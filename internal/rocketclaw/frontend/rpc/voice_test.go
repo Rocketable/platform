@@ -209,7 +209,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 	h.conn = connection
-	web := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.OpenCode, ""))
+	web := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, ""))
 	t.Cleanup(web.Close)
 	h.url = web.URL
 

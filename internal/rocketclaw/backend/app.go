@@ -94,7 +94,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	detach := context.AfterFunc(ctx, cancel)
 
-	stopInstrumentation, err := configureInstrumentation(runCtx, cfg.Instrumentation)
+	stopInstrumentation, err := configureInstrumentation(runCtx, cfg.Instrumentation, cfg.PostHog)
 	if err != nil {
 		return err
 	}

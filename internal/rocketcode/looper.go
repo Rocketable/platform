@@ -25,6 +25,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 	"go.opentelemetry.io/otel/attribute"
+	otelsemconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -565,6 +566,8 @@ func (u TokenUsage) attributes() []attribute.KeyValue {
 		attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheRead, u.PromptCacheReadTokens),
 		attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheWrite, u.PromptCacheWriteTokens),
 		attribute.Int64(semconv.LLMTokenCountCompletionDetailsReasoning, u.CompletionReasoningTokens),
+		otelsemconv.GenAIUsageInputTokensKey.Int64(u.PromptTokens),
+		otelsemconv.GenAIUsageOutputTokensKey.Int64(u.CompletionTokens),
 	}
 
 	return slices.DeleteFunc(attrs, func(attr attribute.KeyValue) bool {
@@ -799,6 +802,7 @@ func (l *looper) runTurn(
 
 	turnCtx, span := l.Observability.startSpan(turnCtx, "rocketcode.turn", semconv.SpanKindAgent,
 		attribute.String(semconv.AgentName, l.agent.Name),
+		otelsemconv.GenAIAgentName(l.agent.Name),
 		l.Observability.inputValue(strings.Join(input.Texts, "")),
 		attribute.String("rocketcode.model", l.DisplayModel),
 		attribute.Int("rocketcode.tool_count", len(l.Tools)),
@@ -1317,12 +1321,16 @@ func (l *looper) newProviderResponse(
 	ctx, span := l.Observability.startSpan(ctx, "rocketcode.provider", semconv.SpanKindLLM,
 		attribute.String(semconv.LLMModelName, l.ProviderOrigin.Model),
 		attribute.String(semconv.LLMProvider, provider),
+		otelsemconv.GenAIRequestModel(l.ProviderOrigin.Model),
+		otelsemconv.GenAIProviderNameKey.String(provider),
 	)
 	defer func() {
 		recordSpanError(span, err)
 
 		if resp != nil {
-			span.span.SetAttributes(attribute.String("rocketcode.response_id", resp.ID))
+			// Marshaling string maps cannot fail.
+			output, _ := json.Marshal([]map[string]string{{"role": "assistant", "content": l.Observability.TraceConfig.MaskOutputValue(resp.OutputText())}})
+			span.span.SetAttributes(attribute.String("rocketcode.response_id", resp.ID), otelsemconv.GenAIResponseID(resp.ID), otelsemconv.GenAIOutputMessagesKey.String(string(output)))
 
 			if usage, ok := tokenUsageFromResponse(resp); ok {
 				span.span.SetAttributes(usage.attributes()...)

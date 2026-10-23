@@ -46,6 +46,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	otelsemconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace/noop"
 	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp" // Registers a WebP decoder for image.Decode.
@@ -2144,7 +2145,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		agentName = cmp.Or(snapshot.Agent, agentName)
 	}
 
-	ctx = instrumentation.WithSession(ctx, b.config.ConversationID)
+	ctx = instrumentation.WithUser(instrumentation.WithSession(ctx, b.config.ConversationID), cmp.Or(msg.Metadata[protocol.InboundPrincipalEmailMetadataKey], msg.Metadata[protocol.InboundPrincipalMetadataKey]))
 
 	tracer := noop.NewTracerProvider().Tracer("rocketclaw")
 	if runtimeCfg.Instrumentation.Enabled {
@@ -2155,16 +2156,19 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	traceConfig := instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}
 
 	instrumentation.ApplyContextAttributes(ctx, span)
-	span.SetAttributes(attribute.String(semconv.OpenInferenceSpanKind, semconv.SpanKindAgent))
+	span.SetAttributes(attribute.String(semconv.OpenInferenceSpanKind, semconv.SpanKindAgent), otelsemconv.GenAIOperationNameInvokeAgent)
 	span.SetAttributes(
 		attribute.String(semconv.AgentName, agentName),
+		otelsemconv.GenAIAgentName(agentName),
 		attribute.String(semconv.SessionID, b.config.ConversationID),
+		otelsemconv.GenAIConversationID(b.config.ConversationID),
 		attribute.String("rocketclaw.conversation_id", b.config.ConversationID),
 		attribute.String("rocketclaw.turn_id", turnID),
 		attribute.String("rocketclaw.source", string(msg.Source)),
 		attribute.String("rocketclaw.kind", string(msg.Kind)),
 		attribute.Int("rocketclaw.attachment_count", len(msg.Attachments)),
 		attribute.String(semconv.InputValue, traceConfig.MaskInputValue(msg.Text)),
+		attribute.String("$ai_input_state", traceConfig.MaskInputValue(msg.Text)), // PostHog's trace input.
 	)
 
 	defer func() {

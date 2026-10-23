@@ -39,6 +39,7 @@ type Config struct {
 	Providers         map[string]OpenAIConfig    `json:"providers,omitempty"`
 	AutoApproverModel string                     `json:"auto_approver_model"`
 	Instrumentation   InstrumentationConfig      `json:"instrumentation"`
+	PostHog           PostHogConfig              `json:"posthog,omitzero"`
 }
 
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
@@ -251,6 +252,13 @@ type InstrumentationConfig struct {
 	HideOutputs       bool   `json:"hide_outputs"`
 }
 
+// PostHogConfig sends log events, errors, and browser sessions to PostHog Cloud when ProjectToken is set,
+// and traces too while instrumentation is enabled. The project token is public: the browser receives it.
+type PostHogConfig struct {
+	ProjectToken string `json:"project_token,omitempty"`
+	Host         string `json:"host,omitempty"`
+}
+
 // Load reads, normalizes, and validates the rocketclaw configuration file.
 func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error) {
 	absPath, err := filepath.Abs(configPath)
@@ -429,12 +437,8 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	c.Instrumentation.CollectorEndpoint = strings.TrimSpace(c.Instrumentation.CollectorEndpoint)
-	c.Instrumentation.ProjectName = strings.TrimSpace(c.Instrumentation.ProjectName)
-
-	c.Instrumentation.APIKey = strings.TrimSpace(c.Instrumentation.APIKey)
-	if c.Instrumentation.Enabled && c.Instrumentation.CollectorEndpoint == "" {
-		return errors.New("instrumentation.collector_endpoint is required when instrumentation is enabled")
+	if err := c.validateInstrumentation(); err != nil {
+		return err
 	}
 
 	if c.MCPExternal.Enabled && strings.TrimSpace(c.MCPExternal.ListenAddr) == "" {
@@ -616,6 +620,23 @@ func (c *Config) validateMCPServers() error {
 		}
 
 		c.MCPServers[name] = server
+	}
+
+	return nil
+}
+
+func (c *Config) validateInstrumentation() error {
+	c.Instrumentation.CollectorEndpoint = strings.TrimSpace(c.Instrumentation.CollectorEndpoint)
+	c.Instrumentation.ProjectName = strings.TrimSpace(c.Instrumentation.ProjectName)
+
+	c.Instrumentation.APIKey = strings.TrimSpace(c.Instrumentation.APIKey)
+	if c.Instrumentation.Enabled && c.Instrumentation.CollectorEndpoint == "" && c.PostHog.ProjectToken == "" {
+		return errors.New("instrumentation.collector_endpoint or posthog.project_token is required when instrumentation is enabled")
+	}
+
+	c.PostHog.Host = strings.TrimRight(cmp.Or(c.PostHog.Host, "https://us.i.posthog.com"), "/")
+	if c.PostHog.ProjectToken != "" && !strings.HasPrefix(c.PostHog.ProjectToken, "phc_") {
+		return errors.New("posthog.project_token must be a public project token (phc_...), never a personal API key")
 	}
 
 	return nil

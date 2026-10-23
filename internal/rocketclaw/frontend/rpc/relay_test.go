@@ -2,9 +2,11 @@ package rpc
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"net"
 	"net/http"
@@ -90,7 +92,7 @@ func startProxyTestRPC(t *testing.T, upstream string) http.Handler {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	return NewHTTPHandler(connection, config.SentryConfig{}, map[string]config.OpenCodeConfig{"box": {URL: upstream, Password: "pw"}}, "")
+	return NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, map[string]config.OpenCodeConfig{"box": {URL: upstream, Password: "pw"}}, "")
 }
 
 func TestOpenCodeProxy(t *testing.T) {
@@ -265,4 +267,30 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 	_, err = io.ReadFull(reader, echo)
 	require.NoError(t, err)
 	assert.Equal(t, "ping", string(echo))
+}
+
+func TestOpenCodeProxyLogsOnlyFailuresTheBrowserWaitsFor(t *testing.T) {
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+
+	var logged bytes.Buffer
+
+	previous := log.Writer()
+
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	proxy := openCodeProxy(config.OpenCodeConfig{URL: gone.URL})
+
+	response := httptest.NewRecorder()
+	proxy.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/event", http.NoBody))
+	assert.Equal(t, http.StatusBadGateway, response.Code)
+	assert.Contains(t, logged.String(), "http: proxy error: ")
+
+	logged.Reset()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	proxy.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/event", http.NoBody))
+	assert.Empty(t, logged.String())
 }

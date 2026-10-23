@@ -194,6 +194,8 @@ func startExternalMCPServer(
 
 		durableRegistration = true
 
+		logger.Info("started external MCP session", "event", "external_mcp_session_started", "external_conversation_id", externalConversationID, "conversation_id", privateConversationID, "agent", usedAgent, "user", username, "slack_channel", slackChannel)
+
 		result, promptAccepted, err = submitExternalMCPInput(callCtx, turns, usedAgent, privateConversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID)
 
 		return result, err

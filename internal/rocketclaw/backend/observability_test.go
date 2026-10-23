@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	otelsemconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 )
 
 func TestRunTurnSpanPreservesMaskingAndFailure(t *testing.T) {
@@ -52,7 +53,10 @@ func TestRunTurnSpanPreservesMaskingAndFailure(t *testing.T) {
 			questions := &webQuestions{store: nt.service, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}
 			bridge := NewConversation(config.NewLockedConfig(nt.cfg), finalsPublisher{finals: nt.finals}, &Config{ConversationID: nt.conversationID, Agent: "main", SessionService: nt.service, RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, UserQuestionAsker: questions}, slog.New(slog.DiscardHandler))
 
-			_, err := runTestTurn(t.Context(), bridge, protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "private input", false), "span-turn")
+			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "private input", false)
+			inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}
+
+			_, err := runTestTurn(t.Context(), bridge, inbound, "span-turn")
 			if !test.fail {
 				require.NoError(t, err)
 			}
@@ -60,6 +64,9 @@ func TestRunTurnSpanPreservesMaskingAndFailure(t *testing.T) {
 			ended := 0
 
 			for _, span := range recorder.Ended() {
+				// PostHog names a trace's person by the user.id on its spans.
+				require.Contains(t, span.Attributes(), attribute.String(semconv.UserID, "alice@example.com"), span.Name())
+
 				if span.Name() != "rocketclaw.turn" {
 					continue
 				}
@@ -71,7 +78,9 @@ func TestRunTurnSpanPreservesMaskingAndFailure(t *testing.T) {
 				output, found := attributes.Value(attribute.Key(semconv.OutputValue))
 				require.True(t, found)
 				require.Equal(t, test.input, input.AsString())
+				require.Contains(t, span.Attributes(), attribute.String("$ai_input_state", test.input))
 				require.Equal(t, test.output, output.AsString())
+				require.Subset(t, span.Attributes(), []attribute.KeyValue{otelsemconv.GenAIOperationNameInvokeAgent, otelsemconv.GenAIAgentName("main"), otelsemconv.GenAIConversationID(nt.conversationID)})
 
 				if test.fail {
 					require.ErrorContains(t, err, "open workspace root")

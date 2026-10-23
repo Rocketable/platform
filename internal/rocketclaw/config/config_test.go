@@ -425,13 +425,29 @@ func TestLoadPreservesInstrumentationConfig(t *testing.T) {
 	assert.True(t, cfg.Instrumentation.HideOutputs)
 }
 
-func TestValidateRejectsEnabledInstrumentationWithoutEndpoint(t *testing.T) {
+func TestValidateRejectsEnabledInstrumentationWithoutDestination(t *testing.T) {
 	cfg := validConfig()
 	cfg.Instrumentation.Enabled = true
 
 	err := cfg.Validate()
 
-	require.ErrorContains(t, err, "instrumentation.collector_endpoint is required")
+	require.ErrorContains(t, err, "instrumentation.collector_endpoint or posthog.project_token is required")
+}
+
+func TestValidatePostHog(t *testing.T) {
+	cfg := validConfig()
+	cfg.Instrumentation.Enabled = true
+	cfg.PostHog.ProjectToken = "phc_project"
+
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, "https://us.i.posthog.com", cfg.PostHog.Host)
+
+	cfg.PostHog = PostHogConfig{ProjectToken: "phc_project", Host: "https://eu.i.posthog.com/"}
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, "https://eu.i.posthog.com", cfg.PostHog.Host)
+
+	cfg.PostHog.ProjectToken = "phx_personal"
+	require.ErrorContains(t, cfg.Validate(), "posthog.project_token must be a public project token")
 }
 
 func TestValidateMCPServers(t *testing.T) {

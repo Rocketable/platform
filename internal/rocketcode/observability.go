@@ -9,6 +9,7 @@ import (
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	otelsemconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
@@ -27,7 +28,13 @@ func (o ObservabilityConfig) startSpan(ctx context.Context, name, kind string, a
 
 	ctx, span := o.Tracer.Start(ctx, name)
 	instrumentation.ApplyContextAttributes(ctx, span)
-	span.SetAttributes(attribute.String(semconv.OpenInferenceSpanKind, kind))
+	// PostHog reads a span as LLM analytics only by its OpenTelemetry GenAI operation.
+	operation := map[string]attribute.KeyValue{
+		semconv.SpanKindAgent: otelsemconv.GenAIOperationNameInvokeAgent,
+		semconv.SpanKindLLM:   otelsemconv.GenAIOperationNameChat,
+		semconv.SpanKindTool:  otelsemconv.GenAIOperationNameExecuteTool,
+	}[kind]
+	span.SetAttributes(attribute.String(semconv.OpenInferenceSpanKind, kind), operation)
 	span.SetAttributes(attrs...)
 
 	return ctx, observabilitySpan{span: span}
@@ -100,6 +107,8 @@ func (o ObservabilityConfig) startToolSpan(ctx context.Context, name, callID, pe
 	attrs := []attribute.KeyValue{
 		attribute.String(semconv.ToolName, name),
 		attribute.String(semconv.ToolID, callID),
+		otelsemconv.GenAIToolName(name),
+		otelsemconv.GenAIToolCallID(callID),
 		attribute.String(semconv.InputMimeType, semconv.MimeTypeJSON),
 		o.inputValue(string(args)),
 		attribute.String("rocketcode.permission", permission),

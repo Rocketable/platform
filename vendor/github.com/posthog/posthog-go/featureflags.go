@@ -1,0 +1,3033 @@
+package posthog
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha1"
+	"encoding/binary"
+	"errors"
+	"fmt"
+
+	"io"
+	"math"
+	"net/http"
+	"net/url"
+	"reflect"
+	"regexp"
+	"regexp/syntax"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	json "github.com/goccy/go-json"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
+)
+
+const (
+	// LONG_SCALE is the denominator used to normalize feature flag hash values.
+	LONG_SCALE                = 0xfffffffffffffff
+	bucketingIdentifierDevice = "device_id"
+)
+
+var relativeDateRegex = regexp.MustCompile(`^-?([0-9]+)([hdwmy])$`)
+
+// Common sentinel errors for matchProperty — reused to avoid allocating new
+// InconclusiveMatchError structs on every evaluation of flags with missing properties.
+var (
+	errMissingPropertyValue     = &InconclusiveMatchError{"Can't match properties without a given property value"}
+	errInconclusiveMatch        = &InconclusiveMatchError{"Can't determine if feature flag is enabled or not with given properties"}
+	errAmbiguousExactNumber     = &InconclusiveMatchError{"Can't match an integral JSON number locally because Go does not preserve whether it was an integer or float"}
+	errCohortPropertyValue      = &InconclusiveMatchError{msg: "Can't match cohort without a given cohort property value"}
+	errHoldoutMissingDeviceID   = &InconclusiveMatchError{msg: "Can't evaluate a device-bucketed holdout without a device id"}
+	errCohortRequiresServerEval = &RequiresServerEvaluationError{msg: "cohort not found in local cohorts - likely a static cohort that requires server evaluation"}
+)
+
+// regexCache caches compiled regexps for flag property matching.
+// The set of patterns is bounded by the number of flag conditions (loaded once),
+// so this cache grows proportionally and avoids re-compiling on every evaluation.
+var regexCache sync.Map // map[string]*flagRegex
+
+// A later matching condition cannot decide the variant while an earlier regex is unresolved.
+var errRegexRequiresServer = &RequiresServerEvaluationError{"Regex requires server evaluation"}
+
+type flagRegex struct {
+	*regexp.Regexp
+	asciiClasses bool
+}
+
+// getOrCompileRegex caches only patterns whose syntax has shared service semantics.
+func getOrCompileRegex(pattern string) (*flagRegex, error) {
+	if cached, ok := regexCache.Load(pattern); ok {
+		return cached.(*flagRegex), nil
+	}
+	asciiClasses, err := classifyFlagRegex(pattern)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		// These errors describe invalid shared syntax, not an RE2 capability limit.
+		syntaxErr := err.(*syntax.Error)
+		if syntaxErr.Code == syntax.ErrMissingRepeatArgument && strings.HasPrefix(syntaxErr.Expr, "{") {
+			return nil, errRegexRequiresServer
+		}
+		switch syntaxErr.Code {
+		case syntax.ErrInvalidRepeatSize:
+			minimum, maximum, bounded := strings.Cut(syntaxErr.Expr[1:len(syntaxErr.Expr)-1], ",")
+			if bounded {
+				min, minErr := strconv.ParseUint(minimum, 10, 32)
+				max, maxErr := strconv.ParseUint(maximum, 10, 32)
+				if minErr == nil && maxErr == nil && min > max {
+					return nil, err
+				}
+			}
+			// RE2 also uses this error for its smaller repetition-size limit.
+			return nil, errRegexRequiresServer
+		case syntax.ErrMissingBracket, syntax.ErrMissingParen, syntax.ErrUnexpectedParen,
+			syntax.ErrMissingRepeatArgument, syntax.ErrInvalidCharRange, syntax.ErrTrailingBackslash:
+			return nil, err
+		default:
+			return nil, errRegexRequiresServer
+		}
+	}
+	if hasRepeatedRegexAssertion(parsed) {
+		return nil, errRegexRequiresServer
+	}
+	r, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, errRegexRequiresServer
+	}
+	compiled := &flagRegex{Regexp: r, asciiClasses: asciiClasses}
+	// Concurrent stores of the same pattern are harmless.
+	regexCache.Store(pattern, compiled)
+	return compiled, nil
+}
+
+// RE2 shorthands are ASCII-only; Rust's are Unicode-aware (and include vertical tab).
+// Nested sets and set operations can compile in RE2 with a different interpretation.
+func classifyFlagRegex(pattern string) (asciiClasses bool, err error) {
+	inClass := false
+	classStart := 0
+	classHyphen := false
+	for i := 0; i < len(pattern); i++ {
+		previousClassHyphen := classHyphen
+		classHyphen = false
+		switch pattern[i] {
+		case '\\':
+			i++
+			if i == len(pattern) {
+				break
+			}
+			switch pattern[i] {
+			case 'd', 'D', 's', 'S', 'w', 'W':
+				if inClass && (previousClassHyphen || i+2 < len(pattern) && pattern[i+1] == '-' && pattern[i+2] != ']') {
+					return false, errRegexRequiresServer
+				}
+				asciiClasses = true
+			case '<', '>', 'b', 'B':
+				// Outside classes, even ASCII boundaries can exhaust the service's
+				// backtracking budget. Inside classes, RE2 lacks Rust's backspace.
+				return false, errRegexRequiresServer
+			case 'x':
+				if i+1 < len(pattern) && pattern[i+1] == '{' {
+					end := strings.IndexByte(pattern[i+2:], '}')
+					if end < 0 {
+						return asciiClasses, nil // Let the compiler categorize the malformed escape once.
+					}
+					i += end + 2
+				}
+			case 'p', 'P':
+				if i+1 < len(pattern) {
+					if pattern[i+1] == '{' {
+						end := strings.IndexByte(pattern[i+2:], '}')
+						if end < 0 {
+							return asciiClasses, nil
+						}
+						i += end + 2
+					} else {
+						i++
+					}
+				}
+				if inClass && (previousClassHyphen || i+2 < len(pattern) && pattern[i+1] == '-' && pattern[i+2] != ']') {
+					return false, errRegexRequiresServer
+				}
+			case 'A', 'z', 'a', 'f', 'n', 'r', 't', 'v':
+			default:
+				c := pattern[i]
+				if c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
+					if c == 'q' { // Invalid in both engines.
+						return false, &syntax.Error{Code: syntax.ErrInvalidEscape, Expr: `\q`}
+					}
+					return false, errRegexRequiresServer
+				}
+			}
+		case '[':
+			if inClass {
+				if strings.HasPrefix(pattern[i:], "[:") {
+					if end := strings.Index(pattern[i+2:], ":]"); end >= 0 {
+						i += end + 3
+						if previousClassHyphen || i+2 < len(pattern) && pattern[i+1] == '-' && pattern[i+2] != ']' {
+							return false, errRegexRequiresServer
+						}
+						continue
+					}
+				}
+				return false, errRegexRequiresServer
+			}
+			inClass = true
+			classStart = i
+		case ']':
+			if inClass && (i == classStart+1 || i == classStart+2 && pattern[classStart+1] == '^') {
+				continue // A leading ] is a literal class member in both engines.
+			}
+			inClass = false
+		case '&', '-', '~':
+			if inClass && i+1 < len(pattern) && pattern[i+1] == pattern[i] {
+				return false, errRegexRequiresServer
+			}
+			classHyphen = inClass && pattern[i] == '-' && i > classStart+1 && !(i == classStart+2 && pattern[classStart+1] == '^')
+		case '{':
+			if !inClass {
+				end := i + 1
+				for end < len(pattern) && pattern[end] >= '0' && pattern[end] <= '9' {
+					end++
+				}
+				if end == i+1 || end-i > 2 && pattern[i+1] == '0' {
+					return false, errRegexRequiresServer
+				}
+				if end < len(pattern) && pattern[end] == ',' {
+					start := end + 1
+					end = start
+					for end < len(pattern) && pattern[end] >= '0' && pattern[end] <= '9' {
+						end++
+					}
+					if end-start > 1 && pattern[start] == '0' {
+						return false, errRegexRequiresServer
+					}
+				}
+				if end == len(pattern) || pattern[end] != '}' {
+					return false, errRegexRequiresServer
+				}
+				// Consume only digits and the optional comma, never search/split the suffix.
+				i = end - 1
+			}
+		}
+	}
+	return asciiClasses, nil
+}
+
+func regexAssertionOnly(r *syntax.Regexp) bool {
+	switch r.Op {
+	case syntax.OpEmptyMatch, syntax.OpBeginLine, syntax.OpEndLine, syntax.OpBeginText, syntax.OpEndText,
+		syntax.OpWordBoundary, syntax.OpNoWordBoundary:
+		return true
+	case syntax.OpCapture, syntax.OpConcat, syntax.OpAlternate:
+		for _, sub := range r.Sub {
+			if !regexAssertionOnly(sub) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func hasRepeatedRegexAssertion(r *syntax.Regexp) bool {
+	switch r.Op {
+	case syntax.OpStar, syntax.OpPlus, syntax.OpQuest, syntax.OpRepeat:
+		if regexAssertionOnly(r.Sub[0]) {
+			return true
+		}
+	}
+	for _, sub := range r.Sub {
+		if hasRepeatedRegexAssertion(sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// flagsState holds the feature flag data that is atomically swapped during updates.
+// This provides lock-free reads for the common path (flag evaluation).
+type flagsState struct {
+	featureFlags            []FeatureFlag
+	flagsByKey              map[string]FeatureFlag // pre-built index for O(1) lookup, avoids rebuilding per evaluation
+	cohorts                 map[string]PropertyGroup
+	groups                  map[string]string
+	flagsEtag               string
+	propertyMatchingVersion int
+	// minimalFlagCalledEvents is the server-controlled gate for minimal
+	// $feature_flag_called events, cached from the local-evaluation payload.
+	minimalFlagCalledEvents bool
+	// definitions is the payload these fields were decoded from, republished to the
+	// cache provider on 304 responses.
+	definitions json.RawMessage
+}
+
+// FeatureFlagsPoller periodically loads feature flag definitions for local evaluation.
+// Applications normally interact with it through Client methods rather than constructing it directly.
+type FeatureFlagsPoller struct {
+	// firstFeatureFlagRequestFinished is used to log feature flag usage before the first feature flag request is done.
+	// After the request the channel get closed.
+	firstFeatureFlagRequestFinished chan bool
+	shutdown                        chan bool
+	shutdownDone                    chan bool
+	forceReload                     chan bool
+
+	// ctx covers polling work; cancel aborts it when shutdown outlives its deadline.
+	ctx    context.Context
+	cancel context.CancelFunc
+	// shutdownCtx is the context handed to the cache provider's Shutdown. Written
+	// before shutdown is closed, read by the polling goroutine after it observes that.
+	shutdownCtx context.Context
+
+	// state holds all flag-related data using atomic pointer for lock-free reads
+	state atomic.Pointer[flagsState]
+
+	personalApiKey string
+	projectApiKey  string
+	localEvalUrl   *url.URL
+	// Logger receives poller warnings and errors.
+	Logger Logger
+	// Endpoint is the PostHog API host used by the poller.
+	Endpoint      string
+	http          http.Client
+	nextPollTick  func() time.Duration
+	flagTimeout   time.Duration
+	decider       decider
+	disableGeoIP  bool
+	cacheProvider FlagDefinitionCacheProvider
+}
+
+// FeatureFlag is a feature flag definition returned by the local evaluation endpoint.
+type FeatureFlag struct {
+	// Key is the feature flag key.
+	Key string `json:"key"`
+	// RolloutPercentage is the top-level rollout percentage, when configured.
+	RolloutPercentage *float64 `json:"rollout_percentage"`
+	// Active reports whether the flag is active.
+	Active bool `json:"active"`
+	// Filters contains matching conditions, variants, and payloads.
+	Filters Filter `json:"filters"`
+	// EnsureExperienceContinuity indicates that the flag requires server-side continuity checks.
+	EnsureExperienceContinuity *bool `json:"ensure_experience_continuity"`
+	// BucketingIdentifier optionally selects the property used for hash bucketing.
+	BucketingIdentifier *string `json:"bucketing_identifier"`
+	// HasExperiment reports whether the flag is linked to an experiment.
+	// Nil when the server does not send it (older deployments).
+	HasExperiment *bool `json:"has_experiment"`
+}
+
+// Filter contains the targeting rules, variants, and payloads for a FeatureFlag.
+type Filter struct {
+	// AggregationGroupTypeIndex identifies the group type for group-targeted flags.
+	AggregationGroupTypeIndex *uint8 `json:"aggregation_group_type_index"`
+	// Groups contains the ordered condition groups to evaluate.
+	Groups []FeatureFlagCondition `json:"groups"`
+	// EarlyExit, when true, stops local condition evaluation and returns a
+	// definitive disabled result as soon as a condition group matches its
+	// property filters (or has none) but the rollout percentage excludes the
+	// user, instead of falling through to later condition groups.
+	EarlyExit bool `json:"early_exit"`
+	// Multivariate contains variant definitions for multivariate flags.
+	Multivariate *Variants `json:"multivariate"`
+	// Holdout contains the experiment holdout configuration, when the flag has one.
+	Holdout *Holdout `json:"holdout"`
+	// Payloads maps flag values or variant keys to raw JSON payloads.
+	Payloads map[string]json.RawMessage `json:"payloads"`
+	// DecodedPayloads holds pre-decoded string versions of Payloads.
+	// Built once at flag load time to avoid per-evaluation json.Unmarshal / unquoting.
+	DecodedPayloads map[string]string `json:"-"`
+	// VariantLookupTable is pre-computed at flag load time to avoid per-evaluation
+	// slice allocation for multivariate flags.
+	VariantLookupTable []FlagVariantMeta `json:"-"`
+}
+
+// Variants contains all variants configured for a multivariate feature flag.
+type Variants struct {
+	// Variants is the ordered list of possible flag variants.
+	Variants []FlagVariant `json:"variants"`
+}
+
+// Holdout is the experiment holdout configuration attached to a feature flag.
+// Identifiers inside the holdout are excluded from the flag's release conditions
+// and resolve to the synthetic variant "holdout-<id>".
+type Holdout struct {
+	// ID identifies the holdout. It is rendered into the synthetic variant key.
+	ID interface{} `json:"id"`
+	// ExclusionPercentage is the share of identifiers held out, from 0 to 100.
+	ExclusionPercentage *float64 `json:"exclusion_percentage"`
+}
+
+// FlagVariant describes one multivariate feature flag variant.
+type FlagVariant struct {
+	// Key is the stable variant key returned by flag evaluation.
+	Key string `json:"key"`
+	// Name is the display name for the variant.
+	Name string `json:"name"`
+	// RolloutPercentage is the percentage allocated to this variant.
+	RolloutPercentage *float64 `json:"rollout_percentage"`
+}
+
+// FeatureFlagCondition describes one condition group for a feature flag.
+type FeatureFlagCondition struct {
+	// Properties are the targeting rules in this condition group.
+	Properties []FlagProperty `json:"properties"`
+	// RolloutPercentage is the rollout percentage for this condition group.
+	RolloutPercentage *float64 `json:"rollout_percentage"`
+	// Variant is the variant key forced by this condition group, when any.
+	Variant *string `json:"variant"`
+	// AggregationGroupTypeIndex identifies the group type for this condition group.
+	AggregationGroupTypeIndex *uint8 `json:"aggregation_group_type_index"`
+}
+
+// FlagProperty describes one property matcher in a feature flag or cohort condition.
+type FlagProperty struct {
+	// Key is the property key to read.
+	Key string `json:"key"`
+	// Operator is the comparison operator, such as exact, is_not, or regex.
+	Operator string `json:"operator"`
+	// Value is the comparison value for Operator.
+	Value interface{} `json:"value"`
+	// Type is the property source. Supported values include "person", "group", "cohort", and "flag".
+	Type string `json:"type"`
+	// Negation inverts the property match when true.
+	Negation bool `json:"negation"`
+	// DependencyChain tracks feature flag dependencies while evaluating nested flag properties.
+	DependencyChain []string `json:"dependency_chain"`
+}
+
+// PropertyGroup describes a nested property group used by cohorts and flag conditions.
+type PropertyGroup struct {
+	// Type is the boolean operator joining Values, such as AND or OR.
+	Type string `json:"type"`
+	// Values contains nested PropertyGroup values or FlagProperty values.
+	Values []any `json:"values"`
+	// ParsedValues holds pre-parsed typed values from Values.
+	// Built once at flag load time to avoid reconstructing FlagProperty/PropertyGroup
+	// from map[string]any on every cohort evaluation.
+	ParsedValues []parsedPropertyValue `json:"-"`
+}
+
+// parsedPropertyValue is a union holding either a nested PropertyGroup or a FlagProperty.
+// Exactly one field is set. Avoids per-evaluation type assertion and reconstruction.
+type parsedPropertyValue struct {
+	IsGroup  bool
+	Group    PropertyGroup
+	Property FlagProperty
+}
+
+// FlagVariantMeta is a precomputed hash range for a feature flag variant.
+type FlagVariantMeta struct {
+	// ValueMin is the inclusive lower bound of the normalized hash range.
+	ValueMin float64
+	// ValueMax is the exclusive upper bound of the normalized hash range.
+	ValueMax float64
+	// Key is the variant key for this hash range.
+	Key string
+}
+
+// FeatureFlagsResponse is the wire-format response from the local evaluation endpoint.
+type FeatureFlagsResponse struct {
+	// Flags contains feature flag definitions for local evaluation.
+	Flags []FeatureFlag `json:"flags"`
+	// GroupTypeMapping maps group type indexes to group type names.
+	GroupTypeMapping *map[string]string `json:"group_type_mapping"`
+	// Cohorts contains cohort definitions referenced by local feature flags.
+	Cohorts map[string]PropertyGroup `json:"cohorts"`
+	// MinimalFlagCalledEvents reports whether the server enabled minimal
+	// $feature_flag_called events for this project. The server sends it only
+	// when the gate is on; absence means full events.
+	MinimalFlagCalledEvents bool `json:"minimal_flag_called_events"`
+}
+
+// DecideRequestData is the legacy wire-format request body for flag decide calls.
+type DecideRequestData struct {
+	// ApiKey is the PostHog project API key.
+	ApiKey string `json:"api_key"`
+	// DistinctId is the user distinct ID to evaluate flags for.
+	DistinctId string `json:"distinct_id"`
+	// Groups contains group identifiers for group-targeted flags.
+	Groups Groups `json:"groups"`
+	// PersonProperties overrides person properties for this evaluation.
+	PersonProperties Properties `json:"person_properties"`
+	// GroupProperties overrides group properties for this evaluation, keyed by group type.
+	GroupProperties map[string]Properties `json:"group_properties"`
+}
+
+// DecideResponse is the legacy wire-format response body for flag decide calls.
+type DecideResponse struct {
+	// FeatureFlags contains evaluated flag values keyed by flag key.
+	FeatureFlags map[string]interface{} `json:"featureFlags"`
+	// FeatureFlagPayloads contains raw payloads keyed by flag key.
+	FeatureFlagPayloads map[string]json.RawMessage `json:"featureFlagPayloads"`
+}
+
+// InconclusiveMatchError indicates that local evaluation could not conclusively match a condition.
+type InconclusiveMatchError struct {
+	msg string
+}
+
+// Error returns the inconclusive match message.
+func (e *InconclusiveMatchError) Error() string {
+	return e.msg
+}
+
+// RequiresServerEvaluationError is returned when feature flag evaluation
+// requires server-side data that is not available locally (e.g., static cohorts,
+// experience continuity). This error should propagate immediately to trigger
+// API fallback, unlike InconclusiveMatchError which allows trying other conditions.
+type RequiresServerEvaluationError struct {
+	msg string
+}
+
+// Error returns the reason server-side evaluation is required.
+func (e *RequiresServerEvaluationError) Error() string {
+	return e.msg
+}
+
+// isServerEvalError returns true if err is a RequiresServerEvaluationError.
+// Uses type assertion instead of errors.As to avoid pointer-variable heap escapes.
+func isServerEvalError(err error) bool {
+	_, ok := err.(*RequiresServerEvaluationError)
+	return ok
+}
+
+// isInconclusiveError returns true if err is an InconclusiveMatchError.
+func isInconclusiveError(err error) bool {
+	_, ok := err.(*InconclusiveMatchError)
+	return ok
+}
+
+// FeatureFlagResult represents the result of a feature flag evaluation,
+// containing both the flag value and its payload.
+type FeatureFlagResult struct {
+	// Key is the feature flag key that was evaluated
+	Key string
+
+	// Enabled indicates whether the feature flag evaluation determined
+	// the flag to be in an enabled state.
+	Enabled bool
+
+	// RawPayload is the serialized JSON payload associated with the flag variant.
+	// Nil if no payload is configured.
+	// Use GetPayloadAs to unmarshal the payload into a specific type.
+	RawPayload *string
+
+	// Variant is the variant key if this is a multivariate flag.
+	// Nil for boolean flags.
+	Variant *string
+
+	// payloadStore and variantStore hold the actual string values so that
+	// RawPayload/Variant can point into the same allocation as the struct itself,
+	// avoiding separate heap escapes for the *string pointers.
+	payloadStore string
+	variantStore string
+}
+
+// GetPayloadAs unmarshals the JSON payload into the provided type.
+// Returns an error if the payload is empty or cannot be unmarshaled.
+func (r *FeatureFlagResult) GetPayloadAs(v interface{}) error {
+	if r.RawPayload == nil || *r.RawPayload == "" {
+		return errors.New("no payload available")
+	}
+	return json.Unmarshal([]byte(*r.RawPayload), v)
+}
+
+// evaluateFlagDependency evaluates a flag dependency property according to the dependency chain algorithm
+func (poller *FeatureFlagsPoller) evaluateFlagDependency(
+	property FlagProperty,
+	flagsByKey map[string]FeatureFlag,
+	evaluationCache map[string]interface{},
+	distinctId string,
+	deviceId *string,
+	properties Properties,
+	cohorts map[string]PropertyGroup,
+	aggregationGroupTypeIndex *uint8,
+	snapshots ...*flagsState,
+) (bool, error) {
+	state := poller.evaluationState(snapshots)
+	// Some of these conditions should never happen, but we'll check them to be defensive.
+	if property.Value == nil {
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Cannot evaluate flag dependency on '%s' without a value", property.Key),
+		}
+	}
+
+	if property.Operator != "flag_evaluates_to" {
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Unsupported operator '%s' for flag dependency '%s'", property.Operator, property.Key),
+		}
+	}
+
+	if flagsByKey == nil || evaluationCache == nil {
+		// Cannot evaluate flag dependencies without required context
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Cannot evaluate flag dependency on '%s' without flagsByKey and evaluationCache", property.Key),
+		}
+	}
+
+	// Check if dependency_chain is present - it should always be provided for flag dependencies
+	if property.DependencyChain == nil {
+		// Missing dependency_chain indicates malformed server data
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Flag dependency property for '%s' is missing required 'dependency_chain' field", property.Key),
+		}
+	}
+
+	dependencyChain := property.DependencyChain
+
+	// Handle circular dependency (empty chain means circular)
+	if len(dependencyChain) == 0 {
+		if poller.Logger != nil {
+			poller.Logger.Debugf("Circular dependency detected for flag: %s", property.Key)
+		}
+		return false, &InconclusiveMatchError{
+			msg: fmt.Sprintf("Circular dependency detected for flag '%s'", property.Key),
+		}
+	}
+
+	// Evaluate all dependencies in the chain order
+	for _, depFlagKey := range dependencyChain {
+		// Dependencies can reuse the caller's key and properties only for the
+		// same aggregation type. Check before the cache so repeated cohort
+		// references cannot bypass the cross-type server boundary.
+		depFlag := flagsByKey[depFlagKey]
+		if depFlag.Active {
+			if !uint8PtrEqual(depFlag.Filters.AggregationGroupTypeIndex, aggregationGroupTypeIndex) {
+				return false, &RequiresServerEvaluationError{"Flag dependency requires different aggregation context"}
+			}
+			for _, condition := range depFlag.Filters.Groups {
+				if condition.AggregationGroupTypeIndex != nil && !uint8PtrEqual(condition.AggregationGroupTypeIndex, aggregationGroupTypeIndex) {
+					return false, &RequiresServerEvaluationError{"Flag dependency requires different aggregation context"}
+				}
+			}
+		}
+		if _, exists := evaluationCache[depFlagKey]; exists {
+			continue
+		}
+
+		// Need to evaluate this dependency first
+		depFlag, flagExists := flagsByKey[depFlagKey]
+		if !flagExists {
+			// Missing flag dependency - cannot evaluate locally
+			evaluationCache[depFlagKey] = nil
+			return false, &InconclusiveMatchError{
+				msg: fmt.Sprintf("Cannot evaluate flag dependency '%s' - flag not found in local flags", depFlagKey),
+			}
+		}
+
+		// Check if the flag is active (same check as in computeFlagLocally)
+		if !depFlag.Active {
+			evaluationCache[depFlagKey] = false
+		} else {
+			// Dependencies must preserve the same server boundary as direct evaluation.
+			if depFlag.EnsureExperienceContinuity != nil && *depFlag.EnsureExperienceContinuity {
+				evaluationCache[depFlagKey] = nil
+				return false, &InconclusiveMatchError{"Flag dependency has experience continuity enabled"}
+			}
+			// Recursively evaluate the dependency
+			result, err := poller.matchFeatureFlagProperties(depFlag, distinctId, deviceId, properties, cohorts, flagsByKey, evaluationCache, nil, nil, state)
+			if err != nil {
+				// Preserve server-required errors on repeated references instead of
+				// reducing them to a cached inconclusive value that cohorts can negate.
+				if isServerEvalError(err) {
+					return false, err
+				}
+				evaluationCache[depFlagKey] = nil
+				return false, &InconclusiveMatchError{
+					msg: fmt.Sprintf("Cannot evaluate flag dependency '%s': %s", depFlagKey, err.Error()),
+				}
+			}
+			evaluationCache[depFlagKey] = result
+		}
+	}
+
+	// Check if the dependency result matches the expected value and operator
+	if cachedResult, exists := evaluationCache[property.Key]; exists && cachedResult != nil {
+		match, err := checkFlagDependencyValue(property.Value, cachedResult)
+		if err != nil {
+			return false, err
+		}
+		return match, nil
+	}
+
+	// The main dependency couldn't be evaluated
+	return false, &InconclusiveMatchError{
+		msg: fmt.Sprintf("Flag dependency '%s' could not be evaluated for value comparison", property.Key),
+	}
+}
+
+// checkFlagDependencyValue checks if a flag dependency result matches the expected value and operator
+func checkFlagDependencyValue(expectedValue interface{}, actualResult interface{}) (bool, error) {
+	// String variant case - check for exact match or boolean true
+	if actualStr, ok := actualResult.(string); ok && len(actualStr) > 0 {
+		if expectedBool, ok := expectedValue.(bool); ok {
+			// Any variant matches boolean true
+			return expectedBool, nil
+		} else if expectedStr, ok := expectedValue.(string); ok {
+			// variants are case-sensitive, hence our comparison is too
+			return actualStr == expectedStr, nil
+		} else {
+			return false, nil
+		}
+	}
+
+	// Boolean case - must match expected boolean value
+	if actualBool, ok := actualResult.(bool); ok {
+		if expectedBool, ok := expectedValue.(bool); ok {
+			return actualBool == expectedBool, nil
+		}
+	}
+
+	// Default case
+	return false, nil
+}
+
+func newFeatureFlagsPoller(
+	projectApiKey string,
+	personalApiKey string,
+	logger Logger,
+	endpoint string,
+	httpClient http.Client,
+	pollingInterval time.Duration,
+	nextPollTick func() time.Duration,
+	flagTimeout time.Duration,
+	decider decider,
+	disableGeoIP bool,
+	cacheProvider FlagDefinitionCacheProvider,
+) (*FeatureFlagsPoller, error) {
+	localEvaluationEndpoint := "/flags/definitions"
+	localEvalURL, err := url.Parse(endpoint + localEvaluationEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("creating local evaluation URL - %w", err)
+	}
+
+	if nextPollTick == nil {
+		nextPollTick = func() time.Duration { return pollingInterval }
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	poller := FeatureFlagsPoller{
+		firstFeatureFlagRequestFinished: make(chan bool),
+		shutdown:                        make(chan bool),
+		shutdownDone:                    make(chan bool),
+		forceReload:                     make(chan bool),
+		ctx:                             ctx,
+		cancel:                          cancel,
+		personalApiKey:                  personalApiKey,
+		projectApiKey:                   projectApiKey,
+		localEvalUrl:                    localEvalURL,
+		Logger:                          logger,
+		Endpoint:                        endpoint,
+		http:                            httpClient,
+		nextPollTick:                    nextPollTick,
+		flagTimeout:                     flagTimeout,
+		decider:                         decider,
+		disableGeoIP:                    disableGeoIP,
+		cacheProvider:                   cacheProvider,
+	}
+
+	go poller.run()
+	return &poller, nil
+}
+
+func (poller *FeatureFlagsPoller) run() {
+	defer close(poller.shutdownDone)
+
+	poller.fetchNewFeatureFlags()
+	close(poller.firstFeatureFlagRequestFinished)
+
+	for {
+		timer := time.NewTimer(poller.nextPollTick())
+		select {
+		case <-poller.shutdown:
+			close(poller.forceReload)
+			timer.Stop()
+			poller.shutdownCacheProvider(poller.shutdownCtx)
+			return
+		case <-poller.forceReload:
+			timer.Stop()
+			poller.fetchNewFeatureFlags()
+		case <-timer.C:
+			poller.fetchNewFeatureFlags()
+		}
+	}
+}
+
+// fetchNewFeatureFlags refreshes the local feature flag definitions used for local
+// evaluation. These should not be confused with the feature flags fetched from the
+// flags API.
+func (poller *FeatureFlagsPoller) fetchNewFeatureFlags() {
+	if poller.shuttingDown() {
+		return
+	}
+	if poller.cacheProvider == nil {
+		poller.fetchFlagDefinitions(false)
+		return
+	}
+
+	// Cache-only readers must not claim fetch leadership they cannot use.
+	if poller.personalApiKey == "" {
+		poller.loadFlagDefinitionsFromCache()
+		return
+	}
+
+	shouldFetch, err := poller.cacheProvider.ShouldFetchFlagDefinitions(poller.ctx)
+	if poller.shuttingDown() {
+		return
+	}
+	if err != nil {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider ShouldFetchFlagDefinitions failed, fetching from the API: %s", err)
+		shouldFetch = true
+	}
+
+	if !shouldFetch {
+		if poller.loadFlagDefinitionsFromCache() {
+			return
+		}
+
+		if poller.shuttingDown() || poller.state.Load() != nil {
+			return
+		}
+
+		// Without definitions local evaluation is impossible, so fetch anyway.
+		poller.Logger.Debugf("[FEATURE FLAGS] No definitions cached or in memory, fetching from the API")
+	}
+
+	poller.fetchFlagDefinitions(shouldFetch)
+}
+
+// shuttingDown reports whether polling work was cancelled by a shutdown that
+// outlived its deadline. No provider call may start after that.
+func (poller *FeatureFlagsPoller) shuttingDown() bool {
+	return poller.ctx.Err() != nil
+}
+
+// loadFlagDefinitionsFromCache applies cached definitions and reports whether any
+// were loaded.
+func (poller *FeatureFlagsPoller) loadFlagDefinitionsFromCache() bool {
+	data, err := poller.cacheProvider.GetFlagDefinitions(poller.ctx)
+	if err != nil {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider GetFlagDefinitions failed: %s", err)
+		return false
+	}
+	if data == nil {
+		return false
+	}
+	decoded, err := decodeFlagDefinitions(data)
+	if err != nil {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider returned unusable flag definitions: %s", err)
+		return false
+	}
+	if decoded.Flags == nil {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider returned definitions without flags, treating as a miss")
+		return false
+	}
+	for i, flag := range decoded.Flags {
+		if flag.Key == "" {
+			poller.Logger.Errorf("[FEATURE FLAGS] Cache provider returned a flag without a key at index %d, treating as a miss", i)
+			return false
+		}
+	}
+
+	// The ETag is dropped: a later conditional request must not be answered with 304
+	// against an ETag whose payload this instance no longer holds.
+	poller.applyFlagDefinitions(data, decoded, "")
+	poller.Logger.Debugf("[FEATURE FLAGS] Loaded %d flag definitions from the external cache", len(decoded.Flags))
+	return true
+}
+
+// flagDefinitions is the SDK's decoded view of a definition snapshot. The original
+// JSON is retained separately for cache publication.
+type flagDefinitions struct {
+	FeatureFlagsResponse
+	// Only 2 enables explicit matching; missing and unknown versions stay legacy.
+	PropertyMatchingVersion int `json:"property_matching_version"`
+}
+
+// decodeFlagDefinitions rejects payloads that would crash preprocessing.
+func decodeFlagDefinitions(data json.RawMessage) (flagDefinitions, error) {
+	var decoded flagDefinitions
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return flagDefinitions{}, err
+	}
+	for _, flag := range decoded.Flags {
+		if err := validateVariants(flag); err != nil {
+			return flagDefinitions{}, err
+		}
+	}
+	return decoded, nil
+}
+
+// validateVariants rejects the one shape known to panic during preprocessing.
+func validateVariants(flag FeatureFlag) error {
+	if flag.Filters.Multivariate == nil {
+		return nil
+	}
+	for _, variant := range flag.Filters.Multivariate.Variants {
+		if variant.RolloutPercentage == nil {
+			return fmt.Errorf("flag %q has variant %q without a rollout percentage", flag.Key, variant.Key)
+		}
+	}
+	return nil
+}
+
+// applyFlagDefinitions precomputes the evaluation lookups and atomically swaps in the
+// new state.
+func (poller *FeatureFlagsPoller) applyFlagDefinitions(data json.RawMessage, decoded flagDefinitions, etag string) {
+	flags := decoded.Flags
+	if flags == nil {
+		// A successful API response without flags represents a loaded empty set.
+		flags = []FeatureFlag{}
+	}
+	preDecodePayloads(flags)
+
+	groups := map[string]string{}
+	if decoded.GroupTypeMapping != nil {
+		groups = *decoded.GroupTypeMapping
+	}
+
+	poller.state.Store(&flagsState{
+		featureFlags:            flags,
+		flagsByKey:              buildFlagsByKey(flags),
+		cohorts:                 preParseCohortValues(decoded.Cohorts),
+		groups:                  groups,
+		flagsEtag:               etag,
+		minimalFlagCalledEvents: decoded.MinimalFlagCalledEvents,
+		propertyMatchingVersion: decoded.PropertyMatchingVersion,
+		definitions:             data,
+	})
+}
+
+// publishFlagDefinitions stores definitions in the cache provider.
+func (poller *FeatureFlagsPoller) publishFlagDefinitions(data json.RawMessage) {
+	if poller.shuttingDown() {
+		return
+	}
+	if err := poller.cacheProvider.OnFlagDefinitionsReceived(poller.ctx, data); err != nil {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider OnFlagDefinitionsReceived failed: %s", err)
+	}
+}
+
+// shutdownCacheProvider releases the cache provider.
+func (poller *FeatureFlagsPoller) shutdownCacheProvider(ctx context.Context) {
+	if poller.cacheProvider == nil {
+		return
+	}
+
+	if err := poller.cacheProvider.Shutdown(ctx); err != nil {
+		poller.Logger.Errorf("[FEATURE FLAGS] Cache provider Shutdown failed: %s", err)
+	}
+}
+
+// fetchFlagDefinitions fetches the latest feature flag definitions from the PostHog API.
+// When publish is true, a successful response is also stored in the cache provider.
+func (poller *FeatureFlagsPoller) fetchFlagDefinitions(publish bool) {
+	if poller.shuttingDown() {
+		return
+	}
+
+	personalApiKey := poller.personalApiKey
+	if personalApiKey == "" {
+		poller.Logger.Warnf("PostHog secret key is not configured; fetching feature flag definitions requires a SecretKey.")
+		return
+	}
+	headers := http.Header{"Authorization": []string{"Bearer " + personalApiKey}}
+
+	// Read current ETag from state (lock-free)
+	currentState := poller.state.Load()
+	currentEtag := ""
+	if currentState != nil {
+		currentEtag = currentState.flagsEtag
+	}
+
+	res, cancel, err := poller.localEvaluationFlags(headers, currentEtag)
+	if err != nil {
+		if !poller.shuttingDown() {
+			poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
+		}
+		return
+	}
+	defer cancel()
+	defer res.Body.Close()
+
+	// Handle 304 Not Modified - flags haven't changed, skip processing
+	if res.StatusCode == http.StatusNotModified {
+		poller.Logger.Debugf("[FEATURE FLAGS] Flags not modified (304), using cached data")
+		// Update ETag if server returned one (preserve existing if not)
+		if newEtag := res.Header.Get("ETag"); newEtag != "" && currentState != nil {
+			// Atomically swap with updated ETag
+			newState := &flagsState{
+				featureFlags:            currentState.featureFlags,
+				flagsByKey:              currentState.flagsByKey,
+				cohorts:                 currentState.cohorts,
+				groups:                  currentState.groups,
+				flagsEtag:               newEtag,
+				minimalFlagCalledEvents: currentState.minimalFlagCalledEvents,
+				propertyMatchingVersion: currentState.propertyMatchingVersion,
+				definitions:             currentState.definitions,
+			}
+			poller.state.Store(newState)
+		}
+		// Republished so that a cache entry with a TTL does not expire while the
+		// definitions keep coming back unchanged.
+		if publish && currentState != nil {
+			poller.publishFlagDefinitions(currentState.definitions)
+		}
+		return
+	}
+
+	// Handle quota limit response (HTTP 402)
+	if res.StatusCode == http.StatusPaymentRequired {
+		// Clear existing flags when quota limited - atomic swap
+		poller.state.Store(&flagsState{
+			featureFlags: []FeatureFlag{},
+			cohorts:      map[string]PropertyGroup{},
+			groups:       map[string]string{},
+			flagsEtag:    "",
+		})
+		poller.Logger.Warnf("[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data. Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts")
+		return
+	}
+
+	if res.StatusCode != http.StatusOK {
+		poller.Logger.Errorf("Unable to fetch feature flags, status: %s", res.Status)
+		return
+	}
+
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		poller.Logger.Errorf("Unable to fetch feature flags: %s", err)
+		return
+	}
+	decoded, err := decodeFlagDefinitions(resBody)
+	if err != nil {
+		poller.Logger.Errorf("Unable to unmarshal response from api/feature_flag/local_evaluation: %s", err)
+		return
+	}
+
+	// Store new ETag from response (clear if server stops sending)
+	poller.applyFlagDefinitions(resBody, decoded, res.Header.Get("ETag"))
+
+	if publish {
+		poller.publishFlagDefinitions(resBody)
+	}
+}
+
+// getMinimalFlagCalledEvents reports whether the local-evaluation payload
+// enabled minimal $feature_flag_called events. False until definitions have
+// been loaded, so missing state always yields full events.
+func (poller *FeatureFlagsPoller) getMinimalFlagCalledEvents() bool {
+	state := poller.state.Load()
+	return state != nil && state.minimalFlagCalledEvents
+}
+
+// GetFeatureFlag evaluates one flag using locally loaded definitions when possible.
+// It returns the flag value, whether that value was locally evaluated, and an error.
+// If local evaluation is inconclusive and OnlyEvaluateLocally is false, it falls back to /flags.
+func (poller *FeatureFlagsPoller) GetFeatureFlag(flagConfig FeatureFlagPayload) (interface{}, bool, error) {
+	flag, state, err := poller.getFeatureFlagWithState(flagConfig)
+
+	var result interface{}
+	locallyEvaluated := false
+
+	if flag.Key != "" {
+		result, err = poller.computeFlagLocally(
+			flag,
+			flagConfig.DistinctId,
+			flagConfig.DeviceId,
+			flagConfig.Groups,
+			flagConfig.PersonProperties,
+			flagConfig.GroupProperties,
+			state.cohorts,
+			state,
+		)
+		locallyEvaluated = err == nil && result != nil
+	}
+
+	if err != nil {
+		poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", flagConfig.Key, err)
+	}
+
+	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
+		result, err = poller.getFeatureFlagVariant(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		if err != nil {
+			return nil, locallyEvaluated, err
+		}
+	}
+
+	return result, locallyEvaluated, err
+}
+
+// GetFeatureFlagPayload returns the payload for the evaluated flag value.
+// It tries local payloads first and falls back to the remote API unless OnlyEvaluateLocally is true.
+func (poller *FeatureFlagsPoller) GetFeatureFlagPayload(flagConfig FeatureFlagPayload) (string, error) {
+	flag, state, err := poller.getFeatureFlagWithState(flagConfig)
+
+	var variant interface{}
+
+	if flag.Key != "" {
+		variant, err = poller.computeFlagLocally(
+			flag,
+			flagConfig.DistinctId,
+			flagConfig.DeviceId,
+			flagConfig.Groups,
+			flagConfig.PersonProperties,
+			flagConfig.GroupProperties,
+			state.cohorts,
+			state,
+		)
+	}
+	if err != nil {
+		poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", flagConfig.Key, err)
+	} else if variant != nil {
+		if decoded, ok := flag.Filters.DecodedPayloads[variantToString(variant)]; ok {
+			return decoded, nil
+		}
+	}
+
+	if (variant == nil || err != nil) && !flagConfig.OnlyEvaluateLocally {
+		result, err := poller.getFeatureFlagPayload(flagConfig.Key, flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		if err != nil {
+			return "", err
+		}
+
+		return result, nil
+	}
+
+	return "", errors.New("unable to compute flag locally")
+}
+
+// flagValueAndPayload holds the result of a single flag evaluation that returns
+// both the flag value and its payload, avoiding the need for double evaluation.
+type flagValueAndPayload struct {
+	value            interface{}
+	payload          string
+	err              error
+	locallyEvaluated bool
+	hasExperiment    *bool
+	// minimalFlagCalledEvents carries the minimal $feature_flag_called gate
+	// from whichever source produced the value (local definitions or the
+	// remote /flags response).
+	minimalFlagCalledEvents bool
+}
+
+// GetFeatureFlagWithPayload evaluates a feature flag once and returns both its value
+// and payload. This avoids the double evaluation that would happen when calling
+// GetFeatureFlag and GetFeatureFlagPayload separately.
+func (poller *FeatureFlagsPoller) GetFeatureFlagWithPayload(flagConfig FeatureFlagPayload) flagValueAndPayload {
+	flag, state, err := poller.getFeatureFlagWithState(flagConfig)
+
+	var result interface{}
+
+	if flag.Key != "" {
+		result, err = poller.computeFlagLocally(
+			flag,
+			flagConfig.DistinctId,
+			flagConfig.DeviceId,
+			flagConfig.Groups,
+			flagConfig.PersonProperties,
+			flagConfig.GroupProperties,
+			state.cohorts,
+			state,
+		)
+	}
+
+	if err != nil {
+		poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", flagConfig.Key, err)
+	}
+
+	// Try to resolve payload from local evaluation result using pre-decoded payloads
+	var payload string
+	if err == nil && result != nil {
+		variantKey := variantToString(result)
+		if decoded, ok := flag.Filters.DecodedPayloads[variantKey]; ok {
+			payload = decoded
+		}
+	}
+
+	locallyEvaluated := err == nil && result != nil
+	hasExperiment := flag.HasExperiment
+	minimalFlagCalledEvents := state != nil && state.minimalFlagCalledEvents
+
+	// Fall back to remote evaluation if local didn't produce a result
+	if (err != nil || result == nil) && !flagConfig.OnlyEvaluateLocally {
+		flagsResponse, remoteErr := poller.getFeatureFlagVariants(flagConfig.DistinctId, flagConfig.DeviceId, flagConfig.Groups, flagConfig.PersonProperties, flagConfig.GroupProperties)
+		if remoteErr != nil {
+			return flagValueAndPayload{value: nil, err: remoteErr}
+		}
+		locallyEvaluated = false
+		// Clear local eval error — we successfully made a remote request
+		err = nil
+		// The remote response is now the source of the flag value, so it is
+		// also the source of has_experiment and of the minimal-event gate:
+		// reset both and only pick them up from the response.
+		hasExperiment = nil
+		minimalFlagCalledEvents = false
+		if flagsResponse != nil {
+			minimalFlagCalledEvents = flagsResponse.MinimalFlagCalledEvents
+			if flagValue, ok := flagsResponse.FeatureFlags[flagConfig.Key]; ok {
+				result = flagValue
+			} else {
+				// Flag not in remote response — treat as false (matches getFeatureFlagVariant behavior)
+				result = false
+			}
+			if rawPayload, ok := flagsResponse.FeatureFlagPayloads[flagConfig.Key]; ok {
+				payload = rawMessageToString(rawPayload)
+			}
+			if detail, ok := flagsResponse.Flags[flagConfig.Key]; ok {
+				hasExperiment = detail.Metadata.HasExperiment
+			}
+		} else {
+			result = false
+		}
+	}
+
+	return flagValueAndPayload{value: result, payload: payload, err: err, locallyEvaluated: locallyEvaluated, hasExperiment: hasExperiment, minimalFlagCalledEvents: minimalFlagCalledEvents}
+}
+
+func (poller *FeatureFlagsPoller) getFeatureFlag(flagConfig FeatureFlagPayload) (FeatureFlag, error) {
+	flag, _, err := poller.getFeatureFlagWithState(flagConfig)
+	return flag, err
+}
+
+// Select the flag and its matching context from one immutable definitions snapshot.
+func (poller *FeatureFlagsPoller) getFeatureFlagWithState(flagConfig FeatureFlagPayload) (FeatureFlag, *flagsState, error) {
+	<-poller.firstFeatureFlagRequestFinished
+	state := poller.state.Load()
+	if state == nil || state.flagsByKey == nil {
+		return FeatureFlag{}, state, errors.New("flags were not successfully fetched yet")
+	}
+	return state.flagsByKey[flagConfig.Key], state, nil
+}
+
+// GetAllFlags evaluates every available flag for the configured user.
+// Values are bools for boolean flags or strings for multivariate variants.
+func (poller *FeatureFlagsPoller) GetAllFlags(flagConfig FeatureFlagPayloadNoKey) (map[string]interface{}, error) {
+	state, err := poller.getLoadedState()
+	if err != nil {
+		return nil, err
+	}
+	featureFlags := state.featureFlags
+	fallbackToDecide := false
+	cohorts := state.cohorts
+
+	// Pre-size response map to avoid rehashing as flags are added
+	response := make(map[string]interface{}, len(featureFlags))
+
+	if len(featureFlags) == 0 {
+		fallbackToDecide = true
+	} else {
+		for _, storedFlag := range featureFlags {
+			result, err := poller.computeFlagLocally(
+				storedFlag,
+				flagConfig.DistinctId,
+				flagConfig.DeviceId,
+				flagConfig.Groups,
+				flagConfig.PersonProperties,
+				flagConfig.GroupProperties,
+				cohorts,
+				state,
+			)
+			if err != nil {
+				poller.Logger.Warnf("Unable to compute flag locally (%s) - %s", storedFlag.Key, err)
+				fallbackToDecide = true
+			} else {
+				response[storedFlag.Key] = result
+			}
+		}
+	}
+
+	if fallbackToDecide && !flagConfig.OnlyEvaluateLocally {
+		flagsResponse, err := poller.getFeatureFlagVariants(
+			flagConfig.DistinctId,
+			flagConfig.DeviceId,
+			flagConfig.Groups,
+			flagConfig.PersonProperties,
+			flagConfig.GroupProperties,
+		)
+
+		if err != nil {
+			return response, err
+		}
+		if flagsResponse != nil {
+			for k, v := range flagsResponse.FeatureFlags {
+				response[k] = v
+			}
+		}
+	}
+
+	return response, nil
+}
+func (poller *FeatureFlagsPoller) computeFlagLocally(
+	flag FeatureFlag,
+	distinctId string,
+	deviceId *string,
+	groups Groups,
+	personProperties Properties,
+	groupProperties map[string]Properties,
+	cohorts map[string]PropertyGroup,
+	snapshots ...*flagsState,
+) (interface{}, error) {
+	state := poller.evaluationState(snapshots)
+	if flag.EnsureExperienceContinuity != nil && *flag.EnsureExperienceContinuity {
+		return nil, &InconclusiveMatchError{"Flag has experience continuity enabled"}
+	}
+
+	if !flag.Active {
+		return false, nil
+	}
+
+	// Use pre-built flagsByKey index (built once when flags are fetched, not per evaluation)
+	flagsByKey := state.flagsByKey
+
+	// evaluationCache is created lazily — only allocated when flag has dependencies.
+	// For simple flags (no dependencies), this avoids a map allocation per evaluation.
+	var evaluationCache map[string]interface{}
+	if flagHasDependencies(flag) {
+		evaluationCache = make(map[string]interface{})
+	}
+
+	if flag.Filters.AggregationGroupTypeIndex != nil {
+		groupType, exists := state.groups[fmt.Sprintf("%d", *flag.Filters.AggregationGroupTypeIndex)]
+
+		if !exists {
+			errMessage := "flag has unknown group type index"
+			return nil, errors.New(errMessage)
+		}
+
+		groupKey, exists := groups[groupType]
+
+		if !exists {
+			errMessage := fmt.Sprintf("[FEATURE FLAGS] Can't compute group feature flag: %s without group names passed in", flag.Key)
+			return nil, errors.New(errMessage)
+		}
+
+		groupKeyStr, ok := groupKeyToString(groupKey)
+		if !ok {
+			return nil, fmt.Errorf("[FEATURE FLAGS] Can't compute group feature flag: %s with a %T group key", flag.Key, groupKey)
+		}
+
+		focusedGroupProperties := groupProperties[groupType]
+		if _, ok := focusedGroupProperties["$group_key"]; !ok {
+			focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
+		}
+		return poller.matchFeatureFlagProperties(flag, groupKeyStr, nil, focusedGroupProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
+	} else {
+		localPersonProperties := personProperties
+		// Only add distinct_id if the flag has conditions that check person properties.
+		// For simple flags (no property conditions), this avoids creating a map that's never read.
+		if flagHasPersonProperties(flag) {
+			if _, ok := localPersonProperties["distinct_id"]; !ok {
+				if personProperties == nil {
+					localPersonProperties = Properties{"distinct_id": distinctId}
+				} else {
+					localPersonProperties = make(Properties, len(personProperties)+1)
+					localPersonProperties["distinct_id"] = distinctId
+					for k, v := range personProperties {
+						localPersonProperties[k] = v
+					}
+				}
+			}
+		}
+		return poller.matchFeatureFlagProperties(flag, distinctId, deviceId, localPersonProperties, cohorts, flagsByKey, evaluationCache, groups, groupProperties, state)
+	}
+}
+
+// groupKeyToString returns the bucketing ID for a group key. Groups values are
+// free-form, and the flags service accepts a string or a JSON number as a group
+// key, bucketing a number by its JSON form (42 -> "42"). Other types are rejected.
+func groupKeyToString(groupKey interface{}) (string, bool) {
+	switch key := groupKey.(type) {
+	case string:
+		return key, true
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+		encoded, err := json.Marshal(key)
+		if err != nil {
+			return "", false
+		}
+		return string(encoded), true
+	default:
+		return "", false
+	}
+}
+
+func getMatchingVariant(flag FeatureFlag, bucketingId string) interface{} {
+	// Use pre-computed lookup table if available, otherwise compute on the fly
+	lookupTable := flag.Filters.VariantLookupTable
+	if lookupTable == nil {
+		// Fast path: no multivariate variants means boolean flag — skip hash computation
+		if flag.Filters.Multivariate == nil || len(flag.Filters.Multivariate.Variants) == 0 {
+			return true
+		}
+		lookupTable = getVariantLookupTable(flag)
+	}
+	if len(lookupTable) == 0 {
+		return true
+	}
+
+	hashValue := calculateHash(flag.Key, bucketingId, "variant")
+	for _, variant := range lookupTable {
+		if hashValue >= float64(variant.ValueMin) && hashValue < float64(variant.ValueMax) {
+			return variant.Key
+		}
+	}
+
+	return true
+}
+
+func isDeviceBucketed(flag FeatureFlag) bool {
+	return flag.BucketingIdentifier != nil && *flag.BucketingIdentifier == bucketingIdentifierDevice
+}
+
+func getBucketingID(flag FeatureFlag, distinctId string, deviceId *string) string {
+	if isDeviceBucketed(flag) && deviceId != nil {
+		return *deviceId
+	}
+	return distinctId
+}
+
+func getVariantLookupTable(flag FeatureFlag) []FlagVariantMeta {
+	multivariates := flag.Filters.Multivariate
+	if multivariates == nil || multivariates.Variants == nil {
+		return nil
+	}
+
+	lookupTable := make([]FlagVariantMeta, 0, len(multivariates.Variants))
+	valueMin := 0.00
+	for _, variant := range multivariates.Variants {
+		valueMax := valueMin + *variant.RolloutPercentage/100.
+		lookupTable = append(lookupTable, FlagVariantMeta{ValueMin: valueMin, ValueMax: valueMax, Key: variant.Key})
+		valueMin = valueMax
+	}
+	return lookupTable
+}
+
+func (poller *FeatureFlagsPoller) matchFeatureFlagProperties(
+	flag FeatureFlag,
+	distinctId string,
+	deviceId *string,
+	properties Properties,
+	cohorts map[string]PropertyGroup,
+	flagsByKey map[string]FeatureFlag,
+	evaluationCache map[string]interface{},
+	groups Groups,
+	groupProperties map[string]Properties,
+	snapshots ...*flagsState,
+) (interface{}, error) {
+	state := poller.evaluationState(snapshots)
+	conditions := flag.Filters.Groups
+	// Holdouts precede release conditions: a held-out identifier is excluded from
+	// the flag's targeting entirely rather than bucketed into one of its variants.
+	// Per-condition aggregation below never changes holdout membership.
+	holdoutVariant, held, err := getHoldoutVariant(flag, distinctId, deviceId)
+	if err != nil {
+		return nil, err
+	}
+	if held {
+		return holdoutVariant, nil
+	}
+	bucketingId := getBucketingID(flag, distinctId, deviceId)
+
+	flagAggregation := flag.Filters.AggregationGroupTypeIndex
+	groupTypeMapping := state.groups
+	isInconclusive := false
+
+	for _, condition := range conditions {
+		// Per-condition aggregation overrides only when the condition explicitly
+		// sets its own AggregationGroupTypeIndex that differs from the flag level
+		// (mixed targeting). When absent, fall back to the flag-level aggregation
+		// so existing pure person and pure group flags keep their original behavior.
+		conditionAggregation := condition.AggregationGroupTypeIndex
+		if conditionAggregation == nil {
+			conditionAggregation = flagAggregation
+		}
+
+		effectiveProperties := properties
+		effectiveBucketingId := bucketingId
+
+		// Mixed-override path: condition-level aggregation differs from flag-level.
+		// This assumes flag-level aggregation is nil for mixed flags.
+		if !uint8PtrEqual(conditionAggregation, flagAggregation) {
+			if conditionAggregation != nil {
+				groupType, exists := groupTypeMapping[fmt.Sprintf("%d", *conditionAggregation)]
+				if !exists {
+					continue
+				}
+				groupKey, hasGroup := groups[groupType]
+				if !hasGroup {
+					continue
+				}
+				focusedGroupProperties, hasProps := groupProperties[groupType]
+				if !hasProps {
+					isInconclusive = true
+					continue
+				}
+				groupKeyStr, ok := groupKeyToString(groupKey)
+				if !ok {
+					continue
+				}
+				if _, exists := focusedGroupProperties["$group_key"]; !exists {
+					focusedGroupProperties = Properties{"$group_key": groupKey}.Merge(focusedGroupProperties)
+				}
+				effectiveProperties = focusedGroupProperties
+				effectiveBucketingId = groupKeyStr
+			}
+		}
+
+		matchResult, err := poller.isConditionMatch(flag, distinctId, effectiveBucketingId, deviceId, condition, effectiveProperties, cohorts, flagsByKey, evaluationCache, state)
+		if err != nil {
+			// Use direct type switch instead of errors.As to avoid pointer escape allocations.
+			// Our error types are returned directly (not wrapped), so type assertion suffices.
+			switch err.(type) {
+			case *RequiresServerEvaluationError:
+				// Static cohort or other missing server-side data - must fallback to API
+				return nil, err
+			case *InconclusiveMatchError:
+				// Evaluation error (invalid date, missing property, etc.)
+				// Track that we had an inconclusive match, but try other conditions
+				isInconclusive = true
+			default:
+				return nil, err
+			}
+		}
+
+		switch matchResult {
+		case conditionMatch:
+			variantOverride := condition.Variant
+			multivariates := flag.Filters.Multivariate
+
+			if variantOverride != nil && multivariates != nil && multivariates.Variants != nil && containsVariant(multivariates.Variants, *variantOverride) {
+				return *variantOverride, nil
+			} else {
+				return getMatchingVariant(flag, effectiveBucketingId), nil
+			}
+		case conditionOutOfRolloutBound:
+			// The property filters matched (or there were none) but the rollout
+			// excluded the user. When early_exit is enabled, mirror the server
+			// engine by returning a definitive disabled result instead of
+			// falling through to later condition groups. If a prior group was
+			// inconclusive we can't decide locally, so return errInconclusiveMatch
+			// to force a server fallback rather than continuing evaluation.
+			if flag.Filters.EarlyExit {
+				if isInconclusive {
+					return false, errInconclusiveMatch
+				}
+				return false, nil
+			}
+		case conditionNoMatch:
+			// A property filter did not match: always fall through to the next
+			// condition group, even when early_exit is enabled.
+		}
+	}
+
+	if isInconclusive {
+		return false, errInconclusiveMatch
+	}
+
+	return false, nil
+}
+
+func uint8PtrEqual(a, b *uint8) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+// conditionMatchResult is the tri-state outcome of evaluating a single
+// condition group, mirroring the server-side (Rust) evaluation engine.
+type conditionMatchResult int
+
+const (
+	// conditionMatch means the property filters matched and the rollout
+	// included the user: the flag matches.
+	conditionMatch conditionMatchResult = iota
+	// conditionNoMatch means a property filter did not match: evaluation
+	// always falls through to the next condition group.
+	conditionNoMatch
+	// conditionOutOfRolloutBound means the property filters matched (or the
+	// group had none) but the rollout percentage excluded the user. With
+	// early_exit enabled this short-circuits the flag to disabled.
+	conditionOutOfRolloutBound
+)
+
+func (poller *FeatureFlagsPoller) isConditionMatch(
+	flag FeatureFlag,
+	distinctId string,
+	bucketingId string,
+	deviceId *string,
+	condition FeatureFlagCondition,
+	properties Properties,
+	cohorts map[string]PropertyGroup,
+	flagsByKey map[string]FeatureFlag,
+	evaluationCache map[string]interface{},
+	snapshots ...*flagsState,
+) (conditionMatchResult, error) {
+	state := poller.evaluationState(snapshots)
+	if len(condition.Properties) > 0 {
+		var (
+			isMatch bool
+			err     error
+		)
+		aggregationGroupTypeIndex := condition.AggregationGroupTypeIndex
+		if aggregationGroupTypeIndex == nil {
+			aggregationGroupTypeIndex = flag.Filters.AggregationGroupTypeIndex
+		}
+		dependencyDistinctId, dependencyDeviceId := distinctId, deviceId
+		if aggregationGroupTypeIndex != nil {
+			// A condition-level group override uses the group's key, not the
+			// original person's ID or device, for dependent flag bucketing.
+			dependencyDistinctId, dependencyDeviceId = bucketingId, nil
+		}
+		for _, prop := range condition.Properties {
+			if prop.Type == "cohort" {
+				isMatch, err = poller.matchCohort(prop, properties, cohorts, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, aggregationGroupTypeIndex, state)
+			} else if prop.Type == "flag" {
+				isMatch, err = poller.evaluateFlagDependency(prop, flagsByKey, evaluationCache, dependencyDistinctId, dependencyDeviceId, properties, cohorts, aggregationGroupTypeIndex, state)
+			} else {
+				isMatch, err = matchProperty(prop, properties, state.propertyMatchingVersion)
+			}
+
+			if err != nil {
+				return conditionNoMatch, err
+			}
+			if !isMatch {
+				return conditionNoMatch, nil
+			}
+		}
+	}
+
+	if condition.RolloutPercentage != nil {
+		if checkIfSimpleFlagEnabled(flag.Key, bucketingId, *condition.RolloutPercentage) {
+			return conditionMatch, nil
+		}
+		// Property filters matched (or there were none) but the rollout
+		// percentage excluded the user.
+		return conditionOutOfRolloutBound, nil
+	}
+
+	return conditionMatch, nil
+}
+
+func matchProperty(property FlagProperty, properties Properties, matchingVersions ...int) (bool, error) {
+	key := property.Key
+	operator := property.Operator
+	value := property.Value
+	if _, ok := properties[key]; !ok {
+		return false, errMissingPropertyValue
+	}
+
+	if operator == "is_not_set" {
+		return false, nil
+	}
+
+	override_value := properties[key]
+
+	if operator == "exact" || operator == "is_not" {
+		matched, err := exactMatch(value, override_value, matchingVersions...)
+		if err != nil {
+			return false, err
+		}
+		if operator == "is_not" {
+			return !matched, nil
+		}
+		return matched, nil
+	}
+
+	if operator == "is_set" {
+		return true, nil
+	}
+
+	if override_value == nil {
+		switch operator {
+		case "icontains", "not_icontains", "starts_with", "not_starts_with", "ends_with", "not_ends_with", "regex", "not_regex":
+			override_value = "null"
+		}
+	}
+
+	if operator == "icontains" {
+		return strings.Contains(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
+	}
+
+	if operator == "not_icontains" {
+		return !strings.Contains(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
+	}
+
+	if operator == "starts_with" {
+		return strings.HasPrefix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
+	}
+
+	if operator == "not_starts_with" {
+		return !strings.HasPrefix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
+	}
+
+	if operator == "ends_with" {
+		return strings.HasSuffix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
+	}
+
+	if operator == "not_ends_with" {
+		return !strings.HasSuffix(asciiLower(valueToString(override_value)), asciiLower(valueToString(value))), nil
+	}
+
+	if operator == "regex" || operator == "not_regex" {
+		r, err := getOrCompileRegex(valueToString(value))
+		if err != nil {
+			if isServerEvalError(err) {
+				return false, err
+			}
+			// Invalid shared syntax fails both operators, without negation.
+			return false, nil
+		}
+		input := valueToString(override_value)
+		if r.asciiClasses {
+			for _, c := range input {
+				if c > 127 || c == '\v' {
+					return false, errRegexRequiresServer
+				}
+			}
+		}
+		matched := r.MatchString(input)
+		if operator == "not_regex" {
+			matched = !matched
+		}
+		return matched, nil
+	}
+
+	if operator == "gt" {
+		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
+		if err != nil {
+			return false, err
+		}
+
+		return overrideValueOrderable > valueOrderable, nil
+	}
+
+	if operator == "lt" {
+		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
+		if err != nil {
+			return false, err
+		}
+
+		return overrideValueOrderable < valueOrderable, nil
+	}
+
+	if operator == "gte" {
+		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
+		if err != nil {
+			return false, err
+		}
+
+		return overrideValueOrderable >= valueOrderable, nil
+	}
+
+	if operator == "lte" {
+		valueOrderable, overrideValueOrderable, err := validateOrderable(value, override_value)
+		if err != nil {
+			return false, err
+		}
+
+		return overrideValueOrderable <= valueOrderable, nil
+	}
+
+	if operator == "is_date_before" || operator == "is_date_after" {
+		overrideTime, err := validateDates(override_value)
+		if err != nil {
+			return false, err
+		}
+
+		valueTime, err := validateDates(value)
+		if err != nil {
+			return false, err
+		}
+
+		if operator == "is_date_before" {
+			return overrideTime.Before(valueTime), nil
+		}
+
+		return overrideTime.After(valueTime), nil
+	}
+
+	// Semver comparison operators
+	if operator == "semver_eq" || operator == "semver_neq" ||
+		operator == "semver_gt" || operator == "semver_gte" ||
+		operator == "semver_lt" || operator == "semver_lte" {
+
+		overrideStr, ok := override_value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("semver comparison requires string value, got %T", override_value)}
+		}
+
+		overrideParsed, err := parseSemver(overrideStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value %q is not a valid semver", overrideStr)}
+		}
+
+		valueStr, ok := value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value must be a string, got %T", value)}
+		}
+
+		valueParsed, err := parseSemver(valueStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value %q is not a valid semver", valueStr)}
+		}
+
+		cmp := overrideParsed.compareTo(valueParsed)
+
+		switch operator {
+		case "semver_eq":
+			return cmp == 0, nil
+		case "semver_neq":
+			return cmp != 0, nil
+		case "semver_gt":
+			return cmp > 0, nil
+		case "semver_gte":
+			return cmp >= 0, nil
+		case "semver_lt":
+			return cmp < 0, nil
+		case "semver_lte":
+			return cmp <= 0, nil
+		}
+	}
+
+	if operator == "semver_tilde" {
+		overrideStr, ok := override_value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("semver comparison requires string value, got %T", override_value)}
+		}
+
+		overrideParsed, err := parseSemver(overrideStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value %q is not a valid semver", overrideStr)}
+		}
+
+		valueStr, ok := value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value must be a string, got %T", value)}
+		}
+
+		lower, upper, err := computeTildeBounds(valueStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value %q is not valid for tilde operator", valueStr)}
+		}
+
+		// Check: lower <= override < upper
+		return overrideParsed.compareTo(lower) >= 0 && overrideParsed.compareTo(upper) < 0, nil
+	}
+
+	if operator == "semver_caret" {
+		overrideStr, ok := override_value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("semver comparison requires string value, got %T", override_value)}
+		}
+
+		overrideParsed, err := parseSemver(overrideStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value %q is not a valid semver", overrideStr)}
+		}
+
+		valueStr, ok := value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value must be a string, got %T", value)}
+		}
+
+		lower, upper, err := computeCaretBounds(valueStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value %q is not valid for caret operator", valueStr)}
+		}
+
+		// Check: lower <= override < upper
+		return overrideParsed.compareTo(lower) >= 0 && overrideParsed.compareTo(upper) < 0, nil
+	}
+
+	if operator == "semver_wildcard" {
+		overrideStr, ok := override_value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("semver comparison requires string value, got %T", override_value)}
+		}
+
+		overrideParsed, err := parseSemver(overrideStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("property value %q is not a valid semver", overrideStr)}
+		}
+
+		valueStr, ok := value.(string)
+		if !ok {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value must be a string, got %T", value)}
+		}
+
+		lower, upper, err := computeWildcardBounds(valueStr)
+		if err != nil {
+			return false, &InconclusiveMatchError{fmt.Sprintf("flag semver value %q is not valid for wildcard operator", valueStr)}
+		}
+
+		// Check: lower <= override < upper
+		return overrideParsed.compareTo(lower) >= 0 && overrideParsed.compareTo(upper) < 0, nil
+	}
+
+	return false, &InconclusiveMatchError{"Unknown operator: " + operator}
+
+}
+
+func validateOrderable(firstValue interface{}, secondValue interface{}) (float64, float64, error) {
+	convertedFirstValue, err := interfaceToFloat(firstValue)
+	if err != nil {
+		errMessage := "value 1 is not orderable"
+		return 0, 0, errors.New(errMessage)
+	}
+	convertedSecondValue, err := interfaceToFloat(secondValue)
+	if err != nil {
+		errMessage := "value 2 is not orderable"
+		return 0, 0, errors.New(errMessage)
+	}
+
+	return convertedFirstValue, convertedSecondValue, nil
+}
+
+func validateDates(value interface{}) (time.Time, error) {
+	dateStr, ok := value.(string)
+	if !ok {
+		return time.Time{}, errors.New("date comparison requires string values")
+	}
+
+	parsedTime, err := parseDate(dateStr)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return parsedTime, nil
+}
+
+// parseDate parses a date string which can be in various ISO 8601 formats or relative format (e.g., "-7d")
+// Supported formats:
+// - RFC3339 with fractional seconds and timezone offsets: "2020-01-01T10:00:00.123Z", "2020-01-01T10:00:00.123+05:30"
+// - RFC3339: "2020-01-01T10:00:00Z" or "2020-01-01T10:00:00+00:00"
+// - Date only: "2020-01-01"
+// - DateTime without timezone: "2020-01-01T10:00:00"
+// - Relative: "-7d", "1h", etc.
+func parseDate(dateStr string) (time.Time, error) {
+	formats := []string{
+		time.RFC3339Nano,      // Handles: fractional seconds, timezone offsets, and Z (e.g., 2024-01-15T10:30:00.123Z, 2024-01-15T10:30:00+05:30)
+		time.RFC3339,          // Handles: basic RFC3339 without fractional seconds (e.g., 2024-01-15T10:30:00Z)
+		time.DateOnly,         // Handles: date-only format (e.g., 2024-01-15)
+		time.DateTime,         // Handles: datetime with space separator (e.g., 2024-01-15 10:30:00)
+		"2006-01-02T15:04:05", // Handles: datetime without timezone (e.g., 2024-01-15T10:30:05)
+	}
+
+	for _, format := range formats {
+		t, err := time.Parse(format, dateStr)
+		if err == nil {
+			return t, nil
+		}
+	}
+
+	relativeTime, relErr := parseRelativeDate(dateStr)
+	if relErr == nil {
+		return relativeTime, nil
+	}
+
+	return time.Time{}, errors.New("invalid date format, must be ISO 8601 or relative format (e.g., '-7d')")
+}
+
+// parseRelativeDate parses relative date format (e.g., "-1d" or "1d" for 1 day ago).
+// Always produces a date in the past.
+func parseRelativeDate(dateStr string) (time.Time, error) {
+	matches := relativeDateRegex.FindStringSubmatch(dateStr)
+	if matches == nil {
+		return time.Time{}, errors.New("invalid relative date format")
+	}
+
+	number, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return time.Time{}, errors.New("invalid number in relative date")
+	}
+
+	// Avoid overflow or overly large date ranges
+	if number >= 10000 {
+		return time.Time{}, errors.New("relative date number too large (must be < 10000)")
+	}
+
+	interval := matches[2]
+	now := time.Now()
+
+	switch interval {
+	case "h":
+		return now.Add(-time.Duration(number) * time.Hour), nil
+	case "d":
+		return now.AddDate(0, 0, -number), nil
+	case "w":
+		return now.AddDate(0, 0, -number*7), nil
+	case "m":
+		return now.AddDate(0, -number, 0), nil
+	case "y":
+		return now.AddDate(-number, 0, 0), nil
+	default:
+		return time.Time{}, errors.New("invalid interval in relative date")
+	}
+}
+
+// semverTuple represents a parsed semantic version as (major, minor, patch).
+type semverTuple struct {
+	major, minor, patch int
+}
+
+// compareTo returns -1 if s < other, 0 if s == other, 1 if s > other.
+func (s semverTuple) compareTo(other semverTuple) int {
+	if s.major != other.major {
+		if s.major < other.major {
+			return -1
+		}
+		return 1
+	}
+	if s.minor != other.minor {
+		if s.minor < other.minor {
+			return -1
+		}
+		return 1
+	}
+	if s.patch != other.patch {
+		if s.patch < other.patch {
+			return -1
+		}
+		return 1
+	}
+	return 0
+}
+
+// parseSemverNumeric parses a single numeric identifier, rejecting leading
+// zeros per semver 2.0.0 §2 (numeric identifiers MUST NOT include them).
+func parseSemverNumeric(part string) (int, error) {
+	if part == "" {
+		return 0, errors.New("empty numeric identifier")
+	}
+	if len(part) > 1 && part[0] == '0' {
+		return 0, fmt.Errorf("numeric identifier has leading zero: '%s'", part)
+	}
+	return strconv.Atoi(part)
+}
+
+// parseSemver parses a version string into a semverTuple.
+// Parsing rules:
+// 1. Strip leading/trailing whitespace
+// 2. Strip v or V prefix
+// 3. Strip pre-release and build metadata suffixes (split on - or +)
+// 4. Split on . and parse first 3 components as integers
+// 5. Default missing components to 0
+// 6. Ignore extra components beyond the third
+// 7. Return error for invalid input (including numeric identifiers with leading zeros)
+func parseSemver(value string) (semverTuple, error) {
+	text := strings.TrimSpace(value)
+
+	// Strip v/V prefix
+	if len(text) > 0 && (text[0] == 'v' || text[0] == 'V') {
+		text = text[1:]
+	}
+
+	if text == "" {
+		return semverTuple{}, errors.New("invalid semver: empty string")
+	}
+
+	// Find the core version (before any - or +)
+	// We need to validate the core before stripping suffixes
+	coreEnd := len(text)
+	if idx := strings.Index(text, "-"); idx >= 0 {
+		coreEnd = idx
+	}
+	if idx := strings.Index(text, "+"); idx >= 0 && idx < coreEnd {
+		coreEnd = idx
+	}
+	core := text[:coreEnd]
+
+	if core == "" {
+		return semverTuple{}, errors.New("invalid semver: empty version before suffix")
+	}
+
+	parts := strings.Split(core, ".")
+	if len(parts) == 0 || parts[0] == "" {
+		return semverTuple{}, errors.New("invalid semver: no version components")
+	}
+
+	major, err := parseSemverNumeric(parts[0])
+	if err != nil {
+		return semverTuple{}, fmt.Errorf("invalid semver: major version '%s': %w", parts[0], err)
+	}
+
+	minor := 0
+	if len(parts) > 1 {
+		if parts[1] == "" {
+			return semverTuple{}, errors.New("invalid semver: empty minor version component")
+		}
+		minor, err = parseSemverNumeric(parts[1])
+		if err != nil {
+			return semverTuple{}, fmt.Errorf("invalid semver: minor version '%s': %w", parts[1], err)
+		}
+	}
+
+	patch := 0
+	if len(parts) > 2 {
+		if parts[2] == "" {
+			return semverTuple{}, errors.New("invalid semver: empty patch version component")
+		}
+		patch, err = parseSemverNumeric(parts[2])
+		if err != nil {
+			return semverTuple{}, fmt.Errorf("invalid semver: patch version '%s': %w", parts[2], err)
+		}
+	}
+
+	return semverTuple{major: major, minor: minor, patch: patch}, nil
+}
+
+// computeTildeBounds computes the bounds for the tilde (~) operator.
+// ~X.Y.Z means >=X.Y.Z and <X.(Y+1).0
+func computeTildeBounds(value string) (lower, upper semverTuple, err error) {
+	parsed, err := parseSemver(value)
+	if err != nil {
+		return semverTuple{}, semverTuple{}, err
+	}
+	lower = parsed
+	upper = semverTuple{major: parsed.major, minor: parsed.minor + 1, patch: 0}
+	return lower, upper, nil
+}
+
+// computeCaretBounds computes the bounds for the caret (^) operator.
+// ^X.Y.Z where:
+// - X > 0: >=X.Y.Z <(X+1).0.0
+// - X == 0, Y > 0: >=0.Y.Z <0.(Y+1).0
+// - X == 0, Y == 0: >=0.0.Z <0.0.(Z+1)
+func computeCaretBounds(value string) (lower, upper semverTuple, err error) {
+	parsed, err := parseSemver(value)
+	if err != nil {
+		return semverTuple{}, semverTuple{}, err
+	}
+	lower = parsed
+
+	if parsed.major > 0 {
+		upper = semverTuple{major: parsed.major + 1, minor: 0, patch: 0}
+	} else if parsed.minor > 0 {
+		upper = semverTuple{major: 0, minor: parsed.minor + 1, patch: 0}
+	} else {
+		upper = semverTuple{major: 0, minor: 0, patch: parsed.patch + 1}
+	}
+	return lower, upper, nil
+}
+
+// computeWildcardBounds computes the bounds for the wildcard (*) operator.
+// X.* means >=X.0.0 <(X+1).0.0
+// X.Y.* means >=X.Y.0 <X.(Y+1).0
+func computeWildcardBounds(value string) (lower, upper semverTuple, err error) {
+	text := strings.TrimSpace(value)
+
+	// Strip v/V prefix
+	if len(text) > 0 && (text[0] == 'v' || text[0] == 'V') {
+		text = text[1:]
+	}
+
+	// Remove wildcards and trailing dots
+	text = strings.ReplaceAll(text, "*", "")
+	text = strings.TrimRight(text, ".")
+
+	if text == "" {
+		return semverTuple{}, semverTuple{}, errors.New("invalid wildcard pattern: empty after removing wildcards")
+	}
+
+	parts := strings.Split(text, ".")
+	// Filter out empty parts
+	var nonEmptyParts []string
+	for _, p := range parts {
+		if p != "" {
+			nonEmptyParts = append(nonEmptyParts, p)
+		}
+	}
+
+	if len(nonEmptyParts) == 0 {
+		return semverTuple{}, semverTuple{}, errors.New("invalid wildcard pattern: no version components")
+	}
+
+	major, err := parseSemverNumeric(nonEmptyParts[0])
+	if err != nil {
+		return semverTuple{}, semverTuple{}, fmt.Errorf("invalid wildcard pattern: major version '%s': %w", nonEmptyParts[0], err)
+	}
+
+	if len(nonEmptyParts) == 1 {
+		// X.* pattern
+		lower = semverTuple{major: major, minor: 0, patch: 0}
+		upper = semverTuple{major: major + 1, minor: 0, patch: 0}
+		return lower, upper, nil
+	}
+
+	minor, err := parseSemverNumeric(nonEmptyParts[1])
+	if err != nil {
+		return semverTuple{}, semverTuple{}, fmt.Errorf("invalid wildcard pattern: minor version '%s': %w", nonEmptyParts[1], err)
+	}
+
+	if len(nonEmptyParts) == 2 {
+		// X.Y.* pattern
+		lower = semverTuple{major: major, minor: minor, patch: 0}
+		upper = semverTuple{major: major, minor: minor + 1, patch: 0}
+		return lower, upper, nil
+	}
+
+	// X.Y.Z.* pattern - treat as X.Y.Z to X.Y.(Z+1)
+	patch, err := parseSemverNumeric(nonEmptyParts[2])
+	if err != nil {
+		return semverTuple{}, semverTuple{}, fmt.Errorf("invalid wildcard pattern: patch version '%s': %w", nonEmptyParts[2], err)
+	}
+	lower = semverTuple{major: major, minor: minor, patch: patch}
+	upper = semverTuple{major: major, minor: minor, patch: patch + 1}
+	return lower, upper, nil
+}
+
+func interfaceToFloat(val interface{}) (float64, error) {
+	var i float64
+	switch t := val.(type) {
+	case int:
+		i = float64(t)
+	case int8:
+		i = float64(t)
+	case int16:
+		i = float64(t)
+	case int32:
+		i = float64(t)
+	case int64:
+		i = float64(t)
+	case float32:
+		i = float64(t)
+	case float64:
+		i = float64(t)
+	case uint8:
+		i = float64(t)
+	case uint16:
+		i = float64(t)
+	case uint32:
+		i = float64(t)
+	case uint64:
+		i = float64(t)
+	case string:
+		// The flags API stores a numeric comparison operand as a string, and every other SDK
+		// parses that form. Without this the value is not orderable and the caller falls back
+		// to the API for a flag it could evaluate locally.
+		parsed, err := strconv.ParseFloat(t, 64)
+		// ParseFloat accepts "NaN" and "Inf". A NaN comparison is false whichever way it is
+		// asked, so accepting one would answer the condition instead of falling back.
+		if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+			return 0.0, errors.New("argument not orderable")
+		}
+		i = parsed
+	default:
+		errMessage := "argument not orderable"
+		return 0.0, errors.New(errMessage)
+	}
+
+	return i, nil
+}
+
+// exactMatch defaults to the flags service's legacy boolean-array precedence.
+// Only version 2 uses explicit equality, retaining empty-array truthiness.
+// Integral float64 filter values are inconclusive
+// because JSON decoding collapses integer and floating-point number kinds.
+func exactMatch(value interface{}, overrideValue interface{}, matchingVersions ...int) (bool, error) {
+	explicitMatching := len(matchingVersions) > 0 && matchingVersions[0] == 2
+	if !explicitMatching && isTruthyOrFalsyPropertyValue(value) {
+		return isTruthyPropertyValue(value) == isTruthyPropertyValue(overrideValue), nil
+	}
+
+	if list, ok := value.([]interface{}); ok {
+		if len(list) == 0 {
+			return isTruthyPropertyValue(overrideValue), nil
+		}
+		hadAmbiguousNumber := false
+		overrideStr := unicodeLower(exactValueToString(overrideValue))
+		for _, item := range list {
+			if containsAmbiguousExactNumber(item) {
+				hadAmbiguousNumber = true
+				continue
+			}
+			if unicodeLower(exactValueToString(item)) == overrideStr {
+				return true, nil
+			}
+		}
+		if hadAmbiguousNumber {
+			return false, errAmbiguousExactNumber
+		}
+		return false, nil
+	}
+
+	if containsAmbiguousExactNumber(value) {
+		return false, errAmbiguousExactNumber
+	}
+	return unicodeLower(exactValueToString(value)) == unicodeLower(exactValueToString(overrideValue)), nil
+}
+
+func isTruthyOrFalsyPropertyValue(value interface{}) bool {
+	switch typed := value.(type) {
+	case bool:
+		return true
+	case string:
+		lowered := unicodeLower(typed)
+		return lowered == "true" || lowered == "false"
+	case []interface{}:
+		for _, item := range typed {
+			if !isTruthyOrFalsyPropertyValue(item) {
+				return false
+			}
+		}
+		return true
+	default:
+		if array, ok := normalizeJSONArray(value); ok {
+			return isTruthyOrFalsyPropertyValue(array)
+		}
+		return false
+	}
+}
+
+func isTruthyPropertyValue(value interface{}) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return unicodeLower(typed) == "true"
+	case []interface{}:
+		for _, item := range typed {
+			if !isTruthyPropertyValue(item) {
+				return false
+			}
+		}
+		return true
+	default:
+		if array, ok := normalizeJSONArray(value); ok {
+			return isTruthyPropertyValue(array)
+		}
+		return false
+	}
+}
+
+func normalizeJSONArray(value interface{}) ([]interface{}, bool) {
+	decoded, ok := normalizeJSONValue(value)
+	if !ok {
+		return nil, false
+	}
+	array, ok := decoded.([]interface{})
+	return array, ok
+}
+
+func normalizeJSONValue(value interface{}) (interface{}, bool) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var decoded interface{}
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, false
+	}
+	return decoded, true
+}
+
+func containsAmbiguousExactNumber(value interface{}) bool {
+	if value == nil {
+		return false
+	}
+
+	reflected := reflect.ValueOf(value)
+	for reflected.Kind() == reflect.Interface || reflected.Kind() == reflect.Pointer {
+		if reflected.IsNil() {
+			return false
+		}
+		reflected = reflected.Elem()
+	}
+
+	switch reflected.Kind() {
+	case reflect.Float64:
+		floatValue := reflected.Float()
+		return !math.IsNaN(floatValue) && !math.IsInf(floatValue, 0) && math.Trunc(floatValue) == floatValue
+	case reflect.Array, reflect.Slice:
+		for index := 0; index < reflected.Len(); index++ {
+			if containsAmbiguousExactNumber(reflected.Index(index).Interface()) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iterator := reflected.MapRange()
+		for iterator.Next() {
+			if containsAmbiguousExactNumber(iterator.Value().Interface()) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		for index := 0; index < reflected.NumField(); index++ {
+			field := reflected.Field(index)
+			if field.CanInterface() && containsAmbiguousExactNumber(field.Interface()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func unicodeLower(value string) string {
+	// Casers may be stateful and cannot be shared between evaluator goroutines.
+	return cases.Lower(language.Und).String(value)
+}
+
+func asciiLower(value string) string {
+	lowered := []byte(value)
+	for i, character := range lowered {
+		if character >= 'A' && character <= 'Z' {
+			lowered[i] = character + ('a' - 'A')
+		}
+	}
+	return string(lowered)
+}
+
+func containsVariant(variantList []FlagVariant, key string) bool {
+	for _, variant := range variantList {
+		if variant.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// flagHasDependencies returns true if any condition in the flag references another flag
+// or cohort, requiring an evaluationCache for dependency resolution.
+func flagHasDependencies(flag FeatureFlag) bool {
+	for _, group := range flag.Filters.Groups {
+		for _, prop := range group.Properties {
+			if prop.Type == "flag" || prop.Type == "cohort" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// flagHasPersonProperties returns true if any condition in the flag checks person properties.
+// When false, local evaluation can skip constructing person-property context for the flag.
+func flagHasPersonProperties(flag FeatureFlag) bool {
+	for _, group := range flag.Filters.Groups {
+		if len(group.Properties) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// variantToString converts a flag variant value to its string key for payload lookup.
+// Flag variants are always bool or string, so we avoid fmt.Sprintf overhead.
+// valueToString converts an interface{} value to string without fmt.Sprint allocation
+// for common types (string, int, float64). Used for cohort ID lookup.
+func valueToString(v interface{}) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case float64:
+		if val == float64(int64(val)) {
+			return strconv.FormatInt(int64(val), 10)
+		}
+		return strconv.FormatFloat(val, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(val)
+	case int64:
+		return strconv.FormatInt(val, 10)
+	case bool:
+		return strconv.FormatBool(val)
+	default:
+		return fmt.Sprint(v)
+	}
+}
+
+// exactValueToString mirrors serde_json::Value::to_string for representable JSON
+// values, except that top-level strings remain unquoted like the flags service helper.
+func exactValueToString(value interface{}) string {
+	if value != nil && reflect.ValueOf(value).Kind() == reflect.String {
+		return reflect.ValueOf(value).String()
+	}
+
+	if !isDirectCanonicalValue(value) {
+		if normalized, ok := normalizeJSONValue(value); ok {
+			if stringValue, ok := normalized.(string); ok {
+				return stringValue
+			}
+			if stringValue, ok := canonicalJSONValue(normalized); ok {
+				return stringValue
+			}
+		}
+	}
+
+	if stringValue, ok := canonicalJSONValue(value); ok {
+		return stringValue
+	}
+	return fmt.Sprint(value)
+}
+
+func isDirectCanonicalValue(value interface{}) bool {
+	switch value.(type) {
+	case nil, string, bool,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64, json.Number,
+		[]interface{}, map[string]interface{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func canonicalJSONValue(value interface{}) (string, bool) {
+	switch typed := value.(type) {
+	case nil:
+		return "null", true
+	case string:
+		encoded, err := json.MarshalNoEscape(typed)
+		return string(encoded), err == nil
+	case bool:
+		return strconv.FormatBool(typed), true
+	case int:
+		return strconv.Itoa(typed), true
+	case int8:
+		return strconv.FormatInt(int64(typed), 10), true
+	case int16:
+		return strconv.FormatInt(int64(typed), 10), true
+	case int32:
+		return strconv.FormatInt(int64(typed), 10), true
+	case int64:
+		return strconv.FormatInt(typed, 10), true
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case uint8:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case uint16:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10), true
+	case uint64:
+		return strconv.FormatUint(typed, 10), true
+	case float32:
+		return serdeFloatString(float64(typed), 32)
+	case float64:
+		return serdeFloatString(typed, 64)
+	case json.Number:
+		number := typed.String()
+		if !strings.ContainsAny(number, ".eE") {
+			return number, true
+		}
+		floatValue, err := typed.Float64()
+		if err != nil {
+			return "", false
+		}
+		return serdeFloatString(floatValue, 64)
+	case []interface{}:
+		values := make([]string, len(typed))
+		for index, item := range typed {
+			encoded, ok := canonicalJSONValue(item)
+			if !ok {
+				return "", false
+			}
+			values[index] = encoded
+		}
+		return "[" + strings.Join(values, ",") + "]", true
+	case map[string]interface{}:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		values := make([]string, 0, len(keys))
+		for _, key := range keys {
+			encodedKey, _ := json.MarshalNoEscape(key)
+			encodedValue, ok := canonicalJSONValue(typed[key])
+			if !ok {
+				return "", false
+			}
+			values = append(values, string(encodedKey)+":"+encodedValue)
+		}
+		return "{" + strings.Join(values, ",") + "}", true
+	default:
+		decoded, ok := normalizeJSONValue(value)
+		if !ok {
+			return "", false
+		}
+		return canonicalJSONValue(decoded)
+	}
+}
+
+func serdeFloatString(value float64, bitSize int) (string, bool) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return "", false
+	}
+
+	absolute := math.Abs(value)
+	if absolute != 0 && (absolute < 1e-6 || absolute >= 1e16) {
+		formatted := strconv.FormatFloat(value, 'e', -1, bitSize)
+		exponentIndex := strings.LastIndexByte(formatted, 'e')
+		exponent, err := strconv.Atoi(formatted[exponentIndex+1:])
+		if err != nil {
+			return "", false
+		}
+		return formatted[:exponentIndex] + "e" + fmt.Sprintf("%+d", exponent), true
+	}
+
+	formatted := strconv.FormatFloat(value, 'f', -1, bitSize)
+	if math.Trunc(value) == value {
+		formatted += ".0"
+	}
+	return formatted, true
+}
+
+func variantToString(v interface{}) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case bool:
+		if val {
+			return "true"
+		}
+		return "false"
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// extracted as a regular func for testing purposes
+func checkIfSimpleFlagEnabled(key, bucketingId string, rolloutPercentage float64) bool {
+	hash := calculateHash(key, bucketingId, "")
+	return hash <= rolloutPercentage/100.
+}
+
+// calculateHash computes a deterministic hash value in [0, 1) for flag bucketing.
+// The input is: key + "." + distinctId + salt.
+// The "." separator is appended internally so callers don't need to concatenate.
+func calculateHash(key, distinctId, salt string) float64 {
+	return calculateHashWithSeparator(key, ".", distinctId, salt)
+}
+
+// calculateHashWithSeparator computes the bucketing hash for key + separator +
+// distinctId + salt. Holdouts join with "-" rather than the "." used by flag
+// rollouts, and the separator decides which population is selected, so it is
+// explicit rather than assumed.
+func calculateHashWithSeparator(key, separator, distinctId, salt string) float64 {
+	// Build the input in a stack-allocated buffer to avoid heap allocations.
+	// sha1.Sum takes a complete []byte and returns a [20]byte — no heap escapes.
+	totalLen := len(key) + len(separator) + len(distinctId) + len(salt)
+	var buf [256]byte
+	var input []byte
+	if totalLen <= len(buf) {
+		input = buf[:0]
+	} else {
+		input = make([]byte, 0, totalLen)
+	}
+	input = append(input, key...)
+	input = append(input, separator...)
+	input = append(input, distinctId...)
+	input = append(input, salt...)
+
+	digest := sha1.Sum(input)
+	return float64(binary.BigEndian.Uint64(digest[:8])>>4) / LONG_SCALE
+}
+
+// holdoutHash computes holdout membership for a bucketing value. Neither the
+// flag key nor the holdout id takes part, so the same identity lands in the
+// same holdout population across every flag, matching the server.
+func holdoutHash(bucketingValue string) float64 {
+	return calculateHashWithSeparator("holdout", "-", bucketingValue, "")
+}
+
+// getHoldoutVariant returns the synthetic "holdout-<id>" variant when the flag
+// has a usable holdout and the identity falls inside it. The server clamps
+// out-of-range percentages rather than rejecting them, and treats 100 as
+// everyone without hashing, so a full holdout cannot miss on a hash boundary.
+//
+// A partial holdout on a device-bucketed person flag needs the device id;
+// hashing the distinct id instead would put an unrelated identity in the
+// holdout, so the evaluation stays inconclusive. Group flags ignore the
+// bucketing identifier and hash the group key.
+func getHoldoutVariant(flag FeatureFlag, distinctId string, deviceId *string) (variant string, held bool, err error) {
+	holdout := flag.Filters.Holdout
+	if holdout == nil || holdout.ID == nil || holdout.ExclusionPercentage == nil {
+		return "", false, nil
+	}
+	holdoutID, ok := holdoutIDToString(holdout.ID)
+	if !ok {
+		return "", false, nil
+	}
+
+	percentage := math.Min(math.Max(*holdout.ExclusionPercentage, 0), 100)
+	if percentage != 100 {
+		if flag.Filters.AggregationGroupTypeIndex == nil && isDeviceBucketed(flag) && (deviceId == nil || *deviceId == "") {
+			return "", false, errHoldoutMissingDeviceID
+		}
+		if holdoutHash(getBucketingID(flag, distinctId, deviceId)) > percentage/100 {
+			return "", false, nil
+		}
+	}
+	return "holdout-" + holdoutID, true, nil
+}
+
+// holdoutIDToString renders a holdout id for the synthetic variant key. The API
+// sends a number, but a string is accepted too; anything else is unusable.
+func holdoutIDToString(holdoutID interface{}) (string, bool) {
+	if id, ok := holdoutID.(string); ok {
+		return id, true
+	}
+	return groupKeyToString(holdoutID)
+}
+
+// GetFeatureFlags returns the locally loaded feature flag definitions.
+// It waits for the initial poll to complete and returns an error if flags were not loaded.
+func (poller *FeatureFlagsPoller) GetFeatureFlags() ([]FeatureFlag, error) {
+	state, err := poller.getLoadedState()
+	if err != nil {
+		return nil, err
+	}
+	return state.featureFlags, nil
+}
+
+func (poller *FeatureFlagsPoller) getLoadedState() (*flagsState, error) {
+	// When channel is open this will block. When channel is closed it will immediately exit.
+	<-poller.firstFeatureFlagRequestFinished
+
+	// Lock-free read of state
+	state := poller.state.Load()
+	if state == nil || state.featureFlags == nil {
+		// There was an error with initial flag fetching
+		return nil, errors.New("flags were not successfully fetched yet")
+	}
+
+	return state, nil
+}
+
+// getState returns the current flags state or nil if not initialized.
+// This is a lock-free read.
+func (poller *FeatureFlagsPoller) getState() *flagsState {
+	return poller.state.Load()
+}
+
+// getCohorts returns the current cohorts map or an empty map if not initialized.
+func (poller *FeatureFlagsPoller) getCohorts() map[string]PropertyGroup {
+	return stateMapOrEmpty(poller.getState(), func(state *flagsState) map[string]PropertyGroup { return state.cohorts })
+}
+
+// preParseCohortValues converts raw []any values in cohort PropertyGroups into
+// typed parsedPropertyValue slices, avoiding per-evaluation reconstruction from map[string]any.
+func preParseCohortValues(cohorts map[string]PropertyGroup) map[string]PropertyGroup {
+	if cohorts == nil {
+		return cohorts
+	}
+	result := make(map[string]PropertyGroup, len(cohorts))
+	for k, pg := range cohorts {
+		result[k] = preParsePG(pg)
+	}
+	return result
+}
+
+func preParsePG(pg PropertyGroup) PropertyGroup {
+	if len(pg.Values) == 0 {
+		return pg
+	}
+	parsed := make([]parsedPropertyValue, 0, len(pg.Values))
+	for _, value := range pg.Values {
+		prop, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, hasValues := prop["values"]; hasValues {
+			// Nested PropertyGroup — recurse
+			childPG := PropertyGroup{
+				Type:   getSafeProp[string](prop, "type"),
+				Values: getSafeProp[[]any](prop, "values"),
+			}
+			childPG = preParsePG(childPG)
+			parsed = append(parsed, parsedPropertyValue{
+				IsGroup: true,
+				Group:   childPG,
+			})
+		} else {
+			// FlagProperty
+			parsed = append(parsed, parsedPropertyValue{
+				Property: FlagProperty{
+					Key:             getSafeProp[string](prop, "key"),
+					Operator:        getSafeProp[string](prop, "operator"),
+					Value:           getSafeProp[any](prop, "value"),
+					Type:            getSafeProp[string](prop, "type"),
+					Negation:        getSafeProp[bool](prop, "negation"),
+					DependencyChain: parseDependencyChain(prop["dependency_chain"]),
+				},
+			})
+		}
+	}
+	pg.ParsedValues = parsed
+	return pg
+}
+
+// parseDependencyChain handles both typed helper inputs and JSON-decoded cohort leaves.
+// Malformed chains remain nil so dependency evaluation treats them as inconclusive.
+func parseDependencyChain(value any) []string {
+	if chain, ok := value.([]string); ok {
+		return chain
+	}
+	values, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	chain := make([]string, len(values))
+	for i, value := range values {
+		key, ok := value.(string)
+		if !ok {
+			return nil
+		}
+		chain[i] = key
+	}
+	return chain
+}
+
+// preDecodePayloads converts json.RawMessage payloads to strings once at load time,
+// so evaluations can use the decoded strings directly without per-call allocation.
+func preDecodePayloads(flags []FeatureFlag) {
+	for i := range flags {
+		if len(flags[i].Filters.Payloads) > 0 {
+			decoded := make(map[string]string, len(flags[i].Filters.Payloads))
+			for k, raw := range flags[i].Filters.Payloads {
+				decoded[k] = rawMessageToString(raw)
+			}
+			flags[i].Filters.DecodedPayloads = decoded
+		}
+		// Pre-compute variant lookup table for multivariate flags
+		flags[i].Filters.VariantLookupTable = getVariantLookupTable(flags[i])
+	}
+}
+
+// buildFlagsByKey creates a map from flag key to FeatureFlag for O(1) lookups.
+func buildFlagsByKey(flags []FeatureFlag) map[string]FeatureFlag {
+	m := make(map[string]FeatureFlag, len(flags))
+	for _, f := range flags {
+		m[f.Key] = f
+	}
+	return m
+}
+
+// getFlagsByKey returns the pre-built flags-by-key index or nil if not initialized.
+func (poller *FeatureFlagsPoller) getFlagsByKey() map[string]FeatureFlag {
+	state := poller.state.Load()
+	if state == nil {
+		return nil
+	}
+	return state.flagsByKey
+}
+
+// getGroups returns the current groups map or an empty map if not initialized.
+func (poller *FeatureFlagsPoller) getGroups() map[string]string {
+	return stateMapOrEmpty(poller.getState(), func(state *flagsState) map[string]string { return state.groups })
+}
+
+func stateMapOrEmpty[K comparable, V any](state *flagsState, getMap func(*flagsState) map[K]V) map[K]V {
+	if state == nil {
+		return map[K]V{}
+	}
+	m := getMap(state)
+	if m == nil {
+		return map[K]V{}
+	}
+	return m
+}
+
+func (poller *FeatureFlagsPoller) localEvaluationFlags(headers http.Header, etag string) (*http.Response, context.CancelFunc, error) {
+	u := url.URL(*poller.localEvalUrl)
+	searchParams := u.Query()
+	searchParams.Add("token", poller.projectApiKey)
+	searchParams.Add("send_cohorts", "true")
+	u.RawQuery = searchParams.Encode()
+
+	if etag != "" {
+		headers.Set("If-None-Match", etag)
+	}
+
+	return poller.request("GET", u.String(), nil, headers, poller.flagTimeout)
+}
+
+func (poller *FeatureFlagsPoller) request(method string, reqUrl string, requestData []byte, headers http.Header, timeout time.Duration) (*http.Response, context.CancelFunc, error) {
+	ctx, cancel := context.WithTimeout(poller.ctx, timeout)
+
+	req, err := http.NewRequestWithContext(ctx, method, reqUrl, bytes.NewReader(requestData))
+	if err != nil {
+		poller.Logger.Errorf("creating request - %s", err)
+		cancel()
+		return nil, nil, err
+	}
+
+	version := getVersion()
+
+	req.Header.Add("User-Agent", SDKName+"/"+version)
+	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Content-Length", fmt.Sprintf("%d", len(requestData)))
+
+	for key, val := range headers {
+		req.Header[key] = val
+	}
+
+	res, err := poller.http.Do(req)
+	if err != nil {
+		poller.Logger.Errorf("sending request - %s", err)
+	}
+
+	return res, cancel, err
+}
+
+// ForceReload requests an immediate reload of local feature flag definitions.
+func (poller *FeatureFlagsPoller) ForceReload() {
+	poller.forceReload <- true
+}
+
+// shutdownPoller stops the polling goroutine, which releases the cache provider on
+// its way out so that Shutdown never overlaps another provider call. Once ctx is
+// done, in-flight polling work is cancelled without extending the caller's wait.
+// The goroutine releases the provider after its active operation returns.
+func (poller *FeatureFlagsPoller) shutdownPoller(ctx context.Context) {
+	poller.shutdownCtx = ctx
+	close(poller.shutdown)
+
+	select {
+	case <-poller.shutdownDone:
+	case <-ctx.Done():
+		poller.Logger.Warnf("[FEATURE FLAGS] Polling did not stop before the shutdown deadline, cancelling: %s", ctx.Err())
+		poller.cancel()
+	}
+}
+
+// getFeatureFlagVariants is a helper function to get the feature flag variants for
+// a given distinctId, groups, personProperties, and groupProperties.
+// This makes a request to the flags endpoint and returns the response.
+// This is used in fallback scenarios where we can't compute the flag locally.
+func (poller *FeatureFlagsPoller) getFeatureFlagVariants(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (*FlagsResponse, error) {
+	return poller.decider.makeFlagsRequest(distinctId, deviceId, groups, personProperties, groupProperties, poller.disableGeoIP, nil)
+}
+
+// getFeatureFlagVariantsWithFallback evaluates all feature flags for capture enrichment,
+// preferring local evaluation and only contacting the remote /flags endpoint to fill in
+// flags that cannot be computed locally (or when no local definitions are loaded).
+//
+// When onlyEvaluateLocally is true it stays strictly local: flags that cannot be evaluated
+// locally are simply omitted and no remote request is made, blocking on the initial
+// definitions fetch since it has no remote path to fall back to. The default path never
+// blocks on that fetch: if definitions aren't loaded yet it treats this as "no definitions"
+// and goes straight to the remote /flags fallback, so the first capture isn't stalled.
+//
+// The returned map includes flags that resolved to false; the caller attaches a
+// $feature/<key> property for each entry and excludes false-valued flags from
+// $active_feature_flags, matching the other SDKs.
+func (poller *FeatureFlagsPoller) getFeatureFlagVariantsWithFallback(distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties, onlyEvaluateLocally bool) (map[string]interface{}, error) {
+	var state *flagsState
+	if onlyEvaluateLocally {
+		var err error
+		state, err = poller.getLoadedState()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Capture's default path must not block on the initial definitions request.
+		state = poller.getState()
+	}
+	var flags []FeatureFlag
+	var cohorts map[string]PropertyGroup
+	if state != nil {
+		flags, cohorts = state.featureFlags, state.cohorts
+	}
+	result := make(map[string]interface{}, len(flags))
+
+	// Fall back to the remote request when no definitions are loaded or any flag
+	// can't be computed locally.
+	fallbackToDecide := len(flags) == 0
+	for _, flag := range flags {
+		flagValue, computeErr := poller.computeFlagLocally(
+			flag,
+			distinctId,
+			deviceId,
+			groups,
+			personProperties,
+			groupProperties,
+			cohorts,
+			state,
+		)
+		if computeErr != nil {
+			// Any flag we can't evaluate locally — experience continuity, missing
+			// properties, a static cohort, or missing group context — is deferred
+			// to the remote /flags request, which is authoritative. This mirrors
+			// GetAllFlags and the single-flag fallback. Under OnlyEvaluateLocally
+			// there is no remote call, so such flags are simply omitted.
+			fallbackToDecide = true
+			continue
+		}
+		result[flag.Key] = flagValue
+	}
+
+	if fallbackToDecide && !onlyEvaluateLocally {
+		flagsResponse, remoteErr := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
+		if remoteErr != nil {
+			return nil, remoteErr
+		}
+		if flagsResponse != nil {
+			// Remote evaluation is authoritative for the flags it returns.
+			for key, value := range flagsResponse.FeatureFlags {
+				result[key] = value
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func (poller *FeatureFlagsPoller) getFeatureFlagVariant(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (interface{}, error) {
+	var result interface{} = false
+
+	flagsResponse, variantErr := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
+
+	if variantErr != nil {
+		return false, variantErr
+	}
+
+	for flagKey, flagValue := range flagsResponse.FeatureFlags {
+		if key == flagKey {
+			return flagValue, nil
+		}
+	}
+	return result, nil
+}
+
+func (poller *FeatureFlagsPoller) getFeatureFlagPayload(key string, distinctId string, deviceId *string, groups Groups, personProperties Properties, groupProperties map[string]Properties) (string, error) {
+	flagsResponse, err := poller.getFeatureFlagVariants(distinctId, deviceId, groups, personProperties, groupProperties)
+	if err != nil {
+		return "", err
+	}
+	if flagsResponse != nil {
+		if payload, ok := flagsResponse.FeatureFlagPayloads[key]; ok {
+			return rawMessageToString(payload), nil
+		}
+	}
+	return "", nil
+}
+
+func getSafeProp[T any](properties map[string]any, key string) T {
+	switch v := properties[key].(type) {
+	case T:
+		return v
+	default:
+		var defaultValue T
+		return defaultValue
+	}
+}
+
+// evaluationState preserves legacy defaults for context-free helper callers.
+// Production evaluation passes the snapshot selected with the flag and never reloads it.
+func (poller *FeatureFlagsPoller) evaluationState(snapshots []*flagsState) *flagsState {
+	if len(snapshots) > 0 && snapshots[0] != nil {
+		return snapshots[0]
+	}
+	return &flagsState{flagsByKey: poller.getFlagsByKey(), groups: poller.getGroups()}
+}

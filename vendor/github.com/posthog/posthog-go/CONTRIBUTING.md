@@ -1,0 +1,71 @@
+# Contributing
+
+Thanks for your interest in improving the PostHog Go SDK.
+
+## Commit signing
+
+This repo requires all commits to be signed. To configure commit signing, see the [PostHog handbook](https://posthog.com/handbook/engineering/security#commit-signing). Set `commit.gpgsign` to `true` in your git config so that every commit is signed, not only the ones you sign by hand.
+
+## Development setup
+
+Make sure you have Go installed (macOS: `brew install go`, Linux / Windows: https://go.dev/doc/install).
+
+From the repository root:
+
+```bash
+# Install dependencies
+make dependencies
+
+# Run tests and build
+make build
+
+# Just run tests
+make test
+```
+
+## Nested modules
+
+Root `go test ./...` and Makefile checks do not enter the separate `otel/` and `posthogmcpsdk/` modules. For changes affecting either module, use its `go.mod` toolchain requirement and run the module-specific checks from the repository root:
+
+```bash
+(cd otel && go build ./... && go vet ./... && go test -race -count=1 -timeout=5m ./...)
+(cd posthogmcpsdk && go build ./... && go vet ./... && go test -race -count=1 -timeout=5m ./...)
+```
+
+Run the checks for the affected modules; core API changes may also affect their consumers. CI tests the supported toolchain and MCP SDK versions in [.github/workflows/unit-tests.yml](.github/workflows/unit-tests.yml).
+
+The MCP adapter's local `replace` tests the checkout, but consumers use the pinned released core. For adapter changes, also build and vet a temporary copy with that replacement removed, using `GOFLAGS=-mod=mod go build ./...` and `GOFLAGS=-mod=mod go vet ./...`, as CI does. This allows missing checksums to be populated in the temporary copy; do not modify the checkout's `go.mod` or `go.sum` for this check. See the adapter's [compatibility and development guide](posthogmcpsdk/README.md#compatibility-and-development) for this constraint and release ordering.
+
+## Testing local changes in another app
+
+You can run your Go app against a local build of `posthog-go` by updating your app's `go.mod`, for example:
+
+```go
+module example/posthog-go-app
+
+go 1.22.5
+
+require github.com/posthog/posthog-go v0.0.0-20240327112532-87b23fe11103
+
+require github.com/google/uuid v1.3.0 // indirect
+
+replace github.com/posthog/posthog-go => /path-to-your-local/posthog-go
+```
+
+## Public API changes
+
+Public API is hard to change once it ships, so agree on it before writing the implementation. Our [SDK guidelines](https://posthog.com/handbook/engineering/sdks/guidelines) explain how we design it.
+
+This section is for external contributors. PostHog maintainers (members of the PostHog GitHub org) agree on API shape in the PR itself, so they don't need a separate issue.
+
+- **Before you start:** if you need something the SDK doesn't support and it would add or change a public option, method, or type, open an issue describing your use case. Wait for a maintainer to agree on the API shape there before you implement it. Context is more useful to us than code at this stage.
+- **Already specified?** If a published [sdk-spec](https://github.com/PostHog/sdk-specs) defines the API, that's the agreement, so you don't need an issue.
+- **Already have a PR open?** Don't stop or rewrite it. Call out the public API change at the top of the PR description, and link or open an issue so we can discuss the shape there.
+- Check first whether an existing option or hook, such as `BeforeSend`, already covers the use case. We avoid offering two ways to do the same thing.
+- If a reviewer suggests a different API on your PR, confirm it with them before re-implementing. Treat it as a question, not an instruction.
+
+`make api-update` regenerates `api/public-api.txt`, and CI runs `make api-diff` to catch an outdated snapshot. A diff in that file means your change touches public API.
+
+## Pull requests
+
+Please keep changes focused and make sure the relevant tests pass before opening a PR.

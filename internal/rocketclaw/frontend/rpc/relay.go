@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -91,6 +92,13 @@ func openCodeProxy(server config.OpenCodeConfig) http.Handler {
 			response.Header.Set("X-Content-Type-Options", "nosniff")
 
 			return nil
+		},
+		// A browser that left takes no reply, and its cancellation is not a failure worth logging.
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			if r.Context().Err() == nil {
+				log.Printf("http: proxy error: %v", err)
+				w.WriteHeader(http.StatusBadGateway)
+			}
 		},
 		FlushInterval: -1,
 	}
