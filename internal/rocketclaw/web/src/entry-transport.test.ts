@@ -19,7 +19,11 @@ test("transcript and entry HTTP proxy reach Go", async () => {
   expect(await call("Identity")).toEqual({ username: "alice", principal: "alice" });
   const batches = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`));
   expect(batches.flatMap((batch) => batch.sessions.map((session) => session.id))).toEqual(["empty-web", id]);
-  expect(batches.at(-1)).toEqual({ sessions: [], owner: "alice", upstreamSuccess: true, opencodeServers: {}, agentTags: {} });
+  expect(batches.at(-1)).toEqual({ sessions: [], owner: "alice", upstreamSuccess: true, opencodeServers: {}, agentTags: {}, version: expect.any(String), order: ["empty-web", id] });
+  // Since that version, an unchanged list sends no rows, only the order and a new version.
+  const since = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions?${new URLSearchParams({ since: batches.at(-1)!.version! })}`));
+  expect([since.flatMap((batch) => batch.sessions), since.at(-1)?.order]).toEqual([[], ["empty-web", id]]);
+  expect(since.at(-1)?.version).not.toBe(batches.at(-1)!.version);
   const original = batches.flatMap((batch) => batch.sessions).find((session) => session.id === id)!;
   for (const details of [{ id, pinned: true }, { id, name: " Launch " }, { id, pinned: false }, { id, name: "" }]) {
     await call("UpdateSession", details);

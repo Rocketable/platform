@@ -109,7 +109,7 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	assert.False(t, rows[0].GetOffline())
 	assert.Equal(t, "2026-10-22T10:00:00Z", rows[0].GetUnreadAt(), "a remote session carries the caller's mark")
 	assert.True(t, proto.Equal(&ListSessionsResponse{
-		Owner: "alice", UpstreamSuccess: true,
+		Owner: "alice", UpstreamSuccess: true, Version: done.GetVersion(), Order: []string{created.Id},
 		OpencodeServers: map[string]int32{"box": 4100, "down": 4101},
 		AgentTags:       map[string]*TagChoices{"main": {Tags: []string{"customer", "internal"}}},
 	}, done), "%v", done)

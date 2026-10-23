@@ -88,9 +88,12 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 				post := *r
 				post.Method = http.MethodPost
 
+				list := &ListSessionsRequest{Since: r.URL.Query().Get("since")}
 				if protection.Check(&post) == nil {
-					request = &ListSessionsRequest{Viewing: r.URL.Query().Get("viewing")}
+					list.Viewing = r.URL.Query().Get("viewing")
 				}
+
+				request = list
 			case "/stream":
 				method, request, response, required = "Join", &JoinRequest{Id: r.URL.Query().Get("id")}, &ConversationChange{}, "id"
 			case "DownloadAttachment", "UploadAttachment":
@@ -159,7 +162,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig) htt
 				return
 			}
 
-			httpEvents(w, stream, response, err)
+			httpEvents(w, r, stream, response, err)
 		})
 	}
 
@@ -294,14 +297,35 @@ func httpDownload(w http.ResponseWriter, r *http.Request, stream grpc.ClientStre
 	}
 }
 
-func httpEvents(w http.ResponseWriter, stream grpc.ClientStream, response proto.Message, err error) {
+// httpEvents writes a stream as server-sent events. The session list, which the Web reloads every few seconds, goes
+// gzip-compressed and flushed per event to browsers that accept it.
+func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream, response proto.Message, err error) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
 
+	controller := http.NewResponseController(w)
+	out, flush := io.Writer(w), controller.Flush
+
+	if r.URL.Path == "/api/ListSessions" && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+
+		compressed := gzip.NewWriter(w)
+		defer func() { _ = compressed.Close() }()
+
+		out, flush = compressed, func() error {
+			if err := compressed.Flush(); err != nil {
+				return fmt.Errorf("flush gzip: %w", err)
+			}
+
+			return controller.Flush()
+		}
+	}
+
 	for {
 		if errors.Is(err, io.EOF) {
-			_, _ = io.WriteString(w, "event: complete\ndata: {}\n\n")
+			_, _ = io.WriteString(out, "event: complete\ndata: {}\n\n")
 			return
 		}
 
@@ -310,7 +334,7 @@ func httpEvents(w http.ResponseWriter, stream grpc.ClientStream, response proto.
 				Code    codes.Code `json:"code"`
 				Message string     `json:"message"`
 			}{status.Code(err), status.Convert(err).Message()})
-			_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", body)
+			_, _ = fmt.Fprintf(out, "event: error\ndata: %s\n\n", body)
 
 			return
 		}
@@ -321,11 +345,11 @@ func httpEvents(w http.ResponseWriter, stream grpc.ClientStream, response proto.
 			continue
 		}
 
-		if _, err := fmt.Fprintf(w, "data: %s\n\n", body); err != nil {
+		if _, err := fmt.Fprintf(out, "data: %s\n\n", body); err != nil {
 			return
 		}
 
-		if err := http.NewResponseController(w).Flush(); err != nil {
+		if err := flush(); err != nil {
 			return
 		}
 

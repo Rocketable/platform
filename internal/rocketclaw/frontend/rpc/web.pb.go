@@ -242,7 +242,10 @@ func (TabPlacement) EnumDescriptor() ([]byte, []int) {
 type ListSessionsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The session of the caller's active tab while its window has focus, else empty.
-	Viewing       string `protobuf:"bytes,1,opt,name=viewing,proto3" json:"viewing,omitempty"`
+	Viewing string `protobuf:"bytes,1,opt,name=viewing,proto3" json:"viewing,omitempty"`
+	// The version of the last complete listing the caller holds. When the server still knows it, the
+	// listing sends only the rows that changed since; otherwise it sends every row.
+	Since         string `protobuf:"bytes,2,opt,name=since,proto3" json:"since,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -280,6 +283,13 @@ func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
 func (x *ListSessionsRequest) GetViewing() string {
 	if x != nil {
 		return x.Viewing
+	}
+	return ""
+}
+
+func (x *ListSessionsRequest) GetSince() string {
+	if x != nil {
+		return x.Since
 	}
 	return ""
 }
@@ -1510,8 +1520,13 @@ type ListSessionsResponse struct {
 	// on its sessions. Remote OpenCode sessions take any tag.
 	OpencodeServers map[string]int32       `protobuf:"bytes,5,rep,name=opencode_servers,json=opencodeServers,proto3" json:"opencode_servers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"` // Server name to its relay port.
 	AgentTags       map[string]*TagChoices `protobuf:"bytes,6,rep,name=agent_tags,json=agentTags,proto3" json:"agent_tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Also sent with the completion message: this listing's version, for the next request's since, and
+	// every session ID in list order. A row not sent is unchanged since that version; an ID missing
+	// from order is gone.
+	Version       string   `protobuf:"bytes,7,opt,name=version,proto3" json:"version,omitempty"`
+	Order         []string `protobuf:"bytes,8,rep,name=order,proto3" json:"order,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ListSessionsResponse) Reset() {
@@ -1575,6 +1590,20 @@ func (x *ListSessionsResponse) GetOpencodeServers() map[string]int32 {
 func (x *ListSessionsResponse) GetAgentTags() map[string]*TagChoices {
 	if x != nil {
 		return x.AgentTags
+	}
+	return nil
+}
+
+func (x *ListSessionsResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *ListSessionsResponse) GetOrder() []string {
+	if x != nil {
+		return x.Order
 	}
 	return nil
 }
@@ -6647,9 +6676,10 @@ var File_web_proto protoreflect.FileDescriptor
 
 const file_web_proto_rawDesc = "" +
 	"\n" +
-	"\tweb.proto\x12\x03rpc\"/\n" +
+	"\tweb.proto\x12\x03rpc\"E\n" +
 	"\x13ListSessionsRequest\x12\x18\n" +
-	"\aviewing\x18\x01 \x01(\tR\aviewing\"\xa4\x05\n" +
+	"\aviewing\x18\x01 \x01(\tR\aviewing\x12\x14\n" +
+	"\x05since\x18\x02 \x01(\tR\x05since\"\xa4\x05\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -6765,14 +6795,16 @@ const file_web_proto_rawDesc = "" +
 	"\x06prompt\x18\x02 \x01(\v2\x14.rpc.TranscriptEventR\x06prompt\"$\n" +
 	"\x12ClearRevertRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x15\n" +
-	"\x13ClearRevertResponse\"\xbe\x03\n" +
+	"\x13ClearRevertResponse\"\xee\x03\n" +
 	"\x14ListSessionsResponse\x12(\n" +
 	"\bsessions\x18\x01 \x03(\v2\f.rpc.SessionR\bsessions\x12\x14\n" +
 	"\x05owner\x18\x02 \x01(\tR\x05owner\x12)\n" +
 	"\x10upstream_success\x18\x03 \x01(\bR\x0fupstreamSuccess\x12Y\n" +
 	"\x10opencode_servers\x18\x05 \x03(\v2..rpc.ListSessionsResponse.OpencodeServersEntryR\x0fopencodeServers\x12G\n" +
 	"\n" +
-	"agent_tags\x18\x06 \x03(\v2(.rpc.ListSessionsResponse.AgentTagsEntryR\tagentTags\x1aB\n" +
+	"agent_tags\x18\x06 \x03(\v2(.rpc.ListSessionsResponse.AgentTagsEntryR\tagentTags\x12\x18\n" +
+	"\aversion\x18\a \x01(\tR\aversion\x12\x14\n" +
+	"\x05order\x18\b \x03(\tR\x05order\x1aB\n" +
 	"\x14OpencodeServersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\x1aM\n" +

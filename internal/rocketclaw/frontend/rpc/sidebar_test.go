@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -143,7 +144,7 @@ func TestSidebarSendFailures(t *testing.T) {
 		name     string
 		response *ListSessionsResponse
 	}{
-		{"empty completion", &ListSessionsResponse{Owner: "alice", UpstreamSuccess: true}},
+		{"empty completion", &ListSessionsResponse{Owner: "alice", UpstreamSuccess: true, Version: strings.Repeat("v", 26)}}, // rand.Text is 26 characters.
 		{"session row", &ListSessionsResponse{Owner: "alice", Sessions: []*Session{{Id: "web", Agent: "main", AllowedAgents: []string{"main"}, Label: "web"}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -248,4 +249,60 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("HTTP abort did not unwind the Go list handler and its deferred row cleanup")
 	}
+}
+
+// A poll naming a listing the server still holds gets only the rows changed since; every listing ends
+// with all IDs in order, so the browser keeps unchanged rows and drops missing ones.
+func TestListSessionsSendsChangesSince(t *testing.T) {
+	server, ctx := sidebarChoicesFixture(t, 3)
+	list := func(ctx context.Context, since string) (sent []string, done *ListSessionsResponse) {
+		require.NoError(t, server.listSessions(&ListSessionsRequest{Since: since}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
+			response := message.(*ListSessionsResponse)
+			for _, session := range response.Sessions {
+				sent = append(sent, session.Id)
+			}
+
+			if response.UpstreamSuccess {
+				done = response
+			}
+
+			return nil
+		}}))
+
+		return sent, done
+	}
+
+	sent, full := list(ctx, "")
+	require.ElementsMatch(t, []string{"chat-00", "chat-01", "chat-02"}, sent)
+	require.Equal(t, sent, full.Order, "the first listing sends every row, in order")
+	require.NotEmpty(t, full.Version)
+
+	sent, unchanged := list(ctx, full.Version)
+	require.Empty(t, sent, "nothing changed")
+	require.Equal(t, full.Order, unchanged.Order)
+	require.NotEqual(t, full.Version, unchanged.Version)
+
+	_, err := server.updateSession(ctx, &UpdateSessionRequest{Id: "chat-01", Name: new("Renamed")})
+	require.NoError(t, err)
+
+	sent, renamed := list(ctx, unchanged.Version)
+	require.Equal(t, []string{"chat-01"}, sent, "only the changed row")
+
+	sent, _ = list(ctx, full.Version)
+	require.Equal(t, []string{"chat-01"}, sent, "an older listing the server still holds works too")
+
+	_, err = server.sessions.DeleteSession(t.Context(), "chat-02")
+	require.NoError(t, err)
+
+	sent, deleted := list(ctx, renamed.Version)
+	require.Empty(t, sent)
+	require.ElementsMatch(t, []string{"chat-00", "chat-01"}, deleted.Order, "a deleted session leaves the order")
+
+	sent, _ = list(ctx, "unknown")
+	require.Len(t, sent, 2, "an unknown version gets every row")
+
+	bob := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1", "rocketclaw-tailnet-login-bin", "bob@example.com", "rocketclaw-tailnet-name-bin", "Bob"))
+	sent, bobs := list(bob, deleted.Version)
+	require.NotEmpty(t, bobs.Order)
+	require.Equal(t, bobs.Order, sent, "another person's version gets every row")
 }
