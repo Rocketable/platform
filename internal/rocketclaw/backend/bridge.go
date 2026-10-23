@@ -2244,20 +2244,22 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			}
 		}
 
-		metadataEntry, foundMetadata, err := b.config.SessionService.externalMCPMetadataEntry(ctx, b.config.ConversationID)
+		// A subagent reads the External MCP metadata of its top-level session and turn, as its shell had
+		// when it ran inside that turn.
+		metadataEntry, foundMetadata, err := b.config.SessionService.externalMCPMetadataEntry(ctx, self)
 		if err != nil {
 			return runResult{}, fmt.Errorf("load external MCP metadata: %w", err)
 		}
 
-		if foundMetadata || msg.Source == protocol.SourceExternalMCP {
+		if foundMetadata || origin.Source == protocol.SourceExternalMCP {
 			var entries []ObservedSessionEntry
 			if foundMetadata {
 				entries = []ObservedSessionEntry{metadataEntry}
 			}
 
-			metadataConversationID := b.config.ConversationID
+			metadataConversationID := self
 
-			_, session, paired, err := b.config.SessionService.ExternalMCPSessionByConversationID(b.config.ConversationID)
+			_, session, paired, err := b.config.SessionService.ExternalMCPSessionByConversationID(self)
 			if err != nil {
 				return runResult{}, fmt.Errorf("load external MCP pairing for metadata environment: %w", err)
 			}
@@ -2268,7 +2270,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 			metadataEnv, ok := externalMCPStoredMetadataEnv(metadataConversationID, entries)
 			if !ok {
-				metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
+				metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, origin.Metadata)
 			}
 
 			replayInput := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", metadataEnv))
@@ -2283,7 +2285,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			} else {
 				metadataEnv[rocketclawConversationIDEnv] = b.config.ConversationID
 
-				transientEnv := externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
+				transientEnv := externalMCPMetadataEnv(b.config.ConversationID, origin.Metadata)
 				for key := range metadataEnv {
 					delete(transientEnv, key)
 				}

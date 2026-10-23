@@ -2160,24 +2160,25 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 
 // A subagent acts for its top-level session's running turn, as it did when it ran inside that turn:
 // the files it attaches reach that turn's reply, and the sessions it creates keep that turn's creator
-// and limits: a Web or External MCP principal, or a cron run's own agent and cron creator. It is not
-// offered scheduling, even when its agent allows it.
+// and limits: a Web or External MCP principal, or a cron run's own agent and cron creator. Its shell
+// sees that turn's person and External MCP metadata. It is not offered scheduling, even when its agent
+// allows it.
 func TestSubagentActsForRootTurn(t *testing.T) {
 	t.Parallel()
 
 	script := "def main():\n    rocketclaw_attach_files_to_response(attachments=[{'path': '', 'name': 'report.txt', 'mime_type': '', 'content': 'hello', 'content_base64': ''}])\n" +
-		"    bash(command=\"printf '%s|%s' \\\"${ROCKETCLAW_PRINCIPAL_NAME-unset}\\\" \\\"${ROCKETCLAW_PRINCIPAL_EMAIL-unset}\\\" > principal.txt\")\n" +
+		"    bash(command=\"printf '%s|%s|%s' \\\"${ROCKETCLAW_PRINCIPAL_NAME-unset}\\\" \\\"${ROCKETCLAW_PRINCIPAL_EMAIL-unset}\\\" \\\"${ROCKETCLAW_METADATA_TICKET-unset}\\\" > principal.txt\")\n" +
 		"    return rocketclaw_sessions_write(session_id='', mode='enqueue', prompt='child task', title='Child', agent='')\n"
 
 	for _, tc := range []struct {
 		source                  protocol.Source
 		principal, agent, maker string
-		person                  map[string]string
+		metadata                map[string]string
 		env                     string
 	}{
-		{protocol.SourceWeb, "Alice", "main", "Alice", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, "Alice|alice@example.com"},
-		{protocol.SourceExternalMCP, "Bob", "main", "Bob", nil, "unset|unset"},
-		{protocol.SourceSystem, "", "job", string(ThreadCreatedByCron), nil, "unset|unset"},
+		{protocol.SourceWeb, "Alice", "main", "Alice", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, "Alice|alice@example.com|unset"},
+		{protocol.SourceExternalMCP, "Bob", "main", "Bob", map[string]string{"ticket": "T-1"}, "unset|unset|T-1"},
+		{protocol.SourceSystem, "", "job", string(ThreadCreatedByCron), nil, "unset|unset|unset"},
 	} {
 		t.Run(string(tc.source), func(t *testing.T) {
 			t.Parallel()
@@ -2224,7 +2225,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 			} else {
 				prompt := protocol.NewInboundMessage(tc.source, protocol.InboundKindPrompt, "hello", true)
 				prompt.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: tc.principal}
-				maps.Copy(prompt.Metadata, tc.person)
+				maps.Copy(prompt.Metadata, tc.metadata)
 				require.NoError(t, nt.bridge(t, manager, root).Submit(t.Context(), prompt))
 			}
 
@@ -2243,7 +2244,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 
 			env, err := os.ReadFile(filepath.Join(nt.cfg.Workspace, "principal.txt"))
 			require.NoError(t, err)
-			assert.Equal(t, tc.env, string(env), "the subagent's shell sees the top-level turn's person")
+			assert.Equal(t, tc.env, string(env), "the subagent's shell sees the top-level turn's person and metadata")
 		})
 	}
 }
