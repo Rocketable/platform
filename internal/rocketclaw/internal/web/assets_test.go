@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -139,6 +141,51 @@ func TestServerNameTitle(t *testing.T) {
 		require.Equal(t, http.StatusOK, response.Code)
 		require.Contains(t, response.Body.String(), "<title>lab &lt;1&gt; - RocketClaw</title>")
 		require.NotEmpty(t, response.Header().Get("ETag"))
+	}
+}
+
+func TestCompressedFileAllocations(t *testing.T) {
+	result := testing.Benchmark(BenchmarkServeCompressedFile)
+	// Allow pool misses (including race-mode discards), but not a fresh compressor per response.
+	require.Less(t, result.AllocedBytesPerOp(), int64(512<<10))
+}
+
+func TestCompressedFileResponses(t *testing.T) {
+	var writers sync.Pool
+
+	for _, text := range []string{"", "alpha", "beta"} {
+		t.Run(text, func(t *testing.T) {
+			t.Parallel()
+
+			data := bytes.Repeat([]byte(text), 256)
+			request := httptest.NewRequest(http.MethodGet, "/example.js", http.NoBody)
+			request.Header.Set("Accept-Encoding", "gzip")
+
+			for range 2 {
+				response := httptest.NewRecorder()
+				serveFile(response, request, "example.js", data, "assets", &writers)
+				reader, err := gzip.NewReader(response.Body)
+				require.NoError(t, err)
+				unpacked, err := io.ReadAll(reader)
+				require.NoError(t, err)
+				require.NoError(t, reader.Close())
+				require.Equal(t, data, unpacked)
+			}
+		})
+	}
+}
+
+func BenchmarkServeCompressedFile(b *testing.B) {
+	var writers sync.Pool
+
+	data := bytes.Repeat([]byte("const greeting = 'hello';\n"), 256)
+	request := httptest.NewRequest(http.MethodGet, "/example.js", http.NoBody)
+	request.Header.Set("Accept-Encoding", "gzip")
+	b.SetBytes(int64(len(data)))
+	b.ReportAllocs()
+
+	for b.Loop() {
+		serveFile(httptest.NewRecorder(), request, "example.js", data, "assets", &writers)
 	}
 }
 
