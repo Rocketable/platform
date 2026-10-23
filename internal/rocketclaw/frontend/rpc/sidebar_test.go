@@ -123,6 +123,55 @@ func BenchmarkSidebarFingerprints(b *testing.B) {
 	}
 }
 
+func TestSidebarChannelChoices(t *testing.T) {
+	server, ctx := sidebarChoicesFixture(t, 2)
+	db := openTestTurns(t, server.cfg.Clone().DatabaseURL)
+	_, err := db.db.ExecContext(ctx, `UPDATE conversations SET slack_channel = 'CEXAMPLE'`)
+	require.NoError(t, err)
+
+	for _, allowed := range [][]string{{"choice-03", "missing", "choice-01", "choice-03"}, {}, {"missing"}} {
+		server.channels = &mockChannels{SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) {
+			return "example", allowed, nil
+		}}
+		rows := 0
+
+		require.NoError(t, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
+			for _, session := range message.(*ListSessionsResponse).Sessions {
+				if len(allowed) == 4 {
+					require.Equal(t, []string{"choice-01", "choice-03"}, session.AllowedAgents)
+					session.AllowedAgents[0] = "changed"
+				} else {
+					require.Empty(t, session.AllowedAgents)
+				}
+
+				require.LessOrEqual(t, cap(session.AllowedAgents), len(allowed), "channel choices must not retain every agent")
+
+				rows++
+			}
+
+			return nil
+		}}))
+		require.Equal(t, 2, rows)
+	}
+}
+
+func BenchmarkSidebarChannelChoices(b *testing.B) {
+	server, ctx := sidebarChoicesFixture(b, 64)
+	db := openTestTurns(b, server.cfg.Clone().DatabaseURL)
+	_, err := db.db.ExecContext(ctx, `UPDATE conversations SET slack_channel = 'CEXAMPLE'`)
+	require.NoError(b, err)
+
+	server.channels = &mockChannels{SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) {
+		return "example", []string{"choice-00"}, nil
+	}}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		require.NoError(b, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(any) error { return nil }}))
+	}
+}
+
 func TestSidebarSendFailures(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
