@@ -48,8 +48,13 @@ jobs:
         with:
           path: internal/rocketclaw/oc/node_modules
           key: oc-node-modules-${{ hashFiles('internal/rocketclaw/oc/bun.lock') }}
+      # Ubuntu's package mirror sometimes takes minutes, so no job installs from it. This is the same
+      # cloc 1.98 as Ubuntu 24.04's package, as one Perl script.
       - name: Install cloc
-        run: sudo apt-get update && sudo apt-get install -y cloc
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/cloc" https://github.com/AlDanial/cloc/releases/download/v1.98/cloc-1.98.pl
+          echo "94cba5168e6d1b72100513d6660a31ebb6a91670cf501816efa71d6e1da6d58a  $RUNNER_TEMP/cloc" | sha256sum -c -
+          sudo install "$RUNNER_TEMP/cloc" /usr/local/bin/cloc
       - run: make -C internal/rocketclaw generate
       - name: Generated files are committed
         run: git diff --exit-code && test -z "$(git status --porcelain)"
@@ -79,8 +84,12 @@ jobs:
           path: ~/.cache/go-build
           key: go-${{ github.job }}-${{ github.sha }}
           restore-keys: go-${{ github.job }}-
+      # The same ripgrep 14.1.0 as Ubuntu 24.04's package, without its package mirror.
       - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/rg.tar.gz" https://github.com/BurntSushi/ripgrep/releases/download/14.1.0/ripgrep-14.1.0-x86_64-unknown-linux-musl.tar.gz
+          echo "f84757b07f425fe5cf11d87df6644691c644a5cd2348a2c670894272999d3ba7  $RUNNER_TEMP/rg.tar.gz" | sha256sum -c -
+          sudo tar -xzf "$RUNNER_TEMP/rg.tar.gz" -C /usr/local/bin --strip-components 1 ripgrep-14.1.0-x86_64-unknown-linux-musl/rg
       - run: go test -race -count 1 ./...
         working-directory: internal/rocketcode
       - run: go test ../../cmd/funneld ./...
@@ -119,12 +128,13 @@ jobs:
             ~/.cache/ms-playwright
             ~/.cache/playwright-core
           key: playwright-1.63.0-no-shell
+      # No --with-deps: the runner's preinstalled Google Chrome already brought Chromium's system libraries.
       - name: Install Playwright and Chromium for browser tests
         run: |
           dir="$HOME/.cache/playwright-core"
           [ -d "$dir/node_modules/playwright-core" ] || (mkdir -p "$dir" && cd "$dir" && bun add playwright-core@1.63.0)
           cd "$dir"
-          ./node_modules/.bin/playwright-core install --with-deps --no-shell chromium
+          ./node_modules/.bin/playwright-core install --no-shell chromium
           echo "ROCKETCLAW_PLAYWRIGHT_MODULE=$dir/node_modules/playwright-core" >> "$GITHUB_ENV"
           echo "ROCKETCLAW_CHROMIUM=$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')" >> "$GITHUB_ENV"
       # TCP readiness skips the image's socket-only init server.
