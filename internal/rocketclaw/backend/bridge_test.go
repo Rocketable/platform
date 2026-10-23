@@ -3853,9 +3853,8 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  edit:\n    '.tmp/${ROCKETCLAW_METADATA_A}/note.txt': allow\n  read: allow\n  bash: auto\n---\nPrompt\n")
 
 	managedBridge := &Bridge{runtime: bridge.runtime, config: Config{ConversationID: managedConversationID, Agent: "planner", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-	_, err = service.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
-SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id, 'sync_source_conversation_id', conversation_id))::json, entry_timestamp
-FROM entries WHERE conversation_id = $2 ORDER BY id`, managedConversationID, bridge.config.ConversationID)
+	// The run reports to its Slack thread, which shows its entries without a copy.
+	_, err = service.db.ExecContext(t.Context(), `UPDATE conversations SET reports_to = $1 WHERE conversation_id = $2`, managedConversationID, bridge.config.ConversationID)
 	require.NoError(t, err)
 
 	managedEntries, err := service.ObserveEntries(context.Background(), managedConversationID)

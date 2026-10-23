@@ -167,6 +167,12 @@ real in the shared workspace; output separation is not a dry-run sandbox.
 
 A hidden conversation that runs work for a human-visible destination conversation, such as an External MCP case or a one-off cron run. Its conversation row records that destination as the one it reports to. The destination's history shows the run's visible messages in place, live while a turn runs, without copying them; what only the run's own context needs stays out of the destination. Web lists only the destination, and session tags set during the turn land on the destination.
 
+### External MCP Metadata
+
+The key-value pairs an External MCP caller attaches to its session, which the agent sees both as a message in its context and as environment variables for its tools.
+
+The session's first turn records the pairs, together with the conversation's identity, in its Private Producer Conversation; later turns keep the recorded values and see new keys for that turn only. Turns in the Report Thread's conversation read the same recorded pairs, with the conversation identity naming the thread.
+
 ## Web Voice
 
 ### Voice Session

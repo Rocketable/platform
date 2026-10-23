@@ -1550,8 +1550,15 @@ func (s *SessionService) externalMCPMetadataEntry(ctx context.Context, conversat
 		raw   string
 	)
 
-	// Keep the fixed type literal so generic plans can use the metadata-only index.
-	err := s.db.QueryRowContext(ctx, `SELECT id, entry_json FROM entries WHERE conversation_id = $1 AND entry_json::jsonb->>'type' = 'mcp_external_metadata' ORDER BY id DESC LIMIT 1`, strings.TrimSpace(conversationID)).Scan(&entry.ID, &raw)
+	// Keep the fixed type literal so generic plans can use the metadata-only index. A chat finds the
+	// metadata of the hidden runs it shows, as their entries are not copied into it.
+	err := s.db.QueryRowContext(ctx, `WITH shown AS (
+    SELECT $1::text AS conversation_id UNION SELECT conversation_id FROM conversations WHERE reports_to = $1
+    UNION SELECT continues FROM conversations WHERE conversation_id = $1 AND continues IS NOT NULL
+), latest AS (
+    SELECT max(e.id) AS id FROM shown s JOIN entries e USING (conversation_id) WHERE e.entry_json::jsonb->>'type' = 'mcp_external_metadata'
+)
+SELECT e.id, e.entry_json FROM latest l JOIN entries e USING (id)`, strings.TrimSpace(conversationID)).Scan(&entry.ID, &raw)
 	if err == sql.ErrNoRows {
 		return ObservedSessionEntry{}, false, nil
 	}

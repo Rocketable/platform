@@ -206,6 +206,8 @@ INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT conversation_id, '{"type":"turn"}', '2000-01-01T00:00:00Z'
 FROM (VALUES ('with-metadata'), ('without-metadata')) c(conversation_id), generate_series(1, 4096);
+INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
+SELECT 'thread-' || n, '{"type":"mcp_external_metadata","version":4}', '2000-01-01T00:00:00Z' FROM generate_series(1, 4096) n;
 ANALYZE entries;
 SET plan_cache_mode = force_generic_plan;`)
 	require.NoError(t, err)
@@ -224,14 +226,20 @@ SET plan_cache_mode = force_generic_plan;`)
 	// Explain the actual prepared lookup, not a separately maintained query.
 	queries, err := queryStrings(ctx, store.db, `SELECT format('EXPLAIN EXECUTE %I(%s)', name,
     (SELECT string_agg('NULL', ',') FROM unnest(parameter_types)))
-FROM pg_prepared_statements WHERE statement LIKE 'SELECT id, entry_json FROM entries%'`, "metadata lookup statement")
+FROM pg_prepared_statements WHERE statement LIKE '%mcp_external_metadata%' AND statement NOT LIKE '%pg_prepared_statements%'`, "metadata lookup statement")
 	require.NoError(t, err)
 	require.Len(t, queries, 1)
 	plan, err := queryStrings(ctx, store.db, queries[0], "metadata lookup plan")
 	require.NoError(t, err)
 	require.Contains(t, strings.Join(plan, "\n"), "session_entries_mcp_metadata")
-	require.NotContains(t, strings.Join(plan, "\n"), "Filter:")
 	require.NotContains(t, strings.Join(plan, "\n"), "Sort")
+
+	for _, line := range plan {
+		if strings.Contains(line, "Filter:") {
+			require.NotContains(t, line, "entry_json", "the metadata index finds entries without filtering them")
+		}
+	}
+
 	t.Log(strings.Join(plan, "\n"))
 }
 
