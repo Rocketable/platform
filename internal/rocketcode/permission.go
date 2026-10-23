@@ -121,7 +121,8 @@ func interpolatePermissions(agent *Agent, env []string) {
 
 	for i := range buckets {
 		// Rules whose variable is absent or empty are dropped from the set:
-		// a scoped rule without its variable grants nothing that turn.
+		// a scoped rule without its variable grants nothing that turn. A deny
+		// rule instead matches as if the variable were *, so it still denies.
 		kept := buckets[i].Rules[:0]
 		for _, rule := range buckets[i].Rules {
 			if len(rule.segments) == 0 {
@@ -137,6 +138,11 @@ func interpolatePermissions(agent *Agent, env []string) {
 				}
 
 				value := values[segment.Text]
+				if value == "" && rule.Action == PermissionDeny {
+					rule.segments[k] = ruleSegment{Text: "*"}
+					continue
+				}
+
 				if value == "" {
 					dropped = true
 					break
