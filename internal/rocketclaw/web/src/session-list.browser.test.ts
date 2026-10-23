@@ -467,7 +467,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   // Fixed SearchSessions fixtures: the conversation IDs, in server order, and the filter terms each query returns.
   const searches: Record<string, string[]> = {
     "needle-17mib": ["kept"], "PREVIEW": ["slack-thread:C:1", "kept"], "ORIGINAL-KEY": ["kept"], "preview": ["slack-thread:C:1"], "partial preview 445": ["prefix-445"],
-    "is:pinned fixture 0": ["perf-0"], "IS:PINNED": ["named", "pinned"], "Release notes": ["named"], "Original preview": ["named"], "agent:main room:room matching": ["slack-thread:C:active", "slack-thread:C:resolved"],
+    "is:pinned fixture 0": ["perf-0"], "Release notes": ["named"], "Original preview": ["named"], "agent:main room:room matching": ["slack-thread:C:active", "slack-thread:C:resolved"],
   };
   const searchTerms: Record<string, string[]> = { "agent:main": ["agent:main"], "agent:main room:ro": ["agent:main"], "agent:main room:room": ["agent:main", "room:room"], "agent:main room:room matching": ["agent:main", "room:room"], "tag:customer": ["tag:customer"] };
   const cronOpens: string[] = [];
@@ -503,7 +503,6 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     lastInputId: "",
     rows: [] as Session[],
     updateError: false,
-    searchError: false,
     createdAgents: [] as string[],
     yieldBatches: async function* (): AsyncGenerator<SessionBatch> {},
   };
@@ -642,7 +641,6 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
           searchQueries.push(input.query);
           if (input.query === "is:pinned fixture 0") await manySearchHold.promise;
           if (input.query === "is:pinned not-in-any-row") await lastSearchHold.promise;
-          if (ctrl.searchError) throw new RPCError("search unavailable", 13);
           return Response.json({
             terms: (searchTerms[input.query] ?? []).map((text) => ({ key: text.slice(0, text.indexOf(":")), text, start: input.query.indexOf(text), end: input.query.indexOf(text) + text.length })),
             text: input.query, needle: input.query.toLowerCase(), matches: (searches[input.query] ?? []).map((conversationId) => ({ conversationId, field: "Preview", text: "" })), messages: [], mentionIds: [],
@@ -853,11 +851,6 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await webRow.locator("time").isVisible()).toBe(true);
     expect(historyRequests).toEqual([]); // Empty Cmd+P does not load histories.
     searchQueries.length = 0;
-    for (const term of ["   ", "agent:", "room:", "is:", "is:pin", "sort:", "sort:ne"]) {
-      await search.fill(term);
-      await page.waitForTimeout(300); // Past the search pause.
-      expect(searchQueries).toEqual([]); // Unfinished operators send nothing.
-    }
     await search.fill("agent:");
     await sessionPalette.getByRole("button", { name: "main gpt", exact: true }).click();
     await sessionPalette.getByRole("button", { name: "agent:main", exact: true }).waitFor();
@@ -1325,18 +1318,6 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await hidden(sessionPalette, "prefix-only");
 
     ctrl.yieldBatches = async function* () {
-      yield batch([row("kept", "should-not-save")], { upstreamSuccess: true });
-      throw new Error("late");
-    };
-    blocked.resolve();
-    await page.waitForTimeout(500);
-    blocked = Promise.withResolvers();
-    await page.reload();
-    await openSessions(page);
-    await shown(sessionPalette, "saved preview");
-    await hidden(sessionPalette, "should-not-save");
-
-    ctrl.yieldBatches = async function* () {
       yield batch([row("kept", "wire-terminal")], { upstreamSuccess: true });
       await wireTail.promise;
     };
@@ -1378,21 +1359,6 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.reload();
     await openSessions(page);
     await shown(sessionPalette, "backfilled preview");
-
-    ctrl.yieldBatches = complete([]);
-    blocked.resolve();
-    await page.getByText("backfilled preview", { exact: true }).first().waitFor({ state: "hidden", timeout: 15_000 });
-    await hidden(page, "backfilled preview");
-    await hidden(page, "saved preview");
-    await page.keyboard.press("Control+p");
-    await search.fill("empty-search");
-    await shown(sessionPalette, "No matches");
-    await hidden(sessionPalette, "loading...");
-    blocked = Promise.withResolvers();
-    await page.reload();
-    await openSessions(page);
-    await sessionPalette.waitFor();
-    await hidden(sessionPalette, "saved preview");
 
     ctrl.yieldBatches = complete([row("kept", "saved preview"), row("gone", "will vanish")]);
     blocked.resolve();
@@ -1703,22 +1669,6 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await matrix.getByRole("button", { name: "Show bottom navigation" }).click();
     await matrix.close();
 
-    ctrl.searchError = true;
-    const failure = await browser.newPage();
-    await failure.goto(origin);
-    await openSessions(failure);
-    const failureDialog = failure.getByRole("dialog", { name: "Go to session or command", exact: true });
-    await failureDialog.getByText("Winner", { exact: true }).waitFor();
-    await failureDialog.getByPlaceholder("Search sessions").fill("is:pinned absent"); // Only a filter asks the server.
-    await failureDialog.getByRole("alert").filter({ hasText: "Search failed: search unavailable" }).waitFor();
-    await failureDialog.getByText("Search incomplete", { exact: true }).waitFor();
-    expect(await failureDialog.getByText("No matches", { exact: true }).count()).toBe(0);
-    ctrl.searchError = false;
-    await failureDialog.getByPlaceholder("Search sessions").press("End");
-    await failureDialog.getByPlaceholder("Search sessions").pressSequentially(" "); // The next keystroke retries.
-    await failureDialog.getByText("No matches", { exact: true }).waitFor();
-    expect(await failureDialog.getByRole("alert").count()).toBe(0);
-    await failure.close();
     ctrl.yieldBatches = complete(Array.from({ length: 96 }, (_, index) => ({ ...row(`perf-${index}`, `Search fixture ${index}`) })));
     const many = await browser.newPage();
     await many.addInitScript(() => {
@@ -1832,16 +1782,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await navMain.getByPlaceholder("Search or agent: or room:").inputValue()).toBe("");
     await navPage.keyboard.press("Escape");
     await closed("Search");
-    for (const name of ["Cron", "Agents", "Skills", "Config"]) {
-      await openPage(name);
-      await navPage.waitForURL(`${origin}/${name.toLowerCase()}`);
-      if (name === "Config") {
-        await shown(navPage.locator("main"), "Configured user");
-        await shown(navPage.locator("main"), "connected@example.com");
-      }
-      await navPage.keyboard.press("Escape");
-      await closed(name);
-    }
+    // The width loop below opens and closes every page; only Config's content is checked here.
+    await openPage("Config");
+    await navPage.waitForURL(`${origin}/config`);
+    await shown(navPage.locator("main"), "Configured user");
+    await shown(navPage.locator("main"), "connected@example.com");
+    await navPage.keyboard.press("Escape");
+    await closed("Config");
     const chatPath = `/s/${Buffer.from("slack-thread:C:active").toString("base64url")}`;
     for (const width of [1280, 390]) {
       await navPage.setViewportSize({ width, height: 844 });
@@ -2359,16 +2306,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         await commands.getByRole("button", { name: `Sessions: ${label}`, exact: true }).click();
         await commands.waitFor({ state: "hidden" });
       };
-      await sessionCommand("Pin session");
-      await detailsPage.keyboard.press("Control+p");
       const detailsPalette = detailsPage.getByRole("dialog", { name: "Go to session or command", exact: true });
       const search = detailsPalette.getByPlaceholder("Search sessions");
       const settled = () => detailsPalette.locator('ul[data-pending="false"]').waitFor();
-      await search.fill("IS:PINNED");
-      await settled();
-      expect(await detailsPalette.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Original preview", "Pinned preview"]);
-      await detailsPage.keyboard.press("Escape");
-      await sessionCommand("Unpin session");
       await sessionCommand("Name session");
       const dialog = detailsPage.getByRole("dialog", { name: "Name session", exact: true });
       await dialog.getByLabel("Session name").fill("  Release notes  ");

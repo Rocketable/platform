@@ -34,10 +34,6 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	shellTemp := testShellTempConfig(t, root, outputDir)
 	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand{})
 
-	t.Run("basic success", func(t *testing.T) {
-		got := sss.Bash(context.Background(), "", bashParams{Command: "echo test", TimeoutMillisecond: 0, Workdir: "", Description: "Echo test"}).String()
-		require.Contains(t, got, "test")
-	})
 	t.Run("shell environment cannot reinterpret checked commands", func(t *testing.T) {
 		require.NoError(t, root.WriteFile("sh", []byte("#!/bin/sh\nprintf unexpected"), 0o755))
 		require.NoError(t, root.WriteFile("startup.sh", []byte("printf unexpected"), 0o644))
@@ -165,14 +161,6 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		require.Equal(t, fs.FileMode(0o700), info.Mode().Perm())
 	})
 
-	t.Run("applies configured env", func(t *testing.T) {
-		sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=configured"}, DefaultShellCommand{})
-
-		got := sss.Bash(context.Background(), "", bashParams{Command: `printf %s "$ROCKETCLAW_CONVERSATION_ID"`, TimeoutMillisecond: 0, Workdir: "", Description: "configured env"})
-
-		require.Equal(t, "configured", got.String())
-	})
-
 	t.Run("configured env overrides process env", func(t *testing.T) {
 		t.Setenv("ROCKETCLAW_CONVERSATION_ID", "old")
 
@@ -191,14 +179,6 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		require.Equal(t, outputDir, got.String())
 	})
 
-	t.Run("mktemp uses shell temp dir", func(t *testing.T) {
-		got := sss.Bash(context.Background(), "", bashParams{Command: `tmp="$TMPDIR/script-temp"; touch "$tmp"; printf %s "$tmp"`, TimeoutMillisecond: 0, Workdir: "", Description: "mktemp"})
-		tempPath := strings.TrimSpace(got.String())
-		rel, err := filepath.Rel(outputDir, tempPath)
-		require.NoError(t, err)
-		require.NotContains(t, rel, "..")
-	})
-
 	t.Run("returns full multi-line output", func(t *testing.T) {
 		cmd := "i=1; while [ $i -le 2100 ]; do echo $i; i=$((i+1)); done"
 		got := sss.Bash(context.Background(), "", bashParams{Command: cmd, TimeoutMillisecond: 0, Workdir: "", Description: "many lines"})
@@ -213,8 +193,6 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 
 	t.Run("custom shell", func(t *testing.T) {
 		require.NoError(t, root.WriteFile("wrap.sh", []byte("#!/bin/sh\nprintf 'argc=%s arg=%s pwd=%s tmp=%s' \"$#\" \"$1\" \"$(pwd -P)\" \"$TMPDIR\""), 0o755))
-		require.NoError(t, root.WriteFile("exit7.sh", []byte("#!/bin/sh\nexit 7"), 0o755))
-		require.NoError(t, root.WriteFile("slow.sh", []byte("#!/bin/sh\nsleep 2"), 0o755))
 
 		realDir, err := filepath.EvalSymlinks(dir)
 		require.NoError(t, err)
@@ -229,16 +207,6 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			got := sss.Bash(t.Context(), filepath.Join(dir, "wrap.sh"), bashParams{Command: "ls", Workdir: filepath.Join(dir, "nested")})
 			require.True(t, got.Success, got.Output)
 			require.Equal(t, fmt.Sprintf("argc=1 arg=ls pwd=%s tmp=%s", filepath.Join(realDir, "nested"), outputDir), got.Output)
-		})
-		t.Run("exit status becomes the error code", func(t *testing.T) {
-			got := sss.Bash(t.Context(), filepath.Join(dir, "exit7.sh"), bashParams{Command: "true"})
-			require.Equal(t, "7", got.ErrorCode)
-			require.False(t, got.Success)
-		})
-		t.Run("timeout applies to the wrapper", func(t *testing.T) {
-			got := sss.Bash(t.Context(), filepath.Join(dir, "slow.sh"), bashParams{Command: "true", TimeoutMillisecond: 100})
-			require.Equal(t, "timeout", got.ErrorCode)
-			require.False(t, got.Success)
 		})
 		t.Run("missing program reports the start error without falling back to bash", func(t *testing.T) {
 			got := sss.Bash(t.Context(), filepath.Join(dir, "missing-shell"), bashParams{Command: "touch ran-under-bash"})

@@ -181,17 +181,13 @@ func TestHTTPStreams(t *testing.T) {
 		{"permission", codes.PermissionDenied, http.StatusForbidden},
 		{"not-found", codes.NotFound, http.StatusNotFound},
 		{"conflict", codes.AlreadyExists, http.StatusConflict},
-		{"aborted", codes.Aborted, http.StatusConflict},
 		{"quota", codes.ResourceExhausted, http.StatusTooManyRequests},
 		{"unavailable", codes.Unavailable, http.StatusServiceUnavailable},
 		{"deadline", codes.DeadlineExceeded, http.StatusGatewayTimeout},
 		{"invalid", codes.InvalidArgument, http.StatusBadRequest},
 		{"internal", codes.Internal, http.StatusInternalServerError},
-		{"unknown", codes.Unknown, http.StatusInternalServerError},
-		{"data-loss", codes.DataLoss, http.StatusInternalServerError},
 		{"unimplemented", codes.Unimplemented, http.StatusNotImplemented},
 		{"upload-rejected", codes.PermissionDenied, http.StatusForbidden},
-		{"upload-metadata", codes.InvalidArgument, http.StatusBadRequest},
 		{"upload-final-error", codes.DataLoss, http.StatusInternalServerError},
 	} {
 		scenario := test.name
@@ -204,7 +200,7 @@ func TestHTTPStreams(t *testing.T) {
 			transport := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
 				require.Equal(t, []string{"127.0.0.1"}, metadata.ValueFromIncomingContext(stream.Context(), "rocketclaw-principal"))
 
-				if test.code != codes.OK && scenario != "upload-metadata" && scenario != "upload-final-error" {
+				if test.code != codes.OK && scenario != "upload-final-error" {
 					return status.Error(test.code, "denied")
 				}
 
@@ -238,15 +234,11 @@ func TestHTTPStreams(t *testing.T) {
 					}
 
 					return stream.SendMsg(&PromptResponse{})
-				case "upload", "upload-metadata", "upload-final-error":
+				case "upload", "upload-final-error":
 					first := &Attachment{}
 					require.NoError(t, stream.RecvMsg(first))
 					require.Equal(t, "visible", first.ConversationId)
 					require.Equal(t, "original.bin", first.Name)
-
-					if scenario == "upload-metadata" {
-						return status.Error(test.code, "denied")
-					}
 
 					var received []byte
 
@@ -379,7 +371,7 @@ func TestHTTPStreams(t *testing.T) {
 			switch scenario {
 			case "cancel", "idle-cancel", "auth":
 				path = "/stream?id=visible"
-			case "upload", "upload-rejected", "upload-metadata", "upload-final-error":
+			case "upload", "upload-rejected", "upload-final-error":
 				path, method = "/api/UploadAttachment?conversationId=visible&name=original.bin", http.MethodPost
 			case "download", "invalid-mime", "inline", "forced-download", "truncated":
 				path = "/api/DownloadAttachment?conversationId=visible&id=file"

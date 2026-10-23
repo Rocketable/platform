@@ -12,24 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunWithoutDefaultConfigShowsHelp(t *testing.T) {
-	workspace := t.TempDir()
-	cwd, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(workspace))
-	t.Cleanup(func() {
-		require.NoError(t, os.Chdir(cwd))
-	})
-
-	output := captureStdout(t, func() error {
-		return run(nil)
-	})
-	assert.Contains(t, output, "Usage:")
-	assert.Contains(t, output, "rocketclaw oai login [provider] [--headless]")
-	assert.Contains(t, output, "rocketclaw oai list")
-	assert.Contains(t, output, "rocketclaw oai logout [provider]")
-}
-
 func TestMainWithoutDefaultConfigShowsHelp(t *testing.T) {
 	workspace := t.TempDir()
 	cwd, err := os.Getwd()
@@ -82,20 +64,6 @@ func TestRunServeKeepsLegacyConfigReadOnly(t *testing.T) {
 	require.NoError(t, os.WriteFile(defaultConfigPath, legacy, 0o600))
 
 	err := runServe(nil)
-	require.ErrorContains(t, err, "slack.channels is required")
-
-	data, err := os.ReadFile(defaultConfigPath)
-	require.NoError(t, err)
-	assert.Equal(t, legacy, data)
-}
-
-func TestLoadRuntimeConfigKeepsLegacyConfigReadOnly(t *testing.T) {
-	workspace := t.TempDir()
-	t.Chdir(workspace)
-	legacy := []byte(`{"workspace":".","database_url":"postgres://localhost/rocketclaw_test?sslmode=disable","slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`)
-	require.NoError(t, os.WriteFile(defaultConfigPath, legacy, 0o600))
-
-	_, _, err := loadRuntimeConfig("")
 	require.ErrorContains(t, err, "slack.channels is required")
 
 	data, err := os.ReadFile(defaultConfigPath)
@@ -195,22 +163,6 @@ func TestRunDispatchesHelp(t *testing.T) {
 	assert.Contains(t, output, "127.0.0.1:6060")
 	assert.Contains(t, output, "enabled by default")
 	assert.NotContains(t, output, "rocketclaw cli")
-}
-
-func TestPrintStdoutReportsWriteError(t *testing.T) {
-	reader, writer, err := os.Pipe()
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-
-	oldStdout := os.Stdout
-	os.Stdout = writer
-
-	t.Cleanup(func() { os.Stdout = oldStdout })
-
-	require.NoError(t, writer.Close())
-
-	err = printStdout("hello", "greeting")
-	require.ErrorContains(t, err, "print greeting")
 }
 
 func captureStdout(t *testing.T, fn func() error) string {

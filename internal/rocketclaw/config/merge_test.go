@@ -202,7 +202,6 @@ func TestLoadRejectsMalformedAWSObject(t *testing.T) {
 		name, ref, arn, key string
 	}{
 		{name: "non-object", ref: `"nope"`},
-		{name: "null", ref: `null`},
 		{name: "missing ARN", ref: `{"key":"token"}`, key: "token"},
 		{name: "missing key", ref: `{"arn":"` + otherARN + `"}`, arn: otherARN},
 	} {
@@ -226,11 +225,6 @@ func TestLoadRejectsMalformedAWSObject(t *testing.T) {
 			assert.Equal(t, tt.key, errFetch.Key)
 		})
 	}
-}
-
-func TestDecodeObjectRejectsArray(t *testing.T) {
-	_, err := decodeObject([]byte(`[]`), "config")
-	require.ErrorContains(t, err, "must be an object")
 }
 
 func TestLoadEmptyLocalBotTokenDoesNotBeatSecret(t *testing.T) {

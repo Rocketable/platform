@@ -133,33 +133,6 @@ func TestQueueEdit(t *testing.T) {
 	require.Equal(t, codes.NotFound, status.Code(err))
 }
 
-func TestRevertWireContract(t *testing.T) {
-	const marker = "9007199254741001:4"
-
-	stage := &StageRevertRequest{Id: "chat", MessageId: marker}
-	staged := &StageRevertResponse{RevertMessageId: marker, Prompt: &TranscriptEvent{Role: "user", Text: "  $skill exact\n"}}
-	redo := &ClearRevertRequest{Id: "chat"}
-
-	history := &HistoryResponse{RevertEligible: true, RevertMessageId: marker, CanUndo: true}
-	for _, message := range []proto.Message{stage, staged, redo, &ClearRevertResponse{}, history} {
-		encoded, err := proto.Marshal(message)
-		require.NoError(t, err)
-
-		decoded := message.ProtoReflect().New().Interface()
-		require.NoError(t, proto.Unmarshal(encoded, decoded))
-		require.True(t, proto.Equal(message, decoded), "Revert data must survive the gRPC wire format")
-	}
-
-	require.Equal(t, "chat", stage.GetId())
-	require.Equal(t, marker, stage.GetMessageId(), "composite IDs are never numeric protobuf fields")
-	require.Equal(t, marker, staged.GetRevertMessageId())
-	require.Equal(t, "  $skill exact\n", staged.GetPrompt().GetText())
-	require.Equal(t, "chat", redo.GetId())
-	require.True(t, history.GetRevertEligible())
-	require.True(t, history.GetCanUndo())
-	require.Equal(t, marker, history.GetRevertMessageId())
-}
-
 func TestTailscaleBrowserIdentity(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)

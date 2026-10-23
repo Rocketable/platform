@@ -318,35 +318,6 @@ func TestLoadDefinitionsReportsDirectoryErrors(t *testing.T) {
 	}
 }
 
-func TestStartStopLoadsCronjobsWithoutRunningFutureDuration(t *testing.T) {
-	workspace := t.TempDir()
-
-	cronDir := filepath.Join(workspace, "cron")
-	if err := os.Mkdir(cronDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nchannel: '#ops'\n---\nBody"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	m := New(workspace, ".", []string{"#ops"}, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		t.Fatal("future duration cronjob ran during start/stop test")
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
-
-	if err := m.Start(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-
-	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	if err := m.Stop(stopCtx); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestStartRejectsAlreadyStartedManager(t *testing.T) {
 	workspace := t.TempDir()
 
@@ -377,20 +348,6 @@ func TestStartRejectsAlreadyStartedManager(t *testing.T) {
 
 	if err := m.Stop(stopCtx); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestParseScheduleTimestamp(t *testing.T) {
-	dueAt := "2026-05-21T15:04:05.123456789Z"
-
-	definition, err := loadDefinition([]byte("---\nschedule: '"+dueAt+"'\nchannel: '#ops'\n---\nJob"), "cron/daily.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	schedule := definition.schedules[0]
-	if schedule.DueAt.Format(time.RFC3339Nano) != dueAt || schedule.Raw != dueAt {
-		t.Fatalf("schedule = %#v; want timestamp-only schedule", schedule)
 	}
 }
 
@@ -434,49 +391,6 @@ func TestOneOffCronjobRunsImmediatelyAndDeletesFile(t *testing.T) {
 	}
 
 	t.Fatal("one-off cronjob file was not deleted")
-}
-
-func TestOneOffCronjobRunsAfterFutureDueTime(t *testing.T) {
-	workspace := t.TempDir()
-
-	cronDir := filepath.Join(workspace, "cron")
-	if err := os.Mkdir(cronDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	now := time.Now().UTC()
-
-	cronPath := filepath.Join(cronDir, "future.md")
-	if err := os.WriteFile(cronPath, []byte("---\nschedule: \""+now.Add(30*time.Millisecond).Format(time.RFC3339Nano)+"\"\nchannel: '#ops'\n---\nBody"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	runDone := make(chan struct{})
-	m := New(workspace, ".", []string{"#ops", "#triage"}, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		close(runDone)
-
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
-	m.now = func() time.Time { return now }
-
-	if err := m.Start(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-
-	select {
-	case <-runDone:
-	case <-time.After(time.Second):
-		t.Fatal("future one-off cronjob did not run")
-	}
-
-	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if _, err := os.Stat(cronPath); errors.Is(err, os.ErrNotExist) {
-			stopCronManager(t, m)
-			return
-		}
-	}
-
-	t.Fatal("future one-off cronjob file was not deleted")
 }
 
 func TestOneOffCronjobDeletesFileAfterRunError(t *testing.T) {

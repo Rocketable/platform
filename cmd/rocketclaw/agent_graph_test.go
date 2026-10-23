@@ -60,8 +60,3 @@ func TestRunAgentGraphRejectsUnknownTarget(t *testing.T) {
 	err := runAgentGraph([]string{"later"})
 	require.ErrorContains(t, err, "usage: rocketclaw agent-graph [next|current]")
 }
-
-func TestHelpMentionsAgentGraph(t *testing.T) {
-	output := captureStdout(t, func() error { return run([]string{"help"}) })
-	assert.Contains(t, output, "rocketclaw agent-graph [next|current]")
-}

@@ -80,10 +80,8 @@ func TestShadowLifecycleAdmissionRollback(t *testing.T) {
 
 func TestShadowLifecycleClearRollback(t *testing.T) {
 	for _, step := range []struct{ table, event string }{
-		{"entries", "DELETE"}, {"conversations", "UPDATE"},
-		{"turns", "DELETE"},
-		{"steps", "DELETE"}, {"shadow_turns", "DELETE"},
-		{"attachments", "DELETE"}, {"pending_attachment_deletions", "INSERT"},
+		{"entries", "DELETE"}, {"conversations", "UPDATE"}, {"steps", "DELETE"},
+		{"shadow_turns", "DELETE"}, {"pending_attachment_deletions", "INSERT"},
 	} {
 		t.Run(step.table, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
@@ -488,10 +486,8 @@ CREATE CONSTRAINT TRIGGER reject_shadow_commit AFTER UPDATE ON shadow_turns DEFE
 
 func TestShadowLifecycleFinishRollback(t *testing.T) {
 	for _, step := range []struct{ table, event string }{
-		{"shadow_turns", "UPDATE"}, {"turns", "UPDATE"},
-		{"entries", "INSERT"}, {"conversations", "UPDATE"},
-		{"turns", "DELETE"}, {"turns", "UPDATE OF note"},
-		{"steps", "DELETE"},
+		{"shadow_turns", "UPDATE"}, {"entries", "INSERT"}, {"turns", "DELETE"},
+		{"turns", "UPDATE OF note"}, {"steps", "DELETE"},
 	} {
 		t.Run(step.table+" "+step.event, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)

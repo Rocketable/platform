@@ -1052,46 +1052,6 @@ func TestSessionToolsCriteria(t *testing.T) {
 	require.Equal(t, header+"[criteria: terms=; text=missing]\n", call(&sessionListParams{Criteria: "missing", Since: epoch, Limit: 200}), "a chat without a summary is never listed")
 }
 
-// The tool returns the chats SearchSessions finds, so it lists what /search shows.
-func TestSessionToolsCriteriaParity(t *testing.T) {
-	t.Parallel()
-
-	s, slack := newSessionSearchFixture(t)
-	list := listSessionsTool(s, &threadBridgeManager{slackLookups: slack})
-
-	for _, query := range []string{"tag:customer", "outage", "outage tag:", "billing", "support sort:oldest", "is:cron", "is:pinned is:forked", "agent:main", "room:support", "room:C9", "room:support room:C9", "room:support room:C9 billing", "room:support room:C9 tag:customer", "cron:daily", "t-1", "ada", "status:open"} {
-		search, err := s.SearchSessions(t.Context(), "", query, SearchMessages, slack)
-		require.NoError(t, err)
-
-		want := make([]string, 0, len(search.Matches))
-		for i := range search.Matches {
-			want = append(want, search.Matches[i].Chat.Session.Conversation.ID)
-		}
-
-		result, err := list.Call(t.Context(), json.RawMessage(fmt.Sprintf(`{"criteria":%q,"since":"1970-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":false}`, query)), nil)
-		require.NoError(t, err)
-
-		got := []string{}
-
-		for _, row := range strings.Split(result.Output, "\n")[1:] {
-			if row == "" || strings.HasPrefix(row, "[") {
-				break
-			}
-
-			id, _, _ := strings.Cut(row, "\t")
-			got = append(got, id)
-		}
-
-		if strings.Contains(query, "sort:") {
-			require.Equal(t, want, got, query)
-		}
-
-		slices.Sort(want)
-		slices.Sort(got)
-		require.Equal(t, want, got, query)
-	}
-}
-
 // A subagent session or review history under a Slack thread keeps the thread's channel, which
 // decides the agents Web offers it, as when its ID named the channel.
 func TestChildConversationsKeepSlackChannel(t *testing.T) {

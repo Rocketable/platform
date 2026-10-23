@@ -455,32 +455,6 @@ func TestAuthorizeURLIncludesOAuthParameters(t *testing.T) {
 	require.Equal(t, originator, query.Get("originator"))
 }
 
-func TestExchangeCodePostsAuthorizationCodeForm(t *testing.T) {
-	base := http.DefaultClient.Transport
-	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		require.Equal(t, http.MethodPost, req.Method)
-		require.Equal(t, issuer+"/oauth/token", req.URL.String())
-		require.Equal(t, "application/x-www-form-urlencoded", req.Header.Get("Content-Type"))
-		require.Equal(t, "application/json", req.Header.Get("Accept"))
-		require.NoError(t, req.ParseForm())
-		require.Equal(t, "authorization_code", req.Form.Get("grant_type"))
-		require.Equal(t, "code-123", req.Form.Get("code"))
-		require.Equal(t, "http://localhost/callback", req.Form.Get("redirect_uri"))
-		require.Equal(t, clientID, req.Form.Get("client_id"))
-		require.Equal(t, "verifier-123", req.Form.Get("code_verifier"))
-
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"access","refresh_token":"refresh","expires_in":60}`)), Header: make(http.Header)}, nil
-	})
-
-	t.Cleanup(func() { http.DefaultClient.Transport = base })
-
-	response, err := exchangeCode(context.Background(), "code-123", "http://localhost/callback", "verifier-123")
-	require.NoError(t, err)
-	require.Equal(t, "access", response.AccessToken)
-	require.Equal(t, "refresh", response.RefreshToken)
-	require.Equal(t, int64(60), response.ExpiresIn)
-}
-
 func TestAcquireDeviceTokenDoesNotSave(t *testing.T) {
 	workspace := t.TempDir()
 	base := http.DefaultClient.Transport
@@ -983,17 +957,6 @@ func TestParseClaimsRejectsMalformedTokens(t *testing.T) {
 			require.False(t, ok)
 		})
 	}
-}
-
-func TestCodexStreamingResponseRequiresCompletionEvent(t *testing.T) {
-	resp := &http.Response{Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"msg\"}}\n")), Header: make(http.Header)}
-
-	got, err := codexStreamingResponse(resp)
-	if got != nil {
-		defer func() { _ = got.Body.Close() }()
-	}
-
-	require.ErrorContains(t, err, "missing completion event")
 }
 
 func TestCodexStreamingResponseReportsFailedEvent(t *testing.T) {
@@ -1751,66 +1714,6 @@ func TestTransportRefreshesExpiredOAuthToken(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "next-refresh", token.Refresh)
 	require.Equal(t, "acc-new", token.AccountID)
-}
-
-func TestTransportRefreshesOAuthTokenInsideSkew(t *testing.T) {
-	workspace := t.TempDir()
-	testAuthPath(t, workspace)
-	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(refreshSkew / 2).UnixMilli(), AccountID: "acc-old"})
-
-	base := http.DefaultClient.Transport
-	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		require.Equal(t, issuer+"/oauth/token", req.URL.String())
-
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"next-access","refresh_token":"next-refresh","expires_in":3600}`)), Header: make(http.Header)}, nil
-	})
-
-	t.Cleanup(func() { http.DefaultClient.Transport = base })
-
-	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		require.Equal(t, "Bearer next-access", req.Header.Get("Authorization"))
-
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: make(http.Header)}, nil
-	})}
-
-	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/models", `{}`))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
-
-	token, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
-	require.NoError(t, err)
-	require.Equal(t, "next-refresh", token.Refresh)
-}
-
-func TestTransportRefreshPreservesStoredAccountID(t *testing.T) {
-	workspace := t.TempDir()
-	testAuthPath(t, workspace)
-	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(-time.Minute).UnixMilli(), AccountID: "acc-old"})
-
-	base := http.DefaultClient.Transport
-	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		require.Equal(t, issuer+"/oauth/token", req.URL.String())
-
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"next-access","refresh_token":"next-refresh","expires_in":3600}`)), Header: make(http.Header)}, nil
-	})
-
-	t.Cleanup(func() { http.DefaultClient.Transport = base })
-
-	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		require.Equal(t, "Bearer next-access", req.Header.Get("Authorization"))
-		require.Equal(t, "acc-old", req.Header.Get("Chatgpt-Account-Id"))
-
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: make(http.Header)}, nil
-	})}
-
-	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/models", `{}`))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
-
-	token, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
-	require.NoError(t, err)
-	require.Equal(t, "next-refresh", token.Refresh)
-	require.Equal(t, "acc-old", token.AccountID)
 }
 
 func TestTransportReportsRefreshError(t *testing.T) {

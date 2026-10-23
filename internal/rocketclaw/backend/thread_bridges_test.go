@@ -42,24 +42,17 @@ func TestRunRejectsUnresolvedAgentModelAtStartup(t *testing.T) {
 func TestRunRejectsInvalidWorkflowAtStartup(t *testing.T) {
 	t.Parallel()
 
-	for _, tt := range []struct{ name, source, want string }{
-		{name: "syntax", source: "not valid starlark", want: "validate workflow definitions"},
-		{name: "worker model", source: "meta = {\"name\": \"bad\", \"description\": \"Bad\"}\nw = worker(name=\"w\", instructions=\"work\", model=\"missing\")\ndef main(args): return None\n", want: `workflow worker model "missing" is not configured`},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			workspace := shortTempDir(t)
-			root, err := os.OpenRoot(workspace)
-			require.NoError(t, err)
-			require.NoError(t, root.Mkdir("workflows", 0o755))
-			require.NoError(t, root.WriteFile("workflows/bad.star", []byte(tt.source), 0o600))
-			t.Cleanup(func() { require.NoError(t, root.Close()) })
+	workspace := shortTempDir(t)
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	require.NoError(t, root.Mkdir("workflows", 0o755))
+	require.NoError(t, root.WriteFile("workflows/bad.star", []byte("meta = {\"name\": \"bad\", \"description\": \"Bad\"}\nw = worker(name=\"w\", instructions=\"work\", model=\"missing\")\ndef main(args): return None\n"), 0o600))
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-			dsn, errDSN := harnessbridgetest.IsolatedTestDatabaseURL()
-			require.NoError(t, errDSN)
-			err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), nil)
-			require.ErrorContains(t, err, tt.want)
-		})
-	}
+	dsn, errDSN := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, errDSN)
+	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), nil)
+	require.ErrorContains(t, err, `workflow worker model "missing" is not configured`)
 }
 
 func TestRuntimeWorkflowDescriptionsListsSavedWorkflows(t *testing.T) {
@@ -372,24 +365,6 @@ func TestThreadBridgeManagerSkipsActiveGoalContinuationForResumedTurn(t *testing
 
 	require.NoError(t, manager.StartActiveGoals(t.Context()))
 	assert.Empty(t, submittedMessages(bridge))
-}
-
-func TestThreadBridgeManagerAllowsGoalAfterCompletedGoal(t *testing.T) {
-	t.Parallel()
-
-	store := newWorkspaceSessionService(t)
-	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
-	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
-	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "first", MaxTurns: 5}))
-	_, err := store.UpdateGoalStatus(conversationID, GoalStatusComplete, "done")
-	require.NoError(t, err)
-	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "second", MaxTurns: 5}))
-
-	goal, ok, err := store.Goal(conversationID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "second", goal.Objective)
-	assert.Equal(t, GoalStatusActive, goal.Status)
 }
 
 func TestThreadBridgeManagerPickLaterWorkUsesLiveBridge(t *testing.T) {

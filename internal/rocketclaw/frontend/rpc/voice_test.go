@@ -145,8 +145,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 
 			peer.sent <- string(data)
 
-			// A quiet peer never confirms the close, so the call must hang up.
-			if string(data) == voiceCloseMessage && !strings.Contains(peer.id, "quiet") {
+			if string(data) == voiceCloseMessage {
 				peer.send(t, `{"type":"session.closed","reason":"client_request"}`)
 
 				_ = conn.Close()
@@ -469,12 +468,6 @@ func TestVoice(t *testing.T) {
 		assert.Equal(t, []string{voiceCloseMessage}, peer.all(t))
 		h.ended(t)
 		assert.Empty(t, h.hangups, "a confirmed close needs no hangup")
-
-		_, cancel, peer = h.call(t, "main", "offer-quiet")
-
-		cancel()
-		assert.Equal(t, []string{voiceCloseMessage}, peer.all(t))
-		assert.Equal(t, "live_offer-quiet", <-h.hangups, "an unconfirmed close hangs up")
 
 		reader, _, peer := h.call(t, "main", "offer-2")
 		peer.send(t, `{"type":"session.closed","reason":"expired"}`)

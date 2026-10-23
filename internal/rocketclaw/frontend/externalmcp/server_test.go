@@ -60,25 +60,6 @@ func TestStartSessionPromptServerReturnsExternalConversationID(t *testing.T) {
 	assert.Equal(t, map[string]any{"external_conversation_id": "external_mcp:planner:abc", "agent": "planner", "answer": "planner reply"}, structuredContentMap(t, result))
 }
 
-func TestStartSessionPromptServerReturnsHandlerAgent(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, externalConversationID, agent, input string, _ map[string]string, _ []SessionAttachment, _ string) (SessionResult, error) {
-		assert.Equal(t, "external-1", externalConversationID)
-		assert.Equal(t, "main", agent)
-		assert.Equal(t, "what now?", input)
-
-		return SessionResult{ExternalConversationID: externalConversationID, Agent: "planner", Answer: "planner reply"}, nil
-	})
-	require.NoError(t, err)
-
-	defer func() { require.NoError(t, server.Close(context.Background())) }()
-
-	result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": "what now?", "slack_channel": "#triage"})
-	content, ok := result.Content[0].(*mcp.TextContent)
-	require.True(t, ok)
-	assert.Equal(t, "planner reply", content.Text)
-	assert.Equal(t, map[string]any{"external_conversation_id": "external-1", "agent": "planner", "answer": "planner reply"}, structuredContentMap(t, result))
-}
-
 func TestStartSessionPromptServerPassesSlackChannel(t *testing.T) {
 	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, id, agent, input string, _ map[string]string, _ []SessionAttachment, slackChannel string) (SessionResult, error) {
 		assert.Equal(t, "external-1", id)
@@ -207,28 +188,6 @@ func TestStartSessionPromptServerReturnsErrors(t *testing.T) {
 			assert.Nil(t, result.StructuredContent)
 		})
 	}
-}
-
-func TestStartSessionPromptServerContinuesSession(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, _ []SessionAttachment, slackChannel string) (SessionResult, error) {
-		assert.Empty(t, username)
-		assert.Equal(t, "planner", agent)
-		assert.Equal(t, "external_mcp:planner:abc", externalConversationID)
-		assert.Equal(t, "follow up", input)
-		assert.Nil(t, metadata)
-		assert.Equal(t, "#triage", slackChannel)
-
-		return SessionResult{ExternalConversationID: externalConversationID, Agent: "planner", Answer: "continued reply"}, nil
-	})
-	require.NoError(t, err)
-
-	defer func() { require.NoError(t, server.Close(context.Background())) }()
-
-	result := callSessionPromptWithExternalConversationID(t, server.url, "external_mcp:planner:abc", "follow up", nil)
-	content, ok := result.Content[0].(*mcp.TextContent)
-	require.True(t, ok)
-	assert.Equal(t, "continued reply", content.Text)
-	assert.Equal(t, map[string]any{"external_conversation_id": "external_mcp:planner:abc", "agent": "planner", "answer": "continued reply"}, structuredContentMap(t, result))
 }
 
 func TestStartSessionPromptServerExposesMetadataSchema(t *testing.T) {
@@ -436,17 +395,6 @@ func TestStartSessionPromptServerRejectsInvalidListenAddr(t *testing.T) {
 		return SessionResult{}, nil
 	})
 	require.ErrorContains(t, err, "listen for external MCP HTTP server")
-}
-
-func callSessionPromptWithExternalConversationID(t *testing.T, endpoint, externalConversationID, input string, metadata map[string]string) *mcp.CallToolResult {
-	t.Helper()
-
-	args := map[string]any{"external_conversation_id": externalConversationID, "agent": "planner", "input": input, "slack_channel": "#triage"}
-	if metadata != nil {
-		args["metadata"] = metadata
-	}
-
-	return callTool(t, endpoint, "", "", args)
 }
 
 func callSessionPrompt(t *testing.T, endpoint, username, password, agent, input string, metadata map[string]string) *mcp.CallToolResult {

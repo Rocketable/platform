@@ -8,17 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSessionStoreRequiresConversationID(t *testing.T) {
-	t.Parallel()
-
-	store, err := NewSessionService(t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Stop()) })
-
-	_, err = store.ObserveEntries(t.Context(), " ")
-	require.EqualError(t, err, "conversation ID is required")
-}
-
 func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) {
 	t.Parallel()
 

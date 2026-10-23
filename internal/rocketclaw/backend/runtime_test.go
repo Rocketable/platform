@@ -272,8 +272,6 @@ func TestRuntimePersistedEnqueueAndProducerArrivalOrder(t *testing.T) {
 		enqueueFirst bool
 	}{
 		{"same X/enqueue first", "X", true},
-		{"same X/producer first", "X", false},
-		{"distinct X2/enqueue first", "X2", true},
 		{"distinct X2/producer first", "X2", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

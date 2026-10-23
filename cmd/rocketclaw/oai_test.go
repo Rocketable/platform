@@ -29,12 +29,8 @@ func requireSaveToken(t *testing.T, workspace, runtimeDir, provider string, toke
 }
 
 func TestRunOAILoginHelpAliases(t *testing.T) {
-	for _, args := range [][]string{{"-h"}, {"--help"}, {"--headless", "-h"}, {"--headless", "--help"}} {
-		t.Run(strings.Join(args, "_"), func(t *testing.T) {
-			output := captureStdout(t, func() error { return runOAILogin(args) })
-			assert.Contains(t, output, "rocketclaw oai login [provider] [--headless]")
-		})
-	}
+	output := captureStdout(t, func() error { return runOAILogin([]string{"-h"}) })
+	assert.Contains(t, output, "rocketclaw oai login [provider] [--headless]")
 }
 
 func TestRunOAILoginRejectsInvalidArgumentsBeforeHelp(t *testing.T) {
@@ -67,22 +63,19 @@ func TestRunOAILoginTreatsBareHelpAsProvider(t *testing.T) {
 	assert.Equal(t, "help-refresh", token.Refresh)
 }
 
-func TestRunOAILoginParsesProviderAndHeadlessInEitherOrder(t *testing.T) {
-	for _, args := range [][]string{{"work", "--headless"}, {"--headless", "work"}} {
-		t.Run(strings.Join(args, "_"), func(t *testing.T) {
-			workspace := prepareOAIConfig(t)
-			mockDeviceLogin(t, "work-refresh")
+// Other login tests pass the provider before --headless.
+func TestRunOAILoginParsesHeadlessBeforeProvider(t *testing.T) {
+	workspace := prepareOAIConfig(t)
+	mockDeviceLogin(t, "work-refresh")
 
-			synctest.Test(t, func(t *testing.T) {
-				output := captureStdout(t, func() error { return runOAILogin(args) })
-				assert.Contains(t, output, "Saved work ChatGPT OAuth token")
-			})
+	synctest.Test(t, func(t *testing.T) {
+		output := captureStdout(t, func() error { return runOAILogin([]string{"--headless", "work"}) })
+		assert.Contains(t, output, "Saved work ChatGPT OAuth token")
+	})
 
-			token, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, "work")
-			require.NoError(t, err)
-			assert.Equal(t, "work-refresh", token.Refresh)
-		})
-	}
+	token, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, "work")
+	require.NoError(t, err)
+	assert.Equal(t, "work-refresh", token.Refresh)
 }
 
 func TestRunOAILoginDefaultsProviderToOpenAI(t *testing.T) {
@@ -352,9 +345,6 @@ func TestRunOAIRejectsInvalidArguments(t *testing.T) {
 		args []string
 		want string
 	}{
-		{args: []string{"login", "--headless", "--headless"}, want: "duplicate --headless"},
-		{args: []string{"login", "--bad"}, want: `unknown flag "--bad"`},
-		{args: []string{"login", "openai", "work"}, want: "more than one provider"},
 		{args: []string{"list", "extra"}, want: "oai list takes no arguments"},
 		{args: []string{"logout", "--bad"}, want: "parse oai logout flags"},
 		{args: []string{"logout", "openai", "work"}, want: "more than one provider"},

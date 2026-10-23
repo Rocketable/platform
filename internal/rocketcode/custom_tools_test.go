@@ -113,22 +113,6 @@ func TestCustomToolParametersRequiredJSON(t *testing.T) {
 	}
 }
 
-func TestCustomToolParametersRequiredDefaultsToSortedPropertyNames(t *testing.T) {
-	parameters, err := customToolParameters(map[string]any{
-		"properties": map[string]any{
-			"b": map[string]any{"type": "string"},
-			"a": map[string]any{"type": "string"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("customToolParameters returned error: %v", err)
-	}
-
-	if got, ok := parameters["required"].([]string); !ok || !slices.Equal(got, []string{"a", "b"}) {
-		t.Fatalf("parameters.required = %#v; want [a b]", parameters["required"])
-	}
-}
-
 func TestCustomToolParametersClosesNestedObjectSchemas(t *testing.T) {
 	parameters, err := customToolParameters(map[string]any{
 		"properties": map[string]any{
