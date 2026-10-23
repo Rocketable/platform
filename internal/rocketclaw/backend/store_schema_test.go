@@ -660,6 +660,27 @@ INSERT INTO session_tags (conversation_id, tags) VALUES
 	}, tags)
 }
 
+func TestDropWebTabStateBlobMigration(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	// Back to before 061, with alice's tabs still the blob 060's release unpacks at startup.
+	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 61)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, state, revision) VALUES ('alice', '\x0a00', 1), ('bob', NULL, 1)`)
+	require.NoError(t, err)
+	require.ErrorContains(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)), "not yet unpacked")
+
+	_, err = store.db.ExecContext(ctx, `UPDATE web_tab_states SET state = NULL`)
+	require.NoError(t, err)
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	columns, err := queryStrings(ctx, store.db, `SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'web_tab_states' AND column_name = 'state'`, "blob column")
+	require.NoError(t, err)
+	require.Empty(t, columns)
+}
+
 func TestDropScriptCallsMigration(t *testing.T) {
 	store := newTestSessionService(t)
 	ctx := t.Context()

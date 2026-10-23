@@ -447,28 +447,8 @@ WHERE username = $1 AND (position IS NOT NULL OR last) ORDER BY position`, "tabs
 	return state, revision, err
 }
 
-// LegacyTabStates returns, by username, the tab states still saved as one protobuf blob.
-func (s *SessionService) LegacyTabStates(ctx context.Context) (map[string][]byte, error) {
-	states := map[string][]byte{}
-
-	return states, readRows(ctx, s.db, `SELECT username, state FROM web_tab_states WHERE state IS NOT NULL`, "legacy tab states", func(row rowScanner) error {
-		var (
-			username string
-			state    []byte
-		)
-
-		if err := row.Scan(&username, &state); err != nil {
-			return fmt.Errorf("scan legacy tab state: %w", err)
-		}
-
-		states[username] = state
-
-		return nil
-	})
-}
-
 // SaveTabState replaces username's saved Web tab state when it was made from the saved revision,
-// and reports whether it did; a save also drops a tab state still saved as one protobuf blob.
+// and reports whether it did.
 // Saves never write unread_at: a closed tab stays while unread or some space's last tab. A session
 // tab names its conversation under the path marks use, and one of a session that does not exist is
 // dropped.
@@ -481,7 +461,7 @@ func (s *SessionService) SaveTabState(ctx context.Context, username string, stat
 	defer func() { _ = tx.Rollback() }()
 
 	if claimed, err := execRows(ctx, tx, "save tab state", "count saved tab state", `INSERT INTO web_tab_states (username, space, placement, revision) VALUES ($1, $2, $3, $4 + 1)
-ON CONFLICT (username) DO UPDATE SET space = excluded.space, placement = excluded.placement, revision = excluded.revision, state = NULL
+ON CONFLICT (username) DO UPDATE SET space = excluded.space, placement = excluded.placement, revision = excluded.revision
 WHERE web_tab_states.revision = $4`, username, state.Space, state.Placement, revision); err != nil || claimed == 0 {
 		return false, err
 	}

@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 )
 
 // tabs saves the caller's tab state or changes one space, then returns every space and the caller's saved state.
@@ -87,32 +85,4 @@ func savedTabState(state *TabState) *backend.TabState {
 	}
 
 	return saved
-}
-
-// ConvertTabStates moves tab states saved as one protobuf blob into rows, each as one more save;
-// an unreadable blob becomes no tabs. It runs before Web serves, and a rerun finds nothing to convert.
-func ConvertTabStates(ctx context.Context, sessions *backend.SessionService) error {
-	legacy, err := sessions.LegacyTabStates(ctx)
-	if err != nil {
-		return fmt.Errorf("convert saved web tabs: %w", err)
-	}
-
-	for username, data := range legacy {
-		state := &TabState{}
-		if err := proto.Unmarshal(data, state); err != nil {
-			slog.Warn("read saved web tabs", "username", username, "error", err)
-			proto.Reset(state)
-		}
-
-		_, revision, err := sessions.TabState(ctx, username)
-		if err == nil {
-			_, err = sessions.SaveTabState(ctx, username, savedTabState(state), revision)
-		}
-
-		if err != nil {
-			return fmt.Errorf("convert saved web tabs: %w", err)
-		}
-	}
-
-	return nil
 }
