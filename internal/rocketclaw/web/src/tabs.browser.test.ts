@@ -483,11 +483,10 @@ test("saved tabs, deep links, keyboard, page close, palette commands, and placem
   await until(() => saved.state.placement === "TOP");
 }), 60_000);
 
-test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and double-clicking empty strip opens a new session", () => withPage({}, async (page, origin) => {
+test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and double-clicking empty strip opens a new session", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"]]) {
-    await page.goto(`${origin}${href(id)}`);
-    await tab(name).waitFor();
+    await openSaved(page, origin, href(id), name, saved);
   }
   await page.getByPlaceholder("Message or $command").focus();
   await page.keyboard.press("Control+BracketRight");
