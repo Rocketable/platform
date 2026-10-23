@@ -18,6 +18,8 @@ test("Voice page keeps each person's conversation and settings on the server, an
   const rows = [{ id: "voice-1", name: "First voice", agent: "main" }, { id: "voice-2", name: "Second voice", agent: "main", running: true }];
   // The server keeps each person's voice settings; the browser keeps none.
   let username = "tester", reads = 0, updateFails = false, reading: PromiseWithResolvers<void> | undefined;
+  let hideReply: PromiseWithResolvers<void> | undefined;
+  let voiceWrite: PromiseWithResolvers<void> | undefined;
   const people: Record<string, { conversationId: string; agent: string; voice: string; transcript: boolean }> = {};
   const settings = (person = username) => people[person] ??= { conversationId: "", agent: "", voice: "", transcript: false };
   const tabs: Record<string, object> = {};
@@ -39,6 +41,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
       const mine = settings();
       if (!body.action) { reads++; await reading?.promise; }
       if (body.action === "UPDATE" && updateFails) return Response.json({ code: 14, message: "settings are unavailable" }, { status: 503 });
+      if (body.action === "UPDATE" && body.voice === "juniper") await voiceWrite?.promise;
       if (body.action === "START" && !mine.conversationId) {
         const id = `voice-${created.push({ agent: body.agent! })}`;
         agents[id] = body.agent!;
@@ -47,6 +50,11 @@ test("Voice page keeps each person's conversation and settings on the server, an
       }
       if (body.action === "RESET" && mine.conversationId === body.conversationId) mine.conversationId = "";
       if (body.action === "UPDATE") Object.assign(mine, Object.fromEntries(Object.entries(body).filter(([key]) => ["agent", "voice", "transcript"].includes(key))));
+      if (body.action === "UPDATE" && body.transcript === false && hideReply) {
+        const reply = Response.json(mine);
+        await hideReply.promise;
+        return reply;
+      }
       return Response.json(mine);
     }
     if (url.pathname === "/api/Prompt") {
@@ -133,8 +141,22 @@ test("Voice page keeps each person's conversation and settings on the server, an
     const voicePicker = page.getByRole("combobox", { name: "Choose voice" }); // Covers the voice picker: the agent's provider offers its voices, the default first.
     const shownVoice = () => voicePicker.locator('[data-slot="select-value"]').textContent();
     expect(await shownVoice()).toBe("Cove");
+    // A transcript update can finish before an earlier voice choice reaches the server.
+    voiceWrite = Promise.withResolvers();
+    const chosenVoice = page.waitForResponse((response: any) => response.url().endsWith("/api/VoiceSettings") && response.request().postDataJSON().voice === "juniper");
     await voicePicker.click();
     await page.getByRole("option", { name: "Juniper" }).click();
+    const enabledTranscript = page.waitForResponse((response: any) => response.url().endsWith("/api/VoiceSettings") && response.request().postDataJSON().transcript === true);
+    await page.getByRole("button", { name: "Show transcript" }).click();
+    await page.getByLabel("Transcript", { exact: true }).waitFor();
+    await enabledTranscript;
+    voiceWrite.resolve();
+    await chosenVoice;
+    await page.waitForFunction(() => document.querySelector('[aria-label="Choose voice"] [data-slot="select-value"]')?.textContent === "Juniper");
+    const disabledTranscript = page.waitForResponse((response: any) => response.url().endsWith("/api/VoiceSettings") && response.request().postDataJSON().transcript === false);
+    await page.getByRole("button", { name: "Show transcript" }).click();
+    await page.getByLabel("Transcript", { exact: true }).waitFor({ state: "detached" });
+    await disabledTranscript;
     creating = Promise.withResolvers(); // Leaving the page while the first Start creates its conversation starts no call.
     await page.getByRole("button", { name: "Start voice call", exact: true }).click(); // Covers R2: the first Start creates the conversation with the picked agent.
     while (created.length === 0) await Bun.sleep(10);
@@ -178,10 +200,18 @@ test("Voice page keeps each person's conversation and settings on the server, an
     await page.waitForFunction(() => !(window as unknown as Probe).audio!.muted);
     await page.waitForFunction(() => Number(document.querySelector<HTMLElement>(".voice-orb")?.style.getPropertyValue("--level")) > 0.01); // The orb swells again.
     // A reply too long to speak turns the transcript on and shows there, formatted as in the conversation.
+    // Its newer setting must survive the older hide response arriving last.
+    hideReply = Promise.withResolvers();
+    const hiddenReply = page.waitForResponse((response: any) => response.url().endsWith("/api/VoiceSettings") && response.request().postDataJSON().transcript === false);
     await page.getByRole("button", { name: "Show transcript" }).click();
     await transcript.waitFor({ state: "detached" });
+    const writtenReply = page.waitForResponse((response: any) => response.url().endsWith("/api/VoiceSettings") && response.request().postDataJSON().transcript === true);
     voiceStream!.enqueue(`data: ${JSON.stringify({ reply: "Summary:\n```\nall green\n```" })}\n\n`);
+    await writtenReply;
     await transcript.getByText("Summary:").waitFor();
+    hideReply.resolve();
+    await hiddenReply;
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     expect(await transcript.getByRole("button", { name: "Copy Code" }).count()).toBe(1);
     expect(await page.getByRole("button", { name: "Show transcript" }).getAttribute("aria-pressed")).toBe("true");
     while (!settings().transcript) await Bun.sleep(10);
