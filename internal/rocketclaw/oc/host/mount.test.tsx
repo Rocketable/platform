@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test"
 import { observeViewerScheme } from "@opencode/session-ui/pierre/file-runtime"
+import { tag } from "../manifest.json"
 import type { Navigation } from "./api"
 import { fetch, reset, server, url } from "./test/server"
 
@@ -364,7 +365,7 @@ test("a server on another minor version gets the pill, and the session still ren
   await answered(view)
   const pill = await until(() => view.root.querySelector("[data-component=rocketclaw-version-pill]"))
   expect(pill.textContent).toContain("2.2.0")
-  expect(pill.textContent).toContain("2.1.3")
+  expect(pill.textContent).toContain(tag.slice(1))
   view.dispose()
   await fresh()
 
