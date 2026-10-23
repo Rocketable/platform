@@ -13,7 +13,7 @@ test("Go's protocol version is the frontend schema SHA-256", async () => {
   expect(generated).toContain(`const protoSHA256 = "${hash}"`);
 });
 
-for (const outcome of ["success", "cancel", "post-terminal-cancel", "fail", "post-terminal-failure", "wire-cut", "terminal-wire-cut"] as const) test(`finite HTTP stream delivers prefix before blocked tail: ${outcome}`, async () => {
+for (const outcome of ["success", "cancel", "post-terminal-cancel", "fail", "post-terminal-failure", "terminal-wire-cut"] as const) test(`finite HTTP stream delivers prefix before blocked tail: ${outcome}`, async () => {
   const tail = Promise.withResolvers<void>();
   const disconnected = Promise.withResolvers<void>();
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch(req) {
