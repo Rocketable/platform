@@ -64,7 +64,7 @@ Without these rules the failures depend on timing and test order, and they look 
 - **No lock:** two schemas migrating at once can both see the extension as missing. Both run `CREATE EXTENSION`, and one transaction fails on the catalog's uniqueness check. `IF NOT EXISTS` does not stop this race, because both checks run before either transaction commits.
 - **No `WITH SCHEMA public`:** the first test to migrate installs the operator class in its own schema. `IF NOT EXISTS` then makes every later schema skip the install, and their `CREATE INDEX ... gin_trgm_ops` cannot find the operator class.
 - **Unqualified operator class:** fails in every test schema, because none of them has `public` on `search_path`. A production database with the default `search_path` would not show the bug, so it reaches tests first or, worse, only some environments.
-- **DROP EXTENSION in Down:** `TestBackgroundJobsMigration` in `internal/rocketclaw/backend/store_schema_test.go` runs the last three Down migrations (`migrate.Down, 3`), which included 030 when this was written, while other tests use the same database. Dropping the shared extension there would break those tests, or fail because of their dependent indexes.
+- **DROP EXTENSION in Down:** `TestBackgroundJobsMigration` in `internal/rocketclaw/backend/store_schema_test.go` rolls back to before 028 (`ExecVersionContext(..., migrate.Down, 28)`), which runs the Down of 030 and 055, while other tests use the same database. Dropping the shared extension there would break those tests, or fail because of their dependent indexes.
 
 ## When to Apply
 

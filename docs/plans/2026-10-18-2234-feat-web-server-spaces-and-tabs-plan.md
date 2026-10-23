@@ -273,7 +273,7 @@ stateDiagram-v2
   - `runCronJob` for a cron without `space:`, whose agent has "Ops", returns Ops's id.
   - A scheduled run of a cron with `space: Banana` records the Slack destination conversation with "Banana" as its birth space.
   - `forkSession` of a session born in "Ops" returns Ops's id.
-- **Verification:** Creation-path tests pass. No caller sets a birth space from the conversation ID's text (`docs/solutions/logic-errors/slash-in-conversation-id-is-not-a-delegation-history.md`).
+- **Verification:** Creation-path tests pass. No caller sets a birth space from the conversation ID's text (`CONCEPTS.md`, Delegation History).
 
 ### U4. Same-space agent picker
 
@@ -430,7 +430,7 @@ Before deploying, confirm `043` isn't already taken in Wallace's `pg_migrations`
   - `frontend/cron/manager.go`: `CronjobMessage` construction
 - Learnings:
   - `docs/solutions/architecture-patterns/web-keep-alive-views-connection-budget.md`
-  - `docs/solutions/logic-errors/slash-in-conversation-id-is-not-a-delegation-history.md`
+  - `CONCEPTS.md` (Delegation History)
   - `docs/solutions/best-practices/postgres-extension-in-migration-with-shared-test-database.md`
   - `docs/solutions/runtime-errors/deployment-binary-missing-live-migrations.md`
   - `docs/solutions/best-practices/test-postgres-container-needs-larger-shm.md`

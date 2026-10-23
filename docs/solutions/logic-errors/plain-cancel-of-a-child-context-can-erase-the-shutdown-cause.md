@@ -71,8 +71,8 @@ cause to the parent context is the correct fix, not stamping a different one.
 The regression test is `TestBridgeStopDoesNotClassifyOrdinaryTurnAsInterrupted`
 in `internal/rocketclaw/backend/bridge_test.go`: it stops a bridge before its
 turn's parent context is canceled and checks the turn ends with the parent's
-cause, for both `errShutdown` and `context.Canceled`. The fix is pending in the
-pull request for the `fix-shutdown-bridge-stop` bookmark.
+cause, for both `errShutdown` and `context.Canceled`. The fix landed in
+PR #507.
 
 ## How it was found
 
