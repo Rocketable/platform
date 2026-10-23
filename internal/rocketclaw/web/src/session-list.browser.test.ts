@@ -2308,7 +2308,6 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       };
       const detailsPalette = detailsPage.getByRole("dialog", { name: "Go to session or command", exact: true });
       const search = detailsPalette.getByPlaceholder("Search sessions");
-      const settled = () => detailsPalette.locator('ul[data-pending="false"]').waitFor();
       await sessionCommand("Name session");
       const dialog = detailsPage.getByRole("dialog", { name: "Name session", exact: true });
       await dialog.getByLabel("Session name").fill("  Release notes  ");
@@ -2324,10 +2323,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await detailsPage.keyboard.press("Control+p");
       await detailsPalette.getByText("Release notes", { exact: true }).waitFor();
       await search.fill("Release notes");
-      await settled();
+      // Server pending does not track the deferred rendering of these rows.
+      await detailsPage.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button [data-slot="session-title"]').length === 1);
       expect(await detailsPalette.locator('li > button [data-slot="session-title"]').count()).toBe(1);
       await search.fill("Original preview"); // A named session's preview is no longer its title.
-      await settled();
+      await detailsPage.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button [data-slot="session-title"]').length === 0);
       expect(await detailsPalette.locator('li > button [data-slot="session-title"]').count()).toBe(0);
       await detailsPage.keyboard.press("Escape");
       expect(await detailsPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
