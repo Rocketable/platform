@@ -344,8 +344,6 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 				} `json:"data"`
 			}
 
-			// ponytail: only the 50 newest prompts are read, so a turn holding more leaves its
-			// older senders unmarked; page back to the cursor if turns grow that large.
 			path := "/api/session/" + url.PathEscape(session.ID) + "/message?type="
 			if openCodeCall(ctx, name, server, http.MethodGet, path+"idle&order=desc&limit=1", nil, &idle) == nil && len(idle.Data) > 0 &&
 				openCodeCall(ctx, name, server, http.MethodGet, path+"user&order=desc&limit=50", nil, &users) == nil {
