@@ -94,6 +94,11 @@ const calls = { opened: [] as string[], created: [] as string[], closed: 0, repo
 const navigation: Navigation = {
   openSession: (id) => calls.opened.push(id),
   newSession: (directory) => calls.created.push(directory),
+  forkSession: async (id, before) => {
+    const response = await fetch(`${url}/api/session/${id}/fork`, { method: "POST", body: JSON.stringify({ before }) })
+    const body: { data: { id: string } } = await response.json()
+    return body.data.id
+  },
   closeTab: () => calls.closed++,
   reportSession: (id) => calls.reported.push(id),
 }

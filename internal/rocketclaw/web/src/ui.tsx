@@ -2183,6 +2183,11 @@ function RemoteSession({ id }: { id: string }) {
   const create = useMutation({ mutationFn: mutations.createSession, onSuccess: (created) => { sidebar.invalidateQueries(); tabs.open(rowPath({ id: created, kind: "REMOTE_OPENCODE" })); } });
   const ready = configured && (!offline || reported);
   const openSession = useEffectEvent((other: string) => tabs.open(rowPath({ id: `opencode:${server}:${other}`, kind: "REMOTE_OPENCODE" })));
+  const forkSession = useEffectEvent(async (other: string, before: string) => {
+    const forked = await mutations.forkSession({ id: `opencode:${server}:${other}`, before });
+    sidebar.invalidateQueries();
+    return forked.id.slice(`opencode:${server}:`.length);
+  });
   // A press while a create runs is the same request; once it settles, success or failure, a press starts another.
   const creating = useRef(false);
   const newSession = useEffectEvent((directory: string) => {
@@ -2197,7 +2202,7 @@ function RemoteSession({ id }: { id: string }) {
     let view: Mounted | undefined, gone = false;
     void (import(/* @vite-ignore */ retries ? `${ocEntry}?retry=${retries}` : ocEntry) as Promise<OcModule>).then(({ mount }) => {
       if (gone) return;
-      view = mount(container.current!, { server, url: `${location.origin}/oc/${server}`, sessionID, navigation: { openSession, newSession, closeTab, reportSession } });
+      view = mount(container.current!, { server, url: `${location.origin}/oc/${server}`, sessionID, navigation: { openSession, newSession, forkSession, closeTab, reportSession } });
       Object.assign(remoteView, { route: id, shown: sessionID, openPalette: view.openPalette });
     }, (error: Error) => setFailed(error.message));
     return () => {

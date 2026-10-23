@@ -7,6 +7,9 @@ import type { Navigation } from "./api"
 const inertNavigation: Navigation = {
   openSession: () => {},
   newSession: () => {},
+  forkSession: async () => {
+    throw new Error("Session navigation is unavailable")
+  },
   closeTab: () => {},
   reportSession: () => {},
 }

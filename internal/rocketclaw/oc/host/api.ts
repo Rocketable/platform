@@ -4,11 +4,13 @@
 /**
  * The navigation the copied UI hands to RocketClaw (KTD17): another session opens in its own RocketClaw tab, a new
  * session starts in a folder through RocketClaw's "New on <server>" path, deleting the shown session closes its
- * tab, and each session the view displays is reported. The mount provides RocketClaw's implementation.
+ * tab, forks are recorded through RocketClaw before opening, and each session the view displays is reported.
+ * The mount provides RocketClaw's implementation.
  */
 export type Navigation = {
   openSession(sessionID: string): void
   newSession(directory: string): void
+  forkSession(sessionID: string, before: string): Promise<string>
   closeTab(): void
   reportSession(sessionID: string): void
 }

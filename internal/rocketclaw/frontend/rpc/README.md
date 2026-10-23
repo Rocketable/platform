@@ -470,6 +470,8 @@ with any tag and RocketClaw sessions with tags their agent allows. Naming a remo
 session renames it on its server; a name RocketClaw stored before names synced with
 OpenCode moves to the server at the first sync the server accepts it.
 `ListSessions` sends each server's origin, never its configured URL or password.
+Remote forks use `ForkSession`, which records the new session before returning,
+just as `CreateSession` does. Their tabs can save without waiting for a sync.
 
 Phones get the secure page that voice needs from the `web.tsnet` listener (see the
 root README for setup). There, a wrapping handler asks the node's `LocalClient().WhoIs`

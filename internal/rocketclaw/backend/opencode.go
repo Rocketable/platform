@@ -513,8 +513,27 @@ func (s *SessionService) CreateOpenCodeSession(ctx context.Context, name string,
 		return "", err
 	}
 
-	session := created.Data
+	return s.recordOpenCodeSession(ctx, name, &created.Data)
+}
 
+// ForkOpenCodeSession forks before a remote message and records the result before its tab saves.
+// OpenCode v2 packages/server/src/handlers/session.ts returns the same Session.Info as creation.
+func (s *SessionService) ForkOpenCodeSession(ctx context.Context, name string, server config.OpenCodeConfig, source, before string) (string, error) {
+	var forked struct {
+		Data openCodeSession `json:"data"`
+	}
+
+	body := struct {
+		Before string `json:"before,omitempty"`
+	}{Before: before}
+	if err := openCodeCall(ctx, name, server, http.MethodPost, "/api/session/"+url.PathEscape(source)+"/fork", &body, &forked); err != nil {
+		return "", err
+	}
+
+	return s.recordOpenCodeSession(ctx, name, &forked.Data)
+}
+
+func (s *SessionService) recordOpenCodeSession(ctx context.Context, name string, session *openCodeSession) (string, error) {
 	id := "opencode:" + name + ":" + session.ID
 
 	_, err := execState(ctx, s.db, "record opencode session", `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, model, remote_session)
