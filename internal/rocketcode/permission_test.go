@@ -65,6 +65,10 @@ func TestInterpolatePermissions(t *testing.T) {
 		agent := Agent{Name: "main", Permission: parsePermissionYAML(t, `edit: {"${ROCKETCLAW_METADATA_FRUIT}": allow}`)}
 		interpolatePermissions(&agent, env)
 		require.Empty(t, agent.Permission.Buckets[0].Rules)
+
+		denied := Agent{Name: "main", Permission: parsePermissionYAML(t, `bash: {"*": allow, "intercom-write --conversation ${ROCKETCLAW_METADATA_FRUIT} *": deny}`)}
+		interpolatePermissions(&denied, env)
+		require.Equal(t, PermissionDeny, denied.Permission.evaluate("bash", "intercom-write --conversation apple note").Action, "a deny rule without its variable denies as if it were *")
 	}
 
 	unchanged := Agent{Permission: parsePermissionYAML(t, `edit: {"$ROCKETCLAW_X/${OTHER}/${ROCKETCLAW_X:-fallback}": allow}`)}
