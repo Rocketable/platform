@@ -41,8 +41,27 @@ func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) (
 
 	for _, query := range []string{
 		`SELECT pg_advisory_lock(hashtext('rocketclaw schema migrations'), hashtext(current_schema()))`,
-		`ALTER TABLE IF EXISTS gorp_migrations RENAME TO pg_migrations`,
 		`CREATE TABLE IF NOT EXISTS pg_migrations (id text PRIMARY KEY, applied_at timestamptz)`,
+		// 001_baseline.sql is the schema 001_init.sql through 059_legacy_handoff.sql built, so a store
+		// at 059 or later adopts it in place: the legacy_ tables 059 kept go, and the baseline's ledger
+		// row replaces those migrations' rows, which sort at or before 059's; later rows stay. An older
+		// store is refused.
+		`DO $$
+DECLARE
+    ids TEXT[];
+    legacy TEXT;
+BEGIN
+    SELECT COALESCE(array_agg(id), '{}') INTO ids FROM pg_migrations;
+    IF '059_legacy_handoff.sql' = ANY (ids) THEN
+        FOR legacy IN SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_') LOOP
+            EXECUTE format('DROP TABLE %I', legacy);
+        END LOOP;
+        DELETE FROM pg_migrations WHERE id <= '059_legacy_handoff.sql';
+        INSERT INTO pg_migrations (id, applied_at) VALUES ('001_baseline.sql', now());
+    ELSIF cardinality(ids) > 0 AND NOT '001_baseline.sql' = ANY (ids) THEN
+        RAISE EXCEPTION 'this State Store predates 059_legacy_handoff.sql; run v0.2.0 on it first';
+    END IF;
+END $$`,
 	} {
 		if _, err := conn.ExecContext(ctx, query); err != nil {
 			return fmt.Errorf("%w: %w", errApplySchemaMigrations, err)

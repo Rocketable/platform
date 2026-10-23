@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"cirello.io/pglock"
-	migrate "github.com/rubenv/sql-migrate"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -28,8 +27,6 @@ import (
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -653,34 +650,7 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	assert.Equal(t, "q1", items[0].ID)
 }
 
-func TestSessionServiceMigratesThreadQueueKind(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	// Recreate the pre-006 queue in this test's isolated database schema, from before 056 moved it into turns.
-	source := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
-	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(t.Context(), store.db, "postgres", source, migrate.Down, 55)
-	require.NoError(t, err)
-	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE thread_queue DROP COLUMN IF EXISTS kind; DELETE FROM pg_migrations WHERE id = '006_thread_queue_kind.sql'; INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position) VALUES ('old', 'recorded', 'original content', 'original author', 1, 0);
-INSERT INTO legacy_lane_work (conversation_id, position, queue_item_id, kind) VALUES ('recorded', 1, 'old', 'enqueue')`)
-	require.NoError(t, err)
-	require.NoError(t, initializeSessionDB(t.Context(), store.db, slog.New(slog.DiscardHandler)))
-	items, err := store.ThreadQueueForConversation("recorded")
-	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, protocol.InboundKind("enqueue"), items[0].Kind)
-	assert.Equal(t, "original content", items[0].Message)
-	assert.Equal(t, "original author", items[0].Principal)
-	items[0].Kind = "steer"
-	require.NoError(t, store.PutThreadQueueItem("old", &items[0]))
-	items, err = store.ThreadQueueForConversation("recorded")
-	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, protocol.InboundKind("steer"), items[0].Kind)
-}
-
-// The State Store ends with its 16 tables, shadow_turns and shadow_steps, and the retired tables and 049's manifest
-// under legacy_ names; nothing ties a legacy table to a live row or notifies for it.
+// The State Store is its 16 tables plus shadow_turns and shadow_steps.
 func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	t.Parallel()
 
@@ -694,20 +664,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	require.ElementsMatch(t, []string{
 		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
 		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
-		"legacy_entry_md5", "legacy_history", "legacy_listed", "legacy_shown", "legacy_lane_work", "legacy_row_counts", "legacy_hidden_run_buckets",
-		"legacy_unrecorded_conversations", "legacy_unmoved_facts", "legacy_turn_steps",
-		"legacy_thread_queue", "legacy_background_jobs", "legacy_scheduled_messages", "legacy_cron_schedules", "legacy_cron_schedule_runs",
-		"legacy_session_summaries", "legacy_session_tags", "legacy_conversation_goals", "legacy_external_mcp_sessions", "legacy_shadow_bindings",
-		"legacy_opencode_sessions", "legacy_message_search", "legacy_message_search_indexed", "legacy_code_mode_calls",
 	}, tables)
-
-	bound, err := queryStrings(t.Context(), store.db, `WITH legacy AS (
-    SELECT oid FROM pg_class WHERE relnamespace = current_schema()::regnamespace AND relkind = 'r' AND starts_with(relname, 'legacy_')
-)
-SELECT c.conname::text FROM pg_constraint c JOIN legacy l ON l.oid IN (c.conrelid, c.confrelid) WHERE c.contype = 'f'
-UNION ALL SELECT t.tgname::text FROM pg_trigger t JOIN legacy l ON l.oid = t.tgrelid WHERE NOT t.tgisinternal`, "legacy foreign keys and triggers")
-	require.NoError(t, err)
-	require.Empty(t, bound)
 }
 
 func TestSessionServiceInitializesActiveTurnIndexes(t *testing.T) {
@@ -772,111 +729,6 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
 	assert.Equal(t, sessionMigrationCount(t), n)
-}
-
-func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
-	t.Parallel()
-
-	for _, prefix := range []int{5, 8, 16, 17, 18} {
-		for _, ledger := range []string{"pg_migrations", "gorp_migrations"} {
-			t.Run(fmt.Sprintf("%d/%s", prefix, ledger), func(t *testing.T) {
-				dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-				require.NoError(t, err)
-				cfg, err := pgx.ParseConfig(dsn)
-				require.NoError(t, err)
-
-				db := stdlib.OpenDB(*cfg)
-
-				t.Cleanup(func() { require.NoError(t, db.Close()) })
-
-				source := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
-				applied, err := (migrate.MigrationSet{TableName: ledger}).ExecMaxContext(t.Context(), db, "postgres", source, migrate.Up, prefix)
-				require.NoError(t, err)
-				require.Equal(t, prefix, applied)
-
-				_, err = db.ExecContext(t.Context(), `UPDATE `+ledger+` SET applied_at='2026-01-01Z';
-					ALTER TABLE managed_conversations ADD COLUMN settled_override boolean NOT NULL DEFAULT false;
-					ALTER TABLE managed_conversations ADD COLUMN bumped_at_unix_ns bigint NOT NULL DEFAULT 0;
-					INSERT INTO managed_conversations (conversation_id, agent, created_by, settled_override, bumped_at_unix_ns) VALUES ('synthetic', 'main', 'owner', true, 123);
-					INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('synthetic', '{"text":"synthetic\u0000\u0000history","literal":"\\u0000","mixed":"\\\u0000","nested":["\u0000"],"\u0000key":"value"}', '2026-09-09T12:00:00.123456Z');
-					INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES ('checkpoint', 'synthetic', '', '', '', '[]', '[]', 'null', '', '[]', '[]', '', '{}', 1, 1);
-					INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position) VALUES ('q', 'synthetic', 'queued', 'owner', 456, 7)`)
-				require.NoError(t, err)
-
-				if prefix == 8 {
-					_, err = db.ExecContext(t.Context(), `ALTER TABLE thread_queue ALTER COLUMN kind SET DEFAULT ''; UPDATE thread_queue SET kind=''`)
-					require.NoError(t, err)
-				}
-
-				if prefix >= 16 {
-					_, err = db.ExecContext(t.Context(), `INSERT INTO session_summaries (conversation_id, preview, last_updated) VALUES ('synthetic', decode('610062', 'hex'), now()), ('clean', 'valid'::bytea, now())`)
-					require.NoError(t, err)
-				}
-
-				backfillPreviousRelease(t, db, ledger)
-
-				for range 2 {
-					require.NoError(t, initializeSessionDB(t.Context(), db, slog.New(slog.DiscardHandler)))
-				}
-
-				var count int
-				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, sessionMigrationCount(t), count)
-				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
-				require.Equal(t, prefix, count)
-				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM legacy_session_tags`).Scan(&count))
-				require.Zero(t, count)
-
-				for _, query := range []string{
-					`SELECT count(*) FROM conversations WHERE conversation_id='synthetic' AND agent='main' AND created_by='owner' AND NOT settled AND NOT pinned AND snoozed_until IS NULL AND name='' AND forked_from='' AND settled_override AND bumped_at_unix_ns=123`,
-					`SELECT count(*) FROM entries WHERE conversation_id='synthetic' AND entry_json::text='{"text":"synthetichistory","literal":"\\u0000","mixed":"\\","nested":[""],"key":"value"}' AND entry_timestamp='2026-09-09T12:00:00.123456Z'`,
-					`SELECT count(*) FROM turns WHERE phase='waiting' AND input_id='q' AND message='queued' AND principal='owner' AND created_at_unix_ns=456 AND position=7 AND content='{}'`,
-				} {
-					require.NoError(t, db.QueryRowContext(t.Context(), query).Scan(&count))
-					require.Equal(t, 1, count)
-				}
-
-				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM turns WHERE phase <> 'waiting'`).Scan(&count))
-				require.Zero(t, count, "the clean cutover drops in-flight turns from the old version")
-
-				if prefix >= 16 {
-					require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations WHERE conversation_id = 'synthetic' AND last_updated IS NOT NULL`).Scan(&count))
-					require.Zero(t, count)
-					// A summary of an ID without a conversation stays as it was, outside the conversations.
-					require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM legacy_unmoved_facts WHERE conversation_id = 'clean' AND row->>'preview' = '\x76616c6964'`).Scan(&count))
-					require.Equal(t, 1, count)
-				}
-
-				var kind, defaultKind string
-				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT delivery FROM turns WHERE input_id='q'`).Scan(&kind))
-				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT column_default FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='legacy_thread_queue' AND column_name='kind'`).Scan(&defaultKind))
-
-				if prefix == 8 {
-					require.Empty(t, kind)
-					require.Equal(t, "''::text", defaultKind)
-				} else {
-					require.Equal(t, "enqueue", kind)
-					require.Equal(t, "'enqueue'::text", defaultKind)
-				}
-			})
-		}
-	}
-}
-
-func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	first := newTestSessionServiceAt(t, workspace)
-	_, err := first.db.ExecContext(t.Context(), `ALTER TABLE pg_migrations RENAME TO gorp_migrations`)
-	require.NoError(t, err)
-
-	second := newTestSessionServiceAt(t, workspace)
-
-	var n int
-	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, sessionMigrationCount(t), n)
-	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
 func TestSlackChannelFacts(t *testing.T) {

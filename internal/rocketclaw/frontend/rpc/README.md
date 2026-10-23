@@ -90,8 +90,7 @@ shows `agent <name> (session <ID>)` instead. Web shows it above human text insid
 bubble and above queue-row text, without replacing it with the viewer's identity.
 Missing or malformed stored principals stay unlabeled; raw headers remain intact.
 Previews use the latest nonempty user or assistant message, including the same
-successful delivery report shown in History. Migration `011_last_message_summaries.sql`
-invalidates the derived user-only previews for the existing background backfill.
+successful delivery report shown in History.
 Session `running` is true while the conversation has an unfinished turn.
 
 `MoveToBackground` moves every running `execute` and `task` call of agents with
@@ -262,7 +261,7 @@ forces a download. Both paths stream chunks and cancel gRPC on disconnect.
 New tool outputs persist original bytes in the configured filesystem directory or
 S3 bucket before returning immutable IDs in successful tool replay. PostgreSQL
 stores ownership, file metadata, and byte counts only; migration
-`014_attachments.sql` creates that metadata table. The default directory is
+`001_baseline.sql` creates that metadata table. The default directory is
 `<workspace>/.rocketclaw/attachments` (or `.femtoclaw/attachments` for the legacy
 configuration). See the root README for the `attachments` configuration.
 Historical successful tool calls may recover still-available workspace files

@@ -36,7 +36,7 @@ An extension does not belong to a schema the way a table does. Each database has
 
 ## Guidance
 
-Write the extension part of the migration like this (as in `030_message_search.sql`):
+Write the extension part of the migration like this (as in `001_baseline.sql`, which replaced `030_message_search.sql`):
 
 ```sql
 -- +migrate Up
@@ -84,7 +84,7 @@ DROP TABLE message_search;
 DROP EXTENSION pg_trgm;
 ```
 
-After: see the Guidance block above, which matches `internal/rocketclaw/backend/migrations/030_message_search.sql`.
+After: see the Guidance block above, which matches `internal/rocketclaw/backend/migrations/001_baseline.sql`.
 
 Production note: `pg_trgm` is a trusted extension (PostgreSQL 13 and later). A role without superuser can create it if it has `CREATE` privilege on the database. Check that the production database role has that privilege before deploying a migration that creates an extension, since startup runs migrations (`README.md`: "RocketClaw upgrades the database schema at startup").
 

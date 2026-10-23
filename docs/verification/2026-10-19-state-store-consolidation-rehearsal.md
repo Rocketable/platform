@@ -353,7 +353,7 @@ If the binary logged `initialized rocketclaw state store schema`, every self-che
 SELECT id, applied_at FROM pg_migrations WHERE id >= '049' ORDER BY id;
 ```
 
-Record these counts:
+Record these counts. The queries on `legacy_` tables work only on a store at `059`; a later release adopts `001_baseline.sql` at startup and drops those tables with their rows.
 
 ```sql
 -- new schema
@@ -424,4 +424,4 @@ These are intended. Diffs that show only these are expected.
 - `CreateSession` with a cron-shaped source ID that has no row returns InvalidArgument instead of NotFound. Web only sends IDs from `ListCronJobs`.
 - Requests: an ID with surrounding spaces, over 1 KiB, or holding a NUL character, and any text holding a NUL character, is refused as invalid instead of being trimmed or failing in the database. A conversation with no record answers not found on every method, and a database error no longer sends its own text to the client.
 - Remote OpenCode sessions: an `opencode:` ID RocketClaw never recorded answers not found. The debug "delete session entries" call refuses a remote session, whose history stays on its server.
-- The retired tables keep their rows under `legacy_` names, past the 30-day prune, until a later release drops them. `shadow_turns` and `shadow_steps` stay their own tables, so the store has 16 tables plus the `legacy_` ones.
+- The retired tables keep their rows under `legacy_` names, past the 30-day prune, until a later release's `001_baseline.sql` adoption drops them. `shadow_turns` and `shadow_steps` stay their own tables, so the store has 16 tables, plus the `legacy_` ones until then.
