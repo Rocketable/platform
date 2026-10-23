@@ -108,15 +108,13 @@ jobs:
       - *node-modules
       - run: bun install --frozen-lockfile
         working-directory: internal/rocketclaw/web
-      - &playwright-cache
-        uses: actions/cache@v6
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cache/ms-playwright
             ~/.cache/playwright-core
           key: playwright-1.63.0-no-shell
-      - &playwright
-        name: Install Playwright and Chromium for browser tests
+      - name: Install Playwright and Chromium for browser tests
         run: |
           dir="$HOME/.cache/playwright-core"
           [ -d "$dir/node_modules/playwright-core" ] || (mkdir -p "$dir" && cd "$dir" && bun add playwright-core@1.63.0)
@@ -158,18 +156,26 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    # The image carries Chromium and its system libraries, so no shard installs them from Ubuntu's
+    # package mirror, which sometimes takes minutes. Its version must match playwright-core below.
+    container: mcr.microsoft.com/playwright:v1.63.0-noble
     strategy:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v7
-      - *setup-bun
+      # setup-bun unpacks Bun with unzip, which the image lacks; npm installs the same release.
+      - run: npm install -g bun@1.4.4
       - *node-modules
       - run: bun install --frozen-lockfile
         working-directory: internal/rocketclaw/web
-      - *playwright-cache
-      - *playwright
+      - name: Locate Playwright and Chromium for browser tests
+        run: |
+          dir="$HOME/.cache/playwright-core"
+          mkdir -p "$dir" && cd "$dir" && bun add playwright-core@1.63.0
+          echo "ROCKETCLAW_PLAYWRIGHT_MODULE=$dir/node_modules/playwright-core" >> "$GITHUB_ENV"
+          echo "ROCKETCLAW_CHROMIUM=$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')" >> "$GITHUB_ENV"
       # The Sentry test reads the source maps the build writes.
       - run: bun run build
         working-directory: internal/rocketclaw/web
