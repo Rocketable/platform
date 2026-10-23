@@ -357,6 +357,54 @@ for (const width of [1280, 320]) test(`copy page link across pages at ${width}px
   }
 }), 60_000);
 
+test("page-link feedback expires and clears when switching sessions", () => withPage({ permissions: ["clipboard-read", "clipboard-write"] }, async (page, origin) => {
+  await page.clock.install();
+  await page.goto(`${origin}${href("alpha")}`);
+  const copy = page.getByRole("button", { name: "Copy page link", exact: true });
+  const status = page.locator("footer").getByRole("status");
+  await copy.click();
+  await status.filter({ hasText: "Page link copied" }).waitFor();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 100));
+  await page.clock.runFor(1_000);
+  await copy.click();
+  await status.filter({ hasText: "Page link copied" }).waitFor();
+  await page.clock.runFor(1_100);
+  expect(await copy.locator("svg.lucide-check").isVisible()).toBe(true);
+  await page.clock.runFor(1_000);
+  await copy.locator("svg.lucide-share").waitFor({ timeout: 2_000 });
+  expect(await status.textContent()).toBe("");
+
+  await copy.click();
+  await status.filter({ hasText: "Page link copied" }).waitFor();
+  const button = await copy.elementHandle();
+  await follow(page, "bravo");
+  await copy.locator("svg.lucide-share").waitFor({ timeout: 2_000 });
+  expect(await status.textContent()).toBe("");
+  expect(await button.evaluate((node: HTMLElement) => node.isConnected)).toBe(true);
+  await follow(page, "alpha");
+  expect(await copy.locator("svg.lucide-check").count()).toBe(0);
+  for (const failed of [false, true]) {
+    await page.evaluate((failed: boolean) => {
+      const pending = Promise.withResolvers<void>();
+      window.addEventListener("settle-copy", () => failed ? pending.reject(new Error("Copy denied")) : pending.resolve(), { once: true });
+      let first = true;
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: () => {
+        if (first) { first = false; return pending.promise; }
+        return Promise.resolve();
+      } } });
+    }, failed);
+    await copy.click();
+    await follow(page, "bravo");
+    await copy.click();
+    await status.filter({ hasText: "Page link copied" }).waitFor();
+    await page.evaluate(() => dispatchEvent(new Event("settle-copy")));
+    await page.clock.runFor(100);
+    expect(await copy.locator("svg.lucide-check").isVisible()).toBe(true);
+    await follow(page, "alpha");
+  }
+  await page.clock.resume();
+}), 30_000);
+
 test("copy page link on plain HTTP without Clipboard API", () => withPage({ permissions: ["clipboard-read", "clipboard-write"] }, async (page, origin) => {
   await page.route("http://copy.test/**", async (route: any) => {
     if (new URL(route.request().url()).pathname === "/stream") return route.fulfill({ contentType: "text/event-stream", body: ": connected\n\n" });
