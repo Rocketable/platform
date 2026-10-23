@@ -16,6 +16,26 @@ import (
 )
 
 func (s *Server) forkSession(ctx context.Context, request *ForkSessionRequest) (*ForkSessionResponse, error) {
+	if remote, ok := strings.CutPrefix(request.Id, "opencode:"); ok {
+		if _, _, err := s.principal(ctx); err != nil {
+			return nil, err
+		}
+
+		name, source, _ := strings.Cut(remote, ":")
+
+		server, configured := s.cfg.Clone().OpenCode[name]
+		if !configured || source == "" {
+			return nil, fmt.Errorf("fork opencode session: %w", status.Error(codes.InvalidArgument, "select a session on a configured OpenCode server"))
+		}
+
+		id, err := s.sessions.ForkOpenCodeSession(ctx, name, server, source, request.Before)
+		if err != nil {
+			return nil, fmt.Errorf("fork opencode session: %w", status.Error(codes.Unavailable, err.Error()))
+		}
+
+		return &ForkSessionResponse{Id: id}, nil
+	}
+
 	if err := s.visibleConversation(ctx, request.Id); err != nil {
 		return nil, err
 	}

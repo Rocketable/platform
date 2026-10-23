@@ -2,6 +2,8 @@ package rpc
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +24,8 @@ import (
 )
 
 func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
+	var boundary string
+
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, password, ok := r.BasicAuth()
 
@@ -32,6 +36,13 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/session":
 			_, _ = w.Write([]byte(`{"data":{"id":"ses_new","title":"","time":{"updated":5000},"location":{"directory":"/srv/app"}}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_new/fork":
+			var body struct {
+				Before string `json:"before"`
+			}
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			boundary = body.Before
+			_, _ = w.Write([]byte(`{"data":{"id":"ses_fork","title":"Forked work","time":{"updated":6000},"location":{"directory":"/srv/app"}}}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -128,4 +139,37 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 		OpencodeServers: map[string]string{"box": upstream.URL, "down": down.URL, "creds": "https://box.example:4096"},
 		AgentTags:       map[string]*TagChoices{"main": {Tags: []string{"customer", "internal"}}},
 	}, done), "%v", done)
+
+	// OpenCode v2 packages/app/src/session/commands/fork-dialog.tsx forks before a user message.
+	// The new conversation must exist before the tab saves, not only after the next remote poll.
+	forked, err := server.forkSession(ctx, &ForkSessionRequest{Id: created.Id, Before: "msg_boundary"})
+	require.NoError(t, err)
+	assert.Equal(t, "msg_boundary", boundary)
+	assert.Equal(t, "opencode:box:ses_fork", forked.Id)
+	spaces, err := sessions.Spaces(t.Context())
+	require.NoError(t, err)
+
+	path := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte(forked.Id))
+	saved, err := sessions.SaveTabState(t.Context(), "alice", &backend.TabState{Space: spaces[0].ID, Tabs: []backend.Tab{{Path: path, Space: spaces[0].ID}}}, 0)
+	require.NoError(t, err)
+	require.True(t, saved)
+	tabs, _, err := sessions.TabState(t.Context(), "alice")
+	require.NoError(t, err)
+	require.Equal(t, []backend.Tab{{Path: path, Space: spaces[0].ID}}, tabs.Tabs)
+
+	for _, test := range []struct {
+		id   string
+		code codes.Code
+	}{
+		{"opencode:nope:ses_a", codes.InvalidArgument},
+		{"opencode:box:", codes.InvalidArgument},
+		{"opencode:down:ses_a", codes.Unavailable},
+		{"opencode:box:missing", codes.Unavailable},
+	} {
+		_, err := server.forkSession(ctx, &ForkSessionRequest{Id: test.id})
+		assert.Equal(t, test.code, status.Code(err), test.id)
+	}
+
+	_, err = server.forkSession(t.Context(), &ForkSessionRequest{Id: created.Id})
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 }

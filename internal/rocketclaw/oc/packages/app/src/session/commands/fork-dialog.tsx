@@ -9,7 +9,6 @@ import { Dialog, DialogBody, DialogHeader, DialogTitle } from "@opencode/ui/dial
 import { List } from "@opencode/ui/list"
 import { showToast } from "@/shell/notifications/toast"
 import { useLanguage } from "@/runtime/i18n/language"
-import { useServerSDK } from "@/runtime/server/client"
 import { base64Encode } from "@opencode/util/encode"
 import { extractPromptContext, extractPromptFromMessage } from "@/composer/prompt"
 import { useWorkspaceLocation } from "@/workspaces/location"
@@ -28,7 +27,6 @@ export const DialogFork: Component = () => {
   const params = useParams()
   const navigation = useContext(NavigationContext)
   const data = useData()
-  const serverSDK = useServerSDK()
   const location = useWorkspaceLocation()
   const prompt = useComposerState()
   const dialog = useDialog()
@@ -73,16 +71,17 @@ export const DialogFork: Component = () => {
     const context = extractPromptContext(message, { directory: location().directory })
     const dir = base64Encode(location().directory)
 
-    serverSDK.api.session
-      .fork({ sessionID, before: item.id })
-      .then((forked) => {
-        data.session.remember(forked)
+    // rocketclaw: record the fork before opening its tab, as for New session
+    // (upstream packages/app/src/session/commands/fork-dialog.tsx)
+    navigation
+      .forkSession(sessionID, item.id)
+      .then((forkedID) => {
         dialog.close()
-        const target = prompt.capture({ dir, id: forked.id })
+        const target = prompt.capture({ dir, id: forkedID })
         target.set(restored)
         target.context.replace([...context.comments, ...context.files])
         // rocketclaw: the fork opens in its own RocketClaw tab (upstream packages/app/src/session/commands/fork-dialog.tsx)
-        navigation.openSession(forked.id)
+        navigation.openSession(forkedID)
       })
       .catch((cause: unknown) => {
         const message = cause instanceof Error ? cause.message : String(cause)

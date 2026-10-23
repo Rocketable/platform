@@ -25,6 +25,7 @@ function start(placement: "TOP" | "LEFT") {
   let release = () => {};
   const entry = new Promise<void>((resolve) => { release = resolve; });
   let failCreate = true;
+  let failFork = true;
   // Terminal sockets the view holds open, counted where OpenCode would serve them.
   const terminals = { open: 0 };
   // A test holds session creates here to press again while one is still running.
@@ -64,6 +65,12 @@ function start(placement: "TOP" | "LEFT") {
         await creates.hold;
         if (failCreate) { failCreate = false; return Response.json({ code: 14, message: "box did not answer" }, { status: 503 }); }
         return Response.json({ id: "opencode:box:ses_child" });
+      case "/api/ForkSession": {
+        if (failFork) { failFork = false; return Response.json({ code: 14, message: "Fork was refused" }, { status: 503 }); }
+        const forked = await openCode(new Request(`${url.origin}/oc/box/api/session/${input.id?.split(":").at(-1)}/fork`, { method: "POST", body: JSON.stringify({ before: input.before }) }));
+        const body: { data: { id: string } } = await forked.json();
+        return Response.json({ id: `opencode:box:${body.data.id}` });
+      }
       case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), preview: true, space: "main" }], groups: [], space: "main", last: {}, placement } });
       default: return Response.json({});
     }
@@ -195,12 +202,18 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     release();
     await view.getByText("answer in ses_a").waitFor();
-    await page.keyboard.press("ControlOrMeta+k");
-    await palette.locator("input").fill("Fork from message");
-    await palette.locator(".command-palette-row", { hasText: "Fork from message" }).click();
+    const beforeForkTabs = await tabs.getByRole("tab").count();
+    await view.locator("[data-component=composer] [contenteditable=true]").fill("/fork");
+    await page.keyboard.press("Enter");
+    await page.locator("[data-oc-portal]").locator("[role=option], button", { hasText: "question in ses_a" }).first().click();
+    await page.getByText("Fork was refused", { exact: true }).waitFor();
+    expect(page.url()).toBe(`${base}${route("opencode:box:ses_a")}`);
+    expect(await page.locator('[role="tablist"][aria-label="Open tabs"] [role="tab"]').count()).toBe(beforeForkTabs);
     await page.locator("[data-oc-portal]").locator("[role=option], button", { hasText: "question in ses_a" }).first().click();
     await page.waitForURL(new RegExp(`/oc/${encode("opencode:box:ses_fork_").slice(0, -2)}`));
     await view.getByText(/answer in ses_fork_/).waitFor();
+    expect(calls.filter(({ path }) => path === "/api/ForkSession").map(({ body }) => body)).toEqual(Array(2).fill({ id: "opencode:box:ses_a", before: "msg_ses_a_1" }));
+    expect(await view.locator("[data-component=composer] [contenteditable=true]").textContent()).toBe("question in ses_a");
     const forkTabs = await tabs.getByRole("tab").count();
 
     // Deleting the shown session closes its tab.
