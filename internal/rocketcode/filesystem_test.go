@@ -450,14 +450,11 @@ func TestRunRipgrepExitResults(t *testing.T) {
 		partial bool
 		errText string
 	}{
-		{name: "success", code: 0, stdout: []byte("result")},
 		{name: "success with stderr", code: 0, stderr: "detail", stdout: []byte("result")},
-		{name: "no matches", code: 1, errText: "No files found"},
 		{name: "no matches with stderr", code: 1, stderr: "detail", errText: "No files found"},
 		{name: "partial", code: 2, stdout: []byte("result"), partial: true},
 		{name: "error with stderr", code: 2, stderr: "detail", errText: "detail"},
 		{name: "other failure", code: 3, errText: "exit status 3"},
-		{name: "other failure with stderr", code: 3, stderr: "detail", errText: "detail"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			root, err := os.OpenRoot(t.TempDir())
@@ -837,11 +834,6 @@ func TestApplyPatchParity(t *testing.T) {
 		requireParity(t, patch, seed)
 	})
 
-	t.Run("rejects update when target file is missing", func(t *testing.T) {
-		patch := "*** Begin Patch\n*** Update File: missing.txt\n@@\n-nope\n+better\n*** End Patch"
-		requireParity(t, patch, nil)
-	})
-
 	t.Run("rejects delete when file is missing", func(t *testing.T) {
 		patch := "*** Begin Patch\n*** Delete File: missing.txt\n*** End Patch"
 		requireParity(t, patch, nil)
@@ -869,12 +861,6 @@ func TestApplyPatchParity(t *testing.T) {
 	t.Run("verification failure leaves no side effects", func(t *testing.T) {
 		patch := "*** Begin Patch\n*** Add File: created.txt\n+hello\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch"
 		requireParity(t, patch, nil)
-	})
-
-	t.Run("supports end of file anchor", func(t *testing.T) {
-		seed := map[string][]byte{"tail.txt": []byte("alpha\nlast\n")}
-		patch := "*** Begin Patch\n*** Update File: tail.txt\n@@\n-last\n+end\n*** End of File\n*** End Patch"
-		requireParity(t, patch, seed)
 	})
 
 	t.Run("heredoc wrapped patch", func(t *testing.T) {

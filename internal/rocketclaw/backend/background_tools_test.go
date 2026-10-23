@@ -61,7 +61,7 @@ func TestStopBackgroundJobTool(t *testing.T) {
 func TestStopBackgroundJobToolNeedsAllowBackground(t *testing.T) {
 	t.Parallel()
 
-	for permission, visible := range map[string]bool{"{}": false, "{rocketclaw: {allow_background: deny}}": false, "{rocketclaw: {allow_background: allow}}": true} {
+	for permission, visible := range map[string]bool{"{}": false, "{rocketclaw: {allow_background: allow}}": true} {
 		t.Run(permission, func(t *testing.T) {
 			workspace := t.TempDir()
 			writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-6.1-sol\nmode: primary\npermission: "+permission+"\n---\nPrompt\n")

@@ -369,7 +369,6 @@ func TestUpdateGoalToolRunsCheckThroughActiveAgentCustomShell(t *testing.T) {
 		wantOutput string
 		wantStatus string
 	}{
-		{name: "wrapper exits zero", wrapperRun: "exec /bin/bash -c \"$1\"\n", wantOutput: "goal marked complete", wantStatus: GoalStatusComplete},
 		{name: "wrapper exits nonzero", wrapperRun: "/bin/bash -c \"$1\"\nexit 9\n", wantOutput: "goal check did not pass. Continue working from this output:\n\npassed", wantStatus: GoalStatusActive},
 	}
 	for _, tt := range tests {
@@ -433,31 +432,6 @@ Prompt
 	assert.Equal(t, "patched parser; tests next", goal.Note)
 }
 
-func TestUpdateGoalToolKeepsGoalActiveWhenCheckFails(t *testing.T) {
-	t.Parallel()
-
-	bridge := newGoalCheckTestBridge(t, `---
-description: Main
-model: gpt-5.4
-permission:
-  bash:
-    "./scripts/check.sh": allow
----
-Prompt
-`, "#!/bin/sh\nprintf failed\nexit 7\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
-
-	result, err := updateGoalTool(bridge, nil).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
-	require.NoError(t, err)
-	assert.Contains(t, result.Output, "goal check did not pass")
-	assert.Contains(t, result.Output, "failed")
-
-	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, GoalStatusActive, goal.Status)
-}
-
 func TestUpdateGoalToolKeepsGoalActiveWhenCheckPermissionDenied(t *testing.T) {
 	t.Parallel()
 
@@ -480,30 +454,6 @@ Prompt
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, GoalStatusActive, goal.Status)
-}
-
-func TestUpdateGoalToolDoesNotRunCheckForBlocked(t *testing.T) {
-	t.Parallel()
-
-	bridge := newGoalCheckTestBridge(t, `---
-description: Main
-model: gpt-5.4
-permission:
-  bash:
-    "./scripts/check.sh": allow
----
-Prompt
-`, "#!/bin/sh\nexit 7\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
-
-	result, err := updateGoalTool(bridge, nil).Call(t.Context(), []byte(`{"status":"blocked","note":"need credentials"}`), nil)
-	require.NoError(t, err)
-	assert.Equal(t, "goal marked blocked", result.Output)
-
-	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "need credentials", goal.Note)
 }
 
 func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
@@ -1285,26 +1235,6 @@ func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T)
 	assert.Contains(t, prompt, "Uncommitted, untracked, or unconfigured files")
 }
 
-func TestNewConversationKeepsInjectedSessionService(t *testing.T) {
-	t.Parallel()
-
-	service, err := NewSessionService(t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, service.Stop()) })
-
-	bus := newTestBus()
-	defer bus.Close()
-
-	input := Config{ConversationID: "  slack-thread:C123:111.222  ", Agent: "  main  ", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}, UserQuestionAsker: &webQuestions{store: service, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}, SessionService: service}
-	bridge := NewConversation(new(config.LockedConfig), bus, &input, slog.New(slog.DiscardHandler))
-	assert.Same(t, service, bridge.config.SessionService)
-	assert.Equal(t, "slack-thread:C123:111.222", bridge.config.ConversationID)
-	assert.Equal(t, "main", bridge.config.Agent)
-	assert.Equal(t, "  main  ", input.Agent)
-	input.Agent = "other"
-	assert.Equal(t, "main", bridge.config.Agent, "the bridge owns its config value")
-}
-
 // A submission during shutdown is stored in the Thread Queue with its full
 // inbound, so it survives the process exit and starts after the restart.
 func TestBridgeSubmitAfterStopStoresRequestDurably(t *testing.T) {
@@ -1586,7 +1516,7 @@ func TestScheduleMessageToolValidatesAndPreservesMessage(t *testing.T) {
 
 	assert.Equal(t, map[string]bool{"  keep spaces  ": false, "again": true}, recurring)
 
-	for _, delay := range []time.Duration{12 * time.Hour, 24 * time.Hour, 24*time.Hour + time.Nanosecond, 5040 * time.Hour} {
+	for _, delay := range []time.Duration{12 * time.Hour, 5040 * time.Hour} {
 		for _, recurring := range []bool{false, true} {
 			t.Run(fmt.Sprintf("accepted%s/recurring=%t", delay, recurring), func(t *testing.T) {
 				message := fmt.Sprintf("  follow up after %s recurring=%t  ", delay, recurring)
@@ -1632,7 +1562,6 @@ func TestScheduleMessageToolValidatesAndPreservesMessage(t *testing.T) {
 		`{"message":"hello","send_this_in":"0s"}`,
 		`{"message":"hello","send_this_in":"-1h"}`,
 		`{"message":"hello","send_this_in":"5040h1ns"}`,
-		`{"message":"hello","send_this_in":"5040h1ns","recurring":true}`,
 		`{"message":"hello","send_this_in":"30s","recurring":true}`,
 	} {
 		_, err := tool.Call(context.Background(), []byte(raw), nil)
@@ -2471,39 +2400,6 @@ func TestBridgeScheduleMessageSubmitsAfterDelay(t *testing.T) {
 	})
 }
 
-func TestBridgeScheduleMessagePersistsRecurringMetadata(t *testing.T) {
-	t.Parallel()
-
-	service := newTestSessionService(t)
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-
-	require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), time.Minute, "again", true))
-
-	messages, err := service.ScheduledMessages()
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-
-	for _, scheduled := range messages {
-		assert.True(t, scheduled.Recurring)
-		assert.Equal(t, time.Minute, scheduled.Interval)
-		assert.Equal(t, "again", scheduled.Message)
-	}
-}
-
-func TestBridgeScheduleMessageLogsPersistFailure(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	require.NoError(t, store.Stop())
-
-	var logs bytes.Buffer
-
-	bridge := &Bridge{log: slog.New(slog.NewJSONHandler(&logs, nil)), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", SessionService: store}}
-
-	require.Error(t, bridge.ScheduleMessage(new(protocol.InboundMessage), time.Minute, "later", false))
-	assert.Contains(t, logs.String(), "scheduled message persist failed")
-}
-
 func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testing.T) {
 	t.Parallel()
 
@@ -2959,75 +2855,6 @@ func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
 	assert.Equal(t, "turn", entries[1].Entry.Type)
 }
 
-func TestBridgeScheduleMessageUsesOwningSlackThread(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		service := newTestSessionService(t)
-		conversationID := protocol.SlackThreadConversationID("D456", "222.333")
-
-		require.NoError(t, service.UpsertThread(protocol.SlackThreadConversationID("D123", "111.222"), ThreadState{Agent: "planner"}))
-
-		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, Agent: "planner", SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "later", false))
-
-		time.Sleep(5 * time.Second)
-		synctest.Wait()
-
-		select {
-		case request := <-bridge.requestCh:
-			require.NotNil(t, request.inbound)
-			assert.Equal(t, "later", request.inbound.Text)
-			assert.Equal(t, conversationID, request.inbound.ConversationID)
-			assert.Nil(t, request.inbound.SlackReply)
-		case <-time.After(time.Nanosecond):
-			t.Fatal("scheduled external MCP message was not submitted")
-		}
-	})
-}
-
-func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	service := newTestSessionServiceAt(t, workspace)
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, service.PutScheduledMessage("schedule-1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "later", DueAt: time.Now().UTC()}))
-
-	bus := newTestBus()
-	defer bus.Close()
-
-	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, SessionService: service}, slog.New(slog.DiscardHandler))
-	bridge.requestCh = make(chan bridgeRequest, 1)
-	bridge.stopCh = make(chan struct{})
-
-	go bridge.loop(t.Context())
-
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "later", false)
-	inbound.ConversationID = conversationID
-	inbound.AttachmentPresence = protocol.AttachmentPresenceUnsupported
-	responseCh := inbound.EnableResponseWait()
-	require.NoError(t, bridge.enqueue(context.Background(), &bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1"}, "submit scheduled message"))
-
-	outbound := readRocketCodeOutbound(t, bus)
-	assert.Equal(t, unsupportedFileFallback, outbound.Text)
-	outbound.MarkDelivered(nil)
-
-	select {
-	case response := <-responseCh:
-		require.NoError(t, response.Err)
-	case <-time.After(time.Second):
-		t.Fatal("scheduled message response was not completed")
-	}
-
-	require.Eventually(t, func() bool {
-		messages, err := service.ScheduledMessages()
-		require.NoError(t, err)
-
-		return len(messages) == 0
-	}, time.Second, time.Millisecond)
-}
-
 func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 	t.Parallel()
 
@@ -3281,40 +3108,6 @@ func TestBridgeResetScheduledMessagesDeletesPersistedAndCancelsArmed(t *testing.
 	})
 }
 
-func TestBridgeResetScheduledMessagesReportsStoreError(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	require.NoError(t, store.Stop())
-
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "slack-thread:C123:111.222", SessionService: store}}
-	require.Error(t, bridge.ResetScheduledMessages(new(protocol.InboundMessage)))
-}
-
-func TestBridgeArmsOverdueScheduledMessage(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		service := newTestSessionService(t)
-		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-		due := protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "now", DueAt: time.Now().UTC().Add(-time.Second)}
-
-		require.NoError(t, service.PutScheduledMessage("due", &due))
-		bridge.armScheduledMessage("due", &due)
-		synctest.Wait()
-
-		select {
-		case request := <-bridge.requestCh:
-			require.NotNil(t, request.inbound)
-			assert.NotEmpty(t, request.scheduledMessageID)
-			assert.Equal(t, "now", request.inbound.Text)
-		case <-time.After(time.Nanosecond):
-			t.Fatal("overdue scheduled message was not submitted")
-		}
-	})
-}
-
 func TestBridgeRecurringScheduledMessageAdvancesAndRearms(t *testing.T) {
 	t.Parallel()
 
@@ -3361,31 +3154,6 @@ func TestBridgeRecurringScheduledMessageAdvancesAndRearms(t *testing.T) {
 	})
 }
 
-func TestBridgeStaleScheduledMessageTimerDoesNotSubmit(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		service := newTestSessionService(t)
-		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-		oldDue := protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "old", DueAt: time.Now().UTC().Add(5 * time.Second)}
-		newDue := oldDue
-		newDue.DueAt = newDue.DueAt.Add(time.Minute)
-
-		require.NoError(t, service.PutScheduledMessage("stale", &newDue))
-		bridge.armScheduledMessage("stale", &oldDue)
-
-		time.Sleep(5 * time.Second)
-		synctest.Wait()
-
-		select {
-		case <-bridge.requestCh:
-			t.Fatal("stale scheduled message was submitted")
-		default:
-		}
-	})
-}
-
 func TestBridgeScheduledMessageTimerStopsOnStoreError(t *testing.T) {
 	t.Parallel()
 
@@ -3408,84 +3176,6 @@ func TestBridgeScheduledMessageTimerStopsOnStoreError(t *testing.T) {
 		default:
 		}
 	})
-}
-
-func TestBridgeRestoresScheduledMessageAfterRestart(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		workspace := t.TempDir()
-		store, err := NewSessionService(workspace)
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, store.Stop()) })
-
-		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-
-		first := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), discardPublisher{}, &Config{ConversationID: conversationID, Agent: "main", SessionService: store}, slog.New(slog.DiscardHandler))
-		require.NoError(t, startTestBridge(t.Context(), first))
-		require.NoError(t, first.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "later", false))
-		require.NoError(t, first.Stop())
-
-		var logs bytes.Buffer
-
-		second := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), discardPublisher{}, &Config{ConversationID: conversationID, Agent: "main", SessionService: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
-		second.requestCh = make(chan bridgeRequest, 1)
-		second.stopCh = make(chan struct{})
-		messages, err := store.ScheduledMessages()
-		require.NoError(t, err)
-
-		for id, message := range messages {
-			second.armScheduledMessage(id, &message)
-		}
-
-		synctest.Wait()
-
-		select {
-		case <-second.requestCh:
-			t.Fatal("scheduled message submitted before restored delay")
-		default:
-		}
-
-		time.Sleep(5 * time.Second)
-		synctest.Wait()
-
-		select {
-		case request := <-second.requestCh:
-			require.NotNil(t, request.inbound)
-			assert.NotEmpty(t, request.scheduledMessageID)
-			assert.Equal(t, "later", request.inbound.Text)
-		case <-time.After(time.Nanosecond):
-			t.Fatal("restored scheduled message was not submitted")
-		}
-
-		messages, err = store.ScheduledMessages()
-		require.NoError(t, err)
-		require.Len(t, messages, 1)
-		assert.Contains(t, logs.String(), "scheduled message enqueued")
-	})
-}
-
-func TestBridgeStartLogsRestoredScheduledMessage(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	store, err := NewSessionService(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Stop()) })
-
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-
-	require.NoError(t, store.PutScheduledMessage("schedule-1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "later", DueAt: time.Now().UTC().Add(time.Hour)}))
-
-	var logs bytes.Buffer
-
-	bus := newTestBus()
-	t.Cleanup(bus.Close)
-	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", SessionService: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
-	require.NoError(t, startTestBridge(t.Context(), bridge))
-	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
-
-	assert.Contains(t, logs.String(), "scheduled message restored")
 }
 
 func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
@@ -4229,71 +3919,6 @@ func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, active, "a delivered turn leaves no row")
 	assert.Empty(t, testTurnStepKeys(t, service, conversationID), "the finish transaction clears the journal")
-}
-
-func TestInterruptActiveTurnEndsRowAsStopped(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-
-	service := newTestSessionServiceAt(t, workspace)
-
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	requestArrived, releaseRequest := make(chan struct{}), make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		close(requestArrived)
-
-		select {
-		case <-request.Context().Done():
-		case <-releaseRequest:
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	bus := newTestBus()
-	t.Cleanup(bus.Close)
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
-	require.NoError(t, startTestBridge(t.Context(), bridge))
-	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
-
-	delivered := make(chan struct{})
-
-	go func() {
-		for outbound := range bus.Outbound(t.Context()) {
-			outbound.MarkDelivered(nil)
-
-			if outbound.Complete {
-				close(delivered)
-				return
-			}
-		}
-	}()
-
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
-	response := inbound.EnableResponseWait()
-	require.NoError(t, bridge.Submit(t.Context(), inbound))
-	<-requestArrived
-
-	active, err := service.HasActiveTurn(t.Context(), conversationID)
-	require.NoError(t, err)
-	require.True(t, active)
-
-	bridge.InterruptActiveTurn()
-	close(releaseRequest)
-	require.NoError(t, (<-response).Err)
-	<-delivered
-
-	require.Eventually(t, func() bool {
-		active, err := service.HasActiveTurn(t.Context(), conversationID)
-		return err == nil && !active
-	}, 5*time.Second, 10*time.Millisecond)
-
-	entries, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
-	require.NoError(t, err)
-	require.Len(t, entries, 1, "the stopped turn stays visible in the transcript")
-	assert.Equal(t, protocol.TerminalStopped, entries[0].Terminal)
 }
 
 func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {

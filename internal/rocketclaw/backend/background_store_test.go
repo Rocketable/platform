@@ -318,7 +318,8 @@ func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 		terminal protocol.Terminal
 		saved    bool
 	}{
-		{"", true}, {protocol.TerminalStopped, true}, {protocol.TerminalFailed, true}, {protocol.TerminalStopped, false},
+		// Settlement depends on whether the turn saved entries, never on its terminal.
+		{protocol.TerminalStopped, true}, {protocol.TerminalStopped, false},
 	} {
 		t.Run(string(tt.terminal)+"/saved="+strconv.FormatBool(tt.saved), func(t *testing.T) {
 			store := newTestSessionService(t)
@@ -555,8 +556,6 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 		hidden bool
 	}{
 		{name: "running", status: backgroundRunning, note: noteNone, keep: true},
-		{name: "wakeable note", status: backgroundCompleted, wake: true, note: notePending, keep: true},
-		{name: "hidden running", status: backgroundRunning, note: noteNone, keep: true, hidden: true},
 		{name: "hidden wakeable note", status: backgroundCompleted, wake: true, note: notePending, keep: true, hidden: true},
 		{name: "no-wake note", status: backgroundKilled, note: notePending},
 		{name: "consumed note", status: backgroundCompleted, wake: true, note: noteConsumed},

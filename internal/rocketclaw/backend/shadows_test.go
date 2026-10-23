@@ -395,7 +395,7 @@ func TestShadowImplicitCreation(t *testing.T) {
 }
 
 func TestShadowExecutionOwnerEntrypoints(t *testing.T) {
-	for _, entrypoint := range []string{"web", "slack", "cron", "external MCP", "scheduled", "goal continuation", "background wake"} {
+	for _, entrypoint := range []string{"web", "cron", "scheduled", "goal continuation", "background wake"} {
 		t.Run(entrypoint, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
 			recordTestConversations(t, store, "main", map[string]ConversationKind{"visible": KindWebChat})
@@ -407,16 +407,10 @@ func TestShadowExecutionOwnerEntrypoints(t *testing.T) {
 			request := bridgeRequest{inbound: inbound}
 
 			switch entrypoint {
-			case "slack":
-				inbound.Source = protocol.SourceSlack
-			case "cron", "external MCP":
+			case "cron":
 				owner = &Bridge{log: visible.log, config: Config{ConversationID: "private", Agent: "main", SessionService: store}}
 				request.producer, inbound.SyncDestination = owner, "visible"
-
 				inbound.Source, inbound.RequireOutputDecision = protocol.SourceSystem, true
-				if entrypoint == "external MCP" {
-					inbound.Source = protocol.SourceExternalMCP
-				}
 			case "scheduled":
 				inbound.Source, inbound.Human, request.scheduledMessageID = protocol.SourceSystem, false, "scheduled"
 

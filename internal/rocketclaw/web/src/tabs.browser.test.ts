@@ -688,16 +688,13 @@ test("the shimmer visibly sweeps the selected and other running titles in both t
   await page.goto(`${origin}${href("delta")}`);
   await tab("Alpha").waitFor();
   await page.mouse.move(640, 600);
-  for (const scheme of ["dark", "light"] as const) {
-    await page.emulateMedia({ colorScheme: scheme });
-    expect(await sweep("Delta")).toBeGreaterThan(8);
-  }
+  // Only a selected title in dark mode dims under the band; each state and each scheme is swept once.
+  await page.emulateMedia({ colorScheme: "dark" });
+  expect(await sweep("Delta")).toBeGreaterThan(8);
   await tab("Alpha").click();
   await page.waitForURL(`**${href("alpha")}`);
-  for (const scheme of ["dark", "light"] as const) {
-    await page.emulateMedia({ colorScheme: scheme });
-    expect(await sweep("Delta")).toBeGreaterThan(8);
-  }
+  await page.emulateMedia({ colorScheme: "light" });
+  expect(await sweep("Delta")).toBeGreaterThan(8);
 }), 60_000);
 
 test("with reduced motion a running tab's title and pinned icon show a still gradient", () => withPage({ reducedMotion: "reduce" }, async (page, origin) => {

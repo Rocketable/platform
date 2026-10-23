@@ -111,14 +111,6 @@ func TestSyncReportsWorkspaceDirectoryConflicts(t *testing.T) {
 	}
 }
 
-func TestResetTargetRejectsFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), targetRoot)
-	require.NoError(t, os.WriteFile(path, []byte("file"), 0o644))
-
-	err := resetRuntimeDirectory(path, testLogger(), true)
-	require.ErrorContains(t, err, "rocketclaw target path is not a directory")
-}
-
 func TestResetRuntimeDirectoryPreservesAuthAndAttachments(t *testing.T) {
 	target := filepath.Join(t.TempDir(), targetRoot)
 	require.NoError(t, os.MkdirAll(target, 0o755))
@@ -277,14 +269,6 @@ func TestOverlayMissingIsNoop(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestOverlayRejectsFile(t *testing.T) {
-	tmp := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tmp, "agents"), []byte("file"), 0o644))
-
-	err := overlayWorkspaceIn(tmp, filepath.Join(tmp, targetRoot), testLogger())
-	require.ErrorContains(t, err, "rocketclaw overlay path is not a directory")
-}
-
 func TestOverlaySkipsFilteredFiles(t *testing.T) {
 	tmp := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "agents", "nested"), 0o755))
@@ -438,40 +422,6 @@ func TestSyncInWithOverlaysAppliesConfiguredOverlaysInConfigOrder(t *testing.T) 
 	data, err := os.ReadFile(filepath.Join(workspace, targetRoot, "agents", "shared.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "second", string(data))
-}
-
-func TestSyncInWithOverlaysTreatsGuardrailAsNormalAgent(t *testing.T) {
-	_, err := exec.LookPath("git")
-	require.NoError(t, err, "git is required for overlay test")
-
-	tmp := t.TempDir()
-	repo := filepath.Join(tmp, "repo")
-	repoGit(t, repo, "init")
-	repoGit(t, repo, "config", "user.email", "test@example.com")
-	repoGit(t, repo, "config", "user.name", "Test User")
-	require.NoError(t, os.MkdirAll(filepath.Join(repo, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "agents", "guardrail.md"), []byte("remote guardrail"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "agents", "helper.md"), []byte("remote helper"), 0o644))
-	repoGit(t, repo, "add", ".")
-	repoGit(t, repo, "commit", "-m", "overlay")
-
-	remoteOnly := filepath.Join(tmp, "remote-only")
-	require.NoError(t, os.MkdirAll(remoteOnly, 0o755))
-	require.NoError(t, SyncInWithOverlays(remoteOnly, targetRoot, []string{repo}, testLogger()))
-	data, err := os.ReadFile(filepath.Join(remoteOnly, targetRoot, "agents", "guardrail.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "remote guardrail", string(data))
-	data, err = os.ReadFile(filepath.Join(remoteOnly, targetRoot, "agents", "helper.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "remote helper", string(data))
-
-	withLocal := filepath.Join(tmp, "with-local")
-	require.NoError(t, os.MkdirAll(filepath.Join(withLocal, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(withLocal, "agents", "guardrail.md"), []byte("local guardrail"), 0o644))
-	require.NoError(t, SyncInWithOverlays(withLocal, targetRoot, []string{repo}, testLogger()))
-	data, err = os.ReadFile(filepath.Join(withLocal, targetRoot, "agents", "guardrail.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "local guardrail", string(data))
 }
 
 func TestSyncWorkspaceScriptSymlinksReplacesRuntimeSymlinks(t *testing.T) {

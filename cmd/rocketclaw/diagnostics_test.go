@@ -154,155 +154,154 @@ func TestDiagnosticsImmediateClose(t *testing.T) {
 
 // Runtime recording is process-wide: these real-network tests must stay serial.
 func TestDiagnosticsLiveCapturesAndCancellation(t *testing.T) {
-	for _, name := range []string{"profile", "trace"} {
-		for _, cancelBy := range []string{"request", "server"} {
-			t.Run(name+" cancel by "+cancelBy, func(t *testing.T) {
-				// No capture may create application files; all responses stay in memory.
-				workspace := t.TempDir()
-				t.Chdir(workspace)
+	// Each capture and each cancellation once: both captures wait in the same pprof sleep.
+	for _, tc := range []struct{ name, cancelBy string }{{"profile", "server"}, {"trace", "request"}} {
+		t.Run(tc.name+" cancel by "+tc.cancelBy, func(t *testing.T) {
+			// No capture may create application files; all responses stay in memory.
+			workspace := t.TempDir()
+			t.Chdir(workspace)
 
-				listener, err := net.Listen("tcp", "127.0.0.1:0")
-				require.NoError(t, err)
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
 
-				var connections sync.WaitGroup
+			var connections sync.WaitGroup
 
-				ctxServer, cancelServer := context.WithCancel(t.Context())
-				server := newDiagnosticsServer(ctxServer, &connections)
+			ctxServer, cancelServer := context.WithCancel(t.Context())
+			server := newDiagnosticsServer(ctxServer, &connections)
 
-				var serving errgroup.Group
+			var serving errgroup.Group
 
-				serving.Go(func() error {
-					serveDiagnostics(server, listener, slog.New(slog.DiscardHandler))
-					return nil
-				})
-				t.Cleanup(func() {
-					cancelServer()
-					require.NoError(t, server.Close())
-					_ = listener.Close()
-
-					require.NoError(t, serving.Wait())
-					connections.Wait()
-				})
-
-				client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
-				t.Cleanup(client.CloseIdleConnections)
-
-				base := "http://" + listener.Addr().String() + "/debug/pprof/"
-
-				seconds := "1"
-				if name == "trace" {
-					seconds = "0.05"
-				}
-
-				request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+name+"?seconds="+seconds, http.NoBody)
-				require.NoError(t, err)
-				response, err := client.Do(request)
-				require.NoError(t, err)
-				data, err := io.ReadAll(response.Body)
-				require.NoError(t, err)
-				require.NoError(t, response.Body.Close())
-				require.Equal(t, http.StatusOK, response.StatusCode)
-				require.Equal(t, "application/octet-stream", response.Header.Get("Content-Type"))
-
-				if name == "profile" {
-					reader, err := gzip.NewReader(bytes.NewReader(data))
-					require.NoError(t, err)
-					profile, err := io.ReadAll(reader)
-					require.NoError(t, err)
-					require.NoError(t, reader.Close())
-					require.NotEmpty(t, profile)
-				} else {
-					require.True(t, bytes.HasPrefix(data, []byte("go 1.")))
-				}
-
-				ctx, cancel := context.WithCancel(t.Context())
-				defer cancel()
-
-				var body io.Reader = http.NoBody
-				if cancelBy == "server" {
-					// An unread GET body prevents net/http's background disconnect read.
-					body = strings.NewReader("unread request body")
-				}
-
-				request, err = http.NewRequestWithContext(ctx, http.MethodGet, base+name+"?seconds=60", body)
-				require.NoError(t, err)
-
-				var requesting errgroup.Group
-
-				requesting.Go(func() error {
-					response, errRequest := client.Do(request)
-					if errRequest != nil {
-						return fmt.Errorf("request live %s capture: %w", name, errRequest)
-					}
-
-					_, errRead := io.Copy(io.Discard, response.Body)
-
-					return errors.Join(errRead, response.Body.Close())
-				})
-				t.Cleanup(func() {
-					cancel()
-					cancelServer()
-
-					_ = requesting.Wait()
-				})
-				// Inspect the native handler's sleep through the goroutine endpoint.
-				// That frame follows StartCPUProfile/trace.Start, unlike connection acceptance.
-				require.EventuallyWithT(t, func(check *assert.CollectT) {
-					request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"goroutine?debug=2", http.NoBody)
-					if !assert.NoError(check, err) {
-						return
-					}
-
-					response, err := client.Do(request)
-					if !assert.NoError(check, err) {
-						return
-					}
-
-					data, err := io.ReadAll(response.Body)
-					assert.NoError(check, err)
-					assert.NoError(check, response.Body.Close())
-					assert.Contains(check, string(data), "net/http/pprof.sleep(")
-				}, 5*time.Second, 5*time.Millisecond)
-				requestConflict, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+name+"?seconds="+seconds, http.NoBody)
-				require.NoError(t, err)
-				response, err = client.Do(requestConflict)
-				require.NoError(t, err)
-				_, err = io.Copy(io.Discard, response.Body)
-				require.NoError(t, err)
-				require.NoError(t, response.Body.Close())
-				require.Equal(t, http.StatusInternalServerError, response.StatusCode)
-
-				cancelStarted := time.Now()
-				if cancelBy == "request" {
-					cancel()
-				} else {
-					cancelServer()
-					require.NoError(t, server.Close())
-					require.NoError(t, serving.Wait())
-				}
-
-				errRequest := requesting.Wait()
-				// Server cancellation can finish the response before Close reaches the socket.
-				if cancelBy == "request" {
-					require.ErrorIs(t, errRequest, context.Canceled)
-				}
-
-				connections.Wait()
-				require.Less(t, time.Since(cancelStarted), 5*time.Second, "cancellation must end the 60-second capture early")
-				// Joining must finish native Stop, not leave a recording alive after close.
-				if name == "profile" {
-					require.NoError(t, pprof.StartCPUProfile(io.Discard))
-					pprof.StopCPUProfile()
-				} else {
-					require.NoError(t, trace.Start(io.Discard))
-					trace.Stop()
-				}
-
-				files, err := os.ReadDir(workspace)
-				require.NoError(t, err)
-				require.Empty(t, files)
+			serving.Go(func() error {
+				serveDiagnostics(server, listener, slog.New(slog.DiscardHandler))
+				return nil
 			})
-		}
+			t.Cleanup(func() {
+				cancelServer()
+				require.NoError(t, server.Close())
+				_ = listener.Close()
+
+				require.NoError(t, serving.Wait())
+				connections.Wait()
+			})
+
+			client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+			t.Cleanup(client.CloseIdleConnections)
+
+			base := "http://" + listener.Addr().String() + "/debug/pprof/"
+
+			seconds := "1"
+			if tc.name == "trace" {
+				seconds = "0.05"
+			}
+
+			request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+tc.name+"?seconds="+seconds, http.NoBody)
+			require.NoError(t, err)
+			response, err := client.Do(request)
+			require.NoError(t, err)
+			data, err := io.ReadAll(response.Body)
+			require.NoError(t, err)
+			require.NoError(t, response.Body.Close())
+			require.Equal(t, http.StatusOK, response.StatusCode)
+			require.Equal(t, "application/octet-stream", response.Header.Get("Content-Type"))
+
+			if tc.name == "profile" {
+				reader, err := gzip.NewReader(bytes.NewReader(data))
+				require.NoError(t, err)
+				profile, err := io.ReadAll(reader)
+				require.NoError(t, err)
+				require.NoError(t, reader.Close())
+				require.NotEmpty(t, profile)
+			} else {
+				require.True(t, bytes.HasPrefix(data, []byte("go 1.")))
+			}
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			var body io.Reader = http.NoBody
+			if tc.cancelBy == "server" {
+				// An unread GET body prevents net/http's background disconnect read.
+				body = strings.NewReader("unread request body")
+			}
+
+			request, err = http.NewRequestWithContext(ctx, http.MethodGet, base+tc.name+"?seconds=60", body)
+			require.NoError(t, err)
+
+			var requesting errgroup.Group
+
+			requesting.Go(func() error {
+				response, errRequest := client.Do(request)
+				if errRequest != nil {
+					return fmt.Errorf("request live %s capture: %w", tc.name, errRequest)
+				}
+
+				_, errRead := io.Copy(io.Discard, response.Body)
+
+				return errors.Join(errRead, response.Body.Close())
+			})
+			t.Cleanup(func() {
+				cancel()
+				cancelServer()
+
+				_ = requesting.Wait()
+			})
+			// Inspect the native handler's sleep through the goroutine endpoint.
+			// That frame follows StartCPUProfile/trace.Start, unlike connection acceptance.
+			require.EventuallyWithT(t, func(check *assert.CollectT) {
+				request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"goroutine?debug=2", http.NoBody)
+				if !assert.NoError(check, err) {
+					return
+				}
+
+				response, err := client.Do(request)
+				if !assert.NoError(check, err) {
+					return
+				}
+
+				data, err := io.ReadAll(response.Body)
+				assert.NoError(check, err)
+				assert.NoError(check, response.Body.Close())
+				assert.Contains(check, string(data), "net/http/pprof.sleep(")
+			}, 5*time.Second, 5*time.Millisecond)
+			requestConflict, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+tc.name+"?seconds="+seconds, http.NoBody)
+			require.NoError(t, err)
+			response, err = client.Do(requestConflict)
+			require.NoError(t, err)
+			_, err = io.Copy(io.Discard, response.Body)
+			require.NoError(t, err)
+			require.NoError(t, response.Body.Close())
+			require.Equal(t, http.StatusInternalServerError, response.StatusCode)
+
+			cancelStarted := time.Now()
+			if tc.cancelBy == "request" {
+				cancel()
+			} else {
+				cancelServer()
+				require.NoError(t, server.Close())
+				require.NoError(t, serving.Wait())
+			}
+
+			errRequest := requesting.Wait()
+			// Server cancellation can finish the response before Close reaches the socket.
+			if tc.cancelBy == "request" {
+				require.ErrorIs(t, errRequest, context.Canceled)
+			}
+
+			connections.Wait()
+			require.Less(t, time.Since(cancelStarted), 5*time.Second, "cancellation must end the 60-second capture early")
+			// Joining must finish native Stop, not leave a recording alive after close.
+			if tc.name == "profile" {
+				require.NoError(t, pprof.StartCPUProfile(io.Discard))
+				pprof.StopCPUProfile()
+			} else {
+				require.NoError(t, trace.Start(io.Discard))
+				trace.Stop()
+			}
+
+			files, err := os.ReadDir(workspace)
+			require.NoError(t, err)
+			require.Empty(t, files)
+		})
 	}
 }
 

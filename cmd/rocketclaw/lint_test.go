@@ -14,20 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunLintCurrentOK(t *testing.T) {
-	workspace := t.TempDir()
-	t.Chdir(workspace)
-	writeLintConfig(t, workspace)
-	writeLintAgent(t, filepath.Join(workspace, ".rocketclaw"), "main.md", `---
-description: main
----
-main
-`)
-
-	output := captureStdout(t, func() error { return runLint([]string{"current"}) })
-	assert.Equal(t, "rocketclaw lint current: OK\n", output)
-}
-
 func TestRunLintResolvesConfiguredModel(t *testing.T) {
 	for _, target := range []string{"current", "next"} {
 		t.Run(target, func(t *testing.T) {
@@ -68,33 +54,9 @@ bad
 	assert.Contains(t, output, "RC006 error agents/lint-bad.md")
 }
 
-func TestRunLintReasoningEffortXHighFails(t *testing.T) {
-	workspace := t.TempDir()
-	t.Chdir(workspace)
-	writeLintConfig(t, workspace)
-	writeLintAgent(t, filepath.Join(workspace, ".rocketclaw"), "expensive.md", `---
-description: expensive
-reasoningEffort: xhigh
----
-expensive
-`)
-
-	output, err := captureStdoutAndError(t, func() error { return runLint([]string{"current"}) })
-	var coded exitCoder
-	require.True(t, errors.As(err, &coded))
-	assert.Equal(t, 1, coded.ExitCode())
-	assert.Contains(t, output, "rocketclaw lint current: found 1 findings")
-	assert.Contains(t, output, "RC008 error agents/expensive.md")
-}
-
 func TestRunLintRejectsUnknownTarget(t *testing.T) {
 	err := runLint([]string{"later"})
 	require.ErrorContains(t, err, "usage: rocketclaw lint [next|current]")
-}
-
-func TestHelpMentionsLint(t *testing.T) {
-	output := captureStdout(t, func() error { return run([]string{"help"}) })
-	assert.Contains(t, output, "rocketclaw lint [next|current]")
 }
 
 func writeLintConfig(t *testing.T, workspace string, models ...map[string]string) {

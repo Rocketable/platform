@@ -84,70 +84,73 @@ func sidebarSummaries(t *testing.T, s *SessionService) map[string]*protocol.Sess
 func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
 	t.Parallel()
 
-	for _, creation := range []string{"upsert", "create", "external MCP"} {
-		for _, failure := range []struct{ name, message string }{
-			{"orphan decode", "parse session summary history"},
-			{"replay decode", "decode session summary replay input"},
-			{"summary write", "write session summary"},
-			{"database unavailable", "database is closed"},
-		} {
-			t.Run(creation+"/"+failure.name, func(t *testing.T) {
-				workspace := t.TempDir()
-				service := newTestSessionServiceAt(t, workspace)
-				insertSessionEntryWithoutSummary(t, service, "history", testSessionEntry("orphan preview", "answer"))
+	// Decoding is shared by every creation path; each path's writes and transaction start fail on their own lines.
+	for _, tc := range []struct{ creation, failure, message string }{
+		{"upsert", "orphan decode", "parse session summary history"},
+		{"create", "replay decode", "decode session summary replay input"},
+		{"upsert", "summary write", "write session summary"},
+		{"external MCP", "summary write", "write session summary"},
+		{"upsert", "database unavailable", "database is closed"},
+		{"create", "database unavailable", "database is closed"},
+		{"external MCP", "database unavailable", "database is closed"},
+	} {
+		t.Run(tc.creation+"/"+tc.failure, func(t *testing.T) {
+			workspace := t.TempDir()
+			service := newTestSessionServiceAt(t, workspace)
+			insertSessionEntryWithoutSummary(t, service, "history", testSessionEntry("orphan preview", "answer"))
 
-				inspection, err := sql.Open("pgx", testStoreDSN(workspace))
+			inspection, err := sql.Open("pgx", testStoreDSN(workspace))
 
+			require.NoError(t, err)
+			defer func() { require.NoError(t, inspection.Close()) }()
+
+			switch tc.failure {
+			case "orphan decode":
+				_, err = inspection.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"timestamp":false}' WHERE conversation_id = 'history'`)
 				require.NoError(t, err)
-				defer func() { require.NoError(t, inspection.Close()) }()
+			case "replay decode":
+				_, err = inspection.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"replay_input":[{"type":"compaction","content":42}]}' WHERE conversation_id = 'history'`)
+				require.NoError(t, err)
+			case "summary write":
+				// A real database write rejection must roll back the earlier record/binding inserts.
+				_, err = inspection.ExecContext(t.Context(), `ALTER TABLE conversations ADD CONSTRAINT reject_summary CHECK (conversation_id <> 'history' OR preview IS NULL)`)
+				require.NoError(t, err)
+			case "database unavailable":
+				require.NoError(t, service.Stop())
+			}
 
-				switch failure.name {
-				case "orphan decode":
-					_, err = inspection.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"timestamp":false}' WHERE conversation_id = 'history'`)
-					require.NoError(t, err)
-				case "replay decode":
-					_, err = inspection.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"replay_input":[{"type":"compaction","content":42}]}' WHERE conversation_id = 'history'`)
-					require.NoError(t, err)
-				case "summary write":
-					// A real database write rejection must roll back the earlier record/binding inserts.
-					_, err = inspection.ExecContext(t.Context(), `ALTER TABLE conversations ADD CONSTRAINT reject_summary CHECK (conversation_id <> 'history' OR preview IS NULL)`)
-					require.NoError(t, err)
-				case "database unavailable":
-					require.NoError(t, service.Stop())
-				}
+			var before string
+			require.NoError(t, inspection.QueryRowContext(t.Context(), `SELECT entry_json FROM entries WHERE conversation_id = 'history'`).Scan(&before))
 
-				var before string
-				require.NoError(t, inspection.QueryRowContext(t.Context(), `SELECT entry_json FROM entries WHERE conversation_id = 'history'`).Scan(&before))
+			switch tc.creation {
+			case "upsert":
+				err = service.UpsertThread("history", ThreadState{Agent: "main"})
+			case "create":
+				runtime := &Runtime{Sessions: service}
+				err = runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "history", Agent: "main"})
+			case "external MCP":
+				err = service.RegisterExternalMCPConversation("public", "main", &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "history", Agent: "main"})
+			}
 
-				switch creation {
-				case "upsert":
-					err = service.UpsertThread("history", ThreadState{Agent: "main"})
-				case "create":
-					runtime := &Runtime{Sessions: service}
-					err = runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "history", Agent: "main"})
-				case "external MCP":
-					err = service.RegisterExternalMCPConversation("public", "main", &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "history", Agent: "main"})
-				}
+			require.ErrorContains(t, err, tc.message)
 
-				require.ErrorContains(t, err, failure.message)
+			// The preview and binding live on the rolled-back rows.
+			var recorded bool
+			require.NoError(t, inspection.QueryRowContext(t.Context(), `SELECT count(*) > 0 FROM conversations`).Scan(&recorded))
+			require.False(t, recorded)
 
-				// The preview and binding live on the rolled-back rows.
-				var recorded bool
-				require.NoError(t, inspection.QueryRowContext(t.Context(), `SELECT count(*) > 0 FROM conversations`).Scan(&recorded))
-				require.False(t, recorded)
-
-				var after string
-				require.NoError(t, inspection.QueryRowContext(t.Context(), `SELECT entry_json FROM entries WHERE conversation_id = 'history'`).Scan(&after))
-				require.Equal(t, before, after, "failed initialization must preserve the orphan history")
-			})
-		}
+			var after string
+			require.NoError(t, inspection.QueryRowContext(t.Context(), `SELECT entry_json FROM entries WHERE conversation_id = 'history'`).Scan(&after))
+			require.Equal(t, before, after, "failed initialization must preserve the orphan history")
+		})
 	}
 }
 
 func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing.T) {
 	t.Parallel()
 
-	for _, creation := range []string{"upsert", "create", "external MCP"} {
+	// CreateConversation initializes summaries through the same stateDAO path as External MCP registration.
+	for _, creation := range []string{"upsert", "external MCP"} {
 		t.Run(creation, func(t *testing.T) {
 			workspace := t.TempDir()
 			service := newTestSessionServiceAt(t, workspace)
@@ -157,9 +160,6 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 				switch creation {
 				case "upsert":
 					require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
-				case "create":
-					runtime := &Runtime{Sessions: service}
-					require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: id, Agent: "main"}))
 				case "external MCP":
 					require.NoError(t, service.RegisterExternalMCPConversation("public-"+id, "main", &ExternalMCPSessionState{PrivateConversationID: "private-" + id, ManagedConversationID: id, Agent: "main"}))
 				}

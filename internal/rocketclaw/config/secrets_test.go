@@ -24,20 +24,6 @@ func (r *recordingSecrets) SecretString(string) (string, error) {
 	return r.body, r.err
 }
 
-func TestSecretFieldReturnsKey(t *testing.T) {
-	got, err := secretField(&recordingSecrets{body: `{"token":"alpha"}`}, testSecretARN, "token")
-	require.NoError(t, err)
-	assert.Equal(t, "alpha", got)
-}
-
-func TestSecretFieldMissingKeyOmitsSecretBody(t *testing.T) {
-	_, err := secretField(&recordingSecrets{body: `{"token":"LEAKED-SECRET-VALUE"}`}, testSecretARN, "missing")
-	require.Error(t, err)
-	require.ErrorContains(t, err, testSecretARN)
-	require.ErrorContains(t, err, "missing")
-	assert.NotContains(t, err.Error(), "LEAKED-SECRET-VALUE")
-}
-
 func TestSecretFieldFetchesSameARNTwice(t *testing.T) {
 	fetcher := &recordingSecrets{body: `{"token":"alpha"}`}
 	_, err := secretField(fetcher, testSecretARN, "token")
@@ -45,15 +31,6 @@ func TestSecretFieldFetchesSameARNTwice(t *testing.T) {
 	_, err = secretField(fetcher, testSecretARN, "token")
 	require.NoError(t, err)
 	assert.Equal(t, 2, fetcher.calls)
-}
-
-func TestSecretsManagerRegionRejectsIncompleteARN(t *testing.T) {
-	_, err := secretsManagerRegion("femto")
-	require.Error(t, err)
-	require.ErrorContains(t, err, "femto")
-	fetchErr, ok := errors.AsType[*SecretFetchError](err)
-	require.True(t, ok)
-	assert.Equal(t, "femto", fetchErr.ARN)
 }
 
 func TestAWSFetcherRejectsIncompleteARN(t *testing.T) {

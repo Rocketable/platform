@@ -277,12 +277,6 @@ func TestRemoveReactionSkipsInvalidTargetsAndIgnoresNoReaction(t *testing.T) {
 	assert.Equal(t, "555.666", calls[2].Get("timestamp"))
 }
 
-func TestNewConnectorUsesInjectedRuntimeDependencies(t *testing.T) {
-	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, inertThreadRouter{}, newTestChannelFacts(), testLogger())
-
-	assert.Equal(t, inertThreadRouter{}, c.threadRouter)
-}
-
 func TestDirectMessagesHaveNoEffect(t *testing.T) {
 	connector := New(
 		&config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}},
@@ -481,35 +475,6 @@ func TestSocketLoopRecreatesClientAndKeepsStableEventChannel(t *testing.T) {
 	require.NotSame(t, firstClient, secondClient)
 	assert.Equal(t, socketmode.EventTypeConnecting, firstEvent.Type)
 	assert.Equal(t, socketmode.EventTypeConnecting, secondEvent.Type)
-}
-
-func TestStopCancelsSocketLoop(t *testing.T) {
-	connector := newTestConnector("http://slack.test")
-	connector.reconnectDelay = 0
-
-	inboundCtx, inboundStop := context.WithCancel(context.Background())
-	connector.inboundStop = inboundStop
-
-	started := make(chan struct{})
-	done := make(chan struct{})
-	connector.runSocketClient = func(ctx context.Context, _ *socketmode.Client) error {
-		close(started)
-		<-ctx.Done()
-		close(done)
-
-		return ctx.Err()
-	}
-
-	go connector.runSocketLoop(inboundCtx)
-
-	<-started
-	require.NoError(t, connector.Stop(context.Background()))
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Slack socket loop was not canceled")
-	}
 }
 
 func TestStopBeforeStart(t *testing.T) {

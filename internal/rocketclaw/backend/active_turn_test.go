@@ -946,7 +946,8 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, private, 1, "canonical turns never append to producer history")
 
-	for _, state := range []string{"completed before Sync", "binding before projection", "existing Web", "reset cancels", "reset then future", "creation failure", "Sync failure", "live creation failure", "live Sync failure", "live read failure", "due creation failure", "due read failure"} {
+	// Failures: each entry path (startup, live, due) once, each with a different failing step.
+	for _, state := range []string{"completed before Sync", "binding before projection", "existing Web", "reset cancels", "reset then future", "creation failure", "live Sync failure", "due read failure"} {
 		t.Run(state, func(t *testing.T) {
 			newBridge, store, calls, outbounds := newResumeTestBridges(t, false)
 			store.db.SetMaxOpenConns(1)
@@ -1023,11 +1024,7 @@ SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(prod
     shadow_parent, running, preview, last_updated, parent_conversation_id, call_id FROM unavailable_conversations`)
 				require.NoError(t, err)
 
-				if state == "live read failure" {
-					bridge.handle(t.Context(), &bridgeRequest{inbound: inbound, turnID: "pending", delivery: delivery})
-				} else {
-					bridge.armScheduledMessage("", &protocol.ScheduledMessageState{ConversationID: "cron:pending", DueAt: time.Now().Add(-time.Minute)})
-				}
+				bridge.armScheduledMessage("", &protocol.ScheduledMessageState{ConversationID: "cron:pending", DueAt: time.Now().Add(-time.Minute)})
 
 				require.Eventually(t, func() bool {
 					var attempted bool
@@ -1049,36 +1046,17 @@ SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(prod
 					table = "turns"
 				}
 
-				if state == "due creation failure" {
-					// Sequences survive rollback, exposing a failed live timer attempt.
-					_, err = store.db.ExecContext(t.Context(), `CREATE SEQUENCE handoff_attempts`)
-					require.NoError(t, err)
-
-					statement = `ALTER TABLE conversations ADD CONSTRAINT reject_handoff CHECK (conversation_id <> 'web:cron:pending' OR nextval('handoff_attempts') < 0) NOT VALID`
-				}
-
 				_, err = store.db.ExecContext(t.Context(), statement)
 				require.NoError(t, err)
 
-				switch {
-				case strings.HasPrefix(state, "live "):
+				if strings.HasPrefix(state, "live ") {
 					bridge := newBridge()
 					bridge.config.ConversationID, bridge.threads = "cron:pending", manager
 
 					t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 					bridge.handle(t.Context(), &bridgeRequest{inbound: inbound, turnID: "pending", delivery: delivery})
 					require.Empty(t, runningTestTurns(t, store))
-				case state == "due creation failure":
-					bridge, err := manager.recordedBridge(t.Context(), "cron:pending")
-					require.NoError(t, err)
-					bridge.armScheduledMessage("", &protocol.ScheduledMessageState{ConversationID: "cron:pending", DueAt: time.Now().Add(-time.Minute)})
-					require.Eventually(t, func() bool {
-						var attempted bool
-						require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT is_called FROM handoff_attempts`).Scan(&attempted))
-
-						return attempted
-					}, 5*time.Second, 10*time.Millisecond)
-				default:
+				} else {
 					require.ErrorContains(t, manager.StartPendingScheduledMessages(t.Context()), "reject_handoff")
 				}
 
@@ -1086,7 +1064,7 @@ SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(prod
 				_, err = store.db.ExecContext(t.Context(), "ALTER TABLE "+table+" DROP CONSTRAINT reject_handoff")
 				require.NoError(t, err)
 
-				if !strings.HasPrefix(state, "live ") && !strings.HasPrefix(state, "due ") {
+				if !strings.HasPrefix(state, "live ") {
 					// Lose the failed process: recovery uses only retained routing and effects.
 					require.NoError(t, shutdown())
 					manager, _ = newTestBridgeManager(t, runtime, store, outbounds)
@@ -1168,7 +1146,7 @@ func TestFailedCronRunPostsNoRoot(t *testing.T) {
 func TestCronRootFooterLinksBoundDestination(t *testing.T) {
 	t.Parallel()
 
-	for name, errFooter := range map[string]error{"edited": nil, "edit fails": errors.New("message_not_found")} {
+	for name, errFooter := range map[string]error{"edit fails": errors.New("message_not_found")} {
 		t.Run(name, func(t *testing.T) {
 			service := newTestSessionService(t)
 			manager, cfg, roots, finals := newCronTestManager(t, service)
@@ -1206,7 +1184,7 @@ func TestCronRootFooterLinksBoundDestination(t *testing.T) {
 func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 	t.Parallel()
 
-	for _, stored := range []string{"row", "queued", "completed before Sync", "binding before projection", "due while producing"} {
+	for _, stored := range []string{"row", "queued", "completed before Sync", "due while producing"} {
 		t.Run(stored, func(t *testing.T) {
 			newBridge, service, requests, finals := newResumeTestBridges(t, false)
 			managedID, privateID := newBridge().config.ConversationID, "external_mcp:main:private"
@@ -1243,12 +1221,6 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, service.closeTurn(t.Context(), "turn-private"))
 				require.Empty(t, runningTestTurns(t, service), "startup must recover without an unfinished producer row")
-
-				if stored == "binding before projection" {
-					owner, _, err := (stateDAO{db: service.db}).bindProducer(t.Context(), privateID, managedID)
-					require.NoError(t, err)
-					assert.Equal(t, managedID, owner)
-				}
 
 				_, err = manager.switchConversationAgent(managedID, "selected")
 				require.NoError(t, err)
@@ -2308,83 +2280,86 @@ func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 
 	const refusal = "Refused: %[1]s did nothing, because this call now runs as background work, after the turn it acts on. Nothing was shown to the user, and nobody will answer. This text is not %[1]s's result or the user's answer. Decide without it, or call %[1]s in the turn that receives this job's result."
 
-	for _, tc := range []struct{ tool, call, done string }{
-		{restartToolName, "rocketclaw_restart(reason='x')", "[]"},
-		{attachFilesToolName, "rocketclaw_attach_files_to_response(attachments=[{'path': '', 'name': 'report.txt', 'mime_type': '', 'content': 'hello', 'content_base64': ''}])", "[queued attachments for final response: "},
+	// Each tool and each mode once: one wrapper refuses both tools, and only attach has a detached-work branch.
+	for _, tc := range []struct {
+		tool, call, done   string
+		background, nested bool
+	}{
+		{restartToolName, "rocketclaw_restart(reason='x')", "[]", false, false},
+		{restartToolName, "rocketclaw_restart(reason='x')", "[]", true, true},
+		{attachFilesToolName, "rocketclaw_attach_files_to_response(attachments=[{'path': '', 'name': 'report.txt', 'mime_type': '', 'content': 'hello', 'content_base64': ''}])", "[queued attachments for final response: ", true, false},
 	} {
-		for _, mode := range []struct{ background, nested bool }{{true, false}, {false, false}, {true, true}} {
-			background := mode.background
-			t.Run(fmt.Sprintf("%s/background=%t/nested=%t", tc.tool, background, mode.nested), func(t *testing.T) {
-				t.Parallel()
+		background := tc.background
+		t.Run(fmt.Sprintf("%s/background=%t/nested=%t", tc.tool, background, tc.nested), func(t *testing.T) {
+			t.Parallel()
 
-				// The task's delegation guardrail holds a background subagent's turn until its top-level turn ended;
-				// a foreground subagent's top-level turn waits for it. Nested, the background subagent, a lead,
-				// starts the researcher in the foreground.
-				rootDone, results := make(chan struct{}), make(chan string, 1)
-				if !background {
-					close(rootDone)
-				}
+			// The task's delegation guardrail holds a background subagent's turn until its top-level turn ended;
+			// a foreground subagent's top-level turn waits for it. Nested, the background subagent, a lead,
+			// starts the researcher in the foreground.
+			rootDone, results := make(chan struct{}), make(chan string, 1)
+			if !background {
+				close(rootDone)
+			}
 
-				nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
-					switch {
-					case strings.Contains(body, "Current Action: "):
-						select {
-						case <-rootDone:
-						case <-r.Context().Done():
-							return
-						}
-
-						writeRawRunMessage(t, w, "gate", "msg", `{"approved":true,"reason":""}`)
-					case strings.Contains(body, `"instructions":"Research`) && strings.Contains(body, "function_call_output"):
-						results <- body
-
-						writeRawRunMessage(t, w, "resp", "msg", "done")
-					case strings.Contains(body, `"instructions":"Research`):
-						writeRawRunFunctionCall(t, w, "act", "execute", struct {
-							Code string `json:"code"`
-						}{"def main():\n    return '[' + " + tc.call + " + ']'\n"})
-					case strings.Contains(body, `"instructions":"Lead`) && strings.Contains(body, "function_call_output"):
-						writeRawRunMessage(t, w, "lead", "msg", "led")
-					case strings.Contains(body, `"instructions":"Lead`):
-						writeRawRunFunctionCall(t, w, "lead", "task", map[string]any{"description": "act", "prompt": "act for me", "subagent_type": "researcher"})
-					case !strings.Contains(body, "function_call_output"):
-						writeRawRunFunctionCall(t, w, "resp", "task", map[string]any{"description": "act", "prompt": "act for me", "subagent_type": map[bool]string{false: "researcher", true: "lead"}[mode.nested], "background": background})
-					default:
-						answerNoteTest(w, r, n, body)
+			nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+				switch {
+				case strings.Contains(body, "Current Action: "):
+					select {
+					case <-rootDone:
+					case <-r.Context().Done():
+						return
 					}
-				})
-				writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
-				writeAgent(t, nt.cfg.Workspace, "lead", "---\ndescription: Lead\nmode: subagent\nmodel: gpt-6.1-sol\nguardrail: guard\npermission:\n  task: allow\n---\nLead\n")
-				writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\nguardrail: guard\npermission:\n  rocketclaw: {rocketclaw_restart: allow, rocketclaw_attach_files_to_response: allow}\n---\nResearch\n")
-				writeAgent(t, nt.cfg.Workspace, "guard", "---\ndescription: Guard\nmode: subagent\nmodel: gpt-6.1-sol\npermission: {}\n---\nGuard\n")
 
-				manager, _ := nt.run(t, ignoreOutbound)
-				require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)))
+					writeRawRunMessage(t, w, "gate", "msg", `{"approved":true,"reason":""}`)
+				case strings.Contains(body, `"instructions":"Research`) && strings.Contains(body, "function_call_output"):
+					results <- body
 
-				final := readFinalFor(t, nt.finals, nt.conversationID)
-				if background {
-					nt.waitIdle(t, manager, nt.conversationID)
-					close(rootDone)
+					writeRawRunMessage(t, w, "resp", "msg", "done")
+				case strings.Contains(body, `"instructions":"Research`):
+					writeRawRunFunctionCall(t, w, "act", "execute", struct {
+						Code string `json:"code"`
+					}{"def main():\n    return '[' + " + tc.call + " + ']'\n"})
+				case strings.Contains(body, `"instructions":"Lead`) && strings.Contains(body, "function_call_output"):
+					writeRawRunMessage(t, w, "lead", "msg", "led")
+				case strings.Contains(body, `"instructions":"Lead`):
+					writeRawRunFunctionCall(t, w, "lead", "task", map[string]any{"description": "act", "prompt": "act for me", "subagent_type": "researcher"})
+				case !strings.Contains(body, "function_call_output"):
+					writeRawRunFunctionCall(t, w, "resp", "task", map[string]any{"description": "act", "prompt": "act for me", "subagent_type": map[bool]string{false: "researcher", true: "lead"}[tc.nested], "background": background})
+				default:
+					answerNoteTest(w, r, n, body)
 				}
-
-				var body string
-
-				select {
-				case body = <-results:
-				case <-time.After(10 * time.Second):
-					t.Fatal("the subagent never called the tool")
-				}
-
-				if background {
-					assert.Contains(t, body, "["+fmt.Sprintf(refusal, tc.tool)+"]")
-					readFinalFor(t, nt.finals, nt.conversationID) // The job's note wakes the top-level session.
-				} else {
-					assert.Contains(t, body, tc.done)
-					assert.Len(t, final.Attachments, map[string]int{restartToolName: 0, attachFilesToolName: 1}[tc.tool], "a foreground subagent's file reaches its top-level turn's reply")
-				}
-
-				nt.waitIdle(t, manager, nt.conversationID)
 			})
-		}
+			writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
+			writeAgent(t, nt.cfg.Workspace, "lead", "---\ndescription: Lead\nmode: subagent\nmodel: gpt-6.1-sol\nguardrail: guard\npermission:\n  task: allow\n---\nLead\n")
+			writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\nguardrail: guard\npermission:\n  rocketclaw: {rocketclaw_restart: allow, rocketclaw_attach_files_to_response: allow}\n---\nResearch\n")
+			writeAgent(t, nt.cfg.Workspace, "guard", "---\ndescription: Guard\nmode: subagent\nmodel: gpt-6.1-sol\npermission: {}\n---\nGuard\n")
+
+			manager, _ := nt.run(t, ignoreOutbound)
+			require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)))
+
+			final := readFinalFor(t, nt.finals, nt.conversationID)
+			if background {
+				nt.waitIdle(t, manager, nt.conversationID)
+				close(rootDone)
+			}
+
+			var body string
+
+			select {
+			case body = <-results:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the subagent never called the tool")
+			}
+
+			if background {
+				assert.Contains(t, body, "["+fmt.Sprintf(refusal, tc.tool)+"]")
+				readFinalFor(t, nt.finals, nt.conversationID) // The job's note wakes the top-level session.
+			} else {
+				assert.Contains(t, body, tc.done)
+				assert.Len(t, final.Attachments, map[string]int{restartToolName: 0, attachFilesToolName: 1}[tc.tool], "a foreground subagent's file reaches its top-level turn's reply")
+			}
+
+			nt.waitIdle(t, manager, nt.conversationID)
+		})
 	}
 }
