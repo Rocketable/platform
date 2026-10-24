@@ -1152,9 +1152,13 @@ func (s *SessionService) ChatOriginFacts(ctx context.Context, id string) iter.Se
 		}
 		defer func() { _ = rows.Close() }()
 
+		dest := make([]any, 0, 11)
+
 		for rows.Next() {
 			var facts ChatOriginFacts
-			if err := scanChatOrigin(rows, &facts, &facts.ConversationID, &facts.CreatedBy); err != nil {
+
+			dest = append(dest[:0], &facts.ConversationID, &facts.CreatedBy)
+			if err := scanChatOrigin(rows, &facts, dest...); err != nil {
 				yield(ChatOriginFacts{}, fmt.Errorf("scan chat origin facts: %w", err))
 				return
 			}
@@ -1355,9 +1359,13 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			unread   sql.NullTime
 		)
 
+		dest := make([]any, 0, 31)
+
 		for rows.Next() {
 			var row SidebarSession
-			if err := scanChatOrigin(rows, &row.Origin, &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread); err != nil {
+
+			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread)
+			if err := scanChatOrigin(rows, &row.Origin, dest...); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
 			}

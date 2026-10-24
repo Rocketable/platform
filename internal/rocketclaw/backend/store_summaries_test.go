@@ -523,7 +523,7 @@ func TestSidebarSessionsPreviewAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkSidebarSessions)
 	require.Positive(t, result.N)
 	require.Less(t, result.AllocedBytesPerOp(), int64(7<<20))
-	require.Less(t, result.AllocsPerOp(), int64(1200)) // Includes race-detector overhead.
+	require.Less(t, result.AllocsPerOp(), int64(1080)) // Includes race-detector overhead.
 }
 
 func BenchmarkSidebarSessions(b *testing.B) {
