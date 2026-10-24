@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { applyPalette, PALETTE_KEY, PALETTES, parsePalette } from "./components/theme";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { applyPalette, PALETTE_KEY, PALETTES, PaletteChooser, parsePalette, ThemeToggle } from "./components/theme";
 
 test("parsePalette keeps a known theme and falls back", () => {
   expect(parsePalette("harbor")).toBe("harbor");
@@ -21,6 +23,16 @@ test("applyPalette writes the chosen theme onto the document", () => {
   expect(root.dataset.palette).toBe("ember");
   applyPalette(root, "neutral");
   expect(root.dataset.palette).toBe("neutral");
+});
+
+test("theme controls initially show system mode and the neutral palette", () => {
+  const mode = renderToStaticMarkup(createElement(ThemeToggle));
+  expect(mode).toMatch(/<button[^>]+aria-label="Theme system"/);
+  const palette = renderToStaticMarkup(createElement(PaletteChooser));
+  expect(palette).toMatch(/<button[^>]+role="combobox"/);
+  expect(palette).toMatch(/<button[^>]+aria-label="Color theme"/);
+  expect(palette).toMatch(/>Neutral</);
+  expect(palette).toMatch(/<input[^>]+value="neutral"/);
 });
 
 test("the page applies the same theme ids before paint", () => {
