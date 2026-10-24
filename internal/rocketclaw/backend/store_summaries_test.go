@@ -70,7 +70,8 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 func TestSessionSummaryHistoryAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkLoadSessionSummaryHistory)
 	require.Positive(t, result.N)
-	require.Less(t, result.AllocedBytesPerOp(), int64(12<<20))
+	// Reused buffers cost up to 12.1 MiB under CI's -race; copying them cost 17.8 MiB, or 20.1 MiB under -race.
+	require.Less(t, result.AllocedBytesPerOp(), int64(16<<20))
 }
 
 func BenchmarkLoadSessionSummaryHistory(b *testing.B) {

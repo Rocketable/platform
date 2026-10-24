@@ -12,7 +12,8 @@ import (
 func TestChatOriginFactsAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkChatOriginFacts)
 	require.Positive(t, result.N)
-	require.Less(t, result.AllocedBytesPerOp(), int64(6<<20))
+	// Decoding in place costs up to 6.0 MiB under CI's -race; copying first cost 7.4 MiB, or 8.4 MiB under -race.
+	require.Less(t, result.AllocedBytesPerOp(), int64(7<<20))
 }
 
 func BenchmarkChatOriginFacts(b *testing.B) {
