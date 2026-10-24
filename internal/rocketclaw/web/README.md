@@ -170,9 +170,10 @@ the choice is kept with the person's voice settings. Leaving the page hangs up, 
 still in progress; a conversation it already created stays.
 The screen stays awake while the Voice page is open or a call runs.
 
-Each session's composer has a voice button that starts and ends a call on that
-session. It is not dictation: nothing is typed into the composer. It is unavailable
-on New session until the conversation exists, and leaving the session ends its call.
+Each session's composer has a voice button, on every screen size, that starts and
+ends a call on that session. It is not dictation: nothing is typed into the composer.
+On New session it first creates the session with the shown agent, as the first send
+does, then calls on it. Leaving the session ends its call.
 
 A tab runs one call at a time, and each person has one live call: starting voice
 anywhere else, on any conversation, ends their older call with "Voice moved to another

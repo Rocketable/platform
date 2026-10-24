@@ -4127,6 +4127,28 @@ function SessionComposer({
   };
   const question = useQuestion(id, draft, refreshHistory, setSendError);
   const { placeholder, sendLabel } = composerLabels(question.pending, busy, id);
+  const goSession = (sessionId: string) => {
+    void draftContent(JSON.stringify([scope, ""]), { text: "", files: [], agent: "" }).catch(() => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; onDraftChange(); });
+    draft.sessionId = sessionId;
+    draft.persistenceKey = JSON.stringify([scope, sessionId]);
+    draft.persistedEdit = undefined;
+    drafts.set(sessionId, draft);
+    onDraftChange();
+  };
+  // A call from a new session creates it with the shown agent, as Send does.
+  const call = async (speaker: string) => {
+    let sessionId = draft.sessionId;
+    try {
+      if (sessionId === "") {
+        promote("/");
+        sessionId = await create.mutateAsync({ agent: selected });
+        goSession(sessionId);
+      }
+    } catch (err) {
+      return setSendError(err instanceof Error ? err.message : "create failed");
+    }
+    void startVoice(sessionId, speaker);
+  };
   const send = (delivery?: PromptDelivery) => {
     const command = /^\p{White_Space}*\$(fork|handoff|undo|redo)\p{White_Space}*$/u.exec(draft.text);
     if (delivery !== "STASH" && command) {
@@ -4151,14 +4173,7 @@ function SessionComposer({
       sessionId: draft.sessionId,
       selected,
       currentAgent,
-      goSession: (sessionId) => {
-        void draftContent(JSON.stringify([scope, ""]), { text: "", files: [], agent: "" }).catch(() => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; onDraftChange(); });
-        draft.sessionId = sessionId;
-        draft.persistenceKey = JSON.stringify([scope, sessionId]);
-        draft.persistedEdit = undefined;
-        drafts.set(sessionId, draft);
-        onDraftChange();
-      },
+      goSession,
       prompt,
       create,
       scrollToEnd,
@@ -4178,7 +4193,7 @@ function SessionComposer({
       <Composer
         files={files}
         setFiles={setFiles}
-        sending={[sending, draft.reverting, question.answering].some(Boolean)}
+        sending={[sending, draft.reverting, question.answering, create.isPending].some(Boolean)}
         messageInput={messageInput}
         historyCommand={(redo) => void revert.run(undefined, redo)}
         sessionId={id}
@@ -4200,6 +4215,7 @@ function SessionComposer({
         queued={queued}
         send={send}
         stop={stop}
+        call={call}
         steerQueued={promoteQueued}
         popQueued={(itemId) => popComposer({ draft, onDraftChange, id, itemId, selected, currentAgent, prompt, popQueueItem, setSendError })}
         removeQueued={(itemId) => void removeQueueItem.mutateAsync({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "remove failed"))}
@@ -4285,6 +4301,7 @@ function Composer({
   queued,
   send,
   stop,
+  call,
   steerQueued,
   popQueued,
   removeQueued,
@@ -4315,6 +4332,7 @@ function Composer({
   queued: QueueItem[];
   send: (delivery?: PromptDelivery) => Promise<void>;
   stop: () => Promise<void>;
+  call: (speaker: string) => Promise<void>;
   steerQueued: (id: string) => Promise<void>;
   popQueued: (id: string) => Promise<unknown>;
   removeQueued: (id: string) => void;
@@ -4429,7 +4447,7 @@ function Composer({
               </TooltipTrigger>
               <TooltipContent>Guide the current response <ModEnterKeys mac={mac} /></TooltipContent>
             </Tooltip>
-            <VoiceToggle sessionId={sessionId} />
+            <VoiceToggle sessionId={sessionId} agent={selected} sending={sending} call={call} />
             <Tooltip><TooltipTrigger render={<InputGroupButton size="icon-sm" variant="default" className="size-11 sm:-mr-0.5 sm:size-7" disabled={sending} />} aria-label={stopping ? "Stop" : "Send"} onClick={() => void (stopping ? stop() : send())}>
               {stopping ? <Square /> : <Send />}
             </TooltipTrigger><TooltipContent>{stopping ? "Stop response" : sendLabel}</TooltipContent></Tooltip>
@@ -4896,20 +4914,20 @@ function StickyToggle() {
   return <Button variant={sticky ? "default" : "outline"} size="icon" className="size-11 sm:size-8" aria-label="Sticky" aria-pressed={sticky} title="Sticky: reconnect after a lost connection until you hang up" onClick={() => setVoiceSticky(!sticky)}><Magnet /></Button>;
 }
 
-function VoiceToggle({ sessionId }: { sessionId: string }) {
+// VoiceToggle calls with the session's agent, or with agent when the session is new.
+function VoiceToggle({ sessionId, agent, sending, call }: { sessionId: string; agent: string; sending: boolean; call: (speaker: string) => Promise<void> }) {
   const route = useRoute();
   const { state, notice } = useOwnVoice(sessionId);
   const calling = state !== "idle" && state !== "error";
-  const choices = useQuery({ ...queries.agents({ conversationId: sessionId }), enabled: sessionId !== "" });
+  const choices = useQuery(queries.agents({ conversationId: sessionId }));
   const identity = useQuery(queries.identity());
   const settings = useQuery({ ...queries.voiceSettings(identity.data?.username ?? ""), enabled: identity.isSuccess });
-  const speaker = voiceChoice(choices.data?.agents.find((item) => item.name === choices.data?.currentAgent), settings.data?.voice);
+  const speaker = voiceChoice(choices.data?.agents.find((item) => item.name === (sessionId ? choices.data?.currentAgent : agent)), settings.data?.voice);
   // The session pane stays mounted on page routes, so leaving the session ends its call as unmounting does.
   useEffect(() => () => { if (voiceView().conversationId === sessionId) stopVoice(); }, [route.id, sessionId]);
-  // Phones talk on the Voice page: a narrow composer row has no room for another button.
   return <>
     <span aria-live="polite" title={notice} className="hidden max-w-48 truncate text-xs text-muted-foreground empty:absolute sm:inline">{notice}</span>
-    <Tooltip><TooltipTrigger render={<Button type="button" variant={calling ? "secondary" : "ghost"} size="icon" className="hidden sm:inline-flex sm:size-7" disabled={sessionId === ""} />} aria-label="Voice call" aria-pressed={calling} onClick={() => void (calling ? stopVoice() : startVoice(sessionId, speaker))}>
+    <Tooltip><TooltipTrigger render={<Button type="button" variant={calling ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-7" disabled={!calling && sending} />} aria-label="Voice call" aria-pressed={calling} onClick={() => void (calling ? stopVoice() : call(speaker))}>
       {state === "connecting" ? <LoaderCircle className="animate-spin" /> : calling ? <MicOff /> : <Mic />}
     </TooltipTrigger><TooltipContent>{calling ? `End voice call (${state})` : "Start voice call"}</TooltipContent></Tooltip>
   </>;
