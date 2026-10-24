@@ -113,6 +113,34 @@ func TestTurnObservationsPersistAfterChildCancellation(t *testing.T) {
 	}
 }
 
+func TestCodeModeCallString(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		record CodeModeCall
+		want   string
+	}{
+		{
+			name:   "running call",
+			record: CodeModeCall{ParentCallID: "exec-1", Name: "bash", Arguments: `{"command":"ls"}`, Status: codeModeCallRunning},
+			want:   `[exec-1] bash {"command":"ls"} -> running`,
+		},
+		{
+			name:   "failed call without review",
+			record: CodeModeCall{ParentCallID: "exec-2", Name: "read", Arguments: `{"path":"go.mod"}`, Status: codeModeCallError, Summary: "file not found"},
+			want:   `[exec-2] read {"path":"go.mod"} -> error: file not found`,
+		},
+		{
+			name:   "whole-script review",
+			record: CodeModeCall{ParentCallID: "exec-3", Arguments: `{"path":"secret"}`, Status: codeModeCallDenied, Summary: "not a call", Outcome: permissionReviewOutcomeDeny, Reason: "outside workspace"},
+			want:   "[exec-3] (approver deny: outside workspace)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, tc.record.String())
+		})
+	}
+}
+
 func TestPublicProgressTraceAllowlist(t *testing.T) {
 	traces := []json.RawMessage{
 		json.RawMessage(`{"type":"reasoning","text":"PRIVATE"}`),
