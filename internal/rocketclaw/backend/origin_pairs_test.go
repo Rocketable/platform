@@ -2,10 +2,52 @@ package backend
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestChatOriginFactsAllocationBudget(t *testing.T) {
+	result := testing.Benchmark(BenchmarkChatOriginFacts)
+	require.Positive(t, result.N)
+	require.Less(t, result.AllocedBytesPerOp(), int64(6<<20))
+}
+
+func BenchmarkChatOriginFacts(b *testing.B) {
+	store, err := NewSessionService(b.TempDir())
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, store.Stop()) })
+
+	values := make(map[string]string, 32)
+
+	for i := range 32 {
+		id := fmt.Sprintf("origin-%02d", i)
+		values[id] = strings.Repeat(id, 8192)
+		binding := ExternalMCPSessionState{PrivateConversationID: "private-" + id, ManagedConversationID: id, Agent: "helper", OriginPairs: map[string]string{"example": values[id]}}
+		require.NoError(b, store.RegisterExternalMCPConversation("external-"+id, "helper", &binding))
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		var rows []ChatOriginFacts
+
+		for facts, err := range store.ChatOriginFacts(b.Context(), "") {
+			require.NoError(b, err)
+
+			rows = append(rows, facts)
+		}
+
+		require.Len(b, rows, len(values))
+
+		for i := range rows {
+			facts := &rows[i]
+			require.Equal(b, map[string]string{"example": values[facts.ConversationID]}, facts.Binding.OriginPairs)
+		}
+	}
+}
 
 func TestExternalMCPOriginDetailsStayOutsideHistory(t *testing.T) {
 	t.Parallel()

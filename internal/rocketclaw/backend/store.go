@@ -1121,7 +1121,7 @@ const originColumns = `c.external, c.binding_agent, c.managed, c.pairs, c.creati
 // scanChatOrigin scans dest, then the origin facts chatOriginSQL reads after created_by, into facts.
 func scanChatOrigin(row rowScanner, facts *ChatOriginFacts, dest ...any) error {
 	var (
-		pairs []byte
+		pairs sql.RawBytes
 		run   protocol.CronRun
 		at    sql.NullInt64
 	)
