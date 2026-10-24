@@ -439,7 +439,8 @@ func TestObserveEntriesJSONAllocationBudget(t *testing.T) {
 	// Decoded entries own their JSON; the input conversion can reuse the row buffer.
 	result := testing.Benchmark(BenchmarkObserveEntries)
 	require.Positive(t, result.N)
-	require.Less(t, result.AllocedBytesPerOp(), int64(6<<20))
+	// 6.5 MiB. A reused buffer costs up to 5.8 MiB under CI's -race; a fresh one cost 6.9 MiB, or 7.9 MiB under -race.
+	require.Less(t, result.AllocedBytesPerOp(), int64(13<<19))
 }
 
 func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
