@@ -3,12 +3,14 @@ package backend
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -650,4 +652,122 @@ func openCodeCall(ctx context.Context, name string, server config.OpenCodeConfig
 	}
 
 	return nil
+}
+
+const openCodeAPIToolName = "opencode_api"
+
+// openCodeAPITool calls a configured OpenCode server's API as `opencode api` does. The opencode
+// permission, keyed by server name, decides which servers an agent may call and how.
+func openCodeAPITool(servers map[string]config.OpenCodeConfig) rocketcode.Tool {
+	names := slices.Sorted(maps.Keys(servers))
+	text := map[string]any{"type": "string"}
+
+	return rocketcode.Tool{Name: openCodeAPIToolName, Permission: "opencode", VisibilitySubjects: names,
+		Description: "Call a remote OpenCode server's HTTP API, as `opencode api` does. operation is an OpenAPI operation ID such as session.list, or a method and path such as GET /api/session; GET /openapi.json lists the operations. " +
+			"Each param fills the {name} path placeholder it names, otherwise it joins the query string, as location[directory] does to pick a project. body is the JSON request body, empty for none. " +
+			"Returns the response body, or the status when it is empty. Event streams are refused.",
+		Parameters: map[string]any{"properties": map[string]any{"server": map[string]any{"type": "string", "enum": names}, "operation": text, "body": text,
+			"params": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"name": text, "value": text}}}}},
+		Subjects: func(raw json.RawMessage) ([]string, error) {
+			var input struct {
+				Server string `json:"server"`
+			}
+			if err := json.Unmarshal(raw, &input); err != nil {
+				return nil, fmt.Errorf("parse %s: %w", openCodeAPIToolName, err)
+			}
+
+			return []string{input.Server}, nil
+		},
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+			var input struct {
+				Server    string `json:"server"`
+				Operation string `json:"operation"`
+				Params    []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"params"`
+				Body string `json:"body"`
+			}
+			if err := json.Unmarshal(raw, &input); err != nil {
+				return rocketcode.ToolResult{}, fmt.Errorf("parse %s: %w", openCodeAPIToolName, err)
+			}
+
+			server, ok := servers[input.Server]
+			if !ok {
+				return rocketcode.ToolResult{}, fmt.Errorf("opencode server %q is not configured", input.Server)
+			}
+
+			method, path, ok := strings.Cut(strings.TrimSpace(input.Operation), " ")
+			if !ok {
+				// Path items hold operations by method; OpenAPI also allows fields such as summary there.
+				var spec struct {
+					Paths map[string]map[string]any `json:"paths"`
+				}
+				if err := openCodeCall(ctx, input.Server, server, http.MethodGet, "/openapi.json", nil, &spec); err != nil {
+					return rocketcode.ToolResult{}, err
+				}
+
+				for template, operations := range spec.Paths {
+					for verb, operation := range operations {
+						if fields, _ := operation.(map[string]any); fields["operationId"] == input.Operation {
+							method, path = verb, template
+						}
+					}
+				}
+
+				if path == "" {
+					return rocketcode.ToolResult{}, fmt.Errorf("opencode server %q has no operation %q", input.Server, input.Operation)
+				}
+			}
+
+			// A path not starting with / would join the server's host and send its password elsewhere.
+			if !strings.HasPrefix(path, "/") {
+				return rocketcode.ToolResult{}, fmt.Errorf("path %q must start with /", path)
+			}
+
+			path, rawQuery, _ := strings.Cut(path, "?")
+
+			query, err := url.ParseQuery(rawQuery)
+			if err != nil {
+				return rocketcode.ToolResult{}, fmt.Errorf("parse opencode query: %w", err)
+			}
+
+			for _, param := range input.Params {
+				if placeholder := "{" + param.Name + "}"; strings.Contains(path, placeholder) {
+					path = strings.ReplaceAll(path, placeholder, url.PathEscape(param.Value))
+				} else {
+					query.Add(param.Name, param.Value)
+				}
+			}
+
+			request, err := http.NewRequestWithContext(ctx, strings.ToUpper(method), strings.TrimSuffix(server.URL, "/")+path+"?"+query.Encode(), strings.NewReader(input.Body))
+			if err != nil {
+				return rocketcode.ToolResult{}, fmt.Errorf("build opencode request: %w", err)
+			}
+
+			request.SetBasicAuth("opencode", server.Password)
+			request.Header.Set("Content-Type", "application/json")
+
+			response, err := http.DefaultClient.Do(request)
+			if err != nil {
+				return rocketcode.ToolResult{}, fmt.Errorf("call opencode %s: %w", input.Server, err)
+			}
+			defer func() { _ = response.Body.Close() }()
+
+			// An event stream never ends, so reading it would hold the call forever.
+			if strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+				return rocketcode.ToolResult{}, fmt.Errorf("opencode %s %s is an event stream, which %s cannot read", input.Server, path, openCodeAPIToolName)
+			}
+
+			data, err := io.ReadAll(response.Body)
+			if err != nil {
+				return rocketcode.ToolResult{}, fmt.Errorf("read opencode %s response: %w", input.Server, err)
+			}
+
+			if response.StatusCode/100 != 2 {
+				return rocketcode.ToolResult{}, fmt.Errorf("%w: %s", &openCodeError{Server: input.Server, Path: path, Status: response.StatusCode}, data)
+			}
+
+			return rocketcode.TextToolResult(cmp.Or(string(data), response.Status)), nil
+		}}
 }
