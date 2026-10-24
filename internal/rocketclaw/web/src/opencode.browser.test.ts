@@ -304,7 +304,7 @@ test("remote sessions list, tag, go offline, start, and keep the theme toggle cl
     await folder.press("Enter");
     await page.waitForURL(`${base}${route("opencode:box:ses_child")}`);
     await page.locator("main [data-oc-view]").getByText("answer in ses_child").waitFor();
-    expect(calls.filter(({ path }) => path === "/api/CreateSession").map(({ body }) => body)).toEqual([{ opencodeServer: "box", directory: "/srv/fresh" }, { opencodeServer: "box", directory: "/srv/fresh" }]);
+    expect(calls.filter(({ path }) => path === "/api/CreateSession").map(({ body }) => body)).toEqual([{ opencodeServer: "box", directory: "/srv/fresh", spaceId: "main" }, { opencodeServer: "box", directory: "/srv/fresh", spaceId: "main" }]);
 
     // OpenCode's New session, from inside the view, goes through RocketClaw: the session's own folder, a new tab.
     const view = page.locator("main [data-oc-view]");
@@ -316,7 +316,7 @@ test("remote sessions list, tag, go offline, start, and keep the theme toggle cl
     await palette.locator(".command-palette-row", { hasText: "New session" }).first().click();
     await page.waitForURL(`${base}${route("opencode:box:ses_child")}`);
     await view.getByText("answer in ses_child").waitFor();
-    expect(calls.filter(({ path }) => path === "/api/CreateSession").map(({ body }) => body).slice(2)).toEqual([{ opencodeServer: "box", directory: "/repo" }]);
+    expect(calls.filter(({ path }) => path === "/api/CreateSession").map(({ body }) => body).slice(2)).toEqual([{ opencodeServer: "box", directory: "/repo", spaceId: "main" }]);
 
     // Pressing New session again while the first is still being created starts one session, not two.
     const created = () => calls.filter(({ path }) => path === "/api/CreateSession").length;

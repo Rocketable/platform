@@ -72,7 +72,10 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			return listener.DialContext(ctx)
 		}))
-	httpServer := &http.Server{Handler: rpc.NewHTTPHandler(connection, cfg.Web.Sentry, cfg.OpenCode, serverName(cfg)), TLSConfig: &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}}
+	handler := http.NewServeMux()
+	handler.Handle("/", rpc.NewHTTPHandler(connection, cfg.Web.Sentry, cfg.OpenCode, serverName(cfg)))
+	handler.Handle("/opencode/{name}/mcp", http.NewCrossOriginProtection().Handler(rt.OpenCodeMCP()))
+	httpServer := &http.Server{Handler: handler, TLSConfig: &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}}
 	server := grpc.NewServer()
 	web := rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs)
 	web.Register(server)

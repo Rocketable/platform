@@ -77,7 +77,10 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	server := New(&mockBackend{}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{})
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
-	created, err := server.createSession(ctx, &CreateSessionRequest{OpencodeServer: "box", Directory: "/srv/app"})
+	spaces, err := sessions.Spaces(t.Context())
+	require.NoError(t, err)
+
+	created, err := server.createSession(ctx, &CreateSessionRequest{OpencodeServer: "box", Directory: "/srv/app", SpaceId: spaces[0].ID})
 	require.NoError(t, err)
 	assert.Equal(t, "opencode:box:ses_new", created.Id)
 
@@ -129,6 +132,7 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, "box", rows[0].GetServer())
 	assert.Equal(t, "/srv/app", rows[0].GetDirectory())
+	assert.Equal(t, spaces[0].ID, rows[0].GetSpaceId(), "a remote session is born in the space the person was in")
 	assert.Equal(t, []string{"billing"}, rows[0].GetTags())
 	assert.Equal(t, "Renamed", rows[0].GetPreview(), "a remote row carries its title as its preview")
 	assert.Equal(t, "Renamed", rows[0].GetName(), "the name is the server title")
@@ -146,8 +150,10 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "msg_boundary", boundary)
 	assert.Equal(t, "opencode:box:ses_fork", forked.Id)
-	spaces, err := sessions.Spaces(t.Context())
-	require.NoError(t, err)
+
+	var forkSpace string
+	require.NoError(t, openTestTurns(t, dsn).db.QueryRowContext(t.Context(), `SELECT space_id FROM conversations WHERE conversation_id = $1`, forked.Id).Scan(&forkSpace))
+	assert.Equal(t, spaces[0].ID, forkSpace, "a fork is born in its source's space")
 
 	path := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte(forked.Id))
 	saved, err := sessions.SaveTabState(t.Context(), "alice", &backend.TabState{Space: spaces[0].ID, Tabs: []backend.Tab{{Path: path, Space: spaces[0].ID}}}, 0)

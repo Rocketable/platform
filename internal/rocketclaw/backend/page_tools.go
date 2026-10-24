@@ -44,7 +44,8 @@ function readData(key) {
 Pages only read data; they cannot write it or read another agent's.`
 
 // pageTools builds the Hosted Page tools acting on agent's files and Page Data, linked under its space.
-func pageTools(sessions *SessionService, root *os.Root, threads *threadBridgeManager, agent, space string) []rocketcode.Tool {
+// Pages they store belong to conversation when it is set, so they go with that session.
+func pageTools(sessions *SessionService, root *os.Root, threads *threadBridgeManager, agent, space, conversation string) []rocketcode.Tool {
 	pageURL := func(ctx context.Context, name string) (string, error) {
 		origin, err := threads.webOrigin(ctx)
 		if err != nil {
@@ -56,7 +57,8 @@ func pageTools(sessions *SessionService, root *os.Root, threads *threadBridgeMan
 			segments[i] = url.PathEscape(segments[i])
 		}
 
-		return origin + "/pages/" + url.PathEscape(cmp.Or(space, "-")) + "/" + url.PathEscape(agent) + "/" + strings.Join(segments, "/"), nil
+		// The Web escapes the ":" of a session owner too, so both links open one tab.
+		return origin + "/pages/" + url.PathEscape(cmp.Or(space, "-")) + "/" + strings.ReplaceAll(url.PathEscape(agent), ":", "%3A") + "/" + strings.Join(segments, "/"), nil
 	}
 	put := func(ctx context.Context, kind PageKind, name, contentType string, body []byte) error {
 		if !fs.ValidPath(name) || name == "." {
@@ -67,7 +69,7 @@ func pageTools(sessions *SessionService, root *os.Root, threads *threadBridgeMan
 			return fmt.Errorf("page %s %q is %d bytes, over the 10 MiB limit", kind, name, len(body))
 		}
 
-		return sessions.PutPage(ctx, &Page{Agent: agent, Kind: kind, Name: name, ContentType: contentType, Body: body})
+		return sessions.PutPage(ctx, &Page{Agent: agent, Kind: kind, Name: name, ContentType: contentType, Body: body, Conversation: conversation})
 	}
 	get := func(ctx context.Context, kind PageKind, name string) (Page, error) {
 		page, ok, err := sessions.Page(ctx, agent, kind, name)
@@ -181,7 +183,8 @@ func pageTools(sessions *SessionService, root *os.Root, threads *threadBridgeMan
 				Keys  []key  `json:"keys"`
 			}{Files: []file{}, Keys: []key{}}
 
-			for _, page := range pages {
+			for i := range pages {
+				page := &pages[i]
 				if page.Kind == PageData {
 					out.Keys = append(out.Keys, key{Key: page.Name, Size: page.Size, UpdatedAt: page.UpdatedAt})
 					continue

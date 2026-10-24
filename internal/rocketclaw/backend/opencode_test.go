@@ -527,7 +527,7 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
-	id, err := s.CreateOpenCodeSession(ctx, "box", box, "/srv/app")
+	id, err := s.CreateOpenCodeSession(ctx, "box", box, "/srv/app", "")
 	require.NoError(t, err)
 
 	unread := func(username string) []string {
@@ -834,7 +834,7 @@ func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
 		box := config.OpenCodeConfig{URL: url, Password: "pw"}
 		require.Error(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}), url)
 
-		_, err := s.CreateOpenCodeSession(ctx, "box", box, "/srv")
+		_, err := s.CreateOpenCodeSession(ctx, "box", box, "/srv", "")
 		require.Error(t, err, url)
 	}
 
@@ -903,14 +903,20 @@ func TestSearchSessionsFiltersByServerAgentAndModel(t *testing.T) {
 	}
 }
 
+// A created session is listed at once in the space it was created in. An unknown space records
+// none; recording the session again fills a missing space, and later syncs keep it.
 func TestCreateOpenCodeSessionListsItAtOnce(t *testing.T) {
-	fake := &fakeOpenCode{}
+	fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", 5000)}}
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
 
 	s := newOpenCodeTestService(t, "box")
+	ctx := t.Context()
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
+	spaces, err := s.Spaces(ctx)
+	require.NoError(t, err)
 
-	id, err := s.CreateOpenCodeSession(t.Context(), "box", config.OpenCodeConfig{URL: server.URL, Password: "pw"}, "/srv/app")
+	id, err := s.CreateOpenCodeSession(ctx, "box", box, "/srv/app", "no-such-space")
 	require.NoError(t, err)
 	assert.Equal(t, "opencode:box:ses_new", id)
 	assert.Equal(t, []string{"/srv/app"}, fake.created)
@@ -918,6 +924,48 @@ func TestCreateOpenCodeSessionListsItAtOnce(t *testing.T) {
 	rows := remoteSidebar(t, s)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "/srv/app", rows[0].Directory)
+	assert.Empty(t, rows[0].SpaceID)
+
+	_, err = s.CreateOpenCodeSession(ctx, "box", box, "/srv/app", spaces[0].ID)
+	require.NoError(t, err)
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	assert.Equal(t, spaces[0].ID, remoteSidebar(t, s)[0].SpaceID)
+}
+
+// A page an OpenCode session owns reads back in the session's space, and goes with the session
+// when sync no longer finds it; a session RocketClaw does not list owns nothing.
+func TestOpenCodeSessionPagesGoWithTheirSession(t *testing.T) {
+	s := newOpenCodeTestService(t, "box")
+	ctx := t.Context()
+	fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "", "/srv", 2000), openCodeTestSession("ses_b", "", "/srv", 1000)}}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	_, err := s.db.ExecContext(ctx, `WITH space AS (INSERT INTO web_spaces (name) VALUES ('Billing') RETURNING id)
+UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_id = 'opencode:box:ses_a'`)
+	require.NoError(t, err)
+
+	for _, page := range []Page{{Agent: "opencode:box:ses_a", Kind: PageFile, Name: "index.html"}, {Agent: "opencode:box:ses_a", Kind: PageData, Name: "rows"}, {Agent: "opencode:box:ses_b", Kind: PageFile, Name: "index.html"}} {
+		page.Conversation, page.ContentType, page.Body = page.Agent, "text/html", []byte("1")
+		require.NoError(t, s.PutPage(ctx, &page))
+	}
+
+	page, found, err := s.Page(ctx, "opencode:box:ses_a", PageFile, "index.html")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "Billing", page.Space)
+	require.Error(t, s.PutPage(ctx, &Page{Agent: "opencode:box:ses_x", Kind: PageFile, Name: "index.html", Conversation: "opencode:box:ses_x"}))
+
+	fake.sessions = fake.sessions[1:]
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+
+	pages, err := s.Pages(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, pages, 1)
+	assert.Equal(t, "opencode:box:ses_b", pages[0].Conversation)
 }
 
 func TestSidebarHidesUnconfiguredOpenCodeServers(t *testing.T) {

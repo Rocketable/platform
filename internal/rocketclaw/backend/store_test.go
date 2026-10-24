@@ -2379,8 +2379,23 @@ func TestWebSpaces(t *testing.T) {
 	assert.Equal(t, ops.ID, birth("ops-1", "Operations"))
 	assert.Empty(t, birth("none", ""), "no name, no birth space")
 
+	// OpenCode sessions' pages go with the space they live in; other spaces' stay.
+	_, err := store.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session, space_id)
+VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), 'ses_b', $1),
+    ('opencode:box:ses_o', '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), 'ses_o', $2)`, banana, ops.ID)
+	require.NoError(t, err)
+
+	for _, owner := range []string{"opencode:box:ses_b", "opencode:box:ses_o"} {
+		require.NoError(t, store.PutPage(ctx, &Page{Agent: owner, Kind: PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("x"), Conversation: owner}))
+	}
+
 	require.NoError(t, store.DeleteSpace(ctx, banana))
 	assert.Empty(t, birth("banana-1", "Banana"), "deleting a space clears the birth space of sessions born there; an existing session never recreates it")
+
+	pages, err := store.Pages(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, pages, 1)
+	assert.Equal(t, "opencode:box:ses_o", pages[0].Agent)
 
 	// Deleting the last space waits for a delete of the only other space in flight, then refuses: the last space stays.
 	tx, err := store.db.BeginTx(ctx, nil)

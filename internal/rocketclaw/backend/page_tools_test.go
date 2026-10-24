@@ -50,13 +50,13 @@ func TestPageTools(t *testing.T) {
 		return out
 	}
 
-	reporter := pageTools(store, root, threads, "reporter", "Billing")
+	reporter := pageTools(store, root, threads, "reporter", "Billing", "")
 	for agent, want := range map[string]string{"reporter": "https://rc.example/pages/Billing/reporter/dashboard/index.html", "main": "https://rc.example/pages/-/main/dashboard/index.html", "main/review": "https://rc.example/pages/-/main%2Freview/dashboard/index.html"} {
-		tools := pageTools(store, root, threads, agent, map[string]string{"reporter": "Billing"}[agent])
+		tools := pageTools(store, root, threads, agent, map[string]string{"reporter": "Billing"}[agent], "")
 		require.Equal(t, want, must(tools, "rocketclaw_store", map[string]string{"path": "dashboard/index.html", "content": "<p>" + agent + "</p>"}))
 	}
 
-	team := pageTools(store, root, threads, "reporter", "Billing Team")
+	team := pageTools(store, root, threads, "reporter", "Billing Team", "")
 	require.Equal(t, "https://rc.example/pages/Billing%20Team/reporter/a%20b/c.html", must(team, "rocketclaw_store", map[string]string{"path": "a b/c.html", "content": "x"}))
 
 	require.Equal(t, "https://rc.example/pages/Billing/reporter/chart.js", must(reporter, "rocketclaw_store", map[string]string{"path": "chart.js", "source": "chart.js"}))
@@ -104,7 +104,7 @@ func TestPageTools(t *testing.T) {
 	require.Len(t, listed.Keys, 1)
 
 	// Tools for main see only main's files, never main/review's (AE7).
-	mainTools := pageTools(store, root, threads, "main", "")
+	mainTools := pageTools(store, root, threads, "main", "", "")
 	require.NoError(t, json.Unmarshal([]byte(must(mainTools, "rocketclaw_list", struct{}{})), &listed))
 	require.Len(t, listed.Files, 1)
 	require.Empty(t, listed.Keys)

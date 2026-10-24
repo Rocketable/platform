@@ -473,6 +473,13 @@ OpenCode moves to the server at the first sync the server accepts it.
 Remote forks use `ForkSession`, which records the new session before returning,
 just as `CreateSession` does. Their tabs can save without waiting for a sync.
 
+Each `opencode` server's MCP bridge is served at `/opencode/<name>/mcp` on both
+listeners, outside this proxy. It answers coding servers, not browsers: the tailnet
+handler lets that path alone through without a Tailscale user, and the bridge takes
+HTTP Basic `opencode:<password>` with the server's password. Each tool call acts on
+the RocketClaw copy of the session its `_meta["ai.opencode/sessionID"]` names, or of
+its nearest listed ancestor, and is refused when there is none.
+
 Phones get the secure page that voice needs from the `web.tsnet` listener (see the
 root README for setup). There, a wrapping handler asks the node's `LocalClient().WhoIs`
 about the connection's remote address and refuses tagged or unknown callers. It
