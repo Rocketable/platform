@@ -101,7 +101,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
         if (input.id === "created" && failFirstTurn) return Response.json({ message: "First turn failed", code: 13 }, { status: 500 });
         return Response.json({ privateText: "" });
       }
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
@@ -535,7 +535,7 @@ test("handoff hits and queued items format tags and markup", async () => {
       case "/api/ListQueue": return Response.json({ items: input.id === "dest" ? [{ id: "q1", text: marked, delivery: "QUEUE" }] : [] });
       case "/api/Handoff": return Response.json({ document: "doc" });
       case "/api/SearchMessages": return Response.json({ matches: [{ conversationId: "dest", message: message("2:0", "user", marked) }] });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });

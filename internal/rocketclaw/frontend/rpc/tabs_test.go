@@ -65,11 +65,10 @@ func TestTabs(t *testing.T) {
 
 	// /search is the ops space's last tab, though closed.
 	saved := &TabState{
-		Tabs:      []*Tab{{Path: "/", Space: "main"}, {Path: "/s/YQ", Pinned: true, Group: "g", Space: "main"}, {Path: "/s/Yg", Preview: true, Space: "ops"}},
-		Groups:    []*TabGroup{{Id: "g", Name: "Work", Color: "Blue", Collapsed: true}},
-		Space:     "main",
-		Last:      map[string]string{"main": "/s/YQ", "ops": "/search"},
-		Placement: TabPlacement_LEFT,
+		Tabs:   []*Tab{{Path: "/", Space: "main"}, {Path: "/s/YQ", Pinned: true, Group: "g", Space: "main"}, {Path: "/s/Yg", Preview: true, Space: "ops"}},
+		Groups: []*TabGroup{{Id: "g", Name: "Work", Color: "Blue", Collapsed: true}},
+		Space:  "main",
+		Last:   map[string]string{"main": "/s/YQ", "ops": "/search"},
 	}
 	response, err := call("127.0.0.1", &TabsRequest{State: saved})
 	require.NoError(t, err)

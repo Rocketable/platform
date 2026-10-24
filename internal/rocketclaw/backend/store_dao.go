@@ -355,14 +355,13 @@ type TabGroup struct {
 	Collapsed       bool
 }
 
-// TabState is one person's Web tabs and groups in strip order, the space they are in, the last
-// active tab of each space by space id, and the strip's placement, TOP or LEFT.
+// TabState is one person's Web tabs and groups in strip order, the space they are in, and the last
+// active tab of each space by space id.
 type TabState struct {
-	Tabs      []Tab
-	Groups    []TabGroup
-	Space     string
-	Last      map[string]string
-	Placement string
+	Tabs   []Tab
+	Groups []TabGroup
+	Space  string
+	Last   map[string]string
 }
 
 // tabPathSQL is conversation c's Web tab path, as the Web's rowPath and encodeSessionId spell it.
@@ -405,7 +404,7 @@ func (s *SessionService) TabState(ctx context.Context, username string) (TabStat
 		revision int64
 	)
 
-	err = tx.QueryRowContext(ctx, `SELECT space, placement, revision FROM web_tab_states WHERE username = $1`, username).Scan(&state.Space, &state.Placement, &revision)
+	err = tx.QueryRowContext(ctx, `SELECT space, revision FROM web_tab_states WHERE username = $1`, username).Scan(&state.Space, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TabState{}, 0, nil
 	}
@@ -460,9 +459,9 @@ func (s *SessionService) SaveTabState(ctx context.Context, username string, stat
 
 	defer func() { _ = tx.Rollback() }()
 
-	if claimed, err := execRows(ctx, tx, "save tab state", "count saved tab state", `INSERT INTO web_tab_states (username, space, placement, revision) VALUES ($1, $2, $3, $4 + 1)
-ON CONFLICT (username) DO UPDATE SET space = excluded.space, placement = excluded.placement, revision = excluded.revision
-WHERE web_tab_states.revision = $4`, username, state.Space, state.Placement, revision); err != nil || claimed == 0 {
+	if claimed, err := execRows(ctx, tx, "save tab state", "count saved tab state", `INSERT INTO web_tab_states (username, space, revision) VALUES ($1, $2, $3 + 1)
+ON CONFLICT (username) DO UPDATE SET space = excluded.space, revision = excluded.revision
+WHERE web_tab_states.revision = $3`, username, state.Space, revision); err != nil || claimed == 0 {
 		return false, err
 	}
 

@@ -417,13 +417,11 @@ active tab.
   as a permanent tab. Sending the first message from New session turns that tab
   into the new session's tab.
 - **Pinned tabs** are browser-only (unlike **Pin session**, which is shared and
-  orders search). They stay first, show only their icon on top placement, show a
-  pin where the close button would be, and survive Close others, Close to the
+  orders search). They stay first, show a pin where the close button would be, and survive Close others, Close to the
   right, and Close all.
 - **Context menu.** Right-click a tab, press Shift+F10 or the menu key on a focused
   tab, or use the **…** button on the active tab (for touch) to reach Close,
-  Close others, Close to the right, Close all, Pin/Unpin, and Move tabs to
-  left/top. Session tabs also offer **Rename session**, which edits the name in
+  Close others, Close to the right, Close all, and Pin/Unpin. Session tabs also offer **Rename session**, which edits the name in
   the tab itself: Enter or clicking away saves and Escape cancels. A blank name
   shows the last message again for RocketClaw sessions; for remote sessions, it
   clears the OpenCode title too. The command palette offers the same commands as
@@ -437,8 +435,8 @@ active tab.
   Activating another tab, a plain click on the active one, or Escape on a focused
   tab drops the selection. Selected tabs are highlighted, and screen readers hear
   “In selection” in their description.
-- **Width and full names.** Top tabs fit their title up to 20rem, then truncate.
-  Hovering a tab shows its full title in a tooltip; while it shows, the first
+- **Full names.** A title longer than the sidebar truncates. Hovering a tab
+  shows its full title in a tooltip; while it shows, the first
   Escape dismisses it.
 - **New session.** Double-clicking empty space in the strip opens New session,
   like the New session button.
@@ -486,8 +484,8 @@ active tab.
   or expands the group. Right-click, Shift+F10, or the header's **…** button opens
   the editor: name (saved on Enter or leaving the field), nine colors, **New tab
   in group** (moves New session into the group, or opens it there), **Ungroup**,
-  and **Close group**, which closes the members by the usual close rules. On the
-  left, members sit under the header behind a colored rule; on top, they get a colored underline. A tab opened while
+  and **Close group**, which closes the members by the usual close rules. Members
+  sit under the header behind a colored rule. A tab opened while
   a grouped tab is active joins that group. Pinned tabs are never grouped:
   pinning a tab removes it from its group. A collapsed group still shows its
   active tab, and activating any hidden tab, including with Cmd/Ctrl+[ and ],
@@ -496,7 +494,7 @@ active tab.
 - **Spaces.** Spaces are shared by everyone: the server keeps one list, oldest
   first, starting with **Main**, and names are unique ignoring case. Every tab,
   pinned or not, belongs to one space, and the strip shows only the current
-  space's tabs. The space button at the start of the strip names the current
+  space's tabs. The space button at the top of the strip names the current
   space; its menu lists the spaces to switch to and offers **New space**,
   **Rename space**, and **Delete space**, which change the space for everyone.
   A new space takes the first free "Space N" name and is then named in place of
@@ -539,16 +537,15 @@ active tab.
   intact, to the first space. **New tab in group** brings New session into the
   group's space as well as the group.
 - **Running turns** make the tab's title shimmer with a moving gradient, so the
-  title stays in place. A pinned top-strip tab, which has no title, shimmers its
-  icon instead. With reduced motion the title or icon shows a still gradient
+  title stays in place. With reduced motion the title shows a still gradient
   that fades toward its end. Screen readers hear “Turn running” in the tab's
   description.
 - **Background work** that can wake an idle session swaps the tab's chat icon for an
   hourglass: a running Background Job, its own or that of a hidden run reporting to it, or a
   remote OpenCode session's running child session (a background subagent) or shell command.
   A running turn keeps the chat icon. Screen readers hear “Background work running”.
-- **Unread** sessions show a bold title and a thin bar along the tab's top edge;
-  a pinned top-strip tab shows the bar. A session becomes unread for you when a
+- **Unread** sessions show a bold title and a thin bar along the tab's top edge.
+  A session becomes unread for you when a
   turn ends, finished, failed, or stopped, that holds a message you sent from the
   Web, unless you had its tab in view in the last 10 seconds. Other people's
   turns, Slack mentions, crons, an agent waking on its own, and remote OpenCode
@@ -558,22 +555,21 @@ active tab.
   tab for the session, even while that tab is closed, so it waits for you after a
   reload or on another device. Screen readers hear
   “Unread” in the tab's description.
-- **Keyboard.** The strip is a `tablist` with one Tab stop. Arrow keys (Left/Right
-  or Up/Down), Home, and End move focus; Enter or Space activates. Anywhere in
+- **Keyboard.** The strip is a vertical `tablist` with one Tab stop. Arrow keys (Up/Down
+  or Left/Right), Home, and End move focus; Enter or Space activates. Anywhere in
   the app, Cmd/Ctrl+[ and Cmd/Ctrl+] activate the previous and next tab, wrapping
   at the ends. This replaces the browser's Back/Forward for those keys.
-- **Placement.** Tabs sit on top by default or in a 14rem sidebar on the left. Switch
-  from **Settings → Appearance → Tabs**, the context menu, or the palette. Below the `md` breakpoint, the left
-  sidebar is a drawer: the **Show sidebar** button at the top left or a swipe right opens it, and picking a tab,
-  tapping outside, Escape, or a swipe left closes it. A swipe that starts on a text field, a slider, or something
-  that scrolls sideways is left to that element. The top strip scrolls horizontally; a mouse wheel scrolls it sideways.
-- **Left sidebar.** Drag its right edge, or focus the edge and press Left/Right, to
-  resize it; the width is kept in this browser. The footer's **Hide sidebar** button
-  or Cmd/Ctrl+B hides and shows it until the next reload.
+- **Sidebar.** Tabs sit in a 14rem sidebar on the left. Drag its right edge, or
+  focus the edge and press Left/Right, to resize it; the width is kept in this
+  browser. The footer's **Hide sidebar** button or Cmd/Ctrl+B hides and shows it
+  until the next reload. Below the `md` breakpoint, the sidebar is a drawer: the
+  **Show sidebar** button at the top left or a swipe right opens it, and picking a
+  tab, tapping outside, Escape, or a swipe left closes it. A swipe that starts on
+  a text field, a slider, or something that scrolls sideways is left to that element.
 - **Storage.** The server keeps each person's tabs, so they follow you to every
   device: open tabs, their order, pins, the preview flag, each tab's group and
-  space, the groups' names, colors, and collapsed state, the current space, each
-  space's last active tab, and the placement. Each change saves the whole state,
+  space, the groups' names, colors, and collapsed state, the current space, and each
+  space's last active tab. Each change saves the whole state,
   one save at a time. A save made from tabs older than another window's save is
   refused; the window then merges in that newer save, keeping what it opened,
   closed, or changed itself, and saves again, so neither window's changes are
@@ -743,7 +739,7 @@ Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
 **Sessions: New**, **Sessions: Search**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
 **List Agents**, **List Skills**, **Settings**, **Tabs: Previous**, **Tabs: Next**,
 and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
-works (tabs in the desktop left sidebar). In both palettes a command bound to a
+works (the desktop sidebar, not the narrow-screen drawer). In both palettes a command bound to a
 key shows it on the right of its row, OpenCode style: **⌘ Option N** on Mac or
 **Ctrl Alt N** elsewhere for **Sessions: New**, **⌘ [** and **⌘ ]** for the tab
 commands, and **⌘ B** for the sidebar toggle. Unbound commands have no shortcut

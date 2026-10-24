@@ -48,7 +48,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
         }
         return Response.json({ ...base, ...live, messages: input.revision ? [] : range(11, 60).flatMap(entry), revision: "tail", reset: !input.revision, entryKeys: range(11, 60).map(String), running: true, start: "11", more: true });
       }
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });

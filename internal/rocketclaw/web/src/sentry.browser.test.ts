@@ -76,7 +76,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     if (url.pathname === "/api/ListSkills") return Response.json({ skills: breakReact ? "invalid rows" : [] }); // Force a real React render failure.
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
     if (url.pathname === "/api/History") return Response.json({ messages: [{ role: "assistant", text: "private-chat-text", entryKey: "entry", itemId: "item", inputId: "", turnId: "turn", complete: true }], entryKeys: ["entry"], replacedKeys: [], removedKeys: [], revision: "one", reset: true, running: false, delegations: [] });
-    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));
     if (await file.exists()) return new Response(file);

@@ -88,7 +88,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
     }
     // Tabs answers with each person's last saved state, as the server does, so a reload keeps the page's own tab.
     if (url.pathname === "/api/Tabs") {
-      tabs[username] = (await request.json() as { state?: object }).state ?? tabs[username] ?? { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" };
+      tabs[username] = (await request.json() as { state?: object }).state ?? tabs[username] ?? { tabs: [], groups: [], space: "main", last: {} };
       return Response.json({ spaces: [{ id: "main", name: "Main" }], state: tabs[username] });
     }
     if (url.pathname.startsWith("/api/")) return Response.json({});

@@ -51,7 +51,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 
 	if err == nil && !saved {
 		state, response.Revision, err = s.sessions.TabState(ctx, username)
-		response.State = &TabState{Space: state.Space, Last: state.Last, Placement: TabPlacement(TabPlacement_value[state.Placement])}
+		response.State = &TabState{Space: state.Space, Last: state.Last}
 
 		for _, tab := range state.Tabs {
 			response.State.Tabs = append(response.State.Tabs, &Tab{Path: tab.Path, Pinned: tab.Pinned, Preview: tab.Preview, Group: tab.Group, Space: tab.Space})
@@ -75,7 +75,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 
 // savedTabState is state as the backend saves it.
 func savedTabState(state *TabState) *backend.TabState {
-	saved := &backend.TabState{Space: state.Space, Last: state.Last, Placement: state.Placement.String()}
+	saved := &backend.TabState{Space: state.Space, Last: state.Last}
 	for _, tab := range state.Tabs {
 		saved.Tabs = append(saved.Tabs, backend.Tab{Path: tab.Path, Pinned: tab.Pinned, Preview: tab.Preview, Group: tab.Group, Space: tab.Space})
 	}

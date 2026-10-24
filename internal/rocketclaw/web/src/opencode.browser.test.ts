@@ -14,7 +14,7 @@ const route = (id: string) => `/oc/${encode(id)}`;
 const box = "http://box.test:4096";
 
 // A RocketClaw Web serving the built view at /oc-ui/ and the fake OpenCode server behind /oc/box/api/.
-function start(placement: "TOP" | "LEFT") {
+function start() {
   reset();
   const rows: Session[] = [
     { id: "opencode:box:ses_a", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_a", preview: "Alpha work", server: "box", directory: "/repo", updatedAt: new Date().toISOString() },
@@ -71,7 +71,7 @@ function start(placement: "TOP" | "LEFT") {
         const body: { data: { id: string } } = await forked.json();
         return Response.json({ id: `opencode:box:${body.data.id}` });
       }
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), preview: true, space: "main" }], groups: [], space: "main", last: {}, placement } });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), preview: true, space: "main" }], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
@@ -88,7 +88,7 @@ async function until(check: () => boolean | Promise<boolean>) {
 
 test("a remote session mounts OpenCode's view in the page, with RocketClaw's keys, commands, and tabs around it", async () => {
   const { chromium: engine } = await import(playwright!);
-  const { web, calls, release, terminals, base } = start("TOP");
+  const { web, calls, release, terminals, base } = start();
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, permissions: ["clipboard-read", "clipboard-write"] });
@@ -233,7 +233,7 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
 
 test("remote sessions list, tag, go offline, start, and keep the theme toggle clear of the view", async () => {
   const { chromium: engine } = await import(playwright!);
-  const { web, calls, release, creates, entryFailures, base } = start("LEFT");
+  const { web, calls, release, creates, entryFailures, base } = start();
   release();
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
@@ -241,7 +241,7 @@ test("remote sessions list, tag, go offline, start, and keep the theme toggle cl
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
 
-    // With vertical tabs, RocketClaw's fixed theme toggle does not cover the view's review toggle.
+    // RocketClaw's fixed theme toggle does not cover the view's review toggle.
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     const review = page.locator("main [data-oc-view] [data-slot=session-review-toggle]");
     await review.waitFor();

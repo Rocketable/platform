@@ -673,18 +673,15 @@ message TabGroup {
   bool collapsed = 4;
 }
 
-enum TabPlacement {
-  TOP = 0;
-  LEFT = 1;
-}
-
 // TabState is one person's Web tabs and groups, the space they are in, and the last tab of each space by space id.
 message TabState {
+  reserved 5;
+  reserved "placement";
+
   repeated Tab tabs = 1;
   repeated TabGroup groups = 2;
   string space = 3;
   map<string, string> last = 4;
-  TabPlacement placement = 5;
 }
 
 // TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space.

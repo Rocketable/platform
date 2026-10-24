@@ -40,7 +40,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web quest
         return Response.json({});
       }
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], pendingQuestions: input.id === "chat" ? questions : [], messages: [], revision: questions.map((asked) => asked.id).join(), reset: true, entryKeys: [], running: input.id === "chat", start: "0", more: false });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
