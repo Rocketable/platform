@@ -227,6 +227,7 @@ func TestHandlerProxiesMountedBasePath(t *testing.T) {
 			t.Fatalf("backend request URI = %q; want /service/webhook?event=ping", r.URL.RequestURI())
 		}
 
+		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, "proxied")
 	}))
 	defer backend.Close()
@@ -241,6 +242,9 @@ func TestHandlerProxiesMountedBasePath(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d; want %d", w.Code, http.StatusOK)
+	}
+	if !w.Flushed {
+		t.Fatal("streamed response was not flushed")
 	}
 }
 
