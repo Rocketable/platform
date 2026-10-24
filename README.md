@@ -26,7 +26,6 @@ See [LICENSE](LICENSE) for the full license terms.
 - `internal/rocketcode` (RocketCode): the agent engine. It builds model requests from the workspace, runs tools, checks permissions, and saves a replayable record of each session.
 - `internal/rocketclaw` (RocketClaw): the long-running service around RocketCode. It connects the web page, Slack, MCP, scheduled jobs, attachments, and the database. Its program is `cmd/rocketclaw`.
 - `cmd/funneld`: a small HTTPS proxy that forwards public paths to internal URLs listed in `funneld.json`.
-- `cmd/quickweb`: serves small trusted internal web pages, each with one saved JSON document. See [cmd/quickweb/README.md](cmd/quickweb/README.md).
 
 ## Getting started
 
@@ -321,8 +320,6 @@ ssh -N -L 127.0.0.1:6060:127.0.0.1:6060 trusted-host
 - `internal/rocketcode/`: the agent engine.
 - `internal/rocketclaw/`: the service around RocketCode.
 - `internal/funneld/`: the HTTPS proxy and its config loading.
-- `internal/quickweb/`: the small web page server.
-- `internal/netutil/`: shared networking code.
 - `vendor/`: copies of Go dependencies.
 
 ## Development
