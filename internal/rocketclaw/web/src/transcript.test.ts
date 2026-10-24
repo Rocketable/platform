@@ -230,6 +230,9 @@ test("active items become stored without changing render identity or losing mess
   expect(draft.lines.map((line) => line.messageId)).toEqual(["83:0", "83:1"]);
   expect(draft.lines[0]).toMatchObject(metadata);
   expect(historyLines([event("legacy", "", "assistant", "saved", { messageId: "1:0" })])[0].id).toBe("1:0");
+  const legacy = [event("legacy", "", "assistant", "same"), event("legacy", "", "assistant", "same"), event("legacy", "", "thinking", "same")];
+  expect(historyLines(legacy).map((line: Line) => line.id)).toEqual(["assistant:same:1", "assistant:same:2", "thinking:same:1"]);
+  expect(historyLines(legacy.slice(1)).map((line: Line) => line.id)).toEqual(["assistant:same:1", "thinking:same:1"]);
   const row = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "TranscriptLine")!.getText(source);
   expect(row).toContain("data-message-id={line.messageId || undefined}");
   const fork = source.statements.find((node) => isFunctionDeclaration(node) && node.name?.text === "ForkDialog")!.getText(source);
@@ -569,6 +572,8 @@ test("tool disclosures match parallel results by ID and include only their loade
   expect(toolTitle({ toolName: "execute", text: `execute\n${JSON.stringify({ code: 'def main():\n  return bash(command=r"""set +e\n./scripts/loop-platform-deps.sh\n""")' })}` })).toBe("Run · ./scripts/loop-platform-deps.sh");
   expect(toolTitle({ toolName: "execute", text: `execute\n${JSON.stringify({ code: 'def main():\n  return read(filePath="scripts/loop-platform-deps.sh")' })}` })).toBe("Read · scripts/loop-platform-deps.sh");
   expect(toolTitle({ toolName: "execute", text: `execute\n${JSON.stringify({ code: 'def main():\n  return read(filePath="scripts/loop-platform-deps.sh")', description: "Validate PR diff" })}` })).toBe("Validate PR diff");
+  expect(toolTitle({ text: "orphan output" })).toBe("Tool result");
+  for (const input of ["{", "null", "7", '"text"']) expect(toolTitle({ toolName: "execute", text: `execute\n${input}` })).toBe("execute");
 });
 
 test("public call outcomes update their original disclosures independently without merging repeated call IDs", () => {
