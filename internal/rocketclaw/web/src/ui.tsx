@@ -754,7 +754,7 @@ function BottomNavigation({ children }: { children: ReactNode }) {
   );
 }
 
-// Wide screens show the left tabs beside the page until hidden; narrow ones show them in a drawer that closes when the address changes, such as when a tab is picked.
+// Wide screens show the left tabs beside the page until hidden; narrow ones show them in a drawer that closes when a tab is picked or the address changes.
 function useTabSidebar(pathname: string) {
   const medium = useMedia("(min-width: 48rem)");
   const [shown, setShown] = useState(true);
@@ -804,7 +804,9 @@ function TabDrawer({ medium, open, toggle, children }: ReturnType<typeof useTabS
       <Drawer.Portal>
         <Drawer.Backdrop className="fixed inset-0 z-50 bg-black/10 opacity-[calc(1-var(--drawer-swipe-progress))] transition-opacity duration-200 data-swiping:duration-0 data-starting-style:opacity-0 data-ending-style:opacity-0 supports-backdrop-filter:backdrop-blur-xs" />
         <Drawer.Viewport className="fixed inset-0 z-50 flex">
-          <Drawer.Popup id="tab-sidebar" className="flex h-full w-3/4 max-w-sm flex-col border-r bg-popover text-sm text-popover-foreground shadow-lg outline-none touch-auto [transform:translateX(var(--drawer-swipe-movement-x))] transition-transform duration-200 ease-in-out data-swiping:select-none data-starting-style:[transform:translateX(-100%)] data-ending-style:[transform:translateX(-100%)]">
+          {/* Picking the tab already shown leaves the address alone, so the pick itself closes the drawer. A mouse
+              click lands on the popup, which holds the pointer for its swipe, so the tab is found under the pointer. */}
+          <Drawer.Popup id="tab-sidebar" onClick={(event) => { if (document.elementFromPoint(event.clientX, event.clientY)?.closest('[role="tab"]')) toggle(); }} className="flex h-full w-3/4 max-w-sm flex-col border-r bg-popover text-sm text-popover-foreground shadow-lg outline-none touch-auto [transform:translateX(var(--drawer-swipe-movement-x))] transition-transform duration-200 ease-in-out data-swiping:select-none data-starting-style:[transform:translateX(-100%)] data-ending-style:[transform:translateX(-100%)]">
             <Drawer.Title className="sr-only">Tabs</Drawer.Title>
             {children}
           </Drawer.Popup>
@@ -893,7 +895,7 @@ type Tab = { path: string; pinned?: boolean; preview?: boolean; group?: string; 
 type TabGroup = { id: string; name: string; color: string; collapsed?: boolean };
 type Space = { id: string; name: string };
 // last names each space's last active tab.
-type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string; last: Record<string, string>; placement: "top" | "left" };
+type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string; last: Record<string, string> };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
 const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard] };
 
@@ -942,7 +944,7 @@ function home(tabs: Tab[], space: string) {
 // An opened location replaces the current space's preview tab, or else opens right of the active tab, inside the active tab's group.
 // A permanent open leaves the preview tab alone and makes an already open tab permanent.
 // Activating any other tab enters its space, where it becomes the last active tab, and expands its group.
-// A session opens where the link points, marked unplaced until TabPlacement moves it to the space it was born in.
+// A session opens where the link points, marked unplaced until TabSettling moves it to the space it was born in.
 function openTab(state: TabState, link: string, preview = true): TabState {
   const [path, target] = pageSpace(state, link);
   const open = state.tabs.find((tab) => tab.path === path), current = open && path !== "/" ? open.space! : target;
@@ -966,7 +968,7 @@ function savedTabs(owner?: string, saved?: Pick<SavedTabs, "spaces" | "state">):
   const spaces = saved?.spaces ?? [{ id: "main", name: "Main" }], known = (id?: string) => spaces.some((space) => space.id === id);
   const groups = saved?.state.groups ?? [];
   const tabs = (saved?.state.tabs ?? []).map(({ group, space, ...tab }) => ({ ...tab, group: groups.some((item) => item.id === group) ? group : undefined, space: known(space) ? space : spaces[0].id }));
-  return { owner, tabs: arrange(tabs), active: "", groups, spaces, space: known(saved?.state.space) ? saved!.state.space : spaces[0].id, last: saved?.state.last ?? {}, placement: saved?.state.placement === "LEFT" ? "left" : "top" };
+  return { owner, tabs: arrange(tabs), active: "", groups, spaces, space: known(saved?.state.space) ? saved!.state.space : spaces[0].id, last: saved?.state.last ?? {} };
 }
 
 // The URL is the active tab, so a reload keeps it and any other URL opens as a permanent tab.
@@ -977,10 +979,10 @@ function loadTabs(path: string, owner?: string, saved?: SavedTabs): TabState {
   return openTab({ ...state, tabs, active: link }, link);
 }
 
-// The saved form drops groups without members, and the server spells placement in capitals.
+// The saved form drops groups without members.
 const savedState = (state: TabState): SavedTabs["state"] => ({
   tabs: state.tabs.map(({ path, pinned, preview, group, space }) => ({ path, pinned, preview, group, space })), groups: state.groups.filter((group) => state.tabs.some((tab) => tab.group === group.id)),
-  space: state.space, last: state.last, placement: state.placement === "left" ? "LEFT" : "TOP",
+  space: state.space, last: state.last,
 });
 
 // A three-way merge of one list: what this window opened, closed, or changed since base wins; the rest is the server's.
@@ -1003,7 +1005,6 @@ function mergeTabs(base: SavedTabs["state"], local: SavedTabs["state"], server: 
     tabs: mergeList(base.tabs, local.tabs, server.tabs, (tab) => tab.path, (tab) => [tab.path, !!tab.pinned, !!tab.preview, tab.group ?? "", tab.space ?? ""].join("\n"), shared(local.tabs, base.tabs) !== shared(base.tabs, local.tabs) || shared(server.tabs, base.tabs) === shared(base.tabs, server.tabs)),
     groups: mergeList(base.groups, local.groups, server.groups, (group) => group.id, (group) => [group.id, group.name, group.color, !!group.collapsed].join("\n"), false),
     space: local.space !== base.space ? local.space : server.space,
-    placement: local.placement !== base.placement ? local.placement : server.placement,
     last: { ...server.last, ...Object.fromEntries(Object.entries(local.last).filter(([space, path]) => base.last[space] !== path)) },
   };
 }
@@ -1018,7 +1019,6 @@ function useTabs() {
   // base is the saved state this window last saved or took in, at revision; at stamps the read last taken in.
   const sync = useRef<{ saving: boolean; dirty: boolean; next?: TabState; applied?: TabState; base?: SavedTabs["state"]; revision: number; at?: number }>({ saving: false, dirty: false, revision: 0 });
   const spaceChange = useMutation({ mutationFn: mutations.tabs, onSuccess: (view) => setState((current) => ({ ...current, spaces: view.spaces })), onError: () => queryClient.invalidateQueries({ queryKey: ["tabs"] }) });
-  const place = (placement: "top" | "left") => setState({ ...state, placement });
   if (state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname));
   // A page link whose space segment was rewritten shows the rewritten path, once the owner's spaces are known.
   useEffect(() => {
@@ -1113,9 +1113,8 @@ function useTabs() {
     if (path !== pathname) navigate(path);
   };
   const unpinned = (tabs: Tab[]) => tabs.flatMap((tab) => tab.pinned ? [] : [tab.path]);
-  const next = state.placement === "left" ? "top" : "left";
   return {
-    state, shown, groups, pathname, placement: state.placement, place, close, enter, edit, editor, setEditor, settle, pending: spaceChange.isPending,
+    state, shown, groups, pathname, close, enter, edit, editor, setEditor, settle, pending: spaceChange.isPending,
     // A new space takes the first free "Space N" name; the server keeps names unique ignoring case.
     addSpace: async () => {
       const taken = new Set(state.spaces.map((space) => space.name.toLowerCase()));
@@ -1177,7 +1176,6 @@ function useTabs() {
         // A session moved to another space can go back to the space it was born in.
         ...birth && birth.id !== tab?.space ? [{ key: "restore", label: `Restore to "${birth.name}"`, run: () => moveTo(paths, birth.id) }] : [],
         ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move to "${space.name}"`, sub: { menu: "Move to space", label: space.name }, run: () => moveTo(paths, space.id) })),
-        { key: "placement", label: `Move tabs to ${next}`, run: () => place(next) },
       ];
     },
     // New session is one location, so New tab in group moves it into the group and its space.
@@ -1193,7 +1191,7 @@ function useTabs() {
 
 // Sessions follow their sidebar rows to the spaces they were born in. Only this and TabNotifications read the rows
 // at the top, so their updates do not redraw the whole app.
-function TabPlacement() {
+function TabSettling() {
   const { rows } = useContext(Sidebar), { settle } = useContext(TabActions);
   useEffect(() => settle(rows), [rows, settle]);
   return null;
@@ -1252,7 +1250,7 @@ function useInSpace() {
 
 const arrows: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
 
-function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs>; vertical: boolean; newChat: () => void }) {
+function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat: () => void }) {
   const { rows } = useContext(Sidebar);
   const { state, shown, groups, pathname, close, promote, move, moveGroup, commands, edit, editor, setEditor, groupCommands } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
   const [menu, setMenu] = useState<{ path: string; anchor: Element | { getBoundingClientRect: () => DOMRect } }>();
@@ -1271,9 +1269,9 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
   const items: ReturnType<typeof commands> = menu ? [...pathSession(menu.path) && targets.size === 1 ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [], ...commands(menu.path, rows, targets)] : [];
   const popupClass = "min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none", itemClass = "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent";
   const option = ({ key, label, run }: (typeof items)[number]) => <Menu.Item key={key} onClick={() => { refocus.current = key; run(); }} className={itemClass}>{label}</Menu.Item>;
-  return <div className={cn("flex shrink-0", vertical ? "h-full flex-col" : "mr-12 border-b")}>
-    <SpaceMenu tabs={tabs} name={space} vertical={vertical} />
-    <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation={vertical ? "vertical" : "horizontal"} className={cn("flex [scrollbar-width:thin]", vertical ? "min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1" : "min-w-0 flex-1 overflow-x-auto overflow-y-hidden")}
+  return <div className="flex h-full shrink-0 flex-col">
+    <SpaceMenu tabs={tabs} name={space} />
+    <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation="vertical" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1 [scrollbar-width:thin]"
       onContextMenu={(event) => {
         const path = pathOf(event);
         if (!path) return;
@@ -1293,8 +1291,6 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
       }}
       onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
       onDoubleClick={(event) => { if (event.target === event.currentTarget) newChat(); }}
-      // A mouse wheel only scrolls vertically, so the top strip turns it sideways; Firefox reports wheel lines, not pixels.
-      onWheel={(event) => { if (!vertical) event.currentTarget.scrollLeft += event.deltaY * (event.deltaMode ? 16 : 1); }}
       onAuxClick={(event) => {
         const path = pathOf(event);
         if (event.button !== 1 || !path) return;
@@ -1345,7 +1341,7 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
         const group = groups.find((item) => item.id === tab.group);
         const openEditor = () => setEditor({ id: group!.id, open: true }), chosen = tab.path !== pathname && selection.has(tab.path);
         return [
-          group && shown[index - 1]?.group !== group.id ? <div key={group.id} data-group={group.id} draggable className={cn("flex shrink-0 items-center", vertical ? "pt-1" : "border-r px-1")} onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
+          group && shown[index - 1]?.group !== group.id ? <div key={group.id} data-group={group.id} draggable className="flex shrink-0 items-center pt-1" onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
             <button type="button" aria-expanded={!group.collapsed} aria-label={groupName(group)} className="flex h-7 min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => edit(group.id, { collapsed: !group.collapsed })}
               onKeyDown={(event) => {
                 if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") { event.preventDefault(); openEditor(); }
@@ -1362,7 +1358,7 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
             <button type="button" aria-label={`Edit ${groupName(group)}`} className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={openEditor}><Ellipsis className="size-3.5" /></button>
           </div> : null,
           // A collapsed group still shows its active tab.
-          group?.collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} description={[chosen && "In selection", !tab.pinned && `${group ? `Group ${groupName(group)}, ` : ""}Space: ${space}`].filter(Boolean).join(", ") || undefined} chosen={chosen} rule={group && <span className={cn("pointer-events-none shrink-0", vertical ? "my-1.5 ml-1 w-0.5 self-stretch" : "absolute inset-x-0 bottom-0 h-0.5", groupColors[group.color])} />} active={tab.path === pathname} vertical={vertical} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />,
+          group?.collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} description={[chosen && "In selection", !tab.pinned && `${group ? `Group ${groupName(group)}, ` : ""}Space: ${space}`].filter(Boolean).join(", ") || undefined} chosen={chosen} rule={group && <span className={cn("pointer-events-none my-1.5 ml-1 w-0.5 shrink-0 self-stretch", groupColors[group.color])} />} active={tab.path === pathname} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />,
         ];
       })}
     </div>
@@ -1396,9 +1392,9 @@ function TabStrip({ tabs, vertical, newChat }: { tabs: ReturnType<typeof useTabs
 }
 
 // The space button opens the space menu; renaming edits the name in place of the button, as Base UI's Menu takes printable keys.
-function SpaceMenu({ tabs: { state, pending, enter, addSpace, renameSpace, deleteSpace }, name, vertical }: { tabs: ReturnType<typeof useTabs>; name?: string; vertical: boolean }) {
+function SpaceMenu({ tabs: { state, pending, enter, addSpace, renameSpace, deleteSpace }, name }: { tabs: ReturnType<typeof useTabs>; name?: string }) {
   const [renaming, setRenaming] = useState(false);
-  const box = cn("flex shrink-0 items-center gap-1.5 px-3 text-sm font-medium", vertical ? "m-1 mb-0 rounded-md py-2" : "border-r");
+  const box = "m-1 mb-0 flex shrink-0 items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium";
   const item = "flex cursor-default items-center rounded-md px-1.5 py-1 text-sm outline-none focus:bg-accent focus:text-accent-foreground";
   return <DropdownMenu>
     {renaming ? <input ref={(node) => node?.focus()} aria-label="Space name" defaultValue={name} className={cn(box, "w-36 bg-background font-normal outline-1 -outline-offset-1 outline-ring")}
@@ -1429,7 +1425,7 @@ function tabActivity(session: Session) {
   return [[activity, session.unreadAt && "Unread"].filter(Boolean).join(", "), Icon] as const;
 }
 
-function TabItem({ tab, description, chosen, rule, active, vertical, editing, endEdit, promote, close, openMenu }: { tab: Tab; description?: string; chosen: boolean; rule?: ReactNode; active: boolean; vertical: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
+function TabItem({ tab, description, chosen, rule, active, editing, endEdit, promote, close, openMenu }: { tab: Tab; description?: string; chosen: boolean; rule?: ReactNode; active: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: Element) => void }) {
   const sidebar = useContext(Sidebar);
   const id = pathSession(tab.path);
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
@@ -1438,14 +1434,14 @@ function TabItem({ tab, description, chosen, rule, active, vertical, editing, en
   const title = useCleanText(label);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
-  return <div data-tab={tab.path} data-running={session.running} data-unread={!!session.unreadAt} draggable={!editing} className={cn("group relative flex shrink-0 items-center", vertical ? "rounded-md" : "border-r", active ? "bg-sidebar-row-active" : "hover:bg-accent", { "bg-accent": chosen })}>
+  return <div data-tab={tab.path} data-running={session.running} data-unread={!!session.unreadAt} draggable={!editing} className={cn("group relative flex shrink-0 items-center rounded-md", active ? "bg-sidebar-row-active" : "hover:bg-accent", { "bg-accent": chosen })}>
     {rule}
     <span className="pointer-events-none absolute inset-x-0 top-0 hidden h-0.5 bg-primary group-data-[unread=true]:block" />
-    <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className={cn("flex min-w-0", vertical ? "flex-1" : "max-w-80")} />}>
+    <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className="flex min-w-0 flex-1" />}>
       <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={activity ? [description, activity].filter(Boolean).join(", ") : description} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
-        <Icon aria-hidden="true" className="size-4 shrink-0 group-data-[running=true]:only:motion-safe:shimmer-icon group-data-[running=true]:only:motion-reduce:shimmer-icon-still" />
-        {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : tab.pinned && !vertical ? null : <span className="truncate group-data-[unread=true]:font-bold motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>}
+        <Icon aria-hidden="true" className="size-4 shrink-0" />
+        {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : <span className="truncate group-data-[unread=true]:font-bold motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>}
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{title}</TooltipContent></Tooltip>
     {active ? <button type="button" aria-label="Tab actions" className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground last:mr-1 hover:bg-accent hover:text-foreground" onClick={(event) => openMenu(event.currentTarget)}><Ellipsis className="size-3.5" /></button> : null}
@@ -1511,7 +1507,6 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const tabs = useTabs();
   const { close: closeTab, pathname } = tabs;
   const sidebar = useTabSidebar(pathname);
-  const vertical = tabs.placement === "left" && sidebar.medium;
   const newChat = useCallback(() => {
     const draft = drafts.get("") ?? drafts.get(conversation.id)!;
     if ([!scope, draft.reverting, !draft.hydrated].some(Boolean)) return;
@@ -1541,7 +1536,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       openPalette(event.shiftKey ? "commands" : "sessions");
       return;
     }
-    if (vertical && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.code === "KeyB") {
+    if (sidebar.medium && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.code === "KeyB") {
       event.preventDefault();
       sidebar.toggle();
       return;
@@ -1579,12 +1574,12 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     setConversation({ id: route.id, created: "", key: created ? conversation.key : conversation.key + 1 });
   }
   return (
-          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabPlacement /><TabNotifications />
+          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabSettling /><TabNotifications />
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
-            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} keyCommands={keyCommands(tabs.step, sidebar.toggle, vertical)} />
+            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} keyCommands={keyCommands(tabs.step, sidebar.toggle, sidebar.medium)} />
          <div className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-y-none bg-background">
             <BottomNavigation>
-              {vertical ? <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} /> : null}
+              {sidebar.medium ? <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} /> : null}
               <div className="min-w-0 max-w-full justify-self-center overflow-x-auto md:col-start-2 overflow-y-hidden scrollbar-none">
                 <div className="flex w-max items-center gap-[var(--navigation-gap)]">
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="New session" onClick={newChat}>
@@ -1601,9 +1596,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               </div>
             </BottomNavigation>
             <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
-          {tabs.placement === "left" ? <TabDrawer {...sidebar}><TabStrip tabs={tabs} vertical newChat={newChat} /></TabDrawer> : <TabStrip tabs={tabs} vertical={false} newChat={newChat} />}
+          <TabDrawer {...sidebar}><TabStrip tabs={tabs} newChat={newChat} /></TabDrawer>
           <div className="flex min-h-0 min-w-0 flex-1">
-            {vertical ? <ResizableAside side="tabs" id="tab-sidebar" className={cn("border-r", !sidebar.open && "hidden")}><TabStrip tabs={tabs} vertical newChat={newChat} /></ResizableAside> : null}
+            {sidebar.medium ? <ResizableAside side="tabs" id="tab-sidebar" className={cn("border-r", !sidebar.open && "hidden")}><TabStrip tabs={tabs} newChat={newChat} /></ResizableAside> : null}
             <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}
@@ -1627,8 +1622,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
 }
 
 // The palette runs the shortcuts' own actions; the sidebar toggle is listed only while Cmd/Ctrl+B works.
-function keyCommands(step: (back: boolean) => void, toggle: () => void, vertical: boolean) {
-  return [{ key: "tab-previous", label: "Tabs: Previous", run: () => step(true) }, { key: "tab-next", label: "Tabs: Next", run: () => step(false) }, ...vertical ? [{ key: "tab-sidebar", label: "Tabs: Toggle sidebar", run: toggle }] : []];
+function keyCommands(step: (back: boolean) => void, toggle: () => void, medium: boolean) {
+  return [{ key: "tab-previous", label: "Tabs: Previous", run: () => step(true) }, { key: "tab-next", label: "Tabs: Next", run: () => step(false) }, ...medium ? [{ key: "tab-sidebar", label: "Tabs: Toggle sidebar", run: toggle }] : []];
 }
 
 function SessionCommandDialog({ command, drafts, onDraftChange }: { command: SessionCommand; drafts: Map<string, ComposerDraft>; onDraftChange: () => void }) {
@@ -5098,11 +5093,8 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
   );
 }
 
-const tabPlacements = [{ value: "top", label: "Top" }, { value: "left", label: "Left sidebar" }];
-
 function ConfigPage() {
   const config = useQuery({ ...queries.config(), staleTime: 60_000 });
-  const tabs = useContext(TabActions);
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
       <PageTitle>Config</PageTitle>
@@ -5110,13 +5102,6 @@ function ConfigPage() {
         <div className="flex flex-wrap items-center justify-between gap-4 border-b py-2">
           <span className="text-sm text-muted-foreground">Theme</span>
           <PaletteChooser />
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b py-2">
-          <span className="text-sm text-muted-foreground">Tabs</span>
-          <Select items={tabPlacements} value={tabs.placement} onValueChange={(value) => tabs.place(value === "left" ? "left" : "top")}>
-            <SelectTrigger aria-label="Tab placement" className="min-w-40"><SelectValue /></SelectTrigger>
-            <SelectContent align="end"><SelectGroup>{tabPlacements.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent>
-          </Select>
         </div>
       </ConfigSection>
       <ConfigSection title="Timeline">

@@ -11,24 +11,6 @@
   -webkit-text-fill-color: transparent;
 }
 
-@utility shimmer-icon {
-  mask-image: linear-gradient(110deg, #000 40%, rgb(0 0 0 / 0.3) 50%, #000 60%);
-  -webkit-mask-image: linear-gradient(110deg, #000 40%, rgb(0 0 0 / 0.3) 50%, #000 60%);
-  mask-size: 300% 100%;
-  -webkit-mask-size: 300% 100%;
-  animation: shimmer-icon 2s linear infinite;
-}
-
-@utility shimmer-icon-still {
-  mask-image: linear-gradient(90deg, #000 40%, rgb(0 0 0 / 0.3));
-  -webkit-mask-image: linear-gradient(90deg, #000 40%, rgb(0 0 0 / 0.3));
-}
-
-@keyframes shimmer-icon {
-  from { mask-position: 100% 0; -webkit-mask-position: 100% 0; }
-  to { mask-position: 0 0; -webkit-mask-position: 0 0; }
-}
-
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

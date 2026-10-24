@@ -26,7 +26,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/ListQueue": return Response.json({ items: [] });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
@@ -46,8 +46,10 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     };
     const notice = page.getByText("A new version of RocketClaw is available.", { exact: true });
     const refresh = page.getByRole("button", { name: "Refresh", exact: true });
+    // Narrow screens keep the tabs in a drawer behind the top-left Show sidebar button.
+    const tabs = width < 768 ? page.getByRole("button", { name: "Show sidebar", exact: true }) : page.getByRole("tablist", { name: "Open tabs" }).locator("..");
     await page.goto(`http://127.0.0.1:${server.port}/`);
-    await page.getByRole("tablist", { name: "Open tabs" }).waitFor();
+    await tabs.waitFor();
 
     await recheck();
     expect(await notice.count()).toBe(0);
@@ -61,7 +63,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
       const box = el.getBoundingClientRect();
       return box.width > 0 && box.top >= 0 && box.left >= 0 && box.bottom <= innerHeight && box.right <= innerWidth && el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
     });
-    for (const target of [refresh, page.getByRole("button", { name: /^Theme / }), page.getByRole("tablist", { name: "Open tabs" }).locator(".."), page.locator("footer").getByRole("button", { name: "New session", exact: true })]) expect(await unobstructed(target)).toBe(true);
+    for (const target of [refresh, page.getByRole("button", { name: /^Theme / }), tabs, page.locator("footer").getByRole("button", { name: "New session", exact: true })]) expect(await unobstructed(target)).toBe(true);
     await page.screenshot({ path: path.join(shots, `web-update-${width}.png`) });
 
     // A failed check keeps what the last successful check showed.
@@ -84,7 +86,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     const reloaded = page.waitForEvent("load");
     await refresh.click();
     await reloaded;
-    await page.getByRole("tablist", { name: "Open tabs" }).waitFor();
+    await tabs.waitFor();
     await recheck();
     expect(await notice.count()).toBe(0);
     expect(errors).toEqual([]);

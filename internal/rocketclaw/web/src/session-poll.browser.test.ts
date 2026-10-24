@@ -34,7 +34,7 @@ test("session list polls ask for changes since the version they hold", async () 
       case "/api/Protocol": return Response.json({ protoSha256: "poll" });
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });

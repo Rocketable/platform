@@ -41,7 +41,7 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
       const before = Number(input.before);
       return Response.json(view(input.from ? Number(input.from) : Math.max(1, before - input.limit!), before - 1, { reset: false }));
     }
-    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));
     return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
@@ -135,7 +135,7 @@ test("a chat that doesn't exist says so instead of loading forever", async () =>
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "missing" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
     if (url.pathname === "/api/History") return Response.json({ code: 5, message: "web conversation: conversation is not recorded" }, { status: 404 });
-    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));
     return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));

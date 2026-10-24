@@ -12,7 +12,7 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
   const { chromium: engine } = await import(playwright!);
   const reads: object[] = [];
   // The shared spaces, and the tab state the page saves.
-  const saved = { spaces: spaces.map((name, index) => ({ id: `s${index}`, name })), state: { tabs: [], groups: [], space: "s0", last: {}, placement: "TOP" } };
+  const saved = { spaces: spaces.map((name, index) => ({ id: `s${index}`, name })), state: { tabs: [], groups: [], space: "s0", last: {} } };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
@@ -42,7 +42,7 @@ async function withPage(spaces: string[], run: (page: any, origin: string, reads
     page.on("pageerror", (error: Error) => errors.push(error.message));
     const origin = `http://127.0.0.1:${server.port}`;
     await page.goto(`${origin}/`);
-    await strip(page).getByRole("tab", { name: "New session", exact: true }).waitFor();
+    await page.getByPlaceholder("Message a new session").waitFor();
     await run(page, origin, reads);
     expect(errors).toEqual([]);
   } finally {
@@ -142,16 +142,22 @@ test("a sandboxed page reads its agent's Page Data only with its token and from 
 }), 60_000);
 
 for (const width of [1280, 320]) test(`the Page Index lists this space's and spaceless agents' pages and opens them at ${width}px`, () => withPage(["Billing"], async (page, origin) => {
+  // Narrow screens keep the tabs in a drawer, opened to find the tab and closed again.
+  const opened = async (name: string) => {
+    if (width === 320) await page.getByRole("button", { name: "Show sidebar", exact: true }).click();
+    await strip(page).getByRole("tab", { name, exact: true }).waitFor();
+    if (width === 320) { await page.keyboard.press("Escape"); await strip(page).waitFor({ state: "detached" }); }
+  };
   await page.keyboard.press("Control+Shift+p");
   await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Pages: Index", exact: true }).click();
   await page.waitForURL(`${origin}/pages`);
-  await strip(page).getByRole("tab", { name: "Pages", exact: true }).waitFor();
+  await opened("Pages");
   const links = page.locator("main").getByRole("link");
   await links.first().waitFor();
   expect(await links.allInnerTexts()).toEqual(["main · index.html", "reporter · index.html", "reporter · q3/report.html"]);
   for (const box of await links.evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getBoundingClientRect().right))) expect(box).toBeLessThanOrEqual(width);
   await links.filter({ hasText: "reporter · q3/report.html" }).click();
   await page.waitForURL(`${origin}/pages/Billing/reporter/q3/report.html`);
-  await strip(page).getByRole("tab", { name: "reporter · q3/report.html", exact: true }).waitFor();
+  await opened("reporter · q3/report.html");
   expect(await page.locator("iframe").getAttribute("src")).toStartWith("/pages-raw/reporter/q3/report.html#rc=");
 }, { viewport: { width, height: 800 } }), 60_000);

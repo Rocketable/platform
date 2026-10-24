@@ -15,7 +15,7 @@ const rows: { id: string; name: string; agent: string; running?: boolean; backgr
   { id: "foxtrot", name: "Foxtrot", agent: "main", running: true, unreadAt: "2026-10-22T10:00:00Z" },
 ];
 const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
-type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; pinned?: boolean; group?: string; space?: string }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; placement: string }; revision: number; refused: number };
+type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; pinned?: boolean; group?: string; space?: string }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string> }; revision: number; refused: number };
 
 // Mirrors the server's Tabs call: it saves the state or changes one space, then answers with every space and the saved state.
 // A taken name, ignoring case, and deleting the last space are refused, and a save made from an older revision is stale.
@@ -36,7 +36,7 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
   const { chromium: engine } = await import(playwright!);
   const prompts: { id: string; text: string }[] = [];
   const sessions = structuredClone(rows);
-  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, placement: "TOP" }, revision: 0, refused: 0 };
+  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {} }, revision: 0, refused: 0 };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -86,7 +86,6 @@ const strip = (page: any) => page.getByRole("tablist", { name: "Open tabs" });
 const names = (page: any) => strip(page).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
 const italic = (tab: any) => tab.evaluate((node: HTMLElement) => getComputedStyle(node).fontStyle === "italic");
 const animation = (locator: any) => locator.evaluate((node: Element) => getComputedStyle(node).animationName);
-const mask = (locator: any) => locator.evaluate((node: Element) => getComputedStyle(node).maskImage);
 // Group headers are the strip's only controls that report aria-expanded.
 const order = (page: any) => strip(page).locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
 // Saves reach the server after the page changes, so a test waits for them before reloading.
@@ -155,7 +154,6 @@ test("preview tabs, promotion, pins, close commands, middle-click, and drag surv
   expect(await names(page)).toEqual(["hello", "Bravo", "Alpha", "Charlie", "Delta"]);
   await menu(page, "Alpha", "Pin");
   expect(await names(page)).toEqual(["Alpha", "hello", "Bravo", "Charlie", "Delta"]);
-  expect(await tab("Alpha").innerText()).toBe("");
   expect(await strip(page).locator('[aria-label="Pinned"]').count()).toBe(1);
   await menu(page, "Bravo", "Close to the right");
   expect(await names(page)).toEqual(["Alpha", "hello", "Bravo"]);
@@ -191,7 +189,7 @@ test("preview tabs, promotion, pins, close commands, middle-click, and drag surv
   await page.reload();
   await tab("Charlie").waitFor();
   expect(await names(page)).toEqual(["Alpha", "Charlie", "Bravo"]);
-  expect(await tab("Alpha").innerText()).toBe("");
+  expect(await strip(page).locator('[aria-label="Pinned"]').count()).toBe(1);
   expect(await italic(tab("Charlie"))).toBe(true);
   expect(await tab("Charlie").getAttribute("aria-selected")).toBe("true");
 
@@ -274,7 +272,8 @@ for (const width of [1280, 320]) test(`copy page link across pages at ${width}px
       const { x, y, width, height } = node.getBoundingClientRect();
       return { x, y, width, height };
     }));
-    expect(boxes).toHaveLength(4);
+    // Wide screens add the sidebar toggle.
+    expect(boxes).toHaveLength(width === 320 ? 4 : 5);
     for (const [index, box] of boxes.entries()) {
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(width);
@@ -429,7 +428,7 @@ test("copy page link on plain HTTP without Clipboard API", () => withPage({ perm
   expect(await copy.locator("svg.lucide-check").count()).toBe(0);
 }), 30_000);
 
-test("saved tabs, deep links, keyboard, page close, palette commands, and placement", () => withPage({}, async (page, origin, _prompts, saved) => {
+test("saved tabs, deep links, keyboard, page close, palette commands, and the sidebar", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
   expect(await names(page)).toEqual(["Alpha"]);
@@ -458,7 +457,8 @@ test("saved tabs, deep links, keyboard, page close, palette commands, and placem
   await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
   await page.getByRole("menu").waitFor({ state: "hidden" });
   expect(await names(page)).toEqual(["Alpha", "Bravo"]);
-  expect(await tab("Alpha").innerText()).toBe("");
+  expect(await tab("Alpha").innerText()).toBe("Alpha");
+  expect(await strip(page).getByRole("button", { name: "Close Alpha" }).count()).toBe(0);
   expect(await strip(page).getByRole("button", { name: "Close Bravo" }).count()).toBe(1);
 
   await page.keyboard.press("Control+Shift+p");
@@ -477,14 +477,9 @@ test("saved tabs, deep links, keyboard, page close, palette commands, and placem
   expect(await names(page)).toEqual(["Alpha", "Bravo"]);
   await page.keyboard.press("Control+Shift+p");
   await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Tabs: Pin", exact: true }).click();
-  expect(await tab("Bravo").innerText()).toBe("");
+  await strip(page).getByRole("button", { name: "Close Bravo" }).waitFor({ state: "detached" });
 
-  expect(await strip(page).getAttribute("aria-orientation")).toBe("horizontal");
-  await strip(page).getByRole("button", { name: "Tab actions" }).click();
-  await page.getByRole("menuitem", { name: "Move tabs to left" }).click();
   expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
-  await until(() => saved.state.placement === "LEFT");
-  expect(await tab("Alpha").innerText()).toBe("Alpha");
   const mainBox = await page.getByRole("main").boundingBox();
   expect((await strip(page).boundingBox()).x + (await strip(page).boundingBox()).width).toBeLessThanOrEqual(mainBox.x);
   await page.locator("footer").getByRole("button", { name: "Hide sidebar", exact: true }).click();
@@ -507,28 +502,6 @@ test("saved tabs, deep links, keyboard, page close, palette commands, and placem
   expect((await strip(page).boundingBox()).width).toBe(width + 16);
   await page.setViewportSize({ width: 375, height: 700 });
   await strip(page).waitFor({ state: "detached" });
-  await page.keyboard.press("Control+Shift+p");
-  await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Tabs: Move tabs to top" }).click();
-  await until(() => saved.state.placement === "TOP");
-
-  // Settings offers the same placement switch.
-  const orientation = (value: string) => page.waitForFunction((expected: string) => document.querySelector('[role="tablist"][aria-label="Open tabs"]')!.getAttribute("aria-orientation") === expected, value);
-  await page.setViewportSize({ width: 1280, height: 800 });
-  await page.getByRole("dialog").waitFor({ state: "detached" });
-  await page.keyboard.press("Control+Shift+p");
-  await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Settings" }).click();
-  await page.waitForURL("**/config");
-  const placement = page.getByRole("combobox", { name: "Tab placement" });
-  expect(await placement.innerText()).toBe("Top");
-  await placement.click();
-  await page.getByRole("option", { name: "Left sidebar" }).click();
-  await orientation("vertical");
-  await until(() => saved.state.placement === "LEFT");
-  expect(await placement.innerText()).toBe("Left sidebar");
-  await placement.click();
-  await page.getByRole("option", { name: "Top" }).click();
-  await orientation("horizontal");
-  await until(() => saved.state.placement === "TOP");
 }), 60_000);
 
 test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and double-clicking empty strip opens a new session", () => withPage({}, async (page, origin, _prompts, saved) => {
@@ -563,9 +536,7 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   await tab(long).waitFor();
   await field.waitFor({ state: "detached" });
   expect(page.url()).toEndWith(href("bravo"));
-  const width = await tab(long).evaluate((node: HTMLElement) => node.getBoundingClientRect().width);
-  expect(width).toBeGreaterThan(12 * 16);
-  expect(width).toBeLessThanOrEqual(20 * 16);
+  expect(await tab(long).evaluate((node: HTMLElement) => node.getBoundingClientRect().right <= node.closest('[role="tablist"]')!.getBoundingClientRect().right)).toBe(true);
   await tab(long).hover();
   expect(await page.locator('[data-slot="tooltip-content"]').innerText()).toBe(long);
   await page.mouse.move(640, 700);
@@ -587,7 +558,7 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Rename session");
 }), 60_000);
 
-test("narrow top strip scrolls and running tabs keep a reachable close control", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin, _prompts, saved) => {
+test("running tabs keep a reachable close control, and closing hands focus to the next tab", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"], [href("delta"), "Delta"], ["/search", "Search"]]) {
     await page.goto(`${origin}${link}`);
@@ -597,12 +568,7 @@ test("narrow top strip scrolls and running tabs keep a reachable close control",
   }
   await tab("Delta").waitFor();
   expect(await names(page)).toEqual(["New session", "Alpha", "Bravo", "Charlie", "Delta", "Search"]);
-  expect(await strip(page).evaluate((node: HTMLElement) => node.scrollWidth > node.clientWidth && getComputedStyle(node).overflowX === "auto")).toBe(true);
-  await strip(page).evaluate((node: HTMLElement) => { node.scrollLeft = 0; });
-  await strip(page).hover();
-  await page.mouse.wheel(0, 100);
-  await page.waitForFunction(() => document.querySelector('[role="tablist"][aria-label="Open tabs"]')!.scrollLeft === 100);
-  await page.mouse.move(0, 400);
+  await page.mouse.move(640, 400);
   expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
   const close = strip(page).getByRole("button", { name: "Close Delta" });
   expect(await close.evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("1");
@@ -619,13 +585,12 @@ test("narrow top strip scrolls and running tabs keep a reachable close control",
   await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Charlie"]'));
 }), 60_000);
 
-test("narrow left placement is a drawer opened by the top-left button or a right swipe and closed by a pick, Escape, or a left swipe", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin, _prompts, saved) => {
+test("narrow screens show the tabs in a drawer opened by the top-left button or a right swipe and closed by a pick, Escape, or a left swipe", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
-  await openSaved(page, origin, href("alpha"), "Alpha", saved);
-  await openSaved(page, origin, href("bravo"), "Bravo", saved);
-  await menu(page, "Bravo", "Move tabs to left");
-  await until(() => saved.state.placement === "LEFT");
-  await page.reload();
+  for (const id of ["alpha", "bravo"]) {
+    await page.goto(`${origin}${href(id)}`);
+    await until(() => saved.state.tabs.some((tab) => tab.path === href(id)));
+  }
   const toggle = page.getByRole("button", { name: "Show sidebar", exact: true });
   const box = (await toggle.boundingBox())!;
   expect(box.x + box.y).toBeLessThan(24);
@@ -637,6 +602,13 @@ test("narrow left placement is a drawer opened by the top-left button or a right
   await tab("Alpha").tap();
   await page.waitForURL(`**${href("alpha")}`);
   await strip(page).waitFor({ state: "detached" });
+  // Picking the tab already shown closes the drawer too, by touch or mouse.
+  for (const pick of ["tap", "click"]) {
+    await toggle[pick]();
+    await tab("Alpha")[pick]();
+    await strip(page).waitFor({ state: "detached" });
+  }
+  expect(page.url()).toEndWith(href("alpha"));
 
   const cdp = await page.context().newCDPSession(page);
   // Moves come at a finger's 60 Hz pace: Chrome on Linux turns an instant burst into a fling that navigates back.
@@ -667,7 +639,7 @@ test("narrow left placement is a drawer opened by the top-left button or a right
   expect(new URL(page.url()).pathname).toBe("/config");
 }), 60_000);
 
-test("running tab title shimmers without shifting, and a pinned running tab shimmers its icon", () => withPage({}, async (page, origin) => {
+test("running tab title shimmers without shifting, pinned or not", () => withPage({}, async (page, origin) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const title = (name: string) => tab(name).getByText(name, { exact: true });
   const indent = (name: string) => title(name).evaluate((node: HTMLElement) => node.getBoundingClientRect().left - node.parentElement!.getBoundingClientRect().left);
@@ -686,12 +658,6 @@ test("running tab title shimmers without shifting, and a pinned running tab shim
   expect(await strip(page).getByRole("img", { name: "Turn running" }).count()).toBe(0);
   expect(await animation(tab("Delta").locator("svg"))).toBe("none");
   await menu(page, "Delta", "Pin");
-  await menu(page, "Alpha", "Pin");
-  expect(await animation(tab("Delta").locator("svg"))).not.toBe("none");
-  expect(await mask(tab("Delta").locator("svg"))).toStartWith("linear-gradient(");
-  expect(await animation(tab("Alpha").locator("svg"))).toBe("none");
-  expect(await mask(tab("Alpha").locator("svg"))).toBe("none");
-  await menu(page, "Delta", "Move tabs to left");
   expect(await animation(title("Delta"))).not.toBe("none");
   expect(await animation(tab("Delta").locator("svg"))).toBe("none");
 }), 60_000);
@@ -745,7 +711,7 @@ test("the shimmer visibly sweeps the selected and other running titles in both t
   expect(await sweep("Delta")).toBeGreaterThan(8);
 }), 60_000);
 
-test("with reduced motion a running tab's title and pinned icon show a still gradient", () => withPage({ reducedMotion: "reduce" }, async (page, origin) => {
+test("with reduced motion a running tab's title shows a still gradient", () => withPage({ reducedMotion: "reduce" }, async (page, origin) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const gradient = (name: string) => tab(name).getByText(name, { exact: true }).evaluate((node: Element) => getComputedStyle(node).backgroundImage);
   await page.goto(`${origin}${href("alpha")}`);
@@ -757,13 +723,9 @@ test("with reduced motion a running tab's title and pinned icon show a still gra
   expect(await animation(title)).toBe("none");
   expect(await gradient("Delta")).toStartWith("linear-gradient(");
   expect(await gradient("Alpha")).toBe("none");
-  await menu(page, "Delta", "Pin");
-  expect(await tab("Delta").getAttribute("aria-description")).toBe("Turn running");
-  expect(await animation(tab("Delta").locator("svg"))).toBe("none");
-  expect(await mask(tab("Delta").locator("svg"))).toStartWith("linear-gradient(");
 }), 60_000);
 
-test("an unread tab shows a bold title and a primary bar on its top edge, pinned and in the sidebar too", () => withPage({}, async (page, origin, _prompts, saved) => {
+test("an unread tab shows a bold title and a primary bar on its top edge, pinned too", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   // The bar is the tab's 2px absolutely placed child flush with its top edge; the title is the tab's text span.
   const cue = (id: string) => strip(page).locator(`[data-tab="${href(id)}"]`).evaluate((root: HTMLElement) => {
@@ -779,12 +741,8 @@ test("an unread tab shows a bold title and a primary bar on its top edge, pinned
   expect(await cue("foxtrot")).toEqual({ bar: true, weight: "700" });
   expect(await cue("alpha")).toEqual({ bar: false, weight: "400" });
   expect(await tab("Foxtrot").getAttribute("aria-description")).toBe("Space: Main, Turn running, Unread");
-  // A pinned tab in the top strip has no title, so the bar alone shows it.
   await menu(page, "Foxtrot", "Pin");
-  expect(await cue("foxtrot")).toEqual({ bar: true, weight: "" });
   expect(await tab("Foxtrot").getAttribute("aria-description")).toBe("Turn running, Unread");
-  await menu(page, "Foxtrot", "Move tabs to left");
-  expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
   expect(await cue("foxtrot")).toEqual({ bar: true, weight: "700" });
   expect(await cue("alpha")).toEqual({ bar: false, weight: "400" });
 }), 60_000);
@@ -939,15 +897,13 @@ test("tab group editor moves New session in, ungroups, and closes; pins leave gr
   expect(await order(page)).toEqual(["Bravo", "Work", "Alpha", "New session", "Charlie"]);
   expect(await tab("Bravo").getAttribute("aria-description")).toBeNull();
 
-  await menu(page, "Charlie", "Move tabs to left");
   await tab("Charlie").click();
   await page.waitForURL(`**${href("charlie")}`);
   await strip(page).getByRole("button", { name: "Work", exact: true }).click();
-  await until(() => saved.state.placement === "LEFT" && saved.state.groups.some((group) => group.collapsed));
+  await until(() => saved.state.groups.some((group) => group.collapsed));
   await page.reload();
-  // Charlie comes from the URL before saved tabs load; Bravo waits for the saved placement and group too.
+  // Charlie comes from the URL before saved tabs load; Bravo waits for the saved group too.
   await tab("Bravo").waitFor();
-  expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
   expect(await order(page)).toEqual(["Bravo", "Work", "Charlie"]);
   await tab("Bravo").focus();
   await page.keyboard.press("ArrowDown");
@@ -1080,7 +1036,7 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   expect(await names(page)).toEqual(["New session"]);
   await choose("Delete space");
 
-  // A space deleted elsewhere hands its tabs, groups kept, to the first space; the menu also sits atop left tabs.
+  // A space deleted elsewhere hands its tabs, groups kept, to the first space; the menu sits atop the tabs.
   await page.getByRole("button", { name: "Space: Main" }).waitFor();
   await settled();
   saved.state.tabs = saved.state.tabs.map((tab) => tab.path === href("bravo") ? { ...tab, space: "gone", group: "kept" } : tab);
@@ -1089,7 +1045,6 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   await tab("Bravo").waitFor();
   expect(await names(page)).toEqual(["Alpha", "Charlie", "New session", "Bravo"]);
   expect(await tab("Bravo").getAttribute("aria-description")).toBe("Group Kept, Space: Main");
-  await menu(page, "Bravo", "Move tabs to left");
   const [button, list] = [await space.boundingBox(), await strip(page).boundingBox()];
   expect(button.y + button.height).toBeLessThanOrEqual(list.y);
 }), 60_000);
@@ -1157,7 +1112,7 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "Space: Ops" }).waitFor();
   await tab("New session").click({ button: "right" });
-  expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["Close", "Close others", "Close to the right", "Close all", "Pin", "Add to group", "Move to space", "Move tabs to left"]);
+  expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["Close", "Close others", "Close to the right", "Close all", "Pin", "Add to group", "Move to space"]);
   await page.getByRole("menuitem", { name: "Move to space", exact: true }).click();
   const spaces = page.getByRole("menu").nth(1);
   await spaces.waitFor();

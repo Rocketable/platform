@@ -181,7 +181,7 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "command-hints" });
       if (url.pathname === "/api/ListConfig") return Response.json({ config: {} });
       if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
-      if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "LEFT" } });
+      if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       return Response.json({});
     } });
     const browser = await engine.launch({ executablePath: chromium, headless: true });
@@ -291,7 +291,7 @@ test("room autocomplete keeps selections and full labels on each search surface"
       }).sort((a, b) => a.start - b.start);
       return Response.json({ terms, text: "", needle: "", matches: (results[query] ?? []).map((index) => ({ conversationId: rows[index].id, field: "Preview", text: rows[index].preview })), messages: [], mentionIds: [] });
     }
-    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
     return Response.json({});
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
@@ -404,7 +404,7 @@ test("actual App renders independent public lifecycle and reconnect replacements
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/Prompt": expect(input.text).toBe("$stop"); running = false; revision++; return Response.json({ privateText: "" });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
@@ -676,7 +676,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         case "/api/EditQueueItem":
           ctrl.queue = ctrl.queue.map((item) => item.id === input.itemId ? { ...item, text: input.text } : item);
           return Response.json({});
-        case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+        case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
         default: return Response.json({});
       }
     } catch (error) { return Response.json({ message: (error as Error).message, code: (error as RPCError).code }, { status: (error as RPCError).code === 16 ? 401 : 500 }); }
@@ -821,7 +821,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const navigation = page.locator("footer");
     const compactHeight = (await navigation.boundingBox())!.height;
     const navigationSearch = navigation.getByRole("button", { name: "Search sessions and commands", exact: true });
-    expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(4);
+    // New session, Search, Voice, Copy page link, and the wide-screen sidebar toggle.
+    expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(5);
     expect(await navigation.getByRole("link").count()).toBe(0);
     expect((await navigationSearch.boundingBox())!.width).toBe(48);
     expect((await navigationSearch.locator("svg").boundingBox())!.width).toBe(24);
@@ -886,7 +887,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
     expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "Help: Keyboard Shortcuts", "List Agents", "List Skills",
-      "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Move tabs to left", "Tabs: Next⌘]", "Tabs: Pin", "Tabs: Previous⌘[",
+      "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Next⌘]", "Tabs: Pin", "Tabs: Previous⌘[", "Tabs: Toggle sidebar⌘B",
       // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
       "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
       "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded.", "Voice"]);
@@ -1791,6 +1792,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await closed("Config");
     const chatPath = `/s/${Buffer.from("slack-thread:C:active").toString("base64url")}`;
     for (const width of [1280, 390]) {
+      // Narrow screens keep the tabs in a drawer, which picking a tab closes.
+      const toChat = async () => {
+        if (width === 390) await navPage.getByRole("button", { name: "Show sidebar", exact: true }).click();
+        await navTabs.getByRole("tab", { name: "matching active", exact: true }).click();
+        await navPage.waitForURL(`${origin}${chatPath}`);
+      };
       await navPage.setViewportSize({ width, height: 844 });
       await goToSession(navPage, "matching active");
       await navPage.waitForURL(`${origin}${chatPath}`);
@@ -1818,8 +1825,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         if (width === 1280 && name === "Skills") await close.click();
         else await navPage.keyboard.press("Escape");
         await closed(name);
-        await navTabs.getByRole("tab", { name: "matching active", exact: true }).click();
-        await navPage.waitForURL(`${origin}${chatPath}`);
+        await toChat();
       }
       await openPage("Cron");
       await navPage.waitForURL(`${origin}/cron`);
@@ -1828,8 +1834,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       expect(await navTabs.getByRole("tab", { name: "Cron", exact: true }).count()).toBe(0); // Skills replaced the Cron preview tab.
       await navPage.keyboard.press("Escape");
       await closed("Skills");
-      await navTabs.getByRole("tab", { name: "matching active", exact: true }).click();
-      await navPage.waitForURL(`${origin}${chatPath}`);
+      await toChat();
       if (width === 390) await navPage.keyboard.press("Escape");
       expect(await navPage.getByPlaceholder("Message or $command").inputValue()).toBe("keep this chat draft");
       const newChat = footer.getByRole("button", { name: "New session", exact: true });
@@ -1989,6 +1994,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await runGroup.locator("details[open]").count()).toBe(0);
     cronHold.resolve("new-cron-chat");
     await cronPage.waitForURL("**/s/bmV3LWNyb24tY2hhdA");
+    // The page is still 390px wide, where the tabs sit in the drawer.
+    await cronPage.getByRole("button", { name: "Show sidebar", exact: true }).click();
     await cronPage.getByRole("tab", { name: "daily", exact: true }).waitFor();
     await cronPage.close();
 
@@ -3091,7 +3098,7 @@ test("session titles and turn-rail previews format tags and markup", async () =>
       case "/api/SlackNames": return Response.json({ names: { S1: "handle" } });
       case "/api/History": return Response.json({ messages: [{ messageId: "1:0", entryKey: "1", itemId: "1:0", inputId: "", role: "user", text: preview, complete: true, turnId: "" }], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: ["1"], running: false, terminal: "" });
       case "/api/ListQueue": return Response.json({ items: [] });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, placement: "TOP" } });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
