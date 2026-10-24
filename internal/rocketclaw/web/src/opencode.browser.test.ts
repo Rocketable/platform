@@ -204,6 +204,8 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await view.getByText("answer in ses_a").waitFor();
     const beforeForkTabs = await tabs.getByRole("tab").count();
     await view.locator("[data-component=composer] [contenteditable=true]").fill("/fork");
+    // oc/packages/app/src/composer/suggestions/machine.ts consumes Enter until a result is active.
+    await view.locator('[data-suggestion-id="session.fork"][data-active]').waitFor();
     await page.keyboard.press("Enter");
     await page.locator("[data-oc-portal]").locator("[role=option], button", { hasText: "question in ses_a" }).first().click();
     await page.getByText("Fork was refused", { exact: true }).waitFor();
