@@ -12,7 +12,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
   const browser = await engine.launch({ executablePath: chromium, headless: true, args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--disable-features=WebRtcHideLocalIpsWithMdns", "--autoplay-policy=no-user-gesture-required"] });
   // A second page plays OpenAI: it answers each offer and drives the oai-events channel.
   const openai = await browser.newPage();
-  const created: { agent: string }[] = [], prompts: object[] = [], calls: string[] = [], spoken: string[] = [], agents: Record<string, string> = {};
+  const created: { agent: string }[] = [], sessions: object[] = [], prompts: object[] = [], calls: string[] = [], spoken: string[] = [], agents: Record<string, string> = {};
   let voiceFails = false, creating: PromiseWithResolvers<void> | undefined, listing: PromiseWithResolvers<void> | undefined, voiceStream: ReadableStreamDefaultController | undefined;
   const notice = "The agent could not accept that request. Try again.";
   const rows = [{ id: "voice-1", name: "First voice", agent: "main" }, { id: "voice-2", name: "Second voice", agent: "main", running: true }];
@@ -63,6 +63,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
       agents[body.id] = body.text.replace("$agent ", "");
       return Response.json({ privateText: "" });
     }
+    if (url.pathname === "/api/CreateSession") return Response.json({ id: `new-${sessions.push(await request.json())}` });
     if (url.pathname === "/api/Voice") {
       const { conversationId, sdp, voice } = await request.json() as { conversationId: string; sdp: string; voice: string };
       calls.push(conversationId);
@@ -285,10 +286,16 @@ test("Voice page keeps each person's conversation and settings on the server, an
     await page.getByPlaceholder("Message or $command").fill("hello");
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await failure.waitFor({ state: "detached" });
-    await page.goto(origin);
-    await toggle.waitFor();
-    expect(await toggle.isDisabled()).toBe(true);
     voiceFails = false;
+    await page.setViewportSize({ width: 390, height: 844 }); // Phones get the composer toggle too.
+    await page.goto(origin);
+    await toggle.click(); // A new session's toggle creates it with the shown agent, then calls on it.
+    await page.waitForURL(`**/s/${Buffer.from("new-1").toString("base64url")}`);
+    await toggle.locator("svg.lucide-mic-off").waitFor();
+    expect({ sessions, call: calls.at(-1), voice: spoken.at(-1) }).toEqual({ sessions: [{ agent: "main", spaceId: "main" }], call: "new-1", voice: "cove" });
+    await toggle.click();
+    await closes(6);
+    await page.setViewportSize({ width: 1280, height: 800 });
     expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith("voice")))).toEqual([]); // The browser keeps no voice state.
 
     // Covers R4: a page still showing a conversation another device reset calls on the one Start returns.
@@ -304,9 +311,9 @@ test("Voice page keeps each person's conversation and settings on the server, an
     await page.evaluate(() => { dispatchEvent(new Event("visibilitychange")); });
     while (reads === before) await Bun.sleep(10);
     await live();
-    expect(await openai.evaluate(() => (window as unknown as { closes?: number }).closes)).toBe(5);
+    expect(await openai.evaluate(() => (window as unknown as { closes?: number }).closes)).toBe(6);
     await page.getByRole("button", { name: "End voice call", exact: true }).click({ force: true }); // The live orb never stops moving.
-    await closes(6);
+    await closes(7);
     await page.getByRole("link", { name: "Open conversation" }).waitFor({ state: "detached" });
     updateFails = true; // A setting the server refuses goes back to what it was, and the error shows.
     await page.getByRole("button", { name: "Show transcript" }).click();
