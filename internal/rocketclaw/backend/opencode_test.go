@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -955,4 +956,64 @@ VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', 'title',
 	var updated time.Time
 	require.NoError(t, s.db.QueryRowContext(t.Context(), `SELECT last_updated FROM conversations WHERE conversation_id = 'opencode:box:ses_a'`).Scan(&updated))
 	assert.Equal(t, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), updated.UTC())
+}
+
+func TestOpenCodeAPITool(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if user, password, ok := r.BasicAuth(); !ok || user != "opencode" || password != "pw" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		body, _ := io.ReadAll(r.Body)
+
+		switch r.Method + " " + r.URL.Path {
+		case "GET /openapi.json":
+			_, _ = w.Write([]byte(`{"paths":{"/api/session/{sessionID}/prompt":{"summary":"Prompt","post":{"operationId":"session.prompt"}}}}`))
+		case "GET /api/event":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		case "DELETE /api/session/ses_1":
+			w.WriteHeader(http.StatusNoContent)
+		case "POST /api/session/ses_1/prompt", "GET /api/session":
+			_, _ = fmt.Fprintf(w, "%s %s %s %s", r.Method, r.URL.EscapedPath(), r.URL.RawQuery, body)
+		default:
+			http.Error(w, "missing", http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+
+	tool := openCodeAPITool(map[string]config.OpenCodeConfig{"box": {URL: upstream.URL + "/", Password: "pw"}, "spare": {URL: upstream.URL, Password: "pw"}})
+	assert.Equal(t, "opencode", tool.Permission)
+	assert.Equal(t, []string{"box", "spare"}, tool.VisibilitySubjects)
+
+	tests := []struct {
+		name, input, want, wantErr string
+	}{
+		{name: "operation ID", input: `{"server":"box","operation":"session.prompt","params":[{"name":"sessionID","value":"ses_1"},{"name":"location[directory]","value":"/repo"}],"body":"{\"text\":\"hi\"}"}`, want: `POST /api/session/ses_1/prompt location%5Bdirectory%5D=%2Frepo {"text":"hi"}`},
+		{name: "method and path", input: `{"server":"box","operation":"get /api/session?limit=5","params":[{"name":"order","value":"desc"}],"body":""}`, want: "GET /api/session limit=5&order=desc "},
+		{name: "empty body", input: `{"server":"box","operation":"DELETE /api/session/ses_1","params":[],"body":""}`, want: "204 No Content"},
+		{name: "event stream", input: `{"server":"box","operation":"GET /api/event","params":[],"body":""}`, wantErr: "opencode box /api/event is an event stream"},
+		{name: "failure status", input: `{"server":"box","operation":"GET /api/nope","params":[],"body":""}`, wantErr: "opencode box /api/nope: status 404: missing"},
+		{name: "unknown operation", input: `{"server":"box","operation":"session.nope","params":[],"body":""}`, wantErr: `opencode server "box" has no operation "session.nope"`},
+		{name: "relative path", input: `{"server":"box","operation":"GET @elsewhere/api","params":[],"body":""}`, wantErr: `path "@elsewhere/api" must start with /`},
+		{name: "unknown server", input: `{"server":"other","operation":"GET /api/session","params":[],"body":""}`, wantErr: `opencode server "other" is not configured`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			subjects, err := tool.Subjects(json.RawMessage(tt.input))
+			require.NoError(t, err)
+			assert.Len(t, subjects, 1)
+
+			result, err := tool.Call(t.Context(), json.RawMessage(tt.input), nil)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, rocketcode.TextToolResult(tt.want), result)
+		})
+	}
 }

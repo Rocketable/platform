@@ -2721,6 +2721,10 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 		tools = append(tools, updateGoalTool(b, shellEnv))
 	}
 
+	if len(runtimeCfg.OpenCode) > 0 {
+		tools = append(tools, openCodeAPITool(runtimeCfg.OpenCode))
+	}
+
 	tools = append(tools, customTools...)
 
 	if b.shadow || b.underShadow {
