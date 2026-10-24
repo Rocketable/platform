@@ -1434,9 +1434,8 @@ function TabItem({ tab, description, chosen, rule, active, editing, endEdit, pro
   const title = useCleanText(label);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
-  return <div data-tab={tab.path} data-running={session.running} data-unread={!!session.unreadAt} draggable={!editing} className={cn("group relative flex shrink-0 items-center rounded-md", active ? "bg-sidebar-row-active" : "hover:bg-accent", { "bg-accent": chosen })}>
+  return <div data-tab={tab.path} data-running={session.running} data-unread={!!session.unreadAt} draggable={!editing} className={cn("group flex shrink-0 items-center rounded-md", active ? "bg-sidebar-row-active" : "hover:bg-accent", { "bg-accent": chosen })}>
     {rule}
-    <span className="pointer-events-none absolute inset-x-0 top-0 hidden h-0.5 bg-primary group-data-[unread=true]:block" />
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className="flex min-w-0 flex-1" />}>
       <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={activity ? [description, activity].filter(Boolean).join(", ") : description} tabIndex={active ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>

@@ -544,7 +544,7 @@ active tab.
   hourglass: a running Background Job, its own or that of a hidden run reporting to it, or a
   remote OpenCode session's running child session (a background subagent) or shell command.
   A running turn keeps the chat icon. Screen readers hear “Background work running”.
-- **Unread** sessions show a bold title and a thin bar along the tab's top edge.
+- **Unread** sessions show a bold title.
   A session becomes unread for you when a
   turn ends, finished, failed, or stopped, that holds a message you sent from the
   Web, unless you had its tab in view in the last 10 seconds. Other people's

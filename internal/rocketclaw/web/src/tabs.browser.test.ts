@@ -725,26 +725,18 @@ test("with reduced motion a running tab's title shows a still gradient", () => w
   expect(await gradient("Alpha")).toBe("none");
 }), 60_000);
 
-test("an unread tab shows a bold title and a primary bar on its top edge, pinned too", () => withPage({}, async (page, origin, _prompts, saved) => {
+test("an unread tab shows a bold title, pinned too", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
-  // The bar is the tab's 2px absolutely placed child flush with its top edge; the title is the tab's text span.
-  const cue = (id: string) => strip(page).locator(`[data-tab="${href(id)}"]`).evaluate((root: HTMLElement) => {
-    const probe = root.appendChild(Object.assign(document.createElement("i"), { style: "background-color: var(--primary)" }));
-    const primary = getComputedStyle(probe).backgroundColor;
-    probe.remove();
-    const bar = [...root.children].find((node) => getComputedStyle(node).position === "absolute" && node.getBoundingClientRect().top === root.getBoundingClientRect().top && node.getBoundingClientRect().height === 2);
-    const title = root.querySelector('[role="tab"] > span');
-    return { bar: bar ? getComputedStyle(bar).backgroundColor === primary : false, weight: title ? getComputedStyle(title).fontWeight : "" };
-  });
+  const weight = (name: string) => tab(name).locator("span").evaluate((title: HTMLElement) => getComputedStyle(title).fontWeight);
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
   await openSaved(page, origin, href("foxtrot"), "Foxtrot", saved);
-  expect(await cue("foxtrot")).toEqual({ bar: true, weight: "700" });
-  expect(await cue("alpha")).toEqual({ bar: false, weight: "400" });
+  expect(await weight("Foxtrot")).toBe("700");
+  expect(await weight("Alpha")).toBe("400");
   expect(await tab("Foxtrot").getAttribute("aria-description")).toBe("Space: Main, Turn running, Unread");
   await menu(page, "Foxtrot", "Pin");
   expect(await tab("Foxtrot").getAttribute("aria-description")).toBe("Turn running, Unread");
-  expect(await cue("foxtrot")).toEqual({ bar: true, weight: "700" });
-  expect(await cue("alpha")).toEqual({ bar: false, weight: "400" });
+  expect(await weight("Foxtrot")).toBe("700");
+  expect(await weight("Alpha")).toBe("400");
 }), 60_000);
 
 test("tab groups take a name and color, collapse, adopt opened tabs, follow drags, and survive reload", () => withPage({}, async (page, origin, _prompts, saved) => {
