@@ -61,7 +61,7 @@ export async function* sse<T>(url: string, init: RequestInit): AsyncGenerator<T>
       reader.releaseLock();
     }
   } catch (error) {
-    if (!signal?.aborted) captureException(error, { tags: { rpc: url.split("/").at(-1) } });
+    if (!signal?.aborted) captureException(error, { tags: { rpc: url.split(/[?#]/, 1)[0].split("/").at(-1) } });
     throw error;
   }
 }
