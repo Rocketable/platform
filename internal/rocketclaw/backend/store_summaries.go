@@ -76,13 +76,16 @@ func loadSessionSummary(ctx context.Context, db stateStoreDB, conversationID str
 	}
 
 	err = readRows(ctx, db, `SELECT entry_json, entry_timestamp FROM entries WHERE conversation_id = $1 ORDER BY id`, "session summary history", func(row rowScanner) error {
-		var raw, timestamp string
+		var (
+			raw       sql.RawBytes
+			timestamp string
+		)
 		if err := row.Scan(&raw, &timestamp); err != nil {
 			return fmt.Errorf("scan session summary history: %w", err)
 		}
 
 		var entry harness.SessionEntry
-		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+		if err := json.Unmarshal(raw, &entry); err != nil {
 			return fmt.Errorf("parse session summary history: %w", err)
 		}
 
