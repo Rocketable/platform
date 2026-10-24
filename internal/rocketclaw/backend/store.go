@@ -1334,7 +1334,7 @@ LEFT JOIN background b ON b.conversation_id = c.conversation_id
 WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY($5))
 ), remote AS (
 SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.pinned, o.name, '', COALESCE(o.tags, '[]'::jsonb),
-    o.server, o.directory, o.synced_at < now() - interval '15 seconds', '', COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at,
+    o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at,
     '', '', '', 'null'::jsonb, '', '', '', NULL::bigint, FALSE
 FROM conversations o
 LEFT JOIN reads u ON u.conversation_id = o.conversation_id

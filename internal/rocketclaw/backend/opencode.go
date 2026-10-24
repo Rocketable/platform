@@ -502,9 +502,9 @@ func (s *SessionService) pruneOpenCode(ctx context.Context, name string, server 
 	return err
 }
 
-// CreateOpenCodeSession creates a root session in directory on server name, lists it at once,
-// and returns its conversation ID.
-func (s *SessionService) CreateOpenCodeSession(ctx context.Context, name string, server config.OpenCodeConfig, directory string) (string, error) {
+// CreateOpenCodeSession creates a root session in directory on server name, lists it at once in
+// the Web space spaceID names, if any, and returns its conversation ID.
+func (s *SessionService) CreateOpenCodeSession(ctx context.Context, name string, server config.OpenCodeConfig, directory, spaceID string) (string, error) {
 	var created struct {
 		Data openCodeSession `json:"data"`
 	}
@@ -520,7 +520,7 @@ func (s *SessionService) CreateOpenCodeSession(ctx context.Context, name string,
 		return "", err
 	}
 
-	return s.recordOpenCodeSession(ctx, name, &created.Data)
+	return s.recordOpenCodeSession(ctx, name, &created.Data, spaceID, "")
 }
 
 // ForkOpenCodeSession forks before a remote message and records the result before its tab saves.
@@ -537,14 +537,21 @@ func (s *SessionService) ForkOpenCodeSession(ctx context.Context, name string, s
 		return "", err
 	}
 
-	return s.recordOpenCodeSession(ctx, name, &forked.Data)
+	return s.recordOpenCodeSession(ctx, name, &forked.Data, "", "opencode:"+name+":"+source)
 }
 
-func (s *SessionService) recordOpenCodeSession(ctx context.Context, name string, session *openCodeSession) (string, error) {
+// recordOpenCodeSession lists session in its Birth Space: the existing space spaceID names, or the
+// source conversation's. A sync may have listed it first, so a space fills a missing one.
+func (s *SessionService) recordOpenCodeSession(ctx context.Context, name string, session *openCodeSession, spaceID, source string) (string, error) {
 	id := "opencode:" + name + ":" + session.ID
 
-	_, err := execState(ctx, s.db, "record opencode session", `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, model, remote_session)
-VALUES ($1, $7, '', $6, FALSE, 'remote', $2, $3, $4, $5, FALSE, now(), $8, $9) ON CONFLICT (conversation_id) DO NOTHING`, id, name, session.Title, session.Location.Directory, time.UnixMilli(session.Time.Updated).UTC(), KindRemote, session.Agent, session.model(), session.ID)
+	_, err := execState(ctx, s.db, "record opencode session", `WITH space AS (
+    SELECT id FROM web_spaces WHERE id = $10
+    UNION ALL SELECT space_id FROM conversations WHERE conversation_id = $11
+)
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, model, remote_session, space_id)
+SELECT $1, $7, '', $6, FALSE, 'remote', $2, $3, $4, $5, FALSE, now(), $8, $9, max(id) FROM space
+ON CONFLICT (conversation_id) DO UPDATE SET space_id = excluded.space_id WHERE conversations.space_id IS NULL`, id, name, session.Title, session.Location.Directory, time.UnixMilli(session.Time.Updated).UTC(), KindRemote, session.Agent, session.model(), session.ID, spaceID, source)
 
 	return id, err
 }

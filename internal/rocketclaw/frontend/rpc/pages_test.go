@@ -47,8 +47,18 @@ func TestPages(t *testing.T) {
 		require.NoError(t, root.WriteFile(agents+name+".md", []byte("---\nmodel: example-model\n"+frontmatter+"---\nHelp."), 0o600))
 	}
 
+	// Two OpenCode sessions own pages: ses_a in Billing, ses_b without a space.
+	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `WITH space AS (INSERT INTO web_spaces (name) VALUES ('Billing') RETURNING id)
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session, space_id)
+SELECT 'opencode:box:ses_' || n, '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), 'ses_' || n, CASE WHEN n = 'a' THEN space.id END
+FROM space, unnest(ARRAY['a', 'b']) n`)
+	require.NoError(t, err)
+
 	large := bytes.Repeat([]byte("x"), 4<<20+1)
 	for _, page := range []backend.Page{
+		{Agent: "opencode:box:ses_a", Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>a</p>"), Conversation: "opencode:box:ses_a"},
+		{Agent: "opencode:box:ses_a", Kind: backend.PageData, Name: "rows", ContentType: "application/json", Body: []byte("[1]"), Conversation: "opencode:box:ses_a"},
+		{Agent: "opencode:box:ses_b", Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>b</p>"), Conversation: "opencode:box:ses_b"},
 		{Agent: "reporter", Kind: backend.PageFile, Name: "x.html", ContentType: "text/html", Body: []byte("<p>x</p>")},
 		{Agent: "reporter", Kind: backend.PageFile, Name: "docs/index.html", ContentType: "text/html", Body: []byte("<p>docs</p>")},
 		{Agent: "reporter", Kind: backend.PageFile, Name: "large.js", ContentType: "text/javascript", Body: large},
@@ -103,6 +113,10 @@ func TestPages(t *testing.T) {
 		{path: "/pages/billing/main%2Freview/a.html", address: admitted, code: http.StatusOK, body: app.Body.String()},
 		{path: "/pages/-/main%2Freview/a.html", address: admitted, code: http.StatusOK, body: app.Body.String()},
 		{path: "/pages/Ops/nobody/x.html", address: admitted, code: http.StatusNotFound},
+		{path: "/pages-raw/opencode:box:ses_a/index.html", address: admitted, code: http.StatusOK, body: "<p>a</p>", contentType: "text/html"},
+		{path: "/pages-raw/opencode%3Abox%3Ases_b/", address: admitted, code: http.StatusOK, body: "<p>b</p>", contentType: "text/html"},
+		{path: "/pages/Ops/opencode%3Abox%3Ases_a/index.html", address: admitted, code: http.StatusPermanentRedirect, location: "/pages/Billing/opencode%3Abox%3Ases_a/index.html"},
+		{path: "/pages/billing/opencode:box:ses_a/index.html", address: admitted, code: http.StatusOK, body: app.Body.String()},
 		{path: "/pages/Ops/reporter/missing.html", address: admitted, code: http.StatusNotFound},
 		{path: "/pages/Ops/reporter/x.html", address: denied, code: http.StatusUnauthorized},
 	} {
@@ -134,10 +148,16 @@ func TestPages(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, proto.Equal(&Page{Space: "Ops", ContentType: "application/json", Body: []byte(`{"total":3}`)}, data), "unexpected page data: %v", data)
 
+	data, err = invoke[Page](ctx, connection, "GetPage", &PageRequest{Agent: "opencode:box:ses_a", Path: "rows", Data: true})
+	require.NoError(t, err)
+	require.True(t, proto.Equal(&Page{Space: "Billing", ContentType: "application/json", Body: []byte("[1]")}, data), "unexpected session page data: %v", data)
+
+	// A session's HTML pages list under its space; one with no space lists nowhere.
 	listed, err := invoke[ListPagesResponse](ctx, connection, "ListPages", &ListPagesRequest{})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(&ListPagesResponse{Pages: []*PageEntry{
 		{Agent: "main/review", Path: "a.html"},
+		{Agent: "opencode:box:ses_a", Space: "Billing", Path: "index.html"},
 		{Agent: "reporter", Space: "Ops", Path: "docs/index.html"},
 		{Agent: "reporter", Space: "Ops", Path: "x.html"},
 		{Agent: "reporter/review", Space: "Ops Team", Path: "a b/c.html"},

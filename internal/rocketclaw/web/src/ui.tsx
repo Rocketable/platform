@@ -2027,7 +2027,7 @@ function useRemoteCreation(query: string, close: () => void, restart: () => void
   const known = sidebar.rows.flatMap((row) => row.server === server && row.directory ? [row.directory] : []).toSorted((a, b) => rank(a) - rank(b) || 0);
   const items: ReturnType<typeof paletteRows> = !server ? [] : [...new Set([typed, ...known])]
     .filter((directory) => directory.startsWith("/") && directory.toLowerCase().includes(typed.toLowerCase()))
-    .map((directory) => ({ key: `folder-${directory}`, label: directory, keep: true, disabled: create.isPending, run: () => create.mutate({ opencodeServer: server, directory }) }));
+    .map((directory) => ({ key: `folder-${directory}`, label: directory, keep: true, disabled: create.isPending, run: () => create.mutate({ opencodeServer: server, directory, spaceId: tabs.state.space }) }));
   return {
     pick: (palette: () => typeof items) => server ? items : palette(),
     commands: Object.keys(sidebar.remote?.servers ?? {}).toSorted().map((name) => ({ key: `opencode-${name}`, label: `Sessions: New on ${name}`, keep: true, run: () => { restart(); setServer(name); } })),
@@ -2308,7 +2308,7 @@ function RemoteSession({ id }: { id: string }) {
   const newSession = useEffectEvent((directory: string) => {
     if (creating.current) return;
     creating.current = true;
-    create.mutate({ opencodeServer: server, directory }, { onSettled: () => { creating.current = false; } });
+    create.mutate({ opencodeServer: server, directory, spaceId: tabs.state.space }, { onSettled: () => { creating.current = false; } });
   });
   const closeTab = useEffectEvent(() => tabs.close([rowPath({ id, kind: "REMOTE_OPENCODE" })]));
   const reportSession = useEffectEvent((other: string) => { remoteView.shown = other; setReported(true); });

@@ -1379,7 +1379,7 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 			return nil, fmt.Errorf("create opencode session: %w", status.Error(codes.InvalidArgument, "select a configured OpenCode server"))
 		}
 
-		id, err := s.sessions.CreateOpenCodeSession(ctx, name, server, request.Directory)
+		id, err := s.sessions.CreateOpenCodeSession(ctx, name, server, request.Directory, request.SpaceId)
 		if err != nil {
 			return nil, fmt.Errorf("create opencode session: %w", status.Error(codes.Unavailable, err.Error()))
 		}

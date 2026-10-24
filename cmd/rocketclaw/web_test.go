@@ -207,6 +207,19 @@ func TestWebRPCProxiesAndSyncsOpenCode(t *testing.T) {
 	require.NoError(t, errors.Join(err, response.Body.Close()))
 	assert.Equal(t, "opencode web", string(body), "the Web proxies OpenCode with its password")
 
+	// The coding server reaches its MCP bridge on the Web listener with its own password.
+	for password, code := range map[string]int{"pw": http.StatusOK, "wrong": http.StatusUnauthorized} {
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://"+address+"/opencode/box/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"opencode","version":"test"}}}`))
+		require.NoError(t, err)
+		request.SetBasicAuth("opencode", password)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/json, text/event-stream")
+		response, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}).Do(request)
+		require.NoError(t, err)
+		require.NoError(t, response.Body.Close())
+		assert.Equal(t, code, response.StatusCode, password)
+	}
+
 	// The sync's first poll runs when the Web starts.
 	require.Eventually(t, func() bool {
 		for chat, err := range sessions.SidebarChats(t.Context(), "", &mockWebChannels{}, nil) {

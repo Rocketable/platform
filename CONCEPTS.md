@@ -199,7 +199,7 @@ The one grey tab group named Shared that every space has, shown first in the Web
 
 ### Birth Space
 
-The Space a session was born in: its agent's `space:`, or for a cron's sessions the cron's, else the cron agent's, else for a Web session the space the person was in. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report threads, have none.
+The Space a session was born in: its agent's `space:`, or for a cron's sessions the cron's, else the cron agent's, else for a Web session, or a remote OpenCode session created from the Web, the space the person was in; a forked remote session takes its source's. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report threads, have none.
 
 ### Unread
 
@@ -211,13 +211,15 @@ A session's per-person mark that a turn the person sent a Web message into has e
 
 A file an agent published with `rocketclaw_store`, served by RocketClaw under a URL that names the agent's space, the agent, and the file path. It belongs to the agent, not to a space: when the agent's `space:` changes, its pages move with it and links under the old space name redirect. Only people the Web admits can open one. Page scripts run walled off from RocketClaw and can only read their own agent's Page Data.
 
+An agent in a remote OpenCode session publishes through its coding server's MCP bridge instead. Such a page belongs to that session, whose `opencode:<server>:<id>` stands in for the agent: it lives in the session's Birth Space, and it is deleted with the session's RocketClaw copy or with that space. A session with no Birth Space cannot publish pages.
+
 ### Page Data
 
-An agent's JSON key-value entries, written with `rocketclaw_kv_store`. The agent reads and writes them; its Hosted Pages may only read them. Each agent, shadow agents included, has its own.
+An agent's JSON key-value entries, written with `rocketclaw_kv_store`. The agent reads and writes them; its Hosted Pages may only read them. Each agent, shadow agents included, has its own, and so does each remote OpenCode session that publishes pages.
 
 ### Page Index
 
-The list of Hosted Pages a Web space shows: HTML pages of agents whose space matches the space's name, ignoring case, plus agents with no space.
+The list of Hosted Pages a Web space shows: HTML pages of agents whose space matches the space's name, ignoring case, plus agents with no space, and HTML pages of remote OpenCode sessions in that space.
 
 ## Process layout
 

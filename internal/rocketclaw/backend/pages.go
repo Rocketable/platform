@@ -17,21 +17,29 @@ const (
 	PageData PageKind = "data"
 )
 
-// Page is one Hosted Page file or Page Data entry. Pages leaves Body empty.
+// Page is one Hosted Page file or Page Data entry. Pages leaves Body empty. Conversation is the
+// OpenCode session that owns the page, empty for an agent's page; Space is that session's space name,
+// read only.
 type Page struct {
-	Agent       string
-	Kind        PageKind
-	Name        string
-	ContentType string
-	Body        []byte
-	Size        int
-	UpdatedAt   time.Time
+	Agent        string
+	Kind         PageKind
+	Name         string
+	ContentType  string
+	Body         []byte
+	Size         int
+	UpdatedAt    time.Time
+	Conversation string
+	Space        string
 }
+
+const pageOwnerSQL = ` FROM hosted_pages p
+LEFT JOIN conversations c ON c.conversation_id = p.conversation_id
+LEFT JOIN web_spaces s ON s.id = c.space_id`
 
 // PutPage stores page, replacing any page with the same agent, kind, and name.
 func (s *SessionService) PutPage(ctx context.Context, page *Page) error {
-	_, err := execState(ctx, s.db, "store page", `INSERT INTO hosted_pages (agent, kind, name, content_type, body) VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (agent, kind, name) DO UPDATE SET content_type = excluded.content_type, body = excluded.body, updated_at = now()`, page.Agent, page.Kind, page.Name, page.ContentType, page.Body)
+	_, err := execState(ctx, s.db, "store page", `INSERT INTO hosted_pages (agent, kind, name, content_type, body, conversation_id) VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''))
+ON CONFLICT (agent, kind, name) DO UPDATE SET content_type = excluded.content_type, body = excluded.body, updated_at = now()`, page.Agent, page.Kind, page.Name, page.ContentType, page.Body, page.Conversation)
 
 	return err
 }
@@ -40,7 +48,8 @@ ON CONFLICT (agent, kind, name) DO UPDATE SET content_type = excluded.content_ty
 func (s *SessionService) Page(ctx context.Context, agent string, kind PageKind, name string) (Page, bool, error) {
 	page := Page{Agent: agent, Kind: kind, Name: name}
 
-	err := s.db.QueryRowContext(ctx, `SELECT content_type, body, updated_at FROM hosted_pages WHERE agent = $1 AND kind = $2 AND name = $3`, agent, kind, name).Scan(&page.ContentType, &page.Body, &page.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT p.content_type, p.body, p.updated_at, COALESCE(p.conversation_id, ''), COALESCE(s.name, '')`+pageOwnerSQL+`
+WHERE p.agent = $1 AND p.kind = $2 AND p.name = $3`, agent, kind, name).Scan(&page.ContentType, &page.Body, &page.UpdatedAt, &page.Conversation, &page.Space)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Page{}, false, nil
 	}
@@ -62,9 +71,10 @@ func (s *SessionService) DeletePage(ctx context.Context, agent string, kind Page
 
 // Pages lists agent's pages, or every agent's when agent is empty, ordered by agent, kind, and name.
 func (s *SessionService) Pages(ctx context.Context, agent string) ([]Page, error) {
-	return queryRows(ctx, s.db, `SELECT agent, kind, name, content_type, octet_length(body), updated_at FROM hosted_pages WHERE $1 = '' OR agent = $1 ORDER BY agent, kind, name`, "pages", func(row rowScanner) (Page, error) {
+	return queryRows(ctx, s.db, `SELECT p.agent, p.kind, p.name, p.content_type, octet_length(p.body), p.updated_at, COALESCE(p.conversation_id, ''), COALESCE(s.name, '')`+pageOwnerSQL+`
+WHERE $1 = '' OR p.agent = $1 ORDER BY p.agent, p.kind, p.name`, "pages", func(row rowScanner) (Page, error) {
 		var page Page
-		if err := row.Scan(&page.Agent, &page.Kind, &page.Name, &page.ContentType, &page.Size, &page.UpdatedAt); err != nil {
+		if err := row.Scan(&page.Agent, &page.Kind, &page.Name, &page.ContentType, &page.Size, &page.UpdatedAt, &page.Conversation, &page.Space); err != nil {
 			return Page{}, fmt.Errorf("scan page: %w", err)
 		}
 

@@ -328,10 +328,10 @@ func spaceNameError(_ sql.Result, err error) error {
 	return err
 }
 
-// DeleteSpace deletes space id unless it is the last space. Sessions born there lose their birth space.
-// Its Shared tabs move to the first space left, keeping when they were added; one shared there already
-// stays once. Locking every space, in id order, makes concurrent deletes take turns, so two cannot
-// remove the last two.
+// DeleteSpace deletes space id unless it is the last space. Sessions born there lose their birth space,
+// and the pages of OpenCode sessions there are deleted with it. Its Shared tabs move to the first space
+// left, keeping when they were added; one shared there already stays once. Locking every space, in id
+// order, makes concurrent deletes take turns, so two cannot remove the last two.
 func (s *SessionService) DeleteSpace(ctx context.Context, id string) error {
 	deleted, err := execRows(ctx, s.db, "delete space", "count deleted space", `WITH locked AS (SELECT id, created_at FROM web_spaces ORDER BY id FOR UPDATE),
 others AS (SELECT id FROM locked WHERE id <> $1 ORDER BY created_at, id LIMIT 1),
@@ -339,6 +339,9 @@ moved AS (
     INSERT INTO web_shared_tabs (space, path, conversation_id, added_at)
     SELECT o.id, t.path, t.conversation_id, t.added_at FROM web_shared_tabs t CROSS JOIN others o WHERE t.space = $1
     ON CONFLICT DO NOTHING
+),
+pages AS (
+    DELETE FROM hosted_pages p USING conversations c, others WHERE p.conversation_id = c.conversation_id AND c.space_id = $1
 )
 DELETE FROM web_spaces USING others WHERE web_spaces.id = $1`, id)
 	if err == nil && deleted == 0 {

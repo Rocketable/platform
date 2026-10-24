@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -34,11 +35,6 @@ func (s *Server) getPage(ctx context.Context, request *PageRequest) (*Page, erro
 		return nil, fmt.Errorf("load web page agents: %w", err)
 	}
 
-	agent, ok := agents.Items[request.Agent]
-	if !ok {
-		return nil, status.Errorf(codes.NotFound, "agent %q not found", request.Agent)
-	}
-
 	kind, name := backend.PageFile, request.Path
 	if request.Data {
 		kind = backend.PageData
@@ -53,11 +49,13 @@ func (s *Server) getPage(ctx context.Context, request *PageRequest) (*Page, erro
 		return nil, fmt.Errorf("read web page: %w", err)
 	}
 
-	if !found {
+	// A page belongs to an agent definition or to the OpenCode session that stored it, placed in its space.
+	agent, ok := agents.Items[request.Agent]
+	if !found || !ok && page.Conversation == "" {
 		return nil, status.Errorf(codes.NotFound, "page %q not found", name)
 	}
 
-	return &Page{Space: agent.Space, ContentType: page.ContentType, Body: page.Body}, nil
+	return &Page{Space: cmp.Or(agent.Space, page.Space), ContentType: page.ContentType, Body: page.Body}, nil
 }
 
 func (s *Server) listPages(ctx context.Context) (*ListPagesResponse, error) {
@@ -77,9 +75,10 @@ func (s *Server) listPages(ctx context.Context) (*ListPagesResponse, error) {
 
 	response := &ListPagesResponse{}
 
-	for _, page := range pages {
-		if agent, ok := agents.Items[page.Agent]; ok && page.Kind == backend.PageFile && page.ContentType == "text/html" {
-			response.Pages = append(response.Pages, &PageEntry{Agent: page.Agent, Space: agent.Space, Path: page.Name})
+	for i := range pages {
+		page := &pages[i]
+		if agent, ok := agents.Items[page.Agent]; (ok || page.Space != "") && page.Kind == backend.PageFile && page.ContentType == "text/html" {
+			response.Pages = append(response.Pages, &PageEntry{Agent: page.Agent, Space: cmp.Or(agent.Space, page.Space), Path: page.Name})
 		}
 	}
 

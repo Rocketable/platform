@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -214,10 +215,16 @@ type tailnetWhoIs interface {
 	WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error)
 }
 
-// NewTailnetHandler signs each request in by its tailnet connection and refuses tagged or unknown callers.
-// next must be NewHTTPHandler, which appends the IP principal to this identity.
+// NewTailnetHandler signs each request in by its tailnet connection and refuses tagged or unknown callers,
+// except at coding servers' MCP endpoints, which check their callers' passwords themselves.
+// next must serve NewHTTPHandler, which appends the IP principal to this identity.
 func NewTailnetHandler(client tailnetWhoIs, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if bridge, _ := path.Match("/opencode/*/mcp", r.URL.Path); bridge {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		who, err := client.WhoIs(r.Context(), r.RemoteAddr)
 		if err != nil || who.Node.IsTagged() || who.UserProfile.LoginName == "" {
 			httpRPCError(w, status.Error(codes.Unauthenticated, "tailnet caller has no Tailscale user"))

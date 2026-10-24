@@ -259,6 +259,21 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 	}
 }
 
+// Coding servers are often tagged nodes: their MCP endpoint, which checks its own password, skips the
+// tailnet sign-in, and every other path still refuses them.
+func TestTailnetHandlerPassesOpenCodeMCP(t *testing.T) {
+	whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) {
+		return &apitype.WhoIsResponse{Node: &tailcfg.Node{Tags: []string{"tag:server"}}, UserProfile: &tailcfg.UserProfile{LoginName: "tagged-devices"}}, nil
+	}}
+	handler := NewTailnetHandler(whois, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }))
+
+	for path, code := range map[string]int{"/opencode/box/mcp": http.StatusTeapot, "/opencode/box/other": http.StatusUnauthorized, "/api/Identity": http.StatusUnauthorized} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, http.NoBody))
+		require.Equal(t, code, response.Code, path)
+	}
+}
+
 // A tsnet caller is signed in by its connection; web_users and the tailscale CLI are never consulted.
 func TestTailnetIdentity(t *testing.T) {
 	dir := t.TempDir()
