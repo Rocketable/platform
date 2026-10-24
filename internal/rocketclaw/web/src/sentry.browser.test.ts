@@ -27,9 +27,10 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
   const sessionNavigation = Promise.withResolvers<void>();
   const interaction = Promise.withResolvers<void>();
   const reported = Promise.withResolvers<void>();
+  const streamReported = Promise.withResolvers<void>();
   const searchStarted = Promise.withResolvers<void>();
   const searchCancelled = Promise.withResolvers<void>();
-  const events: { exception?: { values: { type?: string; value: string; stacktrace?: { frames: { filename: string; lineno: number; colno: number }[] }; mechanism?: { type: string } }[] }; logentry?: { formatted: string }; debug_meta?: { images: { debug_id: string }[] } }[] = [];
+  const events: { tags?: { rpc?: string }; exception?: { values: { type?: string; value: string; stacktrace?: { frames: { filename: string; lineno: number; colno: number }[] }; mechanism?: { type: string } }[] }; logentry?: { formatted: string }; debug_meta?: { images: { debug_id: string }[] } }[] = [];
   const headers: Headers[] = [];
   const frames = new Map<string, PromiseWithResolvers<void>>();
   let breakReact = false;
@@ -47,7 +48,8 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       if (spans.some((span) => span.attributes["sentry.op"]?.value === "navigation" && span.name === "/cron")) cronNavigation.resolve();
       if (spans.some((span) => span.attributes["sentry.op"]?.value === "navigation" && span.name === "/s/:id")) sessionNavigation.resolve();
       if (spans.some((span) => span.attributes["sentry.op"]?.value === "ui.action.click") && spans.some((span) => span.attributes["sentry.op"]?.value === "ui.long_animation_frame" && span.attributes["browser.script.invoker_type"]?.value === "event-listener" && /^INPUT(?:#.*)?\.onclick$/.test(span.attributes["browser.script.invoker"]?.value ?? ""))) interaction.resolve();
-      if (["browser exception", "promise rejection", "console failure", "request failure", "clipboard failure"].every((message) => events.some((event) => event.logentry?.formatted === message || event.exception?.values.some((exception) => exception.value === message))) && events.some((event) => event.exception?.values.some((exception) => exception.type === "React ErrorBoundary TypeError"))) reported.resolve();
+      if (events.some((event) => event.exception?.values.some((exception) => exception.value === "stream failure"))) streamReported.resolve();
+      if (["browser exception", "promise rejection", "console failure", "request failure", "stream failure", "clipboard failure"].every((message) => events.some((event) => event.logentry?.formatted === message || event.exception?.values.some((exception) => exception.value === message))) && events.some((event) => event.exception?.values.some((exception) => exception.type === "React ErrorBoundary TypeError"))) reported.resolve();
       return Response.json({});
     }
     if (url.pathname.startsWith("/test/frame/")) {
@@ -68,8 +70,12 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       return Response.json({ terms: [], text: input.query, needle: input.query, matches: [], messages: [], mentionIds: [] });
     }
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") {
+      if (url.searchParams.get("viewing") === "private-stream") return Response.json({ message: "stream failure", code: 13 }, { status: 500 });
+      return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    }
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });
+    if (url.pathname === "/api/ListQueue") return Response.json({ items: [] });
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "sentry" } });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "sentry-test" });
     if (url.pathname === "/api/ListCronJobs") return Response.json({ message: "request failure", code: 13 }, { status: 500 });
@@ -145,8 +151,9 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     ` });
     await page.getByText("request failure", { exact: true }).waitFor();
     if (rate === 1) await cronNavigation.promise; // Finish this navigation so the next one is not classified as a redirect.
-    await page.evaluate(() => { history.pushState({}, "", "/s/c2Vzc2lvbg"); dispatchEvent(new PopStateEvent("popstate")); });
+    await page.evaluate(() => { history.pushState({}, "", "/s/" + btoa("private-stream")); dispatchEvent(new PopStateEvent("popstate")); });
     await page.getByText("private-chat-text", { exact: true }).waitFor();
+    if (rate !== undefined) await streamReported.promise;
     if (rate === 1) {
       await sessionNavigation.promise;
       // Background refreshes are not user-facing latency and must not hold pageloads and navigations open.
@@ -161,6 +168,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     await page.goto(`http://127.0.0.1:${server.port}/skills?q=private-search`);
     if (rate !== undefined) {
       await reported.promise;
+      expect(events.find((event) => event.exception?.values.some((exception) => exception.value === "stream failure"))?.tags?.rpc).toBe("ListSessions");
       expect(events.filter((event) => event.exception?.values.some((exception) => exception.value === "browser exception"))).toHaveLength(1);
       expect(events.some((event) => event.exception?.values.some((exception) => exception.type === "React ErrorBoundary TypeError" && exception.stacktrace?.frames.length))).toBe(true);
       const react = events.find((event) => event.exception?.values.some((exception) => exception.mechanism?.type === "auto.function.react.error_handler"))!;
@@ -175,7 +183,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       })).toBe(true);
       expect(await Bun.file(path.join(dist, "assets", bundle + ".map")).exists()).toBe(false);
       const data = envelopes.join("\n");
-      for (const privateValue of ["private-search", "private-cookie", "private-chat-text", "private-console-log", "private-console-warning", '"type":"log"', '"type":"replay_event"', '"type":"replay_recording"']) expect(data).not.toContain(privateValue);
+      for (const privateValue of ["private-search", "private-stream", "private-cookie", "private-chat-text", "private-console-log", "private-console-warning", '"type":"log"', '"type":"replay_event"', '"type":"replay_recording"']) expect(data).not.toContain(privateValue);
       expect(events.every((event) => !("user" in event) && !("breadcrumbs" in event))).toBe(true);
       expect(events.some((event) => event.exception?.values.some((exception) => exception.type === "AbortError"))).toBe(false);
     }
