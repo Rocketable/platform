@@ -523,8 +523,19 @@ func permissionWildcardMatch(input, pattern string, segments ...ruleSegment) boo
 
 	if len(segments) == 0 {
 		// Invalid UTF-8 must retain regexp's replacement-rune matching.
-		if !strings.ContainsAny(pattern, "*?") && utf8.ValidString(pattern) && utf8.ValidString(input) {
-			return input == pattern
+		if !strings.ContainsRune(pattern, '?') && utf8.ValidString(pattern) && utf8.ValidString(input) {
+			before, after, star := strings.Cut(pattern, "*")
+			if !star {
+				return input == pattern
+			}
+
+			if !strings.ContainsRune(after, '*') {
+				if after == "" && strings.HasSuffix(before, " ") && input == strings.TrimSuffix(before, " ") {
+					return true
+				}
+
+				return len(input) >= len(before)+len(after) && strings.HasPrefix(input, before) && strings.HasSuffix(input, after)
+			}
 		}
 
 		segments = []ruleSegment{{Text: pattern}}

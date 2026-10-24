@@ -105,6 +105,12 @@ func TestPermissionWildcardMatchOpenCodeSemantics(t *testing.T) {
 		{"./cli", "./cli", true}, {"./cli foo", "./cli", false}, {"./client", "./cli", false},
 		{"./cli", "./cli*", true}, {"./cli foo", "./cli*", true}, {"./client", "./cli*", true},
 		{"./cli", "./cli *", true}, {"./cli foo", "./cli *", true}, {"./client", "./cli *", false},
+		{"prefix\nnext\x00", "prefix*", true}, {"é/note.txt", "*.txt", true},
+		{"prefix.txt", "prefix*.txt", true}, {"prefix.txt", "prefix.txt*.txt", false},
+		{"é", "é*é", false}, {"éé", "é*é", true},
+		{"", " *", true}, {"echo ", "echo  *", true}, {"echo", "echo  *", false},
+		{"foo", "foo* *", true}, {"foo ", "foo* *", true}, {"foobar.txt", "foo?*.txt", true},
+		{"prefix\xff", "prefix*", true}, {"\xff.txt", "*.txt", true}, {"\xff", "\xff*", false},
 		{"README.md", "readme.md", false},
 		{`dir\file.txt`, "dir/file.txt", false},
 		{"", "*", true}, {"line\nnext\x00", "*", true}, {"é\xff", "*", true},
@@ -126,13 +132,15 @@ func TestPermissionWildcardMatchOpenCodeSemantics(t *testing.T) {
 		require.Zero(t, allocs)
 	}
 
-	for _, input := range []string{"note.txt", "other.txt", "é\n\x00", ""} {
-		allocs := testing.AllocsPerRun(100, func() {
-			if got := permissionWildcardMatch(input, "note.txt"); got != (input == "note.txt") {
-				t.Fatalf("exact match %q: got %t", input, got)
-			}
-		})
-		require.Zero(t, allocs, input)
+	for _, pattern := range []string{"note.txt", "note*", "*.txt", "note*.txt", "note.txt *"} {
+		for _, input := range []string{"note.txt", "other.txt", "é\n\x00", ""} {
+			allocs := testing.AllocsPerRun(100, func() {
+				if got := permissionWildcardMatch(input, pattern); got != (input == "note.txt" || pattern == "*.txt" && input == "other.txt") {
+					t.Fatalf("match %q against %q: got %t", input, pattern, got)
+				}
+			})
+			require.Zero(t, allocs, "%s %q", pattern, input)
+		}
 	}
 
 	require.True(t, permissionWildcardMatch("*", "*", ruleSegment{Text: "*", Literal: true}))
@@ -152,6 +160,9 @@ func BenchmarkPermissionWildcardMatch(b *testing.B) {
 		"exact":          {"note.txt", "note.txt", nil},
 		"exact-mismatch": {"other.txt", "note.txt", nil},
 		"wildcard":       {"note.txt", "*.txt", nil},
+		"prefix":         {"note.txt", "note*", nil},
+		"middle":         {"note.txt", "note*.txt", nil},
+		"optional-space": {"note.txt", "note.txt *", nil},
 	} {
 		b.Run(name, func(b *testing.B) {
 			b.ReportAllocs()
