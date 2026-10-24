@@ -639,7 +639,6 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	assert.Equal(t, "q1", items[0].ID)
 }
 
-// The State Store is its 16 tables plus shadow_turns and shadow_steps.
 func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	t.Parallel()
 
@@ -652,7 +651,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{
 		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
-		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
+		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_mutes", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
 	}, tables)
 }
 
@@ -2425,10 +2424,124 @@ func TestWebSpaces(t *testing.T) {
 	assert.Equal(t, TabState{Space: "second", Last: map[string]string{}}, state)
 	assert.Equal(t, int64(2), revision)
 
+	// A space's last tab may be a Shared tab whose own copy sits in another space, or a closed tab.
+	last := map[string]string{"main": "/cron", "ops": "/cron", "dev": "/search"}
+	saved, err := store.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}}, Space: "main", Last: last}, revision)
+	require.NoError(t, err)
+	require.True(t, saved)
+
+	state, _, err = store.TabState(ctx, "alice")
+	require.NoError(t, err)
+	assert.Equal(t, TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}}, Space: "main", Last: last}, state, "every space keeps its own last tab")
+
 	state, revision, err = store.TabState(ctx, "bob")
 	require.NoError(t, err)
 	assert.Zero(t, state, "each person has their own state")
 	assert.Zero(t, revision)
+}
+
+func TestWebSharedTabs(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"a": KindWebChat})
+	require.NoError(t, store.CreateSpace(ctx, "Ops"))
+	require.NoError(t, store.CreateSpace(ctx, "Dev"))
+
+	spaces, err := store.Spaces(ctx)
+	require.NoError(t, err)
+
+	ops, dev := spaces[1].ID, spaces[2].ID
+	share := func(space, path string) {
+		t.Helper()
+		require.NoError(t, store.ShareTab(ctx, space, path))
+	}
+	shared := func() []SharedTab {
+		t.Helper()
+
+		tabs, err := store.SharedTabs(ctx)
+		require.NoError(t, err)
+
+		return tabs
+	}
+
+	share("main", "/search")
+	share("main", "/s/a")
+	share("main", "/search")
+	share("main", "/s/bm9uZQ")
+	share("gone", "/cron")
+	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/s/YQ"}}, shared(),
+		"oldest first; a legacy spelling is stored canonical; sharing again, a missing session, or a missing space changes nothing")
+
+	require.NoError(t, store.SwapSharedTabs(ctx, "main", "/s/YQ", "/search"))
+	require.NoError(t, store.SwapSharedTabs(ctx, "main", "/search", "/cron"))
+	require.NoError(t, store.SwapSharedTabs(ctx, ops, "/search", "/s/YQ"))
+	assert.Equal(t, []SharedTab{{Space: "main", Path: "/s/YQ"}, {Space: "main", Path: "/search"}}, shared(),
+		"swapping two tabs swaps their places; swapping with a tab not shared there changes nothing")
+
+	share(ops, "/cron")
+	share(ops, "/s/YQ")
+	share(dev, "/agents")
+	require.NoError(t, store.UnshareTab(ctx, "main", "/s/YQ"))
+	require.NoError(t, store.UnshareTab(ctx, "main", "/pages"))
+	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: ops, Path: "/cron"}, {Space: ops, Path: "/s/YQ"}, {Space: dev, Path: "/agents"}}, shared(),
+		"removing a tab from one space leaves it in another; removing one not shared changes nothing")
+
+	// Main is the oldest space, though every generated id sorts before "main".
+	share("main", "/s/YQ")
+	require.NoError(t, store.DeleteSpace(ctx, ops))
+	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/cron"}, {Space: dev, Path: "/agents"}, {Space: "main", Path: "/s/YQ"}}, shared(),
+		"a deleted space's tabs move to the first space, keeping when they were added; one shared there already stays once")
+
+	share(dev, "/s/YQ")
+
+	_, err = store.db.ExecContext(ctx, `DELETE FROM conversations WHERE conversation_id = 'a'`)
+	require.NoError(t, err)
+	require.NoError(t, store.DeleteSpace(ctx, dev))
+	require.ErrorIs(t, store.DeleteSpace(ctx, "main"), ErrSpaceRejected)
+	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/cron"}, {Space: "main", Path: "/agents"}}, shared(),
+		"deleting a session takes it out of every space; the last space keeps its tabs")
+}
+
+func TestWebTabMutes(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"a": KindWebChat, "b": KindWebChat, "c": KindWebChat})
+
+	later, earlier := time.Now().Add(time.Hour).Truncate(time.Second), time.Now().Add(-time.Hour)
+	mutes := func(username string) []string {
+		t.Helper()
+
+		got, err := store.TabMutes(ctx, username)
+		require.NoError(t, err)
+
+		out := make([]string, 0, len(got))
+		for _, mute := range got {
+			out = append(out, fmt.Sprint(mute.Path, " ", mute.Until != nil && mute.Until.Equal(later)))
+		}
+
+		return out
+	}
+
+	require.NoError(t, store.MuteTab(ctx, "alice", "/s/a", nil))
+	require.NoError(t, store.MuteTab(ctx, "alice", "/s/Yg", &later))
+	require.NoError(t, store.MuteTab(ctx, "alice", "/s/Yw", &earlier))
+	require.NoError(t, store.MuteTab(ctx, "alice", "/search", nil))
+	require.NoError(t, store.MuteTab(ctx, "alice", "/s/bm9uZQ", nil))
+	require.NoError(t, store.MuteTab(ctx, "bob", "/s/YQ", &later))
+	assert.Equal(t, []string{"/s/YQ false", "/s/Yg true"}, mutes("alice"),
+		"a mute or a snooze is kept under the canonical path; a past snooze, a page, and a missing session are not")
+	assert.Equal(t, []string{"/s/YQ true"}, mutes("bob"), "each person's mutes are their own")
+
+	require.NoError(t, store.MuteTab(ctx, "alice", "/s/Yw", nil))
+	require.NoError(t, store.UnmuteTab(ctx, "alice", "/s/YQ"))
+	_, err := store.db.ExecContext(ctx, `DELETE FROM conversations WHERE conversation_id = 'b'`)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/s/Yw false"}, mutes("alice"), "muting again replaces a snooze; unmuting or deleting the session clears a mute")
+	assert.Equal(t, []string{"/s/YQ true"}, mutes("bob"))
 }
 
 // Each conversation-creating path stores what it creates and whether Web lists it, and Web lists,

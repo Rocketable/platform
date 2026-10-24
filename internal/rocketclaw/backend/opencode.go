@@ -401,6 +401,8 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	// fetch proves deletions only inside its window. Rows stamped after the poll started were
 	// created or renamed meanwhile and stay. Earlier polls must not undo a rename's title/name.
 	// Kept rows are stamped too: offline means unreachable only.
+	// A turn's end marks its senders unread, and every Web person when the session is in some
+	// space's Shared group.
 	// Session.Info.title is also the shared name, including when cleared (OpenCode v2
 	// https://opencode.ai/v2/openapi.json#/paths/~1api~1session/get).
 	_, err := execState(ctx, s.db, "sync opencode sessions", `WITH incoming AS (
@@ -414,8 +416,11 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
         last_updated = excluded.last_updated, running = excluded.running, background = excluded.background, synced_at = excluded.synced_at,
         reply = COALESCE(excluded.reply, conversations.reply), agent = excluded.agent, model = excluded.model,
         read_through = GREATEST(excluded.read_through, conversations.read_through)
+), ended AS (
+    SELECT DISTINCT conversation_id, username FROM unnest($17::text[], $18::text[]) AS m(conversation_id, username)
 ), marks AS (
-    SELECT DISTINCT conversation_id, username, $14 AS kind FROM unnest($17::text[], $18::text[]) AS m(conversation_id, username) WHERE username <> ''
+    SELECT conversation_id, username, $14 AS kind FROM ended WHERE username <> ''
+    UNION SELECT e.conversation_id, p.username, $14 FROM ended e JOIN web_shared_tabs t USING (conversation_id) CROSS JOIN web_tab_states p
 ), marked AS (
     INSERT INTO web_tabs (username, path, conversation_id, unread_at)
     SELECT c.username, `+tabPathSQL+`, c.conversation_id, now() FROM marks c

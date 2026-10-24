@@ -19,6 +19,8 @@ test("an open RocketClaw or OpenCode tab newly marked unread raises a desktop no
     { id: "opencode:box:ses_a", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_a", preview: "Alpha work", server: "box", directory: "/srv/app", running: true, reply: "All **green**:\n\n- 12 tests pass" },
     { id: "idle", agent: "main", preview: "Idle work", unreadAt: "2026-10-22T10:00:00Z" },
     { id: "closed", agent: "main", preview: "Closed work", running: true },
+    // Team is open only in Shared; Quiet is muted, Later snoozed for years, and Over's snooze has ended.
+    ...["team", "quiet", "later", "over"].map((id) => ({ id, agent: "main", preview: `${id} work`, running: true })),
   ];
   const mark = (ids: string[], unreadAt: string) => { rows = rows.map((row) => ids.includes(row.id) ? { ...row, unreadAt } : row); };
   const viewing: string[] = [];
@@ -40,7 +42,8 @@ test("an open RocketClaw or OpenCode tab newly marked unread raises a desktop no
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [["/s/", "chat"], ["/oc/", "opencode:box:ses_a"], ["/s/", "idle"]].map(([route, id]) => ({ path: `${route}${encode(id)}`, space: "main" })), groups: [], space: "main", last: {} }, revision: "1" });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [["/s/", "chat"], ["/oc/", "opencode:box:ses_a"], ["/s/", "idle"], ["/s/", "quiet"], ["/s/", "later"], ["/s/", "over"]].map(([route, id]) => ({ path: `${route}${encode(id)}`, space: "main" })), groups: [], space: "main", last: {} }, revision: "1",
+        shared: [{ space: "main", path: `/s/${encode("team")}` }], mutes: [["quiet", ""], ["later", "2999-01-01T00:00:00Z"], ["over", "2001-01-01T00:00:00Z"]].map(([id, until]) => ({ path: `/s/${encode(id)}`, until })) });
       default: return Response.json({});
     }
   } });
@@ -93,13 +96,16 @@ test("an open RocketClaw or OpenCode tab newly marked unread raises a desktop no
     await polls();
     expect(await notes()).toEqual([]);
 
-    // A new mark, or one moving past the last seen, notifies; the tab in view in a focused window and a row
-    // without a tab stay quiet. An OpenCode notification keeps the tab title and shows the start of its reply as plain text.
-    mark(["chat", "opencode:box:ses_a", "idle", "closed"], "2026-10-22T10:01:00Z");
+    // A new mark, or one moving past the last seen, notifies, a tab only in Shared too; the tab in view in a focused
+    // window, a row without a tab, and a muted or snoozed tab stay quiet. An OpenCode notification keeps the tab
+    // title and shows the start of its reply as plain text.
+    mark(["chat", "opencode:box:ses_a", "idle", "closed", "team", "quiet", "later", "over"], "2026-10-22T10:01:00Z");
     await polls();
     expect(await notes()).toEqual([
       { title: "Alpha work", body: "All green: - 12 tests pass", tag: "opencode:box:ses_a", closed: false },
       { title: "main", body: "Idle work", tag: "idle", closed: false },
+      { title: "main", body: "team work", tag: "team", closed: false },
+      { title: "main", body: "over work", tag: "over", closed: false },
     ]);
 
     // With the window in the background, the poll reports no view, so a turn ending on the active tab marks it and
@@ -108,7 +114,7 @@ test("an open RocketClaw or OpenCode tab newly marked unread raises a desktop no
     rows = rows.map((row) => row.id === "chat" ? { ...row, unreadAt: "2026-10-22T10:02:00Z", preview: `Chat work\n${"x".repeat(300)}` } : row);
     await polls();
     expect(viewing.at(-1)).toBe("");
-    expect((await notes()).slice(2)).toEqual([{ title: "main", body: `Chat work ${"x".repeat(189)}…`, tag: "chat", closed: false }]);
+    expect((await notes()).slice(4)).toEqual([{ title: "main", body: `Chat work ${"x".repeat(189)}…`, tag: "chat", closed: false }]);
     expect(await page.getByRole("tab", { name: "Chat work" }).getAttribute("aria-description")).toBe("Space: Main, Unread");
 
     // Clicking a notification opens its tab and closes it; the focused window then reports the OpenCode session.

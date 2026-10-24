@@ -191,7 +191,11 @@ A task the voice model passes to the conversation's agent during a Voice Session
 
 ### Space
 
-A named place in the Web that holds tabs, shared by everyone: the server keeps one list, oldest first, with names unique ignoring case, and the last one cannot be deleted. An agent or cron names its space by name with `space:`; tabs and sessions refer to a space by its ID, so a rename keeps them in it. Where each tab sits, and which space a person is in, is that person's own and follows them across devices.
+A named place in the Web that holds tabs, shared by everyone: the server keeps one list, oldest first, with names unique ignoring case, and the last one cannot be deleted. An agent or cron names its space by name with `space:`; tabs and sessions refer to a space by its ID, so a rename keeps them in it. Where each tab sits, and which space a person is in, is that person's own and follows them across devices; only the space's Shared Group is the same for everyone.
+
+### Shared Group
+
+The one grey tab group named Shared that every space has, shown first in the Web sidebar. Its tabs are the same for every Web user, oldest added first, and anyone can add a tab to it or remove one, which removes it for everyone. A tab can be in a space's Shared Group and in a person's own tabs at once. Collapsing it is each person's own choice. Deleting a space moves its Shared Group's tabs into the first remaining space's.
 
 ### Birth Space
 
@@ -199,7 +203,7 @@ The Space a session was born in: its agent's `space:`, or for a cron's sessions 
 
 ### Unread
 
-A session's per-person mark that a turn the person sent a Web message into has ended and they have not looked at it since. Other people's turns, and turns with no Web sender, mark no one. Having the session's tab active in a focused window clears the mark on all of that person's devices. Unrelated to the per-chat `web_unread` flag that migration 017 removed.
+A session's per-person mark that a turn the person sent a Web message into has ended and they have not looked at it since. Other people's turns, and turns with no Web sender, mark no one, except in a session in some space's Shared group, where any turn's end marks every Web person. Having the session's tab active in a focused window clears the mark on all of that person's devices. Unrelated to the per-chat `web_unread` flag that migration 017 removed.
 
 ## Hosted Pages
 

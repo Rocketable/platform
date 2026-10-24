@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"maps"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -330,10 +329,17 @@ func spaceNameError(_ sql.Result, err error) error {
 }
 
 // DeleteSpace deletes space id unless it is the last space. Sessions born there lose their birth space.
-// Locking every space, in id order, makes concurrent deletes take turns, so two cannot remove the last two.
+// Its Shared tabs move to the first space left, keeping when they were added; one shared there already
+// stays once. Locking every space, in id order, makes concurrent deletes take turns, so two cannot
+// remove the last two.
 func (s *SessionService) DeleteSpace(ctx context.Context, id string) error {
-	deleted, err := execRows(ctx, s.db, "delete space", "count deleted space", `WITH locked AS (SELECT id FROM web_spaces ORDER BY id FOR UPDATE),
-others AS (SELECT id FROM locked WHERE id <> $1 LIMIT 1)
+	deleted, err := execRows(ctx, s.db, "delete space", "count deleted space", `WITH locked AS (SELECT id, created_at FROM web_spaces ORDER BY id FOR UPDATE),
+others AS (SELECT id FROM locked WHERE id <> $1 ORDER BY created_at, id LIMIT 1),
+moved AS (
+    INSERT INTO web_shared_tabs (space, path, conversation_id, added_at)
+    SELECT o.id, t.path, t.conversation_id, t.added_at FROM web_shared_tabs t CROSS JOIN others o WHERE t.space = $1
+    ON CONFLICT DO NOTHING
+)
 DELETE FROM web_spaces USING others WHERE web_spaces.id = $1`, id)
 	if err == nil && deleted == 0 {
 		return ErrSpaceRejected
@@ -344,9 +350,9 @@ DELETE FROM web_spaces USING others WHERE web_spaces.id = $1`, id)
 
 // Tab is one open Web tab; Group and Space are the ids of its group and space.
 type Tab struct {
-	Path            string
-	Pinned, Preview bool
-	Group, Space    string
+	Path         string
+	Preview      bool
+	Group, Space string
 }
 
 // TabGroup is one Web tab group.
@@ -367,9 +373,9 @@ type TabState struct {
 // tabPathSQL is conversation c's Web tab path, as the Web's rowPath and encodeSessionId spell it.
 const tabPathSQL = `CASE WHEN c.kind = '` + string(KindRemote) + `' THEN '/oc/' ELSE '/s/' END || rtrim(translate(replace(encode(convert_to(c.conversation_id, 'UTF8'), 'base64'), E'\n', ''), '+/', '-_'), '=')`
 
-// tabConversation is the conversation a /s/ or /oc/ tab path opens, as the Web's decodeSessionId
+// TabConversation is the conversation a /s/ or /oc/ tab path opens, as the Web's decodeSessionId
 // reads it, which takes legacy URI-encoded IDs too; else "".
-func tabConversation(path string) string {
+func TabConversation(path string) string {
 	encoded, ok := strings.CutPrefix(path, "/s/")
 	if !ok {
 		if encoded, ok = strings.CutPrefix(path, "/oc/"); !ok {
@@ -400,11 +406,12 @@ func (s *SessionService) TabState(ctx context.Context, username string) (TabStat
 	defer func() { _ = tx.Rollback() }()
 
 	var (
-		state    = TabState{Last: map[string]string{}}
+		state    TabState
+		last     []byte
 		revision int64
 	)
 
-	err = tx.QueryRowContext(ctx, `SELECT space, revision FROM web_tab_states WHERE username = $1`, username).Scan(&state.Space, &revision)
+	err = tx.QueryRowContext(ctx, `SELECT space, last, revision FROM web_tab_states WHERE username = $1`, username).Scan(&state.Space, &last, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TabState{}, 0, nil
 	}
@@ -413,26 +420,13 @@ func (s *SessionService) TabState(ctx context.Context, username string) (TabStat
 		return TabState{}, 0, fmt.Errorf("read tab state: %w", err)
 	}
 
-	err = readRows(ctx, tx, `SELECT path, pinned, preview, group_id, space, position IS NOT NULL, last FROM web_tabs
-WHERE username = $1 AND (position IS NOT NULL OR last) ORDER BY position`, "tabs", func(row rowScanner) error {
-		var (
-			tab        Tab
-			open, last bool
-		)
+	if err := json.Unmarshal(last, &state.Last); err != nil {
+		return TabState{}, 0, fmt.Errorf("decode last tabs: %w", err)
+	}
 
-		if err := row.Scan(&tab.Path, &tab.Pinned, &tab.Preview, &tab.Group, &tab.Space, &open, &last); err != nil {
-			return fmt.Errorf("scan tab: %w", err)
-		}
-
-		if open {
-			state.Tabs = append(state.Tabs, tab)
-		}
-
-		if last {
-			state.Last[tab.Space] = tab.Path
-		}
-
-		return nil
+	state.Tabs, err = queryRows(ctx, tx, `SELECT path, preview, group_id, space FROM web_tabs WHERE username = $1 AND position IS NOT NULL ORDER BY position`, "tabs", func(row rowScanner) (Tab, error) {
+		var tab Tab
+		return tab, row.Scan(&tab.Path, &tab.Preview, &tab.Group, &tab.Space)
 	}, username)
 	if err != nil {
 		return TabState{}, 0, err
@@ -448,7 +442,7 @@ WHERE username = $1 AND (position IS NOT NULL OR last) ORDER BY position`, "tabs
 
 // SaveTabState replaces username's saved Web tab state when it was made from the saved revision,
 // and reports whether it did.
-// Saves never write unread_at: a closed tab stays while unread or some space's last tab. A session
+// Saves never write unread_at: a closed tab stays while unread. A session
 // tab names its conversation under the path marks use, and one of a session that does not exist is
 // dropped.
 func (s *SessionService) SaveTabState(ctx context.Context, username string, state *TabState, revision int64) (bool, error) {
@@ -459,30 +453,33 @@ func (s *SessionService) SaveTabState(ctx context.Context, username string, stat
 
 	defer func() { _ = tx.Rollback() }()
 
-	if claimed, err := execRows(ctx, tx, "save tab state", "count saved tab state", `INSERT INTO web_tab_states (username, space, revision) VALUES ($1, $2, $3 + 1)
-ON CONFLICT (username) DO UPDATE SET space = excluded.space, revision = excluded.revision
-WHERE web_tab_states.revision = $3`, username, state.Space, revision); err != nil || claimed == 0 {
-		return false, err
+	var lastSpaces, lastPaths, lastConversations []string
+	for space, path := range state.Last {
+		lastSpaces, lastPaths, lastConversations = append(lastSpaces, space), append(lastPaths, path), append(lastConversations, TabConversation(path))
 	}
 
-	// A space's last tab that is closed is a row of its own after the open tabs.
-	tabs := slices.Clip(state.Tabs)
-	for space, path := range state.Last {
-		if !slices.ContainsFunc(state.Tabs, func(tab Tab) bool { return tab.Path == path }) {
-			tabs = append(tabs, Tab{Path: path, Space: space})
-		}
+	// Each space's last tab is kept under the path its tab is saved as.
+	if claimed, err := execRows(ctx, tx, "save tab state", "count saved tab state", `WITH lasts AS (
+    SELECT COALESCE(jsonb_object_agg(l.space, COALESCE(`+tabPathSQL+`, l.path)), '{}') AS last
+    FROM unnest($4::text[], $5::text[], $6::text[]) AS l(space, path, conversation_id)
+    LEFT JOIN conversations c ON c.conversation_id = l.conversation_id
+)
+INSERT INTO web_tab_states (username, space, last, revision) SELECT $1, $2, last, $3 + 1 FROM lasts
+ON CONFLICT (username) DO UPDATE SET space = excluded.space, last = excluded.last, revision = excluded.revision
+WHERE web_tab_states.revision = $3`, username, state.Space, revision, lastSpaces, lastPaths, lastConversations); err != nil || claimed == 0 {
+		return false, err
 	}
 
 	var (
 		paths, conversations, groups, spaces []string
-		pinned, previews, lasts              []bool
+		previews                             []bool
 		groupIDs, names, colors              []string
 		collapsed                            []bool
 	)
 
-	for _, tab := range tabs {
-		paths, conversations, groups, spaces = append(paths, tab.Path), append(conversations, tabConversation(tab.Path)), append(groups, tab.Group), append(spaces, tab.Space)
-		pinned, previews, lasts = append(pinned, tab.Pinned), append(previews, tab.Preview), append(lasts, state.Last[tab.Space] == tab.Path)
+	for _, tab := range state.Tabs {
+		paths, conversations, groups, spaces = append(paths, tab.Path), append(conversations, TabConversation(tab.Path)), append(groups, tab.Group), append(spaces, tab.Space)
+		previews = append(previews, tab.Preview)
 	}
 
 	for _, group := range state.Groups {
@@ -494,7 +491,7 @@ WHERE web_tab_states.revision = $3`, username, state.Space, revision); err != ni
 ), closed AS (
     DELETE FROM web_tabs WHERE username = $1 AND unread_at IS NULL
 )
-UPDATE web_tabs SET position = NULL, pinned = FALSE, preview = FALSE, group_id = '', space = '', last = FALSE
+UPDATE web_tabs SET position = NULL, preview = FALSE, group_id = '', space = ''
 WHERE username = $1 AND unread_at IS NOT NULL`, username); err != nil {
 		return false, err
 	}
@@ -504,17 +501,16 @@ WHERE username = $1 AND unread_at IS NOT NULL`, username); err != nil {
     INSERT INTO web_tab_groups (username, id, position, name, color, collapsed)
     SELECT $1, id, n - 1, name, color, collapsed FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[]) WITH ORDINALITY AS g(id, name, color, collapsed, n)
 ), incoming AS (
-    SELECT COALESCE(`+tabPathSQL+`, t.path) AS path, c.conversation_id, CASE WHEN t.n <= $6 THEN t.n - 1 END AS position,
-        t.pinned, t.preview, t.group_id, t.space, t.last
-    FROM unnest($7::text[], $8::text[], $9::boolean[], $10::boolean[], $11::text[], $12::text[], $13::boolean[]) WITH ORDINALITY AS t(path, conversation_id, pinned, preview, group_id, space, last, n)
+    SELECT COALESCE(`+tabPathSQL+`, t.path) AS path, c.conversation_id, t.n - 1 AS position, t.preview, t.group_id, t.space
+    FROM unnest($6::text[], $7::text[], $8::boolean[], $9::text[], $10::text[]) WITH ORDINALITY AS t(path, conversation_id, preview, group_id, space, n)
     LEFT JOIN conversations c ON c.conversation_id = t.conversation_id
     WHERE t.conversation_id = '' OR c.conversation_id IS NOT NULL
 )
-INSERT INTO web_tabs (username, path, conversation_id, position, pinned, preview, group_id, space, last)
-SELECT DISTINCT ON (path) $1, path, conversation_id, position, pinned, preview, group_id, space, last FROM incoming ORDER BY path, position NULLS LAST, space
-ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversation_id, position = excluded.position, pinned = excluded.pinned,
-    preview = excluded.preview, group_id = excluded.group_id, space = excluded.space, last = excluded.last`,
-		username, groupIDs, names, colors, collapsed, len(state.Tabs), paths, conversations, pinned, previews, groups, spaces, lasts); err != nil {
+INSERT INTO web_tabs (username, path, conversation_id, position, preview, group_id, space)
+SELECT DISTINCT ON (path) $1, path, conversation_id, position, preview, group_id, space FROM incoming ORDER BY path, position
+ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversation_id, position = excluded.position,
+    preview = excluded.preview, group_id = excluded.group_id, space = excluded.space`,
+		username, groupIDs, names, colors, collapsed, paths, conversations, previews, groups, spaces); err != nil {
 		return false, err
 	}
 
@@ -523,6 +519,81 @@ ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversati
 	}
 
 	return true, nil
+}
+
+// SharedTab is one tab in a space's Shared group, which every Web user sees.
+type SharedTab struct{ Space, Path string }
+
+// SharedTabs lists every space's Shared tabs, oldest added first.
+func (s *SessionService) SharedTabs(ctx context.Context) ([]SharedTab, error) {
+	return queryRows(ctx, s.db, `SELECT space, path FROM web_shared_tabs ORDER BY added_at, path`, "shared tabs", func(row rowScanner) (SharedTab, error) {
+		var tab SharedTab
+		return tab, row.Scan(&tab.Space, &tab.Path)
+	})
+}
+
+// ShareTab adds path to space's Shared tabs under the path SaveTabState saves it as. A tab already
+// shared there keeps its place; a missing space or session stores nothing.
+func (s *SessionService) ShareTab(ctx context.Context, space, path string) error {
+	_, err := execState(ctx, s.db, "share tab", `INSERT INTO web_shared_tabs (space, path, conversation_id)
+SELECT w.id, COALESCE(`+tabPathSQL+`, $2), c.conversation_id FROM web_spaces w
+LEFT JOIN conversations c ON c.conversation_id = $3
+WHERE w.id = $1 AND ($3 = '' OR c.conversation_id IS NOT NULL)
+ON CONFLICT DO NOTHING`, space, path, TabConversation(path))
+
+	return err
+}
+
+// UnshareTab takes path out of space's Shared tabs.
+func (s *SessionService) UnshareTab(ctx context.Context, space, path string) error {
+	_, err := execState(ctx, s.db, "unshare tab", `DELETE FROM web_shared_tabs WHERE space = $1 AND path = $2`, space, path)
+
+	return err
+}
+
+// SwapSharedTabs swaps when path and with were added to space's Shared tabs, which swaps their places.
+// Unless both are shared there, it changes nothing.
+func (s *SessionService) SwapSharedTabs(ctx context.Context, space, path, with string) error {
+	_, err := execState(ctx, s.db, "swap shared tabs", `WITH pair AS (
+    SELECT path, added_at FROM web_shared_tabs WHERE space = $1 AND path IN ($2, $3)
+)
+UPDATE web_shared_tabs t SET added_at = other.added_at FROM pair this JOIN pair other ON other.path <> this.path
+WHERE t.space = $1 AND t.path = this.path`, space, path, with)
+
+	return err
+}
+
+// TabMute is a session tab whose desktop notifications a person muted until Until, or until unmuted
+// when Until is nil.
+type TabMute struct {
+	Path  string
+	Until *time.Time
+}
+
+// MuteTab mutes path's session for username until until, or until unmuted when until is nil. A path
+// that names no session stores nothing.
+func (s *SessionService) MuteTab(ctx context.Context, username, path string, until *time.Time) error {
+	_, err := execState(ctx, s.db, "mute tab", `INSERT INTO web_tab_mutes (username, conversation_id, until)
+SELECT $1, conversation_id, $3 FROM conversations WHERE conversation_id = $2
+ON CONFLICT (username, conversation_id) DO UPDATE SET until = excluded.until`, username, TabConversation(path), until)
+
+	return err
+}
+
+// UnmuteTab unmutes path's session for username.
+func (s *SessionService) UnmuteTab(ctx context.Context, username, path string) error {
+	_, err := execState(ctx, s.db, "unmute tab", `DELETE FROM web_tab_mutes WHERE username = $1 AND conversation_id = $2`, username, TabConversation(path))
+
+	return err
+}
+
+// TabMutes lists username's mutes that have not ended, by the path SaveTabState saves each tab as.
+func (s *SessionService) TabMutes(ctx context.Context, username string) ([]TabMute, error) {
+	return queryRows(ctx, s.db, `SELECT `+tabPathSQL+`, m.until FROM web_tab_mutes m JOIN conversations c USING (conversation_id)
+WHERE m.username = $1 AND (m.until IS NULL OR m.until > now()) ORDER BY m.conversation_id`, "tab mutes", func(row rowScanner) (TabMute, error) {
+		var mute TabMute
+		return mute, row.Scan(&mute.Path, &mute.Until)
+	}, username)
 }
 
 // ViewSession records that username has conversationID in view now, which clears their mark on it
@@ -1135,7 +1206,8 @@ FROM steps s, replay r WHERE a.id = $2 AND s.conversation_id = $1 AND s.key = $2
 	}
 
 	// Each Web person who sent a listed session's turn its input or an applied steer finds the
-	// session unread on its tab, unless they viewed it in the last 10 seconds by the database clock.
+	// session unread on its tab, and every Web person does when the session is in some space's
+	// Shared group, unless they viewed it in the last 10 seconds by the database clock.
 	if _, err := tx.ExecContext(ctx, `WITH turn AS (
     SELECT a.inbound_json, a.applied_input_ids FROM turns a JOIN conversations c ON c.conversation_id = $1 AND c.listed WHERE a.id = $2
 ), inbounds AS (
@@ -1145,9 +1217,12 @@ FROM steps s, replay r WHERE a.id = $2 AND s.conversation_id = $1 AND s.key = $2
 ), senders AS (
     SELECT DISTINCT inbound->'Metadata'->>$3::text AS username FROM inbounds
     WHERE inbound->>'Source' = $4 AND inbound->>'Human' = 'true' AND inbound->'Metadata'->>$3::text <> ''
+), readers AS (
+    SELECT username FROM senders
+    UNION SELECT p.username FROM web_shared_tabs t CROSS JOIN turn CROSS JOIN web_tab_states p WHERE t.conversation_id = $1
 )
 INSERT INTO web_tabs (username, path, conversation_id, unread_at)
-SELECT s.username, `+tabPathSQL+`, c.conversation_id, now() FROM senders s JOIN conversations c ON c.conversation_id = $1
+SELECT s.username, `+tabPathSQL+`, c.conversation_id, now() FROM readers s JOIN conversations c ON c.conversation_id = $1
 LEFT JOIN web_tab_states p ON p.username = s.username AND p.viewing = $1 AND p.viewed_at >= now() - interval '10 seconds'
 WHERE p.username IS NULL
 ON CONFLICT (username, path) DO UPDATE SET unread_at = now(), conversation_id = excluded.conversation_id`, finish.store.conversationID, turnID, protocol.InboundPrincipalEmailMetadataKey, protocol.SourceWeb); err != nil {

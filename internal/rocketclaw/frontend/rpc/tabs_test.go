@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
@@ -25,9 +26,11 @@ func TestTabs(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-	for _, id := range []string{"a", "b", "c"} {
+	for _, id := range []string{"a", "b", "c", "private-X"} {
 		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
 	}
+
+	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "a", Agent: "main", SlackChannel: "#ops"}))
 
 	db := openTestTurns(t, dsn).db
 	server := &Server{sessions: sessions, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"}}
@@ -38,6 +41,14 @@ func TestTabs(t *testing.T) {
 		out := make([]string, 0, len(response.Spaces))
 		for _, space := range response.Spaces {
 			out = append(out, space.Name)
+		}
+
+		return out
+	}
+	shared := func(response *TabsResponse) []string {
+		out := make([]string, 0, len(response.Shared))
+		for _, tab := range response.Shared {
+			out = append(out, tab.Space+" "+tab.Path)
 		}
 
 		return out
@@ -65,7 +76,7 @@ func TestTabs(t *testing.T) {
 
 	// /search is the ops space's last tab, though closed.
 	saved := &TabState{
-		Tabs:   []*Tab{{Path: "/", Space: "main"}, {Path: "/s/YQ", Pinned: true, Group: "g", Space: "main"}, {Path: "/s/Yg", Preview: true, Space: "ops"}},
+		Tabs:   []*Tab{{Path: "/", Space: "main"}, {Path: "/s/YQ", Group: "g", Space: "main"}, {Path: "/s/Yg", Preview: true, Space: "ops"}},
 		Groups: []*TabGroup{{Id: "g", Name: "Work", Color: "Blue", Collapsed: true}},
 		Space:  "main",
 		Last:   map[string]string{"main": "/s/YQ", "ops": "/search"},
@@ -94,8 +105,7 @@ func TestTabs(t *testing.T) {
 
 	// Alice has b's open tab and c's closed one unread. A save keeps both marks, writes a's tab saved in the
 	// old URI spelling under its canonical path, drops tabs of sessions that do not exist, even ones whose
-	// path decodes to bytes that are not UTF-8, and deletes closed tabs that are neither unread nor some
-	// space's last.
+	// path decodes to bytes that are not UTF-8, and deletes closed tabs that are not unread.
 	_, err = db.ExecContext(t.Context(), `UPDATE web_tabs SET unread_at = now() WHERE conversation_id = 'b'; INSERT INTO web_tabs (username, path, conversation_id, unread_at) VALUES ('alice', '/s/Yw', 'c', now())`)
 	require.NoError(t, err)
 
@@ -120,6 +130,33 @@ func TestTabs(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, response.Stale)
 
+	// Alice shares her open tab, then Bob a page: everyone sees both, oldest first, and Bob's own tabs stay his.
+	response, err = call("127.0.0.1", &TabsRequest{Share: &SharedTab{Space: "main", Path: "/s/YQ"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"main /s/YQ"}, shared(response))
+	response, err = call("192.0.2.2", &TabsRequest{Share: &SharedTab{Space: "main", Path: "/search"}})
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(&TabState{Space: "main"}, response.State))
+	assert.Equal(t, []string{"main /s/YQ", "main /search"}, shared(response))
+
+	// New session, a session nobody may open, one that does not exist, and a path no Web can decode cannot be shared.
+	for path, code := range map[string]codes.Code{"/": codes.InvalidArgument, "/s/cHJpdmF0ZS1Y": codes.PermissionDenied, "/s/bm9uZQ": codes.NotFound, "/pages/x/%": codes.InvalidArgument, "/pages/x/%FF": codes.InvalidArgument} {
+		_, err = call("192.0.2.2", &TabsRequest{Share: &SharedTab{Space: "main", Path: path}})
+		assert.Equal(t, code, status.Code(err), path)
+	}
+
+	// Bob takes Alice's tab out for everyone; it stays among her own tabs.
+	_, err = call("192.0.2.2", &TabsRequest{Unshare: &SharedTab{Space: "main", Path: "/s/YQ"}})
+	require.NoError(t, err)
+	response, err = call("127.0.0.1", &TabsRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"main /search"}, shared(response))
+	assert.Equal(t, []*Tab{{Path: "/s/YQ", Space: "main"}}, response.State.Tabs)
+
+	response, err = call("192.0.2.2", &TabsRequest{State: &TabState{Space: "main"}, Revision: 1})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"main /search"}, shared(response), "a save's reply carries the Shared tabs too")
+
 	response, err = call("192.0.2.2", &TabsRequest{CreateSpace: "Ops"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Main", "Ops"}, names(response), "spaces are shared, oldest first")
@@ -135,6 +172,52 @@ func TestTabs(t *testing.T) {
 	response, err = call("127.0.0.1", &TabsRequest{DeleteSpace: "main"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Operations"}, names(response))
+	assert.Equal(t, []string{response.Spaces[0].Id + " /search"}, shared(response), "a deleted space's Shared tabs move to the first space")
 	_, err = call("127.0.0.1", &TabsRequest{DeleteSpace: response.Spaces[0].Id})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "the last space stays")
+
+	// Bob moves a newer Shared tab above an older one for everyone.
+	space := response.Spaces[0].Id
+	_, err = call("127.0.0.1", &TabsRequest{Share: &SharedTab{Space: space, Path: "/cron"}})
+	require.NoError(t, err)
+	response, err = call("192.0.2.2", &TabsRequest{SwapShared: &SharedSwap{Space: space, Path: "/cron", With: "/search"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{space + " /cron", space + " /search"}, shared(response))
+
+	// Alice mutes a and snoozes c, and Bob mutes c: every reply carries only the caller's live mutes.
+	mutes := func(response *TabsResponse) []string {
+		out := make([]string, 0, len(response.Mutes))
+		for _, mute := range response.Mutes {
+			out = append(out, mute.Path+" "+mute.Until)
+		}
+
+		return out
+	}
+	// The browser writes times with milliseconds; replies carry RFC 3339 times in UTC.
+	later := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	until := later.Format(time.RFC3339)
+	_, err = call("127.0.0.1", &TabsRequest{Mute: &TabMute{Path: "/s/YQ"}})
+	require.NoError(t, err)
+	response, err = call("127.0.0.1", &TabsRequest{Mute: &TabMute{Path: "/s/Yw", Until: later.Format("2006-01-02T15:04:05.000Z07:00")}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/s/YQ ", "/s/Yw " + until}, mutes(response))
+	response, err = call("192.0.2.2", &TabsRequest{Mute: &TabMute{Path: "/s/Yw"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/s/Yw "}, mutes(response))
+	response, err = call("127.0.0.1", &TabsRequest{Unmute: "/s/YQ"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/s/Yw " + until}, mutes(response))
+	response, err = call("127.0.0.1", &TabsRequest{Mute: &TabMute{Path: "/s/YQ", Until: time.Now().Add(-time.Hour).Format(time.RFC3339)}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/s/Yw " + until}, mutes(response), "a past snooze is not carried")
+
+	// A malformed time, a session nobody may open, one that does not exist, and a page cannot be muted.
+	for mute, code := range map[*TabMute]codes.Code{{Path: "/s/YQ", Until: "tomorrow"}: codes.InvalidArgument, {Path: "/s/cHJpdmF0ZS1Y"}: codes.PermissionDenied, {Path: "/s/bm9uZQ"}: codes.NotFound, {Path: "/search"}: codes.InvalidArgument} {
+		_, err = call("127.0.0.1", &TabsRequest{Mute: mute})
+		assert.Equal(t, code, status.Code(err), mute.Path)
+	}
+
+	response, err = call("127.0.0.1", &TabsRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/s/Yw " + until}, mutes(response), "a refused mute stores nothing")
 }
