@@ -182,6 +182,9 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await until(async () => await view.count() === 0 && terminals.open === 0 && fake.streams === 0);
     await page.goForward();
     await view.getByText("answer in ses_a").waitFor();
+    // The restored terminal must not take focus during the remaining keyboard checks.
+    await view.getByRole("button", { name: "Close terminal", exact: true }).click();
+    await until(() => terminals.open === 0);
 
     // The server link names the shown session on its own server, with no password.
     await command("Copy server link");
