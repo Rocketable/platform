@@ -287,6 +287,17 @@ test("remote sessions list, tag, go offline, start, and keep the theme toggle cl
     await page.getByPlaceholder("Type a command").fill("new on box");
     await page.getByRole("button", { name: "Sessions: New on box" }).click();
     const folder = page.getByPlaceholder("Folder on box, like /srv/app");
+    // Folders the person picked lead the server's other folders, most recent first.
+    const folders = page.getByRole("button", { name: /^\// });
+    await folders.first().waitFor();
+    expect(await folders.allTextContents()).toEqual(["/repo", "/srv/old"]);
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => localStorage.setItem("command-history", JSON.stringify(["folder-/srv/old"])));
+    await page.keyboard.press("Control+Shift+p");
+    await page.getByPlaceholder("Type a command").fill("new on box");
+    await page.getByRole("button", { name: "Sessions: New on box" }).click();
+    await folders.first().waitFor();
+    expect(await folders.allTextContents()).toEqual(["/srv/old", "/repo"]);
     await folder.fill("/srv/fresh");
     await folder.press("Enter");
     await page.getByText("box did not answer").waitFor();
