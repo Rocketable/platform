@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -63,7 +62,7 @@ func DecideOrigin(facts *ChatOriginFacts) (origin any, text string) {
 		}
 
 		return externalMCPOrigin{Kind: originExternalMCP, ExternalConversationID: facts.ExternalConversationID, Agent: facts.Binding.Agent, Pairs: pairs},
-			strings.ToLower(fmt.Sprintf("External MCP External conversation: %s Agent: %s %s", facts.ExternalConversationID, facts.Binding.Agent, strings.Join(texts, " ")))
+			strings.ToLower("External MCP External conversation: " + facts.ExternalConversationID + " Agent: " + facts.Binding.Agent + " " + strings.Join(texts, " "))
 	}
 
 	kind := cronScheduled
@@ -73,5 +72,5 @@ func DecideOrigin(facts *ChatOriginFacts) (origin any, text string) {
 
 	cron := cronOrigin{Kind: originCron, SourcePath: facts.Run.Path, Stem: strings.TrimSuffix(strings.TrimPrefix(facts.Run.Path, "cron/"), ".md"), RunKind: kind, RunID: facts.CreatingSource, Agent: facts.ProducerAgent, RanAt: facts.Run.At.Format(time.RFC3339Nano)}
 
-	return cron, strings.ToLower(fmt.Sprintf("Cron Source: %s Stem: %s Run kind: %s Run ID: %s Agent: %s Ran at: %s", cron.SourcePath, cron.Stem, cron.RunKind, cron.RunID, cron.Agent, cron.RanAt))
+	return cron, strings.ToLower("Cron Source: " + cron.SourcePath + " Stem: " + cron.Stem + " Run kind: " + string(cron.RunKind) + " Run ID: " + cron.RunID + " Agent: " + cron.Agent + " Ran at: " + cron.RanAt)
 }

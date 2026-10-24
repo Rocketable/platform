@@ -5,9 +5,33 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDecideCronOriginAllocationBudget(t *testing.T) {
+	result := testing.Benchmark(BenchmarkDecideCronOrigin)
+	require.Positive(t, result.N)
+	require.LessOrEqual(t, result.AllocsPerOp(), int64(6))
+}
+
+func BenchmarkDecideCronOrigin(b *testing.B) {
+	facts := ChatOriginFacts{ConversationID: "example-chat", CreatingSource: "example-run", ProducerAgent: "Helper Ω",
+		Run: &protocol.CronRun{Path: "cron/Weekly %s.md", At: time.Date(2001, time.January, 2, 3, 4, 5, 0, time.UTC)}}
+
+	const want = "cron source: cron/weekly %s.md stem: weekly %s run kind: scheduled run id: example-run agent: helper ω ran at: 2001-01-02t03:04:05z"
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		origin, text := DecideOrigin(&facts)
+		if origin.(cronOrigin).Stem != "Weekly %s" || text != want {
+			b.Fatalf("origin = %#v, text = %q", origin, text)
+		}
+	}
+}
 
 func TestChatOriginFactsAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkChatOriginFacts)
