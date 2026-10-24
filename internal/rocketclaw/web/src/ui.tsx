@@ -1906,14 +1906,17 @@ const paletteCopy = { sessions: { title: "Go to session or command", desc: "Sear
   cron: { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" } };
 
 // "Sessions: New on <server>" turns the palette into a folder picker for a remote OpenCode
-// session: a typed folder, or one of that server's sessions' folders.
-function useRemoteCreation(query: string, close: () => void, restart: () => void, copy: { title: string; desc: string; placeholder: string }) {
+// session: a typed folder, or one of that server's sessions' folders, those the person picked most recently first,
+// since agents also start sessions there.
+function useRemoteCreation(query: string, close: () => void, restart: () => void, copy: { title: string; desc: string; placeholder: string }, recent: string[]) {
   const sidebar = useContext(Sidebar);
   const tabs = useContext(TabActions);
   const [server, setServer] = useState<string>();
   const create = useMutation({ mutationFn: mutations.createSession, onSuccess: (created) => { sidebar.invalidateQueries(); close(); tabs.open(rowPath({ id: created, kind: "REMOTE_OPENCODE" })); } });
   const typed = query.trim();
-  const items: ReturnType<typeof paletteRows> = !server ? [] : [...new Set([typed, ...sidebar.rows.flatMap((row) => row.server === server && row.directory ? [row.directory] : [])])]
+  const rank = (directory: string) => recent.indexOf(`folder-${directory}`) + 1 || Infinity;
+  const known = sidebar.rows.flatMap((row) => row.server === server && row.directory ? [row.directory] : []).toSorted((a, b) => rank(a) - rank(b) || 0);
+  const items: ReturnType<typeof paletteRows> = !server ? [] : [...new Set([typed, ...known])]
     .filter((directory) => directory.startsWith("/") && directory.toLowerCase().includes(typed.toLowerCase()))
     .map((directory) => ({ key: `folder-${directory}`, label: directory, keep: true, disabled: create.isPending, run: () => create.mutate({ opencodeServer: server, directory }) }));
   return {
@@ -2000,7 +2003,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
     },
   });
   // The folder picker leaves session search, so typed folders are never sent as a search.
-  const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(0); setMode("commands"); }, paletteCopy[mode ?? "sessions"]);
+  const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(0); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent);
   const inSpace = useInSpace();
   const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, jobs.data?.filter(inSpace), newChat, tabs.open, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...timeline, ...outputs], recent));
   const selected = items.length === 0 ? 0 : pick % items.length;
