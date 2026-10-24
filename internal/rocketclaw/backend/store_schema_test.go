@@ -610,12 +610,12 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.Equal(t, 1, kept)
 
 	// The later migrations already ran here; running them again would fail on what they created.
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql")
+	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
 	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql"}, ledger)
+	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql"}, ledger)
 
 	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
 	require.NoError(t, err)
@@ -645,6 +645,46 @@ func TestDropWebTabStateBlobMigration(t *testing.T) {
 	columns, err := queryStrings(ctx, store.db, `SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'web_tab_states' AND column_name = 'state'`, "blob column")
 	require.NoError(t, err)
 	require.Empty(t, columns)
+}
+
+func TestDropWebTabPinMigration(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	// Back to before 063, with alice's first tab pinned.
+	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 63)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, space, revision) VALUES ('alice', 'main', 1);
+INSERT INTO web_tabs (username, path, position, pinned, group_id, space) VALUES ('alice', '/search', 0, TRUE, 'g', 'main'), ('alice', '/cron', 1, FALSE, '', 'main')`)
+	require.NoError(t, err)
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	state, _, err := store.TabState(ctx, "alice")
+	require.NoError(t, err)
+	require.Equal(t, []Tab{{Path: "/search", Group: "g", Space: "main"}, {Path: "/cron", Space: "main"}}, state.Tabs, "a pinned tab stays open in place as an ordinary tab")
+}
+
+func TestSpaceLastTabMigration(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	// Back to before 064: main's last tab is open, ops's last tab is closed.
+	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 64)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, space, revision) VALUES ('alice', 'main', 1);
+INSERT INTO web_tabs (username, path, position, space, last) VALUES ('alice', '/search', 0, 'main', TRUE), ('alice', '/cron', NULL, 'ops', TRUE), ('alice', '/agents', NULL, 'ops', FALSE)`)
+	require.NoError(t, err)
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	state, _, err := store.TabState(ctx, "alice")
+	require.NoError(t, err)
+	require.Equal(t, TabState{Tabs: []Tab{{Path: "/search", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/search", "ops": "/cron"}}, state)
+
+	rows, err := queryStrings(ctx, store.db, `SELECT path FROM web_tabs ORDER BY path`, "tab rows")
+	require.NoError(t, err)
+	require.Equal(t, []string{"/search"}, rows, "closed tabs kept only as a space's last tab are dropped")
 }
 
 func TestMessageSearchMigrationSharesExtension(t *testing.T) {

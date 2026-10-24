@@ -407,8 +407,8 @@ active tab.
 - **Preview tab.** Opening a location that is not already open (Search
   results, links, footer buttons, page commands) shows it in the single preview
   tab, drawn in italics. The next such open replaces it; with no preview tab, the
-  new one opens right of the active tab. Double-clicking the tab, typing a draft or
-  sending a message in it, or pinning it makes it permanent. A session chosen in the
+  new one opens right of the active tab. Double-clicking the tab, or typing a draft
+  or sending a message in it, makes it permanent. A session chosen in the
   palette opens as a permanent tab right of the active tab, leaving the preview tab
   in place, or makes its already open tab permanent. Arrowing through the palette's
   sessions shows each in the preview tab, without adding history entries; a session
@@ -417,12 +417,9 @@ active tab.
   dismissing the palette returns there too. A deep link or reload opens its location
   as a permanent tab. Sending the first message from New session turns that tab
   into the new session's tab.
-- **Pinned tabs** are browser-only (unlike **Pin session**, which is shared and
-  orders search). They stay first, show a pin where the close button would be, and survive Close others, Close to the
-  right, and Close all.
 - **Context menu.** Right-click a tab, press Shift+F10 or the menu key on a focused
   tab, or use the **…** button on the active tab (for touch) to reach Close,
-  Close others, Close to the right, Close all, and Pin/Unpin. Session tabs also offer **Rename session**, which edits the name in
+  Close others, Close to the right, and Close all. Session tabs also offer **Rename session**, which edits the name in
   the tab itself: Enter or clicking away saves and Escape cancels. A blank name
   shows the last message again for RocketClaw sessions; for remote sessions, it
   clears the OpenCode title too. The command palette offers the same commands as
@@ -430,8 +427,8 @@ active tab.
 - **Selecting tabs.** Cmd/Ctrl+click adds a tab to the selection or removes it,
   and Shift+click selects the shown tabs from the active tab to the clicked one;
   the active tab stays active and always belongs to the selection. The menu of a
-  selected tab acts on every selected tab for Close, Pin/Unpin (only the tabs not
-  already in that state), the group commands, and the moves to another space, and
+  selected tab acts on every selected tab for Close, the group commands, and the
+  moves to another space, and
   it drops Rename session and Restore; any other tab's menu acts on that tab alone.
   Activating another tab, a plain click on the active one, or Escape on a focused
   tab drops the selection. Selected tabs are highlighted, and screen readers hear
@@ -445,7 +442,8 @@ active tab.
   Escape on a page closes a tab. Closing the active tab activates its right
   neighbour, or its left one at the end. Closing the last tab opens New session;
   New session alone does not close. Closing with the × button or the menu moves
-  keyboard focus to the selected tab.
+  keyboard focus to the selected tab. A page that is only in Shared has no close
+  button, and Escape leaves it open.
 - **Remote OpenCode sessions.** A remote session's tab shows OpenCode's own
   session view, copied into RocketClaw at `internal/rocketclaw/oc/` and mounted in
   the page with no frame. It reaches its server through the Web's
@@ -459,16 +457,29 @@ active tab.
   view, RocketClaw's shortcuts win: ⌘P and ⌘⇧P open RocketClaw's palette, and ⌘K
   opens OpenCode's.
 - **Notifications.** When an open session tab, RocketClaw or remote OpenCode,
-  becomes unread for you (see Unread below), the browser shows a desktop
-  notification with the start of its reply. Other people's turns never notify
-  you. A RocketClaw session's notification is titled by its name, or its agent
-  when it has none; an OpenCode session's by its tab title. Clicking the
-  notification opens the tab. The tab in view (the active tab while the window
+  one of yours or one in any space's Shared group, becomes unread for you (see
+  Unread below), the browser shows a desktop notification with the start of its
+  reply. Other people's turns notify you only in a Shared session. A RocketClaw
+  session's notification is titled by its name, or its agent when it has none;
+  an OpenCode session's by its tab title. Clicking the notification opens the
+  tab. The tab in view (the active tab while the window
   has focus) does not notify. Notifications are on by default: the first click or
   key press asks for the browser's permission, the earliest a browser allows;
   turn them off in the browser's site settings. A new mark is noticed on the
   session list's poll, so a hidden window may notify late; a page load never
   notifies for sessions that were already unread.
+- **Mute and snooze.** Any session tab's menu, Shared rows included, offers
+  **Mute notifications** and a **Snooze notifications** submenu: 1 hour, 4
+  hours, tomorrow 9:00, next Monday 9:00, or **Pick date & time…**, a dialog that
+  starts at tomorrow 9:00 and refuses a time already past. A muted or snoozed tab
+  shows a bell with a slash, whose tooltip and screen-reader description say
+  “Muted” or “Snoozed until …”, and its menu offers **Unmute notifications**. A
+  snooze ends by itself. Muting is yours alone, follows you to every device, and
+  belongs to the session, so it covers its Shared row and your own tab and
+  survives closing it. It stops only desktop notifications: the unread title
+  still shows. The command palette offers the same as **Tabs: Mute
+  notifications**, **Tabs: Snooze notifications …**, and **Tabs: Unmute
+  notifications** for the tab in view.
 - **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
   A moved tab joins the group of the tab it lands on, or leaves its group when it
   lands on an ungrouped tab. Drag a group's header, or press Shift+Arrow on it, to
@@ -487,14 +498,13 @@ active tab.
   in group** (moves New session into the group, or opens it there), **Ungroup**,
   and **Close group**, which closes the members by the usual close rules. Members
   sit under the header behind a colored rule. A tab opened while
-  a grouped tab is active joins that group. Pinned tabs are never grouped:
-  pinning a tab removes it from its group. A collapsed group still shows its
+  a grouped tab is active joins that group. A collapsed group still shows its
   active tab, and activating any hidden tab, including with Cmd/Ctrl+[ and ],
   expands its group. Arrow keys skip hidden tabs. Headers report
   `aria-expanded`.
 - **Spaces.** Spaces are shared by everyone: the server keeps one list, oldest
-  first, starting with **Main**, and names are unique ignoring case. Every tab,
-  pinned or not, belongs to one space, and the strip shows only the current
+  first, starting with **Main**, and names are unique ignoring case. Every tab
+  belongs to one space, and the strip shows only the current
   space's tabs. The space button at the top of the strip names the current
   space; its menu lists the spaces to switch to and offers **New space**,
   **Rename space**, and **Delete space**, which change the space for everyone.
@@ -505,14 +515,14 @@ active tab.
   entering an empty space, opening New session, or closing a space's last tab
   moves that tab into the current space. Opening a location that is open in
   another space switches to that space. The tab menu's **Move to space** submenu
-  lists each other space, a moved pinned tab stays pinned, and moving the active tab follows it; the command
+  lists each other space, and moving the active tab follows it; the command
   palette offers the same moves as **Tabs: Move to "<space>"**. Moving a tab is
   your own: it moves only in your tabs. Deleting a space moves its tabs to the
   first space; the last space cannot be deleted. A tab
   moved between spaces becomes permanent, so each space keeps at most one preview
-  tab. Pinning and unpinning keep a tab in its space. Close others, Close to the
+  tab. Close others, Close to the
   right, Close all, Cmd/Ctrl+[ and ], and the preview tab act only within the
-  current space. Screen readers hear each unpinned tab's group, if any, and space
+  current space. Screen readers hear each tab's group, if any, and space
   as its description, such as “Group Work, Space: Main”.
 - **Agents and crons in spaces.** An agent or cron whose frontmatter sets
   `space:` belongs to the space of that name, ignoring case; a cron without one
@@ -537,6 +547,25 @@ active tab.
   moving the active tab's group follows it. Deleting a space moves its groups,
   intact, to the first space. **New tab in group** brings New session into the
   group's space as well as the group.
+- **Shared.** Every space has one grey **Shared** group, shown first in the
+  sidebar above your own tabs, with a hint when it is empty. Its tabs are the
+  same for everyone, newly added ones last. The tab menu and the command palette
+  offer **Add to Shared** and **Remove from Shared**; both change the group for
+  everyone in the space, one tab at a time, so two people's changes never undo
+  each other. New session and sessions no Web user may open cannot be shared.
+  A tab can be in Shared and among your own tabs at once, and both rows light up
+  while it is open. Opening a Shared tab adds no tab of your own and keeps you in
+  the current space. Shared tabs show a people icon instead of a close button,
+  and their menu offers only **Remove from Shared** and the notification items;
+  dragging, middle-click, and selection never act on them. Otherwise the keyboard
+  treats them as tabs: Cmd/Ctrl+[ and ] step through the Shared rows and then
+  your own tabs, each tab once; arrows, Home, and End cross between the two
+  lists; and Shift+Arrow on a Shared row moves it among the Shared rows, for
+  everyone. Collapsing Shared is your own choice, for every
+  space. When the Shared tab you are viewing is removed, the window enters its
+  space as it does for a tab closed elsewhere. Other people's changes arrive when
+  a window regains focus. Deleting a space moves its Shared tabs into the first
+  remaining space's, and deleting a session takes it out of every Shared group.
 - **Running turns** make the tab's title shimmer with a moving gradient, so the
   title stays in place. With reduced motion the title shows a still gradient
   that fades toward its end. Screen readers hear “Turn running” in the tab's
@@ -548,7 +577,10 @@ active tab.
 - **Unread** sessions show a bold title.
   A session becomes unread for you when a
   turn ends, finished, failed, or stopped, that holds a message you sent from the
-  Web, unless you had its tab in view in the last 10 seconds. Other people's
+  Web, unless you had its tab in view in the last 10 seconds. A session in any
+  space's Shared group becomes unread for everyone when one of its turns ends,
+  whoever started it; for a remote OpenCode session, a turn with a prompt in it.
+  Otherwise other people's
   turns, Slack mentions, crons, an agent waking on its own, and remote OpenCode
   turns with no recorded sender (`/command`, shell runs, prompts typed in
   OpenCode's own app outside RocketClaw) mark no one. Having the tab active in a
@@ -568,7 +600,7 @@ active tab.
   tab, tapping outside, Escape, or a swipe left closes it. A swipe that starts on
   a text field, a slider, or something that scrolls sideways is left to that element.
 - **Storage.** The server keeps each person's tabs, so they follow you to every
-  device: open tabs, their order, pins, the preview flag, each tab's group and
+  device: open tabs, their order, the preview flag, each tab's group and
   space, the groups' names, colors, and collapsed state, the current space, and each
   space's last active tab. Each change saves the whole state,
   one save at a time. A save made from tabs older than another window's save is
@@ -576,7 +608,8 @@ active tab.
   closed, or changed itself, and saves again, so neither window's changes are
   lost. The server keeps one row per tab and per group. A session's tab is saved
   only while the session exists, and deleting a session removes its tab for
-  everyone. Groups with no tabs are dropped, tabs whose space is gone join the
+  everyone. Groups with no tabs are dropped, except the entry that keeps whether
+  you collapsed Shared, tabs whose space is gone join the
   first space keeping their group, and tabs whose group is gone leave it. A
   window reloads them when it becomes visible or regains focus: it takes in
   changes made elsewhere, merged with its own unsaved ones, but stays on its own
@@ -592,7 +625,7 @@ per-tab Back/Forward or reopen-closed-tab. Unlike grouped tabs there are no
 agent/age lines. Spaces hide every other space's tabs, which keeps one task in
 focus but means a tab in another space is reached through the space menu, the
 palette, or a link rather than at a glance. Unlike warm tabs, switching sessions remounts the
-transcript. In exchange, the strip stays compact, and the menu, pins, and drag
+transcript. In exchange, the strip stays compact, and the menu and drag
 give more control than a minimal strip.
 
 The session list restores the last complete list only after live identity confirms the

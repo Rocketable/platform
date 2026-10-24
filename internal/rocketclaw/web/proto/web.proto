@@ -657,10 +657,12 @@ message Space {
   string name = 2;
 }
 
-// One of a person's Web tabs: its location, pin, preview, group, and space ids.
+// One of a person's Web tabs: its location, preview, group, and space ids.
 message Tab {
+  reserved 2;
+  reserved "pinned";
+
   string path = 1;
-  bool pinned = 2;
   bool preview = 3;
   string group = 4;
   string space = 5;
@@ -684,7 +686,29 @@ message TabState {
   map<string, string> last = 4;
 }
 
-// TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space.
+// SharedTab is one tab in a space's Shared group, which every Web user sees: its space id and location.
+message SharedTab {
+  string space = 1;
+  string path = 2;
+}
+
+// SharedSwap swaps the places of two tabs in a space's Shared group: path and with, by location.
+message SharedSwap {
+  string space = 1;
+  string path = 2;
+  string with = 3;
+}
+
+// TabMute is a session tab whose desktop notifications a person muted, by location. until is the
+// RFC 3339 time a snooze ends; empty mutes the tab until it is unmuted.
+message TabMute {
+  string path = 1;
+  string until = 2;
+}
+
+// TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space,
+// adds one tab to or removes one from a space's Shared group, swaps two Shared tabs, or mutes or
+// unmutes one session tab for the caller.
 // revision is the saved revision the state was made from.
 message TabsRequest {
   TabState state = 1;
@@ -692,15 +716,24 @@ message TabsRequest {
   Space rename_space = 3;
   string delete_space = 4;
   int64 revision = 5;
+  SharedTab share = 6;
+  SharedTab unshare = 7;
+  SharedSwap swap_shared = 8;
+  TabMute mute = 9;
+  string unmute = 10;
 }
 
 // TabsResponse is every space, oldest first, and the caller's saved tab state and its revision.
 // stale reports a refused save: the state was made from an older revision than the one saved.
+// shared is every space's Shared tabs, oldest added first. mutes is the caller's mutes and snoozes
+// that have not ended.
 message TabsResponse {
   repeated Space spaces = 1;
   TabState state = 2;
   int64 revision = 3;
   bool stale = 4;
+  repeated SharedTab shared = 5;
+  repeated TabMute mutes = 6;
 }
 
 // The first event answers the browser's SDP offer; the last ends the call.

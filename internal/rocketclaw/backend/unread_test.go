@@ -130,6 +130,16 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 	require.Empty(t, unreadBy(t, service, "web:late"))
 	finish("web:late", "turn:late", protocol.TerminalComplete)
 	assert.Empty(t, unreadBy(t, service, "web:late"), "the late finish writes no second mark")
+
+	// A turn of a session in a space's Shared group marks every Web person, whoever sent it, except one viewing it.
+	require.NoError(t, service.UpsertThread("web:shared", ThreadState{Agent: "main"}))
+	require.NoError(t, service.ShareTab(ctx, "main", "/s/"+base64.RawURLEncoding.EncodeToString([]byte("web:shared"))))
+	require.NoError(t, startTurnDB(ctx, service.db, "turn:shared", "web:shared", slack))
+	require.NoError(t, saveTestTurn(ctx, service, "web:shared", "turn:shared", nil, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "turn:shared"}))
+	require.NoError(t, service.ViewSession(ctx, alice, "web:elsewhere"))
+	viewedAgo(t, service, bob, "web:shared", 3*time.Second)
+	finish("web:shared", "turn:shared", protocol.TerminalComplete)
+	assert.Equal(t, []string{alice}, unreadBy(t, service, "web:shared"))
 }
 
 // R4: a message Alice queued behind Bob's turn marks her when it runs as its own turn.
