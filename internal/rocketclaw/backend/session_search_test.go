@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -552,14 +555,23 @@ func TestSearchSessionsTermOffsets(t *testing.T) {
 func TestSearchSessionsLongQueryParse(t *testing.T) {
 	t.Parallel()
 
+	if os.Getenv("ROCKETCLAW_TEST_LONG_QUERY_PARSE") != "1" {
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+t.Name()+"$", "-test.cpu="+strconv.Itoa(runtime.GOMAXPROCS(0)))
+
+		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_LONG_QUERY_PARSE=1")
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		// Count the isolated parser's CPU work, not time descheduled behind parallel tests.
+		require.Less(t, cmd.ProcessState.UserTime()+cmd.ProcessState.SystemTime(), 2*time.Second)
+
+		return
+	}
+
 	const pairs = 1 << 17
 
-	start := time.Now()
 	terms, text := parseSessionQuery(strings.Repeat("tag:a x ", pairs))
-	elapsed := time.Since(start)
 
 	require.Len(t, terms, pairs)
 	require.Equal(t, SearchTerm{Key: keyTag, Text: "tag:a", Value: "a", Start: 8 * (pairs - 1), End: 8*(pairs-1) + 5}, terms[pairs-1])
 	require.Len(t, text, 2*pairs-1)
-	require.Less(t, elapsed, 2*time.Second)
 }
