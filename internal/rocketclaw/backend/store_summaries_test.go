@@ -39,6 +39,7 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			entry := &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 123456789).UTC(), ReplayInput: []json.RawMessage{json.RawMessage(tc.raw)}}
 			insertSessionEntryWithoutSummary(t, service, tc.name, entry)
+			insertSessionEntryWithoutSummary(t, service, tc.name, &harness.SessionEntry{Timestamp: entry.Timestamp, ReplayInput: replayInputForMessage("assistant", " \n")})
 			require.NoError(t, service.UpsertThread(tc.name, ThreadState{Agent: "main"}))
 			require.Equal(t, tc.want, sidebarSummaries(t, service)[tc.name].LastMessage)
 			// Following appends use only the stored summary.
@@ -63,6 +64,43 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, &protocol.SessionSummary{ConversationID: tc.name, LastMessage: "latest user", LastUpdated: time.Unix(1, 987654000).UTC()}, sidebarSummaries(t, service)[tc.name])
 		})
+	}
+}
+
+func TestSessionSummaryHistoryAllocationBudget(t *testing.T) {
+	result := testing.Benchmark(BenchmarkLoadSessionSummaryHistory)
+	require.Positive(t, result.N)
+	require.Less(t, result.AllocedBytesPerOp(), int64(12<<20))
+}
+
+func BenchmarkLoadSessionSummaryHistory(b *testing.B) {
+	service, err := NewSessionService(b.TempDir())
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, service.Stop()) })
+
+	text := "answer"
+	trace, err := json.Marshal(struct{ Output string }{Output: strings.Repeat("synthetic trace ", 8192)})
+	require.NoError(b, err)
+
+	entry := testSessionEntry("question", text)
+	entry.OutputTrace = []json.RawMessage{trace}
+	data, err := json.Marshal(entry)
+	require.NoError(b, err)
+	_, err = service.db.ExecContext(b.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
+SELECT 'benchmark', $1, '2000-01-02T03:04:05Z' FROM generate_series(1, 32)`, string(data))
+	require.NoError(b, err)
+	tx, err := service.db.BeginTx(b.Context(), nil)
+
+	require.NoError(b, err)
+	defer func() { require.NoError(b, tx.Rollback()) }()
+
+	require.NoError(b, lockSessionHistory(b.Context(), tx, "benchmark"))
+	b.ReportAllocs()
+
+	for b.Loop() {
+		summary, err := loadSessionSummary(b.Context(), tx, "benchmark")
+		require.NoError(b, err)
+		require.Equal(b, protocol.SessionSummary{ConversationID: "benchmark", LastMessage: text, LastUpdated: time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)}, summary)
 	}
 }
 
