@@ -133,17 +133,22 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			name    string
 			command string
 		}{
-			{name: "shell already exited", command: "set -m; sleep 30 & echo $!"},
-			{name: "shell still running", command: "set -m; sleep 30 & echo $!; sleep 10"},
+			{name: "shell already exited", command: "set -m; sleep 30 & echo $! > child.pid"},
+			{name: "shell still running", command: "set -m; sleep 30 & echo $! > child.pid; sleep 10"},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
+				require.NoError(t, root.WriteFile("child.pid", nil, 0o600))
+
 				start := time.Now()
 				got := sss.Bash(context.Background(), "", bashParams{Command: tt.command, TimeoutMillisecond: 100, Workdir: "", Description: "escaped child"})
 				elapsed := time.Since(start)
 
-				pid, err := strconv.Atoi(strings.TrimSpace(strings.SplitN(got.Output, "\n", 2)[0]))
+				// Bash job-control diagnostics can precede the PID in the combined output.
+				data, err := root.ReadFile("child.pid")
+				require.NoError(t, err)
+				pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 				require.NoError(t, err)
 				require.NoError(t, syscall.Kill(pid, syscall.SIGKILL))
 				require.Equal(t, "timeout", got.ErrorCode)
