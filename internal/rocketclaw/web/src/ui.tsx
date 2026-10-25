@@ -2590,7 +2590,8 @@ function windowed(text: string, needle: string, tagIds: string[]) {
   return `${start ? "…\n" : ""}${lines.slice(start, end).join("\n")}${end < lines.length ? "\n…" : ""}`;
 }
 
-function SearchResultGroup({ session, hits, text, field, needle, tagIds }: { session: Session; hits: MessageMatch[]; text: string; field: string; needle: string; tagIds: string[] }) {
+// drawn caps the rows shown so far; the count still covers every hit.
+function SearchResultGroup({ session, hits, text, field, needle, tagIds, drawn }: { session: Session; hits: MessageMatch[]; text: string; field: string; needle: string; tagIds: string[]; drawn: number }) {
   const count = hits.length + Number(!!field);
   const label = sessionTitle(session);
   const clean = useCleanText(label);
@@ -2599,7 +2600,7 @@ function SearchResultGroup({ session, hits, text, field, needle, tagIds }: { ses
     <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={rowPath(session)} title={clean} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring"><InlineText text={label} /></Link><span className="shrink-0 text-muted-foreground">({count})</span>{session.pinned ? <Pin aria-label="Pinned" className="size-3 shrink-0" /> : null}</h2>
     <ul className="mt-1 border-l pl-2 text-sm leading-5">
       {field ? row(rowPath(session), field, text) : null}
-      {hits.map((match, i) => row(sessionPath(session.id) + (match.message.messageId ? `?message=${encodeURIComponent(match.message.messageId)}` : ""), match.message.role === "user" ? "You" : "Assistant", match.message.text, match.message.messageId || String(i)))}
+      {hits.slice(0, drawn - Number(!!field)).map((match, i) => row(sessionPath(session.id) + (match.message.messageId ? `?message=${encodeURIComponent(match.message.messageId)}` : ""), match.message.role === "user" ? "You" : "Assistant", match.message.text, match.message.messageId || String(i)))}
     </ul>
   </li>;
 }
@@ -2614,16 +2615,29 @@ function SearchStatus({ search, empty = false, incomplete = false }: { search: R
   </>;
 }
 
+const searchPage = 200;
+
 function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab: SavedSearch; rows: Session[]; catalog: Agent[]; edit: (change: (item: SavedSearch) => Partial<SavedSearch>) => void; input: RefObject<HTMLInputElement | null>; onFirstSubmit: () => void }) {
   const sidebar = useContext(Sidebar);
   // Opening a saved search or a link sends its whole query.
   const [entered, setEntered] = useState(true);
   const search = useSessionSearch(tab.query, "messages", entered);
   const { response } = search.result;
-  const groups = useMemo(() => {
+  // Rows are drawn a page at a time as the end nears the screen; a new response starts again at one page.
+  const [budget, setBudget] = useState({ response, rows: searchPage });
+  const rowsDrawn = budget.response === response ? budget.rows : searchPage;
+  const { groups, more } = useMemo(() => {
     const hits = Map.groupBy(response?.messages ?? [], (match) => match.conversationId);
-    return search.found.map(({ match, session }) => <SearchResultGroup key={session.id} session={session} hits={hits.get(session.id) ?? []} text={match.text} field={match.field} needle={response!.needle} tagIds={response!.mentionIds} />);
-  }, [response, search.found]);
+    let left = rowsDrawn;
+    const groups = [];
+    for (const { match, session } of search.found) {
+      if (left <= 0) break;
+      const own = hits.get(session.id) ?? [];
+      groups.push(<SearchResultGroup key={session.id} session={session} hits={own} text={match.text} field={match.field} needle={response!.needle} tagIds={response!.mentionIds} drawn={left} />);
+      left -= own.length + Number(!!match.field);
+    }
+    return { groups, more: left < 0 || groups.length < search.found.length };
+  }, [response, search.found, rowsDrawn]);
   return <>
     <div id="search-tab-panel" role="tabpanel" aria-label="Search" className="min-w-0">
       <SessionSearch rows={rows} catalog={catalog} query={tab.query} setQuery={(update) => { setEntered(false); edit((item) => ({ query: update(item.query) })); }} search={search} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { onFirstSubmit(); setEntered(true); void search.run(tab.query.trimEnd()); } }} />
@@ -2632,6 +2646,13 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
       <SearchStatus search={search} empty={!!search.sent && !search.pending && !search.error && search.found.length === 0} incomplete={!searchIsAuthoritative(sidebar) || search.missing} />
       {search.sent ? <ul data-pending={search.pending} className="flex min-w-0 flex-col gap-4 data-[pending=true]:opacity-50">
         {groups}
+        {more ? <li aria-hidden ref={(node) => {
+          const observer = new IntersectionObserver(([entry]) => {
+            if (entry.isIntersecting) setBudget((last) => ({ response, rows: (last.response === response ? last.rows : searchPage) + searchPage }));
+          }, { root: node!.closest('[aria-label="Search results"]'), rootMargin: "0px 0px 100% 0px" });
+          observer.observe(node!);
+          return () => observer.disconnect();
+        }} /> : null}
       </ul> : <p className="text-muted-foreground">Type to search messages and conversations.</p>}
     </div>
   </>;

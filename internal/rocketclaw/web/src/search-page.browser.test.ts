@@ -733,6 +733,31 @@ test("typing reuses unchanged message results and new replies replace them", asy
   }
 }, 30_000);
 
+test("a broad search draws a page of rows and scrolling draws the rest", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const rows = Array.from({ length: 1000 }, (_, i) => ({ id: `wide-${i}`, name: `Wide ${i}`, agent: "main" }));
+  const { server, origin } = serve(rows, (input) => response(input.query, rows.map(({ id }) => ({ conversationId: id, field: "" })), [], {
+    messages: rows.flatMap(({ id }) => [0, 1, 2].map((turn) => ({ conversationId: id, message: { messageId: `${turn}:0`, role: "assistant", text: `wide match ${turn}`, complete: true } }))),
+  }));
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`${origin}/search?q=wide`);
+    const results = page.getByLabel("Search results");
+    const hits = results.locator('a[href*="?message="]');
+    await results.getByRole("group", { name: "Wide 0", exact: true }).waitFor();
+    expect(await hits.count()).toBeLessThan(1000);
+    expect(await results.getByRole("group", { name: "Wide 999", exact: true }).count()).toBe(0);
+    while (!await results.getByRole("group", { name: "Wide 999", exact: true }).count()) await results.evaluate((node: HTMLElement) => { node.scrollTop = node.scrollHeight; });
+    await page.waitForFunction(() => document.querySelectorAll('[aria-label="Search results"] a[href*="?message="]').length === 3000);
+    expect(await results.getByRole("group").count()).toBe(1000);
+    expect(await results.getByRole("group", { name: "Wide 999", exact: true }).getByRole("heading").textContent()).toBe("Wide 999(3)");
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
+
 test("a search answer arriving keeps the selected search text, so typing replaces it", async () => {
   const { chromium: engine } = await import(playwright!);
   const started = Promise.withResolvers<void>();
