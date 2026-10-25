@@ -356,15 +356,40 @@ func sessionMigrationCount(t *testing.T) int {
 func TestSessionMigrationsSerializeStartup(t *testing.T) {
 	t.Parallel()
 
+	base, err := url.Parse(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	adminConfig, err := pgx.ParseConfig(base.String())
+	require.NoError(t, err)
+
+	admin := stdlib.OpenDB(*adminConfig)
+	defer func() { require.NoError(t, admin.Close()) }()
+
 	for _, outcome := range []string{"success", "cancel", "cancel waiting", "connection loss"} {
 		t.Run(outcome, func(t *testing.T) {
-			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+			// The baseline's extension lock spans schemas, so unrelated startups need a different database.
+			name := "t_" + strings.ToLower(rand.Text())
+			_, err := admin.ExecContext(t.Context(), `CREATE DATABASE `+name)
+
 			require.NoError(t, err)
+			defer func() {
+				_, err := admin.ExecContext(context.Background(), `DROP DATABASE `+name+` WITH (FORCE)`)
+				require.NoError(t, err)
+			}()
+
+			location := *base
+			location.Path = "/" + name
+			query := location.Query()
+			query.Set("options", "-csearch_path="+name)
+			location.RawQuery = query.Encode()
+			dsn := location.String()
 			cfg, err := pgx.ParseConfig(dsn)
 			require.NoError(t, err)
 
 			db := stdlib.OpenDB(*cfg)
 			defer func() { require.NoError(t, db.Close()) }()
+
+			_, err = db.ExecContext(t.Context(), `CREATE SCHEMA `+name)
+			require.NoError(t, err)
 
 			// The ledger exists, so the barrier can hold the first caller at its baseline's ledger write.
 			_, err = db.ExecContext(t.Context(), `CREATE TABLE pg_migrations (id text PRIMARY KEY, applied_at timestamptz)`)
