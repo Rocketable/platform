@@ -1252,6 +1252,7 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
   await page.keyboard.press("Control+Shift+p");
   await commands.getByRole("button", { name: "Tabs: Close", exact: true }).waitFor();
   expect(await commands.getByRole("button", { name: "Tabs: Add to Shared" }).count()).toBe(0);
+  await page.waitForFunction(() => document.activeElement?.getAttribute("placeholder") === "Type a command");
   await page.keyboard.press("Escape");
   await commands.waitFor({ state: "hidden" });
 
