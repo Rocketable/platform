@@ -28,6 +28,51 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
+func TestHTTPEventFramingAllocationBudget(t *testing.T) {
+	result := testing.Benchmark(BenchmarkHTTPEventFraming)
+	require.Positive(t, result.N)
+	// Allow race instrumentation, but not the extra frame buffer under -race.
+	require.Less(t, result.AllocedBytesPerOp(), int64(900<<10))
+}
+
+func BenchmarkHTTPEventFraming(b *testing.B) {
+	transport := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, _ grpc.ServerStream) error { return nil }))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(b, err)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	b.Cleanup(func() { transport.Stop(); require.NoError(b, serving.Wait()) })
+
+	connection, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, connection.Close()) })
+
+	message := &ListSessionsResponse{Sessions: []*Session{{Title: strings.Repeat("example", 32768), Tags: []string{"quote\" 日本語\n"}}}}
+	request := httptest.NewRequest(http.MethodGet, "/stream", http.NoBody)
+	body, err := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(message)
+	require.NoError(b, err)
+
+	want := []byte("data: " + string(body) + "\n\nevent: complete\ndata: {}\n\n")
+	b.SetBytes(int64(len(want)))
+	b.ReportAllocs()
+
+	var writers sync.Pool
+
+	for b.Loop() {
+		stream, err := connection.NewStream(b.Context(), &grpc.StreamDesc{ServerStreams: true}, "/example/Events")
+		require.NoError(b, err)
+		require.NoError(b, stream.CloseSend())
+
+		response := httptest.NewRecorder()
+		httpEvents(response, request, stream, message, nil, &writers)
+
+		if !bytes.Equal(want, response.Body.Bytes()) {
+			b.Fatal("stream event framing changed")
+		}
+	}
+}
+
 func startHTTPTestServer(t *testing.T, connection *grpc.ClientConn) *httptest.Server {
 	t.Helper()
 

@@ -369,13 +369,13 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 			return
 		}
 
-		body, errMarshal := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(response)
+		body, errMarshal := (protojson.MarshalOptions{EmitDefaultValues: true}).MarshalAppend([]byte("data: "), response)
 		if errMarshal != nil {
 			err = errMarshal
 			continue
 		}
 
-		if _, err := fmt.Fprintf(out, "data: %s\n\n", body); err != nil {
+		if _, err := out.Write(append(body, '\n', '\n')); err != nil {
 			return
 		}
 
