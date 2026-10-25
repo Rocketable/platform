@@ -127,7 +127,11 @@ func TestChatListingReadsScaleWithReportingRuns(t *testing.T) {
 	store.db.SetMaxOpenConns(1)
 
 	ctx := t.Context()
+	// The planner reads only the statistics set here. Autovacuum, woken by these writes, would
+	// change them mid-test, and the read count with them, though never with entries.
 	_, err := store.db.ExecContext(ctx, `
+ALTER TABLE conversations SET (autovacuum_enabled = false);
+ALTER TABLE entries SET (autovacuum_enabled = false);
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, last_updated)
 SELECT 'chat-' || n, 'main', 'alice', 'web_chat', TRUE, now() FROM generate_series(1, 256) n;
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, reports_to)
