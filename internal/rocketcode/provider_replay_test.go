@@ -162,6 +162,16 @@ func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
 	for _, test := range []struct {
 		name, raw, want string
 	}{
+		{name: "invalid JSON", raw: `{"type":`, want: "replay item 0 type: unexpected end of JSON input"},
+		{name: "wrong type field", raw: `{"type":7}`, want: "replay item 0 type: json: cannot unmarshal number"},
+		{name: "wrong message role", raw: `{"type":"message","role":{},"content":"text"}`, want: "replay item 0 message: json: cannot unmarshal object"},
+		{name: "wrong call id", raw: `{"type":"function_call","call_id":7,"name":"read","arguments":"{}"}`, want: "function call decode fields: json: cannot unmarshal number"},
+		{name: "wrong output call id", raw: `{"type":"function_call_output","call_id":7,"output":"done"}`, want: "function output: json: cannot unmarshal number"},
+		{name: "message content missing", raw: `{"type":"message","role":"user"}`, want: "message content: missing"},
+		{name: "message content wrong text", raw: `{"type":"message","role":"user","content":[{"type":"input_text","text":7}]}`, want: "message content: decode array: json: cannot unmarshal number"},
+		{name: "reasoning missing text", raw: `{"type":"reasoning","summary":{}}`, want: "reasoning summary: missing text"},
+		{name: "reasoning wrong item", raw: `{"type":"reasoning","summary":["text"]}`, want: "reasoning summary: item 0: decode object: json: cannot unmarshal string"},
+		{name: "reasoning wrong shape", raw: `{"type":"reasoning","summary":7}`, want: "reasoning summary: expected string, text object, or text array"},
 		{name: "message null", raw: `{"type":"message","role":"user","content":null}`, want: "message content"},
 		{name: "message object", raw: `{"type":"message","role":"user","content":{"text":"wrong container"}}`, want: "message content"},
 		{name: "output null", raw: `{"type":"function_call_output","call_id":"call","output":null}`, want: "function output"},
@@ -172,10 +182,9 @@ func TestReplayForProviderRejectsMalformedKnownReadableData(t *testing.T) {
 		{name: "compaction null summary", raw: `{"type":"compaction","summary":null}`, want: "compaction summary"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			raw := []json.RawMessage{json.RawMessage(test.raw)}
-			entry := SessionEntry{Model: "openai/model", ReplayInput: raw}
+			entry := SessionEntry{Model: "openai/model", ReplayInput: []json.RawMessage{json.RawMessage(test.raw)}}
 			require.ErrorContains(t, entry.forProvider("other"), test.want)
-			require.Equal(t, raw, entry.ReplayInput)
+			require.Equal(t, []json.RawMessage{json.RawMessage(test.raw)}, entry.ReplayInput)
 		})
 	}
 
