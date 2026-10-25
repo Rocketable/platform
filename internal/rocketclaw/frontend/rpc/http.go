@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/internal/web"
@@ -36,6 +37,9 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, ser
 	mux := http.NewServeMux()
 	protection := http.NewCrossOriginProtection()
 	app := web.Handler(sentry, serverName)
+
+	var gzipWriters sync.Pool
+
 	mux.Handle("GET /", app)
 	mux.Handle("GET /api/", http.NotFoundHandler())
 	mux.Handle("POST /api/", http.NotFoundHandler())
@@ -71,7 +75,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, ser
 				return
 			}
 
-			httpJSON(w, r, body)
+			httpJSON(w, r, body, &gzipWriters)
 		})
 	}
 
@@ -141,7 +145,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, ser
 					if errors.Is(err, io.EOF) {
 						body, errMarshal := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(response)
 						if errMarshal == nil {
-							httpJSON(w, r, body)
+							httpJSON(w, r, body, &gzipWriters)
 							return
 						}
 
@@ -166,7 +170,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, ser
 				return
 			}
 
-			httpEvents(w, r, stream, response, err)
+			httpEvents(w, r, stream, response, err, &gzipWriters)
 		})
 	}
 
@@ -237,7 +241,7 @@ func NewTailnetHandler(client tailnetWhoIs, next http.Handler) http.Handler {
 }
 
 // httpJSON writes a JSON body, gzip-compressed when the client accepts it.
-func httpJSON(w http.ResponseWriter, r *http.Request, body []byte) {
+func httpJSON(w http.ResponseWriter, r *http.Request, body []byte, writers *sync.Pool) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Add("Vary", "Accept-Encoding")
 
@@ -248,9 +252,16 @@ func httpJSON(w http.ResponseWriter, r *http.Request, body []byte) {
 
 	w.Header().Set("Content-Encoding", "gzip")
 
-	compressed := gzip.NewWriter(w)
+	compressed, ok := writers.Get().(*gzip.Writer)
+	if !ok {
+		compressed = gzip.NewWriter(io.Discard)
+	}
+
+	compressed.Reset(w)
 	_, _ = compressed.Write(body)
 	_ = compressed.Close()
+	compressed.Reset(io.Discard)
+	writers.Put(compressed)
 }
 
 func httpUpload(body io.Reader, stream grpc.ClientStream) error {
@@ -309,7 +320,7 @@ func httpDownload(w http.ResponseWriter, r *http.Request, stream grpc.ClientStre
 
 // httpEvents writes a stream as server-sent events. The session list, which the Web reloads every few seconds, goes
 // gzip-compressed and flushed per event to browsers that accept it.
-func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream, response proto.Message, err error) {
+func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream, response proto.Message, err error, writers *sync.Pool) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
@@ -321,8 +332,17 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Add("Vary", "Accept-Encoding")
 
-		compressed := gzip.NewWriter(w)
-		defer func() { _ = compressed.Close() }()
+		compressed, ok := writers.Get().(*gzip.Writer)
+		if !ok {
+			compressed = gzip.NewWriter(io.Discard)
+		}
+
+		compressed.Reset(w)
+		defer func() {
+			_ = compressed.Close()
+			compressed.Reset(io.Discard)
+			writers.Put(compressed)
+		}()
 
 		out, flush = compressed, func() error {
 			if err := compressed.Flush(); err != nil {

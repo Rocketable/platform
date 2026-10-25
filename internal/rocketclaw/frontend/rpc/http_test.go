@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"testing/iotest"
 
@@ -343,7 +344,7 @@ func TestHTTPStreams(t *testing.T) {
 				require.NoError(t, err)
 
 				response := httptest.NewRecorder()
-				httpEvents(response, httptest.NewRequest(http.MethodGet, "/api/ListSessions", http.NoBody), stream, &ListSessionsResponse{Sessions: []*Session{{Title: "\xff"}}}, nil)
+				httpEvents(response, httptest.NewRequest(http.MethodGet, "/api/ListSessions", http.NoBody), stream, &ListSessionsResponse{Sessions: []*Session{{Title: "\xff"}}}, nil, new(sync.Pool))
 				require.Equal(t, "text/event-stream", response.Header().Get("Content-Type"))
 				require.Contains(t, response.Body.String(), "event: error\n")
 				require.Contains(t, response.Body.String(), "invalid UTF-8")
@@ -533,6 +534,16 @@ func TestHTTPStreams(t *testing.T) {
 
 				if scenario == "complete" {
 					require.True(t, strings.HasSuffix(string(body), "event: complete\ndata: {}\n\n"))
+
+					for range 2 {
+						next, err := server.Client().Do(request.Clone(ctx))
+						require.NoError(t, err)
+						unpacked, err := io.ReadAll(next.Body)
+						require.NoError(t, err)
+						require.NoError(t, next.Body.Close())
+						require.True(t, next.Uncompressed)
+						require.Equal(t, body, unpacked)
+					}
 				} else {
 					require.Contains(t, string(body), "event: error\n")
 					require.NotContains(t, string(body), "event: complete")
