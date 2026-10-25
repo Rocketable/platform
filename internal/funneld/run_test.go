@@ -92,6 +92,35 @@ func TestRunCanceledContext(t *testing.T) {
 	}
 }
 
+func TestRunHelpWithoutExecutableName(t *testing.T) {
+	output, err := os.Create(filepath.Join(t.TempDir(), "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stdout := os.Stdout
+	os.Stdout = output
+	t.Cleanup(func() {
+		os.Stdout = stdout
+		if err := output.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Setenv("FUNNELD_CONFIG", filepath.Join(t.TempDir(), "missing.json"))
+
+	if err := Run(t.Context(), "", []string{"--help"}); err != nil {
+		t.Fatal(err)
+	}
+
+	help, err := os.ReadFile(output.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(help), "Usage:\n\n  funneld [--config ./funneld.json]") {
+		t.Fatalf("help = %q; want usage with the default executable name", help)
+	}
+}
+
 func TestLoadConfigFromArgs(t *testing.T) {
 	path := writeConfig(t, `{
 		"host": "https://example.ts.net",
