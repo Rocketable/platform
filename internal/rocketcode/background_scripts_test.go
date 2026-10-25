@@ -119,7 +119,7 @@ func TestBackgroundExecuteRetainsLargeResult(t *testing.T) {
 		config := testWorkspaceConfig(t, root.Name())
 		config.BackgroundJobs = jobs
 		config.RetainedResultDir = filepath.Join("retained", conversation)
-		loop, err := New(&client, config, root, agents, Skills{Items: map[string]Skill{}}, "main", nil)
+		loop, err := NewWithProviders(Providers{OpenAI: &client}, config, root, agents, Skills{Items: map[string]Skill{}}, "main", nil)
 		require.NoError(t, err)
 
 		loop.observations = &turnObservations{journal: InertJournal{}, turnID: turnID}
@@ -217,7 +217,7 @@ func TestBackgroundExecuteRetainsLargeResult(t *testing.T) {
 	for _, dir := range []string{"", "../outside", "/absolute"} {
 		config := testWorkspaceConfig(t, root.Name())
 		config.RetainedResultDir = dir
-		_, err := New(&client, config, root, agents, Skills{Items: map[string]Skill{}}, "main", nil)
+		_, err := NewWithProviders(Providers{OpenAI: &client}, config, root, agents, Skills{Items: map[string]Skill{}}, "main", nil)
 		require.ErrorContains(t, err, "retained result dir", dir)
 	}
 }

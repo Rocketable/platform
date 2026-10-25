@@ -292,7 +292,7 @@ type permissionReviewDecision struct {
 	Rationale         string                            `json:"rationale"`
 }
 
-// Runtime is the concrete RocketCode loop runtime returned by New.
+// Runtime is the concrete RocketCode loop runtime returned by NewWithModelResolver.
 type Runtime = looper
 
 // Looper processes prompt input streams with a configured runtime.

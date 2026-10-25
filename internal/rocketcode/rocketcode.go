@@ -233,23 +233,6 @@ func (c *shellTempConfig) effectivePermissions(permissions PermissionSet) Permis
 	return PermissionSet{Buckets: buckets, skillRead: permissions.skillRead}
 }
 
-// New loads the supplied runtime dependencies and returns a configured looper.
-func New(
-	client *openai.Client,
-	configInput *Config,
-	root *os.Root,
-	agents Agents,
-	skills Skills,
-	defaultAgent string,
-	diagnosticsWriter io.Writer,
-) (*Runtime, error) {
-	if client == nil {
-		return nil, errors.New("client is required")
-	}
-
-	return NewWithProviders(Providers{OpenAI: client}, configInput, root, agents, skills, defaultAgent, diagnosticsWriter)
-}
-
 // NewWithProviders loads the supplied runtime dependencies and returns a configured looper.
 func NewWithProviders(
 	providers Providers,
