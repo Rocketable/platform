@@ -136,7 +136,6 @@ func TestRegistrySnapshot(t *testing.T) {
 		Headers: map[string]string{"Accept": "application/json"},
 	}, reg.servers["beta"])
 	assert.Equal(t, []string{"alpha", "beta"}, reg.Names())
-	assert.True(t, reg.Has("alpha"))
 }
 
 func TestSessionErrors(t *testing.T) {

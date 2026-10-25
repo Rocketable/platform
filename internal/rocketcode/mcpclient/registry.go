@@ -61,12 +61,6 @@ func (r *Registry) Names() []string {
 	return slices.Sorted(maps.Keys(r.servers))
 }
 
-// Has reports whether name is a configured server.
-func (r *Registry) Has(name string) bool {
-	_, ok := r.servers[name]
-	return ok
-}
-
 // Open starts a session that connects servers lazily and closes them on Close.
 func (r *Registry) Open() *Session {
 	return &Session{reg: r, conns: make(map[string]*mcp.ClientSession)}
