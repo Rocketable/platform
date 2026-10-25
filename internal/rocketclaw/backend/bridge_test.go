@@ -3998,8 +3998,12 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 
 	request.inbound.SyncDestination = "destination"
 
+	finished := make(chan struct{})
+
 	var group errgroup.Group
 	group.Go(func() error {
+		defer close(finished)
+
 		result, err := runTestTurn(t.Context(), bridge, request.inbound, "turn-1")
 		if err != nil {
 			return err
@@ -4032,7 +4036,14 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 
 	var consumedSteer, assistant, final bool
 	for !final {
-		message := readRocketCodeOutbound(t, bus)
+		var message *protocol.OutboundMessage
+		select {
+		case message = <-bus.outbound:
+		case <-finished:
+			require.NoError(t, group.Wait())
+			t.Fatal("turn finished without its final outbound message")
+		}
+
 		require.Equal(t, "reviewer", message.Agent)
 		require.Equal(t, "work/model-b", message.Model)
 		require.Equal(t, new("low"), message.ReasoningEffort)
