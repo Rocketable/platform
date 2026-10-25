@@ -2620,7 +2620,10 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
   const [entered, setEntered] = useState(true);
   const search = useSessionSearch(tab.query, "messages", entered);
   const { response } = search.result;
-  const hits = Map.groupBy(response?.messages ?? [], (match) => match.conversationId);
+  const groups = useMemo(() => {
+    const hits = Map.groupBy(response?.messages ?? [], (match) => match.conversationId);
+    return search.found.map(({ match, session }) => <SearchResultGroup key={session.id} session={session} hits={hits.get(session.id) ?? []} text={match.text} field={match.field} needle={response!.needle} tagIds={response!.mentionIds} />);
+  }, [response, search.found]);
   return <>
     <div id="search-tab-panel" role="tabpanel" aria-label="Search" className="min-w-0">
       <SessionSearch rows={rows} catalog={catalog} query={tab.query} setQuery={(update) => { setEntered(false); edit((item) => ({ query: update(item.query) })); }} search={search} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { onFirstSubmit(); setEntered(true); void search.run(tab.query.trimEnd()); } }} />
@@ -2628,7 +2631,7 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
     <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
       <SearchStatus search={search} empty={!!search.sent && !search.pending && !search.error && search.found.length === 0} incomplete={!searchIsAuthoritative(sidebar) || search.missing} />
       {search.sent ? <ul data-pending={search.pending} className="flex min-w-0 flex-col gap-4 data-[pending=true]:opacity-50">
-        {search.found.map(({ match, session }) => <SearchResultGroup key={session.id} session={session} hits={hits.get(session.id) ?? []} text={match.text} field={match.field} needle={response!.needle} tagIds={response!.mentionIds} />)}
+        {groups}
       </ul> : <p className="text-muted-foreground">Type to search messages and conversations.</p>}
     </div>
   </>;

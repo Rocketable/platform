@@ -669,6 +669,70 @@ test("newer search replaces an in-flight search and retries errors", async () =>
   }
 }, 30_000);
 
+test("typing reuses unchanged message results and new replies replace them", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const text = "needle " + "fixture text ".repeat(2048);
+  const rows = Array.from({ length: 64 }, (_, i) => ({ id: `result-${i}`, name: `Result ${i}`, agent: "main" }));
+  const requests: { query: string; messages?: boolean }[] = [];
+  const held = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const polling = Promise.withResolvers<void>();
+  const { server, origin } = serve(rows, async (input) => {
+    requests.push(input);
+    if (input.query === "needle xyz") { started.resolve(); await held.promise; }
+    const matches = input.query === "needle" ? rows : rows.slice(0, 1);
+    return response(input.query, matches.map(({ id }) => ({ conversationId: id, field: "" })), [], {
+      messages: matches.map(({ id }) => ({ conversationId: id, message: { messageId: "1:0", role: "assistant", text: input.query === "needle" ? text : "needle xyz replacement", complete: true } })),
+    });
+  });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    let listings = 0;
+    await page.route((url: URL) => url.pathname === "/api/ListSessions", (route: { continue(): Promise<void> }) => {
+      if (++listings === 1) return route.continue();
+      // Hold refreshes until page close: new sidebar rows legitimately rebuild results.
+      polling.resolve();
+    });
+    await page.addInitScript((text: string) => {
+      Object.assign(window, { messageSplits: 0 });
+      const split = String.prototype.split;
+      Object.defineProperty(String.prototype, "split", { value: function(this: string, separator: string | RegExp, limit?: number) {
+        if (String(this) === text) Reflect.set(window, "messageSplits", Reflect.get(window, "messageSplits") + 1);
+        return Reflect.apply(split, this, [separator, limit]);
+      } });
+    }, text);
+    await page.goto(`${origin}/search?q=needle`);
+    const search = page.getByRole("textbox", { name: "Search sessions" });
+    const results = page.getByLabel("Search results");
+    await results.getByRole("group", { name: "Result 63", exact: true }).waitFor();
+    await polling.promise;
+    expect(listings).toBeGreaterThan(1);
+    expect(await results.getByRole("group").count()).toBe(64);
+    expect(await results.locator('a[href*="?message="]').count()).toBe(64);
+    expect(await results.locator("mark").count()).toBe(64);
+    expect(await page.evaluate(() => Reflect.get(window, "messageSplits"))).toBeGreaterThan(0);
+    await page.evaluate(() => Reflect.set(window, "messageSplits", 0));
+    await search.press("End");
+    await search.pressSequentially(" xyz", { delay: 140 });
+    expect(await search.inputValue()).toBe("needle xyz");
+    expect(await page.evaluate(() => Reflect.get(window, "messageSplits"))).toBe(0);
+    expect(requests).toEqual([{ query: "needle", messages: true }]);
+    await search.press("Enter");
+    await started.promise;
+    expect(await results.getByRole("group").count()).toBe(64);
+    held.resolve();
+    await results.getByRole("link", { name: "Assistant needle xyz replacement", exact: true }).waitFor();
+    expect(await results.getByRole("group").count()).toBe(1);
+    expect(await results.locator("mark").allTextContents()).toEqual(["needle xyz"]);
+    expect(requests).toEqual([{ query: "needle", messages: true }, { query: "needle xyz", messages: true }]);
+  } finally {
+    held.resolve();
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
+
 test("a search answer arriving keeps the selected search text, so typing replaces it", async () => {
   const { chromium: engine } = await import(playwright!);
   const started = Promise.withResolvers<void>();
