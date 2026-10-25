@@ -88,9 +88,11 @@ test("comparison query reads dependent child pages sequentially and stops at the
   const requests: { id: string; before?: string; limit?: number }[] = [];
   const binding: ShadowBinding = { parentConversationId: "parent", parentAgent: "main", shadowAgent: "main/a", childConversationId: "paged-child", turns: [{ parentSourceConversationId: "parent", parentTurnId: "T1", childTurnId: "T1", order: "1", running: false, terminal: "complete", revision: "final" }] };
   let outstanding = 0, maximum = 0;
+  let failPage = false;
   globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
     const input = JSON.parse(init.body as string);
     requests.push(input);
+    if (failPage && input.before) return Response.json({ message: "page unavailable", code: 13 }, { status: 500 });
     maximum = Math.max(maximum, ++outstanding);
     await Promise.resolve();
     const start = input.before ? Number(input.before) - 50 : 101;
@@ -104,8 +106,12 @@ test("comparison query reads dependent child pages sequentially and stops at the
     expect(maximum).toBe(1);
     expect(result.lines).toHaveLength(150);
     expect(result.lines[0].turnId).toBe("T1");
+    failPage = true;
+    await expect(queryClient.fetchQuery({ ...shadowHistory({ ...binding, childConversationId: "failed-page-child" }, new Map()), retry: false })).rejects.toThrow("page unavailable");
+    expect(requests.slice(3)).toEqual([{ id: "failed-page-child", limit: 50 }, { id: "failed-page-child", before: "101", limit: 50 }]);
   } finally {
     queryClient.removeQueries({ queryKey: ["shadow-history", binding.childConversationId] });
+    queryClient.removeQueries({ queryKey: ["shadow-history", "failed-page-child"] });
     globalThis.fetch = original;
   }
 });
@@ -405,6 +411,43 @@ test("history request ownership rejects an old page even after stage and Redo re
     expect(draft.lines.map((line: Line) => line.text)).toEqual(["tail"]);
     expect(draft.start).toBe("50");
   } finally { globalThis.fetch = original; }
+});
+
+for (const phase of ["tail", "comparison"] as const) test(`a reset during a ${phase} read discards stale history and follows the new revision`, async () => {
+  const id = `reset-during-${phase}`;
+  const binding: ShadowBinding = { parentConversationId: id, parentAgent: "main", shadowAgent: "main/a", childConversationId: "child", turns: [{ parentSourceConversationId: id, parentTurnId: "T1", childTurnId: "", order: "1", running: false, terminal: "", revision: "pending" }] };
+  const initial = view([event("tail", "tail", "assistant", "initial")], { revision: "initial", start: "2", more: true });
+  const fresh = view([event("fresh", "fresh", "assistant", "fresh")], { revision: "reset" });
+  const draft = { lines: [] as Line[], busy: false, historyEpoch: 0, earlierShadows: undefined as { from: string; before: string; shadows: ShadowBinding[] }[] | undefined };
+  applyHistoryDelta(draft, initial);
+  draft.earlierShadows = [{ from: "1", before: "2", shadows: [binding] }];
+  queryClient.setQueryData(["history", { id }], initial);
+  const delayed = Promise.withResolvers<Response>(), started = Promise.withResolvers<void>();
+  const requests: { id: string; revision?: string; before?: string; limit?: number }[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = ((_url: unknown, init: RequestInit) => {
+    const input = JSON.parse(init.body as string);
+    requests.push(input);
+    if (requests.length === (phase === "tail" ? 1 : 2)) { started.resolve(); return delayed.promise; }
+    if (input.revision === "reset") {
+      expect(draft.lines.map((line) => line.text)).toEqual(["fresh"]);
+      return Promise.resolve(Response.json(fresh));
+    }
+    return Promise.resolve(Response.json(initial));
+  }) as typeof fetch;
+  try {
+    const reading = readHistoryDelta(id, draft, () => {});
+    await started.promise;
+    applyHistoryDelta(draft, fresh);
+    delayed.resolve(Response.json(view([event("stale", "stale", "assistant", "stale")], { revision: "stale", start: "1" })));
+    await reading;
+    expect(draft.lines.map((line) => line.text)).toEqual(["fresh"]);
+    expect(queryClient.getQueryData(["history", { id }])).toEqual(fresh);
+    expect(requests).toEqual([{ id, revision: "initial", limit: 50 }, ...(phase === "comparison" ? [{ id, before: "2", limit: 50 }] : []), { id, revision: "reset", limit: 50 }]);
+  } finally {
+    queryClient.removeQueries({ queryKey: ["history", { id }], exact: true });
+    globalThis.fetch = original;
+  }
 });
 
 test("revert replaces only the captured untouched draft, Redo leaves it alone, and failures keep edits", async () => {
