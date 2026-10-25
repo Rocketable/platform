@@ -1068,8 +1068,12 @@ func TestPublishFinalMarksCurrentGoalCompletion(t *testing.T) {
 func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
 	t.Parallel()
 
-	bus := newTestBus()
-	defer bus.Close()
+	bus := &outboundPublisherMock{PublishOutboundFunc: func(_ context.Context, outbound *protocol.OutboundMessage) error {
+		assert.False(t, outbound.GoalComplete)
+		outbound.MarkDelivered(nil)
+
+		return nil
+	}}
 
 	store := newTestSessionService(t)
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
@@ -1085,13 +1089,8 @@ func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
 	inbound.ConversationID = "thread-1"
 	result := runResult{turnID: "turn-2", text: "normal reply"}
 
-	var group errgroup.Group
-	group.Go(func() error { return publishTestFinal(context.Background(), bridge, inbound, &result) })
-
-	outbound := readRocketCodeOutbound(t, bus)
-	assert.False(t, outbound.GoalComplete)
-	outbound.MarkDelivered(nil)
-	require.NoError(t, group.Wait())
+	require.NoError(t, publishTestFinal(t.Context(), bridge, inbound, &result))
+	require.Len(t, bus.PublishOutboundCalls(), 1)
 }
 
 func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
