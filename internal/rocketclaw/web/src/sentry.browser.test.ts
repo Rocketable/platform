@@ -9,11 +9,11 @@ const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 // traced request until the page's own later observer has seen the frame (see /test/frame/ in the server).
 function holdFrame(name: string, pattern: string) {
   new PerformanceObserver((list, observer) => {
-    const scripts = list.getEntries().flatMap((entry) => (entry as PerformanceEntry & { scripts: { invokerType: string; invoker: string }[] }).scripts);
+    const scripts = list.getEntries().flatMap((entry) => (entry as PerformanceEntry & { scripts: { invokerType: string; invoker: string }[] }).scripts.slice(0, 1));
     if (!scripts.some((script) => new RegExp(pattern).test(`${script.invokerType}:${script.invoker}`))) return;
     observer.disconnect();
     void fetch(`/test/frame/seen/${name}`);
-  }).observe({ type: "long-animation-frame" });
+  }).observe({ type: "long-animation-frame", buffered: true });
   void fetch(`/test/frame/hold/${name}`);
 }
 
@@ -82,6 +82,8 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     if (await file.exists()) return new Response(file);
     let html = await Bun.file(path.join(dist, "index.html")).text();
     if (rate !== undefined) html = html.replace("</head>", `<script id="sentry-config" type="application/json">${JSON.stringify({ dsn: `http://public@127.0.0.1:${server.port}/1`, environment: "browser-test", release: "v9.8.7-browser-test", traces_sample_rate: rate })}</script></head>`);
+    // Sentry attributes a frame to its first script. Run before React can precede this classic script.
+    if (rate === 1 && url.pathname === "/") html = html.replace("<body>", `<body><script>const until = performance.now() + 150; while (performance.now() < until) {} document.body.append("slow script"); addEventListener("load", () => holdFrame("script", "^classic-script:"), { once: true });</script>`);
     return new Response(html, { headers: { "Content-Type": "text/html" } });
   } });
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
@@ -93,14 +95,6 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     await page.goto(`http://127.0.0.1:${server.port}/?q=private-search`);
     await page.evaluate(() => { document.cookie = "private-cookie=secret"; });
     await page.getByRole("button", { name: "Search sessions" }).waitFor();
-    if (rate === 1) {
-      // Let startup requests and rendering settle before measuring the inline script.
-      await page.waitForLoadState("networkidle");
-      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-      // Trigger a paint while the document still has a query string. The pageload span may already have
-      // ended, so the click opens an interaction span for the frame.
-      await page.addScriptTag({ content: `document.body.click(); const until = performance.now() + 150; while (performance.now() < until) {} document.body.append("slow script"); holdFrame("script", "^classic-script:");` });
-    }
     await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
