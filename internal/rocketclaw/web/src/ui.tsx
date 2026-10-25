@@ -1445,22 +1445,22 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
   </div>;
 }
 
-// Shared shows the space's Shared tabs, the same for everyone, above this person's tabs. It is a list of its own, so the
+// Shared shows the space's Shared tabs, the same for everyone, above this person's tabs, and hides while it has none. It
+// is a list of its own, so the
 // handlers of theirs never act on a Shared row; only its menu and Shift+Arrow, which reorders it for everyone, change it.
 function SharedTabs({ tabs: { state, here, pathname, promote, toggleShared, swapShared }, space, openMenu }: { tabs: ReturnType<typeof useTabs>; space?: string; openMenu: (path: string, anchor: MenuAnchor) => void }) {
   const collapsed = state.groups.some((group) => group.id === "shared" && group.collapsed), stop = here.includes(pathname) ? pathname : here[0];
   const inert = () => undefined, list = useRef<HTMLDivElement>(null), moved = useRef(""), order = here.join("\n");
   // A moved row takes its new place when the reply arrives, which drops its focus, so it takes the focus back then.
   useEffect(() => { if (moved.current) list.current!.querySelector<HTMLElement>(`[data-tab="${CSS.escape(moved.current)}"] [role="tab"]`)?.focus(); moved.current = ""; }, [order]);
+  if (!here.length) return null;
   return <>
     <div className="flex max-h-1/2 shrink-0 flex-col gap-0.5 overflow-y-auto px-1 pt-1 [scrollbar-width:thin]">
       <div className="flex shrink-0 items-center pt-1">
         <button type="button" aria-expanded={!collapsed} className="flex h-7 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={toggleShared}>
           <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium text-black", groupColors.Grey)}><Users aria-hidden="true" className="size-3" />Shared</span>
         </button>
-        {here.length ? <span className="ml-1 text-xs text-muted-foreground">{here.length} · everyone</span> : null}
       </div>
-      {here.length ? null : <p className="mx-1 mb-1 rounded-md border border-dashed px-2.5 py-2 text-xs text-muted-foreground">Nobody has shared a tab in {space} yet. Right-click a tab and choose “Add to Shared”.</p>}
       <div ref={list} role="tablist" aria-label="Shared tabs" aria-orientation="vertical" className="flex flex-col gap-0.5" onKeyDown={(event) => tabKeys(event, pathname, openMenu, (path, other) => { moved.current = path; swapShared(path, other); })}>
         {here.map((path) => collapsed && path !== pathname ? null : <TabItem key={path} tab={{ path }} shared description={`Shared, Space: ${space}`} chosen={false} rule="Grey" active={path === pathname} stop={path === stop} editing={false} endEdit={inert} promote={() => promote(path)} close={inert} openMenu={(anchor) => openMenu(path, anchor)} />)}
       </div>

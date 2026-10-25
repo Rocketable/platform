@@ -548,7 +548,7 @@ active tab.
   intact, to the first space. **New tab in group** brings New session into the
   group's space as well as the group.
 - **Shared.** Every space has one grey **Shared** group, shown first in the
-  sidebar above your own tabs, with a hint when it is empty. Its tabs are the
+  sidebar above your own tabs, and hidden while it has no tabs. Its tabs are the
   same for everyone, newly added ones last. The tab menu and the command palette
   offer **Add to Shared** and **Remove from Shared**; both change the group for
   everyone in the space, one tab at a time, so two people's changes never undo

@@ -146,7 +146,6 @@ async function sharedMenu(page: any, name: string) {
   await page.getByRole("menuitem").first().waitFor();
   return page.getByRole("menuitem").allInnerTexts();
 }
-const hint = (page: any, space: string) => page.getByText(`Nobody has shared a tab in ${space} yet. Right-click a tab and choose “Add to Shared”.`, { exact: true });
 
 test("preview tabs, promotion, close commands, middle-click, and drag survive reload", () => withPage({}, async (page, origin, prompts, saved) => {
   await page.goto(`${origin}/`);
@@ -1239,15 +1238,12 @@ test("a change made from tabs older than another window's save keeps both", () =
   expect(saved.refused).toBe(1);
 }), 30_000);
 
-test("Shared starts empty, takes tabs from the tab menu, highlights both copies, and changes only through its menu", () => withPage({}, async (page, origin, _prompts, saved) => {
+test("Shared hides while empty, takes tabs from the tab menu, highlights both copies, and changes only through its menu", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true }), row = (name: string) => shared(page).getByRole("tab", { name, exact: true });
   const header = page.getByRole("button", { name: "Shared", exact: true }), commands = page.getByRole("dialog", { name: "Run command" });
-  // A fresh space shows Shared first, empty with its hint, between the space menu and New session, which cannot be shared.
+  // A fresh space shows no Shared group, and New session cannot be shared.
   await openSaved(page, origin, "/", "New session", saved);
-  await hint(page, "Main").waitFor();
-  const [space, head, list] = [await page.getByRole("button", { name: "Space: Main" }).boundingBox(), await header.boundingBox(), await strip(page).boundingBox()];
-  expect([space.y + space.height <= head.y, head.y + head.height <= list.y]).toEqual([true, true]);
-  expect(await header.getAttribute("aria-expanded")).toBe("true");
+  expect(await header.count()).toBe(0);
   await tab("New session").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Close", exact: true }).waitFor();
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Add to Shared");
@@ -1259,14 +1255,15 @@ test("Shared starts empty, takes tabs from the tab menu, highlights both copies,
   await page.keyboard.press("Escape");
   await commands.waitFor({ state: "hidden" });
 
-  // Add to Shared shares the tab in this space and keeps it among this person's tabs; opening it highlights both copies.
+  // Add to Shared shares the tab in this space and keeps it among this person's tabs, and Shared shows, between the space
+  // menu and this person's tabs; opening the tab highlights both copies.
   for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"]]) await openSaved(page, origin, href(id), name, saved);
   await menu(page, "Alpha", "Add to Shared");
   await row("Alpha").waitFor();
   expect(saved.shared).toEqual([{ space: "main", path: href("alpha") }]);
   expect(await names(page)).toEqual(["New session", "Alpha", "Bravo"]);
-  await page.getByText("1 · everyone", { exact: true }).waitFor();
-  expect(await hint(page, "Main").count()).toBe(0);
+  const [space, head, list] = [await page.getByRole("button", { name: "Space: Main" }).boundingBox(), await header.boundingBox(), await strip(page).boundingBox()];
+  expect([space.y + space.height <= head.y, head.y + head.height <= list.y, await header.getAttribute("aria-expanded")]).toEqual([true, true, "true"]);
   expect(await row("Alpha").getAttribute("aria-description")).toBe("Shared, Space: Main");
   await row("Alpha").click();
   await page.waitForURL(`**${href("alpha")}`);
@@ -1307,14 +1304,15 @@ test("Shared starts empty, takes tabs from the tab menu, highlights both copies,
   await page.keyboard.press("Escape");
   await commands.waitFor({ state: "hidden" });
 
-  // Removing the Shared tab in view enters the space; removing one this person has open leaves their copy.
+  // Removing the Shared tab in view enters the space; removing one this person has open leaves their copy, and removing
+  // the last one hides Shared.
   await sharedMenu(page, "Bravo");
   await page.getByRole("menuitem", { name: "Remove from Shared", exact: true }).click();
   await page.waitForURL(`${origin}/`);
   expect(await sharedNames(page)).toEqual(["Alpha"]);
   await sharedMenu(page, "Alpha");
   await page.getByRole("menuitem", { name: "Remove from Shared", exact: true }).click();
-  await hint(page, "Main").waitFor();
+  await header.waitFor({ state: "detached" });
   expect(await names(page)).toEqual(["New session", "Alpha"]);
   expect(saved.shared).toEqual([]);
 
@@ -1416,12 +1414,13 @@ test("Shared collapses for this person in every space, a space returns to its la
   expect(await sharedNames(page)).toEqual(["Alpha", "Delta", "Bravo"]);
 }), 60_000);
 
-test("Shared shows in the narrow screen's tab drawer", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin, _prompts, saved) => {
+test("Shared shows in the narrow screen's tab drawer once it has tabs", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin, _prompts, saved) => {
   const toggle = page.getByRole("button", { name: "Show sidebar", exact: true }), drawer = page.locator("#tab-sidebar");
   await page.goto(`${origin}${href("bravo")}`);
   await until(() => saved.state.tabs.some((tab) => tab.path === href("bravo")));
   await toggle.tap();
-  await drawer.getByText("Nobody has shared a tab in Main yet. Right-click a tab and choose “Add to Shared”.", { exact: true }).waitFor();
+  await strip(page).getByRole("tab", { name: "Bravo", exact: true }).waitFor();
+  expect(await drawer.getByRole("button", { name: "Shared", exact: true }).count()).toBe(0);
   await page.keyboard.press("Escape");
   await strip(page).waitFor({ state: "detached" });
   saved.shared.push({ space: "main", path: href("alpha") });
