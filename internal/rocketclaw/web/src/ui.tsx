@@ -19,7 +19,7 @@ import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, us
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
 import { BellOff, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, Hourglass, Keyboard, Layers, ListChecks, LoaderCircle, Magnet, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
-import { createContext, memo, use, useDeferredValue, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
+import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
@@ -2041,6 +2041,23 @@ function useRemoteCreation(query: string, close: () => void, restart: () => void
   };
 }
 
+// Paging bounds initial/edit work; deep browsing or wrapping to the last row still mounts it all. Window rows if that becomes costly.
+function usePalettePage<T>(items: T[], selected: number, key: string) {
+  const [budget, setBudget] = useState({ key, rows: 50 });
+  if (budget.key !== key) setBudget({ key, rows: 50 });
+  const drawn = Math.max(budget.key === key ? budget.rows : 50, selected + 1);
+  return {
+    shown: items.slice(0, drawn),
+    next: drawn < items.length ? <li aria-hidden ref={(node) => {
+      const observer = new IntersectionObserver(([entry]) => {
+        if (entry.isIntersecting) setBudget({ key, rows: drawn + 50 });
+      }, { root: node!.parentElement, rootMargin: "0px 0px 100% 0px" });
+      observer.observe(node!);
+      return () => observer.disconnect();
+    }} /> : null,
+  };
+}
+
 function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void; keyCommands: { key: string; label: string; run: () => void }[] }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
@@ -2120,8 +2137,8 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
   const inSpace = useInSpace();
   const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, jobs.data?.filter(inSpace), newChat, tabs.open, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...timeline, ...outputs], recent));
   const selected = items.length === 0 ? 0 : pick % items.length;
-  // The palette opens with the first rows; the full list renders in the background.
-  const shown = useDeferredValue(items, items.slice(0, 50));
+  // Draw more rows only as scrolling or the keyboard needs them; every choice stays reachable.
+  const { shown, next } = usePalettePage(items, selected, `${mode}:${query}`);
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
     if (mode !== "cron" && !item.session) {
@@ -2166,7 +2183,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
         {runCron.error || actions.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runCron.error ?? actions.error)?.message}</p> : null}
         {remote.alert}
         {mode === "sessions" ? <div className="px-3 text-sm empty:hidden"><SearchStatus search={search} /></div> : null}
-        <ul data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
+        <ul key={`${mode}:${query}`} data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
           {shown.every(({ key }) => key === searchEverywhereKey) ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading, remote.empty)}</li> : null}
           {shown.map((item, index) => (
             <li key={item.key}>
@@ -2175,6 +2192,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
               </button>
             </li>
           ))}
+          {next}
         </ul>
       </DialogContent>
     </Dialog>

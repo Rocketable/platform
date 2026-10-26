@@ -601,6 +601,70 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
   }
 }, 30_000);
 
+test("Cmd+P draws large session lists only as scrolling and keyboard navigation need them", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const rows = Array.from({ length: 600 }, (_, i) => ({ id: `report-${i}`, name: `Report ${String(i).padStart(4, "0")}`, agent: "main" }));
+  const { server, origin, paths } = serve(rows, ({ query }) => response(query));
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(origin);
+    await page.getByRole("button", { name: "Search sessions and commands", exact: true }).waitFor();
+    await page.keyboard.press("Control+p");
+    const palette = page.getByRole("dialog", { name: "Go to session" });
+    const input = palette.getByPlaceholder("Search sessions");
+    await input.fill("Report");
+    await palette.getByText("Report 0000", { exact: true }).waitFor();
+    // Let deferred work finish too: an initial-value-only limit is not paging.
+    await page.evaluate(() => new Promise((resolve) => requestIdleCallback(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
+    const buttons = palette.locator("li > button");
+    expect(await buttons.count()).toBe(50);
+    expect(await palette.locator('[data-slot="session-title"]').allTextContents()).toEqual(rows.slice(0, 50).map(({ name }) => name));
+    await input.press("ArrowUp"); // Wrap past the hand-off to the last session, without dropping choices.
+    await page.keyboard.press("ArrowUp");
+    await page.waitForURL(`**/s/${btoa("report-599").replaceAll("=", "")}`);
+    expect(await palette.getByText("Report 0599", { exact: true }).evaluate((node: HTMLElement) => {
+      const row = node.closest("button")!.getBoundingClientRect(), list = node.closest("ul")!.getBoundingClientRect();
+      return row.top >= list.top && row.bottom <= list.bottom && document.activeElement === document.querySelector('[role="dialog"] input');
+    })).toBe(true);
+    await input.fill("Report 0000");
+    await input.fill("Report");
+    await palette.getByText("Report 0049", { exact: true }).waitFor();
+    expect(await buttons.count()).toBe(50);
+    await palette.locator("ul[data-pending]").evaluate((node: HTMLElement) => { node.scrollTop = node.scrollHeight; });
+    await page.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length > 50);
+    expect(await palette.getByText("Report 0050", { exact: true }).count()).toBe(1);
+    while (await buttons.count() < rows.length + 1) {
+      const drawn = await buttons.count();
+      await palette.locator("ul[data-pending]").evaluate((node: HTMLElement) => { node.scrollTop = node.scrollHeight; });
+      await page.waitForFunction((count: number) => document.querySelectorAll('[role="dialog"] li > button').length > count, drawn);
+    }
+    expect(await palette.locator('[data-slot="session-title"]').allTextContents()).toEqual(rows.map(({ name }) => name));
+    await palette.getByRole("button", { name: "Search everywhere for 'Report'", exact: true }).scrollIntoViewIfNeeded();
+    await input.fill("Report 0599");
+    await palette.getByText("Report 0599", { exact: true }).waitFor();
+    expect(await palette.locator('[data-slot="session-title"]').allTextContents()).toEqual(["Report 0599"]);
+    await input.fill("Report");
+    await palette.getByText("Report 0000", { exact: true }).waitFor();
+    expect(await buttons.count()).toBe(50);
+    for (let i = 0; i < 51; i++) await page.keyboard.press("ArrowDown");
+    await page.waitForURL(`**/s/${btoa("report-51")}`);
+    expect(await palette.getByText("Report 0051", { exact: true }).evaluate((node: HTMLElement) => {
+      const row = node.closest("button")!.getBoundingClientRect(), list = node.closest("ul")!.getBoundingClientRect();
+      return row.top >= list.top && row.bottom <= list.bottom && document.activeElement === document.querySelector('[role="dialog"] input');
+    })).toBe(true);
+    await input.fill("Report 0599");
+    await palette.getByText("Report 0599", { exact: true }).waitFor();
+    await input.press("Enter");
+    await palette.waitFor({ state: "hidden" });
+    await page.waitForURL(`**/s/${btoa("report-599").replaceAll("=", "")}`);
+    expect(paths.has("/api/SearchSessions")).toBe(false);
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
+
 test("newer search replaces an in-flight search and retries errors", async () => {
   const { chromium: engine } = await import(playwright!);
   const started = Promise.withResolvers<void>();
