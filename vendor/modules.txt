@@ -424,7 +424,7 @@ github.com/openai/openai-go/v3/webhooks
 # github.com/pires/go-proxyproto v0.16.0
 ## explicit; go 1.26.9
 github.com/pires/go-proxyproto
-# github.com/posthog/posthog-go v1.37.0
+# github.com/posthog/posthog-go v1.38.0
 ## explicit; go 1.21
 github.com/posthog/posthog-go
 # github.com/robfig/cron/v3 v3.0.1

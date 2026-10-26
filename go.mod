@@ -18,7 +18,7 @@ require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/openai/openai-go/v3 v3.88.0
-	github.com/posthog/posthog-go v1.37.0
+	github.com/posthog/posthog-go v1.38.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rubenv/sql-migrate v1.8.1
 	github.com/slack-go/slack v0.31.0
