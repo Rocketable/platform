@@ -6,13 +6,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestSandboxedShellSystemBash(t *testing.T) {
@@ -128,31 +128,62 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		require.False(t, got.Success)
 	})
 
-	t.Run("timeout ends the call when an escaped child keeps the output open", func(t *testing.T) {
+	t.Run("cancellation ends the call when an escaped child keeps the output open", func(t *testing.T) {
 		tests := []struct {
 			name    string
 			command string
 		}{
-			{name: "shell already exited", command: "set -m; sleep 30 & echo $! > child.pid"},
-			{name: "shell still running", command: "set -m; sleep 30 & echo $! > child.pid; sleep 10"},
+			{name: "shell already exited", command: "set -m; sleep 30 & echo $! $$ > child.pid"},
+			{name: "shell still running", command: "set -m; sleep 30 & echo $! $$ > child.pid; sleep 10"},
 		}
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				require.NoError(t, root.WriteFile("child.pid", nil, 0o600))
 
+				ctx, cancel := context.WithCancel(t.Context())
+
+				var (
+					running errgroup.Group
+					got     BashResult
+				)
+
+				running.Go(func() error {
+					got = sss.Bash(ctx, "", bashParams{Command: tt.command, Description: "escaped child"})
+					return nil
+				})
+				t.Cleanup(func() {
+					cancel()
+					require.NoError(t, running.Wait())
+				})
+
+				// Keep job-control diagnostics separate and cancel only after the child exists.
+				var pid, shellPID int
+
+				require.EventuallyWithT(t, func(check *assert.CollectT) {
+					data, err := root.ReadFile("child.pid")
+					assert.NoError(check, err)
+					_, err = fmt.Sscanf(string(data), "%d %d", &pid, &shellPID)
+					assert.NoError(check, err)
+				}, 10*time.Second, time.Millisecond)
+				t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+
+				if tt.name == "shell already exited" {
+					require.Eventually(t, func() bool {
+						return syscall.Kill(shellPID, 0) == syscall.ESRCH
+					}, 10*time.Second, time.Millisecond)
+				}
+
 				start := time.Now()
-				got := sss.Bash(context.Background(), "", bashParams{Command: tt.command, TimeoutMillisecond: 100, Workdir: "", Description: "escaped child"})
+
+				cancel()
+				require.NoError(t, running.Wait())
+
 				elapsed := time.Since(start)
 
-				// Bash job-control diagnostics can precede the PID in the combined output.
-				data, err := root.ReadFile("child.pid")
-				require.NoError(t, err)
-				pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-				require.NoError(t, err)
-				require.NoError(t, syscall.Kill(pid, syscall.SIGKILL))
-				require.Equal(t, "timeout", got.ErrorCode)
 				require.Less(t, elapsed, 10*time.Second)
+				require.Equal(t, "timeout", got.ErrorCode)
+				require.NoError(t, syscall.Kill(pid, syscall.SIGKILL))
 			})
 		}
 	})
