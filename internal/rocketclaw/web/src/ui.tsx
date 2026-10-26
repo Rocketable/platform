@@ -1938,8 +1938,8 @@ function paletteRows(
 ): { key: string; label?: string; detail?: string; session?: Session; keep?: boolean; disabled?: boolean; run: () => void }[] {
   const needle = typed.toLowerCase(), pages = searchPages(tabs), fresh = () => `/search/${crypto.getRandomValues(new Uint32Array(2)).join("-")}`;
   if (mode === "cron") {
-    return jobs.filter((job) => job.status !== "ran" && (needle === "" || `${job.stem} ${job.schedule ?? ""} ${job.agent ?? ""} ${job.channel ?? ""}`.toLowerCase().includes(needle))).map((job) => ({
-      key: job.stem, label: job.stem, detail: [job.schedule, job.agent, job.channel].filter(Boolean).join(" · "), keep: true, run: () => runStem(job.stem),
+    return jobs.filter((job) => job.status !== "ran" && (needle === "" || `${job.stem} ${job.schedule ?? ""} ${job.agent ?? ""}`.toLowerCase().includes(needle))).map((job) => ({
+      key: job.stem, label: job.stem, detail: [job.schedule, job.agent].filter(Boolean).join(" · "), keep: true, run: () => runStem(job.stem),
     }));
   }
   // Every cron with a definition or runs, retired ones too; runs come newest first.
@@ -4887,7 +4887,7 @@ function CronOverview({ stem, job, runs, gaps, runButton }: { stem: string; job?
   return <>
     <PageTitle><Link href="/cron" className="text-muted-foreground hover:underline">Cron</Link> / {stem} <span className="ml-1 rounded-full border px-2 align-middle text-xs font-normal">{job ? "Active" : "Retired"}</span></PageTitle>
     <div className="flex flex-col gap-2 text-xs text-muted-foreground">
-      <p className="flex items-center gap-1">{runButton}{[job?.agent, job?.channel, "Times in UTC"].filter(Boolean).join(" · ")}</p>
+      <p className="flex items-center gap-1">{runButton}{[job?.agent, "Times in UTC"].filter(Boolean).join(" · ")}</p>
       {job?.schedule ? <ul aria-label="Schedule" className="flex flex-wrap gap-1">{job.schedule.split(", ").map((at) => <li key={at} className="rounded-md bg-muted px-2 py-0.5 font-mono">{at}</li>)}</ul> : null}
       {job ? <details><summary className="cursor-pointer">Definition</summary><p className="mt-2 font-mono">{job.origin}</p><pre className="mt-2 whitespace-pre-wrap">{job.body || "No body."}</pre></details> : null}
     </div>

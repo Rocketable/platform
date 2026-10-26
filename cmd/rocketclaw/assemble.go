@@ -17,9 +17,8 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 
 	rt.Log.Info("starting Slack connector")
 
-	channels := cfg.Slack.MappedChannels()
-	runner := &cronRunner{backend: rt, config: cfg}
-	cronjobs := cronfrontend.New(cfg.Workspace, cfg.RuntimeDirName(), channels, rt.Sessions, runner, rt.Log)
+	runner := &cronRunner{backend: rt}
+	cronjobs := cronfrontend.New(cfg.Workspace, cfg.RuntimeDirName(), rt.Sessions, runner, rt.Log)
 	slack := slackconnector.New(&cfg.Slack, rt.TextRouter, rt.Sessions, rt.Log)
 
 	if err := slack.Authenticate(); err != nil {
@@ -40,7 +39,7 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 			return nil, nil, nil, err
 		}
 
-		externalMCP, err := startExternalMCPServer(rt.RunCtx, cfg, slack, rt.ExternalMCPUsers, agents, rt.Sessions, rt, rt.Log)
+		externalMCP, err := startExternalMCPServer(rt.RunCtx, cfg, rt.ExternalMCPUsers, agents, rt.Sessions, rt, rt.Log)
 		if err != nil {
 			return nil, nil, nil, err
 		}

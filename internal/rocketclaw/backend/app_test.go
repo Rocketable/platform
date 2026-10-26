@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -93,10 +94,9 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 		},
 	}
 	assembler := &frontendAssemblerMock{
-		ValidateAssetsFunc: func(got *config.Config, runtimeDir string, channels []string) error {
+		ValidateAssetsFunc: func(got *config.Config, runtimeDir string) error {
 			require.Equal(t, cfg, got)
 			require.True(t, runtimeDir == cfg.RuntimeDirName() || strings.HasPrefix(runtimeDir, cfg.RuntimeDirName()+"-reload-"))
-			require.Equal(t, []string{"#general"}, channels)
 
 			data, err := root.ReadFile(runtimeDir + "/agents/main.md")
 			require.NoError(t, err)
@@ -219,7 +219,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 		finals := make(chan string, 4)
 		copyDone := make(chan struct{})
 		assembler := &frontendAssemblerMock{
-			ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+			ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 			AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
 				events := rt.Subscribe(rt.RunCtx)
 				go func() {
@@ -442,7 +442,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 				},
 			}
 			assembler := &frontendAssemblerMock{
-				ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+				ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 				AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
 					runtimes <- rt
 
@@ -532,7 +532,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 
 			go func() {
 				done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), &frontendAssemblerMock{
-					ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+					ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 					AssembleFunc: func(*Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
 						return slack, nil, nil, nil
 					},
@@ -547,6 +547,23 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 			require.NoError(t, <-done)
 		})
 	}
+}
+
+// Invalid frontend assets, such as a broken cron file, stop startup before anything is assembled.
+func TestRunStopsOnInvalidFrontendAssets(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n"), 0o600))
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	errInvalid := errors.New("invalid cron")
+	assembler := &frontendAssemblerMock{ValidateAssetsFunc: func(*config.Config, string) error { return errInvalid }}
+	require.ErrorIs(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), assembler), errInvalid)
+	assert.Empty(t, assembler.AssembleCalls())
 }
 
 // A person's Slack mention turn is not offered ask_user_question; Slack cannot show questions.
@@ -591,7 +608,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 		return nil
 	}
 	assembler := &frontendAssemblerMock{
-		ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+		ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 		AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
 			assembled = rt
 			return slack, nil, []func(context.Context) error{slack.Stop}, nil

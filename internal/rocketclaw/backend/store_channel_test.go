@@ -3,7 +3,6 @@ package backend
 import (
 	"testing"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,10 +14,9 @@ func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) 
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"slack-thread:C1:2.2": KindSlackThread})
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"chat-2": KindWebChat})
 
-	binding := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops",
-		Thread: protocol.SlackReplyTarget{ChannelID: "C1", ThreadTS: "2.2"}}
+	binding := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "chat-2"}
 	require.NoError(t, store.UpsertExternalMCPSession("deploy-42", &binding))
 
 	got, ok, err := store.ExternalMCPSession("deploy-42")
@@ -50,25 +48,30 @@ func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
-	require.NoError(t, store.RegisterExternalMCPConversation("existing", "managed-agent", &ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private-1", ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops", OriginPairs: map[string]string{"topic": "billing", "rocketclaw_principal": "reader"}}))
+	require.NoError(t, store.RegisterExternalMCPConversation("existing", "managed-agent", &ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private-1", ManagedConversationID: "chat-1", OriginPairs: map[string]string{"topic": "billing", "rocketclaw_principal": "reader"}}))
 	binding, found, err := store.ExternalMCPSession("existing")
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, map[string]string{"topic": "billing"}, binding.OriginPairs)
 
-	thread, ok, err := store.Thread("slack-thread:C1:1.1")
+	thread, ok, err := store.Thread("chat-1")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "managed-agent", thread.Agent)
 
-	err = store.RegisterExternalMCPConversation("existing", "other-managed", &ExternalMCPSessionState{Agent: "other-private", PrivateConversationID: "external_mcp:private-2", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops", OriginPairs: map[string]string{"topic": "replacement"}})
+	kind, ok, err := store.ConversationKind(t.Context(), "chat-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, KindWebChat, kind, "an External MCP session shows in a Web chat")
+
+	err = store.RegisterExternalMCPConversation("existing", "other-managed", &ExternalMCPSessionState{Agent: "other-private", PrivateConversationID: "external_mcp:private-2", ManagedConversationID: "chat-2", OriginPairs: map[string]string{"topic": "replacement"}})
 	require.Error(t, err)
 	binding, found, err = store.ExternalMCPSession("existing")
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, map[string]string{"topic": "billing"}, binding.OriginPairs)
 
-	_, ok, err = store.Thread("slack-thread:C1:2.2")
+	_, ok, err = store.Thread("chat-2")
 	require.NoError(t, err)
 	assert.False(t, ok)
 }
@@ -80,7 +83,7 @@ func TestExternalMCPConversationCleanupRemovesOnlyBoundSessions(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
-	session := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops"}
+	session := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "chat-1"}
 	require.NoError(t, store.RegisterExternalMCPConversation("public", "managed-agent", &session))
 
 	for _, conversationID := range []string{session.PrivateConversationID, session.ManagedConversationID, "unrelated"} {

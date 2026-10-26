@@ -185,7 +185,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
 		ready <- rt
 		return nil, rt.RunCtx.Done(), nil, nil // The public assembler contract permits absent Slack.
-	}, ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil }}
+	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group
 	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
@@ -794,10 +794,13 @@ func TestVoice(t *testing.T) {
 	}
 
 	t.Run("one call per person", func(t *testing.T) {
-		require.NoError(t, h.rt.CreateConversation(t.Context(), protocol.Conversation{ID: "second", Agent: "main", CreatedBy: "alice"}))
+		// An earlier subtest's retention pass removed the fixture chats, so this one makes its own.
+		for _, id := range []string{"second", "shared"} {
+			require.NoError(t, h.rt.CreateConversation(t.Context(), protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
+		}
 
 		phone, hangUpPhone, _ := h.call(t, "second", "offer-phone")
-		desk, hangUpDesk, alice := h.call(t, "main", "offer-desk")
+		desk, hangUpDesk, alice := h.call(t, "shared", "offer-desk")
 		assert.JSONEq(t, `{"ended":{"reason":"replaced"}}`, strings.TrimPrefix(frame(t, phone), "data: "), "a person's new call on another conversation ends their older one")
 		hangUpPhone()
 
@@ -807,7 +810,7 @@ func TestVoice(t *testing.T) {
 
 		stream, err := h.conn.NewStream(metadata.NewOutgoingContext(ctx, metadata.Pairs("rocketclaw-principal", "192.0.2.2")), &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/Voice")
 		require.NoError(t, err)
-		require.NoError(t, stream.SendMsg(&VoiceRequest{ConversationId: "main", Sdp: "offer-bob"}))
+		require.NoError(t, stream.SendMsg(&VoiceRequest{ConversationId: "shared", Sdp: "offer-bob"}))
 		require.NoError(t, stream.CloseSend())
 
 		answer := &VoiceEvent{}

@@ -569,7 +569,7 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 
 			recordTestConversations(t, store, "planner", map[string]ConversationKind{thread: KindSlackThread})
 			recordPrivateHistories(t, store, map[string]ConversationKind{orphan: KindCronRun})
-			require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Thread: protocol.SlackReplyTarget{ChannelID: "C1", ThreadTS: slackTestTS(old)}, Agent: "planner", PrivateConversationID: private, ManagedConversationID: managed}))
+			require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: private, ManagedConversationID: managed}))
 
 			for _, conversationID := range []string{thread, managed, private, orphan} {
 				_, err := store.AppendEntryID(ctx, conversationID, testSessionEntryAt(old, conversationID))

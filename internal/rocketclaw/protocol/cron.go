@@ -7,6 +7,6 @@ type CronRunResult struct {
 
 // OneOffCronjob captures a live one-off cronjob prompt loaded from disk.
 type OneOffCronjob struct {
-	Agent, Prompt, RelativePath, TextChannel, Space string
-	ConversationID                                  string
+	Agent, Prompt, RelativePath, Space string
+	ConversationID                     string
 }

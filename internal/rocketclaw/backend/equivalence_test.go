@@ -873,7 +873,7 @@ func (c *equivCapture) capture() {
 			}
 
 			pairs, _ := json.Marshal(session.OriginPairs)
-			c.put("external_mcp", id, map[string]any{"external_id": external, "agent": session.Agent, "private": session.PrivateConversationID, "managed": session.ManagedConversationID, "slack_channel": session.SlackChannel,
+			c.put("external_mcp", id, map[string]any{"external_id": external, "agent": session.Agent, "private": session.PrivateConversationID, "managed": session.ManagedConversationID,
 				"origin_pairs": equivHash(string(pairs)), "lookup_found": foundExternal, "lookup_private": byExternal.PrivateConversationID, "lookup_managed": byExternal.ManagedConversationID})
 		}
 

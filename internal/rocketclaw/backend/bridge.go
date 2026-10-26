@@ -1126,8 +1126,8 @@ func claimWakeNotes(ctx context.Context, tx stateStoreDB, conversationID, turnID
 		return false, err
 	}
 
-	// A wake queued before its cron run posted a thread would post a second root; leaving the
-	// notes unclaimed lets later work wake them toward the thread their jobs now report to.
+	// A wake queued before its cron run opened its report chat would report outside it; leaving
+	// the notes unclaimed lets later work wake them toward the chat their jobs now report to.
 	if inbound.SyncDestination == "" && slices.ContainsFunc(notes, func(note backgroundJob) bool { return note.origin.SyncDestination != "" }) {
 		return false, nil
 	}
@@ -1345,17 +1345,11 @@ WHERE m.conversation_id = $1`, source).Scan(&data, &owner, &active); err != nil 
 			}
 
 			choices := definitions.PrimaryNames()
-
-			stem := strings.TrimSuffix(strings.TrimPrefix(inbound.Cronjob.RelativePath, "cron/"), ".md")
-			if job, err := config.LoadOneOffCronjob(runtimeCfg.Workspace, runtimeCfg.RuntimeDirName(), stem); err == nil {
-				choices = runtimeCfg.CronWebAgentChoices(choices, &job)
-			}
-
 			if len(choices) == 0 {
 				return errors.New("create canonical web conversation: no loaded agents")
 			}
 
-			// Like the report thread, the chat is born in the cron's space, else its agent's.
+			// Like a report chat, the chat is born in the cron's space, else its agent's.
 			space := cmp.Or(inbound.Cronjob.Space, definitions.Items[inbound.Cronjob.Agent].Space)
 			if _, err := dao.createConversation(ctx, protocol.Conversation{ID: web, Agent: choices[0], CreatedBy: string(ThreadCreatedByCron), Space: space}, conversationFacts{kind: KindWebChat, cronRun: source}); err != nil {
 				return err
@@ -1782,9 +1776,9 @@ func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *
 		return fmt.Errorf("wait for final outbound delivery: %w", errDelivered)
 	}
 
-	// A cron run with no channel has no Slack target and posts nowhere.
-	if outbound.Cronjob != nil && msg.SyncDestination == "" && outbound.SlackReply != nil && (strings.TrimSpace(outbound.Text) != "" || len(outbound.Attachments) > 0) {
-		if err := b.postCronRoot(ctx, outbound); err != nil {
+	// A cron run with a reply reports it in a new Web chat; an empty reply reports nothing.
+	if outbound.Cronjob != nil && msg.SyncDestination == "" && (strings.TrimSpace(outbound.Text) != "" || len(outbound.Attachments) > 0) {
+		if err := b.openCronReport(ctx, outbound); err != nil {
 			msg.CompleteResponseWithAttachments(outbound.Text, outbound.Attachments, err)
 			return err
 		}
@@ -1806,39 +1800,21 @@ func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *
 	return nil
 }
 
-// postCronRoot posts the report in its configured channel, records the new
-// thread for the channel's first agent, binds this run to it, and footers the
-// root with the bound destination.
-func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMessage) error {
-	runtimeCfg := b.runtime.Clone()
-
-	channel, ok := runtimeCfg.Slack.Channel(outbound.SlackReply.ChannelID)
-	if !ok || len(channel.Agents) == 0 {
-		return fmt.Errorf("cron destination %q has no configured agents", outbound.SlackReply.ChannelID)
-	}
-
-	agents, _, err := LoadRuntimeDefinitions(b.runtime, runtimeCfg.RuntimeDirName())
+// openCronReport records the run's Web report chat, the same chat continuing the run from Web
+// opens, for the cron's agent in the cron's space, else its agent's, and binds the run to it.
+// A replayed delivery finds the chat and the binding already there.
+func (b *Bridge) openCronReport(ctx context.Context, outbound *protocol.OutboundMessage) error {
+	agents, _, err := LoadRuntimeDefinitions(b.runtime, b.runtime.Clone().RuntimeDirName())
 	if err != nil {
 		return fmt.Errorf("load cron agents: %w", err)
 	}
 
-	b.threads.mu.Lock()
-	roots := b.threads.cronRoots
-	b.threads.mu.Unlock()
-
-	root, err := roots.SendCronjobRoot(ctx, outbound)
-	if err != nil {
-		return fmt.Errorf("post cronjob root: %w", err)
-	}
-
-	destinationID := protocol.SlackThreadConversationID(root.ChannelID, root.ThreadID)
-
-	// The thread is born in the cron's space, else its agent's, whichever agent the channel gives it.
+	destinationID := "web:" + b.config.ConversationID
 	space := cmp.Or(outbound.Cronjob.Space, agents.Items[outbound.Cronjob.Agent].Space)
 
 	ctx = context.WithoutCancel(ctx)
-	if err := b.config.SessionService.recordConversation(ctx, protocol.Conversation{ID: destinationID, Agent: channel.Agents[0], CreatedBy: string(ThreadCreatedByCron), Space: space}, conversationFacts{kind: KindSlackThread, slackChannel: root.ChannelID, slackThread: root.ThreadID}); err != nil {
-		return fmt.Errorf("record cronjob thread: %w", err)
+	if err := b.config.SessionService.recordConversation(ctx, protocol.Conversation{ID: destinationID, Agent: outbound.Cronjob.Agent, CreatedBy: string(ThreadCreatedByCron), Space: space}, conversationFacts{kind: KindWebChat, cronRun: b.config.ConversationID}); err != nil {
+		return fmt.Errorf("record cron report chat: %w", err)
 	}
 
 	tx, err := b.config.SessionService.beginStateTx(ctx, "cron destination binding")
@@ -1858,11 +1834,6 @@ func (b *Bridge) postCronRoot(ctx context.Context, outbound *protocol.OutboundMe
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit cron destination binding: %w", err)
-	}
-
-	// The footer links the bound destination; a failed edit never fails or re-posts the report.
-	if err := roots.EditCronjobRootFooter(ctx, outbound, root, destinationID); err != nil {
-		b.log.Warn("edit cronjob root footer", "conversation_id", b.config.ConversationID, "destination", destinationID, "error", err)
 	}
 
 	return b.threads.armSchedules(ctx, destinationID, schedules)
@@ -3293,10 +3264,6 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 	outbound := protocol.NewOutboundMessage(b.config.ConversationID, text)
 	outbound.ConversationID = b.config.ConversationID
 	outbound.SourceConversationID = b.config.ConversationID
-
-	if msg != nil && msg.Source == protocol.SourceExternalMCP {
-		outbound.ExternalConversationID = strings.TrimSpace(msg.Metadata["external_conversation_id"])
-	}
 
 	outbound.Agent = b.agentSnapshot()
 

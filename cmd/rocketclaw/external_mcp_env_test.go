@@ -32,7 +32,7 @@ type externalMCPStarted struct {
 	server  *externalmcp.Server
 }
 
-func (externalMCPAssembler) ValidateAssets(*config.Config, string, []string) error { return nil }
+func (externalMCPAssembler) ValidateAssets(*config.Config, string) error { return nil }
 
 func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
 	events := rt.Subscribe(rt.RunCtx)
@@ -42,14 +42,7 @@ func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (backend.SlackFronte
 		}
 	}()
 
-	relay := &mcpRelayMock{
-		SendExternalMCPRelayFunc: func(context.Context, string, string, *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error) {
-			return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}, nil
-		},
-		CleanupExternalMCPRelayFunc: func(context.Context, *protocol.SlackReplyTarget) {},
-	}
-
-	server, err := startExternalMCPServer(rt.RunCtx, rt.Cfg.Clone(), relay, nil, &mcpAgentIndex{names: []string{"planner"}}, rt.Sessions, rt, rt.Log)
+	server, err := startExternalMCPServer(rt.RunCtx, rt.Cfg.Clone(), nil, &mcpAgentIndex{names: []string{"planner"}}, rt.Sessions, rt, rt.Log)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -64,9 +57,9 @@ func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (backend.SlackFronte
 	return slack, make(chan struct{}), []func(context.Context) error{server.Close}, nil
 }
 
-// An External MCP call and a later turn in its Slack thread both run their shell commands with the
+// An External MCP call and a later turn in its Web chat both run their shell commands with the
 // call's metadata, each under its own conversation ID.
-func TestExternalMCPMetadataReachesThreadTurns(t *testing.T) {
+func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{}`), 0o600))
 
@@ -118,7 +111,6 @@ func TestExternalMCPMetadataReachesThreadTurns(t *testing.T) {
 		Workspace:   workspace,
 		DatabaseURL: dsn,
 		OpenAI:      config.OpenAIConfig{APIKey: "test", APIBaseURL: model.URL},
-		Slack:       config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}},
 		MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0"},
 	}
 	assembler := externalMCPAssembler{started: make(chan externalMCPStarted, 1)}
@@ -138,9 +130,7 @@ func TestExternalMCPMetadataReachesThreadTurns(t *testing.T) {
 	started := <-assembler.started
 
 	// Startup installs the workspace's runtime assets, so the agents are written after it.
-	for _, agent := range []string{"planner", "managed"} {
-		require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", agent+".md"), []byte("---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n---\nPrompt\n"), 0o600))
-	}
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", "planner.md"), []byte("---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n---\nPrompt\n"), 0o600))
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
 	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: started.server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
@@ -148,7 +138,7 @@ func TestExternalMCPMetadataReachesThreadTurns(t *testing.T) {
 	t.Cleanup(func() { _ = session.Close() })
 
 	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{
-		"external_conversation_id": "ticket-1", "agent": "planner", "input": "reply to the customer", "slack_channel": "#ops",
+		"external_conversation_id": "ticket-1", "agent": "planner", "input": "reply to the customer",
 		"metadata": map[string]string{"intercom_conversation_id": "ic-42"},
 	}})
 	require.NoError(t, err)
@@ -166,7 +156,7 @@ func TestExternalMCPMetadataReachesThreadTurns(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(30 * time.Second):
-		t.Fatal("timed out waiting for the thread turn")
+		t.Fatal("timed out waiting for the Web chat turn")
 	}
 
 	mu.Lock()

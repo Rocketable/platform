@@ -529,17 +529,17 @@ active tab.
   takes its agent's. The Cron page and Run cron palette hide crons, and their
   runs, that belong to another space.
 - **Birth space.** A session is born in its agent's space; a Run cron session, a
-  cron's report thread, or a chat continuing a cron run in its cron's space, else
+  cron's report chat, or a chat continuing a cron run in its cron's space, else
   the cron agent's; any other Web session in the space you were in. A space named
   this way that does not exist yet is created with the session. A session opens
   in the space it was born in, and after its first message a new session moves
   there and takes you along. When you have moved a session's tab elsewhere, its tab
   menu offers **Restore to "<space>"**. Sessions from before birth spaces, and
-  sessions started outside the Web other than cron report threads, have none and
+  sessions started outside the Web other than cron report chats, have none and
   open in the current space.
 - **Agent picker.** New session offers every agent. Once a session's agent has a
   space, its picker and `$agent` offer only agents with that space, ignoring case;
-  when that leaves none the Slack channel or cron allows, they offer all of those.
+  when that leaves none the Slack channel allows, they offer all of those.
 - **Groups in spaces.** A group lives in one space. The tab menu offers only the
   current space's groups, and moving a tab to another space takes it out of its group.
   The group editor adds **Move group to "<space>"** for each other space: it
@@ -1002,11 +1002,9 @@ Each run is one run of the cron; its subagents and sessions are inside it. Click
 recorded run marker or the bar (for the latest run) to preview that run's own
 reasoning and tool activity. **Open chat** opens the chat that holds
 the run's output, or else creates or reuses a writable Web chat that shows the
-run's history, without rerunning the job or creating a Slack thread. Repeated opens
-return the same chat. Its agent choices follow the current
-cron definition's channel and configured channel agents; if those choices cannot
-be computed, all loaded agents are available. The first allowed loaded agent is
-selected when the chat is created. Removed definitions keep
+run's history, without rerunning the job. Repeated opens return the same chat. It
+offers every loaded agent, and the first loaded agent is selected when the chat is
+created. Removed definitions keep
 their recorded runs visible.
 A cron's journal opens from its name on the Cron page or from **Cron: Timeline** in
 the command palette, which lists every cron, retired ones too, with its run count

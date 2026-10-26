@@ -525,7 +525,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   const image: Attachment = { id: "history-image", name: "history.png", mimeType: "image/png", size: String(imageBytes.length), conversationId: "private-source", originalUnverified: true };
   const downloadConversations: string[] = [];
   const jobs = [
-      { stem: "daily", status: "", lastRun: "", nextRun: "", schedule: "24h", body: "Daily prompt", agent: "planner", channel: "#ops", upcoming: [new Date(Date.now() + 3_600_000).toISOString(), new Date(Date.now() + 18 * 3_600_000).toISOString()], origin: "cron/daily.md" },
+      { stem: "daily", status: "", lastRun: "", nextRun: "", schedule: "24h", body: "Daily prompt", agent: "planner", upcoming: [new Date(Date.now() + 3_600_000).toISOString(), new Date(Date.now() + 18 * 3_600_000).toISOString()], origin: "cron/daily.md" },
       { stem: "unused", status: "", lastRun: "", nextRun: "", upcoming: [] },
       { stem: "daily", status: "ran", lastRun: new Date(Date.now() - 3_600_000).toISOString(), nextRun: "cron-chat", origin: "cron-source" },
       { stem: "retired", status: "ran", lastRun: "2026-09-01T00:00:00Z", nextRun: "old-chat", origin: "old-source" },
@@ -1897,7 +1897,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       const searchBounds = await search.boundingBox();
       const gridBounds = await cronPage.getByRole("button", { name: "Preview latest run of daily", exact: true }).boundingBox();
       expect(searchBounds.y + searchBounds.height).toBeLessThan(gridBounds.y);
-      for (const text of ["DAILY", "prompt", "24h", "planner", "#ops", "cron/daily.md"]) {
+      for (const text of ["DAILY", "prompt", "24h", "planner", "cron/daily.md"]) {
         await search.fill(text);
         await cronPage.getByRole("link", { name: "retired", exact: true }).waitFor({ state: "hidden" });
         expect(await daily.isVisible()).toBe(true);

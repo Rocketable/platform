@@ -679,8 +679,8 @@ func (s *SessionService) ExternalMCPSessionByConversationID(conversationID strin
 	return externalConversationID, session, true, nil
 }
 
-// externalMCPSessionSQL reads External MCP bindings from the Slack threads they are on; callers add conditions.
-const externalMCPSessionSQL = `SELECT external_id, external_agent, external_run, conversation_id, external_channel, origin_pairs, COALESCE(slack_channel, ''), COALESCE(slack_thread, '')
+// externalMCPSessionSQL reads External MCP bindings from the Web chats they are on; callers add conditions.
+const externalMCPSessionSQL = `SELECT external_id, external_agent, external_run, conversation_id, origin_pairs
 FROM conversations WHERE external_id IS NOT NULL`
 
 type externalMCPSessionScanner struct{}
@@ -692,7 +692,7 @@ func (externalMCPSessionScanner) scan(scanner rowScanner) (string, ExternalMCPSe
 		privateConversationID  sql.NullString
 		originPairs            []byte
 	)
-	if err := scanner.Scan(&externalConversationID, &session.Agent, &privateConversationID, &session.ManagedConversationID, &session.SlackChannel, &originPairs, &session.Thread.ChannelID, &session.Thread.ThreadTS); err != nil {
+	if err := scanner.Scan(&externalConversationID, &session.Agent, &privateConversationID, &session.ManagedConversationID, &originPairs); err != nil {
 		return "", ExternalMCPSessionState{}, fmt.Errorf("scan external MCP session: %w", err)
 	}
 

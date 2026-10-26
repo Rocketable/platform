@@ -29,7 +29,6 @@ type Runner interface {
 // Manager loads and runs workspace cron definitions.
 type Manager struct {
 	workspace, runtimeDir string
-	channels              []string
 	store                 cronScheduleStore
 	run                   Runner
 	log                   *slog.Logger
@@ -50,15 +49,15 @@ type cronScheduleStore interface {
 }
 
 type definition struct {
-	relativePath, agent, textChannel, body, space string
-	schedules                                     []config.CronSchedule
+	relativePath, agent, body, space string
+	schedules                        []config.CronSchedule
 }
 
 // Job is the read-only presentation of a loaded definition and its next triggers.
 type Job struct {
-	RelativePath, Agent, TextChannel, Body, Space string
-	Schedules                                     []string
-	Upcoming                                      []time.Time
+	RelativePath, Agent, Body, Space string
+	Schedules                        []string
+	Upcoming                         []time.Time
 }
 
 const (
@@ -67,21 +66,13 @@ const (
 )
 
 // New constructs a cronjob manager using runtimeDir for effective runtime cron definitions.
-func New(workspace, runtimeDir string, channels []string, store cronScheduleStore, run Runner, logger *slog.Logger) *Manager {
-	channels = slices.Clone(channels)
-	for i := range channels {
-		channels[i] = strings.TrimSpace(channels[i])
-	}
-
-	slices.Sort(channels)
-	channels = slices.Compact(channels)
-
-	return &Manager{workspace: workspace, channels: channels, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, runtimeDir: runtimeDir}
+func New(workspace, runtimeDir string, store cronScheduleStore, run Runner, logger *slog.Logger) *Manager {
+	return &Manager{workspace: workspace, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, runtimeDir: runtimeDir}
 }
 
 // ValidateRuntimeDefinitions loads cron definitions from runtimeDir without mutating scheduler state.
-func ValidateRuntimeDefinitions(workspace, runtimeDir string, channels []string) error {
-	_, err := loadDefinitionsIn(workspace, runtimeDir, channels)
+func ValidateRuntimeDefinitions(workspace, runtimeDir string) error {
+	_, err := loadDefinitionsIn(workspace, runtimeDir)
 
 	return err
 }
@@ -95,7 +86,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 	m.mu.Unlock()
 
-	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir, m.channels)
+	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
 	if err != nil {
 		return err
 	}
@@ -179,7 +170,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 }
 
-// LoadOneOffCronjob resolves and loads one live cronjob for a managed Slack thread run.
+// LoadOneOffCronjob resolves and loads one live cronjob for a run from Web.
 func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, error) {
 	job, err := config.LoadOneOffCronjob(m.workspace, m.runtimeDir, target)
 	if err != nil {
@@ -194,7 +185,7 @@ func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, erro
 // Jobs returns loaded definitions and their next triggers in the next day.
 // It neither refreshes scheduler state nor claims any work.
 func (m *Manager) Jobs() ([]Job, error) {
-	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir, m.channels)
+	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +199,7 @@ func (m *Manager) Jobs() ([]Job, error) {
 
 	jobs := make([]Job, 0, len(definitions))
 	for _, definition := range definitions {
-		job := Job{RelativePath: definition.relativePath, Agent: definition.agent, TextChannel: definition.textChannel, Body: definition.body, Space: definition.space}
+		job := Job{RelativePath: definition.relativePath, Agent: definition.agent, Body: definition.body, Space: definition.space}
 		for i, schedule := range definition.schedules {
 			job.Schedules = append(job.Schedules, schedule.Raw)
 			if !schedule.DueAt.IsZero() && !schedule.DueAt.Before(now) && !schedule.DueAt.After(now.Add(24*time.Hour)) {
@@ -237,7 +228,6 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCron
 	raw.ConversationID = cronTraceConversationID(oneOffCronTracePrefix, job.RelativePath, raw.Run.At)
 	raw.SyncDestination = job.ConversationID
 	raw.Cronjob = &protocol.CronjobMessage{RelativePath: job.RelativePath, Agent: job.Agent, RanAt: m.now().Format(time.RFC3339)}
-	raw.TextChannel = job.TextChannel
 
 	m.mu.Lock()
 	if m.closed {
@@ -327,7 +317,7 @@ func (m *Manager) runTickerLoop(ctx context.Context) {
 func (m *Manager) scanScheduled(ctx context.Context) error {
 	now := m.now()
 
-	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir, m.channels)
+	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
 	if err != nil {
 		return err
 	}
@@ -428,23 +418,18 @@ func (m *Manager) scheduledStates(definitions []definition, now time.Time) []bac
 	return states
 }
 
-const cronReplyInstruction = "Your reply is posted to the channel exactly as written. If there is nothing worth posting, reply with nothing."
+const cronReplyInstruction = "Your reply is posted as a report in a new Web chat exactly as written. If there is nothing worth reporting, reply with nothing."
 
 func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	startedAt := m.now()
 	ranAt := startedAt.Format(time.RFC3339)
-	// A run with no channel posts nowhere, so only a channel's runs learn that their reply is posted.
-	prompt := definition.body
-	if definition.textChannel != "" {
-		prompt = m.preparePrompt(definition.body)
-	}
+	prompt := m.preparePrompt(definition.body)
 
 	log := m.log.With("file", definition.relativePath, "agent", definition.agent, "ran_at", ranAt)
 
 	progress := &backend.RawRunProgress{
 		ConversationID: cronTraceConversationID(cronTracePrefix, definition.relativePath, startedAt),
 		Run:            &protocol.CronRun{Path: definition.relativePath, At: startedAt},
-		TextChannel:    definition.textChannel,
 		Cronjob:        &protocol.CronjobMessage{RelativePath: definition.relativePath, Agent: definition.agent, RanAt: ranAt, Space: definition.space},
 	}
 	log = log.With("conversation_id", progress.ConversationID)
@@ -479,8 +464,8 @@ func (m *Manager) preparePrompt(body string) string {
 	return strings.TrimSuffix(body, "\n") + "\n\n" + cronReplyInstruction
 }
 
-// loadDefinitionsIn loads every cron definition, then rejects any whose channel is not in channels.
-func loadDefinitionsIn(workspace, runtimeDir string, channels []string) ([]definition, error) {
+// loadDefinitionsIn loads every cron definition.
+func loadDefinitionsIn(workspace, runtimeDir string) ([]definition, error) {
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open workspace root: %w", err)
@@ -528,12 +513,6 @@ func loadDefinitionsIn(workspace, runtimeDir string, channels []string) ([]defin
 		definitions = append(definitions, definition)
 	}
 
-	for _, definition := range definitions {
-		if definition.textChannel != "" && !slices.Contains(channels, definition.textChannel) {
-			return nil, fmt.Errorf("cronjob %s channel %q is not configured", definition.relativePath, definition.textChannel)
-		}
-	}
-
 	return definitions, nil
 }
 
@@ -546,7 +525,6 @@ func loadDefinition(data []byte, relativePath string) (definition, error) {
 	return definition{
 		relativePath: job.RelativePath,
 		agent:        job.Agent,
-		textChannel:  job.TextChannel,
 		body:         job.Prompt,
 		space:        job.Space,
 		schedules:    schedules,

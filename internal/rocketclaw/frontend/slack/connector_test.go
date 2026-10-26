@@ -36,10 +36,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-func testExternalMCPRelay(text string, attachments []protocol.OutboundAttachment) *protocol.ExternalMCPRelay {
-	return &protocol.ExternalMCPRelay{ConversationID: "external_mcp:private-agent:private", ExternalConversationID: "public-conversation", Agent: "private-agent", Text: text, Attachments: attachments}
-}
-
 func TestSlackImageHelpers(t *testing.T) {
 	assert.Equal(t, "photo (image/png)", slackFileDescriptor(&slack.File{Name: " photo ", Mimetype: " image/png "}))
 	assert.Equal(t, "title", slackFileDisplayName(&slack.File{Title: " title ", ID: "F123"}))
@@ -52,131 +48,6 @@ func TestSlackImageHelpers(t *testing.T) {
 	data := mustPNG(t, 2, 2)
 	assert.Equal(t, "image/png", protocol.NormalizeMIMEType(http.DetectContentType(data)))
 	assert.Equal(t, "text/plain", protocol.NormalizeMIMEType(http.DetectContentType(nil)))
-}
-
-func TestSlackMCPBlocksStayWithinSlackLimit(t *testing.T) {
-	messages := slackMCPBlockMessages(strings.Repeat("conversation", 400), "private-agent", strings.Repeat("body", slackBlockTextLimit*60))
-	assert.Greater(t, len(messages), 1)
-
-	for _, message := range messages {
-		assert.LessOrEqual(t, len(message.blocks), 50)
-		assert.LessOrEqual(t, len([]rune(message.blocks[0].(*slack.HeaderBlock).Text.Text)), 150)
-	}
-}
-
-func TestSlackMCPBlocksUseCronStyleFrame(t *testing.T) {
-	blocks := slackMCPBlocks("MCP request", "conversation-1", "private-agent", "body", true)
-	require.Len(t, blocks, 3)
-
-	header, ok := blocks[0].(*slack.HeaderBlock)
-	require.True(t, ok)
-	assert.Equal(t, "📡 MCP request | conversation-1 | private-agent", header.Text.Text)
-	assert.IsType(t, new(slack.DividerBlock), blocks[1])
-	assert.IsType(t, new(slack.SectionBlock), blocks[2])
-}
-
-func TestSendExternalMCPRelayRendersMarkdownWithoutNotifications(t *testing.T) {
-	var posted []url.Values
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !assert.NoError(t, r.ParseForm()) {
-			return
-		}
-
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			posted = append(posted, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("1.%d", len(posted))})
-		case "/reactions.add":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	connector := newTestConnector(server.URL)
-	request := "*bold* <@U123> <@W123> <!subteam^S123> <!here> <!channel> <!everyone> @here @channel @everyone @admins <https://example.com|Example>"
-	target, err := connector.SendExternalMCPRelay(t.Context(), "D123", "123.456", testExternalMCPRelay(request, nil))
-	require.NoError(t, err)
-	require.NotEmpty(t, posted)
-	assert.Equal(t, "external_mcp:private-agent:private", connector.pending[slackPendingKey(target)].ConversationID)
-
-	want := "*bold* &lt;@U123> &lt;@W123> &lt;!subteam^S123> &lt;!here> &lt;!channel> &lt;!everyone> @here @channel @everyone @admins <https://example.com|Example>"
-	assert.Equal(t, want, posted[0].Get("text"))
-
-	var blocks []struct {
-		Type string `json:"type"`
-		Text struct {
-			Type     string `json:"type"`
-			Text     string `json:"text"`
-			Verbatim bool   `json:"verbatim"`
-		} `json:"text"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(posted[0].Get("blocks")), &blocks))
-	require.Len(t, blocks, 3)
-	assert.Equal(t, slack.MarkdownType, blocks[2].Text.Type)
-	assert.Equal(t, want, blocks[2].Text.Text)
-	assert.True(t, blocks[2].Text.Verbatim)
-}
-
-func TestSendExternalMCPRelayContinuesHugeRequestBeforePlaceholders(t *testing.T) {
-	var (
-		posted, updated []url.Values
-		deleted         []string
-	)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !assert.NoError(t, r.ParseForm()) {
-			return
-		}
-
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			posted = append(posted, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("1.%d", len(posted))})
-		case "/chat.update":
-			updated = append(updated, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": r.PostForm.Get("ts")})
-		case "/reactions.add":
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/chat.delete":
-			deleted = append(deleted, r.PostForm.Get("ts"))
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	connector := newTestConnector(server.URL)
-	request := strings.Repeat("x", slackBlockTextLimit*47) + "\n\n_tail_ <@U999> <@W123> <!here> <https://example.com/tail|Tail>"
-	replyTarget, err := connector.SendExternalMCPRelay(t.Context(), "D123", "", testExternalMCPRelay(request, nil))
-	require.NoError(t, err)
-	require.Len(t, posted, 3)
-	assert.Empty(t, posted[0].Get("thread_ts"))
-
-	for i := 1; i < len(posted); i++ {
-		assert.Equal(t, "1.1", posted[i].Get("thread_ts"))
-	}
-
-	var rootBlocks, continuationBlocks []any
-	require.NoError(t, json.Unmarshal([]byte(posted[0].Get("blocks")), &rootBlocks))
-	require.NoError(t, json.Unmarshal([]byte(posted[1].Get("blocks")), &continuationBlocks))
-	assert.Len(t, rootBlocks, 49)
-	require.Len(t, updated, 1)
-	_, footered := slackContextTexts(t, updated[0].Get("blocks"))
-	assert.Equal(t, 50, footered, "the root's footer fits Slack's block limit")
-	assert.Greater(t, len(continuationBlocks), 1)
-	assert.Contains(t, posted[1].Get("text"), "_tail_ &lt;@U999> &lt;@W123> &lt;!here> <https://example.com/tail|Tail>")
-	assert.Contains(t, posted[1].Get("blocks"), `_tail_ \u0026lt;@U999\u003e \u0026lt;@W123\u003e \u0026lt;!here\u003e \u003chttps://example.com/tail|Tail\u003e`)
-	assert.Contains(t, posted[1].Get("blocks"), `"verbatim":true`)
-	assert.NotContains(t, posted[1].Get("text"), "<@U999>")
-	assert.NotContains(t, posted[1].Get("text"), "<@W123>")
-	assert.NotContains(t, posted[1].Get("blocks"), `<@U999>`)
-	connector.CleanupExternalMCPRelay(t.Context(), replyTarget)
-	assert.Equal(t, []string{"1.3", "1.2", "1.1"}, deleted)
 }
 
 func TestSplitSlackResponseTextBoundaries(t *testing.T) {
@@ -887,264 +758,6 @@ func mustPNG(t *testing.T, width, height int) []byte {
 	return b.Bytes()
 }
 
-func TestSendExternalMCPThreadRelay(t *testing.T) {
-	var posted []url.Values
-
-	var reacted []url.Values
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			posted = append(posted, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("222.%d", len(posted)), "text": posted[len(posted)-1].Get("text")})
-		case "/reactions.add":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			reacted = append(reacted, cloneValues(r.PostForm))
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "123.456", testExternalMCPRelay("follow up", nil))
-	require.NoError(t, err)
-	require.NotNil(t, replyTarget)
-	assert.Equal(t, protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.1", ThreadTS: "123.456"}, *replyTarget)
-	require.Len(t, posted, 2)
-	assert.Equal(t, "D123", posted[0].Get("channel"))
-	assert.Equal(t, "follow up", posted[0].Get("text"))
-	assert.Equal(t, "123.456", posted[0].Get("thread_ts"))
-	assert.JSONEq(t, `[
-		{"type":"header","text":{"type":"plain_text","text":"📡 MCP request | public-conversation | private-agent","emoji":false}},
-		{"type":"divider"},
-		{"type":"section","text":{"type":"mrkdwn","text":"follow up","verbatim":true}}
-	]`, posted[0].Get("blocks"))
-	assert.Equal(t, slackImmediatePlaceholder, posted[1].Get("text"))
-	assert.Equal(t, "123.456", posted[1].Get("thread_ts"))
-	require.Len(t, reacted, 2)
-	assert.ElementsMatch(t, []string{slackRobotReaction, slackExternalMCPRelayReaction}, []string{reacted[0].Get("name"), reacted[1].Get("name")})
-
-	for _, reaction := range reacted {
-		assert.Equal(t, "D123", reaction.Get("channel"))
-		assert.Equal(t, "222.1", reaction.Get("timestamp"))
-	}
-}
-
-func TestSendExternalMCPThreadRelayAttachesFilesToRelayMessage(t *testing.T) {
-	var (
-		posted, updated               []url.Values
-		uploadURL, completed          []url.Values
-		uploadedName, uploadedContent string
-	)
-
-	var server *httptest.Server
-
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			posted = append(posted, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("222.%d", len(posted)), "text": r.PostForm.Get("text")})
-		case "/files.getUploadURLExternal":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			uploadURL = append(uploadURL, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "upload_url": server.URL + "/upload", "file_id": fmt.Sprintf("F%d", len(uploadURL))})
-		case "/upload":
-			if !assert.NoError(t, r.ParseMultipartForm(1<<20)) {
-				return
-			}
-
-			file, header, err := r.FormFile("file")
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			defer func() { assert.NoError(t, file.Close()) }()
-
-			data, err := io.ReadAll(file)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			uploadedName = header.Filename
-			uploadedContent = string(data)
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/files.completeUploadExternal":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			completed = append(completed, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "files": []map[string]string{{"id": fmt.Sprintf("F%d", len(completed)), "title": "report.txt"}}})
-		case "/chat.update":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			updated = append(updated, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": r.PostForm.Get("channel"), "ts": r.PostForm.Get("ts"), "text": r.PostForm.Get("text")})
-		case "/reactions.add":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "123.456", testExternalMCPRelay(" ", []protocol.OutboundAttachment{{Name: "report.txt", Data: []byte("report")}}))
-	require.NoError(t, err)
-	require.NotNil(t, replyTarget)
-
-	require.Len(t, posted, 2)
-	assert.Equal(t, "Attached files: report.txt.", posted[0].Get("text"))
-	assert.Equal(t, "123.456", posted[0].Get("thread_ts"))
-	assert.JSONEq(t, `[
-		{"type":"header","text":{"type":"plain_text","text":"📡 MCP request | public-conversation | private-agent","emoji":false}},
-		{"type":"divider"},
-		{"type":"section","text":{"type":"mrkdwn","text":"Attached files: report.txt.","verbatim":true}}
-	]`, posted[0].Get("blocks"))
-	assert.Equal(t, "123.456", posted[1].Get("thread_ts"))
-	assert.Equal(t, protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.1", ThreadTS: "123.456"}, *replyTarget)
-	require.Len(t, uploadURL, 1)
-	assert.Equal(t, "report.txt", uploadURL[0].Get("filename"))
-	assert.Equal(t, "report.txt", uploadedName)
-	assert.Equal(t, "report", uploadedContent)
-	require.Len(t, completed, 1)
-	assert.Empty(t, completed[0].Get("channel_id"))
-	assert.Empty(t, completed[0].Get("thread_ts"))
-	require.Len(t, updated, 1)
-	assert.Equal(t, "D123", updated[0].Get("channel"))
-	assert.Equal(t, "222.1", updated[0].Get("ts"))
-	assert.Equal(t, "Attached files: report.txt.", updated[0].Get("text"))
-	assert.JSONEq(t, `["F1"]`, updated[0].Get("file_ids"))
-	assert.JSONEq(t, posted[0].Get("blocks"), updated[0].Get("blocks"))
-}
-
-func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
-	var (
-		uploadURL, completed          url.Values
-		updated                       url.Values
-		posted                        []url.Values
-		uploadedName, uploadedContent string
-	)
-
-	var server *httptest.Server
-
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			posted = append(posted, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": posted[len(posted)-1].Get("channel"), "ts": fmt.Sprintf("123.%d", len(posted)), "text": posted[len(posted)-1].Get("text")})
-		case "/files.getUploadURLExternal":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			uploadURL = cloneValues(r.PostForm)
-
-			writeJSON(t, w, map[string]any{"ok": true, "upload_url": server.URL + "/upload", "file_id": "F123"})
-		case "/upload":
-			if !assert.NoError(t, r.ParseMultipartForm(1<<20)) {
-				return
-			}
-
-			file, header, err := r.FormFile("file")
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			defer func() { assert.NoError(t, file.Close()) }()
-
-			data, err := io.ReadAll(file)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			uploadedName = header.Filename
-			uploadedContent = string(data)
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/files.completeUploadExternal":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			completed = cloneValues(r.PostForm)
-
-			writeJSON(t, w, map[string]any{"ok": true, "files": []map[string]string{{"id": "F123", "title": "red.png"}}})
-		case "/chat.update":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			updated = cloneValues(r.PostForm)
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": r.PostForm.Get("channel"), "ts": r.PostForm.Get("ts"), "text": r.PostForm.Get("text")})
-		case "/reactions.add":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "#triage", "", testExternalMCPRelay("hello", []protocol.OutboundAttachment{{Name: "red.png", MIMEType: "image/png", Data: []byte("png")}}))
-	require.NoError(t, err)
-	require.NotNil(t, replyTarget)
-	require.Len(t, posted, 2)
-	assert.Equal(t, "#triage", posted[0].Get("channel"))
-	assert.Empty(t, posted[0].Get("thread_ts"))
-	assert.Equal(t, "hello", posted[0].Get("text"))
-	assert.JSONEq(t, `[
-		{"type":"header","text":{"type":"plain_text","text":"📡 MCP request | public-conversation | private-agent","emoji":false}},
-		{"type":"divider"},
-		{"type":"section","text":{"type":"mrkdwn","text":"hello","verbatim":true}}
-	]`, posted[0].Get("blocks"))
-	assert.Equal(t, slackImmediatePlaceholder, posted[1].Get("text"))
-	assert.Equal(t, "123.1", posted[1].Get("thread_ts"))
-	assert.Equal(t, "#triage", replyTarget.ChannelID)
-	assert.Equal(t, "123.1", replyTarget.MessageTS)
-	assert.Equal(t, "123.1", replyTarget.ThreadTS)
-	assert.Equal(t, "red.png", uploadURL.Get("filename"))
-	assert.Equal(t, "red.png", uploadedName)
-	assert.Equal(t, "png", uploadedContent)
-	assert.Empty(t, completed.Get("channel_id"))
-	assert.Empty(t, completed.Get("thread_ts"))
-	assert.Equal(t, "#triage", updated.Get("channel"))
-	assert.Equal(t, "123.1", updated.Get("ts"))
-	assert.Equal(t, "hello", updated.Get("text"))
-	assert.JSONEq(t, `["F123"]`, updated.Get("file_ids"))
-	assert.JSONEq(t, `[
-		{"type":"header","text":{"type":"plain_text","text":"📡 MCP request | public-conversation | private-agent","emoji":false}},
-		{"type":"divider"},
-		{"type":"section","text":{"type":"mrkdwn","text":"hello","verbatim":true}},
-		{"type":"context","elements":[{"type":"mrkdwn","text":"private-agent · working"}]}
-	]`, updated.Get("blocks"), "the root gains its footer with its files")
-}
-
 func TestChannelAgentChoicesResolvesLivePolicy(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, err := io.WriteString(w, `{"ok":true,"channel":{"id":"C1","name":"triage"}}`)
@@ -1262,7 +875,7 @@ func TestChannelFactsRefreshTimingAndCoalescing(t *testing.T) {
 	})
 }
 
-func TestChannelFactsRenameRaceAndLookupHarvest(t *testing.T) {
+func TestChannelFactsRenameRace(t *testing.T) {
 	store := newTestStoredChannelFacts(t)
 	started, release := make(chan struct{}), make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1273,16 +886,6 @@ func TestChannelFactsRenameRaceAndLookupHarvest(t *testing.T) {
 
 			_, err := io.WriteString(w, `{"ok":true,"channel":{"id":"C1","name":"old"}}`)
 			assert.NoError(t, err)
-		case "/conversations.list":
-			assert.NoError(t, r.ParseForm())
-
-			if r.Form.Get("cursor") == "" {
-				_, err := io.WriteString(w, `{"ok":true,"channels":[{"id":"C8","name":"first"}],"response_metadata":{"next_cursor":"next"}}`)
-				assert.NoError(t, err)
-			} else {
-				_, err := io.WriteString(w, `{"ok":true,"channels":[{"id":"G1","name":"current"},{"id":"C9","name":"after-match"}]}`)
-				assert.NoError(t, err)
-			}
 		default:
 			t.Errorf("unexpected Slack path %s", r.URL.Path)
 		}
@@ -1290,7 +893,7 @@ func TestChannelFactsRenameRaceAndLookupHarvest(t *testing.T) {
 	t.Cleanup(server.Close)
 	connector := newTestConnector(server.URL)
 	connector.teamID, connector.facts = "T1", store
-	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#old", Agents: []string{"live"}}, {Channel: "#current", Agents: []string{"main"}}}
+	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#old", Agents: []string{"live"}}}
 
 	require.NoError(t, store.RecordChannelFact(t.Context(), "T1", "C1", "cached", time.Unix(1, 0)))
 
@@ -1319,29 +922,19 @@ func TestChannelFactsRenameRaceAndLookupHarvest(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, "delayed", name)
-	id, err := connector.resolveConfiguredChannelID(t.Context(), "#current")
-	require.NoError(t, err)
-	assert.Equal(t, "G1", id)
-	connector.flushChannelFacts(t.Context())
-
-	for _, tc := range []struct{ id, name string }{{"C8", "first"}, {"G1", "current"}, {"C9", "after-match"}} {
-		name, found, err := store.ChannelFact(t.Context(), "T1", tc.id)
-		require.NoError(t, err)
-		require.True(t, found)
-		assert.Equal(t, tc.name, name)
-	}
-
-	name, choices, err := connector.SidebarChannelAgentChoices(t.Context(), "G1")
-	require.NoError(t, err)
-	assert.Equal(t, "current", name)
-	assert.Equal(t, []string{"main"}, choices)
 }
 
 func TestChannelFactsRefreshRetryRetentionAndConvergence(t *testing.T) {
 	store := newTestStoredChannelFacts(t)
 	for _, id := range []string{"C1", "G1", "G2"} {
-		require.NoError(t, store.RegisterExternalMCPConversation("public-"+id, "main", &backend.ExternalMCPSessionState{Thread: protocol.SlackReplyTarget{ChannelID: id, ThreadTS: "1.1"}, Agent: "main", PrivateConversationID: "private-" + id, ManagedConversationID: protocol.SlackThreadConversationID(id, "1.1")}))
 		require.NoError(t, store.RecordChannelFact(t.Context(), "T1", id, "old", time.Unix(1, 0)))
+	}
+
+	// The channels of recorded Slack threads; only RocketClaw's own Slack handling records those.
+	facts := &channelFactsStoreMock{
+		ChannelFactFunc:       store.ChannelFact,
+		RecordChannelFactFunc: store.RecordChannelFact,
+		SlackChannelIDsFunc:   func(context.Context) ([]string, error) { return []string{"C1", "G1", "G2"}, nil },
 	}
 
 	rateLimited, retried := make(chan time.Time, 1), make(chan time.Time, 1)
@@ -1388,7 +981,7 @@ func TestChannelFactsRefreshRetryRetentionAndConvergence(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	connector := newTestConnector(server.URL)
-	connector.teamID, connector.facts = "T1", store
+	connector.teamID, connector.facts = "T1", facts
 	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#old", Agents: []string{"keeper"}}}
 	ctx, cancel := context.WithCancel(t.Context())
 	connector.inboundStop = cancel
@@ -1432,464 +1025,6 @@ func newTestStoredChannelFacts(t *testing.T) *backend.SessionService {
 	return store
 }
 
-func TestSendExternalMCPRelayResolvesPrivateConfiguredChannelName(t *testing.T) {
-	var postedChannel string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/conversations.list":
-			writeJSON(t, w, map[string]any{"ok": true, "channels": []map[string]any{{"id": "G123", "name": "triage", "is_private": true}}, "response_metadata": map[string]string{"next_cursor": ""}})
-		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			postedChannel = r.PostForm.Get("channel")
-			writeJSON(t, w, map[string]any{"ok": true, "channel": postedChannel, "ts": "123.1"})
-		case "/chat.update", "/reactions.add":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#triage", Agents: []string{"main"}}}
-	_, err := connector.SendExternalMCPRelay(t.Context(), "#triage", "", testExternalMCPRelay("hello", nil))
-	require.NoError(t, err)
-	assert.Equal(t, "G123", postedChannel)
-}
-
-func TestExternalMCPRelayUsesAnswerPlaceholderForStackedReply(t *testing.T) {
-	server, posted, updated := newExternalMCPReplyServer(t)
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	first, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("first", nil))
-	require.NoError(t, err)
-	second, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("second", nil))
-	require.NoError(t, err)
-	require.NotNil(t, second)
-
-	final := protocol.NewOutboundMessage("test", "first answer")
-	final.TurnID = "turn-1"
-	final.Complete = true
-	final.ExternalConversationID = "public-conversation"
-	final.Agent = "private-agent"
-	final.SlackReply = first
-	require.NoError(t, connector.SendResponse(context.Background(), final))
-
-	require.Len(t, *posted, 4)
-	require.Len(t, *updated, 1)
-	assert.Equal(t, "555.2", (*updated)[0].Get("ts"))
-	assert.Equal(t, "first answer", (*updated)[0].Get("text"))
-	assert.JSONEq(t, `[
-		{"type":"header","text":{"type":"plain_text","text":"📡 MCP response | public-conversation | private-agent","emoji":false}},
-		{"type":"divider"},
-		{"type":"section","text":{"type":"mrkdwn","text":"first answer"}}
-	]`, (*updated)[0].Get("blocks"))
-}
-
-func newExternalMCPReplyServer(t *testing.T) (server *httptest.Server, posted, updated *[]url.Values) {
-	t.Helper()
-
-	var postedValues, updatedValues []url.Values
-
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			postedValues = append(postedValues, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("555.%d", len(postedValues)), "text": postedValues[len(postedValues)-1].Get("text")})
-		case "/chat.update":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			updatedValues = append(updatedValues, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": updatedValues[len(updatedValues)-1].Get("ts"), "text": updatedValues[len(updatedValues)-1].Get("text")})
-		case "/reactions.add", "/reactions.remove", "/chat.delete":
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/conversations.replies":
-			// The thread root is unknown here, so a managed final's root footer edit is only logged.
-			writeJSON(t, w, map[string]any{"ok": false, "error": "thread_not_found"})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-
-	return server, &postedValues, &updatedValues
-}
-
-func TestExternalMCPRelayTailResponseUpdatesAnswerPlaceholder(t *testing.T) {
-	server, posted, updated := newExternalMCPReplyServer(t)
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("tail", nil))
-	require.NoError(t, err)
-
-	final := protocol.NewOutboundMessage("test", "tail answer")
-	final.TurnID = "turn-1"
-	final.Complete = true
-	final.ExternalConversationID = "public-conversation"
-	final.Agent = "private-agent"
-	final.SlackReply = replyTarget
-	require.NoError(t, connector.SendResponse(context.Background(), final))
-
-	require.Len(t, *posted, 2)
-	assert.Equal(t, "tail", (*posted)[0].Get("text"))
-	assert.Equal(t, slackImmediatePlaceholder, (*posted)[1].Get("text"))
-	require.Len(t, *updated, 1)
-	assert.Equal(t, "555.2", (*updated)[0].Get("ts"))
-	assert.Equal(t, "tail answer", (*updated)[0].Get("text"))
-}
-
-func TestExternalMCPResponseBlocksSurviveChunking(t *testing.T) {
-	server, posted, updated := newExternalMCPReplyServer(t)
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("request", nil))
-	require.NoError(t, err)
-
-	text := strings.Repeat("0123456789", 500)
-	final := protocol.NewOutboundMessage("test", text)
-	final.TurnID = "turn-1"
-	final.Complete = true
-	final.ExternalConversationID = "public-conversation"
-	final.Agent = "private-agent"
-	final.SlackReply = replyTarget
-	require.NoError(t, connector.SendResponse(context.Background(), final))
-
-	require.Len(t, *updated, 1)
-	require.Len(t, *posted, 3)
-	assert.Equal(t, "555.2", (*updated)[0].Get("ts"))
-
-	var rebuilt strings.Builder
-
-	for _, values := range slices.Concat(*updated, (*posted)[2:]) {
-		var blocks []struct {
-			Type string `json:"type"`
-			Text struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"text"`
-		}
-		require.NoError(t, json.Unmarshal([]byte(values.Get("blocks")), &blocks))
-		require.GreaterOrEqual(t, len(blocks), 3)
-		assert.Equal(t, "header", blocks[0].Type)
-		assert.Equal(t, "📡 MCP response | public-conversation | private-agent", blocks[0].Text.Text)
-		assert.Equal(t, "divider", blocks[1].Type)
-
-		var blockBody strings.Builder
-
-		for _, block := range blocks {
-			assert.LessOrEqual(t, len([]rune(block.Text.Text)), slackBlockTextLimit)
-		}
-
-		for _, block := range blocks[2:] {
-			blockBody.WriteString(block.Text.Text)
-		}
-
-		assert.Equal(t, values.Get("text"), blockBody.String())
-		rebuilt.WriteString(values.Get("text"))
-	}
-
-	assert.Equal(t, text, rebuilt.String())
-}
-
-func TestExternalMCPRelayStackedTailResponseUpdatesAnswerPlaceholder(t *testing.T) {
-	server, posted, updated := newExternalMCPReplyServer(t)
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	_, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("first", nil))
-	require.NoError(t, err)
-	tail, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("second", nil))
-	require.NoError(t, err)
-
-	final := protocol.NewOutboundMessage("test", "second answer")
-	final.TurnID = "turn-2"
-	final.Complete = true
-	final.ExternalConversationID = "public-conversation"
-	final.Agent = "private-agent"
-	final.SlackReply = tail
-	require.NoError(t, connector.SendResponse(context.Background(), final))
-
-	require.Len(t, *posted, 4)
-	assert.Equal(t, "second", (*posted)[2].Get("text"))
-	assert.Equal(t, slackImmediatePlaceholder, (*posted)[3].Get("text"))
-	require.Len(t, *updated, 1)
-	assert.Equal(t, "555.4", (*updated)[0].Get("ts"))
-	assert.Equal(t, "second answer", (*updated)[0].Get("text"))
-}
-
-// An External MCP root gets a "working" footer linking its managed Slack-thread
-// conversation, and each MCP turn's end rewrites only that footer to the turn's state. A failed
-// edit is logged and the delivery still succeeds.
-func TestExternalMCPRootFooterShowsLatestTurnState(t *testing.T) {
-	var (
-		posts       int
-		rootText    string
-		rootBlocks  []string
-		rootFileIDs string
-		failReplies bool
-	)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !assert.NoError(t, r.ParseForm()) {
-			return
-		}
-
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			posts++
-			if posts == 1 {
-				rootText = r.Form.Get("text")
-				rootBlocks = append(rootBlocks, r.Form.Get("blocks"))
-			}
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("555.%d", posts)})
-		case "/chat.update":
-			if r.Form.Get("ts") == "555.1" {
-				var blocks slack.Blocks
-				if !assert.NoError(t, json.Unmarshal([]byte(r.Form.Get("blocks")), &blocks)) {
-					return
-				}
-
-				for _, block := range blocks.BlockSet {
-					if section, ok := block.(*slack.SectionBlock); ok && len([]rune(section.Text.Text)) > slackBlockTextLimit {
-						writeJSON(t, w, map[string]any{"ok": false, "error": "invalid_blocks"})
-						return
-					}
-				}
-
-				rootBlocks = append(rootBlocks, r.Form.Get("blocks"))
-				rootFileIDs = r.Form.Get("file_ids")
-			}
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": r.Form.Get("ts")})
-		case "/conversations.replies":
-			assert.Equal(t, "555.1", r.Form.Get("ts"))
-
-			if failReplies {
-				writeJSON(t, w, map[string]any{"ok": false, "error": "thread_not_found"})
-				return
-			}
-
-			var blocks slack.Blocks
-			if !assert.NoError(t, json.Unmarshal([]byte(rootBlocks[len(rootBlocks)-1]), &blocks)) {
-				return
-			}
-
-			for _, block := range blocks.BlockSet {
-				if section, ok := block.(*slack.SectionBlock); ok {
-					section.Text.Text = strings.ReplaceAll(section.Text.Text, ">", "&gt;")
-				}
-			}
-
-			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{{"ts": "555.1", "text": rootText, "blocks": blocks, "files": []map[string]any{{"id": "F1"}}}}})
-		case "/reactions.add", "/reactions.remove", "/chat.delete":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	managed := protocol.SlackThreadConversationID("D123", "555.1")
-	router := &primaryTextRouterMock{
-		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, true, nil },
-		WebURLFunc: func(_ context.Context, conversationID string) (string, error) {
-			assert.Equal(t, managed, conversationID, "the link opens the managed Slack-thread conversation")
-			return testFooterLink, nil
-		},
-	}
-
-	var logs bytes.Buffer
-
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
-	connector.log = slog.New(slog.NewJSONHandler(&logs, nil))
-
-	footer := func(state string) []string {
-		return []string{"private-agent · " + state + " · <" + testFooterLink + "|Open in Web>"}
-	}
-	rootFooter := func() []string {
-		texts, _ := slackContextTexts(t, rootBlocks[len(rootBlocks)-1])
-		return texts
-	}
-	turn := func(threadTS, request, turnID string, terminal protocol.Terminal, answer string) {
-		t.Helper()
-
-		target, err := connector.SendExternalMCPRelay(t.Context(), "D123", threadTS, testExternalMCPRelay(request, nil))
-		require.NoError(t, err)
-
-		final := protocol.NewOutboundMessage(managed, answer)
-		final.TurnID, final.Complete, final.Terminal = turnID, true, terminal
-		final.ExternalConversationID, final.Agent, final.SlackReply = "public-conversation", "private-agent", target
-		require.NoError(t, connector.SendResponse(t.Context(), final))
-	}
-
-	request := strings.Repeat("> ", 1000) + "first"
-	turn("", request, "turn-1", protocol.TerminalComplete, "first answer")
-	require.Len(t, rootBlocks, 3, "the root is posted, given its working footer, then its final state")
-	assert.Equal(t, `["F1"]`, rootFileIDs, "the turn-end edit resends the root's attachments")
-
-	working, _ := slackContextTexts(t, rootBlocks[1])
-	assert.Equal(t, footer("working"), working)
-	assert.Equal(t, footer("done"), rootFooter())
-
-	turn("555.1", "second", "turn-2", protocol.TerminalFailed, "internal error")
-	assert.Equal(t, footer("failed"), rootFooter(), "the root shows the newest MCP turn's state")
-
-	_, posted := slackContextTexts(t, rootBlocks[0])
-	_, edited := slackContextTexts(t, rootBlocks[len(rootBlocks)-1])
-	assert.Equal(t, posted+1, edited, "the root keeps its request blocks")
-
-	var root slack.Blocks
-	require.NoError(t, json.Unmarshal([]byte(rootBlocks[len(rootBlocks)-1]), &root))
-
-	var body strings.Builder
-
-	for _, block := range root.BlockSet {
-		if section, ok := block.(*slack.SectionBlock); ok {
-			body.WriteString(section.Text.Text)
-		}
-	}
-
-	assert.Equal(t, strings.ReplaceAll(request, ">", "&gt;"), body.String())
-
-	failReplies = true
-	writes := len(rootBlocks)
-
-	turn("555.1", "third", "turn-3", protocol.TerminalStopped, "")
-	assert.Len(t, rootBlocks, writes)
-	assert.Contains(t, logs.String(), `"msg":"edit Slack external MCP root footer"`)
-}
-
-func TestExternalMCPRelayDoesNotHoldMutexDuringNetworkCalls(t *testing.T) {
-	postStarted := make(chan struct{})
-	releasePost := make(chan struct{})
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			select {
-			case <-postStarted:
-			default:
-				close(postStarted)
-				<-releasePost
-			}
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
-		case "/reactions.add":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	errCh := make(chan error, 1)
-
-	go func() {
-		_, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("first", nil))
-		errCh <- err
-	}()
-
-	<-postStarted
-	require.True(t, connector.mu.TryLock())
-	connector.mu.Unlock()
-	close(releasePost)
-	require.NoError(t, <-errCh)
-}
-
-func TestSendExternalMCPRelayReturnsPlaceholderError(t *testing.T) {
-	posts := 0
-
-	var deleted []url.Values
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			posts++
-			if posts == 3 {
-				writeJSON(t, w, map[string]any{"ok": false, "error": "ratelimited"})
-				return
-			}
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("555.%d", posts)})
-		case "/chat.update":
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/chat.delete":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			deleted = append(deleted, cloneValues(r.PostForm))
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay(strings.Repeat("x", slackBlockTextLimit*50), nil))
-	require.ErrorContains(t, err, "post Slack reply placeholder")
-	assert.Nil(t, replyTarget)
-	require.Len(t, deleted, 2)
-	assert.Equal(t, "555.2", deleted[0].Get("ts"))
-	assert.Equal(t, "555.1", deleted[1].Get("ts"))
-}
-
-func TestCleanupPendingReplyPlaceholderDeletesUnclaimedExternalMCPReply(t *testing.T) {
-	var deleted []url.Values
-
-	posts := 0
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			posts++
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("555.%d", posts)})
-		case "/chat.delete":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			deleted = append(deleted, cloneValues(r.PostForm))
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/chat.update", "/reactions.add":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay("hello", nil))
-	require.NoError(t, err)
-	require.Contains(t, connector.pending, slackPendingKey(replyTarget))
-
-	connector.CleanupPendingReplyPlaceholder(context.Background(), replyTarget)
-	connector.CleanupPendingReplyPlaceholder(context.Background(), replyTarget)
-
-	assert.Empty(t, connector.pending)
-	assert.Empty(t, connector.replies)
-	require.Len(t, deleted, 1)
-	assert.Equal(t, "555.2", deleted[0].Get("ts"))
-}
-
 func TestReplyStateTracksPendingSlots(t *testing.T) {
 	replyTarget := &protocol.SlackReplyTarget{ChannelID: " D123 ", MessageTS: " 111.222 ", ThreadTS: " 333.444 "}
 	key := slackPendingKey(replyTarget)
@@ -1916,99 +1051,6 @@ func TestReplyStateTracksPendingSlots(t *testing.T) {
 	connector.clearReplyState("turn-1")
 	_, ok = connector.replyState("turn-1")
 	assert.False(t, ok)
-}
-
-func TestSendExternalMCPRelayEdgeFailures(t *testing.T) {
-	t.Run("empty", func(t *testing.T) {
-		connector := newTestConnector("http://127.0.0.1:1")
-		replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay(" ", nil))
-		require.NoError(t, err)
-		assert.Nil(t, replyTarget)
-	})
-
-	t.Run("post", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, "/chat.postMessage", r.URL.Path)
-			writeJSON(t, w, map[string]any{"ok": false, "error": "ratelimited"})
-		}))
-		defer server.Close()
-
-		connector := newTestConnector(server.URL)
-		replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay("hello", nil))
-		require.ErrorContains(t, err, "send Slack external MCP relay")
-		assert.Nil(t, replyTarget)
-	})
-
-	t.Run("attachment", func(t *testing.T) {
-		var deleted []url.Values
-
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Path {
-			case "/chat.postMessage":
-				writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
-			case "/files.getUploadURLExternal":
-				writeJSON(t, w, map[string]any{"ok": false, "error": "ratelimited"})
-			case "/chat.delete":
-				if !assert.NoError(t, r.ParseForm()) {
-					return
-				}
-
-				deleted = append(deleted, cloneValues(r.PostForm))
-
-				writeJSON(t, w, map[string]any{"ok": true})
-			default:
-				assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-			}
-		}))
-		defer server.Close()
-
-		connector := newTestConnector(server.URL)
-		replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay("hello", []protocol.OutboundAttachment{{Name: "report.txt", Data: []byte("report")}}))
-		require.ErrorContains(t, err, "send Slack external MCP relay attachments")
-		assert.Nil(t, replyTarget)
-		require.Len(t, deleted, 1)
-		assert.Equal(t, "555.1", deleted[0].Get("ts"))
-	})
-
-	t.Run("attachment update", func(t *testing.T) {
-		var (
-			deleted []url.Values
-			server  *httptest.Server
-		)
-
-		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Path {
-			case "/chat.postMessage":
-				writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
-			case "/files.getUploadURLExternal":
-				writeJSON(t, w, map[string]any{"ok": true, "upload_url": server.URL + "/upload", "file_id": "F1"})
-			case "/upload":
-				writeJSON(t, w, map[string]any{"ok": true})
-			case "/files.completeUploadExternal":
-				writeJSON(t, w, map[string]any{"ok": true, "files": []map[string]string{{"id": "F1"}}})
-			case "/chat.update":
-				writeJSON(t, w, map[string]any{"ok": false, "error": "ratelimited"})
-			case "/chat.delete":
-				if !assert.NoError(t, r.ParseForm()) {
-					return
-				}
-
-				deleted = append(deleted, cloneValues(r.PostForm))
-
-				writeJSON(t, w, map[string]any{"ok": true})
-			default:
-				assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-			}
-		}))
-		defer server.Close()
-
-		connector := newTestConnector(server.URL)
-		replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay("hello", []protocol.OutboundAttachment{{Name: "report.txt", Data: []byte("report")}}))
-		require.ErrorContains(t, err, "update Slack relay files")
-		assert.Nil(t, replyTarget)
-		require.Len(t, deleted, 1)
-		assert.Equal(t, "555.1", deleted[0].Get("ts"))
-	})
 }
 
 func TestStartEventsMirrorsConsumedWebInput(t *testing.T) {
@@ -2267,14 +1309,12 @@ func TestResumedTurnReattachesRecordedPlaceholder(t *testing.T) {
 	})
 }
 
-func TestSendResponseRetriesTitledAndMCPFinalUpdates(t *testing.T) {
+func TestSendResponseRetriesTitledFinalUpdates(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		message *protocol.OutboundMessage
 	}{
 		{name: "goal", message: &protocol.OutboundMessage{GoalTurn: true, GoalTurnNumber: 1, GoalMaxTurns: 5}},
-		{name: "MCP", message: &protocol.OutboundMessage{ExternalConversationID: "public-conversation"}},
-		{name: "cronjob", message: &protocol.OutboundMessage{Cronjob: &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var updated []url.Values
@@ -2401,62 +1441,6 @@ func TestSendResponseUsesGoalBlocksForGoalAnswers(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(updated[1].Get("blocks")), &blocks))
 	assert.Equal(t, "✅ Goal complete", blocks[0].Text.Text)
 	assert.Contains(t, reactions, slackGoalCompleteReaction+" a.2")
-}
-
-func TestSendCronjobRootUsesCronLayout(t *testing.T) {
-	var posted url.Values
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			posted = cloneValues(r.PostForm)
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "999.000"})
-		case "/chat.getPermalink":
-			writeJSON(t, w, map[string]any{"ok": true, "permalink": "https://slack.example/archives/C123/p999000"})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	_, err := connector.SendCronjobRoot(context.Background(), &protocol.OutboundMessage{
-		Text:       "actual report",
-		SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123"},
-		Cronjob:    &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"},
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "Cronjob `cron/daily.md` ran at `2000-01-02T03:04:05Z` with agent `planner`.", posted.Get("text"))
-	assert.NotContains(t, posted.Get("blocks"), "Started by RocketClaw")
-	assert.Contains(t, posted.Get("blocks"), "🔁 daily.md | planner | 2000-01-02T03:04:05Z")
-	assert.Contains(t, posted.Get("blocks"), "actual report")
-	assert.Empty(t, posted.Get("thread_ts"))
-}
-
-func TestSlackRootPostsReportSlackFailures(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/conversations.list", "/chat.postMessage":
-			writeJSON(t, w, map[string]any{"ok": false, "error": "internal_error"})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnectorWithOptions(server.URL, []config.SlackChannelConfig{{Channel: "#ops"}}, inertThreadRouter{})
-	cronjob := &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "main", RanAt: "2026-10-03T00:00:00Z"}
-
-	_, err := connector.SendCronjobRoot(t.Context(), &protocol.OutboundMessage{Text: "report", Cronjob: cronjob, SlackReply: &protocol.SlackReplyTarget{ChannelID: "#ops"}})
-	require.ErrorContains(t, err, `resolve configured Slack channel "#ops"`)
-
-	_, err = connector.SendCronjobRoot(t.Context(), &protocol.OutboundMessage{Text: "report", Cronjob: cronjob, SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123"}})
-	require.ErrorContains(t, err, "post Slack cronjob root")
 }
 
 func TestSendResponseRequiresSlackTarget(t *testing.T) {
@@ -2720,6 +1704,20 @@ func TestSendResponseFooterOnlyPostsOncePerTurn(t *testing.T) {
 			posted = append(posted, cloneValues(r.PostForm))
 
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+		case "/conversations.replies":
+			assert.Equal(t, "111.222", r.PostForm.Get("ts"))
+			// The footer is on the second page of the thread.
+			if r.PostForm.Get("cursor") == "" {
+				writeJSON(t, w, map[string]any{"ok": true, "has_more": true, "response_metadata": map[string]any{"next_cursor": "next"}, "messages": []map[string]any{
+					{"ts": "555.0", "blocks": []map[string]any{{"type": "context", "block_id": "turn-0/footer", "elements": []map[string]any{}}}},
+				}})
+
+				return
+			}
+
+			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{
+				{"ts": "555.1", "blocks": []map[string]any{{"type": "context", "block_id": "turn-1/footer", "elements": []map[string]any{}}}},
+			}})
 		case "/reactions.remove":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
@@ -2745,6 +1743,22 @@ func TestSendResponseFooterOnlyPostsOncePerTurn(t *testing.T) {
 	texts, count := slackContextTexts(t, posted[0].Get("blocks"))
 	assert.Equal(t, []string{"main · stopped · <" + testFooterLink + "|Open in Web>"}, texts)
 	assert.Equal(t, 1, count)
+
+	// A crash after the post but before it was recorded finds the footer in its thread instead of posting again.
+	cut := map[string]json.RawMessage{"turn-1/footer/posting": json.RawMessage(`{"channel_id":"C123","thread_ts":"111.222"}`)}
+	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, false, nil))
+	connector.facts = newTestTurnSteps(t, final.ConversationID, cut)
+	require.NoError(t, connector.SendResponse(t.Context(), protocol.CloneOutboundMessage(final)))
+	require.Len(t, posted, 1)
+	assert.Contains(t, string(cut["turn-1/footer"]), "555.1", "the found footer is recorded")
+
+	// A post cut off before it reached Slack is not in its thread, so it posts.
+	unposted := protocol.CloneOutboundMessage(final)
+	unposted.TurnID = "turn-2"
+	cut["turn-2/footer/posting"] = cut["turn-1/footer/posting"]
+
+	require.NoError(t, connector.SendResponse(t.Context(), unposted))
+	require.Len(t, posted, 2)
 }
 
 // agentSessionCalls records the Slack calls of mention turns in thread 111.222 of #social (C123):
@@ -2822,7 +1836,6 @@ func TestMentionTurnSetsAgentSessionStatus(t *testing.T) {
 		{name: "done", source: protocol.SourceSlack, terminal: protocol.TerminalComplete, want: session},
 		{name: "workspace without agent sessions", source: protocol.SourceSlack, terminal: protocol.TerminalComplete, errStatus: "feature_disabled", want: session},
 		{name: "Web-started", source: protocol.SourceWeb, terminal: protocol.TerminalComplete},
-		{name: "External MCP", source: protocol.SourceExternalMCP, terminal: protocol.TerminalComplete},
 		{name: "cron, goal continuation, or background wake", source: protocol.SourceSystem, terminal: protocol.TerminalComplete},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2970,7 +1983,7 @@ func TestPostResponseChunksContinuesCleanupWhenDeletesFail(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	err := connector.postResponseChunks(context.Background(), "D123", "111.222", []string{"one", "two", "three"}, nil)
+	err := connector.postResponseChunks(context.Background(), "D123", "111.222", []string{"one", "two", "three"})
 	require.ErrorContains(t, err, "send Slack response chunk 3/3")
 	require.ErrorContains(t, err, "ratelimited")
 
@@ -3182,93 +2195,6 @@ func TestCreateReplyPlaceholderPostsOneMessage(t *testing.T) {
 	assert.Contains(t, connector.pending, slackPendingKey(&protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}))
 }
 
-func TestSendResponseUploadsAttachmentOnlyMCPResponseToSlackThread(t *testing.T) {
-	var (
-		posted, uploadURL, completed  url.Values
-		uploadedName, uploadedContent string
-	)
-
-	var server *httptest.Server
-
-	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			posted = cloneValues(r.PostForm)
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.666", "text": posted.Get("text")})
-		case "/files.getUploadURLExternal":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			uploadURL = cloneValues(r.PostForm)
-
-			writeJSON(t, w, map[string]any{"ok": true, "upload_url": server.URL + "/upload", "file_id": "F123"})
-		case "/upload":
-			if !assert.NoError(t, r.ParseMultipartForm(1<<20)) {
-				return
-			}
-
-			file, header, err := r.FormFile("file")
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			defer func() { assert.NoError(t, file.Close()) }()
-
-			data, err := io.ReadAll(file)
-			if !assert.NoError(t, err) {
-				return
-			}
-
-			uploadedName = header.Filename
-			uploadedContent = string(data)
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/files.completeUploadExternal":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			completed = cloneValues(r.PostForm)
-
-			writeJSON(t, w, map[string]any{"ok": true, "files": []map[string]string{{"id": "F123", "title": "report.txt"}}})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	msg := protocol.NewOutboundMessage("test", "")
-	msg.Complete = true
-	msg.ExternalConversationID = "public-conversation"
-	msg.Agent = "private-agent"
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "D123", ThreadTS: "111.222"}
-	msg.Attachments = []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report body")}}
-	require.NoError(t, connector.SendResponse(context.Background(), msg))
-
-	assert.Equal(t, "Attached files: report.txt.", posted.Get("text"))
-	assert.Contains(t, posted.Get("blocks"), "MCP response")
-	assert.Contains(t, posted.Get("blocks"), "public-conversation")
-	assert.Equal(t, "111.222", posted.Get("thread_ts"))
-	assert.Equal(t, "report.txt", uploadURL.Get("filename"))
-	assert.Equal(t, strconv.Itoa(len("report body")), uploadURL.Get("length"))
-	assert.Equal(t, "report.txt", uploadedName)
-	assert.Equal(t, "report body", uploadedContent)
-	assert.Equal(t, "D123", completed.Get("channel_id"))
-	assert.Equal(t, "111.222", completed.Get("thread_ts"))
-
-	msg.Text = ""
-	msg.Attachments = []protocol.OutboundAttachment{{}}
-	require.NoError(t, connector.SendResponse(t.Context(), msg))
-	assert.Equal(t, "Attached files.", posted.Get("text"))
-	assert.Equal(t, "111.222", posted.Get("thread_ts"))
-}
-
 func TestSendResponseDoesNotFailWhenAttachmentUploadFails(t *testing.T) {
 	var posted []url.Values
 
@@ -3310,251 +2236,6 @@ func TestSendResponseDoesNotFailWhenAttachmentUploadFails(t *testing.T) {
 	assert.Contains(t, logs.String(), `"duration_ms":`)
 	assert.NotContains(t, logs.String(), "final payload")
 	assert.NotContains(t, logs.String(), "example-com.png")
-}
-
-func TestSendResponseCronjobKeepsRenderedTextWhenAttachmentUploadFails(t *testing.T) {
-	var updated, deleted []url.Values
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.update":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			updated = append(updated, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "answer-1", "text": updated[len(updated)-1].Get("text")})
-		case "/files.getUploadURLExternal":
-			writeJSON(t, w, map[string]any{"ok": false, "error": "missing_scope"})
-		case "/chat.delete":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			deleted = append(deleted, cloneValues(r.PostForm))
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	connector.replies["turn-1"] = slackReplyState{ChannelID: "D123", MessageTS: "answer-1"}
-
-	msg := protocol.NewOutboundMessage("test", "final payload")
-	msg.Complete = true
-	msg.TurnID = "turn-1"
-	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "D123", ThreadTS: "111.222"}
-	msg.Attachments = []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}
-	require.NoError(t, connector.SendResponse(context.Background(), msg))
-
-	require.Len(t, updated, 1)
-	assert.Equal(t, "Cronjob `cron/daily.md` ran at `2000-01-02T03:04:05Z` with agent `planner`.", updated[0].Get("text"))
-	assert.Contains(t, updated[0].Get("blocks"), "final payload")
-	assert.Empty(t, deleted)
-}
-
-func TestSendCronjobRootPostsReport(t *testing.T) {
-	var posted, updated []url.Values
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			posted = append(posted, cloneValues(r.PostForm))
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "999.000"})
-		case "/chat.update":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			updated = append(updated, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": updated[len(updated)-1].Get("ts")})
-		case "/reactions.remove", "/reactions.add":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	msg := protocol.NewOutboundMessage("slack-thread:C123:111.0", "cron body")
-	msg.Complete = true
-	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
-	root, err := connector.SendCronjobRoot(t.Context(), msg)
-	require.NoError(t, err)
-	assert.Equal(t, "999.000", root.ThreadID)
-	assert.Empty(t, updated)
-	require.Len(t, posted, 1)
-	assert.Empty(t, posted[0].Get("thread_ts"))
-	assert.Equal(t, "Cronjob `cron/daily.md` ran at `2000-01-02T03:04:05Z` with agent `planner`.", posted[0].Get("text"))
-	assert.Contains(t, posted[0].Get("blocks"), "cron body")
-	assert.Contains(t, posted[0].Get("blocks"), "🔁 daily.md | planner | 2000-01-02T03:04:05Z")
-}
-
-func TestSendResponseSilentCronDoesNotPost(t *testing.T) {
-	var posted, updated []url.Values
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			posted = append(posted, cloneValues(r.PostForm))
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "999.000"})
-		case "/chat.update":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			updated = append(updated, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": updated[len(updated)-1].Get("ts")})
-		case "/chat.delete", "/reactions.remove", "/reactions.add":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-
-	var logs bytes.Buffer
-
-	connector.log = slog.New(slog.NewJSONHandler(&logs, nil))
-	msg := protocol.NewOutboundMessage("slack-thread:C123:111.0", "")
-	msg.Complete = true
-	msg.TurnID = "turn-1"
-	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
-
-	for _, test := range []struct {
-		terminal protocol.Terminal
-		outcome  string
-	}{{"", "intentional_silence"}, {protocol.TerminalStopped, "stopped"}, {protocol.TerminalFailed, "generation_failed"}} {
-		logs.Reset()
-
-		msg.Terminal = test.terminal
-		require.NoError(t, connector.SendResponse(context.Background(), msg))
-		assert.Contains(t, logs.String(), `"outcome":"`+test.outcome+`"`)
-		assert.NotContains(t, logs.String(), `"event":"slack_text_delivery"`)
-	}
-
-	assert.Empty(t, posted)
-	assert.Empty(t, updated)
-}
-
-func TestSendResponseCronjobRepliesInExistingThread(t *testing.T) {
-	var posted []url.Values
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/reactions.remove", "/reactions.add":
-			writeJSON(t, w, map[string]any{"ok": true})
-			return
-		case "/chat.postMessage":
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-			return
-		}
-
-		if !assert.NoError(t, r.ParseForm()) {
-			return
-		}
-
-		posted = append(posted, cloneValues(r.PostForm))
-
-		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "999.000"})
-	}))
-	defer server.Close()
-
-	connector := newTestConnector(server.URL)
-	msg := protocol.NewOutboundMessage("slack-thread:C123:111.0", "cron body")
-	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.0"}
-	require.NoError(t, connector.SendResponse(t.Context(), msg))
-	assert.Empty(t, posted, "incomplete cron output must not post a placeholder or report")
-
-	msg.Complete = true
-	require.NoError(t, connector.SendResponse(context.Background(), msg))
-
-	require.Len(t, posted, 1)
-	assert.Equal(t, "111.0", posted[0].Get("thread_ts"))
-	assert.Contains(t, posted[0].Get("blocks"), "cron body")
-}
-
-func TestSendResponseCronjobCleansPartialReportBeforeRetry(t *testing.T) {
-	var posted, deleted []url.Values
-
-	rootFailure := true
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !assert.NoError(t, r.ParseForm()) {
-			return
-		}
-
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			if rootFailure {
-				rootFailure = false
-
-				writeJSON(t, w, map[string]any{"ok": false, "error": "root_failed"})
-
-				return
-			}
-
-			posted = append(posted, cloneValues(r.PostForm))
-			if len(posted) == 4 {
-				writeJSON(t, w, map[string]any{"ok": false, "error": "post_failed"})
-				return
-			}
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": fmt.Sprintf("555.%d", len(posted))})
-		case "/chat.delete":
-			deleted = append(deleted, cloneValues(r.PostForm))
-
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	connector := newTestConnector(server.URL)
-	msg := protocol.NewOutboundMessage("test", strings.Repeat("x", slackBlockTextLimit*50))
-	msg.Complete = true
-	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123"}
-	require.ErrorContains(t, connector.SendResponse(t.Context(), msg), "send Slack cronjob response: root_failed")
-	assert.Empty(t, deleted, "failed root post must not try to delete an unposted message")
-	require.ErrorContains(t, connector.SendResponse(t.Context(), msg), "send Slack cronjob response continuation")
-	require.Len(t, deleted, 3)
-	assert.Equal(t, "555.3", deleted[0].Get("ts"))
-	assert.Equal(t, "555.2", deleted[1].Get("ts"))
-	assert.Equal(t, "555.1", deleted[2].Get("ts"))
-	assert.Empty(t, connector.replies)
-	require.NoError(t, connector.SendResponse(t.Context(), msg))
-	require.Len(t, posted, 8)
-	assert.Empty(t, posted[4].Get("thread_ts"))
-
-	for _, continuation := range posted[5:] {
-		assert.Equal(t, "C123", continuation.Get("channel"))
-		assert.Equal(t, "555.5", continuation.Get("thread_ts"))
-	}
-
-	assert.Len(t, deleted, 3, "successful retry must retain the report")
 }
 
 func TestHandleEventsAPIIncludesNativeForwardedPublicThread(t *testing.T) {
@@ -4148,7 +2829,7 @@ func TestSlackDollarTextReachesOrdinaryRouting(t *testing.T) {
 	}
 }
 
-// The router names report threads, cron or External MCP, and the connector makes no Slack
+// The router names report threads, which earlier versions posted, and the connector makes no Slack
 // call for a mention in one: no reaction, no placeholder, and no turn.
 func TestHandleAppMentionEventIgnoresReportThread(t *testing.T) {
 	var (
@@ -4636,116 +3317,4 @@ func newSlackStackTestServer(t *testing.T, posted *[]url.Values, reactions *[]st
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
 		}
 	}))
-}
-
-func TestSendCronjobRootPostsOnceAcrossReplay(t *testing.T) {
-	posts := 0
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			posts++
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "999.000"})
-		case "/conversations.history":
-			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{
-				{"ts": "776.000", "blocks": []map[string]any{{"type": "header", "block_id": "turn-0/cron-root", "text": map[string]any{"type": "plain_text", "text": "older run"}}}},
-				{"ts": "777.000", "blocks": []map[string]any{{"type": "header", "block_id": "turn-1/cron-root", "text": map[string]any{"type": "plain_text", "text": "this run"}}}},
-			}})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	msg := protocol.NewOutboundMessage("cron:daily", "cron body")
-	msg.Complete, msg.TurnID = true, "turn-1"
-	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123"}
-	send := func(steps map[string]json.RawMessage) protocol.TextConversationTarget {
-		t.Helper()
-
-		connector := newTestConnector(server.URL)
-		connector.facts = newTestTurnSteps(t, "cron:daily", steps)
-
-		root, err := connector.SendCronjobRoot(t.Context(), msg)
-		require.NoError(t, err)
-
-		return root
-	}
-
-	steps := map[string]json.RawMessage{}
-	first := send(steps)
-
-	require.Equal(t, 1, posts)
-	assert.Equal(t, first, send(steps), "a replayed delivery reuses the recorded root")
-	assert.Equal(t, 1, posts)
-
-	cut := map[string]json.RawMessage{"turn-1/cron-root/posting": json.RawMessage(`{"channel_id":"C123","oldest":"700.000000"}`)}
-	root := send(cut)
-
-	assert.Equal(t, 1, posts, "the root posted before the crash is not posted again")
-	assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C123", MessageID: "777.000", ThreadID: "777.000"}, root)
-	assert.Contains(t, string(cut["turn-1/cron-root"]), "777.000", "the found root is recorded")
-}
-
-// A cron root's footer edit rewrites the root's own blocks plus one footer linking the
-// bound destination. A crash between the post and the edit, then the delivery retry, leaves
-// one root with one footer, and the root keeps the block ID its replay finds it by.
-func TestEditCronjobRootFooterAfterReplay(t *testing.T) {
-	var posted, updated []url.Values
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !assert.NoError(t, r.ParseForm()) {
-			return
-		}
-
-		switch r.URL.Path {
-		case "/chat.postMessage":
-			posted = append(posted, cloneValues(r.PostForm))
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "999.000"})
-		case "/chat.update":
-			updated = append(updated, cloneValues(r.PostForm))
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts")})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	defer server.Close()
-
-	msg := protocol.NewOutboundMessage("cron:daily", "cron body")
-	msg.Complete, msg.Terminal, msg.TurnID, msg.Agent = true, protocol.TerminalComplete, "turn-1", "planner"
-	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123"}
-
-	steps := map[string]json.RawMessage{}
-	router := &primaryTextRouterMock{WebURLFunc: func(context.Context, string) (string, error) { return testFooterLink, nil }}
-
-	for attempt := range 2 {
-		connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
-		connector.facts = newTestTurnSteps(t, "cron:daily", steps)
-
-		root, err := connector.SendCronjobRoot(t.Context(), msg)
-		require.NoError(t, err)
-
-		if attempt > 0 {
-			require.NoError(t, connector.EditCronjobRootFooter(t.Context(), msg, root, "web:cron:daily"))
-		}
-	}
-
-	require.Len(t, posted, 1, "one root")
-	require.Len(t, updated, 1)
-	assert.Equal(t, "C123", updated[0].Get("channel"))
-	assert.Equal(t, "999.000", updated[0].Get("ts"))
-	assert.Equal(t, "web:cron:daily", router.WebURLCalls()[0].ConversationID, "the link names the bound destination")
-
-	texts, count := slackContextTexts(t, updated[0].Get("blocks"))
-	assert.Equal(t, []string{"planner · done · <" + testFooterLink + "|Open in Web>"}, texts, "one footer")
-
-	rootTexts, rootCount := slackContextTexts(t, posted[0].Get("blocks"))
-	assert.Empty(t, rootTexts)
-	assert.Equal(t, rootCount+1, count, "the root's blocks stay, followed by the footer")
-	assert.Contains(t, updated[0].Get("blocks"), `"block_id":"turn-1/cron-root"`)
 }

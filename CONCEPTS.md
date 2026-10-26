@@ -26,9 +26,9 @@ A configured Slack channel entry named `@` that supplies agents and an allowlist
 
 ### Report Thread
 
-A Slack thread that shows a cron report or an External MCP session: a cron-created Slack-thread conversation, a conversation bound to an External MCP session, or an unrecorded thread whose root RocketClaw's own bot posted. The last case covers roots posted before their thread is recorded and threads whose record expired.
+A Slack thread an earlier version posted a cron report or an External MCP session into: its conversation, now a Web chat created by cron or bound to the session, or an unrecorded thread whose root RocketClaw's own bot posted. The last case covers threads whose record expired.
 
-A Report Thread is read-only. RocketClaw ignores every reply and mention in it, with no reaction and no reply, while its sessions keep posting into it. Read-only means RocketClaw ignores input, not that Slack locks the thread. Work on it continues in Web.
+A Report Thread is read-only. RocketClaw ignores every reply and mention in it, with no reaction and no reply, and posts nothing more into it. Read-only means RocketClaw ignores input, not that Slack locks the thread. Work on it continues in Web.
 
 ### Thread Queue
 
@@ -157,7 +157,7 @@ It records that destination as the one it reports to. The destination's history 
 
 The key-value pairs an External MCP caller attaches to its session, which the agent sees both as a message in its context and as environment variables for its tools.
 
-The session's first turn records the pairs, together with the conversation's identity, in its Private Producer Conversation; later turns keep the recorded values and see new keys for that turn only. Turns in the Report Thread's conversation read the same recorded pairs, with the conversation identity naming the thread, and a Subagent Session's turns read those of the top-level session and turn it works for, with its own conversation identity.
+The session's first turn records the pairs, together with the conversation's identity, in its Private Producer Conversation; later turns keep the recorded values and see new keys for that turn only. Turns in the session's Web chat read the same recorded pairs, with the conversation identity naming the chat, and a Subagent Session's turns read those of the top-level session and turn it works for, with its own conversation identity.
 
 ## Web Voice
 
@@ -201,7 +201,7 @@ It holds its own searches, shown as tabs inside the page, and can be named; unna
 
 The Space a session was born in.
 
-It is its agent's space, or for a cron's sessions the cron's, else the cron agent's, else for a Web session, or a remote OpenCode session created from the Web, the space the person was in; a forked remote session takes its source's. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report threads, have none.
+It is its agent's space, or for a cron's sessions the cron's, else the cron agent's, else for a Web session, or a remote OpenCode session created from the Web, the space the person was in; a forked remote session takes its source's. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report chats, have none.
 
 ### Unread
 

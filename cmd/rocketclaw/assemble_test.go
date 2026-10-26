@@ -19,14 +19,14 @@ import (
 
 func TestValidateAssetsAcceptsWorkspaceWithoutCronjobs(t *testing.T) {
 	workspace := t.TempDir()
-	require.NoError(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, ".rocketclaw", nil))
+	require.NoError(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, ".rocketclaw"))
 }
 
-func TestValidateAssetsReportsCronChannelError(t *testing.T) {
+func TestValidateAssetsReportsCronDefinitionError(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(workspace, "cron"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "cron", "daily.md"), []byte("---\nschedule: 1h\nchannel: '#ops'\n---\nBody"), 0o644))
-	require.ErrorContains(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, ".", []string{"#release"}), "validate cron definitions")
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "cron", "daily.md"), []byte("---\nagent: main\n---\nBody"), 0o644))
+	require.ErrorContains(t, processAssembler{}.ValidateAssets(&config.Config{Workspace: workspace}, "."), "validate cron definitions")
 }
 
 func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {

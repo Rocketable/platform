@@ -176,7 +176,7 @@ Explicit `Prompt.delivery=STASH` treats the entire payload as literal text inste
 including all three commands. Bare `$stop` and `$agent` keep their built-in meanings.
 Normal Send during a turn queues; Cmd/Ctrl+Enter steers. Skills are loaded when consumed.
 
-`ListCronJobs` uses the same started Cron manager as scheduled/Slack execution.
+`ListCronJobs` uses the same started Cron manager as scheduled execution.
 It exposes parsed definitions and each schedule's next trigger within 24 hours,
 using persisted due times for recurring schedules rather than restarting their
 intervals on a read. `RunCronJob` loads the selected stem through that manager,
@@ -201,12 +201,10 @@ When no human destination has a copy, Web's **Open chat** action uses
 producer and creates or reuses `web:<source ID>`, which continues the run: it shows
 the run's messages under their own IDs before its own, without copying them, and
 adopts a run that reports to no chat. Creation is idempotent, including concurrent
-opens. This creates a writable Web conversation, without Slack creation or
-Cron execution. The Web chat ID retains its source cron ID to resolve the current definition's channel for
-agent choices in the picker, session list, and server-side agent changes. Choices use
-the current configured channel agent order intersected with loaded agents; if no
-list can be computed, all loaded agents are allowed. Creation selects the first
-allowed loaded agent; reopening does not overwrite a conversation's selection.
+opens. This creates a writable Web conversation, without Cron execution. It offers
+every loaded agent. Creation selects the first loaded agent; reopening does not
+overwrite a conversation's selection. A scheduled run with a non-empty reply opens
+the same `web:<source ID>` chat on delivery, for the cron's agent.
 Authenticated users can read Cron producer history through `History`; this does not
 grant prompt, queue, deletion, or other mutation access to producers. Web previews a
 run from that history.

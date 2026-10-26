@@ -379,7 +379,7 @@ message CronJob {
   string schedule = 5;
   string body = 6;
   string agent = 7;
-  string channel = 8;
+  reserved 8;
   repeated string upcoming = 9;
   string origin = 10;
   // The job's space, else its agent's; empty shows the job in every space.

@@ -61,14 +61,11 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 			case message.ConversationID == "":
 			case threadTS != "":
 				if message.SlackReply == nil {
-					message.SlackReply = &protocol.SlackReplyTarget{}
-					if message.Cronjob == nil {
-						message.SlackReply.MessageTS = threadTS
-					}
+					message.SlackReply = &protocol.SlackReplyTarget{MessageTS: threadTS}
 				}
 
 				message.SlackReply.ChannelID, message.SlackReply.ThreadTS = channelID, threadTS
-			case message.ExternalConversationID == "" || message.SlackReply == nil || message.SlackReply.ChannelID == "" || message.Complete:
+			default:
 				event.Acknowledgement <- nil
 				continue
 			}

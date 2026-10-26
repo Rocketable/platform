@@ -163,7 +163,7 @@ JOIN shadow_parents p USING (conversation_id);
 
 ## RocketClaw-Specific Requirements
 
-- The Web interface is RocketClaw's primary interface. Slack is a convenience surface with three jobs: showing cron reports, showing External MCP sessions, and answering @mentions from allowlisted users. Cron and External MCP threads are read-only in Slack, and nothing else in Slack drives an agent.
+- The Web interface is RocketClaw's primary interface. Slack is a convenience surface with one job: answering @mentions from allowlisted users. Only mention threads post to Slack; cron reports and External MCP sessions are Web chats, and nothing else in Slack drives an agent.
 
 ## RocketCode-Specific Requirements
 

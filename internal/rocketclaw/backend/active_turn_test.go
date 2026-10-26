@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -587,33 +586,18 @@ func TestOverdueScheduledTurnRunsOnceAfterRestart(t *testing.T) {
 	require.Never(t, func() bool { return len(requests) > 0 }, 300*time.Millisecond, 10*time.Millisecond, "the reminder ran once")
 }
 
-// newCronTestManager returns a manager for one #ops channel whose cron roots
-// are recorded, plus the published finals.
-func newCronTestManager(t *testing.T, service *SessionService) (manager *threadBridgeManager, cfg *config.Config, roots, finals chan *protocol.OutboundMessage) {
+// newCronTestManager returns a manager and the published finals.
+func newCronTestManager(t *testing.T, service *SessionService) (manager *threadBridgeManager, cfg *config.Config, finals chan *protocol.OutboundMessage) {
 	t.Helper()
 
-	cfg = &config.Config{Workspace: t.TempDir(), Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"channel-agent"}}}}}
-	// A cron's report root reads the agents, as in any workspace.
+	cfg = &config.Config{Workspace: t.TempDir()}
+	// A cron's report chat reads the agents, as in any workspace.
 	require.NoError(t, os.MkdirAll(filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents"), 0o755))
 
-	roots, finals = make(chan *protocol.OutboundMessage, 4), make(chan *protocol.OutboundMessage, 4)
+	finals = make(chan *protocol.OutboundMessage, 4)
 	manager, _ = newTestBridgeManager(t, config.NewLockedConfig(cfg), service, finals)
-	manager.cronRoots = newCronRoots(func(message *protocol.OutboundMessage) { roots <- message })
 
-	return manager, cfg, roots, finals
-}
-
-// newCronRoots posts every cron root as C1 1.2, reports each to sent, and accepts footer edits.
-func newCronRoots(sent func(*protocol.OutboundMessage)) *slackFrontendMock {
-	return &slackFrontendMock{
-		SendCronjobRootFunc: func(_ context.Context, message *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-			sent(message)
-			return protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, nil
-		},
-		EditCronjobRootFooterFunc: func(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
-			return nil
-		},
-	}
+	return manager, cfg, finals
 }
 
 func seedCronRun(t *testing.T, service *SessionService, runID string) *protocol.InboundMessage {
@@ -624,18 +608,17 @@ func seedCronRun(t *testing.T, service *SessionService, runID string) *protocol.
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
 	msg.ConversationID, msg.RequireOutputDecision = runID, true
 	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "job", RanAt: "2000-01-02T03:04:05Z"}
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "#ops"}
 	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-cron", runID, msg))
 
 	return msg
 }
 
-// A cron run with no channel delivers its report to no Slack thread and stays unbound.
-func TestCronRunWithoutChannelPostsNoRoot(t *testing.T) {
+// A cron run with an empty reply reports nothing: it opens no chat and stays unbound.
+func TestSilentCronRunOpensNoReportChat(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	manager, cfg, roots, finals := newCronTestManager(t, service)
+	manager, cfg, finals := newCronTestManager(t, service)
 	require.NoError(t, service.recordConversation(t.Context(), protocol.Conversation{ID: "cron:quiet", Agent: "job", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "cron/quiet.md"}}, conversationFacts{}))
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
@@ -645,26 +628,29 @@ func TestCronRunWithoutChannelPostsNoRoot(t *testing.T) {
 	writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nRun the job.\n")
 
 	crashed := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:quiet", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
-	_, err := service.finishTurn(t.Context(), "turn-quiet", &turnFinish{store: newSessionStore("cron:quiet", service), entries: []rocketcode.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replayInputForMessage("user", "job prompt")}}, outbound: crashed.newOutboundMessage(msg, "turn-quiet", "quiet report", true)})
+	_, err := service.finishTurn(t.Context(), "turn-quiet", &turnFinish{store: newSessionStore("cron:quiet", service), entries: []rocketcode.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replayInputForMessage("user", "job prompt")}}, outbound: crashed.newOutboundMessage(msg, "turn-quiet", "", true)})
 	require.NoError(t, err)
 
 	require.NoError(t, manager.StartActiveTurns(t.Context()))
-	assert.Equal(t, "quiet report", readFinal(t, finals).Text)
+	assert.Empty(t, readFinal(t, finals).Text)
 	require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
-	assert.Empty(t, roots, "no report root is posted")
+
+	_, recorded, err := service.Thread("web:cron:quiet")
+	require.NoError(t, err)
+	assert.False(t, recorded, "no report chat is opened")
 
 	var reportsTo sql.NullString
 	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT reports_to FROM conversations WHERE conversation_id = 'cron:quiet'`).Scan(&reportsTo))
 	assert.False(t, reportsTo.Valid, "the run reports to no chat until it is continued in Web")
 }
 
-// AE2: a scheduled cron row resumed after restart posts its report root once in
-// the configured channel, and the new thread receives the run's history.
-func TestResumedCronRowPostsRootOnce(t *testing.T) {
+// AE2: a scheduled cron row resumed after restart opens its Web report chat, which shows
+// the run's history.
+func TestResumedCronRowOpensReportChat(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	manager, cfg, roots, finals := newCronTestManager(t, service)
+	manager, cfg, finals := newCronTestManager(t, service)
 	msg := seedCronRun(t, service, "cron:daily")
 	writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmode: primary\nmodel: gpt-6.1-sol\nspace: Reports\npermission: {}\n---\nRun the job.\n")
 
@@ -676,21 +662,20 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 	require.NoError(t, manager.StartActiveTurns(t.Context()))
 	assert.Equal(t, "exact report", readFinal(t, finals).Text)
 
-	root := readFinal(t, roots)
-	assert.Equal(t, "exact report", root.Text)
-	assert.Equal(t, "#ops", root.SlackReply.ChannelID)
-	assert.Equal(t, msg.Cronjob, root.Cronjob)
-
-	destination := protocol.SlackThreadConversationID("C1", "1.2")
+	const destination = "web:cron:daily"
 
 	require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
 
 	thread, recorded, err := service.Thread(destination)
 	require.NoError(t, err)
 	require.True(t, recorded)
-	assert.Equal(t, ThreadState{Agent: "channel-agent", CreatedBy: ThreadCreatedByCron}, thread)
+	assert.Equal(t, ThreadState{Agent: "job", CreatedBy: ThreadCreatedByCron}, thread, "the report chat runs the cron's agent")
 
-	// The cron names no space, so the report thread is born in its agent's, whichever agent the channel gives it.
+	kind, _, err := service.ConversationKind(t.Context(), destination)
+	require.NoError(t, err)
+	assert.Equal(t, KindWebChat, kind)
+
+	// The cron names no space, so the report chat is born in its agent's.
 	spaces, err := service.Spaces(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, "Reports", spaces[len(spaces)-1].Name)
@@ -702,11 +687,11 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 
 	entries, err := service.ObserveEntries(t.Context(), destination)
 	require.NoError(t, err)
-	assert.Len(t, entries, 1, "the report thread shows the run's history")
+	assert.Len(t, entries, 1, "the report chat shows the run's history")
 
 	var copies int
 	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT count(*) FROM entries WHERE conversation_id = $1`, destination).Scan(&copies))
-	assert.Zero(t, copies, "binding the run copies no entries into the report thread")
+	assert.Zero(t, copies, "binding the run copies no entries into the report chat")
 
 	listed := false
 
@@ -717,22 +702,15 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 			listed = true
 
 			require.NotNil(t, row.Summary)
-			assert.Equal(t, "job prompt", row.Summary.LastMessage, "a thread whose only content is the run lists the run's preview")
+			assert.Equal(t, "job prompt", row.Summary.LastMessage, "a chat whose only content is the run lists the run's preview")
 		}
 	}
 
 	assert.True(t, listed)
-	assert.Empty(t, roots, "the root is posted once")
-
-	footers := manager.cronRoots.(*slackFrontendMock).EditCronjobRootFooterCalls()
-	require.Len(t, footers, 1, "the root's footer is edited once, after binding")
-	assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, footers[0].Root)
-	assert.Equal(t, destination, footers[0].ConversationID, "the footer links the bound report thread")
-	assert.Equal(t, "turn-cron", footers[0].Msg.TurnID)
 
 	var owner string
 	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT reports_to FROM conversations WHERE conversation_id = 'cron:daily'`).Scan(&owner))
-	assert.Equal(t, destination, owner, "the delivered root survives turn close")
+	assert.Equal(t, destination, owner, "the report chat survives turn close")
 	_, err = manager.switchConversationAgent(destination, "selected")
 	require.NoError(t, err)
 	run, err := manager.recordedBridge(t.Context(), "cron:daily")
@@ -746,8 +724,6 @@ func TestResumedCronRowPostsRootOnce(t *testing.T) {
 	for _, message := range pending {
 		assert.Equal(t, "selected", message.Agent, "follow-ups reuse the selected original report conversation")
 	}
-
-	assert.Empty(t, roots, "recovery reuses the delivered root")
 }
 
 func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
@@ -761,7 +737,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(".rocketclaw/cron", 0o755))
-	require.NoError(t, root.WriteFile(".rocketclaw/cron/daily.md", []byte("---\nschedule: 1h\nagent: job\nchannel: '#current'\n---\nJob\n"), 0o600))
+	require.NoError(t, root.WriteFile(".rocketclaw/cron/daily.md", []byte("---\nschedule: 1h\nagent: job\n---\nJob\n"), 0o600))
 	service := newTestSessionServiceAt(t, workspace)
 	finals := make(chan *protocol.OutboundMessage, 8)
 	requests := make(chan string, 4)
@@ -792,13 +768,8 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 		}{Code: "def main():\n    rocketclaw_schedule_message(message=\"follow up\", send_this_in=\"59m\", recurring=False)\n    rocketclaw_schedule_message(message=\"second follow up\", send_this_in=\"59m200ms\", recurring=False)\n    rocketclaw_schedule_message(message=\"recurring follow up\", send_this_in=\"1h\", recurring=True)\n    return \"\"\n"})
 	}))
 	t.Cleanup(server.Close)
-	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"job"}}, {Channel: "#current", Agents: []string{"not-loaded", "canonical", "job"}}}}}
+	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 	manager, shutdown := newTestBridgeManager(t, config.NewLockedConfig(cfg), service, finals)
-	roots := make(chan *protocol.OutboundMessage, 4)
-	manager.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(_ context.Context, message *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-		roots <- message
-		return protocol.TextConversationTarget{ChannelID: "C1", ThreadID: "1.2"}, nil
-	}}
 
 	require.NoError(t, service.UpsertThread("cron:daily", ThreadState{Agent: "job", CreatedBy: ThreadCreatedByCron}))
 
@@ -808,7 +779,6 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "run job", false)
 	msg.RequireOutputDecision = true
 	msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "job"}
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "#ops"}
 	require.NoError(t, bridge.Submit(t.Context(), msg))
 	assert.Empty(t, readFinal(t, finals).Text)
 	require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
@@ -894,7 +864,9 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	}, 10*time.Second, 10*time.Millisecond)
 	require.Empty(t, requests, "all one-shot requests and finals are consumed before restart")
 
-	assert.Empty(t, roots, "silent fallback never creates a Slack root")
+	_, recorded, err = service.Thread("web:cron:daily")
+	require.NoError(t, err)
+	require.True(t, recorded, "the due schedule, not the silent reply, opened the chat")
 
 	var owner string
 	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT reports_to FROM conversations WHERE conversation_id = 'cron:daily'`).Scan(&owner))
@@ -919,10 +891,6 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	}
 
 	manager, _ = newTestBridgeManager(t, config.NewLockedConfig(cfg), service, finals)
-	manager.cronRoots = &slackFrontendMock{SendCronjobRootFunc: func(_ context.Context, message *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-		roots <- message
-		return protocol.TextConversationTarget{ChannelID: "C1", ThreadID: "1.2"}, nil
-	}}
 	require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
 	recurring := readFinal(t, finals)
 	assert.Equal(t, "web:cron:daily", recurring.ConversationID)
@@ -941,7 +909,6 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	require.NotEmpty(t, messages)
 	assert.Equal(t, "user", messages[len(messages)-1].role)
 	assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nrecurring follow up", messages[len(messages)-1].text)
-	assert.Empty(t, roots)
 	private, err := service.ObserveEntries(t.Context(), "cron:daily")
 	require.NoError(t, err)
 	assert.Len(t, private, 1, "canonical turns never append to producer history")
@@ -1123,11 +1090,11 @@ SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(prod
 }
 
 // A failed scheduled cron run posts no report root, live or resumed.
-func TestFailedCronRunPostsNoRoot(t *testing.T) {
+func TestFailedCronRunOpensNoReportChat(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	manager, cfg, roots, finals := newCronTestManager(t, service)
+	manager, cfg, finals := newCronTestManager(t, service)
 	msg := seedCronRun(t, service, "cron:daily")
 
 	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
@@ -1137,45 +1104,60 @@ func TestFailedCronRunPostsNoRoot(t *testing.T) {
 	final := readFinal(t, finals)
 	assert.Equal(t, internalErrorResponse, final.Text)
 	assert.Equal(t, protocol.TerminalFailed, final.Terminal)
-	assert.Empty(t, roots)
+
+	_, recorded, err := service.Thread("web:cron:daily")
+	require.NoError(t, err)
+	assert.False(t, recorded)
 }
 
-// A cron root's footer links the destination binding returns, here an existing one other
-// than the thread just posted. A failed footer edit is only logged: the delivery succeeds,
-// the turn closes, and no second root is posted.
-func TestCronRootFooterLinksBoundDestination(t *testing.T) {
+// A report that cannot open its chat, here because the agents no longer load, fails delivery.
+func TestCronReportFailsWhenAgentsDoNotLoad(t *testing.T) {
 	t.Parallel()
 
-	for name, errFooter := range map[string]error{"edit fails": errors.New("message_not_found")} {
-		t.Run(name, func(t *testing.T) {
-			service := newTestSessionService(t)
-			manager, cfg, roots, finals := newCronTestManager(t, service)
-			sender := manager.cronRoots.(*slackFrontendMock)
-			sender.EditCronjobRootFooterFunc = func(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
-				return errFooter
-			}
-			msg := seedCronRun(t, service, "cron:daily")
+	service := newTestSessionService(t)
+	manager, cfg, finals := newCronTestManager(t, service)
+	msg := seedCronRun(t, service, "cron:daily")
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Main\n---\nPrompt\n"), 0o600))
 
-			const existing = "web:cron:daily"
+	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge.threads = manager
+	err := bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{store: newSessionStore("cron:daily", service)}, &runResult{turnID: "turn-cron", text: "report"}, "")
+	require.ErrorContains(t, err, "load cron agents")
 
-			require.NoError(t, (&Runtime{Sessions: service}).CreateConversation(t.Context(), protocol.Conversation{ID: existing, Agent: "selected"}))
-			_, _, err := (stateDAO{db: service.db}).bindProducer(t.Context(), "cron:daily", existing)
-			require.NoError(t, err)
+	_, recorded, err := service.Thread("web:cron:daily")
+	require.NoError(t, err)
+	assert.False(t, recorded)
+}
 
-			bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
-			bridge.threads = manager
-			require.NoError(t, bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{store: newSessionStore("cron:daily", service)}, &runResult{turnID: "turn-cron", text: "report"}, ""))
+// A run already bound to a chat reports there: delivery keeps that chat and its agent, and
+// the turn closes.
+func TestCronReportKeepsBoundDestination(t *testing.T) {
+	t.Parallel()
 
-			assert.Equal(t, "report", readFinal(t, finals).Text)
-			assert.Equal(t, "report", readFinal(t, roots).Text)
-			assert.Empty(t, roots, "one root")
-			assert.Empty(t, runningTestTurns(t, service), "the turn closes")
+	service := newTestSessionService(t)
+	manager, cfg, finals := newCronTestManager(t, service)
+	msg := seedCronRun(t, service, "cron:daily")
 
-			footers := sender.EditCronjobRootFooterCalls()
-			require.Len(t, footers, 1)
-			assert.Equal(t, existing, footers[0].ConversationID)
-		})
-	}
+	const existing = "web:cron:daily"
+
+	require.NoError(t, (&Runtime{Sessions: service}).CreateConversation(t.Context(), protocol.Conversation{ID: existing, Agent: "selected"}))
+	_, _, err := (stateDAO{db: service.db}).bindProducer(t.Context(), "cron:daily", existing)
+	require.NoError(t, err)
+
+	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge.threads = manager
+	require.NoError(t, bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{store: newSessionStore("cron:daily", service)}, &runResult{turnID: "turn-cron", text: "report"}, ""))
+
+	assert.Equal(t, "report", readFinal(t, finals).Text)
+	assert.Empty(t, runningTestTurns(t, service), "the turn closes")
+
+	thread, _, err := service.Thread(existing)
+	require.NoError(t, err)
+	assert.Equal(t, "selected", thread.Agent)
+
+	var owner string
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT reports_to FROM conversations WHERE conversation_id = 'cron:daily'`).Scan(&owner))
+	assert.Equal(t, existing, owner)
 }
 
 // AE3: an interrupted private External MCP turn, and an External MCP request
@@ -1909,11 +1891,7 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Report finished.","annotations":[]}]}]}`))
 	})
 	first, shutdown := nt.run(t, ignoreOutbound)
-	report := protocol.SlackThreadConversationID("C1", "1.2")
-
-	first.mu.Lock()
-	first.cronRoots = newCronRoots(func(*protocol.OutboundMessage) {})
-	first.mu.Unlock()
+	report := "web:cron:nightly"
 
 	msg := seedCronRun(t, nt.service, "cron:nightly")
 	job := testBackgroundJob("cron:nightly", "turn-cron/call/a")
@@ -1921,7 +1899,7 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 	createTestBackgroundJob(t, nt.service, job)
 
 	outbound := protocol.NewOutboundMessage("cron:nightly", "Report started")
-	outbound.TurnID, outbound.Complete, outbound.Cronjob, outbound.SlackReply = "turn-cron", true, msg.Cronjob, msg.SlackReply
+	outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
 	_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:nightly", nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
 	require.NoError(t, err)
 	require.NoError(t, first.StartActiveTurns(t.Context()))
@@ -2238,10 +2216,6 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 			root := nt.conversationID
 
 			if tc.source == protocol.SourceSystem {
-				manager.mu.Lock()
-				manager.cronRoots = newCronRoots(func(*protocol.OutboundMessage) {})
-				manager.mu.Unlock()
-
 				root = "cron:nightly"
 				seedCronRun(t, nt.service, root)
 				require.NoError(t, manager.StartActiveTurns(t.Context()))

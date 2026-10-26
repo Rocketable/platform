@@ -18,8 +18,6 @@ import (
 type SlackFrontend interface {
 	Start(context.Context) error
 	Stop(context.Context) error
-	SendCronjobRoot(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
-	EditCronjobRootFooter(ctx context.Context, msg *protocol.OutboundMessage, root protocol.TextConversationTarget, conversationID string) error
 	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
 	SlackTagsMatching(context.Context, string) []string
 }
@@ -71,7 +69,7 @@ func (r *Runtime) Reload(reason string) (string, error) {
 			return err
 		}
 
-		return r.assemble.ValidateAssets(cfg, runtimeDir, cfg.Slack.MappedChannels())
+		return r.assemble.ValidateAssets(cfg, runtimeDir)
 	}); err != nil {
 		return "", fmt.Errorf("reload runtime assets: %w", err)
 	}
@@ -155,10 +153,9 @@ func (r *Runtime) PublishOutbound(ctx context.Context, message *protocol.Outboun
 	return errDelivery
 }
 
-// AttachSlack makes Slack the cron report root sender and the session search's Slack lookup.
+// AttachSlack makes Slack the session search's Slack lookup.
 func (r *Runtime) AttachSlack(slack SlackFrontend) {
 	r.threads.mu.Lock()
-	r.threads.cronRoots = slack
 	r.threads.slackLookups = slack
 	r.threads.mu.Unlock()
 }

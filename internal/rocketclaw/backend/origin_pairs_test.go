@@ -78,7 +78,7 @@ func TestExternalMCPOriginDetailsStayOutsideHistory(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
-	binding := ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "managed", Agent: "helper", SlackChannel: "#triage", OriginPairs: map[string]string{"topic": "billing"}}
+	binding := ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "managed", Agent: "helper", OriginPairs: map[string]string{"topic": "billing"}}
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "helper", &binding))
 
 	for _, id := range []string{"private", "managed"} {
@@ -114,7 +114,7 @@ func TestChatOriginFactsReportsFailures(t *testing.T) {
 
 	require.Equal(t, 1, seen, "stopping early ends the scan")
 
-	_, err := store.db.ExecContext(ctx, `UPDATE conversations SET external_id = 'external', external_run = 'private', external_agent = 'helper', external_channel = '#triage',
+	_, err := store.db.ExecContext(ctx, `UPDATE conversations SET external_id = 'external', external_run = 'private', external_agent = 'helper',
     origin_pairs = '"not an object"' WHERE conversation_id = 'first'`)
 	require.NoError(t, err)
 

@@ -130,12 +130,6 @@ type CronjobMessage struct {
 	Space string
 }
 
-// ExternalMCPRelay carries one MCP request to its Slack surface.
-type ExternalMCPRelay struct {
-	ConversationID, ExternalConversationID, Agent, Text string
-	Attachments                                         []OutboundAttachment
-}
-
 // InboundMessage is a message headed into its conversation prompt queue.
 type InboundMessage struct {
 	// Source is the surface that produced the message.
@@ -215,7 +209,6 @@ type OutboundMessage struct {
 	ConsumedSource                     Source
 	Text                               string
 	ConversationID, TurnID             string
-	ExternalConversationID             string
 	Agent                              string
 	Model, SourceConversationID        string
 	ReasoningEffort                    *string

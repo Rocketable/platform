@@ -639,12 +639,12 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.Equal(t, 1, kept)
 
 	// The later migrations already ran here; running them again would fail on what they created.
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql")
+	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
 	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql"}, ledger)
+	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql"}, ledger)
 
 	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
 	require.NoError(t, err)
@@ -692,6 +692,38 @@ INSERT INTO web_tabs (username, path, position, pinned, group_id, space) VALUES 
 	state, _, err := store.TabState(ctx, "alice")
 	require.NoError(t, err)
 	require.Equal(t, []Tab{{Path: "/search", Group: "g", Space: "main"}, {Path: "/cron", Space: "main"}}, state.Tabs, "a pinned tab stays open in place as an ordinary tab")
+}
+
+func TestSlackThreadsMigration(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	// Back to before 069, with an External MCP session, a cron report, and a mention each on a Slack thread.
+	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 69)
+	require.NoError(t, err)
+	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "main", PrivateConversationID: "private", ManagedConversationID: "mcp"}))
+	require.NoError(t, store.UpsertThread("cron", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, store.UpsertThread("mention", ThreadState{Agent: "main"}))
+	_, err = store.db.ExecContext(ctx, `UPDATE conversations SET kind = 'slack_thread', slack_channel = 'C1', slack_thread = '1.' || length(conversation_id), external_channel = '#ops' WHERE conversation_id IN ('mcp', 'cron', 'mention')`)
+	require.NoError(t, err)
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	for id, want := range map[string]ConversationKind{"mcp": KindWebChat, "cron": KindWebChat, "mention": KindSlackThread} {
+		kind, ok, err := store.ConversationKind(ctx, id)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, want, kind, id)
+
+		_, thread, err := store.SlackThread(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, want == KindSlackThread, thread != "", "only a mention thread still posts to Slack: %s", id)
+	}
+
+	session, ok, err := store.ExternalMCPSession("ticket")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, ExternalMCPSessionState{Agent: "main", PrivateConversationID: "private", ManagedConversationID: "mcp"}, session, "the session keeps its private run and canonical chat")
 }
 
 func TestSpaceLastTabMigration(t *testing.T) {
@@ -870,8 +902,8 @@ func TestSessionMigrationUnlockFailureDiscardsConnection(t *testing.T) {
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 }
 
-// An External MCP call for an existing external ID finds its binding, with the Slack thread it is
-// on, in one row through the external ID's unique index.
+// An External MCP call for an existing external ID finds its binding in one row through the
+// external ID's unique index.
 func TestExternalMCPBindingLookupUsesOneIndexedRow(t *testing.T) {
 	t.Parallel()
 
@@ -879,8 +911,7 @@ func TestExternalMCPBindingLookupUsesOneIndexedRow(t *testing.T) {
 	store.db.SetMaxOpenConns(1)
 
 	ctx := t.Context()
-	thread := protocol.SlackReplyTarget{ChannelID: "C1", ThreadTS: "1.1"}
-	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Thread: thread, Agent: "job", PrivateConversationID: "private", ManagedConversationID: protocol.SlackThreadConversationID("C1", "1.1"), SlackChannel: "#ops"}))
+	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "job", PrivateConversationID: "private", ManagedConversationID: "managed"}))
 	_, err := store.db.ExecContext(ctx, `
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
 SELECT 'chat-' || n, 'main', '', 'web_chat', TRUE FROM generate_series(1, 4096) n;
@@ -891,7 +922,7 @@ SET plan_cache_mode = force_generic_plan;`)
 	session, found, err := store.ExternalMCPSession("ticket")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, ExternalMCPSessionState{Agent: "job", PrivateConversationID: "private", ManagedConversationID: protocol.SlackThreadConversationID("C1", "1.1"), SlackChannel: "#ops", Thread: thread}, session)
+	require.Equal(t, ExternalMCPSessionState{Agent: "job", PrivateConversationID: "private", ManagedConversationID: "managed"}, session)
 
 	// Explain the actual prepared lookup, not a separately maintained query.
 	queries, err := queryStrings(ctx, store.db, `SELECT format('EXPLAIN EXECUTE %I(%s)', name,

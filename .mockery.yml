@@ -9,11 +9,6 @@ recursive: false
 template: matryer
 inpackage: true
 packages:
-  github.com/Rocketable/platform/cmd/rocketclaw:
-    interfaces:
-      mcpRelay:
-        config:
-          structname: mcpRelayMock
   github.com/Rocketable/platform/internal/rocketclaw/backend:
     interfaces:
       FrontendAssembler:

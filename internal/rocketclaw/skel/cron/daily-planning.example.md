@@ -1,6 +1,5 @@
 ---
 schedule: 0 9 * * 1-5
-channel: "#ops"
 ---
 
 Review the current workspace context.

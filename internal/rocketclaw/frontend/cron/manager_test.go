@@ -61,13 +61,13 @@ func TestJobsProjectsDefinitionsAndPersistedTriggers(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll("runtime/cron", 0o700))
-	require.NoError(t, root.WriteFile("runtime/cron/alpha.md", []byte("---\nschedule: [30m, '0 * * * *']\nagent: worker\nchannel: '#ops'\n---\nExact body\n"), 0o600))
-	require.NoError(t, root.WriteFile("runtime/cron/zeta.md", []byte("---\nschedule: '2000-01-01T00:45:00Z'\nagent: worker\nchannel: '#ops'\n---\nOnce\n"), 0o600))
+	require.NoError(t, root.WriteFile("runtime/cron/alpha.md", []byte("---\nschedule: [30m, '0 * * * *']\nagent: worker\n---\nExact body\n"), 0o600))
+	require.NoError(t, root.WriteFile("runtime/cron/zeta.md", []byte("---\nschedule: '2000-01-01T00:45:00Z'\nagent: worker\n---\nOnce\n"), 0o600))
 	store := newCronScheduleStore(t)
-	manager := New(workspace, "runtime", []string{"#ops"}, store, &runnerMock{}, slog.New(slog.DiscardHandler))
+	manager := New(workspace, "runtime", store, &runnerMock{}, slog.New(slog.DiscardHandler))
 	start := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	manager.now = func() time.Time { return start.Add(5 * time.Minute) }
-	definitions, err := loadDefinitionsIn(workspace, "runtime", []string{"#ops"})
+	definitions, err := loadDefinitionsIn(workspace, "runtime")
 	require.NoError(t, err)
 
 	states := manager.scheduledStates(definitions, start)
@@ -76,8 +76,8 @@ func TestJobsProjectsDefinitionsAndPersistedTriggers(t *testing.T) {
 	jobs, err := manager.Jobs()
 	require.NoError(t, err)
 	require.Equal(t, []Job{
-		{RelativePath: "cron/alpha.md", Agent: "worker", TextChannel: "#ops", Body: "Exact body\n", Schedules: []string{"30m", "0 * * * *"}, Upcoming: []time.Time{start.Add(30 * time.Minute), start.Add(time.Hour)}},
-		{RelativePath: "cron/zeta.md", Agent: "worker", TextChannel: "#ops", Body: "Once\n", Schedules: []string{"2000-01-01T00:45:00Z"}, Upcoming: []time.Time{start.Add(45 * time.Minute)}},
+		{RelativePath: "cron/alpha.md", Agent: "worker", Body: "Exact body\n", Schedules: []string{"30m", "0 * * * *"}, Upcoming: []time.Time{start.Add(30 * time.Minute), start.Add(time.Hour)}},
+		{RelativePath: "cron/zeta.md", Agent: "worker", Body: "Once\n", Schedules: []string{"2000-01-01T00:45:00Z"}, Upcoming: []time.Time{start.Add(45 * time.Minute)}},
 	}, jobs)
 	remaining, err := store.DueCronSchedules(start.Add(24 * time.Hour))
 	require.NoError(t, err)
@@ -97,7 +97,7 @@ func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule:\n  - 15m\n  - '0 8 * * *'\nagent: worker\nchannel: '#triage'\n---\nRun daily\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule:\n  - 15m\n  - '0 8 * * *'\nagent: worker\n---\nRun daily\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -113,7 +113,7 @@ func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	defs, err := loadDefinitionsIn(workspace, ".", []string{"#triage"})
+	defs, err := loadDefinitionsIn(workspace, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
 	}
 
 	def := defs[0]
-	if def.relativePath != "cron/daily.md" || def.agent != "worker" || def.textChannel != "#triage" || def.body != "Run daily\n" {
+	if def.relativePath != "cron/daily.md" || def.agent != "worker" || def.body != "Run daily\n" {
 		t.Fatalf("definition = %#v; want daily worker body", def)
 	}
 
@@ -145,11 +145,11 @@ func TestValidateRuntimeDefinitionsReportsStagedCronParseErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ValidateRuntimeDefinitions(workspace, ".rocketclaw-stage", []string{"#ops"}); err == nil || !strings.Contains(err.Error(), "yaml frontmatter is required") {
+	if err := ValidateRuntimeDefinitions(workspace, ".rocketclaw-stage"); err == nil || !strings.Contains(err.Error(), "yaml frontmatter is required") {
 		t.Fatalf("ValidateRuntimeDefinitions() error = %v; want frontmatter error", err)
 	}
 
-	m := New(workspace, ".rocketclaw-stage", []string{"#ops"}, newCronScheduleStore(t), &runnerMock{}, slog.New(slog.DiscardHandler))
+	m := New(workspace, ".rocketclaw-stage", newCronScheduleStore(t), &runnerMock{}, slog.New(slog.DiscardHandler))
 	require.ErrorContains(t, m.Start(t.Context()), "yaml frontmatter is required")
 	require.ErrorContains(t, m.scanScheduled(t.Context()), "yaml frontmatter is required")
 }
@@ -162,11 +162,11 @@ func TestLoadOneOffCronjobUsesEffectiveRuntimeCron(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nagent: helper\nchannel: '#ops'\n---\nRuntime cron"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nagent: helper\n---\nRuntime cron"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	m := New(workspace, ".rocketclaw", nil, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(workspace, ".rocketclaw", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		t.Fatal("cronjob manager ran during load test")
 
 		return protocol.CronRunResult{}, nil
@@ -177,7 +177,7 @@ func TestLoadOneOffCronjobUsesEffectiveRuntimeCron(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if job.Agent != "helper" || job.RelativePath != "cron/daily.md" || job.TextChannel != "#ops" || !strings.Contains(job.Prompt, "Runtime cron") {
+	if job.Agent != "helper" || job.RelativePath != "cron/daily.md" || !strings.Contains(job.Prompt, "Runtime cron") {
 		t.Fatalf("LoadOneOffCronjob = %#v; want effective runtime cron", job)
 	}
 }
@@ -200,7 +200,7 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 		destination string
 	)
 
-	m := New(t.TempDir(), ".", nil, newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(t.TempDir(), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		require.Equal(t, "helper", agent)
 		require.Equal(t, "Body", prompt)
 		require.Equal(t, destination, progress.SyncDestination)
@@ -211,16 +211,12 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 			t.Fatalf("ConversationID = %q; want one-off trace ID", progress.ConversationID)
 		}
 
-		if progress.TextChannel != "#ops" {
-			t.Fatalf("TextChannel = %q; want #ops", progress.TextChannel)
-		}
-
 		return protocol.CronRunResult{ConversationID: progress.SyncDestination}, nil
 	}}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC) }
 
 	for _, destination = range []string{"slack-thread:C1:1.2", ""} {
-		_, err := m.RunOneOffCronjob(t.Context(), &protocol.OneOffCronjob{Agent: "helper", Prompt: "Body", RelativePath: "cron/daily.md", TextChannel: "#ops", ConversationID: destination})
+		_, err := m.RunOneOffCronjob(t.Context(), &protocol.OneOffCronjob{Agent: "helper", Prompt: "Body", RelativePath: "cron/daily.md", ConversationID: destination})
 		require.NoError(t, err)
 	}
 
@@ -233,7 +229,7 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 }
 
 func TestRunOneOffCronjobRejectsStoppedManager(t *testing.T) {
-	m := New(t.TempDir(), ".", nil, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(t.TempDir(), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		t.Fatal("stopped cronjob manager ran one-off cronjob")
 
 		return protocol.CronRunResult{}, nil
@@ -252,20 +248,16 @@ func TestRunOneOffCronjobRejectsStoppedManager(t *testing.T) {
 func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	var logs bytes.Buffer
 
-	m := New(t.TempDir(), ".", nil, newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(t.TempDir(), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		if !strings.HasPrefix(progress.ConversationID, "cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want scheduled trace ID", progress.ConversationID)
-		}
-
-		if progress.TextChannel != "#ops" {
-			t.Fatalf("TextChannel = %q; want #ops", progress.TextChannel)
 		}
 
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC) }
 
-	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#ops", body: "Body"})
+	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", body: "Body"})
 	require.Contains(t, logs.String(), `"event":"cron_completed"`)
 	require.Contains(t, logs.String(), `"outcome":"intentional_silence"`)
 	require.Contains(t, logs.String(), `"duration_ms":`)
@@ -274,7 +266,7 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	m.run = &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{ConversationID: "destination"}, nil
 	}}
-	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#ops", body: "Body"})
+	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", body: "Body"})
 	require.Contains(t, logs.String(), `"outcome":"completed"`)
 	require.Contains(t, logs.String(), `"destination_conversation_id":"destination"`)
 	logs.Reset()
@@ -282,13 +274,13 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	m.run = &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, errors.New("secret-bearing-error")
 	}}
-	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#ops", body: "Body"})
+	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", body: "Body"})
 	require.Contains(t, logs.String(), `"outcome":"failed"`)
 	require.NotContains(t, logs.String(), "secret-bearing-error")
 }
 
 func TestLoadDefinitionsWithoutCronDirectory(t *testing.T) {
-	defs, err := loadDefinitionsIn(t.TempDir(), ".", nil)
+	defs, err := loadDefinitionsIn(t.TempDir(), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +296,7 @@ func TestLoadDefinitionsReportsDirectoryErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := loadDefinitionsIn(workspaceFile, ".", nil); err == nil || !strings.Contains(err.Error(), "open workspace root") {
+	if _, err := loadDefinitionsIn(workspaceFile, "."); err == nil || !strings.Contains(err.Error(), "open workspace root") {
 		t.Fatalf("loadDefinitionsIn(workspace file, .) error = %v; want workspace open error", err)
 	}
 
@@ -313,7 +305,7 @@ func TestLoadDefinitionsReportsDirectoryErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := loadDefinitionsIn(workspace, ".", nil); err == nil || !strings.Contains(err.Error(), "read cronjob directory") {
+	if _, err := loadDefinitionsIn(workspace, "."); err == nil || !strings.Contains(err.Error(), "read cronjob directory") {
 		t.Fatalf("loadDefinitionsIn(cron file, .) error = %v; want cron directory error", err)
 	}
 }
@@ -326,11 +318,11 @@ func TestStartRejectsAlreadyStartedManager(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nchannel: '#ops'\n---\nBody"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	m := New(workspace, ".", []string{"#ops"}, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(workspace, ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		t.Fatal("future duration cronjob ran during duplicate start test")
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
@@ -360,12 +352,12 @@ func TestOneOffCronjobRunsImmediatelyAndDeletesFile(t *testing.T) {
 	}
 
 	cronPath := filepath.Join(cronDir, "due.md")
-	if err := os.WriteFile(cronPath, []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\nchannel: '#ops'\nspace: Ops\n---\nBody"), 0o644); err != nil {
+	if err := os.WriteFile(cronPath, []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\nspace: Ops\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	runDone := make(chan struct{})
-	m := New(workspace, ".", []string{"#ops", "#triage"}, newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(workspace, ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		assert.Equal(t, "Ops", progress.Cronjob.Space, "the run carries the cron's space to its report thread")
 		close(runDone)
 
@@ -410,13 +402,13 @@ func TestOneOffCronjobDeletesFileAfterRunError(t *testing.T) {
 
 	localCronPath := filepath.Join(localCronDir, "error.md")
 	for _, path := range []string{cronPath, localCronPath} {
-		if err := os.WriteFile(path, []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\nchannel: '#ops'\n---\nBody"), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\n---\nBody"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	runDone := make(chan struct{})
-	m := New(workspace, runtimeDir, []string{"#ops", "#triage"}, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(workspace, runtimeDir, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		close(runDone)
 
 		return protocol.CronRunResult{}, errors.New("boom")
@@ -466,13 +458,13 @@ func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
 	}
 
 	cronPath := filepath.Join(cronDir, "daily.md")
-	if err := os.WriteFile(cronPath, []byte("---\nschedule: 1s\nagent: helper\nchannel: '#ops'\n---\nold body"), 0o644); err != nil {
+	if err := os.WriteFile(cronPath, []byte("---\nschedule: 1s\nagent: helper\n---\nold body"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	store := newCronScheduleStore(t)
 	runPrompt := make(chan string, 1)
-	m := New(workspace, ".", []string{"#ops"}, store, &runnerMock{RunFunc: func(_ context.Context, _ string, prompt string, _ *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(workspace, ".", store, &runnerMock{RunFunc: func(_ context.Context, _ string, prompt string, _ *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		runPrompt <- prompt
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
@@ -480,7 +472,7 @@ func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
 	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 	m.now = func() time.Time { return start }
 
-	defs, err := loadDefinitionsIn(workspace, ".", m.channels)
+	defs, err := loadDefinitionsIn(workspace, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +481,7 @@ func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(cronPath, []byte("---\nschedule: 1s\nagent: helper\nchannel: '#ops'\n---\nnew body"), 0o644); err != nil {
+	if err := os.WriteFile(cronPath, []byte("---\nschedule: 1s\nagent: helper\n---\nnew body"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -501,8 +493,9 @@ func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
 
 	select {
 	case prompt := <-runPrompt:
-		if !strings.Contains(prompt, "new body") {
-			t.Fatalf("scheduled prompt = %q; want latest body", prompt)
+		// Every scheduled run's reply is reported in a Web chat, so every run is told so.
+		if prompt != "new body\n\n"+cronReplyInstruction {
+			t.Fatalf("scheduled prompt = %q; want latest body and the report instruction", prompt)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("scheduled cronjob did not run")
@@ -515,46 +508,6 @@ func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
 	require.Equal(t, []backend.CronScheduleState{{ScheduleID: "cron/daily.md#0#1s", RelativePath: "cron/daily.md", NextDue: start.Add(11 * time.Second)}}, triggers)
 }
 
-func TestScanScheduledInvalidLiveChannelRunsNothingUntilRepaired(t *testing.T) {
-	workspace := t.TempDir()
-	cronDir := filepath.Join(workspace, "cron")
-	require.NoError(t, os.Mkdir(cronDir, 0o755))
-	cronPath := filepath.Join(cronDir, "daily.md")
-	require.NoError(t, os.WriteFile(cronPath, []byte("---\nschedule: 1s\nchannel: '#ops'\n---\nbody"), 0o644))
-
-	store := newCronScheduleStore(t)
-	runs := make(chan struct{}, 1)
-	m := New(workspace, ".", []string{"#ops"}, store, &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		runs <- struct{}{}
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
-	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
-	m.now = func() time.Time { return start }
-	definitions, err := loadDefinitionsIn(workspace, ".", m.channels)
-	require.NoError(t, err)
-	require.NoError(t, store.SyncCronSchedules(m.scheduledStates(definitions, start)))
-
-	require.NoError(t, os.WriteFile(cronPath, []byte("---\nschedule: 1s\nchannel: '#private'\n---\ninvalid"), 0o644))
-
-	m.now = func() time.Time { return start.Add(time.Second) }
-	require.ErrorContains(t, m.scanScheduled(t.Context()), "channel \"#private\" is not configured")
-
-	select {
-	case <-runs:
-		t.Fatal("invalid live channel ran")
-	default:
-	}
-
-	require.NoError(t, os.WriteFile(cronPath, []byte("---\nschedule: 1s\nchannel: '#ops'\n---\nrepaired"), 0o644))
-	require.NoError(t, m.scanScheduled(t.Context()))
-
-	select {
-	case <-runs:
-	case <-time.After(time.Second):
-		t.Fatal("repaired cron did not retain due state")
-	}
-}
-
 func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 	workspace := t.TempDir()
 
@@ -563,14 +516,14 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule:\n  - 1s\n  - 1s\nagent: helper\nchannel: '#ops'\n---\nBody"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule:\n  - 1s\n  - 1s\nagent: helper\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	store, db := newCronScheduleStoreDB(t)
 	runStarted := make(chan error, 2)
 	release := make(chan struct{})
-	m := New(workspace, ".", []string{"#ops"}, store, &runnerMock{RunFunc: func(ctx context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(workspace, ".", store, &runnerMock{RunFunc: func(ctx context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		// As the backend's runner does, the run's conversation holds a running turn while the run goes.
 		_, errConversation := db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, cron_path) VALUES ($1, 'helper', 'cron', 'cron_run', FALSE, $2)`, progress.ConversationID, progress.Run.Path)
 
@@ -585,7 +538,7 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 	m.now = func() time.Time { return start }
 
-	defs, err := loadDefinitionsIn(workspace, ".", m.channels)
+	defs, err := loadDefinitionsIn(workspace, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,7 +574,7 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 }
 
 func TestPreparePromptInstructionCases(t *testing.T) {
-	m := New(t.TempDir(), ".", nil, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(t.TempDir(), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
 
@@ -655,15 +608,15 @@ func TestLoadDefinitionRejectsInvalidFrontmatter(t *testing.T) {
 		{name: "missing frontmatter", data: "body", want: "yaml frontmatter is required"},
 		{name: "missing closing delimiter", data: "---\nschedule: 1h\nbody", want: "yaml frontmatter closing delimiter is required"},
 		{name: "invalid yaml", data: "---\nschedule: [\n---\nbody", want: "unmarshal frontmatter yaml"},
-		{name: "missing schedule", data: "---\nagent: main\nchannel: '#ops'\n---\nbody", want: "schedule is required"},
-		{name: "null schedule", data: "---\nschedule: null\nchannel: '#ops'\n---\nbody", want: "schedule is required"},
-		{name: "invalid schedule list item", data: "---\nschedule:\n  - 1h\n  - 3\nchannel: '#ops'\n---\nbody", want: "schedule must be a string or list of strings"},
-		{name: "invalid schedule scalar", data: "---\nschedule: 123\nchannel: '#ops'\n---\nbody", want: "schedule must be a string or list of strings"},
-		{name: "blank duration", data: "---\nschedule: ''\nchannel: '#ops'\n---\nbody", want: "schedule must not be blank"},
-		{name: "zero duration", data: "---\nschedule: 0s\nchannel: '#ops'\n---\nbody", want: "duration schedules must be greater than zero"},
-		{name: "every unsupported", data: "---\nschedule: '@every 1h'\nchannel: '#ops'\n---\nbody", want: "@every is not supported"},
-		{name: "invalid cron", data: "---\nschedule: not a cron\nchannel: '#ops'\n---\nbody", want: "invalid cron expression"},
-		{name: "mixed timestamp", data: "---\nschedule:\n  - '2000-01-01T00:00:00Z'\n  - 1h\nchannel: '#ops'\n---\nbody", want: "timestamp schedules cannot be combined"},
+		{name: "missing schedule", data: "---\nagent: main\n---\nbody", want: "schedule is required"},
+		{name: "null schedule", data: "---\nschedule: null\n---\nbody", want: "schedule is required"},
+		{name: "invalid schedule list item", data: "---\nschedule:\n  - 1h\n  - 3\n---\nbody", want: "schedule must be a string or list of strings"},
+		{name: "invalid schedule scalar", data: "---\nschedule: 123\n---\nbody", want: "schedule must be a string or list of strings"},
+		{name: "blank duration", data: "---\nschedule: ''\n---\nbody", want: "schedule must not be blank"},
+		{name: "zero duration", data: "---\nschedule: 0s\n---\nbody", want: "duration schedules must be greater than zero"},
+		{name: "every unsupported", data: "---\nschedule: '@every 1h'\n---\nbody", want: "@every is not supported"},
+		{name: "invalid cron", data: "---\nschedule: not a cron\n---\nbody", want: "invalid cron expression"},
+		{name: "mixed timestamp", data: "---\nschedule:\n  - '2000-01-01T00:00:00Z'\n  - 1h\n---\nbody", want: "timestamp schedules cannot be combined"},
 	}
 
 	for _, tt := range tests {
@@ -677,7 +630,7 @@ func TestLoadDefinitionRejectsInvalidFrontmatter(t *testing.T) {
 }
 
 func TestLoadDefinitionLeavesNonStringAgentForValidation(t *testing.T) {
-	def, err := loadDefinition([]byte("---\nschedule: 1h\nagent: 7\nchannel: '#ops'\n---\nBody"), "cron/test.md")
+	def, err := loadDefinition([]byte("---\nschedule: 1h\nagent: 7\n---\nBody"), "cron/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -688,12 +641,12 @@ func TestLoadDefinitionLeavesNonStringAgentForValidation(t *testing.T) {
 }
 
 func TestLoadDefinitionDefaultsBlankAgent(t *testing.T) {
-	defEmpty, err := loadDefinition([]byte("---\nschedule: []\nchannel: '#ops'\n---\nBody"), "cron/test.md")
+	defEmpty, err := loadDefinition([]byte("---\nschedule: []\n---\nBody"), "cron/test.md")
 	require.NoError(t, err)
 	require.NotNil(t, defEmpty.schedules)
 	require.Empty(t, defEmpty.schedules)
 
-	def, err := loadDefinition([]byte("---\nschedule: 1h\nagent: '  \t  '\nchannel: '  #ops  '\n---\nBody"), "cron/test.md")
+	def, err := loadDefinition([]byte("---\nschedule: 1h\nagent: '  \t  '\n---\nBody"), "cron/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -702,7 +655,7 @@ func TestLoadDefinitionDefaultsBlankAgent(t *testing.T) {
 		t.Fatalf("definition agent = %q; want main", def.agent)
 	}
 
-	defNull, err := loadDefinition([]byte("---\nschedule: 1h\nagent: null\nchannel: '#ops'\n---\nBody"), "cron/test.md")
+	defNull, err := loadDefinition([]byte("---\nschedule: 1h\nagent: null\n---\nBody"), "cron/test.md")
 	require.NoError(t, err)
 	require.Equal(t, "main", defNull.agent)
 }
@@ -715,11 +668,11 @@ func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nagent: helper\nchannel: '#triage'\n---\nBody"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nagent: helper\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	m := New(workspace, ".", []string{"#ops", "#triage"}, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(workspace, ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
 
@@ -728,8 +681,8 @@ func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if job.Agent != "helper" || job.RelativePath != "cron/daily.md" || job.TextChannel != "#triage" {
-		t.Fatalf("job = %#v; want helper cron/daily.md #triage", job)
+	if job.Agent != "helper" || job.RelativePath != "cron/daily.md" {
+		t.Fatalf("job = %#v; want helper cron/daily.md", job)
 	}
 
 	if !strings.Contains(job.Prompt, "Body") || !strings.Contains(job.Prompt, cronReplyInstruction) {
@@ -755,7 +708,7 @@ func TestLoadOneOffCronjobReportsReadAndDefinitionErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := New(workspace, ".", []string{"#ops", "#triage"}, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(workspace, ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
 
@@ -774,7 +727,7 @@ func TestLoadOneOffCronjobReportsWorkspaceOpenError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := New(workspace, ".", []string{"#ops", "#triage"}, newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	m := New(workspace, ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
 
