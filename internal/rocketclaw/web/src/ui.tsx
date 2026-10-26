@@ -1577,7 +1577,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   // The screen stays on while the Voice page is open or a call runs.
   const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
   useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
-  const [palette, setPalette] = useState<{ mode: "sessions" | "commands" | "cron" | "timeline" | undefined; key: number }>({ mode: undefined, key: 0 });
+  const [palette, setPalette] = useState<{ mode: keyof typeof paletteCopy | undefined; key: number }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
   const drafts = useMemo(() => new Map<string, ComposerDraft>(), [scope]);
   const [, setDraftVersion] = useState(0);
@@ -1872,7 +1872,7 @@ function SessionCommandPicker({ items, query, setQuery, forking, disabled }: { i
 }
 
 function paletteRows(
-  mode: "sessions" | "commands" | "cron" | "timeline",
+  mode: keyof typeof paletteCopy,
   typed: string,
   rows: Session[],
   jobs: CronJob[],
@@ -1889,10 +1889,10 @@ function paletteRows(
       key: job.stem, label: job.stem, detail: [job.schedule, job.agent, job.channel].filter(Boolean).join(" · "), keep: true, run: () => runStem(job.stem),
     }));
   }
-  // Every stem with a definition or runs; a run is one origin, and sub-calls do not count as runs.
+  // Every stem with a definition or runs, retired ones included.
   if (mode === "timeline") return [...Map.groupBy(jobs, (job) => job.stem)].filter(([stem]) => stem.toLowerCase().includes(needle)).map(([stem, rows]) => {
-    const runs = rows.filter((job) => job.status === "ran" && !job.origin!.includes("/call_"));
-    return { key: stem, label: stem, detail: [runs[0] ? `${plural(new Set(runs.map((job) => job.origin)).size, "run")} · last ${cronWhen(runs[0].lastRun)} UTC` : "No runs yet", rows.some((job) => job.status !== "ran") ? "" : "Retired"].filter(Boolean).join(" · "), run: () => navigate(`/cron?${new URLSearchParams({ timeline: stem })}`) };
+    const runs = cronRuns(rows.filter((job) => job.status === "ran" && !job.origin!.includes("/call_")));
+    return { key: stem, label: stem, detail: [runs[0] ? `${plural(runs.length, "run")} · last ${cronWhen(runs[0].item.lastRun)} UTC` : "No runs yet", rows.some((job) => job.status !== "ran") ? "" : "Retired"].filter(Boolean).join(" · "), run: () => navigate(`/cron?${new URLSearchParams({ timeline: stem })}`) };
   });
   // Match quality: 0 the whole label, 1 one contiguous run, 2 three or more letters in order with gaps, 3 none; all case-insensitive.
   const tier = (label: string) => {
@@ -2064,7 +2064,7 @@ function usePalettePage<T>(items: T[], selected: number, key: string) {
   };
 }
 
-function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | "timeline" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | "timeline" | undefined) => void; newChat: () => void; keyCommands: { key: string; label: string; run: () => void }[] }) {
+function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { drafts: Map<string, ComposerDraft>; mode: keyof typeof paletteCopy | undefined; setMode: (mode: keyof typeof paletteCopy | undefined) => void; newChat: () => void; keyCommands: { key: string; label: string; run: () => void }[] }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
   // Arrowing onto a session shows it in the preview tab. The palette remounts per opening and keeps acting on the
@@ -2205,7 +2205,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
   );
 }
 
-function PaletteCommandContent({ item, mode }: { item: ReturnType<typeof paletteRows>[number]; mode: "sessions" | "commands" | "cron" | "timeline" | undefined }) {
+function PaletteCommandContent({ item, mode }: { item: ReturnType<typeof paletteRows>[number]; mode: keyof typeof paletteCopy | undefined }) {
   return <>
     <span className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1"><span className="font-medium">{item.label}</span>{mode === "sessions" || mode === "commands" ? <Keys id={item.key} hidden /> : null}</span>
     {item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}
@@ -2241,7 +2241,7 @@ function ShortcutsPage({ show }: { show: boolean }) {
   </div>;
 }
 
-function paletteEmpty(mode: "sessions" | "commands" | "cron" | "timeline" | undefined, sidebar: SidebarView, search: ReturnType<typeof useSessionSearch>, loadingJobs: boolean, folders?: string) {
+function paletteEmpty(mode: keyof typeof paletteCopy | undefined, sidebar: SidebarView, search: ReturnType<typeof useSessionSearch>, loadingJobs: boolean, folders?: string) {
   if (folders) return folders;
   if (mode === "sessions" && search.error) return "Search incomplete";
   if (mode === "sessions" && (!searchIsAuthoritative(sidebar) || search.pending || search.missing)) return "loading...";
@@ -4744,12 +4744,13 @@ const cronDayHead = "sticky top-0 z-10 flex items-baseline justify-between gap-2
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 const cronDay = (day: string) => new Date(day).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 
-// One cron's journal: a summary, runs per day, and every run newest first, whole UTC days of about 60 runs at a time.
-// On wide screens the picked run's transcript stays beside the list; on narrow ones it opens under the run.
-// status, when set, replaces the journal: loading, a failed load, or a cron this space does not have.
+// One cron's runs, newest first, in whole UTC days of about 60 runs at a time. status, when set, replaces the
+// journal: loading, a failed load, or a cron this space does not have. The picked run's transcript shows beside
+// the list on wide screens and under the run on narrow ones.
 function CronTimeline({ stem, rows, status }: { stem: string; rows: CronJob[]; status: string }) {
   const [limit, setLimit] = useState(60);
   const [preview, setPreview] = useState("");
+  const wide = useMedia("(min-width: 64rem)");
   const job = rows.find((item) => item.stem === stem && item.status !== "ran");
   const all = rows.filter((item) => item.stem === stem && item.status === "ran");
   const callRuns = cronRuns(all.filter((item) => item.origin!.includes("/call_")));
@@ -4776,14 +4777,14 @@ function CronTimeline({ stem, rows, status }: { stem: string; rows: CronJob[]; s
               <CronUpcoming upcoming={job?.upcoming ?? []} now={now} />
               {days.map(([day, list]) => <section key={day} id={`cron-day-${day}`} aria-label={day}>
                 <h2 className={cronDayHead}><span className="text-foreground">{day === today ? "Today · " : ""}{cronDay(day)}</span><span>{plural(list.length, "run")}</span></h2>
-                <ol className="ml-1.5 border-l">{list.map((run) => <CronJournalRun key={run.item.origin} run={run} calls={calls.get(run.item.origin!) ?? []} preview={preview} setPreview={setPreview} />)}</ol>
+                <ol className="ml-1.5 border-l">{list.map((run) => <CronJournalRun key={run.item.origin} run={run} calls={calls.get(run.item.origin!) ?? []} preview={preview} setPreview={setPreview} inline={!wide} />)}</ol>
               </section>)}
               {all.length === 0 ? <p className="text-sm text-muted-foreground">No runs yet.</p> : null}
               {shown < runs.length ? <Button variant="outline" className="self-center" onClick={() => setLimit(limit + 100)}>Show older runs ({runs.length - shown} more)</Button> : null}
             </div>
-            <aside aria-label="Selected run" className="hidden lg:block">
+            {wide ? <aside aria-label="Selected run">
               <div className="sticky top-2"><CronPreviewPanel picked={[...runs, ...callRuns].find(({ item }) => item.origin === preview)?.item} close={() => setPreview("")} /></div>
-            </aside>
+            </aside> : null}
           </div>
         </>}
       </div>
@@ -4864,8 +4865,7 @@ function cronGap(ms: number) {
   return minutes < 60 ? `${minutes}m` : hours < 24 ? `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ""}` : `${Math.floor(hours / 24)}d${hours % 24 ? ` ${hours % 24}h` : ""}`;
 }
 
-// A run on the journal line; opening it lists its sub-calls and, on narrow screens, previews it or the sub-call picked.
-function CronJournalRun({ run: { item, gap, delivered }, calls, preview, setPreview }: { run: CronJournalRow; calls: CronJournalRow[]; preview: string; setPreview: (origin: string) => void }) {
+function CronJournalRun({ run: { item, gap, delivered }, calls, preview, setPreview, inline }: { run: CronJournalRow; calls: CronJournalRow[]; preview: string; setPreview: (origin: string) => void; inline: boolean }) {
   const picked = [item, ...calls.map((call) => call.item)].find((each) => each.origin === preview);
   return <li className="relative pl-4">
     <span className={cn(cronDot, "border-cyan-600 dark:border-cyan-400", delivered ? "bg-cyan-600 ring-4 ring-cyan-600/15 dark:bg-cyan-400 dark:ring-cyan-400/15" : "bg-background")} />
@@ -4880,7 +4880,7 @@ function CronJournalRun({ run: { item, gap, delivered }, calls, preview, setPrev
         ↳ Sub-call {call.item.origin!.split("/call_").at(-1)!.slice(0, 8)} · {call.delivered ? "Delivered" : "Silent"}
       </button>)}
     </div> : null}
-    {picked ? <div className="py-2 lg:hidden"><CronRunPreview preview={picked} onClose={() => setPreview("")} /></div> : null}
+    {picked && inline ? <div className="py-2"><CronRunPreview preview={picked} onClose={() => setPreview("")} /></div> : null}
   </li>;
 }
 
