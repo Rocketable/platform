@@ -38,7 +38,7 @@ const (
 // FrontendAssembler constructs Slack and MCP frontends for a running backend.
 type FrontendAssembler interface {
 	Assemble(*Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error)
-	ValidateAssets(*config.Config, string, []string) error
+	ValidateAssets(*config.Config, string) error
 }
 
 type lockedRun struct {
@@ -187,13 +187,11 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		return fmt.Errorf("sync rocketclaw skeleton: %w", err)
 	}
 
-	channels := cfg.Slack.MappedChannels()
-
 	if err := validateRuntimeAssets(s.cfg, cfg.RuntimeDirName()); err != nil {
 		return err
 	}
 
-	if err := s.assemble.ValidateAssets(cfg, cfg.RuntimeDirName(), channels); err != nil {
+	if err := s.assemble.ValidateAssets(cfg, cfg.RuntimeDirName()); err != nil {
 		return fmt.Errorf("validate frontend assets: %w", err)
 	}
 

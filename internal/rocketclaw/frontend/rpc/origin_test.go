@@ -70,7 +70,7 @@ WHERE conversation_id IN ($1, $2)`, cronSlack, plainSlack)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `UPDATE conversations SET cron_run = substr(conversation_id, 5) WHERE conversation_id IN ($1, $2)`, "web:"+scheduled, "web:"+oneOff)
 	require.NoError(t, err)
-	require.NoError(t, sessions.RegisterExternalMCPConversation("ext-1", "main", &backend.ExternalMCPSessionState{Thread: protocol.SlackReplyTarget{ChannelID: "C3", ThreadTS: "3.3"}, Agent: "producer", PrivateConversationID: "external_mcp:private", ManagedConversationID: destination, SlackChannel: "C3", OriginPairs: map[string]string{"Ticket": "T-1", "b": "two"}}))
+	require.NoError(t, sessions.RegisterExternalMCPConversation("ext-1", "main", &backend.ExternalMCPSessionState{Agent: "producer", PrivateConversationID: "external_mcp:private", ManagedConversationID: destination, OriginPairs: map[string]string{"Ticket": "T-1", "b": "two"}}))
 
 	// entry appends a turn; a source attributes it by entry ID, as copies made before 049 do, or by name.
 	entry := func(id, source string, byEntryID bool) {

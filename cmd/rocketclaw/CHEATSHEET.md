@@ -2,7 +2,7 @@
 
 ## Slack
 
-The Web interface is the primary way to work. Slack has three jobs: cron report threads, External MCP threads, and quick help when an allowlisted user @mentions RocketClaw. Slack has no `$` commands, help, agent selector, goals, queue, steering, or reaction controls; its only control is the native Stop on a running mention turn. In a mention, `$stop`, `$agent`, `$<skill>`, and any other `$` text reach the agent as ordinary text. Use Web to run commands and skills, switch agents, start goals, manage queued work, and stop any turn.
+The Web interface is the primary way to work. Slack has one job: quick help when an allowlisted user @mentions RocketClaw. Cron reports and External MCP sessions are Web chats. Slack has no `$` commands, help, agent selector, goals, queue, steering, or reaction controls; its only control is the native Stop on a running mention turn. In a mention, `$stop`, `$agent`, `$<skill>`, and any other `$` text reach the agent as ordinary text. Use Web to run commands and skills, switch agents, start goals, manage queued work, and stop any turn.
 
 ## Skill Calls (Web)
 
@@ -60,8 +60,8 @@ Add `users:read.email` too, then reinstall the app, so a Slack mention's turn ge
 | Continue a conversation | Mention the bot again in a thread it answers in. | Next turn of that thread's conversation; only the mention is added. Replies without a mention start nothing. |
 | Mention while the agent works | Mention the bot during a running turn. | Waits and runs as the next turn; it never steers. Mentions also wait behind an active goal. Each mention is accepted once, even if Slack delivers it again. |
 | Stop a running turn | Press Slack's Stop on a running mention turn, or use **Stop turn** or `$stop` in Web. | Slack's Stop needs agent sessions (see Slack Native Stop) and an allowlisted user. Report threads and Web-started turns have no Slack stop control. |
-| Cron report thread | Read the report in Slack; follow up from its conversation in Web. | Read-only: replies and mentions in the thread are ignored. |
-| External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. Managed history shows MCP history; MCP history does not show Slack history. The Slack thread is read-only. |
+| Old report thread | A Slack thread an earlier version posted a cron report or External MCP session into. | Read-only: replies and mentions are ignored. Its conversation is a Web chat now. |
+| External MCP conversation | Call `session_prompt` with an external conversation ID and an agent; a `slack_channel` field is ignored. | The ID owns one private MCP session and one Web chat, both run by the agent the first call named. The MCP agent stays fixed. The Web chat shows MCP history; MCP history does not show what people add in Web. Nothing is posted to Slack. |
 
 ## Goal Examples
 
@@ -237,11 +237,10 @@ RocketClaw reads no reactions. These are markers it posts:
 
 | Emoji | Reaction Name | Meaning |
 | --- | --- | --- |
-| `🤖` | `robot_face` | Added when RocketClaw accepts a mention or an External MCP relay; removed after final response delivery. |
+| `🤖` | `robot_face` | Added when RocketClaw accepts a mention; removed after final response delivery. |
 | `✅` | `white_check_mark` | Added when a goal in a Slack thread's conversation reaches `complete`. |
 | `🏁` |  | Goal header RocketClaw posts while a goal is running. |
-| `🔁` |  | Cron result header RocketClaw posts. |
-| `📡` | `satellite_antenna` | External MCP relay marker. `📡 web` also heads Web input mirrored into a Slack thread. |
+| `📡` | `satellite_antenna` | `📡 web` heads Web input mirrored into a Slack thread. |
 
 ## Agent Frontmatter And Permissions
 
@@ -301,7 +300,7 @@ Known frontmatter fields:
 | `verbosity` | Optional model verbosity. |
 | `maxRecursion` | Optional task delegation depth for inferences started with this agent. Omitted or `-1` is unlimited, `0` disables `task`, and positive integers allow that many levels. |
 | `customShell` | Optional program that runs this agent's shell commands instead of `/bin/bash`, called as `<customShell> <command>`. The value must be a string holding an absolute path; any other value stops this agent from loading. It names one program; the value cannot carry extra arguments. Omit it to keep default bash. See the wrapper contract below. |
-| `space` | Optional Web space name, as one string; any other value stops this agent from loading. A Web session started with this agent is born in that space, created when missing, and opens there. A new Web session offers every agent; a session whose agent has a `space` offers only agents with the same `space`, ignoring case, or every agent its Slack channel or cron allows when none of those has that `space`. |
+| `space` | Optional Web space name, as one string; any other value stops this agent from loading. A Web session started with this agent is born in that space, created when missing, and opens there. A new Web session offers every agent; a session whose agent has a `space` offers only agents with the same `space`, ignoring case, or every agent its Slack channel allows when none of those has that `space`. |
 | `guardrail` | Optional loaded agent name that gates task delegations to this agent before the child runs and after its response. The guardrail must approve or reject with strict JSON containing `approved` and `reason`; it does not transform the delegated prompt or child response. |
 | `additionalInstructions` | Optional RocketClaw normal-reply prompt-header override for this selected agent. Use it for response-format guidance, such as telling an agent to avoid Markdown for Slack, prefer Markdown for technical answers, keep answers terse, or follow another surface-specific style. When omitted, RocketClaw uses `Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.` It does not affect internal notes or raw cron runs. |
 | `schema.output` | Optional JSON Schema mapping. When set, that agent's own turns (including `task` children) use OpenAI structured output. Guardrail and permission-review child runs keep their fixed decision schemas. Workflow `agent(..., schema=...)` still overrides for that call. Object schemas are sent with `additionalProperties: false`; list every property in `required`. |

@@ -70,7 +70,7 @@ func SlackThreadConversationID(channelID, threadTS string) string {
 // PrimaryTextRouter routes primary text connector conversations.
 type PrimaryTextRouter interface {
 	// MentionThread reports whether a conversation records the thread and whether it is a
-	// read-only report thread: a cron report or an External MCP thread.
+	// read-only report thread: one an earlier version posted a cron report or External MCP session into.
 	MentionThread(target TextConversationTarget) (recorded, report bool, err error)
 	// SubmitMention records the thread's conversation with agent when absent and queues inbound
 	// as its next turn, at most once per mention; it reports false for a mention already accepted,

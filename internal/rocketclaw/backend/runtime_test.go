@@ -1278,7 +1278,6 @@ func TestAttachSlack(t *testing.T) {
 	slack := new(slackFrontendMock)
 	rt := &Runtime{threads: manager}
 	rt.AttachSlack(slack)
-	require.Same(t, slack, manager.cronRoots)
 	require.Same(t, slack, manager.slackLookups)
 }
 

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -59,23 +58,6 @@ func LoadOneOffCronjob(workspace, runtimeDir, target string) (protocol.OneOffCro
 	return job, err
 }
 
-// CronWebAgentChoices keeps configured channel order among loaded agents, with
-// the caller's sorted loaded-agent list as the fallback.
-func (c *Config) CronWebAgentChoices(loaded []string, job *protocol.OneOffCronjob) []string {
-	for _, channel := range c.Slack.Channels {
-		if channel.Channel != job.TextChannel {
-			continue
-		}
-
-		allowed := slices.DeleteFunc(slices.Clone(channel.Agents), func(name string) bool { return !slices.Contains(loaded, name) })
-		if len(allowed) > 0 {
-			return allowed
-		}
-	}
-
-	return loaded
-}
-
 // ParseCronDefinition validates a cron asset and returns its prompt and schedules.
 func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronjob, []CronSchedule, error) {
 	frontmatterBytes, body, err := splitCronFrontmatter(data)
@@ -90,12 +72,6 @@ func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronj
 
 	if raw.Schedule.values == nil {
 		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s frontmatter: schedule is required", relativePath)
-	}
-
-	// Leaving channel out posts nowhere; a channel line that names none, as `channel: #ops` does
-	// since YAML reads # as a comment, is a mistake.
-	if raw.Channel.set && raw.Channel.name == "" {
-		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s frontmatter: channel must name a Slack channel; leave it out to post nowhere", relativePath)
 	}
 
 	oneOff := false
@@ -115,13 +91,12 @@ func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronj
 		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s schedules: timestamp schedules cannot be combined with other schedules", relativePath)
 	}
 
-	return protocol.OneOffCronjob{RelativePath: relativePath, Agent: cmp.Or(string(raw.Agent), "main"), TextChannel: raw.Channel.name, Space: raw.Space, Prompt: body}, schedules, nil
+	return protocol.OneOffCronjob{RelativePath: relativePath, Agent: cmp.Or(string(raw.Agent), "main"), Space: raw.Space, Prompt: body}, schedules, nil
 }
 
 type cronFrontmatter struct {
 	Schedule cronFrontmatterSchedule `json:"schedule"`
 	Agent    cronFrontmatterAgent    `json:"agent"`
-	Channel  cronFrontmatterChannel  `json:"channel"`
 	Space    string                  `json:"space"`
 }
 
@@ -162,28 +137,6 @@ func (a *cronFrontmatterAgent) UnmarshalJSON(data []byte) error {
 	}
 
 	*a = cronFrontmatterAgent(strings.TrimSpace(text))
-
-	return nil
-}
-
-// cronFrontmatterChannel is the channel line's Slack channel, empty when the line names none.
-type cronFrontmatterChannel struct {
-	name string
-	set  bool
-}
-
-func (c *cronFrontmatterChannel) UnmarshalJSON(data []byte) error {
-	c.set = true
-
-	var text string
-	if err := json.Unmarshal(data, &text); err == nil {
-		text = strings.TrimSpace(text)
-		if text != "" && !strings.HasPrefix(text, "#") {
-			text = "#" + text
-		}
-
-		c.name = text
-	}
 
 	return nil
 }

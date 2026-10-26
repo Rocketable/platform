@@ -13,7 +13,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
@@ -22,11 +21,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend/externalmcp"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
-
-type mcpRelay interface {
-	SendExternalMCPRelay(context.Context, string, string, *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error)
-	CleanupExternalMCPRelay(context.Context, *protocol.SlackReplyTarget)
-}
 
 type mcpAgentIndex struct {
 	cfg *config.LockedConfig
@@ -55,7 +49,6 @@ func (i *mcpAgentIndex) Exposed(agent string) bool {
 func startExternalMCPServer(
 	ctx context.Context,
 	cfg *config.Config,
-	relay mcpRelay,
 	users map[string]string,
 	agents *mcpAgentIndex,
 	store *backend.SessionService,
@@ -64,30 +57,20 @@ func startExternalMCPServer(
 ) (*externalmcp.Server, error) {
 	locks := backend.NewKeyedConversationLocks()
 
-	server, err := externalmcp.StartSessionPromptServer(ctx, logger, cfg.MCPExternal.ListenAddr, users, func(callCtx context.Context, username, externalConversationID, requestedAgent, input string, metadata map[string]string, attachments []externalmcp.SessionAttachment, slackChannel string) (result externalmcp.SessionResult, err error) {
+	server, err := externalmcp.StartSessionPromptServer(ctx, logger, cfg.MCPExternal.ListenAddr, users, func(callCtx context.Context, username, externalConversationID, requestedAgent, input string, metadata map[string]string, attachments []externalmcp.SessionAttachment) (result externalmcp.SessionResult, err error) {
 		var (
-			reply                 *protocol.InboundMessage
-			createdConversationID string
+			managedConversationID string
 			durableRegistration   bool
 			promptAccepted        bool
 		)
 
 		defer func() {
-			if err == nil || createdConversationID == "" || promptAccepted {
-				return
-			}
-
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			relay.CleanupExternalMCPRelay(cleanupCtx, reply.SlackReply)
-
-			if !durableRegistration {
+			if err == nil || !durableRegistration || promptAccepted {
 				return
 			}
 
 			if err := store.RemoveExternalMCPConversation(externalConversationID); err != nil {
-				logger.Error("clean failed external MCP conversation", "external_conversation_id", externalConversationID, "conversation_id", createdConversationID, "error", err)
+				logger.Error("clean failed external MCP conversation", "external_conversation_id", externalConversationID, "conversation_id", managedConversationID, "error", err)
 			}
 		}()
 
@@ -99,14 +82,7 @@ func startExternalMCPServer(
 			return externalmcp.SessionResult{}, errors.New("external MCP agent is required")
 		}
 
-		channel, ok := cfg.Slack.Channel(slackChannel)
-		if !ok || slackChannel == "@" {
-			return externalmcp.SessionResult{}, fmt.Errorf("slack channel %q is not configured", slackChannel)
-		}
-
-		managedAgent := channel.Agents[0]
-
-		inboundContent, outboundAttachments, err := externalMCPInboundContent(attachments)
+		inboundContent, err := externalMCPInboundContent(attachments)
 		if err != nil {
 			return externalmcp.SessionResult{}, err
 		}
@@ -139,28 +115,11 @@ func startExternalMCPServer(
 				return externalmcp.SessionResult{}, fmt.Errorf("external_conversation_id %q has incomplete persisted state", externalConversationID)
 			}
 
-			channelID, threadTS := session.Thread.ChannelID, session.Thread.ThreadTS
-			if threadTS == "" {
-				return externalmcp.SessionResult{}, fmt.Errorf("external_conversation_id %q has invalid persisted managed conversation ID", externalConversationID)
-			}
-
-			persistedChannel := strings.TrimSpace(session.SlackChannel)
-			if slackChannel != persistedChannel {
-				return externalmcp.SessionResult{}, fmt.Errorf("external_conversation_id %q is bound to Slack channel %q", externalConversationID, session.SlackChannel)
-			}
-
 			if !agents.Exposed(usedAgent) {
 				return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", usedAgent)
 			}
 
-			conversationID := session.PrivateConversationID
-			target, err := relay.SendExternalMCPRelay(callCtx, channelID, threadTS, &protocol.ExternalMCPRelay{ConversationID: conversationID, ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments})
-			if err != nil {
-				return externalmcp.SessionResult{}, fmt.Errorf("send text connector external MCP thread relay: %w", err)
-			}
-			reply = &protocol.InboundMessage{SlackReply: target}
-
-			result, _, err := submitExternalMCPInput(callCtx, turns, usedAgent, conversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID)
+			result, _, err := submitExternalMCPInput(callCtx, turns, usedAgent, session.PrivateConversationID, session.ManagedConversationID, &inboundContent, metadata, strings.TrimSpace(username), externalConversationID)
 
 			return result, err
 		}
@@ -172,31 +131,17 @@ func startExternalMCPServer(
 		}
 
 		privateConversationID := "external_mcp:" + usedAgent + ":" + rand.Text()
+		managedConversationID = rand.Text()
 
-		target, err := relay.SendExternalMCPRelay(callCtx, slackChannel, "", &protocol.ExternalMCPRelay{ConversationID: privateConversationID, ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments})
-		if err != nil {
-			return externalmcp.SessionResult{}, err
-		}
-		reply = &protocol.InboundMessage{SlackReply: target}
-
-		if reply.SlackReply == nil {
-			return externalmcp.SessionResult{}, errors.New("slack external MCP relay returned no reply target")
-		}
-
-		reply.SlackReply.ThreadTS = reply.SlackReply.MessageTS
-
-		managedConversationID := protocol.SlackThreadConversationID(reply.SlackReply.ChannelID, reply.SlackReply.ThreadTS)
-
-		createdConversationID = managedConversationID
-		if err := store.RegisterExternalMCPConversation(externalConversationID, managedAgent, &backend.ExternalMCPSessionState{Agent: usedAgent, PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: slackChannel, OriginPairs: metadata, Thread: *reply.SlackReply}); err != nil {
+		if err := store.RegisterExternalMCPConversation(externalConversationID, usedAgent, &backend.ExternalMCPSessionState{Agent: usedAgent, PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, OriginPairs: metadata}); err != nil {
 			return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP conversation: %w", err)
 		}
 
 		durableRegistration = true
 
-		logger.Info("started external MCP session", "event", "external_mcp_session_started", "external_conversation_id", externalConversationID, "conversation_id", privateConversationID, "agent", usedAgent, "user", username, "slack_channel", slackChannel)
+		logger.Info("started external MCP session", "event", "external_mcp_session_started", "external_conversation_id", externalConversationID, "conversation_id", privateConversationID, "managed_conversation_id", managedConversationID, "agent", usedAgent, "user", username)
 
-		result, promptAccepted, err = submitExternalMCPInput(callCtx, turns, usedAgent, privateConversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID)
+		result, promptAccepted, err = submitExternalMCPInput(callCtx, turns, usedAgent, privateConversationID, managedConversationID, &inboundContent, metadata, strings.TrimSpace(username), externalConversationID)
 
 		return result, err
 	})
@@ -207,19 +152,17 @@ func startExternalMCPServer(
 	return server, nil
 }
 
-func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (protocol.InboundContent, []protocol.OutboundAttachment, error) {
+func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (protocol.InboundContent, error) {
 	var content protocol.InboundContent
 
-	outbound := slices.Grow([]protocol.OutboundAttachment(nil), len(attachments))
 	for i := range attachments {
 		data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(attachments[i].DataBase64))
 		if err != nil {
-			return protocol.InboundContent{}, nil, fmt.Errorf("decode external MCP attachment %d: %w", i+1, err)
+			return protocol.InboundContent{}, fmt.Errorf("decode external MCP attachment %d: %w", i+1, err)
 		}
 
 		name := strings.TrimSpace(attachments[i].Name)
 		mimeType := strings.TrimSpace(attachments[i].MIMEType)
-		outbound = append(outbound, protocol.OutboundAttachment{Name: name, MIMEType: mimeType, Data: append([]byte(nil), data...)})
 
 		if protocol.IsTextAttachment(name, mimeType) {
 			descriptor := cmp.Or(name, "attachment")
@@ -245,10 +188,10 @@ func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (pro
 		content.Attachments = append(content.Attachments, protocol.InboundAttachment{Name: name, MIMEType: mimeType, Data: data})
 	}
 
-	return content, outbound, nil
+	return content, nil
 }
 
-func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAgent, conversationID string, content *protocol.InboundContent, metadata map[string]string, principal string, reply *protocol.InboundMessage, externalConversationID string) (externalmcp.SessionResult, bool, error) {
+func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAgent, conversationID, managedConversationID string, content *protocol.InboundContent, metadata map[string]string, principal, externalConversationID string) (externalmcp.SessionResult, bool, error) {
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, content, true)
 
 	inbound.Metadata = maps.Clone(metadata)
@@ -272,11 +215,7 @@ func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAge
 		}
 	}
 
-	if reply != nil {
-		inbound.SlackReply = reply.SlackReply
-		inbound.SyncDestination = protocol.SlackThreadConversationID(reply.SlackReply.ChannelID, reply.SlackReply.ThreadTS)
-	}
-	inbound.ConversationID = conversationID
+	inbound.ConversationID, inbound.SyncDestination = conversationID, managedConversationID
 
 	resultCh := inbound.EnableResponseWait()
 

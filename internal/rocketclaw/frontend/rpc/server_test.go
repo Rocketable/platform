@@ -1020,7 +1020,6 @@ func TestSessionEntries(t *testing.T) {
 	cronRunner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		require.Equal(t, "planner", agent)
 		require.Contains(t, prompt, "Cron body")
-		require.Equal(t, "#ops", progress.TextChannel)
 		require.NotEmpty(t, progress.SyncDestination)
 		require.True(t, strings.HasPrefix(progress.ConversationID, "one-off-cron:cron/alpha.md:"))
 
@@ -1028,7 +1027,7 @@ func TestSessionEntries(t *testing.T) {
 
 		return protocol.CronRunResult{ConversationID: progress.SyncDestination}, nil
 	}}
-	cronjobs := cronfrontend.New(cfg.Workspace, cfg.RuntimeDirName(), []string{"#ops"}, sessions, cronRunner, slog.New(slog.DiscardHandler))
+	cronjobs := cronfrontend.New(cfg.Workspace, cfg.RuntimeDirName(), sessions, cronRunner, slog.New(slog.DiscardHandler))
 	require.NoError(t, cronjobs.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, cronjobs.Stop(context.Background())) })
 
@@ -1613,7 +1612,7 @@ func TestSessionEntries(t *testing.T) {
 	}
 
 	require.NoError(t, sessions.UpsertThread("private-X", backend.ThreadState{Agent: "producer"}))
-	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: id, Agent: "producer", SlackChannel: "#ops"}))
+	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: id, Agent: "producer"}))
 
 	_, err = seeded.db.ExecContext(ctx, `UPDATE conversations SET kind = 'external_mcp_run', listed = FALSE WHERE conversation_id = 'private-X'`)
 	require.NoError(t, err)
@@ -2288,7 +2287,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 
 	// alpha inherits planner's space; zeta names its own.
 	for name, space := range map[string]string{"zeta": "\nspace: Ops", "alpha": ""} {
-		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "cron", name+".md"), []byte("---\nschedule: 24h\nagent: planner\nchannel: '#ops'"+space+"\n---\nCron body\n"), 0o600))
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "cron", name+".md"), []byte("---\nschedule: 24h\nagent: planner"+space+"\n---\nCron body\n"), 0o600))
 	}
 
 	next := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
@@ -2299,7 +2298,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.Len(t, jobs.Jobs, 2)
 
 	for i, name := range []string{"alpha", "zeta"} {
-		require.True(t, proto.Equal(&CronJob{Stem: name, Schedule: "24h", Body: "Cron body\n", Agent: "planner", Channel: "#ops", Origin: "cron/" + name + ".md", NextRun: next.Format(time.RFC3339Nano), Upcoming: []string{next.Format(time.RFC3339Nano)}, Space: jobs.Jobs[i].GetSpace()}, jobs.Jobs[i]), "unexpected job: %v", jobs.Jobs[i])
+		require.True(t, proto.Equal(&CronJob{Stem: name, Schedule: "24h", Body: "Cron body\n", Agent: "planner", Origin: "cron/" + name + ".md", NextRun: next.Format(time.RFC3339Nano), Upcoming: []string{next.Format(time.RFC3339Nano)}, Space: jobs.Jobs[i].GetSpace()}, jobs.Jobs[i]), "unexpected job: %v", jobs.Jobs[i])
 	}
 
 	require.Equal(t, []string{"Billing", "Ops"}, []string{jobs.Jobs[0].GetSpace(), jobs.Jobs[1].GetSpace()}, "alpha inherits planner's space; zeta names its own")
@@ -2565,17 +2564,8 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		path := filepath.Join(cfg.RuntimeDirName(), "cron", "silent.md")
 
 		// The cron names Ops, so chats continuing its runs are born there, not in planner's Billing.
-		require.NoError(t, root.WriteFile(path, []byte("---\nschedule: 24h\nagent: planner\nspace: Ops\nchannel: '#ops'\n---\nSilent\n"), 0o600))
+		require.NoError(t, root.WriteFile(path, []byte("---\nschedule: 24h\nagent: planner\nspace: Ops\n---\nSilent\n"), 0o600))
 		defer func() { require.NoError(t, root.Remove(path)) }()
-
-		originalAgents := cfg.Slack.Channels[0].Agents
-		defer func() {
-			cfg.Slack.Channels[0].Agents = originalAgents
-			server.cfg.Store(cfg)
-		}()
-
-		cfg.Slack.Channels[0].Agents = []string{"missing", "selected", "main"}
-		server.cfg.Store(cfg)
 
 		request := &CreateSessionRequest{SourceConversationId: undelivered}
 
@@ -2608,7 +2598,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		thread, found, err := sessions.Thread(webID)
 		require.NoError(t, err)
 		require.True(t, found)
-		require.Equal(t, backend.ThreadState{Agent: "selected", CreatedBy: "alice"}, thread)
+		require.Equal(t, backend.ThreadState{Agent: "main", CreatedBy: "alice"}, thread, "a continued run starts with the first loaded agent")
 
 		conversations, err := rt.ListConversations(ctx)
 		require.NoError(t, err)
@@ -2671,24 +2661,17 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		}()
 
 		for _, test := range []struct {
-			name, channel string
-			agents, want  []string
+			name       string
+			definition bool
+			want       []string
 		}{
-			{"current config", "#ops", []string{"selected", "main"}, []string{"selected", "main"}},
-			{"config changed", "#ops", []string{"planner"}, []string{"planner"}},
-			{"no loaded channel agents", "#ops", []string{"missing"}, []string{"main", "planner", "selected"}},
-			{"unmapped channel", "#unknown", []string{"planner"}, []string{"main", "planner", "selected"}},
-			{"missing definition", "", []string{"planner"}, []string{"main", "planner", "selected"}},
+			{"definition", true, []string{"main", "planner", "selected"}},
+			{"missing definition", false, []string{"main", "planner", "selected"}},
 		} {
 			t.Run(test.name, func(t *testing.T) {
-				cfg.Slack.Channels[0].Agents = test.agents
-				server.cfg.Store(cfg)
-
-				if test.channel == "" {
+				if !test.definition {
 					require.NoError(t, root.Remove(path))
 					defer func() { require.NoError(t, root.WriteFile(path, []byte("removed definition"), 0o600)) }()
-				} else {
-					require.NoError(t, root.WriteFile(path, []byte("---\nschedule: 24h\nagent: planner\nchannel: '"+test.channel+"'\n---\nSilent\n"), 0o600))
 				}
 
 				catalog, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: webID})
@@ -3920,7 +3903,7 @@ func TestBackgroundJobRPCs(t *testing.T) {
 
 	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(t.Context(), protocol.Conversation{ID: cronRun, Agent: "main", Run: &protocol.CronRun{Path: "cron/daily.md", At: time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC)}}))
 
-	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main", SlackChannel: "#ops"}))
+	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main"}))
 
 	// The script's output quotes a note, which must not become a row of its own.
 	note := `<execute id="turn-1/call/a" state="completed" description="tests">` + "\n" + `<execute id="turn-1/call/fake" state="failed" description="fake">` + "\n</execute>"
@@ -4075,7 +4058,7 @@ func TestQuestionRPCs(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
-	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main", SlackChannel: "#ops"}))
+	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main"}))
 
 	pending := []protocol.AskUserQuestionRequest{{ID: "turn-1/call/q", ConversationID: "chat", Question: "Which?", Details: "Pick any", Options: []protocol.AskUserQuestionOption{{Label: "A", Value: "a", Description: "first"}, {Label: "B", Value: "b"}}, Multiple: true}}
 	core := withoutBackgroundJobs()

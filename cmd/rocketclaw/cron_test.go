@@ -6,18 +6,11 @@ import (
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/require"
 )
 
-func TestCronRunnerRejectsChannelWithoutAgents(t *testing.T) {
-	runner := &cronRunner{config: &config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops"}}}}}
-	_, err := runner.Run(t.Context(), "job", "prompt", &backend.RawRunProgress{TextChannel: "#ops"})
-	require.ErrorContains(t, err, "has no configured agents")
-}
-
-// A run with a destination records it and runs; the destination shows the run without a copy.
+// A run with a destination records it for the cron's agent and runs; the destination shows the run without a copy.
 func TestCronProducerRunsWithDestination(t *testing.T) {
 	progressCronjob := &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "job-agent", RanAt: "2000-01-02T03:04:05Z"}
 	for _, outcome := range []string{"normal", "run-error", "interrupted"} {
@@ -33,7 +26,7 @@ func TestCronProducerRunsWithDestination(t *testing.T) {
 				},
 				RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
 					operations = append(operations, "run:"+inbound.ConversationID)
-					require.Equal(t, "slack-thread:C1:1.2", inbound.SyncDestination)
+					require.Equal(t, "web-chat", inbound.SyncDestination)
 					require.Equal(t, "job prompt", inbound.Text)
 					require.True(t, inbound.RequireOutputDecision)
 					require.Equal(t, progressCronjob, inbound.Cronjob)
@@ -48,11 +41,11 @@ func TestCronProducerRunsWithDestination(t *testing.T) {
 					return nil
 				},
 			}
-			runner := &cronRunner{backend: core, config: &config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"channel-agent"}}}}}}
-			progress := &backend.RawRunProgress{ConversationID: "X", TextChannel: "#ops", Cronjob: progressCronjob}
-			progress.SyncDestination = "slack-thread:C1:1.2"
+			runner := &cronRunner{backend: core}
+			progress := &backend.RawRunProgress{ConversationID: "X", Cronjob: progressCronjob}
+			progress.SyncDestination = "web-chat"
 			result, err := runner.Run(ctx, "job-agent", "job prompt", progress)
-			require.Equal(t, "slack-thread:C1:1.2", result.ConversationID)
+			require.Equal(t, "web-chat", result.ConversationID)
 			switch outcome {
 			case "run-error":
 				require.ErrorIs(t, err, errRun)
@@ -61,45 +54,14 @@ func TestCronProducerRunsWithDestination(t *testing.T) {
 			default:
 				require.NoError(t, err)
 			}
-			want := []string{"create:slack-thread:C1:1.2:channel-agent", "create:X:job-agent", "run:X"}
+			want := []string{"create:web-chat:job-agent", "create:X:job-agent", "run:X"}
 			require.Equal(t, want, operations)
 		})
 	}
 }
 
-// A run with no channel needs no Slack configuration, has no Slack target, and records its
-// destination, when it has one, under the cron's own agent.
-func TestCronRunWithoutChannelPostsNowhere(t *testing.T) {
-	for _, destination := range []string{"", "web-chat"} {
-		var created []string
-
-		core := &BackendMock{
-			CreateConversationFunc: func(_ context.Context, conversation protocol.Conversation) error {
-				created = append(created, conversation.ID+":"+conversation.Agent)
-				return nil
-			},
-			RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
-				require.Nil(t, inbound.SlackReply)
-				require.Equal(t, destination, inbound.SyncDestination)
-				return nil
-			},
-		}
-		runner := &cronRunner{backend: core, config: &config.Config{}}
-		result, err := runner.Run(t.Context(), "job", "prompt", &backend.RawRunProgress{ConversationID: "X", SyncDestination: destination})
-		require.NoError(t, err)
-		require.Equal(t, destination, result.ConversationID)
-
-		want := []string{"X:job"}
-		if destination != "" {
-			want = []string{destination + ":job", "X:job"}
-		}
-
-		require.Equal(t, want, created)
-	}
-}
-
 // A scheduled run without a destination only stores and waits; the backend's
-// delivery posts any visible report.
+// delivery reports any reply in a Web chat.
 func TestScheduledCronOnlyRunsTurn(t *testing.T) {
 	var operations []string
 	errRun := errors.New("run failed")
@@ -111,14 +73,23 @@ func TestScheduledCronOnlyRunsTurn(t *testing.T) {
 		RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
 			require.Empty(t, inbound.SyncDestination)
 			require.True(t, inbound.RequireOutputDecision)
-			require.Equal(t, &protocol.SlackReplyTarget{ChannelID: "#ops"}, inbound.SlackReply, "the report channel travels with the stored request")
+			require.Nil(t, inbound.SlackReply, "a cron report never goes to Slack")
 			operations = append(operations, "run")
 			return errRun
 		},
 	}
-	runner := &cronRunner{backend: core, config: &config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}}}}}}
-	result, err := runner.Run(t.Context(), "job", "prompt", &backend.RawRunProgress{ConversationID: "X", TextChannel: "#ops"})
+	runner := &cronRunner{backend: core}
+	result, err := runner.Run(t.Context(), "job", "prompt", &backend.RawRunProgress{ConversationID: "X"})
 	require.ErrorIs(t, err, errRun)
 	require.Empty(t, result.ConversationID)
 	require.Equal(t, []string{"create:X", "run"}, operations)
+}
+
+// A destination that cannot be created stops the run before it starts.
+func TestCronRunStopsWhenDestinationFails(t *testing.T) {
+	errCreate := errors.New("create failed")
+	core := &BackendMock{CreateConversationFunc: func(context.Context, protocol.Conversation) error { return errCreate }}
+	_, err := (&cronRunner{backend: core}).Run(t.Context(), "job", "prompt", &backend.RawRunProgress{ConversationID: "X", SyncDestination: "web-chat"})
+	require.ErrorIs(t, err, errCreate)
+	require.Empty(t, core.RunTurnCalls(), "no turn runs")
 }

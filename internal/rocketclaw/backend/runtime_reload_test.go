@@ -39,7 +39,7 @@ func TestRuntimeReload(t *testing.T) {
 			// Reload must not read configuration changes from disk.
 			require.NoError(t, root.WriteFile("rocketclaw.json", []byte("invalid config"), 0o600))
 
-			assembler := &frontendAssemblerMock{ValidateAssetsFunc: func(*config.Config, string, []string) error {
+			assembler := &frontendAssemblerMock{ValidateAssetsFunc: func(*config.Config, string) error {
 				if scenario == "invalid-frontend" {
 					return errors.New("invalid staged frontend")
 				}

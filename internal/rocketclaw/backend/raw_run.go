@@ -25,13 +25,12 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// RawRunProgress carries the conversation and Slack destination for one cron run.
+// RawRunProgress carries the conversation and destination for one cron run.
 type RawRunProgress struct {
 	ConversationID  string
 	Run             *protocol.CronRun
 	SyncDestination string
 	Cronjob         *protocol.CronjobMessage
-	TextChannel     string
 }
 
 type workflowAgentRunner struct {

@@ -69,26 +69,7 @@ type threadBridgeManager struct {
 	bridges      map[string]directBridge
 	pending      map[string]directBridge
 	stopping     bool
-	cronRoots    cronRootSender
 	slackLookups slackLookup
-}
-
-// cronRootSender posts a delivered cron report as a new Slack thread root, then ends
-// that root with a footer linking the conversation the report is bound to.
-type cronRootSender interface {
-	SendCronjobRoot(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
-	EditCronjobRootFooter(ctx context.Context, msg *protocol.OutboundMessage, root protocol.TextConversationTarget, conversationID string) error
-}
-
-// noCronRoots is the cron root sender before Slack is attached.
-type noCronRoots struct{}
-
-func (noCronRoots) SendCronjobRoot(context.Context, *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-	return protocol.TextConversationTarget{}, errors.New("slack is not available for cron reports")
-}
-
-func (noCronRoots) EditCronjobRootFooter(context.Context, *protocol.OutboundMessage, protocol.TextConversationTarget, string) error {
-	return errors.New("slack is not available for cron reports")
 }
 
 // slackLookup gives session search the stored Slack room names and the Slack
@@ -115,7 +96,7 @@ func newThreadBridgeManager(runtime *config.LockedConfig, store *SessionService,
 	return &threadBridgeManager{
 		log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, factory: factory,
 		wake:    make(chan struct{}, 1),
-		bridges: map[string]directBridge{}, pending: map[string]directBridge{}, cronRoots: noCronRoots{},
+		bridges: map[string]directBridge{}, pending: map[string]directBridge{},
 		slackLookups: noSlackLookups{},
 	}
 }
@@ -317,8 +298,9 @@ func (r *Runtime) SwitchConversationAgent(conversationID, agent string) (bool, e
 	return switched, nil
 }
 
-// MentionThread treats a slack-thread: conversation cron created, or one an External MCP
-// session binds, as a report thread; the prefix keeps cron's own web: chats out.
+// MentionThread treats a slack-thread: conversation that earlier versions created for a cron
+// report or bound to an External MCP session as a report thread; the prefix keeps cron's own
+// web: chats out.
 func (m *threadBridgeManager) MentionThread(target protocol.TextConversationTarget) (recorded, report bool, err error) {
 	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
 

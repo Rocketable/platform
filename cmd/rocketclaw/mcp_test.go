@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,59 +23,32 @@ import (
 )
 
 func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T) {
-	for _, private := range []bool{false, true} {
-		t.Run(strconv.FormatBool(private), func(t *testing.T) {
-			var captured *protocol.InboundMessage
+	var captured *protocol.InboundMessage
 
-			conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-			destination := ""
+	turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
+		captured = inbound
+		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 
-			var reply *protocol.InboundMessage
+		return nil
+	})
+	content := &protocol.InboundContent{Text: "prompt"}
+	metadata := map[string]string{"ticket": "123", protocol.InboundPrincipalNameMetadataKey: "Mallory", protocol.InboundPrincipalEmailMetadataKey: "mallory@example.com"}
+	result, accepted, err := submitExternalMCPInput(context.Background(), turns, "planner", "external_mcp:planner:private", "managed-chat", content, metadata, "alice", "public-1")
 
-			if private {
-				destination = conversationID
-				conversationID = "external_mcp:planner:private"
-				reply = &protocol.InboundMessage{SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.222"}}
-			}
-
-			turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
-				captured = inbound
-				inbound.CompleteResponseWithAttachments("answer", nil, nil)
-
-				return nil
-			})
-			turns.CreateConversationFunc = func(_ context.Context, conversation protocol.Conversation) error {
-				assert.Equal(t, "planner", conversation.Agent)
-				assert.Equal(t, conversationID, conversation.ID)
-
-				return nil
-			}
-			content := &protocol.InboundContent{Text: "prompt"}
-			metadata := map[string]string{"ticket": "123", protocol.InboundPrincipalNameMetadataKey: "Mallory", protocol.InboundPrincipalEmailMetadataKey: "mallory@example.com"}
-			result, accepted, err := submitExternalMCPInput(context.Background(), turns, "planner", conversationID, content, metadata, "alice", reply, "public-1")
-
-			require.NoError(t, err)
-			assert.True(t, accepted)
-			require.NotNil(t, captured)
-			assert.Equal(t, protocol.SourceExternalMCP, captured.Source)
-			assert.Equal(t, "public-1", captured.Metadata["external_conversation_id"])
-			assert.Equal(t, "123", captured.Metadata["ticket"])
-			assert.Equal(t, "alice", captured.Metadata[protocol.InboundPrincipalMetadataKey])
-			assert.NotContains(t, captured.Metadata, protocol.InboundPrincipalNameMetadataKey, "an External MCP caller cannot name a person")
-			assert.NotContains(t, captured.Metadata, protocol.InboundPrincipalEmailMetadataKey)
-			assert.Equal(t, conversationID, captured.ConversationID)
-			assert.Equal(t, destination, captured.SyncDestination)
-			assert.False(t, captured.RequireOutputDecision, "MCP output does not use the cron decision contract")
-
-			if private {
-				assert.Equal(t, reply.SlackReply, captured.SlackReply)
-			} else {
-				assert.Nil(t, captured.SlackReply)
-			}
-
-			assert.Equal(t, externalmcp.SessionResult{ExternalConversationID: "public-1", Agent: "planner", Answer: "answer", Attachments: []externalmcp.SessionAttachment{}}, result)
-		})
-	}
+	require.NoError(t, err)
+	assert.True(t, accepted)
+	require.NotNil(t, captured)
+	assert.Equal(t, protocol.SourceExternalMCP, captured.Source)
+	assert.Equal(t, "public-1", captured.Metadata["external_conversation_id"])
+	assert.Equal(t, "123", captured.Metadata["ticket"])
+	assert.Equal(t, "alice", captured.Metadata[protocol.InboundPrincipalMetadataKey])
+	assert.NotContains(t, captured.Metadata, protocol.InboundPrincipalNameMetadataKey, "an External MCP caller cannot name a person")
+	assert.NotContains(t, captured.Metadata, protocol.InboundPrincipalEmailMetadataKey)
+	assert.Equal(t, "external_mcp:planner:private", captured.ConversationID)
+	assert.Equal(t, "managed-chat", captured.SyncDestination, "the private run reports to its Web chat")
+	assert.Nil(t, captured.SlackReply, "External MCP never replies in Slack")
+	assert.False(t, captured.RequireOutputDecision, "MCP output does not use the cron decision contract")
+	assert.Equal(t, externalmcp.SessionResult{ExternalConversationID: "public-1", Agent: "planner", Answer: "answer", Attachments: []externalmcp.SessionAttachment{}}, result)
 }
 
 func TestSubmitExternalMCPInputWaitsForOwnQueuedTurnResult(t *testing.T) {
@@ -106,14 +78,13 @@ func TestSubmitExternalMCPInputWaitsForOwnQueuedTurnResult(t *testing.T) {
 
 	resultCh := make(chan externalmcp.SessionResult, 1)
 	errCh := make(chan error, 1)
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
 		queue <- inbound
 		return nil
 	})
 
 	go func() {
-		result, _, err := submitExternalMCPInput(context.Background(), turns, "planner", conversationID, &protocol.InboundContent{Text: "follow-up"}, nil, "", nil, "public-1")
+		result, _, err := submitExternalMCPInput(context.Background(), turns, "planner", "external_mcp:planner:x", "managed-chat", &protocol.InboundContent{Text: "follow-up"}, nil, "", "public-1")
 		if err != nil {
 			errCh <- err
 
@@ -148,8 +119,8 @@ func TestSubmitExternalMCPInputWaitsForOwnQueuedTurnResult(t *testing.T) {
 	close(queue)
 }
 
-func TestExternalMCPInboundContentProvidesRelayAttachments(t *testing.T) {
-	content, outbound, err := externalMCPInboundContent([]externalmcp.SessionAttachment{{
+func TestExternalMCPInboundContentAddsTextAttachments(t *testing.T) {
+	content, err := externalMCPInboundContent([]externalmcp.SessionAttachment{{
 		Name:       "report.txt",
 		MIMEType:   "text/plain",
 		DataBase64: "cmVwb3J0",
@@ -157,63 +128,48 @@ func TestExternalMCPInboundContentProvidesRelayAttachments(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"External MCP text file attachment report.txt (text/plain):\nreport"}, content.TextAttachments)
-	assert.Equal(t, []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}, outbound)
 }
 
 func TestExternalMCPInboundContentCoversAttachmentWarnings(t *testing.T) {
-	_, _, err := externalMCPInboundContent([]externalmcp.SessionAttachment{{DataBase64: "not-base64"}})
+	_, err := externalMCPInboundContent([]externalmcp.SessionAttachment{{DataBase64: "not-base64"}})
 	require.ErrorContains(t, err, "decode external MCP attachment")
 
-	empty, outbound, err := externalMCPInboundContent(nil)
+	empty, err := externalMCPInboundContent(nil)
 	require.NoError(t, err)
 	require.Empty(t, empty.Attachments)
-	require.Nil(t, outbound)
 
 	huge := strings.Repeat("a", protocol.MaxInboundTextAttachmentBytes+1)
-	content, _, err := externalMCPInboundContent([]externalmcp.SessionAttachment{{Name: "", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte(huge))}})
+	content, err := externalMCPInboundContent([]externalmcp.SessionAttachment{{Name: "", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte(huge))}})
 	require.NoError(t, err)
 	require.NotEmpty(t, content.AttachmentWarnings)
 
-	content, _, err = externalMCPInboundContent([]externalmcp.SessionAttachment{{Name: "bin.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte{0})}})
+	content, err = externalMCPInboundContent([]externalmcp.SessionAttachment{{Name: "bin.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte{0})}})
 	require.NoError(t, err)
 	require.NotEmpty(t, content.AttachmentWarnings)
 
-	content, _, err = externalMCPInboundContent([]externalmcp.SessionAttachment{{Name: "blank.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("  "))}})
+	content, err = externalMCPInboundContent([]externalmcp.SessionAttachment{{Name: "blank.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("  "))}})
 	require.NoError(t, err)
 	require.NotEmpty(t, content.AttachmentWarnings)
 
-	content, _, err = externalMCPInboundContent([]externalmcp.SessionAttachment{{Name: "pic.png", MIMEType: "image/png", DataBase64: base64.StdEncoding.EncodeToString([]byte("png"))}})
+	content, err = externalMCPInboundContent([]externalmcp.SessionAttachment{{Name: "pic.png", MIMEType: "image/png", DataBase64: base64.StdEncoding.EncodeToString([]byte("png"))}})
 	require.NoError(t, err)
 	require.Len(t, content.Attachments, 1)
 }
 
-func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-	store, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, testLogger())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Stop()) })
+func TestExternalMCPDuplicateSuppliedIDCreatesOneWebChat(t *testing.T) {
+	store := newMCPTestStore(t)
 
 	var (
-		mu        sync.Mutex
-		rootCount int
+		mu    sync.Mutex
+		turns []*protocol.InboundMessage
 	)
 
-	relay := &mcpRelayMock{
-		SendExternalMCPRelayFunc: func(_ context.Context, _, threadTS string, _ *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error) {
-			mu.Lock()
-			defer mu.Unlock()
+	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}}
+	server, err := startExternalMCPServer(t.Context(), cfg, nil, &mcpAgentIndex{names: []string{"planner"}}, store, mcpTurns(func(inbound *protocol.InboundMessage) error {
+		mu.Lock()
+		turns = append(turns, inbound)
+		mu.Unlock()
 
-			if threadTS == "" {
-				rootCount++
-				return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}, nil
-			}
-
-			return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: threadTS, ThreadTS: threadTS}, nil
-		},
-	}
-	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
-	server, err := startExternalMCPServer(t.Context(), cfg, relay, nil, &mcpAgentIndex{names: []string{"planner"}}, store, mcpTurns(func(inbound *protocol.InboundMessage) error {
 		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 		return nil
 	}), testLogger())
@@ -236,7 +192,7 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 				return
 			}
 
-			_, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "shared-1", "agent": "planner", "input": "hello", "slack_channel": "#ops"}})
+			_, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "shared-1", "agent": "planner", "input": "hello"}})
 
 			errClose := session.Close()
 			if errors.Is(errClose, context.Canceled) {
@@ -254,47 +210,41 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	mu.Lock()
-	assert.Equal(t, 1, rootCount)
-	mu.Unlock()
-
 	session, ok, err := store.ExternalMCPSession("shared-1")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, protocol.SlackThreadConversationID("C123", "111.222"), session.ManagedConversationID)
 	assert.Equal(t, "planner", session.Agent)
 	assert.Contains(t, session.PrivateConversationID, "external_mcp:planner:")
+
+	require.Len(t, turns, calls)
+	for _, turn := range turns {
+		assert.Equal(t, session.PrivateConversationID, turn.ConversationID)
+		assert.Equal(t, session.ManagedConversationID, turn.SyncDestination)
+	}
+
+	kind, ok, err := store.ConversationKind(t.Context(), session.ManagedConversationID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, backend.KindWebChat, kind)
+
 	thread, ok, err := store.Thread(session.ManagedConversationID)
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "managed", thread.Agent)
+	assert.Equal(t, "planner", thread.Agent, "the Web chat runs the caller's agent")
 }
 
-func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testing.T) {
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-	store, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, testLogger())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Stop()) })
+func TestExternalMCPRepeatedIDKeepsLockedAgent(t *testing.T) {
+	store := newMCPTestStore(t)
 
-	var agents []string
+	var conversations []string
 
-	relay := &mcpRelayMock{
-		SendExternalMCPRelayFunc: func(_ context.Context, _, threadTS string, relay *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error) {
-			agents = append(agents, relay.Agent)
-			if threadTS == "" {
-				return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}, nil
-			}
-
-			return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: threadTS, ThreadTS: threadTS}, nil
-		},
-	}
 	turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
+		conversations = append(conversations, inbound.ConversationID)
 		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 		return nil
 	})
-	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}, {Channel: "#triage", Agents: []string{"triage"}}}}}
-	server, err := startExternalMCPServer(t.Context(), cfg, relay, nil, &mcpAgentIndex{names: []string{"planner"}}, store, turns, testLogger())
+	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}}
+	server, err := startExternalMCPServer(t.Context(), cfg, nil, &mcpAgentIndex{names: []string{"planner"}}, store, turns, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -303,27 +253,68 @@ func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testi
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = session.Close() })
 
-	first, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "planner", "input": "hello", "slack_channel": "#ops", "metadata": map[string]string{"topic": "original"}}})
+	first, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "planner", "input": "hello", "metadata": map[string]string{"topic": "original"}}})
 	require.NoError(t, err)
 	require.False(t, first.IsError)
 
-	repeat, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "other", "input": "again", "slack_channel": "#ops", "metadata": map[string]string{"topic": "later"}}})
+	repeat, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "other", "input": "again", "metadata": map[string]string{"topic": "later"}}})
 	require.NoError(t, err)
 	require.False(t, repeat.IsError)
-	require.Equal(t, []string{"planner", "planner"}, agents)
 
 	stored, ok, err := store.ExternalMCPSession("ticket-1")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "planner", stored.Agent)
-	assert.Equal(t, "#ops", stored.SlackChannel)
 	assert.Equal(t, map[string]string{"topic": "original"}, stored.OriginPairs)
+	assert.Equal(t, []string{stored.PrivateConversationID, stored.PrivateConversationID}, conversations)
+}
 
-	mismatch, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "planner", "input": "wrong channel", "slack_channel": "#triage"}})
+// A call naming an agent MCP does not expose is refused and records nothing; a session whose
+// agent stops being exposed is refused too.
+func TestExternalMCPRefusesUnexposedAgents(t *testing.T) {
+	store := newMCPTestStore(t)
+	agents := &mcpAgentIndex{names: []string{"planner"}}
+
+	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}}
+	server, err := startExternalMCPServer(t.Context(), cfg, nil, agents, store, mcpTurns(func(inbound *protocol.InboundMessage) error {
+		inbound.CompleteResponseWithAttachments("answer", nil, nil)
+		return nil
+	}), testLogger())
 	require.NoError(t, err)
-	require.True(t, mismatch.IsError)
-	require.Contains(t, mismatch.Content[0].(*mcp.TextContent).Text, `bound to Slack channel "#ops"`)
-	require.Equal(t, []string{"planner", "planner"}, agents)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = session.Close() })
+
+	call := func(id, agent string) *mcp.CallToolResult {
+		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": id, "agent": agent, "input": "hello"}})
+		require.NoError(t, err)
+
+		return result
+	}
+
+	refused := call("ticket-1", "ghost")
+	require.True(t, refused.IsError)
+	assert.Contains(t, refused.Content[0].(*mcp.TextContent).Text, `external MCP agent "ghost" is not exposed`)
+
+	refused, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "planner", "input": "hello", "attachments": []map[string]any{{"data_base64": "not-base64"}}}})
+	require.NoError(t, err)
+	require.True(t, refused.IsError, "an undecodable attachment is refused")
+	_, ok, err := store.ExternalMCPSession("ticket-1")
+	require.NoError(t, err)
+	assert.False(t, ok, "a refused first call records nothing")
+
+	require.False(t, call("ticket-2", "planner").IsError)
+
+	agents.mu.Lock()
+	agents.names = nil
+	agents.mu.Unlock()
+
+	refused = call("ticket-2", "planner")
+	require.True(t, refused.IsError)
+	assert.Contains(t, refused.Content[0].(*mcp.TextContent).Text, `external MCP agent "planner" is not exposed`)
 }
 
 func TestSubmitExternalMCPInputReturnsAfterSubmitAgent(t *testing.T) {
@@ -341,7 +332,7 @@ func TestSubmitExternalMCPInputReturnsAfterSubmitAgent(t *testing.T) {
 	errCh := make(chan error, 1)
 
 	go func() {
-		result, _, err := submitExternalMCPInput(context.Background(), turns, "planner", "external_mcp:planner:x", &protocol.InboundContent{Text: "hello"}, nil, "", nil, "public-1")
+		result, _, err := submitExternalMCPInput(context.Background(), turns, "planner", "external_mcp:planner:x", "managed-chat", &protocol.InboundContent{Text: "hello"}, nil, "", "public-1")
 		if err != nil {
 			errCh <- err
 
@@ -375,53 +366,27 @@ func TestSubmitExternalMCPInputReturnsAfterSubmitAgent(t *testing.T) {
 
 func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 	for _, tt := range []struct {
-		name                string
-		prepare             func(*backend.SessionService) error
-		relayErr, submitErr error
-		resultErr           error
-		cancelAfterSubmit   bool
-		wantCleanup         bool
-		wantBinding         bool
+		name                 string
+		submitErr, resultErr error
+		cancelAfterSubmit    bool
+		wantBinding          bool
 	}{
-		{name: "root creation", relayErr: errors.New("post failed")},
-		{name: "atomic persistence", prepare: func(store *backend.SessionService) error {
-			return store.UpsertThread(protocol.SlackThreadConversationID("C123", "111.222"), backend.ThreadState{Agent: "existing"})
-		}, wantCleanup: true},
-		{name: "first submit", submitErr: errors.New("submit failed"), wantCleanup: true},
+		{name: "first submit", submitErr: errors.New("submit failed")},
 		{name: "provider error after acceptance", resultErr: errors.New("provider failed"), wantBinding: true},
 		{name: "caller cancellation after acceptance", cancelAfterSubmit: true, wantBinding: true},
 		{name: "shutdown after acceptance", submitErr: fmt.Errorf("run turn: %w", protocol.ErrBridgeStopped), wantBinding: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-			require.NoError(t, err)
-			store, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, testLogger())
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, store.Stop()) })
-
-			if tt.prepare != nil {
-				require.NoError(t, tt.prepare(store))
-			}
-
-			cleanupCalls := 0
-			relayCalls := 0
-			relay := &mcpRelayMock{
-				SendExternalMCPRelayFunc: func(context.Context, string, string, *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error) {
-					relayCalls++
-
-					if tt.relayErr != nil {
-						return nil, tt.relayErr
-					}
-
-					return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}, nil
-				},
-				CleanupExternalMCPRelayFunc: func(context.Context, *protocol.SlackReplyTarget) { cleanupCalls++ },
-			}
+			store := newMCPTestStore(t)
 
 			callCtx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
+			var managed string
+
 			turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
+				managed = inbound.SyncDestination
+
 				if tt.submitErr != nil {
 					return tt.submitErr
 				}
@@ -437,8 +402,8 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 
 				return nil
 			})
-			cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
-			server, err := startExternalMCPServer(t.Context(), cfg, relay, nil, &mcpAgentIndex{names: []string{"planner"}}, store, turns, testLogger())
+			cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}}
+			server, err := startExternalMCPServer(t.Context(), cfg, nil, &mcpAgentIndex{names: []string{"planner"}}, store, turns, testLogger())
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -447,15 +412,29 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = session.Close() })
 
-			_, _ = session.CallTool(callCtx, &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "failed-1", "agent": "planner", "input": "hello", "slack_channel": "#ops"}})
+			_, _ = session.CallTool(callCtx, &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "failed-1", "agent": "planner", "input": "hello"}})
 
 			_, ok, err := store.ExternalMCPSession("failed-1")
 			require.NoError(t, err)
-			assert.Equal(t, 1, relayCalls)
 			assert.Equal(t, tt.wantBinding, ok)
-			assert.Equal(t, tt.wantCleanup, cleanupCalls == 1)
+
+			_, ok, err = store.ConversationKind(t.Context(), managed)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantBinding, ok, "a refused first prompt leaves no Web chat behind")
 		})
 	}
+}
+
+func newMCPTestStore(t *testing.T) *backend.SessionService {
+	t.Helper()
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	store, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Stop()) })
+
+	return store
 }
 
 func testLogger() *slog.Logger {

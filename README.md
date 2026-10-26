@@ -85,15 +85,15 @@ Processes on this machine, including agent tools and MCP servers, can still act 
 
 ### Slack
 
-Slack has three jobs: showing cron reports, showing MCP sessions, and quick help when an allowed user mentions the bot. Everything else happens in the web page.
+Slack has one job: quick help when an allowed user mentions the bot. Everything else happens in the web page, including cron reports and MCP sessions.
 
 Under `slack.channels`, map each channel to a list of agents and the Slack user IDs allowed to use them. A row named `@` is not a channel: it gives agents and allowed users for mentions in any other channel or group DM the bot is already in.
 
 Only a mention from an allowed user starts work. Messages without a mention, including replies in threads the bot answers in, reactions, and edited messages start nothing, and 1:1 DMs never start work. A top-level mention in a configured channel starts a new thread answered by the channel's first agent; a top-level mention with no text, file, or forward is ignored. A mention in a thread the bot does not know takes that thread over and reads up to 50 earlier messages. A mention in a thread the bot already answers in is that conversation's next turn and adds only the mention itself. It waits for running work and active goals instead of steering them. Mentions keep their files and forwarded threads. The bot marks each accepted mention with 🤖 and accepts it once, even if Slack delivers it again. If it cannot read the thread or take the request, it replies with a short error.
 
-While it works, Slack shows one placeholder message, then the final answer and any files. Mention replies and cron reports end with a footer: the agent, its state (working, done, failed, or stopped), and an Open in Web link.
+While it works, Slack shows one placeholder message, then the final answer and any files. Mention replies end with a footer: the agent, its state (working, done, failed, or stopped), and an Open in Web link.
 
-Cron report threads and MCP threads are read-only in Slack: the bot ignores every reply and mention in them, even after their record expires. Open the conversation in Web to keep working.
+Slack threads that earlier versions posted cron reports or MCP sessions into are read-only: the bot ignores every reply and mention in them. Their conversations are Web chats now; keep working there.
 
 Slack has no commands. `$stop`, `$agent`, `$goal`, `$enqueue`, skill names, and any other `$` text reach the agent as plain text. There is no agent picker, steering, queue card, question button, or reaction control. Mention turns cannot use `ask_user_question`, so the agent asks in its reply or hands the work to Web. Use Web to switch agents, run commands and skills, start goals, manage queued work, and stop any turn. Web messages used in a Slack thread are still posted there, and every reply in that conversation still goes to Slack.
 
@@ -118,15 +118,25 @@ Release note for mention-only Slack:
 - Mention replies and cron reports end with a footer that links to Web. Where the workspace supports Slack agent sessions, an allowed user can stop a running mention turn with Slack's Stop; elsewhere, open the footer link and stop the turn in Web.
 - Slack no longer shows questions. Question buttons posted by earlier versions do nothing, and a question still waiting fails when its turn resumes.
 
+Release note for Slack answering mentions only:
+
+- Only mention threads post to Slack. Cron reports and MCP sessions show as Web chats.
+- Cron jobs no longer take `channel`; a leftover `channel` line is ignored. Every scheduled run with a non-empty reply opens a new Web chat, also for jobs that never had a channel.
+- `session_prompt` ignores `slack_channel`, so older MCP callers keep working.
+- Existing cron report and MCP Slack threads become Web chats. They keep their history, and an MCP session keeps its private run; their Slack threads stay read-only and get no new messages.
+- Every chat, in Web or Slack, is now deleted 30 days after its last message. Before, Web chats with messages were kept forever.
+
 ### MCP and scheduled jobs
 
-MCP clients call `session_prompt` with a conversation ID, an agent, and a configured Slack channel. Each MCP conversation also gets a read-only Slack thread in that channel. Switch its agent or continue it from Web.
+MCP clients call `session_prompt` with a conversation ID and an agent. Each MCP conversation shows as a Web chat run by that agent. Continue it or switch its agent from Web.
 
-A job file in `cron/` may name a Slack `channel`. Then an empty reply posts nothing, and any other reply starts a new read-only thread in that channel; follow up from its conversation in Web. A job without a `channel` posts nowhere: read or continue its runs from the Cron page in Web.
+A job file in `cron/` runs its agent on its schedule. An empty reply reports nothing; any other reply opens a new Web chat with the report, run by the job's agent. The Cron page in Web lists every run, and continuing one opens the same chat.
 
 Cron definition bodies expand shell snippets (an exclamation mark followed by a backtick-quoted command) before the model reads them. These are trusted commands, like those in agent prompts: they run in the workspace through the selected agent's `customShell`, when set, without a tool permission review. Ordinary messages, scheduled messages, and Background Job completion notes stay literal.
 
 Agents can use `rocketclaw_schedule_message` for a follow-up in the current conversation. `send_this_in` accepts positive durations up to `5040h` (210 days), including `12h` and `168h`. Set `recurring` to `false` for one message or `true` to repeat at that interval (at least `1m`) until scheduled messages are reset. Pending schedules protect their conversations and explicit owners from normal retention cleanup.
+
+Retention cleanup deletes every chat, in Web or Slack and pinned or not, 30 days after its last message; an MCP chat goes with its private MCP session. A chat with no messages counts from when it was created. Queued work and pending schedules keep a chat.
 
 ## How a request runs
 

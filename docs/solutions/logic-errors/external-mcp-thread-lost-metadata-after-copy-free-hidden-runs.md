@@ -61,7 +61,7 @@ Fixed in PR #613, released in v0.2.1.
 
 ## Why This Works
 
-An External MCP call runs in a private conversation and sets `SyncDestination` to its Slack thread (`cmd/rocketclaw/mcp.go:275`). Starting that turn records the thread as the run's `reports_to` (`internal/rocketclaw/backend/store_dao.go:1041`). The run's first turn writes the `mcp_external_metadata` entry into the run's own conversation.
+An External MCP call runs in a private conversation and sets `SyncDestination` to the chat it reports to, a Slack thread when this was written and a Web chat since (`submitExternalMCPInput` in `cmd/rocketclaw/mcp.go`). Starting that turn records the thread as the run's `reports_to` (`internal/rocketclaw/backend/store_dao.go:1041`). The run's first turn writes the `mcp_external_metadata` entry into the run's own conversation.
 
 Before 77fabe81 that entry was also copied into the thread, so a lookup of the thread's own rows found it. After 77fabe81 the thread shows the run's entries through `reports_to` and holds no copy. A turn in the thread then found no metadata, so `if foundMetadata || origin.Source == protocol.SourceExternalMCP` (`bridge.go:2630`) was false for any turn not sourced from External MCP (a Web message in the thread's conversation, for example), and the whole metadata block was skipped. Searching the shown set restores exactly what the thread's history already displays.
 

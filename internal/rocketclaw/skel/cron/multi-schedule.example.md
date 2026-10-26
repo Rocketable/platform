@@ -3,7 +3,6 @@ schedule:
   - 0 9 * * 1-5
   - "@weekly"
 agent: main
-channel: "#ops"
 ---
 
 Review the current workspace state.

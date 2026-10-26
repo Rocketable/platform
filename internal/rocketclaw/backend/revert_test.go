@@ -347,9 +347,11 @@ VALUES ($1, 'parent', $2, $3, '{}', '[{"id":"input","text":"prepared"}]')`, chil
 	require.NoError(t, err)
 	require.Empty(t, entries)
 
-	prune, err := shouldPruneThreadConversation(ctx, s.db, "main", time.Now().Add(time.Hour))
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET created_at = 'epoch' WHERE conversation_id = 'main'`)
 	require.NoError(t, err)
-	require.False(t, prune, "a first-message cutoff must not let retention discard the stored suffix")
+	prune, err := shouldPruneThreadConversation(ctx, s.db, "main", time.Unix(1, 0))
+	require.NoError(t, err)
+	require.False(t, prune, "a first-message cutoff must not let retention discard the stored suffix: hidden entries still date the chat")
 
 	_, eligible, previous, err = s.RevertState(ctx, "main")
 	require.NoError(t, err)

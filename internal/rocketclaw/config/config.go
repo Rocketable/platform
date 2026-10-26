@@ -190,18 +190,6 @@ type SlackConfig struct {
 	Channels []SlackChannelConfig `json:"channels,omitempty"`
 }
 
-// MappedChannels returns Slack channel names, excluding the `@` Channel Entry.
-func (s SlackConfig) MappedChannels() []string {
-	channels := make([]string, 0, len(s.Channels))
-	for _, channel := range s.Channels {
-		if channel.Channel != "@" {
-			channels = append(channels, channel.Channel)
-		}
-	}
-
-	return channels
-}
-
 // Channel returns the configured Slack channel with this name.
 func (s SlackConfig) Channel(name string) (SlackChannelConfig, bool) {
 	for _, channel := range s.Channels {

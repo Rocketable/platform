@@ -2409,7 +2409,7 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	writeAgent(t, cfg.Clone().Workspace, "selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nSelected canonical instructions\n")
 	require.NoError(t, service.UpsertThread(threadKey, ThreadState{Agent: "selected"}))
 	require.NoError(t, service.UpsertThread(privateConversationID, ThreadState{Agent: "planner"}))
-	require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: threadKey, SlackChannel: "ops"}))
+	require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: threadKey}))
 	_, err := service.AppendEntryID(t.Context(), threadKey, testSessionEntry("canonical context", "canonical history"))
 	require.NoError(t, err)
 
@@ -3523,7 +3523,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	managedConversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, service.RegisterExternalMCPConversation("public-1", "planner", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:private", ManagedConversationID: managedConversationID, SlackChannel: "#ops", OriginPairs: map[string]string{"z": "last", "a": "first"}}))
+	require.NoError(t, service.RegisterExternalMCPConversation("public-1", "planner", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:private", ManagedConversationID: managedConversationID, OriginPairs: map[string]string{"z": "last", "a": "first"}}))
 	bridge.config = Config{ConversationID: "external_mcp:planner:private", Agent: "planner", SessionService: service}
 	bridge.bus = discardPublisher{}
 	bridge.log = slog.New(slog.DiscardHandler)
@@ -5109,7 +5109,7 @@ func TestResumedTurnInjectsNoteClaimedBeforeCrash(t *testing.T) {
 	assert.Equal(t, []string{"turn-0/call/a consumed true"}, noteStates(t, nt.service))
 }
 
-// The destination is the thread a cron run posted, subject to its output decision, or an External MCP managed thread.
+// The destination is the chat a cron run reported in, subject to its output decision, or an External MCP managed chat.
 func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 	t.Parallel()
 
@@ -5121,20 +5121,16 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 	t.Run("cron", func(t *testing.T) {
 		nt := newNoteTest(t, decide)
 		manager, _ := nt.run(t, ignoreOutbound)
-		report := protocol.SlackThreadConversationID("C1", "1.2")
+		report := "web:cron:daily"
 
-		manager.mu.Lock()
-		manager.cronRoots = newCronRoots(func(*protocol.OutboundMessage) {})
-		manager.mu.Unlock()
-
-		// The run started a background job, then posted "Report started" as a new thread root.
+		// The run started a background job, then reported "Report started" in a new chat.
 		msg := seedCronRun(t, nt.service, "cron:daily")
 		job := testBackgroundJob("cron:daily", "turn-cron/call/a")
 		job.origin = msg
 		createTestBackgroundJob(t, nt.service, job)
 
 		outbound := protocol.NewOutboundMessage("cron:daily", "Report started")
-		outbound.TurnID, outbound.Complete, outbound.Cronjob, outbound.SlackReply = "turn-cron", true, msg.Cronjob, msg.SlackReply
+		outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
 		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
 		require.NoError(t, err)
 		require.NoError(t, manager.StartActiveTurns(t.Context()))
@@ -5142,28 +5138,22 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		require.Eventually(t, func() bool {
 			destinations, err := queryStrings(context.Background(), nt.service.db, `SELECT COALESCE(c.reports_to, '') || ' ' || COALESCE(NULLIF(j.inbound_json->>'SyncDestination', ''), c.reports_to, '')`+testJobsSQL, "job destinations")
 			return err == nil && slices.Equal(destinations, []string{report + " " + report})
-		}, 10*time.Second, 10*time.Millisecond, "the job reports to the posted thread")
+		}, 10*time.Second, 10*time.Millisecond, "the job reports to the report chat")
 
 		finishTestBackgroundJob(t, nt.service, job, backgroundCompleted, true)
 		manager.noteReady("cron:daily")
 
-		assert.Equal(t, "Tests passed.", readFinalFor(t, nt.finals, report).Text, "the decided output is posted in the report thread")
+		assert.Equal(t, "Tests passed.", readFinalFor(t, nt.finals, report).Text, "the decided output reaches the report chat")
 		assert.Equal(t, systemPromptHeader()+"\n\n"+testExecuteNote(job.jobID), lastRequestMessage(t, nt.request(t)))
 		nt.waitIdle(t, manager, report)
 		assert.Equal(t, []string{"turn-cron/call/a consumed true"}, noteStates(t, nt.service))
 	})
 
-	// A wake queued from the run's origin before the run posted its thread still reaches that
-	// thread and posts no second root.
-	t.Run("cron wake queued before the root", func(t *testing.T) {
+	// A wake queued from the run's origin before the run opened its report chat still reaches that chat.
+	t.Run("cron wake queued before the report chat", func(t *testing.T) {
 		nt := newNoteTest(t, decide)
 		manager, _ := nt.run(t, ignoreOutbound)
-		report := protocol.SlackThreadConversationID("C1", "1.2")
-		roots := make(chan struct{}, 4)
-
-		manager.mu.Lock()
-		manager.cronRoots = newCronRoots(func(*protocol.OutboundMessage) { roots <- struct{}{} })
-		manager.mu.Unlock()
+		report := "web:cron:daily"
 
 		msg := seedCronRun(t, nt.service, "cron:daily")
 		job := testBackgroundJob("cron:daily", "turn-cron/call/a")
@@ -5171,12 +5161,11 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		createTestBackgroundJob(t, nt.service, job)
 
 		outbound := protocol.NewOutboundMessage("cron:daily", "Report started")
-		outbound.TurnID, outbound.Complete, outbound.Cronjob, outbound.SlackReply = "turn-cron", true, msg.Cronjob, msg.SlackReply
+		outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
 		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
 		require.NoError(t, err)
 		require.NoError(t, manager.StartActiveTurns(t.Context()))
 		readFinalFor(t, nt.finals, "cron:daily")
-		<-roots
 		require.Eventually(t, func() bool {
 			destinations, err := queryStrings(context.Background(), nt.service.db, `SELECT COALESCE(c.reports_to, '')`+testJobsSQL, "job destinations")
 			return err == nil && slices.Equal(destinations, []string{report})
@@ -5185,12 +5174,11 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		finishTestBackgroundJob(t, nt.service, job, backgroundCompleted, true)
 
 		stale := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
-		stale.ConversationID, stale.SlackReply, stale.RequireOutputDecision, stale.Cronjob = "cron:daily", protocol.Clone(msg.SlackReply), msg.RequireOutputDecision, msg.Cronjob
+		stale.ConversationID, stale.RequireOutputDecision, stale.Cronjob = "cron:daily", msg.RequireOutputDecision, msg.Cronjob
 		require.NoError(t, nt.bridge(t, manager, "cron:daily").enqueue(t.Context(), &bridgeRequest{inbound: stale, backgroundWake: true}, "submit background wake"))
 
 		assert.Equal(t, "Tests passed.", readFinalFor(t, nt.finals, report).Text)
 		nt.waitIdle(t, manager, report)
-		assert.Empty(t, roots, "no second root is posted")
 		assert.Equal(t, []string{"turn-cron/call/a consumed true"}, noteStates(t, nt.service))
 	})
 

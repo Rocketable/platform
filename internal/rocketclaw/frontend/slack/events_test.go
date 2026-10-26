@@ -2,7 +2,6 @@ package slackconnector
 
 import (
 	"context"
-	"encoding/json"
 	"iter"
 	"net/http"
 	"net/http/httptest"
@@ -65,46 +64,6 @@ func TestStartEventsRoutesAndAcknowledgesSubscription(t *testing.T) {
 	assert.Contains(t, posted[1].Get("blocks"), `"text":"second answer"`)
 	assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.0", MessageTS: "111.0"}, messages[1].SlackReply)
 	assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "C456", ThreadTS: "222.0", MessageTS: "222.1"}, messages[2].SlackReply)
-}
-
-func TestStartEventsKeepsScheduledCronPrivateAndRepliesToOneOff(t *testing.T) {
-	var posted []url.Values
-
-	reactions := []string{}
-
-	server := newSlackStackTestServer(t, &posted, &reactions)
-	defer server.Close()
-
-	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), inertThreadRouter{})
-	oneOff := &protocol.OutboundMessage{
-		ConversationID: "slack-thread:C123:111.0",
-		Text:           "one-off body",
-		Complete:       true,
-		Cronjob:        &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"},
-	}
-	private := &protocol.OutboundMessage{
-		ConversationID: "cron:daily:run-1",
-		Text:           "scheduled body",
-		Complete:       true,
-		Cronjob:        &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"},
-	}
-	events := []protocol.Event{
-		{Message: oneOff, Acknowledgement: make(chan error, 1)},
-		{Message: private, Acknowledgement: make(chan error, 1)},
-	}
-	backend := &backendMock{SubscribeFunc: func(context.Context) iter.Seq[protocol.Event] {
-		return slices.Values(events)
-	}}
-	done := connector.StartEvents(t.Context(), backend)
-	<-done
-	require.NoError(t, <-events[0].Acknowledgement)
-	require.NoError(t, <-events[1].Acknowledgement)
-
-	assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.0"}, oneOff.SlackReply)
-	assert.Nil(t, private.SlackReply)
-	require.Len(t, posted, 1)
-	assert.Equal(t, "111.0", posted[0].Get("thread_ts"))
-	assert.Contains(t, posted[0].Get("blocks"), "one-off body")
 }
 
 func TestStartEventsAcknowledgesDeliveryFailureAfterAborting(t *testing.T) {
@@ -175,38 +134,4 @@ func TestStartEventsAcknowledgesConsumedInputFailure(t *testing.T) {
 	connector := newTestConnector(server.URL)
 	<-connector.StartEvents(t.Context(), backend)
 	require.ErrorContains(t, <-event.Acknowledgement, "channel_not_found")
-}
-
-// A private External MCP turn records its relay placeholder, so the paired
-// thread's final delivered after a restart edits it once instead of leaving it behind.
-func TestStartEventsRecordsExternalMCPRelayPlaceholder(t *testing.T) {
-	server, posted, updated := newExternalMCPReplyServer(t)
-	defer server.Close()
-
-	const private = "external_mcp:private-agent:private"
-
-	steps := map[string]json.RawMessage{}
-	connector := newTestConnector(server.URL)
-	connector.facts = newTestTurnSteps(t, private, steps)
-
-	target, err := connector.SendExternalMCPRelay(t.Context(), "D123", "111.222", testExternalMCPRelay("request", nil))
-	require.NoError(t, err)
-	require.Len(t, *posted, 2, "the relay and its placeholder")
-
-	start := protocol.NewOutboundMessage(private, "")
-	start.TurnID, start.ExternalConversationID, start.SlackReply = "turn-1", "public-conversation", target
-	events := []protocol.Event{{Message: start, Acknowledgement: make(chan error, 1)}}
-
-	<-connector.StartEvents(t.Context(), &backendMock{SubscribeFunc: func(context.Context) iter.Seq[protocol.Event] { return slices.Values(events) }})
-	require.NoError(t, <-events[0].Acknowledgement)
-	require.Contains(t, steps, "turn-1/reply", "the private turn records the relay placeholder")
-	assert.Len(t, *posted, 2, "no second placeholder")
-
-	final := protocol.NewOutboundMessage(protocol.SlackThreadConversationID("D123", "111.222"), "answer")
-	final.TurnID, final.Complete, final.ExternalConversationID, final.Agent, final.SlackReply = "turn-1", true, "public-conversation", "private-agent", target
-	final.ReplyState = steps["turn-1/reply"]
-	require.NoError(t, newTestConnector(server.URL).SendResponse(t.Context(), final))
-	require.Len(t, *updated, 1)
-	assert.Equal(t, "555.2", (*updated)[0].Get("ts"), "the answer edits the recorded placeholder")
-	assert.Len(t, *posted, 2, "the answer is not posted separately")
 }

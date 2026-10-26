@@ -67,10 +67,7 @@ type ExternalMCPSessionState struct {
 	Agent                 string            `json:"agent,omitempty"`
 	PrivateConversationID string            `json:"private_conversation_id,omitempty"`
 	ManagedConversationID string            `json:"managed_conversation_id,omitempty"`
-	SlackChannel          string            `json:"slack_channel,omitempty"`
 	OriginPairs           map[string]string `json:"origin_pairs,omitempty"`
-	// Thread locates the Slack thread the binding is on, read in the same lookup.
-	Thread protocol.SlackReplyTarget `json:"-"`
 }
 
 // CronScheduleState records one observed scheduled cron trigger.
@@ -321,7 +318,6 @@ func (s *SessionService) UpsertExternalMCPSession(externalConversationID string,
 	session.Agent = strings.TrimSpace(session.Agent)
 	session.PrivateConversationID = strings.TrimSpace(session.PrivateConversationID)
 	session.ManagedConversationID = strings.TrimSpace(session.ManagedConversationID)
-	session.SlackChannel = strings.TrimSpace(session.SlackChannel)
 
 	// The binding leaves the conversation it was on before the one it moves to takes it.
 	_, err := execState(context.Background(), s.db, "upsert external MCP session", `WITH moved AS (
@@ -329,15 +325,15 @@ func (s *SessionService) UpsertExternalMCPSession(externalConversationID string,
 ), released AS (
     SELECT count(*) FROM moved
 )
-`+bindExternalMCPSQL+` FROM released WHERE conversation_id = $3`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel, originPairsJSON(session.OriginPairs))
+`+bindExternalMCPSQL+` FROM released WHERE conversation_id = $3`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, originPairsJSON(session.OriginPairs))
 
 	return err
 }
 
-// bindExternalMCPSQL stores binding $1 of private run $2, by agent $4 in channel $5 with origin pairs $6, on its Slack thread.
-const bindExternalMCPSQL = `UPDATE conversations SET external_id = $1, external_run = NULLIF($2::text, ''), external_agent = $4, external_channel = $5, origin_pairs = $6`
+// bindExternalMCPSQL stores binding $1 of private run $2, by agent $4 with origin pairs $5, on its Web chat.
+const bindExternalMCPSQL = `UPDATE conversations SET external_id = $1, external_run = NULLIF($2::text, ''), external_agent = $4, origin_pairs = $5`
 
-// RegisterExternalMCPConversation atomically persists the Slack thread at session.Thread, the private
+// RegisterExternalMCPConversation atomically persists the Web chat the session shows in, the private
 // conversation the session runs in, and their public binding.
 func (s *SessionService) RegisterExternalMCPConversation(externalConversationID, managedAgent string, session *ExternalMCPSessionState) error {
 	externalConversationID = strings.TrimSpace(externalConversationID)
@@ -345,7 +341,6 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID,
 	session.Agent = strings.TrimSpace(session.Agent)
 	session.PrivateConversationID = strings.TrimSpace(session.PrivateConversationID)
 	session.ManagedConversationID = strings.TrimSpace(session.ManagedConversationID)
-	session.SlackChannel = strings.TrimSpace(session.SlackChannel)
 
 	ctx := context.Background()
 
@@ -362,7 +357,7 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID,
 
 	managed, private := protocol.Conversation{ID: session.ManagedConversationID, Agent: managedAgent}, protocol.Conversation{ID: session.PrivateConversationID, Agent: session.Agent}
 
-	created, err := (stateDAO{db: tx}).createConversation(ctx, managed, conversationFacts{kind: KindSlackThread, slackChannel: session.Thread.ChannelID, slackThread: session.Thread.ThreadTS})
+	created, err := (stateDAO{db: tx}).createConversation(ctx, managed, conversationFacts{kind: KindWebChat})
 	if err != nil {
 		return err
 	}
@@ -381,7 +376,7 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID,
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, bindExternalMCPSQL+` WHERE conversation_id = $3`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel, originPairsJSON(session.OriginPairs)); err != nil {
+	if _, err := tx.ExecContext(ctx, bindExternalMCPSQL+` WHERE conversation_id = $3`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, originPairsJSON(session.OriginPairs)); err != nil {
 		return fmt.Errorf("register external MCP binding: %w", err)
 	}
 
@@ -413,7 +408,7 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 	defer func() { _ = tx.Rollback() }()
 	defer releaseHistory(workers)
 
-	// The binding goes with its Slack thread's row.
+	// The binding goes with its Web chat's row.
 	if _, err := deleteSessionEntries(ctx, tx, ids); err != nil {
 		return err
 	}
@@ -1872,11 +1867,12 @@ SELECT count(*) > 0 FROM owned`, &bound, conversationID); err != nil || bound {
 		return false, err
 	}
 
-	// A Slack thread expires with its newest entry, else with its thread's time.
+	// A chat, Web or Slack, expires with its newest entry, else with its Slack thread's time,
+	// else with its creation, so a new one survives until its first turn lands.
 	var created time.Time
 
-	err = queryScalar(ctx, db, "read Slack thread time", `SELECT to_timestamp(slack_thread::numeric) FROM conversations
-WHERE conversation_id = $1 AND slack_thread ~ '^[0-9]+(\.[0-9]+)?$'`, &created, conversationID)
+	err = queryScalar(ctx, db, "read chat time", `SELECT CASE WHEN slack_thread ~ '^[0-9]+(\.[0-9]+)?$' THEN to_timestamp(slack_thread::numeric) ELSE created_at END
+FROM conversations WHERE conversation_id = $1 AND (listed AND retention = 'record' OR slack_thread ~ '^[0-9]+(\.[0-9]+)?$')`, &created, conversationID)
 	if !errors.Is(err, sql.ErrNoRows) {
 		if err != nil {
 			return false, err
@@ -1885,8 +1881,8 @@ WHERE conversation_id = $1 AND slack_thread ~ '^[0-9]+(\.[0-9]+)?$'`, &created, 
 		return sessionLatestBefore(ctx, db, conversationID, created, cutoff)
 	}
 
-	// An empty conversation expires only once it is older than cutoff, so a new
-	// one survives until its first turn lands. The entries it shows of hidden runs count.
+	// Any other empty conversation expires only once it is older than cutoff. The entries it
+	// shows of hidden runs count.
 	var emptyManaged bool
 	if err := queryScalar(ctx, db, "read empty managed conversation", `WITH shown AS (
     SELECT $1::text AS conversation_id UNION SELECT conversation_id FROM conversations WHERE reports_to = $1
@@ -1910,6 +1906,7 @@ func sessionLatestBefore(ctx context.Context, db stateStoreDB, conversationID st
 	var before bool
 	if err := queryScalar(ctx, db, "read latest session entry timestamp", `WITH runs AS (
     SELECT conversation_id FROM conversations WHERE reports_to = $3
+    UNION SELECT continues FROM conversations WHERE conversation_id = $3 AND continues IS NOT NULL
 ), shown AS (
     SELECT entry_timestamp FROM entries WHERE conversation_id = $3
     UNION ALL SELECT e.entry_timestamp FROM runs r JOIN entries e USING (conversation_id) WHERE e.audience <> 'sandbox'

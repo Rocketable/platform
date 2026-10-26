@@ -236,7 +236,6 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 			origin, kind := ChatOriginFacts{ConversationID: "history"}, KindWebChat
 			if creation == "external MCP" {
 				origin.ExternalConversationID, origin.Binding = "public-history", ExternalMCPSessionState{Agent: "main", ManagedConversationID: "history"}
-				kind = KindSlackThread
 			}
 
 			require.Equal(t, []SidebarSession{

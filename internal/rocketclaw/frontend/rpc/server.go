@@ -224,7 +224,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 			return err
 		}
 
-		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: s.cronChoices(allChoices, row.CronPath), Running: row.Running, Background: row.Background, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
+		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: allChoices, Running: row.Running, Background: row.Background, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
 			Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label()}
 
 		if row.SlackChannel != "" {
@@ -1002,7 +1002,7 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 	for i := range jobs {
 		job := &jobs[i]
 
-		row := &CronJob{Stem: cronStem(job.RelativePath), Schedule: strings.Join(job.Schedules, ", "), Body: job.Body, Agent: job.Agent, Channel: job.TextChannel, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
+		row := &CronJob{Stem: cronStem(job.RelativePath), Schedule: strings.Join(job.Schedules, ", "), Body: job.Body, Agent: job.Agent, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
 		for _, at := range job.Upcoming {
 			row.Upcoming = append(row.Upcoming, at.Format(time.RFC3339Nano))
 		}
@@ -1231,18 +1231,11 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 			return nil, fmt.Errorf("read web Slack thread: %w", err)
 		}
 
-		var path string
 		if channel != "" {
-			_, allowed, err = s.channels.SidebarChannelAgentChoices(ctx, channel)
-		} else if path, _, err = s.sessions.CronRun(ctx, id); err != nil {
-			err = fmt.Errorf("read web cron run: %w", err)
+			if _, allowed, err = s.channels.SidebarChannelAgentChoices(ctx, channel); err != nil {
+				return nil, fmt.Errorf("web channel choices: %w", err)
+			}
 		}
-
-		if err != nil {
-			return nil, fmt.Errorf("web channel choices: %w", err)
-		}
-
-		allowed = s.cronChoices(allowed, path)
 	}
 
 	allowed = sameSpace(definitions, response.CurrentAgent, allowed)
@@ -1305,7 +1298,7 @@ func sameSpace(agents rocketcode.Agents, current string, allowed []string) []str
 }
 
 // agentChoices lists the primary agents a conversation offers: those its Slack thread's channel
-// allows, those the cron job of the cron run it is or continues offers in Web, else every one.
+// allows, else every one.
 func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) {
 	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
@@ -1328,25 +1321,7 @@ func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) 
 		return slices.DeleteFunc(choices, func(name string) bool { return !slices.Contains(allowed, name) }), nil
 	}
 
-	path, _, err := s.sessions.CronRun(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("read web cron run: %w", err)
-	}
-
-	return s.cronChoices(choices, path), nil
-}
-
-// cronChoices narrows choices to those the cron job at path offers in Web, while it still loads.
-func (s *Server) cronChoices(choices []string, path string) []string {
-	if path == "" {
-		return choices
-	}
-
-	if job, err := s.cronjobs.LoadOneOffCronjob(cronStem(path)); err == nil {
-		return s.cfg.Clone().CronWebAgentChoices(choices, &job)
-	}
-
-	return choices
+	return choices, nil
 }
 
 // cronStem is the name a cron job at path is listed and loaded by.

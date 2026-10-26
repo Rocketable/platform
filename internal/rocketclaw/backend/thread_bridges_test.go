@@ -221,7 +221,7 @@ func TestThreadBridgeManagerMentionThreadRecognizesReportThreads(t *testing.T) {
 		recorded, report bool
 	}{
 		{name: "cron report", threadTS: "1.1", recorded: true, report: true},
-		{name: "External MCP thread", threadTS: "2.2", recorded: true, report: true},
+		{name: "External MCP thread from before Web chats", threadTS: "2.2", recorded: true, report: true},
 		{name: "mention thread", threadTS: "3.3", recorded: true},
 		{name: "unknown thread", threadTS: "4.4"},
 	} {

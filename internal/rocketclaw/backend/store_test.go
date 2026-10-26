@@ -1466,19 +1466,19 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 	store := newTestSessionServiceAt(t, workspace)
 	recordTestConversations(t, store, "selected", map[string]ConversationKind{"slack-thread:C1:1.1": KindSlackThread, "slack-thread:C1:2.2": KindSlackThread})
 
-	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: " cron ", PrivateConversationID: " external_mcp:cron:abc ", ManagedConversationID: " slack-thread:C1:1.1 ", SlackChannel: " #ops "}))
+	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: " cron ", PrivateConversationID: " external_mcp:cron:abc ", ManagedConversationID: " slack-thread:C1:1.1 "}))
 
 	session, ok, err := store.ExternalMCPSession("ticket-123")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, ExternalMCPSessionState{Agent: "cron", PrivateConversationID: "external_mcp:cron:abc", ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops", Thread: protocol.SlackReplyTarget{ChannelID: "C1", ThreadTS: "1.1"}}, session)
+	assert.Equal(t, ExternalMCPSessionState{Agent: "cron", PrivateConversationID: "external_mcp:cron:abc", ManagedConversationID: "slack-thread:C1:1.1"}, session)
 
-	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:def", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"}))
+	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:def", ManagedConversationID: "slack-thread:C1:2.2"}))
 
 	session, ok, err = store.ExternalMCPSession("ticket-123")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:def", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops", Thread: protocol.SlackReplyTarget{ChannelID: "C1", ThreadTS: "2.2"}}, session)
+	assert.Equal(t, ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:def", ManagedConversationID: "slack-thread:C1:2.2"}, session)
 	require.NoError(t, store.UpsertThread(session.ManagedConversationID, ThreadState{Agent: "selected"}))
 	privateEntryID, err := store.AppendEntryID(t.Context(), session.PrivateConversationID, testSessionEntry("private", "private answer"))
 	require.NoError(t, err)
@@ -1581,8 +1581,10 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	require.NoError(t, store.UpsertThread("empty-new", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
 	require.NoError(t, store.UpsertThread("empty-running", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
 	require.NoError(t, store.UpsertThread("continuing", ThreadState{Agent: "planner"}))
+	require.NoError(t, store.UpsertThread("old-web", ThreadState{Agent: "planner"}))
+	require.NoError(t, store.UpsertThread("active-web", ThreadState{Agent: "planner"}))
 	_, err = store.db.ExecContext(t.Context(), `UPDATE conversations SET created_at = $1, continues = CASE WHEN conversation_id = 'continuing' THEN 'cron:daily:new' END
-WHERE conversation_id IN ('empty-recorded', 'continuing')`, oldTime)
+WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web')`, oldTime)
 	require.NoError(t, err)
 	seedActiveTurn(t, store, "empty-running", "running", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "running"})
 	require.NoError(t, store.UpsertThread(activeOldThread, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByCron}))
@@ -1598,6 +1600,8 @@ WHERE conversation_id IN ('empty-recorded', 'continuing')`, oldTime)
 		"slack-thread:DORPHAN:1.000":   oldTime,
 		"cron:daily:boundary":          cutoff,
 		"unmanaged-web":                oldTime,
+		"old-web":                      oldTime,
+		"active-web":                   newTime,
 	} {
 		_, err := AppendSessionEntryID(context.Background(), workspace, conversationID, testSessionEntryAt(ts, conversationID))
 		require.NoError(t, err)
@@ -1616,7 +1620,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing')`, oldTime)
 
 	stats, err := store.PruneStateBefore(context.Background(), cutoff, 0)
 	require.NoError(t, err)
-	assert.Equal(t, PruneStateStats{Threads: 2, SessionRows: 5}, stats)
+	assert.Equal(t, PruneStateStats{Threads: 4, SessionRows: 7}, stats)
 
 	_, ok, err := store.Goal(orphanGoal)
 	require.NoError(t, err)
@@ -1632,6 +1636,8 @@ WHERE conversation_id IN ('empty-recorded', 'continuing')`, oldTime)
 	assert.Contains(t, threadIDs, "empty-new", "an empty conversation newer than cutoff awaits its first turn")
 	assert.Contains(t, threadIDs, "empty-running")
 	assert.Contains(t, threadIDs, "continuing", "the run a chat continues is its history")
+	assert.NotContains(t, threadIDs, "old-web", "a Web chat expires with its last message")
+	assert.Contains(t, threadIDs, "active-web", "a Web chat's age is its last message, not its creation")
 
 	thread, ok, err := store.Thread(activeOldThread)
 	require.NoError(t, err)
@@ -1640,21 +1646,20 @@ WHERE conversation_id IN ('empty-recorded', 'continuing')`, oldTime)
 	assert.Contains(t, threadIDs, activeOldThread)
 	assert.Contains(t, threadIDs, newThread)
 	assert.Contains(t, threadIDs, boundaryThread)
-	assert.Contains(t, threadIDs, "slack-thread:D123:not-a-time")
 
 	active, err := store.HasActiveTurn(t.Context(), oldThread)
 	require.NoError(t, err)
 	assert.False(t, active)
 	assert.Empty(t, testTurnStepKeys(t, store, oldThread))
 
-	for _, conversationID := range []string{oldThread, "external_mcp:cron:orphan", "cron:daily:old", "one-off-cron:daily:old", "slack-thread:DORPHAN:1.000"} {
+	for _, conversationID := range []string{oldThread, "slack-thread:D123:not-a-time", "external_mcp:cron:orphan", "cron:daily:old", "one-off-cron:daily:old", "slack-thread:DORPHAN:1.000"} {
 		entries, err := store.ObserveEntries(context.Background(), conversationID)
 		require.NoError(t, err)
 		assert.Empty(t, entries, conversationID)
 		assert.NotContains(t, threadIDs, conversationID)
 	}
 
-	for _, conversationID := range []string{activeOldThread, "slack-thread:D123:not-a-time", "cron:daily:new", "cron:daily:boundary", "unmanaged-web"} {
+	for _, conversationID := range []string{activeOldThread, "cron:daily:new", "cron:daily:boundary", "unmanaged-web"} {
 		entries, err := store.ObserveEntries(context.Background(), conversationID)
 		require.NoError(t, err)
 		assert.Len(t, entries, 1, conversationID)
@@ -1684,7 +1689,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 
 	managedID := protocol.SlackThreadConversationID("C1", slackTestTS(cutoff.Add(-time.Hour)))
 	privateID := "external_mcp:planner:private"
-	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Thread: protocol.SlackReplyTarget{ChannelID: "C1", ThreadTS: slackTestTS(cutoff.Add(-time.Hour))}, Agent: "planner", PrivateConversationID: privateID, ManagedConversationID: managedID, SlackChannel: "#ops"}))
+	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateID, ManagedConversationID: managedID}))
 	require.NoError(t, store.UpsertThread(privateID, ThreadState{Agent: "planner"}))
 
 	for _, conversationID := range []string{privateID, managedID} {
@@ -1916,7 +1921,7 @@ func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.
 	cutoff := time.Unix(1_700_000_000, 0).UTC()
 	managedConversationID := protocol.SlackThreadConversationID("C1", slackTestTS(cutoff.Add(-time.Hour)))
 	privateConversationID := "external_mcp:planner:private"
-	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Thread: protocol.SlackReplyTarget{ChannelID: "C1", ThreadTS: slackTestTS(cutoff.Add(-time.Hour))}, Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
+	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID}))
 
 	for _, conversationID := range []string{privateConversationID, managedConversationID} {
 		_, err := store.AppendEntryID(t.Context(), conversationID, testSessionEntryAt(cutoff.Add(-time.Hour), conversationID))
@@ -1960,16 +1965,19 @@ func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t 
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			store := newTestSessionServiceAt(t, t.TempDir())
-			managedConversationID := protocol.SlackThreadConversationID("C1", slackTestTS(cutoff.Add(-time.Hour)))
+			managedConversationID := "managed"
 
 			privateConversationID := ""
 			if tt.paired {
 				privateConversationID = "external_mcp:planner:private"
-				require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Thread: protocol.SlackReplyTarget{ChannelID: "C1", ThreadTS: slackTestTS(cutoff.Add(-time.Hour))}, Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
+				require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID}))
 			} else {
-				recordTestConversations(t, store, "main", map[string]ConversationKind{managedConversationID: KindSlackThread})
-				require.NoError(t, store.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
+				recordTestConversations(t, store, "main", map[string]ConversationKind{managedConversationID: KindWebChat})
+				require.NoError(t, store.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", ManagedConversationID: managedConversationID}))
 			}
+
+			_, err := store.db.ExecContext(t.Context(), `UPDATE conversations SET created_at = $1`, cutoff.Add(-time.Hour))
+			require.NoError(t, err)
 
 			if privateConversationID != "" && !tt.privateEmpty {
 				_, err := store.AppendEntryID(t.Context(), privateConversationID, testSessionEntryAt(pruneTestTime(cutoff, tt.privateFresh), "private"))
@@ -1981,7 +1989,7 @@ func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t 
 				require.NoError(t, err)
 			}
 
-			_, err := store.PruneStateBefore(t.Context(), cutoff, 0)
+			_, err = store.PruneStateBefore(t.Context(), cutoff, 0)
 			require.NoError(t, err)
 			_, ok, err := store.ExternalMCPSession("public-1")
 			require.NoError(t, err)
@@ -2650,7 +2658,7 @@ func TestConversationKindsAtCreation(t *testing.T) {
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: oneOff, Agent: "job", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/once.md", OneOff: true}}))
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "web:" + run, Agent: "main", CreatedBy: "alice"}))
 	require.NoError(t, runtime.ContinueRun(ctx, run, "web:"+run))
-	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Thread: protocol.SlackReplyTarget{ChannelID: "C2", ThreadTS: "2.2"}, Agent: "job", PrivateConversationID: "private", ManagedConversationID: protocol.SlackThreadConversationID("C2", "2.2")}))
+	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "job", PrivateConversationID: "private", ManagedConversationID: "mcp-chat"}))
 	// A delegation's guardrail saves its review where the subagent session it approves then starts.
 	require.NoError(t, (&Bridge{config: Config{ConversationID: "web", SessionService: store}}).AppendChildEntry(ctx, harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, testSessionEntry("guard", "approved")))
 	require.NoError(t, store.startSubagent(ctx, "web", harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "helper", true))
@@ -2682,7 +2690,7 @@ FROM conversations c WHERE c.shadow_parent IS NULL`, "kinds", func(row rowScanne
 	}))
 	require.Equal(t, map[string]string{
 		"web": "web_chat listed record", run: "cron_run hidden record", oneOff: "one_off_cron_run hidden record", "web:" + run: "web_chat listed record",
-		protocol.SlackThreadConversationID("C2", "2.2"): "slack_thread listed record", "private": "external_mcp_run hidden record", slack: "slack_thread listed record",
+		"mcp-chat": "web_chat listed record", "private": "external_mcp_run hidden record", slack: "slack_thread listed record",
 		"web/call-1": "subagent hidden record web", "web/call-2-review-0a1b2c3d": "review hidden nested web",
 		run + "/call-2-review-0a1b2c3d": "review hidden private " + run,
 	}, kinds, "a review history is no record; one of a cron run expires as its unrecorded history did")
@@ -2707,7 +2715,7 @@ FROM conversations c WHERE c.shadow_parent IS NULL`, "kinds", func(row rowScanne
 		listed = append(listed, row.Conversation.ID)
 	}
 
-	require.ElementsMatch(t, []string{"web", "web:" + run, protocol.SlackThreadConversationID("C2", "2.2"), slack}, listed)
+	require.ElementsMatch(t, []string{"web", "web:" + run, "mcp-chat", slack}, listed)
 
 	// Each chat Web lists, and each shadow, whoever started it; never a hidden run or a delegation.
 	for _, id := range ids {

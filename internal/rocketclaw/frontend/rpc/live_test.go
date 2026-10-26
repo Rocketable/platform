@@ -107,7 +107,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 				ready <- rt
 				return nil, rt.RunCtx.Done(), nil, nil // The public assembler contract permits absent Slack.
 			},
-			ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+			ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 		}
 
 		var running errgroup.Group
@@ -435,7 +435,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
 		ready <- rt
 		return nil, rt.RunCtx.Done(), nil, nil // Public assembler permits absent Slack.
-	}, ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil }}
+	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group
 	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
@@ -518,7 +518,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
 		ready <- rt
 		return nil, rt.RunCtx.Done(), nil, nil // Public assembler permits absent Slack.
-	}, ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil }}
+	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group
 	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })

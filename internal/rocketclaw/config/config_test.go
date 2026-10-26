@@ -708,7 +708,6 @@ func TestValidateSlackChannelsLegacyCoverage(t *testing.T) {
 		{Channel: "#triage", Agents: []string{"planner", "helper"}, AllowedUserIDs: []string{"U999"}},
 		{Channel: "#team", Agents: []string{"team"}, AllowedUserIDs: []string{"U123", "U456"}},
 	}, cfg.Slack.Channels)
-	assert.Equal(t, []string{"#triage", "#team"}, cfg.Slack.MappedChannels())
 	triage, ok := cfg.Slack.Channel("#triage")
 	require.True(t, ok)
 	assert.Equal(t, []string{"planner", "helper"}, triage.Agents)
@@ -727,7 +726,6 @@ func TestValidateSlackKeepsAtChannel(t *testing.T) {
 	assert.Equal(t, []SlackChannelConfig{
 		{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}},
 	}, cfg.Slack.Channels)
-	assert.Empty(t, cfg.Slack.MappedChannels())
 	at, ok := cfg.Slack.Channel("@")
 	require.True(t, ok)
 	assert.Equal(t, []string{"main"}, at.Agents)

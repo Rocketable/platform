@@ -7,8 +7,6 @@ package backend
 import (
 	"context"
 	"sync"
-
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
 // Ensure that slackFrontendMock does implement SlackFrontend.
@@ -21,12 +19,6 @@ var _ SlackFrontend = &slackFrontendMock{}
 //
 //		// make and configure a mocked SlackFrontend
 //		mockedSlackFrontend := &slackFrontendMock{
-//			EditCronjobRootFooterFunc: func(ctx context.Context, msg *protocol.OutboundMessage, root protocol.TextConversationTarget, conversationID string) error {
-//				panic("mock out the EditCronjobRootFooter method")
-//			},
-//			SendCronjobRootFunc: func(context1 context.Context, outboundMessage *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-//				panic("mock out the SendCronjobRoot method")
-//			},
 //			SidebarChannelAgentChoicesFunc: func(context1 context.Context, s string) (string, []string, error) {
 //				panic("mock out the SidebarChannelAgentChoices method")
 //			},
@@ -46,12 +38,6 @@ var _ SlackFrontend = &slackFrontendMock{}
 //
 //	}
 type slackFrontendMock struct {
-	// EditCronjobRootFooterFunc mocks the EditCronjobRootFooter method.
-	EditCronjobRootFooterFunc func(ctx context.Context, msg *protocol.OutboundMessage, root protocol.TextConversationTarget, conversationID string) error
-
-	// SendCronjobRootFunc mocks the SendCronjobRoot method.
-	SendCronjobRootFunc func(context1 context.Context, outboundMessage *protocol.OutboundMessage) (protocol.TextConversationTarget, error)
-
 	// SidebarChannelAgentChoicesFunc mocks the SidebarChannelAgentChoices method.
 	SidebarChannelAgentChoicesFunc func(context1 context.Context, s string) (string, []string, error)
 
@@ -66,24 +52,6 @@ type slackFrontendMock struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
-		// EditCronjobRootFooter holds details about calls to the EditCronjobRootFooter method.
-		EditCronjobRootFooter []struct {
-			// Ctx is the ctx argument value.
-			Ctx context.Context
-			// Msg is the msg argument value.
-			Msg *protocol.OutboundMessage
-			// Root is the root argument value.
-			Root protocol.TextConversationTarget
-			// ConversationID is the conversationID argument value.
-			ConversationID string
-		}
-		// SendCronjobRoot holds details about calls to the SendCronjobRoot method.
-		SendCronjobRoot []struct {
-			// Context1 is the context1 argument value.
-			Context1 context.Context
-			// OutboundMessage is the outboundMessage argument value.
-			OutboundMessage *protocol.OutboundMessage
-		}
 		// SidebarChannelAgentChoices holds details about calls to the SidebarChannelAgentChoices method.
 		SidebarChannelAgentChoices []struct {
 			// Context1 is the context1 argument value.
@@ -109,92 +77,10 @@ type slackFrontendMock struct {
 			Context1 context.Context
 		}
 	}
-	lockEditCronjobRootFooter      sync.RWMutex
-	lockSendCronjobRoot            sync.RWMutex
 	lockSidebarChannelAgentChoices sync.RWMutex
 	lockSlackTagsMatching          sync.RWMutex
 	lockStart                      sync.RWMutex
 	lockStop                       sync.RWMutex
-}
-
-// EditCronjobRootFooter calls EditCronjobRootFooterFunc.
-func (mock *slackFrontendMock) EditCronjobRootFooter(ctx context.Context, msg *protocol.OutboundMessage, root protocol.TextConversationTarget, conversationID string) error {
-	if mock.EditCronjobRootFooterFunc == nil {
-		panic("slackFrontendMock.EditCronjobRootFooterFunc: method is nil but SlackFrontend.EditCronjobRootFooter was just called")
-	}
-	callInfo := struct {
-		Ctx            context.Context
-		Msg            *protocol.OutboundMessage
-		Root           protocol.TextConversationTarget
-		ConversationID string
-	}{
-		Ctx:            ctx,
-		Msg:            msg,
-		Root:           root,
-		ConversationID: conversationID,
-	}
-	mock.lockEditCronjobRootFooter.Lock()
-	mock.calls.EditCronjobRootFooter = append(mock.calls.EditCronjobRootFooter, callInfo)
-	mock.lockEditCronjobRootFooter.Unlock()
-	return mock.EditCronjobRootFooterFunc(ctx, msg, root, conversationID)
-}
-
-// EditCronjobRootFooterCalls gets all the calls that were made to EditCronjobRootFooter.
-// Check the length with:
-//
-//	len(mockedSlackFrontend.EditCronjobRootFooterCalls())
-func (mock *slackFrontendMock) EditCronjobRootFooterCalls() []struct {
-	Ctx            context.Context
-	Msg            *protocol.OutboundMessage
-	Root           protocol.TextConversationTarget
-	ConversationID string
-} {
-	var calls []struct {
-		Ctx            context.Context
-		Msg            *protocol.OutboundMessage
-		Root           protocol.TextConversationTarget
-		ConversationID string
-	}
-	mock.lockEditCronjobRootFooter.RLock()
-	calls = mock.calls.EditCronjobRootFooter
-	mock.lockEditCronjobRootFooter.RUnlock()
-	return calls
-}
-
-// SendCronjobRoot calls SendCronjobRootFunc.
-func (mock *slackFrontendMock) SendCronjobRoot(context1 context.Context, outboundMessage *protocol.OutboundMessage) (protocol.TextConversationTarget, error) {
-	if mock.SendCronjobRootFunc == nil {
-		panic("slackFrontendMock.SendCronjobRootFunc: method is nil but SlackFrontend.SendCronjobRoot was just called")
-	}
-	callInfo := struct {
-		Context1        context.Context
-		OutboundMessage *protocol.OutboundMessage
-	}{
-		Context1:        context1,
-		OutboundMessage: outboundMessage,
-	}
-	mock.lockSendCronjobRoot.Lock()
-	mock.calls.SendCronjobRoot = append(mock.calls.SendCronjobRoot, callInfo)
-	mock.lockSendCronjobRoot.Unlock()
-	return mock.SendCronjobRootFunc(context1, outboundMessage)
-}
-
-// SendCronjobRootCalls gets all the calls that were made to SendCronjobRoot.
-// Check the length with:
-//
-//	len(mockedSlackFrontend.SendCronjobRootCalls())
-func (mock *slackFrontendMock) SendCronjobRootCalls() []struct {
-	Context1        context.Context
-	OutboundMessage *protocol.OutboundMessage
-} {
-	var calls []struct {
-		Context1        context.Context
-		OutboundMessage *protocol.OutboundMessage
-	}
-	mock.lockSendCronjobRoot.RLock()
-	calls = mock.calls.SendCronjobRoot
-	mock.lockSendCronjobRoot.RUnlock()
-	return calls
 }
 
 // SidebarChannelAgentChoices calls SidebarChannelAgentChoicesFunc.
