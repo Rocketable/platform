@@ -657,7 +657,7 @@ message Space {
   string name = 2;
 }
 
-// One of a person's Web tabs: its location, preview, group, and space ids.
+// One of a person's Web tabs: its location, preview, group, and space ids, and a Search page's content.
 message Tab {
   reserved 2;
   reserved "pinned";
@@ -666,6 +666,21 @@ message Tab {
   bool preview = 3;
   string group = 4;
   string space = 5;
+  SearchPage search = 6;
+}
+
+// SearchPage is a Search tab's name and its searches, active naming the shown one by id.
+message SearchPage {
+  string name = 1;
+  repeated SavedSearch searches = 2;
+  string active = 3;
+}
+
+// SavedSearch is one search on a Search page: its id, the name the person gave it, and its query.
+message SavedSearch {
+  string id = 1;
+  string name = 2;
+  string query = 3;
 }
 
 message TabGroup {
@@ -686,10 +701,15 @@ message TabState {
   map<string, string> last = 4;
 }
 
-// SharedTab is one tab in a space's Shared group, which every Web user sees: its space id and location.
+// SharedTab is one tab in a space's Shared group, which every Web user sees: its space id and location, and for a
+// Search tab its one page.
 message SharedTab {
   string space = 1;
   string path = 2;
+  // A Search tab's one page, which everyone in the space sees and edits.
+  SearchPage search = 3;
+  // base is, in edit_shared, the page the edit was made from; an edit of a page that changed since is refused as stale.
+  SearchPage base = 4;
 }
 
 // SharedSwap swaps the places of two tabs in a space's Shared group: path and with, by location.
@@ -721,10 +741,13 @@ message TabsRequest {
   SharedSwap swap_shared = 8;
   TabMute mute = 9;
   string unmute = 10;
+  // edit_shared saves a Shared Search page's one page; a page no longer shared stays unshared.
+  SharedTab edit_shared = 11;
 }
 
 // TabsResponse is every space, oldest first, and the caller's saved tab state and its revision.
-// stale reports a refused save: the state was made from an older revision than the one saved.
+// stale reports a refused save: the state was made from an older revision than the one saved, or a Shared Search
+// page edit made from a page that has since changed.
 // shared is every space's Shared tabs, oldest added first. mutes is the caller's mutes and snoozes
 // that have not ended.
 message TabsResponse {
@@ -734,6 +757,8 @@ message TabsResponse {
   bool stale = 4;
   repeated SharedTab shared = 5;
   repeated TabMute mutes = 6;
+  // unshared is the Search page a Search tab taken out of Shared held.
+  SearchPage unshared = 7;
 }
 
 // The first event answers the browser's SDP offer; the last ends the call.

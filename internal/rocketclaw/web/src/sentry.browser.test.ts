@@ -117,7 +117,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
-    await page.waitForURL("**/search");
+    await page.waitForURL((url: URL) => url.pathname.startsWith("/search/"));
     await page.getByRole("textbox", { name: "Search sessions" }).waitFor();
     await page.getByRole("textbox", { name: "Search sessions" }).fill("cancelled request");
     await searchStarted.promise;
@@ -139,7 +139,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       // Chromium reports slow frames with the script that caused them.
       expect(spans.some((span) => span.attributes["sentry.op"]?.value === "ui.long_animation_frame" && span.attributes["browser.script.invoker_type"]?.value === "event-listener")).toBe(true);
       const data = envelopes.join("\n");
-      expect(spans.some((span) => span.name === "/search" && span.attributes["url.path"]?.value === "/search" && span.attributes["sentry.op"]?.value === "navigation")).toBe(true);
+      expect(spans.some((span) => span.name === "/search/:id" && !!span.attributes["url.path"]?.value.startsWith("/search/") && span.attributes["sentry.op"]?.value === "navigation")).toBe(true);
       expect(data).toContain("browser-test");
       expect(data).toContain("v9.8.7-browser-test");
       expect(data).not.toContain("private-search");

@@ -11,9 +11,10 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// tabs saves the caller's tab state, changes one space, adds, removes, or swaps Shared tabs, or mutes or
+// tabs saves the caller's tab state, changes one space, adds, removes, swaps, or edits Shared tabs, or mutes or
 // unmutes one session tab for the caller, then returns every space, the caller's saved state, every Shared
 // tab, and the caller's live mutes. New session and sessions people may not open are never shared or muted.
 func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse, error) {
@@ -22,8 +23,69 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		return nil, err
 	}
 
-	var saved bool
+	saved, refused, unshared, err := s.changeTabs(ctx, username, request)
+	if errors.Is(err, backend.ErrSpaceRejected) {
+		err = status.Error(codes.InvalidArgument, backend.ErrSpaceRejected.Error())
+	}
 
+	// A save answers with the state it saved; anything else, a refused save included, reads it.
+	var (
+		spaces   []backend.Space
+		shared   []backend.SharedTab
+		mutes    []backend.TabMute
+		state    backend.TabState
+		response = &TabsResponse{Stale: (request.State != nil && !saved) || refused}
+	)
+
+	if saved {
+		response.State, response.Revision = request.State, request.Revision+1
+	}
+
+	if err == nil {
+		spaces, err = s.sessions.Spaces(ctx)
+	}
+
+	if err == nil {
+		shared, err = s.sessions.SharedTabs(ctx)
+	}
+
+	if err == nil {
+		mutes, err = s.sessions.TabMutes(ctx, username)
+	}
+
+	if err == nil && !saved {
+		var errState error
+
+		state, response.Revision, err = s.sessions.TabState(ctx, username)
+		response.State, errState = tabState(state)
+		err = errors.Join(err, errState)
+	}
+
+	if err == nil {
+		response.Shared, err = sharedTabs(shared)
+	}
+
+	if err == nil {
+		response.Unshared, err = searchPage(unshared)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("web tabs: %w", err)
+	}
+
+	for _, space := range spaces {
+		response.Spaces = append(response.Spaces, &Space{Id: space.ID, Name: space.Name})
+	}
+
+	response.Mutes = tabMutes(mutes)
+
+	return response, nil
+}
+
+// changeTabs makes request's one change for username. It reports whether a save was made from the saved revision,
+// whether an edit of a Shared Search page was refused because the page changed since the edit's base, and the page a
+// Search tab taken out of Shared held.
+func (s *Server) changeTabs(ctx context.Context, username string, request *TabsRequest) (saved, refused bool, unshared []byte, err error) {
 	switch {
 	case request.State != nil:
 		saved, err = s.sessions.SaveTabState(ctx, username, savedTabState(request.State), request.Revision)
@@ -44,10 +106,15 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		}
 
 		if err == nil {
-			err = s.sessions.ShareTab(ctx, request.Share.Space, request.Share.Path)
+			err = s.sessions.ShareTab(ctx, request.Share.Space, request.Share.Path, searchJSON(request.Share.Search))
 		}
+	case request.EditShared != nil:
+		var edited bool
+
+		edited, err = s.sessions.EditSharedSearch(ctx, request.EditShared.Space, request.EditShared.Path, searchJSON(request.EditShared.Base), searchJSON(request.EditShared.Search))
+		refused = !edited
 	case request.Unshare != nil:
-		err = s.sessions.UnshareTab(ctx, request.Unshare.Space, request.Unshare.Path)
+		unshared, err = s.sessions.UnshareTab(ctx, request.Unshare.Space, request.Unshare.Path)
 	case request.SwapShared != nil:
 		err = s.sessions.SwapSharedTabs(ctx, request.SwapShared.Space, request.SwapShared.Path, request.SwapShared.With)
 	case request.Mute != nil:
@@ -56,63 +123,11 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		err = s.sessions.UnmuteTab(ctx, username, request.Unmute)
 	}
 
-	if errors.Is(err, backend.ErrSpaceRejected) {
-		err = status.Error(codes.InvalidArgument, backend.ErrSpaceRejected.Error())
-	}
-
-	// A save answers with the state it saved; anything else, a refused save included, reads it.
-	var (
-		spaces   []backend.Space
-		shared   []backend.SharedTab
-		mutes    []backend.TabMute
-		state    backend.TabState
-		response = &TabsResponse{Stale: request.State != nil && !saved}
-	)
-
-	if saved {
-		response.State, response.Revision = request.State, request.Revision+1
-	}
-
-	if err == nil {
-		spaces, err = s.sessions.Spaces(ctx)
-	}
-
-	if err == nil {
-		shared, err = s.sessions.SharedTabs(ctx)
-	}
-
-	if err == nil {
-		mutes, err = s.sessions.TabMutes(ctx, username)
-	}
-
-	if err == nil && !saved {
-		state, response.Revision, err = s.sessions.TabState(ctx, username)
-		response.State = &TabState{Space: state.Space, Last: state.Last}
-
-		for _, tab := range state.Tabs {
-			response.State.Tabs = append(response.State.Tabs, &Tab{Path: tab.Path, Preview: tab.Preview, Group: tab.Group, Space: tab.Space})
-		}
-
-		for _, group := range state.Groups {
-			response.State.Groups = append(response.State.Groups, &TabGroup{Id: group.ID, Name: group.Name, Color: group.Color, Collapsed: group.Collapsed})
-		}
-	}
-
 	if err != nil {
-		return nil, fmt.Errorf("web tabs: %w", err)
+		return saved, refused, unshared, fmt.Errorf("change tabs: %w", err)
 	}
 
-	for _, space := range spaces {
-		response.Spaces = append(response.Spaces, &Space{Id: space.ID, Name: space.Name})
-	}
-
-	for _, tab := range shared {
-		response.Shared = append(response.Shared, &SharedTab{Space: tab.Space, Path: tab.Path})
-	}
-
-	response.Mutes = tabMutes(mutes)
-
-	return response, nil
+	return saved, refused, unshared, nil
 }
 
 // muteTab mutes mute's session for username until its until, or until unmuted when until is empty.
@@ -156,16 +171,74 @@ func tabMutes(mutes []backend.TabMute) []*TabMute {
 	return out
 }
 
+// sharedTabs is every space's Shared tabs as the Web reads them.
+func sharedTabs(shared []backend.SharedTab) ([]*SharedTab, error) {
+	var err error
+
+	out := make([]*SharedTab, 0, len(shared))
+	for _, tab := range shared {
+		page, errPage := searchPage(tab.Search)
+		err = errors.Join(err, errPage)
+
+		out = append(out, &SharedTab{Space: tab.Space, Path: tab.Path, Search: page})
+	}
+
+	return out, err
+}
+
+// tabState is the backend's saved state as the Web reads it.
+func tabState(state backend.TabState) (out *TabState, err error) {
+	out = &TabState{Space: state.Space, Last: state.Last}
+	for _, tab := range state.Tabs {
+		page, errPage := searchPage(tab.Search)
+		err = errors.Join(err, errPage)
+
+		out.Tabs = append(out.Tabs, &Tab{Path: tab.Path, Preview: tab.Preview, Group: tab.Group, Space: tab.Space, Search: page})
+	}
+
+	for _, group := range state.Groups {
+		out.Groups = append(out.Groups, &TabGroup{Id: group.ID, Name: group.Name, Color: group.Color, Collapsed: group.Collapsed})
+	}
+
+	return out, err
+}
+
 // savedTabState is state as the backend saves it.
 func savedTabState(state *TabState) *backend.TabState {
 	saved := &backend.TabState{Space: state.Space, Last: state.Last}
 	for _, tab := range state.Tabs {
-		saved.Tabs = append(saved.Tabs, backend.Tab{Path: tab.Path, Preview: tab.Preview, Group: tab.Group, Space: tab.Space})
+		saved.Tabs = append(saved.Tabs, backend.Tab{Path: tab.Path, Preview: tab.Preview, Group: tab.Group, Space: tab.Space, Search: searchJSON(tab.Search)})
 	}
 
 	for _, group := range state.Groups {
 		saved.Groups = append(saved.Groups, backend.TabGroup{ID: group.Id, Name: group.Name, Color: group.Color, Collapsed: group.Collapsed})
 	}
+
+	return saved
+}
+
+// searchPage reads a Search page the backend saved as JSON, nil for other tabs.
+func searchPage(saved []byte) (*SearchPage, error) {
+	if saved == nil {
+		return nil, nil
+	}
+
+	page := &SearchPage{}
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(saved, page); err != nil {
+		return nil, fmt.Errorf("read search page: %w", err)
+	}
+
+	return page, nil
+}
+
+// searchJSON is page as the backend saves it, nil for other tabs. The page came from a request's protobuf JSON,
+// so it marshals back without error.
+func searchJSON(page *SearchPage) []byte {
+	if page == nil {
+		return nil
+	}
+
+	saved, _ := protojson.Marshal(page)
 
 	return saved
 }

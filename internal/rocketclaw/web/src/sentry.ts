@@ -26,7 +26,10 @@ if (sentryConfig) {
     defaultIntegrations: false,
     integrations: [globalHandlersIntegration(), linkedErrorsIntegration(), dedupeIntegration(), captureConsoleIntegration({ levels: ["error"] }), browserTracingIntegration({
       shouldCreateSpanForRequest: (url) => !refreshed.has(new URL(url, location.href).pathname),
-      beforeStartSpan: (options) => ({ ...options, name: path.startsWith("/s/") ? "/s/:id" : path.startsWith("/oc/") ? "/oc/:id" : path }),
+      beforeStartSpan: (options) => {
+        const prefix = ["/s/", "/oc/", "/search/"].find((start) => path.startsWith(start));
+        return { ...options, name: prefix ? `${prefix}:id` : path };
+      },
     }), interactionsIntegration()],
     tracePropagationTargets: [],
     dataCollection: { userInfo: false, cookies: false, httpHeaders: false, httpBodies: [], urlQueryParams: false },

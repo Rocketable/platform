@@ -38,8 +38,10 @@ export type SlackNamesResponse = { names?: Record<string, string> };
 export type VoiceRoute = "public" | "codex";
 export type VoiceEndReason = "stopped" | "replaced" | "expired" | "safety" | "closed" | "lost" | "error";
 export type VoiceEvent = { answer?: { sdp: string; route: VoiceRoute }; notice?: string; typed?: boolean; reply?: string; reconnecting?: boolean; ended?: { reason: VoiceEndReason } };
+// SearchPage is a Search tab's name and its searches, active naming the shown one by id.
+export type SearchPage = { name?: string; searches: { id: string; name?: string; query: string }[]; active: string };
 // SavedTabs is every Web space and the signed-in person's saved tabs; last names the last tab of each space by space id.
 // revision counts saves; stale reports a save refused because it was made from an older revision than the one saved.
-// shared is every space's Shared tabs, the same for every person, in order. mutes is the person's muted session tabs;
+// shared is every space's Shared tabs, the same for every person, in order, a Search tab with its one page. mutes is the person's muted session tabs;
 // until is when a snooze ends, empty for a mute.
-export type SavedTabs = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; preview?: boolean; group?: string; space?: string }[]; groups: { id: string; name: string; color: string; collapsed?: boolean }[]; space: string; last: Record<string, string> }; revision: string; stale?: boolean; shared: { space: string; path: string }[]; mutes: { path: string; until: string }[] };
+export type SavedTabs = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; preview?: boolean; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color: string; collapsed?: boolean }[]; space: string; last: Record<string, string> }; revision: string; stale?: boolean; shared: { space: string; path: string; search?: SearchPage }[]; unshared?: SearchPage; mutes: { path: string; until: string }[] };
