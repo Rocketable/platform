@@ -452,10 +452,10 @@ active tab.
   the view first opens shows a notice; once open, the view shows its own
   reconnecting banner. Forks and other referenced sessions open in new tabs, child
   sessions open inside the view, and deleting the shown session closes its tab.
-  Escape never closes a remote session's tab, and while OpenCode's terminal has
-  focus every key goes to it, RocketClaw's shortcuts included. Elsewhere in the
-  view, RocketClaw's shortcuts win: ⌘P and ⌘⇧P open RocketClaw's palette, and ⌘K
-  opens OpenCode's.
+  Escape never closes a remote session's tab. RocketClaw's global shortcuts win
+  throughout the view, including while OpenCode's terminal has focus, without
+  also sending the shortcut to the terminal. ⌘P and ⌘⇧P open RocketClaw's palette.
+  Other keys stay with the view; ⌘K opens OpenCode's palette from its composer.
 - **Notifications.** When an open session tab, RocketClaw or remote OpenCode,
   one of yours or one in any space's Shared group, becomes unread for you (see
   Unread below), the browser shows a desktop notification with the start of its
