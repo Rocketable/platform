@@ -723,7 +723,9 @@ with spaces, such as `room:"general chat"`. Typing `agent:` or `room:` suggests
 values; choosing one by click, arrows, Tab, or Enter writes the filter into the
 query without replacing earlier agents or rooms. Multiple agent filters match
 any listed agent; multiple room filters match any listed room. Other filters
-still narrow those results.
+still narrow those results. `agent:` also matches a chat that shows a hidden
+cron or External MCP run of that agent, such as `agent:dream` for the chat a
+`dream` cron run reports to.
 A remote OpenCode session's agent is the one it has selected, so `agent:build`
 also finds those. `server:box` keeps the remote sessions of the configured
 OpenCode server `box`, exactly. `model:opus` keeps conversations whose model
@@ -743,7 +745,7 @@ or text that looks like a header. Typing `principal:` suggests recorded values.
 Repeated principal filters require every named principal to appear somewhere in
 the conversation. Other filters and search text still apply. Principal search
 uses the message index and follows the same history cutoff and indexing status.
-Other repeated filters use AND: `tag:customer tag:triage` requires both tags. Unknown
+Other repeated filters, except `agent:` and `room:`, use AND: `tag:customer tag:triage` requires both tags. Unknown
 tags match nothing. Bare `tag:`, unclosed quotes, and invalid quoted values stay
 ordinary search text. A filter-only query lists every conversation it keeps;
 `tag:customer outage` keeps message hits only from tagged conversations.

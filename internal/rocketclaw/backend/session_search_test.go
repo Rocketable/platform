@@ -211,6 +211,16 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 	s, slack := newSessionSearchFixture(t)
 	all := []string{searchChatA, searchChatX, searchChatH, searchChatB, searchChatW, searchChatD, searchChatE}
 
+	// Bind the hidden runs as production does: the External MCP run reports to its chat and the
+	// daily chat continues its run, which another agent ran.
+	daily := strings.TrimPrefix(searchChatD, "web:")
+	_, err := s.db.ExecContext(t.Context(), `UPDATE conversations SET reports_to = $1 WHERE conversation_id = 'external_mcp:private'`, searchChatX)
+	require.NoError(t, err)
+	_, err = s.db.ExecContext(t.Context(), `UPDATE conversations SET continues = $1 WHERE conversation_id = $2`, daily, searchChatD)
+	require.NoError(t, err)
+	_, err = s.db.ExecContext(t.Context(), `UPDATE conversations SET agent = 'scribe' WHERE conversation_id = $1`, daily)
+	require.NoError(t, err)
+
 	for _, tc := range []struct {
 		query string
 		terms []string
@@ -267,6 +277,9 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 		{"agent:unknown agent:other", []string{"agent=unknown", "agent=other"}, "", []string{searchChatW}},
 		{`agent:other AGENT:"two words" agent:other`, []string{"agent=other", "agent=two words", "agent=other"}, "", []string{searchChatB, searchChatW}},
 		{`agent:"two words"`, []string{"agent=two words"}, "", []string{searchChatB}},
+		{"agent:producer", []string{"agent=producer"}, "", []string{searchChatX}},
+		{"agent:scribe agent:other", []string{"agent=scribe", "agent=other"}, "", []string{searchChatW, searchChatD}},
+		{"agent:Producer", []string{"agent=Producer"}, "", nil},
 		{"room:support", []string{"room=support"}, "", []string{searchChatA}},
 		{"room:C9", []string{"room=C9"}, "", []string{searchChatB}},
 		{"room:C1", []string{"room=C1"}, "", nil},
