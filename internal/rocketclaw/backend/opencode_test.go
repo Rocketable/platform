@@ -814,8 +814,11 @@ func TestOpenCodeMovesOldNamesToTheServer(t *testing.T) {
 func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
-	gone := httptest.NewServer(http.NotFoundHandler())
-	gone.Close()
+	// Keep the address reserved so another fixture cannot turn a failed poll into a successful one.
+	gone := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(gone.Close)
 
 	activeFails := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/session" {
