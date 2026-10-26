@@ -4806,7 +4806,7 @@ function CronUpcoming({ upcoming, now }: { upcoming: string[]; now: number }) {
     <h2 className={cronDayHead}>Upcoming</h2>
     <ol className="ml-1.5 border-l border-dashed border-amber-600/50">{upcoming.slice(0, 3).toReversed().map((at) => <li key={at} className="relative flex items-baseline gap-3 py-1.5 pl-5 text-sm text-muted-foreground">
       <span className={cn(cronDot, "border-amber-600 bg-background dark:border-amber-400")} />
-      <span className="w-11 font-medium tabular-nums">{at.slice(11, 16)}</span><span className="text-xs">in {cronGap(Date.parse(at) - now)}</span>
+      <span className="w-11 font-medium tabular-nums">{new Date(at).toISOString().slice(11, 16)}</span><span className="text-xs">in {cronGap(Date.parse(at) - now)}</span>
     </li>)}</ol>
   </section>;
 }
