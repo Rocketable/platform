@@ -2968,29 +2968,25 @@ func TestBridgeDeletesScheduledMessageWhenTurnStarts(t *testing.T) {
 
 	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.requestCh = make(chan bridgeRequest, 1)
-	bridge.stopCh = make(chan struct{})
-
-	go bridge.loop(t.Context())
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "later", false)
 	inbound.ConversationID = conversationID
 	inbound.AttachmentPresence = protocol.AttachmentPresenceUnsupported
 	responseCh := inbound.EnableResponseWait()
 	require.NoError(t, bridge.enqueue(context.Background(), &bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1"}, "submit scheduled message"))
+	request := <-bridge.requestCh
+	bridge.handle(t.Context(), &request)
 
 	select {
 	case response := <-responseCh:
 		require.Error(t, response.Err)
-	case <-time.After(time.Second):
+	default:
 		t.Fatal("scheduled message response was not completed")
 	}
 
-	require.Eventually(t, func() bool {
-		messages, err := service.ScheduledMessages()
-		require.NoError(t, err)
-
-		return len(messages) == 0
-	}, time.Second, time.Millisecond)
+	messages, err := service.ScheduledMessages()
+	require.NoError(t, err)
+	require.Empty(t, messages)
 }
 
 func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.T) {
