@@ -1294,9 +1294,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await search.fill("");
     await shown(sessionPalette, "merged-live");
     await shown(sessionPalette, "prefix-only");
+    expect(page.url()).toBe(selectedURL);
+    await search.fill("will vanish"); // A retained snapshot row need not be on the first rendered page.
     await shown(sessionPalette, "will vanish");
 
-    expect(page.url()).toBe(selectedURL);
+    await search.fill("");
     for (let i = 0; i < 8; i++) await shown(sessionPalette, `partial preview ${i}`);
     await search.fill("partial preview 445");
     await shown(sessionPalette, "partial preview 445");
@@ -1307,9 +1309,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.waitForFunction(() => (window as unknown as { __openHeld: boolean }).__openHeld);
     await page.keyboard.press("Control+p");
     await shown(sessionPalette, "merged-live");
+    await search.fill("will vanish");
     await hidden(sessionPalette, "will vanish");
     await page.evaluate(() => (window as unknown as { __releaseOpen: () => void }).__releaseOpen());
     await shown(sessionPalette, "will vanish");
+    await search.fill("");
     await shown(sessionPalette, "merged-live");
 
     blocked = Promise.withResolvers();
@@ -1683,13 +1687,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await many.goto(origin);
     await openSessions(many);
     const manyDialog = many.getByRole("dialog", { name: "Go to session or command", exact: true });
-    await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length === 96);
+    await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length === 50);
     await manyDialog.getByPlaceholder("Search sessions").pressSequentially("is:pinned fixture 0", { delay: 20 });
     await many.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null); // The title matches stay, dimmed, until the response.
     await many.waitForTimeout(300);
     expect(await many.evaluate(() => (window as unknown as { searchFetches: number }).searchFetches)).toBe(1); // Typing settles into one request.
     manySearchHold.resolve();
-    // The shown list follows the response in a background render.
+    // The shown list follows the response.
     await many.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button [data-slot="session-title"]').length === 1);
     expect(await manyDialog.getByText("Search fixture 0", { exact: true }).count()).toBe(1);
     await manyDialog.getByPlaceholder("Search sessions").fill("is:pinned not-in-any-row");
