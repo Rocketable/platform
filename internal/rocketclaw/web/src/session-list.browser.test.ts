@@ -2012,7 +2012,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const timelinePage = await context.newPage();
     await timelinePage.setViewportSize({ width: 1280, height: 844 });
     await timelinePage.goto(`${origin}/`);
+    // The palette shortcut only works once the app has mounted its key handler.
+    await timelinePage.getByPlaceholder("Message a new session").waitFor();
     await timelinePage.keyboard.press("Control+Shift+p");
+    await timelinePage.getByRole("dialog", { name: "Run command", exact: true }).getByPlaceholder("Type a command", { exact: true }).waitFor();
     await timelinePage.keyboard.type("Cron: Timeline");
     await timelinePage.getByRole("dialog", { name: "Run command", exact: true }).getByRole("button", { name: "Cron: Timeline", exact: true }).click();
     const timelinePicker = timelinePage.getByRole("dialog", { name: "Cron timeline", exact: true });
