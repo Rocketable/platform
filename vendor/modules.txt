@@ -453,11 +453,12 @@ github.com/segmentio/asm/keyset
 github.com/segmentio/encoding/ascii
 github.com/segmentio/encoding/iso8601
 github.com/segmentio/encoding/json
-# github.com/slack-go/slack v0.30.1
+# github.com/slack-go/slack v0.31.0
 ## explicit; go 1.26
 github.com/slack-go/slack
 github.com/slack-go/slack/internal/backoff
 github.com/slack-go/slack/internal/errorsx
+github.com/slack-go/slack/internal/redact
 github.com/slack-go/slack/internal/timex
 github.com/slack-go/slack/slackevents
 github.com/slack-go/slack/slackutilsx
