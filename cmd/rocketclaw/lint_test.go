@@ -2,13 +2,17 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +24,7 @@ func TestRunLintResolvesConfiguredModel(t *testing.T) {
 			workspace := t.TempDir()
 			t.Chdir(workspace)
 			writeLintConfig(t, workspace, map[string]string{"coding-high": "software-development-sol"})
+			serveLint(t)
 
 			root := workspace
 			if target == "current" {
@@ -37,6 +42,7 @@ func TestRunLintDefaultUsesNext(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	writeLintConfig(t, workspace)
+	serveLint(t)
 	writeLintAgent(t, workspace, "lint-bad.md", `---
 description: bad
 permissions:
@@ -47,11 +53,56 @@ bad
 `)
 
 	output, err := captureStdoutAndError(t, func() error { return runLint(nil) })
-	var coded exitCoder
-	require.True(t, errors.As(err, &coded))
-	assert.Equal(t, 1, coded.ExitCode())
+	assert.Equal(t, exitCodeError(1), err)
 	assert.Contains(t, output, "rocketclaw lint next: found")
-	assert.Contains(t, output, "RC006 error agents/lint-bad.md")
+	assert.Contains(t, output, "RC006 error agents/lint-bad.md: plural permissions frontmatter is ignored; use permission\n")
+}
+
+// The server's own error is told apart from an unreachable server, and neither prints a result.
+func TestRunLintReportsServerFailures(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	writeLintConfig(t, workspace)
+	writeLintAgent(t, filepath.Join(workspace, ".rocketclaw"), "main.md", "---\ndescription: main\n---\nmain\n", `{{ model "coding-high" }}`)
+
+	_, cfg, err := loadRuntimeConfig("")
+	require.NoError(t, err)
+	_, port, err := net.SplitHostPort(cfg.Web.ListenAddress)
+	require.NoError(t, err)
+
+	output, err := captureStdoutAndError(t, func() error { return runLint([]string{"current"}) })
+	assert.Empty(t, output)
+	require.ErrorContains(t, err, "could not reach the running rocketclaw server at 127.0.0.1:"+port)
+	assert.Equal(t, 1, exitCodeForError(err))
+
+	serveLint(t)
+	output, err = captureStdoutAndError(t, func() error { return runLint([]string{"current"}) })
+	assert.Empty(t, output)
+	require.ErrorContains(t, err, "rocketclaw server at 127.0.0.1:"+port+" failed lint")
+	require.ErrorContains(t, err, `model "coding-high" is not configured`)
+	assert.Equal(t, 1, exitCodeForError(err))
+}
+
+// A server too old to know InspectAgents answers with a plain-text 404.
+func TestRunLintReportsOldServer(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	writeLintConfig(t, workspace)
+
+	_, cfg, err := loadRuntimeConfig("")
+	require.NoError(t, err)
+	listener, err := net.Listen("tcp", cfg.Web.ListenAddress)
+	require.NoError(t, err)
+
+	server := httptest.NewUnstartedServer(http.NotFoundHandler())
+	require.NoError(t, server.Listener.Close())
+	server.Listener = listener
+	server.StartTLS()
+	t.Cleanup(server.Close)
+
+	output, err := captureStdoutAndError(t, func() error { return runLint([]string{"current"}) })
+	assert.Empty(t, output)
+	require.ErrorContains(t, err, "the running rocketclaw server does not support this command; restart it after upgrading")
 }
 
 func TestRunLintRejectsUnknownTarget(t *testing.T) {
@@ -59,15 +110,49 @@ func TestRunLintRejectsUnknownTarget(t *testing.T) {
 	require.ErrorContains(t, err, "usage: rocketclaw lint [next|current]")
 }
 
+// Settings print the live Behavior Settings without who may use the server.
+func TestRunSettings(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	writeLintConfig(t, workspace, map[string]string{"coding-high": "software-development-sol"})
+	serveLint(t)
+
+	output := captureStdout(t, func() error { return runSettings(nil) })
+
+	var settings config.Behavior
+	require.NoError(t, json.Unmarshal([]byte(output), &settings))
+	assert.Equal(t, map[string]string{"coding-high": "software-development-sol"}, settings.Models)
+	assert.Equal(t, []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}}}, settings.Slack.Channels)
+	assert.Contains(t, output, "{\n  \"models\": {\n")
+	assert.NotContains(t, output, "U123")
+
+	require.ErrorContains(t, runSettings([]string{"current"}), "usage: rocketclaw settings")
+}
+
+// writeLintConfig writes a rocketclaw.json whose Web listens on a loopback port that was free a moment ago.
 func writeLintConfig(t *testing.T, workspace string, models ...map[string]string) {
 	t.Helper()
-	data := config.Config{Workspace: workspace, DatabaseURL: "postgres://localhost/rocketclaw_test?sslmode=disable", Slack: config.SlackConfig{BotToken: "xoxb", AppToken: "xapp", Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U123"}}}}, OpenAI: config.OpenAIConfig{APIKey: "test"}}
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	require.NoError(t, probe.Close())
+
+	data := config.Config{Workspace: workspace, DatabaseURL: "postgres://localhost/rocketclaw_test?sslmode=disable", Web: config.WebConfig{ListenAddress: probe.Addr().String()}, Slack: config.SlackConfig{BotToken: "xoxb", AppToken: "xapp", Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U123"}}}}, OpenAI: config.OpenAIConfig{APIKey: "test"}}
 	if len(models) > 0 {
 		data.Models = models[0]
 	}
 	content, err := json.Marshal(data)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(defaultConfigPath, content, 0o600))
+}
+
+// serveLint starts the Web for the rocketclaw.json in the working directory, as rocketclaw run serves it.
+func serveLint(t *testing.T) {
+	t.Helper()
+	_, cfg, err := loadRuntimeConfig("")
+	require.NoError(t, err)
+	stop, err := startWebRPC(&backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler)}, &mockWebChannels{}, &mockWebCron{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, stop(t.Context())) })
 }
 
 func writeLintAgent(t *testing.T, root, name, content string, models ...string) {

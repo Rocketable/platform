@@ -20,8 +20,10 @@ func TestExampleConfigUsesDirectSlackChannels(t *testing.T) {
 	var cfg Config
 	require.NoError(t, json.Unmarshal(data, &cfg))
 	require.NoError(t, cfg.Validate())
+	require.NoError(t, cfg.ValidateBehavior())
 
 	require.NotEmpty(t, cfg.Slack.Channels)
+	assert.Equal(t, []string{"alice@example.com"}, cfg.Web.Admins)
 
 	assert.NotEmpty(t, cfg.Slack.Channels[0].Agents)
 	assert.NotEmpty(t, cfg.Slack.Channels[0].AllowedUserIDs)
@@ -51,6 +53,57 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 	assert.Equal(t, "127.0.0.1:8080", cfg.Web.ListenAddress)
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
+	assert.Empty(t, cfg.Logging.Level)
+	require.NoError(t, cfg.ValidateBehavior())
+	assert.Equal(t, "debug", cfg.Logging.Level)
+}
+
+func TestLoadAcceptsSetupOnlyFile(t *testing.T) {
+	cfg := loadTestConfig(t, `{
+	  "openai": {"api_key": "test-key"},
+	  "slack": {"bot_token": "xoxb-test", "app_token": "xapp-test"},
+	  "web": {"admins": ["alice@example.com"]}
+	}`)
+
+	assert.Empty(t, cfg.Slack.Channels)
+	assert.Empty(t, cfg.Models)
+	assert.Equal(t, []string{"alice@example.com"}, cfg.Web.Admins)
+	require.EqualError(t, cfg.ValidateBehavior(), "slack.channels is required")
+}
+
+func TestBehaviorRoundTrip(t *testing.T) {
+	document := `{
+	  "models": {"fast": "gpt-6.1-luna"},
+	  "auto_approver_model": "work/gpt-6.1-sol",
+	  "slack": {"channels": [{"channel": "#ops", "agents": ["main"], "allowed_user_ids": ["U123"]}]},
+	  "web_users": {"192.0.2.1": "alice"},
+	  "server_display_name": "home lab",
+	  "logging": {"level": "warn"},
+	  "instrumentation": {"hide_inputs": true, "hide_outputs": true},
+	  "web": {"sentry": {"environment": "production", "traces_sample_rate": 0.25}},
+	  "overlays": ["github.com/rocketable/overlay1@main"]
+	}`
+
+	var behavior Behavior
+	require.NoError(t, json.Unmarshal([]byte(document), &behavior))
+
+	var file Config
+	require.NoError(t, json.Unmarshal([]byte(document), &file))
+	require.Equal(t, behavior, file.Behavior(), "the document has the file's shape")
+
+	cfg := validConfig()
+	cfg.Web.Sentry.DSN = "https://public@o1.ingest.sentry.io/1"
+	cfg.Instrumentation.CollectorEndpoint = "http://localhost:6006"
+	cfg.SetBehavior(&behavior)
+
+	require.Equal(t, behavior, cfg.Behavior())
+	data, err := json.Marshal(cfg.Behavior())
+	require.NoError(t, err)
+	require.JSONEq(t, document, string(data))
+	assert.Equal(t, "xoxb-test", cfg.Slack.BotToken)
+	assert.Equal(t, "xapp-test", cfg.Slack.AppToken)
+	assert.Equal(t, "https://public@o1.ingest.sentry.io/1", cfg.Web.Sentry.DSN)
+	assert.Equal(t, "http://localhost:6006", cfg.Instrumentation.CollectorEndpoint)
 }
 
 func TestAttachmentLocation(t *testing.T) {
@@ -106,8 +159,6 @@ func TestLoadSentry(t *testing.T) {
 		{"disabled", `{}`, ""},
 		{"configured", `{"dsn":"https://public@o1.ingest.sentry.io/1","environment":"production","traces_sample_rate":0.25}`, ""},
 		{"zero sampling", `{"dsn":"https://public@o1.ingest.sentry.io/1","traces_sample_rate":0}`, ""},
-		{"negative sampling", `{"traces_sample_rate":-0.1}`, "web.sentry.traces_sample_rate"},
-		{"excessive sampling", `{"traces_sample_rate":1.1}`, "web.sentry.traces_sample_rate"},
 		{"invalid DSN", `{"dsn":"not-a-dsn"}`, "web.sentry.dsn"},
 		{"private key", `{"dsn":"https://public:private@o1.ingest.sentry.io/1"}`, "web.sentry.dsn"},
 	} {
@@ -169,20 +220,23 @@ func TestLoadPreservesModelConfig(t *testing.T) {
 	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`)
 
+	behavior := cfg.Behavior()
+	assert.Equal(t, " openai/gpt-6.1-sol ", behavior.AutoApproverModel)
+	assert.Equal(t, map[string]string{"coding-high": "software-development-sol", "review-fast": "gpt-5.6-luna"}, behavior.Models)
+	require.NoError(t, cfg.ValidateBehavior())
 	assert.Equal(t, "gpt-6.1-sol", cfg.AutoApproverModel)
-	assert.Equal(t, map[string]string{"coding-high": "software-development-sol", "review-fast": "gpt-5.6-luna"}, cfg.Models)
 }
 
-func TestLoadWebUsers(t *testing.T) {
+func TestValidateBehaviorWebUsers(t *testing.T) {
 	for _, tt := range []struct {
 		name, users, wantErr string
 	}{
 		{name: "mapped", users: `{"192.0.2.1":"alice","2001:db8::1":"bob"}`},
 		{name: "empty", users: `{}`},
 		{name: "invalid IP", users: `{"alice":"alice"}`, wantErr: "parse config JSON"},
-		{name: "empty IP", users: `{"":"alice"}`, wantErr: "web_users"},
-		{name: "empty username", users: `{"192.0.2.1":""}`, wantErr: "web_users"},
-		{name: "untrimmed username", users: `{"192.0.2.1":" alice "}`, wantErr: "web_users"},
+		{name: "empty IP", users: `{"":"alice"}`, wantErr: "web_users requires valid IP keys and non-empty, trimmed usernames"},
+		{name: "empty username", users: `{"192.0.2.1":""}`, wantErr: "web_users requires valid IP keys and non-empty, trimmed usernames"},
+		{name: "untrimmed username", users: `{"192.0.2.1":" alice "}`, wantErr: "web_users requires valid IP keys and non-empty, trimmed usernames"},
 		{name: "nonstring username", users: `{"192.0.2.1":123}`, wantErr: "parse config JSON"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -191,6 +245,10 @@ func TestLoadWebUsers(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
 			cfg, err := Load(path, "", AWSFetcher{})
+			if err == nil {
+				err = cfg.ValidateBehavior()
+			}
+
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
@@ -330,7 +388,7 @@ func TestValidateAutoApproverModels(t *testing.T) {
 			cfg := validConfig()
 			cfg.AutoApproverModel = tt.model
 
-			err := cfg.Validate()
+			err := cfg.ValidateBehavior()
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
@@ -354,8 +412,8 @@ func TestValidateRejectsInvalidModels(t *testing.T) {
 			cfg := validConfig()
 			cfg.Models = tt.models
 
-			err := cfg.Validate()
-			require.ErrorContains(t, err, "models")
+			err := cfg.ValidateBehavior()
+			require.EqualError(t, err, "models keys and values must not be empty")
 		})
 	}
 }
@@ -646,6 +704,7 @@ func TestLoadNormalizesOverlays(t *testing.T) {
 	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`)
 
+	require.NoError(t, cfg.ValidateBehavior())
 	assert.Equal(t, []string{"github.com/rocketable/overlay1@main", "github.com/rocketable/overlay2"}, cfg.Overlays)
 }
 
@@ -684,11 +743,9 @@ func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 	}{
 		{name: "workspace", update: func(c *Config) { c.Workspace = "" }, wantErr: "workspace is required"},
 		{name: "database url", update: func(c *Config) { c.DatabaseURL = "" }, wantErr: "database_url is required"},
-		{name: "missing model", update: func(c *Config) { c.AutoApproverModel = "work/" }, wantErr: `auto_approver_model: invalid model "work/": expected model or provider/model`},
 		{name: "mcp external listen addr", update: func(c *Config) { c.MCPExternal.Enabled = true }, wantErr: "mcp_external.listen_addr is required when mcp_external is enabled"},
 		{name: "slack bot token", update: func(c *Config) { c.Slack.BotToken = "" }, wantErr: "slack.bot_token is required"},
 		{name: "slack app token", update: func(c *Config) { c.Slack.AppToken = "" }, wantErr: "slack.app_token is required"},
-		{name: "slack channels", update: func(c *Config) { c.Slack.Channels = nil }, wantErr: "slack.channels is required"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
@@ -696,6 +753,27 @@ func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 
 			err := cfg.Validate()
 			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestValidateBehaviorRejectsInvalidSettings(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		update  func(*Config)
+		wantErr string
+	}{
+		{name: "missing model", update: func(c *Config) { c.AutoApproverModel = "work/" }, wantErr: `auto_approver_model: invalid model "work/": expected model or provider/model`},
+		{name: "slack channels", update: func(c *Config) { c.Slack.Channels = nil }, wantErr: "slack.channels is required"},
+		{name: "negative sampling", update: func(c *Config) { c.Web.Sentry.TracesSampleRate = new(-0.1) }, wantErr: "web.sentry.traces_sample_rate must be between 0 and 1"},
+		{name: "excessive sampling", update: func(c *Config) { c.Web.Sentry.TracesSampleRate = new(1.1) }, wantErr: "web.sentry.traces_sample_rate must be between 0 and 1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			tt.update(cfg)
+
+			require.NoError(t, cfg.Validate(), "setup validation ignores behavior")
+			require.EqualError(t, cfg.ValidateBehavior(), tt.wantErr)
 		})
 	}
 }
@@ -708,7 +786,7 @@ func TestValidateSlackChannelsLegacyCoverage(t *testing.T) {
 		{Channel: " ", Agents: []string{"ignored"}},
 	}
 
-	require.NoError(t, cfg.Validate())
+	require.NoError(t, cfg.ValidateBehavior())
 	assert.Equal(t, []SlackChannelConfig{
 		{Channel: "#triage", Agents: []string{"planner", "helper"}, AllowedUserIDs: []string{"U999"}},
 		{Channel: "#team", Agents: []string{"team"}, AllowedUserIDs: []string{"U123", "U456"}},
@@ -727,7 +805,7 @@ func TestValidateSlackKeepsAtChannel(t *testing.T) {
 		{Channel: " @ ", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}},
 	}
 
-	require.NoError(t, cfg.Validate())
+	require.NoError(t, cfg.ValidateBehavior())
 	assert.Equal(t, []SlackChannelConfig{
 		{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}},
 	}, cfg.Slack.Channels)
@@ -742,7 +820,7 @@ func TestValidateSlackLeavesHashAtUnchanged(t *testing.T) {
 		{Channel: "#@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}},
 	}
 
-	require.NoError(t, cfg.Validate())
+	require.NoError(t, cfg.ValidateBehavior())
 	assert.Equal(t, "#@", cfg.Slack.Channels[0].Channel)
 }
 
@@ -753,7 +831,7 @@ func TestValidateSlackRejectsSecondAtChannel(t *testing.T) {
 		{Channel: "@", Agents: []string{"other"}, AllowedUserIDs: []string{"U2"}},
 	}
 
-	require.ErrorContains(t, cfg.Validate(), "slack.channels may include only one @ entry")
+	require.ErrorContains(t, cfg.ValidateBehavior(), "slack.channels may include only one @ entry")
 }
 
 func TestValidateSlackChannelsRejectsInvalidConfig(t *testing.T) {
@@ -780,7 +858,7 @@ func TestValidateSlackChannelsRejectsInvalidConfig(t *testing.T) {
 			cfg.Slack.Channels = []SlackChannelConfig{{Channel: "#triage", Agents: []string{"triage"}, AllowedUserIDs: []string{"U123"}}}
 			tt.update(&cfg.Slack.Channels)
 
-			err := cfg.Validate()
+			err := cfg.ValidateBehavior()
 			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}

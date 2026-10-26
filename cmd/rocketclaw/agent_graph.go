@@ -1,22 +1,9 @@
 package main
 
-import (
-	"github.com/Rocketable/platform/internal/rocketclaw/agentlint"
-)
+import "github.com/Rocketable/platform/internal/rocketclaw/protocol"
 
 func runAgentGraph(args []string) error {
-	target, secretsARN, err := parseInspectionCommand("agent-graph", args)
-	if err != nil {
-		return err
-	}
-
-	runtimeRoot, cfg, cleanup, err := runtimeRootForInspectionTarget(target, "rocketclaw-agent-graph-*", "agent graph", secretsARN)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	dot, err := agentlint.AgentGraphDOT(runtimeRoot, cfg)
+	dot, _, err := inspectAgents("agent-graph", protocol.InspectGraph, args)
 	if err != nil {
 		return err
 	}

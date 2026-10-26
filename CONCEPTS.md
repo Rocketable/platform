@@ -84,9 +84,13 @@ Reload rebuilds the live overlay clones. It is not interchangeable with Restart.
 
 ### Restart
 
-A process restart required when the overlay list or runtime config changed.
+A process restart required when setup in the config file or AWS Secrets Manager changed. Behavior Settings, the overlay list included, apply on save and need no restart.
 
 Restart is not a substitute for Reload when only overlay file contents changed.
+
+### Behavior Settings
+
+The part of RocketClaw configuration that changes how the server behaves rather than where it runs or what secrets it holds: model mappings, the auto-approver model, Slack channel routing and allowed users, Web users, display name, logging level, trace hiding, Sentry environment and sampling, and the overlay list. They live in PostgreSQL as one document that the Web admins named in the config file (`web.admins`) edit on the Config page, and a save applies to the running server. The first start imports them from the config file; after that the file's copies are ignored. Setup and secrets stay in the config file or AWS Secrets Manager.
 
 ## Model Providers
 

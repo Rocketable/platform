@@ -13,6 +13,7 @@ func TestRunAgentGraphCurrent(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	writeLintConfig(t, workspace, map[string]string{"coding-high": "software-development-sol"})
+	serveLint(t)
 	writeLintAgent(t, filepath.Join(workspace, ".rocketclaw"), "main.md", `---
 description: main
 maxRecursion: 0
@@ -41,6 +42,7 @@ func TestRunAgentGraphDefaultUsesNext(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	writeLintConfig(t, workspace)
+	serveLint(t)
 	writeLintAgent(t, workspace, "main.md", `---
 description: main
 ---

@@ -19,7 +19,7 @@ func (processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []func(c
 
 	runner := &cronRunner{backend: rt}
 	cronjobs := cronfrontend.New(cfg.Workspace, cfg.RuntimeDirName(), rt.Sessions, runner, rt.Log)
-	slack := slackconnector.New(&cfg.Slack, rt.TextRouter, rt.Sessions, rt.Log)
+	slack := slackconnector.New(rt.Cfg, rt.TextRouter, rt.Sessions, rt.Log)
 
 	if err := slack.Authenticate(); err != nil {
 		return nil, nil, fmt.Errorf("start Slack connector: %w", err)

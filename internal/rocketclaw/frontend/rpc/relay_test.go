@@ -92,7 +92,7 @@ func startProxyTestRPC(t *testing.T, upstream string) http.Handler {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	return NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, map[string]config.OpenCodeConfig{"box": {URL: upstream, Password: "pw"}}, "")
+	return NewHTTPHandler(connection, config.NewLockedConfig(&config.Config{OpenCode: map[string]config.OpenCodeConfig{"box": {URL: upstream, Password: "pw"}}}), "")
 }
 
 func TestOpenCodeProxy(t *testing.T) {

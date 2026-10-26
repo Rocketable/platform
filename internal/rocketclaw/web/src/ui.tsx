@@ -26,6 +26,7 @@ import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, InlineText, MarkdownText, OUTPUT_KEY, TranscriptText, cleanText, copyText, mentionIds, setPreference, useCleanText, usePreference, useSlackNames } from "./transcript-text";
 import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
+import { BehaviorSettings } from "./behavior-settings";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -5535,6 +5536,7 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
         <ConfigRow label="Instrumentation" value={view.instrumentationEnabled ? "On" : "Off"} />
         <ConfigRow label="External MCP" value={view.mcpExternal ? "On" : "Off"} />
       </ConfigSection>
+      {view.canEdit ? <ConfigSection title="Behavior settings"><BehaviorSettings view={view} /></ConfigSection> : null}
     </>
   );
 }

@@ -6,23 +6,12 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
-	"strings"
 
 	"github.com/posthog/posthog-go"
 )
 
-// newLogger logs to stderr at levelText and also hands every record to the mirrors, which pick their own levels.
-func newLogger(levelText string, mirrors ...slog.Handler) *slog.Logger {
-	levelText = strings.TrimSpace(strings.ToUpper(levelText))
-	if levelText == "WARNING" {
-		levelText = "WARN"
-	}
-
-	level := slog.LevelInfo
-	if err := level.UnmarshalText([]byte(levelText)); err != nil {
-		level = slog.LevelDebug
-	}
-
+// newLogger logs to stderr at level and also hands every record to the mirrors, which pick their own levels.
+func newLogger(level *slog.LevelVar, mirrors ...slog.Handler) *slog.Logger {
 	logger := slog.New(slog.NewMultiHandler(append(mirrors, slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))...))
 	slog.SetDefault(logger)
 

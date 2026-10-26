@@ -70,7 +70,7 @@ Slack mentions use the first agent in each channel's configured `agents` list, a
 3. Add exact caller-to-coordinator and coordinator-to-member task rules.
 4. Run `rocketclaw lint` after all requested edits.
 5. Use `rocketclaw_reload` for agent-only edits.
-6. Use `main-update-rocketclaw-json` and `rocketclaw_restart` when `rocketclaw.json` or overlay-list configuration changes.
+6. Model mappings, Slack channel `agents` lists, and the overlay list are Behavior Settings: ask the human to change them on the Web Config page, where a save applies without a restart. Use `main-update-rocketclaw-json` and `rocketclaw_restart` only for setup fields in `rocketclaw.json`.
 7. Complete review-only requests with a report and preserve the active runtime state.
 8. Report the flat agent names, permission edges, recursion budget, surface names, lint result, and activation result.
 

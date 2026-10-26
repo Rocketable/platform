@@ -89,7 +89,7 @@ func TestShadowsRealBackendBrowser(t *testing.T) {
 		assert.NoError(t, conn.WriteMessage(websocket.TextMessage, fmt.Appendf(nil, `{"type":"response.completed","response":{"id":"resp","object":"response","created_at":0,"status":"completed","model":%q,"output":[{"id":"reply","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%s,"annotations":[]}]}]}}`, request.Model, encoded)))
 	}))
 	t.Cleanup(provider.Close)
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}, Slack: liveSlack()}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -108,7 +108,9 @@ func TestShadowsRealBackendBrowser(t *testing.T) {
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group
-	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
+	running.Go(func() error {
+		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly)
+	})
 	t.Cleanup(func() {
 		unlockA()
 		unlockB()
@@ -147,7 +149,7 @@ func TestShadowsRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "")
+	handler := NewHTTPHandler(connection, config.NewLockedConfig(cfg), "")
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/test/release/a":

@@ -34,7 +34,7 @@ func TestRunRejectsUnresolvedAgentModelAtStartup(t *testing.T) {
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), nil)
+	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), nil)
 	require.ErrorContains(t, err, "validate rocketcode definitions")
 	require.ErrorContains(t, err, `model "missing" is not configured`)
 }
@@ -51,7 +51,7 @@ func TestRunRejectsInvalidWorkflowAtStartup(t *testing.T) {
 
 	dsn, errDSN := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, errDSN)
-	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), nil)
+	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), nil)
 	require.ErrorContains(t, err, `workflow worker model "missing" is not configured`)
 }
 
@@ -91,9 +91,9 @@ func TestWorkflowValidationKeepsLiveAssetsOnInvalidReload(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 			cfg := &config.Config{Workspace: workspace}
-			err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), nil, slog.New(slog.DiscardHandler), config.NewLockedConfig(cfg), func(runtimeDir string) error {
+			err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), new(cfg.Behavior()), slog.New(slog.DiscardHandler), config.NewLockedConfig(cfg), func(runtimeDir string) error {
 				return validateWorkflowDefinitions(cfg, runtimeDir)
-			})
+			}, func() error { return nil })
 			require.ErrorContains(t, err, tt.want)
 			data, err := root.ReadFile(".rocketclaw/workflows/live.star")
 			require.NoError(t, err)

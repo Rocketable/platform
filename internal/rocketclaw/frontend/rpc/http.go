@@ -32,11 +32,12 @@ import (
 )
 
 // NewHTTPHandler bridges the browser API to the local Web service, and each remote OpenCode
-// server's API to the browsers the Web admits under /oc/{server}/api/. serverName prefixes the page title.
-func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, posthog config.PostHogConfig, servers map[string]config.OpenCodeConfig, serverName string) http.Handler {
+// server's API to the browsers the Web admits under /oc/{server}/api/. serverName prefixes the page
+// title when cfg has no server_display_name.
+func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serverName string) http.Handler {
 	mux := http.NewServeMux()
 	protection := http.NewCrossOriginProtection()
-	app := web.Handler(sentry, posthog, serverName)
+	app := web.Handler(cfg, serverName)
 
 	var gzipWriters sync.Pool
 
@@ -44,13 +45,13 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, pos
 	mux.Handle("GET /api/", http.NotFoundHandler())
 	mux.Handle("POST /api/", http.NotFoundHandler())
 
-	handleOpenCode(mux, connection, servers)
+	handleOpenCode(mux, connection, cfg.Clone().OpenCode)
 
 	for _, route := range []string{"GET /pages/{space}/{agent}/{path...}", "GET /pages-raw/{agent}/{path...}"} {
 		mux.HandleFunc(route, servePage(connection, app))
 	}
 
-	for method := range strings.FieldsSeq("Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions Board SlackNames Handoff ListAgents CreateSession ListConfig ListSkills ListWorkflows UpdateSession ListCronJobs RunCronJob GetPage ListPages ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs") {
+	for method := range strings.FieldsSeq("Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions Board SlackNames Handoff ListAgents CreateSession ListConfig SaveBehaviorSettings InspectAgents ListSkills ListWorkflows UpdateSession ListCronJobs RunCronJob GetPage ListPages ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs") {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 		responseType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Output().FullName())
@@ -181,11 +182,25 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, pos
 			return
 		}
 
-		ctx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-principal", address.Addr().Unmap().String()))
+		ip := address.Addr().Unmap()
+
+		ctx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-principal", ip.String(), "rocketclaw-direct-local", strconv.FormatBool(directLocal(r, ip))))
 		defer cancel()
 
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	}))
+}
+
+// directLocal reports whether r came straight from this host: from loopback ip, without a header
+// that a relay such as tailscale serve adds.
+func directLocal(r *http.Request, ip netip.Addr) bool {
+	for name := range r.Header {
+		if name == "X-Forwarded-For" || name == "Forwarded" || strings.HasPrefix(name, "Tailscale-") {
+			return false
+		}
+	}
+
+	return ip.IsLoopback()
 }
 
 // servePage answers /pages-raw/ with the file, sandboxed into an opaque origin, and /pages/ with the Web app,
@@ -438,6 +453,8 @@ func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, me
 		required = "conversationId askId"
 	case "Voice":
 		required = "conversationId sdp"
+	case "SaveBehaviorSettings":
+		required = "documentJson"
 	}
 
 	for name := range strings.FieldsSeq(required) {

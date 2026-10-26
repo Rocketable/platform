@@ -54,10 +54,12 @@ func runServe(args []string) error {
 			}
 		}()
 
-		mirrors = postHogMirrors(client, serverName(cfg))
+		mirrors = postHogMirrors(client, cmp.Or(cfg.ServerDisplayName, serverName(cfg)))
 	}
 
-	logger := newLogger(cfg.Logging.Level, mirrors...).With("process_start", processStart)
+	level := new(slog.LevelVar)
+	backend.SetLogLevel(level, cfg.Logging.Level)
+	logger := newLogger(level, mirrors...).With("process_start", processStart)
 	logger.Info(
 		"loaded rocketclaw configuration",
 		"config_path", selected.Path,
@@ -109,7 +111,7 @@ func runServe(args []string) error {
 		logger.Info("started private pprof HTTP", "address", listener.Addr().String())
 	}
 
-	if err := backend.Run(ctx, cfg, configPath, logger, processAssembler{}); err != nil {
+	if err := backend.Run(ctx, cfg, configPath, logger, level, processAssembler{}); err != nil {
 		if errors.Is(err, backend.ErrRestartRequested) {
 			logger.Info("rocketclaw restart requested; exiting with code 255 for supervisor restart")
 			return exitCodeError(255)

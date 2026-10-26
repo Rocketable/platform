@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -292,6 +293,40 @@ func (s *SessionService) ResetVoiceConversation(ctx context.Context, username, c
 func (s *SessionService) UpdateVoiceSettings(ctx context.Context, username string, agent, voice *string, transcript *bool) error {
 	_, err := execState(ctx, s.db, "update voice settings", `INSERT INTO voice_settings (username, agent, voice, transcript) VALUES ($1, COALESCE($2, ''), COALESCE($3, ''), COALESCE($4, FALSE))
 ON CONFLICT (username) DO UPDATE SET agent = COALESCE($2, voice_settings.agent), voice = COALESCE($3, voice_settings.voice), transcript = COALESCE($4, voice_settings.transcript)`, username, agent, voice, transcript)
+
+	return err
+}
+
+func (s *SessionService) behaviorSettings(ctx context.Context) (config.Behavior, bool, error) {
+	var (
+		behavior config.Behavior
+		document []byte
+	)
+
+	err := s.db.QueryRowContext(ctx, `SELECT document FROM behavior_settings`).Scan(&document)
+	if errors.Is(err, sql.ErrNoRows) {
+		return config.Behavior{}, false, nil
+	}
+
+	if err != nil {
+		return config.Behavior{}, false, fmt.Errorf("read behavior settings: %w", err)
+	}
+
+	if err := json.Unmarshal(document, &behavior); err != nil {
+		return config.Behavior{}, false, fmt.Errorf("parse behavior settings: %w", err)
+	}
+
+	return behavior, true, nil
+}
+
+func putBehaviorSettings(ctx context.Context, db stateStoreDB, behavior *config.Behavior) error {
+	document, err := json.Marshal(behavior)
+	if err != nil {
+		return fmt.Errorf("encode behavior settings: %w", err)
+	}
+
+	_, err = execState(ctx, db, "store behavior settings", `INSERT INTO behavior_settings (document) VALUES ($1)
+ON CONFLICT (id) DO UPDATE SET document = excluded.document`, document)
 
 	return err
 }

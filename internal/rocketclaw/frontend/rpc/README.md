@@ -160,7 +160,18 @@ re-added merely because they remain the current selection.
 `ListConfig` exposes only the retained `ConfigView` fields: workspace, overlays,
 model aliases, channel agent choices, MCP server names, logging level,
 auto-approver model, and enabled flags. It never serializes credentials, database
-URLs, environment values, MCP commands/headers, or browser/user mappings.
+URLs, environment values, or MCP commands/headers. It also returns the behavior
+settings as two-space-indented JSON in `behaviorJson`, and `canEdit`, true when
+the caller's username is in `web.admins`. For everyone else `web_users` and each
+Slack channel's `allowed_user_ids` are `null`.
+`SaveBehaviorSettings(SaveBehaviorSettingsRequest) -> ListConfigResponse`
+(`POST /api/SaveBehaviorSettings`, `documentJson` required) replaces the whole
+document and answers as `ListConfig` does. A non-admin gets `PermissionDenied`.
+Malformed JSON and every rejected save get `InvalidArgument` with the reason. A
+rejected save changes nothing: the stored document, live settings, runtime assets,
+and External MCP agents all stay as they were. A caller
+identified by IP, not by a tailnet login, may not map its own IP to another username
+or remove the `web_users` entry it signed in through, because that would sign it out.
 `ListSkills` uses the existing rooted runtime-definition loader and returns loaded
 skill text and metadata; origin is the loader's relative definition location.
 With `ListSkills.agent`, it returns only skills allowed for that loaded agent,

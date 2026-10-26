@@ -2,12 +2,15 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,10 +63,13 @@ func TestRunWithLegacyConfigAttemptsServe(t *testing.T) {
 func TestRunServeKeepsLegacyConfigReadOnly(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
-	legacy := []byte(`{"workspace":".","database_url":"postgres://localhost/rocketclaw_test?sslmode=disable","slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","human_user_id":"U123","room":"D123","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`)
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	legacy := fmt.Appendf(nil, `{"workspace":".","database_url":%q,"slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","human_user_id":"U123","room":"D123","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`, dsn)
 	require.NoError(t, os.WriteFile(defaultConfigPath, legacy, 0o600))
 
-	err := runServe(nil)
+	err = runServe([]string{"--pprof=false"})
 	require.ErrorContains(t, err, "slack.channels is required")
 
 	data, err := os.ReadFile(defaultConfigPath)
@@ -83,12 +89,15 @@ func TestNewLoggerLevel(t *testing.T) {
 
 	t.Cleanup(func() { slog.SetDefault(previous) })
 
+	level := new(slog.LevelVar)
+	logger := newLogger(level)
+	assert.Same(t, logger, slog.Default())
+
 	for _, test := range []struct {
 		text  string
 		level slog.Level
 	}{{"", slog.LevelDebug}, {" warning ", slog.LevelWarn}, {"ERROR", slog.LevelError}, {"bogus", slog.LevelDebug}} {
-		logger := newLogger(test.text)
-		assert.Same(t, logger, slog.Default())
+		backend.SetLogLevel(level, test.text)
 		assert.True(t, logger.Enabled(t.Context(), test.level))
 		assert.False(t, logger.Enabled(t.Context(), test.level-1))
 	}
@@ -139,6 +148,7 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 		{name: "agent graph flags", args: []string{"agent-graph", "--bad-flag"}, want: "parse agent-graph flags"},
 		{name: "lint config", args: []string{"lint", "current"}, want: "load config"},
 		{name: "agent graph config", args: []string{"agent-graph", "current"}, want: "load config"},
+		{name: "settings config", args: []string{"settings"}, want: "load config"},
 		{name: "oai login config", args: []string{"oai", "login", "--headless"}, want: "load runtime config"},
 		{name: "oai list config", args: []string{"oai", "list"}, want: "load runtime config"},
 		{name: "oai logout config", args: []string{"oai", "logout"}, want: "load runtime config"},

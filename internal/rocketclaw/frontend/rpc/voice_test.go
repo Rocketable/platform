@@ -175,6 +175,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 		DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"},
 		OpenAI:    config.OpenAIConfig{APIKey: voiceSecret, APIBaseURL: openai.URL + "/v1"},
 		Providers: map[string]config.OpenAIConfig{"nokey": {APIBaseURL: openai.URL + "/v1"}, "chat": {Auth: "chatgpt"}, "stale": {Auth: "chatgpt"}, "worker": {APIKey: "worker-key", APIBaseURL: openai.URL + "/worker"}},
+		Slack:     liveSlack(),
 	}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
@@ -193,7 +194,9 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group
-	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
+	running.Go(func() error {
+		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly)
+	})
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
 	h.rt = <-ready
@@ -214,7 +217,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 	h.conn = connection
-	web := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, ""))
+	web := httptest.NewServer(NewHTTPHandler(connection, config.NewLockedConfig(cfg), ""))
 	t.Cleanup(web.Close)
 	h.url = web.URL
 

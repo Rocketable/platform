@@ -23,7 +23,7 @@ const maxIDBytes = 1024
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
 
-	for _, method := range []string{"Protocol", "Identity", "Reload", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "Board", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "EditQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "VoiceSettings", "Tabs", "GetPage", "ListPages"} {
+	for _, method := range []string{"Protocol", "Identity", "Reload", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "Board", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "SaveBehaviorSettings", "InspectAgents", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "EditQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "VoiceSettings", "Tabs", "GetPage", "ListPages"} {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 
@@ -169,8 +169,8 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 		return s.runCronJob(ctx, request.(*RunCronJobRequest))
 	case "UpdateSession":
 		return s.updateSession(ctx, request.(*UpdateSessionRequest))
-	case "ListConfig":
-		return s.listConfig(ctx)
+	case "ListConfig", "SaveBehaviorSettings", "InspectAgents":
+		return s.configCall(ctx, method, request)
 	case "ListSkills":
 		return s.listSkills(ctx, request.(*ListSkillsRequest))
 	case "ListWorkflows":
@@ -221,6 +221,17 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 		return s.DeleteSessionEntries(ctx, request.(*SessionEntriesRequest))
 	default:
 		return s.pageCall(ctx, request)
+	}
+}
+
+func (s *Server) configCall(ctx context.Context, method string, request any) (any, error) {
+	switch method {
+	case "SaveBehaviorSettings":
+		return s.saveBehaviorSettings(ctx, request.(*SaveBehaviorSettingsRequest))
+	case "InspectAgents":
+		return s.inspectAgents(ctx, request.(*InspectAgentsRequest))
+	default:
+		return s.listConfig(ctx)
 	}
 }
 

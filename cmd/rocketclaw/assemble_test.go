@@ -68,12 +68,12 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 		DatabaseURL: dsn,
 		Slack: config.SlackConfig{
 			BotToken: "xoxb-test", AppToken: "xapp-test",
-			Channels: []config.SlackChannelConfig{{Channel: "@"}, {Channel: "#ops", Agents: []string{"main"}}},
+			Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}},
 		},
 		MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0"},
 		Web:         config.WebConfig{ListenAddress: "127.0.0.1:0"},
 	}
-	require.NoError(t, backend.Run(t.Context(), cfg, configPath, slog.New(slog.DiscardHandler), &FrontendAssemblerMock{
+	require.NoError(t, backend.Run(t.Context(), cfg, configPath, slog.New(slog.DiscardHandler), new(slog.LevelVar), &FrontendAssemblerMock{
 		ValidateAssetsFunc: processAssembler{}.ValidateAssets,
 		AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 			rt.RunCtx = ctx

@@ -42,12 +42,11 @@ import (
 
 // Server supplies concrete Web handlers. The host owns transport registration.
 type Server struct {
-	backend   frontend.Backend
-	sessions  *backend.SessionService
-	usernames map[netip.Addr]string
-	cfg       *config.LockedConfig
-	channels  ChannelAgentChoices
-	cronjobs  CronJobs
+	backend  frontend.Backend
+	sessions *backend.SessionService
+	cfg      *config.LockedConfig
+	channels ChannelAgentChoices
+	cronjobs CronJobs
 
 	tailscaleMu    sync.Mutex
 	tailscaleUsers map[netip.Addr]tailscaleUser
@@ -102,11 +101,11 @@ type CronJobs interface {
 	RunOneOffCronjob(context.Context, *protocol.OneOffCronjob) (protocol.CronRunResult, error)
 }
 
-// New snapshots WebUsers from the validated startup configuration.
+// New reads WebUsers from cfg on each call, so saved changes apply without a restart.
 // The host must restrict RPC access to the trusted Web proxy: the metadata
 // carries the browser IP, not an independently authenticated network peer.
 func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, usernames: cfg.Clone().WebUsers, cfg: cfg, channels: channels, cronjobs: cronjobs, voiceCalls: map[string]*context.CancelCauseFunc{}, listings: map[string][]sessionListing{}}
+	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, voiceCalls: map[string]*context.CancelCauseFunc{}, listings: map[string][]sessionListing{}}
 }
 
 // ListSessionEntries returns ordered entry identifiers and metadata.
@@ -1115,7 +1114,8 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 }
 
 func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
+	username, _, err := s.principal(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1125,8 +1125,21 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 		Workspace: cfg.Workspace, Overlays: cfg.Overlays,
 		LoggingLevel: cfg.Logging.Level, AutoApproverModel: cfg.AutoApproverModel,
 		InstrumentationEnabled: cfg.Instrumentation.Enabled, McpExternal: cfg.MCPExternal.Enabled,
-		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)),
+		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)), CanEdit: slices.Contains(cfg.Web.Admins, username),
 	}
+
+	// Non-admins never see who may use the server: web_users and Slack allowed user IDs.
+	behavior := cfg.Behavior()
+	if !view.CanEdit {
+		behavior.RedactUsers()
+	}
+
+	document, err := json.MarshalIndent(behavior, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("web config: %w", err)
+	}
+
+	view.BehaviorJson = string(document)
 
 	if login := metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-login-bin"); len(login) == 1 {
 		view.TailscaleUser = login[0]
@@ -1143,6 +1156,56 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 	}
 
 	return &ListConfigResponse{Config: view}, nil
+}
+
+func (s *Server) saveBehaviorSettings(ctx context.Context, request *SaveBehaviorSettingsRequest) (*ListConfigResponse, error) {
+	username, _, err := s.principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := s.cfg.Clone()
+	if !slices.Contains(cfg.Web.Admins, username) {
+		return nil, fmt.Errorf("web behavior settings: %w", status.Error(codes.PermissionDenied, "only admins may edit behavior settings"))
+	}
+
+	var behavior config.Behavior
+	if err := json.Unmarshal([]byte(request.DocumentJson), &behavior); err != nil {
+		return nil, fmt.Errorf("web behavior settings: %w", status.Error(codes.InvalidArgument, err.Error()))
+	}
+
+	// A caller known by IP may map that IP only to itself or leave it as it is, so an admin cannot
+	// sign itself out; recovering from that would need SQL.
+	if len(metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-login-bin")) == 0 {
+		ip := netip.MustParseAddr(metadata.ValueFromIncomingContext(ctx, "rocketclaw-principal")[0])
+		if next := behavior.WebUsers[ip]; next != username && next != cfg.WebUsers[ip] {
+			return nil, fmt.Errorf("web behavior settings: %w", status.Errorf(codes.InvalidArgument, "this change would sign you out as %s", username))
+		}
+	}
+
+	// Every failure is a rejected save; the chain keeps database text for withoutDatabaseText.
+	if err := s.backend.SaveBehavior(&behavior); err != nil {
+		return nil, fmt.Errorf("%w: %w", status.Error(codes.InvalidArgument, "web behavior settings"), err)
+	}
+
+	return s.listConfig(ctx)
+}
+
+func (s *Server) inspectAgents(ctx context.Context, request *InspectAgentsRequest) (*InspectAgentsResponse, error) {
+	// Agents run rocketclaw lint on the server's host, where they have no Web identity. Only this
+	// read-only RPC accepts direct loopback callers without one.
+	if !slices.Contains(metadata.ValueFromIncomingContext(ctx, "rocketclaw-direct-local"), "true") {
+		if _, _, err := s.principal(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	output, findings, err := s.backend.InspectAgents(protocol.InspectTarget(request.Target), protocol.InspectKind(request.Kind))
+	if err != nil {
+		return nil, fmt.Errorf("web inspect agents: %w", err)
+	}
+
+	return &InspectAgentsResponse{Output: output, Findings: int32(findings)}, nil
 }
 
 // listWorkflows lists the saved workflows for the web $workflow picker.
@@ -1902,7 +1965,7 @@ func (s *Server) principal(ctx context.Context) (username, principal string, err
 		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "invalid browser IP"))
 	}
 
-	if username := s.usernames[ip]; username != "" {
+	if username := s.cfg.Clone().WebUsers[ip]; username != "" {
 		return username, username, nil
 	}
 

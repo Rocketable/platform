@@ -1,10 +1,12 @@
 ---
 name: main-update-rocketclaw-json
-description: Use this skill to inspect or update rocketclaw.json (configuration file) for this rocketclaw session with jq
+description: Use this skill to inspect or update setup fields of rocketclaw.json (configuration file) for this rocketclaw session with jq
 ---
 ## Purpose
 
-Use this skill whenever the human wants to inspect or modify `rocketclaw.json` in the current working directory.
+Use this skill whenever the human wants to inspect or modify setup fields of `rocketclaw.json` in the current working directory.
+
+This skill covers setup fields only. These fields are Behavior Settings, stored in PostgreSQL and edited by a Web admin (a user listed in `web.admins`) on the Web Config page: `models`, `auto_approver_model`, `slack.channels`, `web_users`, `server_display_name`, `logging.level`, `instrumentation.hide_inputs`, `instrumentation.hide_outputs`, `web.sentry.environment`, `web.sentry.traces_sample_rate`, and `overlays`. After the first start, RocketClaw ignores their copies in `rocketclaw.json`, so editing them in the file changes nothing and reading them from the file can be stale. Run `rocketclaw settings` to see the live models and Slack routing. When the human asks for a change to one of them, do not edit the file: tell the human to make the change on the Web Config page, where a save applies at once without a restart.
 
 This skill exists to shorten the learning loop around routine rocketclaw configuration changes.
 
@@ -67,19 +69,19 @@ Examples:
 Read a value:
 
 ```bash
-jq '.slack.channels' "rocketclaw.json"
+jq '.web.listen_address' "rocketclaw.json"
 ```
 
-Set the first configured channel safely:
+Set a string safely:
 
 ```bash
-tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --arg v "#ops" '.slack.channels[0].channel = $v' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
+tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --arg v "127.0.0.1:3000" '.web.listen_address = $v' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
 ```
 
 Set a boolean or number safely:
 
 ```bash
-tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --argjson v true '.some_flag = $v' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
+tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --argjson v true '.mcp_external.enabled = $v' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
 ```
 
 Delete a key:
@@ -91,7 +93,7 @@ tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq 'del(.obsolete_key)
 Append to an array:
 
 ```bash
-tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --arg v "new-word" '.reaction_words += [$v]' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
+tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --arg v "alice@example.com" '.web.admins += [$v]' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
 ```
 
 If a write command fails after creating a temp file, clean up the temp file before finishing.
@@ -105,9 +107,7 @@ When the human asks for a config change in plain English:
 - preserve the correct JSON type
 - if the target path or intended type is ambiguous, ask a clarifying question before writing
 
-The top-level `models` object maps arbitrary placeholder names to deployment model names. Agent frontmatter uses a mapping as `model: '{{ model "name" }}'`.
-
-Slack uses direct `slack.channels` mappings. Each mapping requires `channel`, a non-empty ordered `agents` list, and non-empty `allowed_user_ids`. An `@` row is a hail fallback, not a Slack channel. Slack only answers mentions: cron and External MCP never post there. One External MCP conversation ID remains bound to one private MCP session and one Web chat. MCP history shows in that chat, but chat history does not copy back.
+If the request touches a Behavior Setting, such as a model mapping, a Slack channel's agents or allowed users, or the overlay list, do not write it with `jq`; point the human to the Web Config page instead.
 
 Use `jq` operations for arrays and object updates instead of rewriting large sections by hand.
 
@@ -135,6 +135,7 @@ If the request was read-only:
 ## Important
 
 - Use `jq`, not manual text editing, for `rocketclaw.json` changes.
+- Never edit Behavior Settings in `rocketclaw.json`; ask the human to change them on the Web Config page.
 - Use the `rocketclaw.json` in the current working directory only.
 - Do not guess missing JSON paths or intended types.
 - Never leave a partial or invalid JSON file behind.

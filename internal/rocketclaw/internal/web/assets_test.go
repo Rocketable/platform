@@ -24,7 +24,7 @@ func TestEmbeddedApplication(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(index), "<script")
 
-	handler := Handler(config.SentryConfig{}, config.PostHogConfig{}, "")
+	handler := Handler(new(config.LockedConfig), "")
 
 	for _, path := range []string{"/", "/s/conversation", "/oc/b3BlbmNvZGU6Ym94OnNlc19h", "/cron", "/cron/SEVBUlRCRUFU", "/agents", "/skills", "/skills/release", "/config", "/search", "/search/3-1-4", "/voice", "/pages", "/shortcuts", "/pages/Ops/main%2Freview/index.html"} {
 		response := httptest.NewRecorder()
@@ -54,7 +54,7 @@ func TestEmbeddedApplication(t *testing.T) {
 
 // Vite names the asset directory and some chunks with a leading underscore, which only an all: embed keeps.
 func TestEmbeddedOCApplication(t *testing.T) {
-	handler := Handler(config.SentryConfig{}, config.PostHogConfig{}, "")
+	handler := Handler(new(config.LockedConfig), "")
 	files := os.DirFS("oc-dist")
 	underscored := 0
 
@@ -90,7 +90,7 @@ func TestEmbeddedOCApplication(t *testing.T) {
 }
 
 func TestEmbeddedFileCaching(t *testing.T) {
-	handler := Handler(config.SentryConfig{}, config.PostHogConfig{}, "")
+	handler := Handler(new(config.LockedConfig), "")
 	serve := func(path string, header http.Header) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(http.MethodGet, path, http.NoBody)
 		maps.Copy(request.Header, header)
@@ -135,13 +135,22 @@ func TestEmbeddedFileCaching(t *testing.T) {
 }
 
 func TestServerNameTitle(t *testing.T) {
+	cfg := new(config.LockedConfig)
+	handler := Handler(cfg, "lab <1>")
+
 	for _, path := range []string{"/", "/s/conversation"} {
 		response := httptest.NewRecorder()
-		Handler(config.SentryConfig{}, config.PostHogConfig{}, "lab <1>").ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, http.NoBody))
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, http.NoBody))
 		require.Equal(t, http.StatusOK, response.Code)
 		require.Contains(t, response.Body.String(), "<title>lab &lt;1&gt; - RocketClaw</title>")
 		require.NotEmpty(t, response.Header().Get("ETag"))
 	}
+
+	cfg.Store(&config.Config{ServerDisplayName: "live"})
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", http.NoBody))
+	require.Contains(t, response.Body.String(), "<title>live - RocketClaw</title>")
 }
 
 func TestCompressedFileAllocations(t *testing.T) {
@@ -191,7 +200,8 @@ func BenchmarkServeCompressedFile(b *testing.B) {
 
 func TestBrowserBootstrap(t *testing.T) {
 	sentry := config.SentryConfig{DSN: "https://public@o1.ingest.sentry.io/1", Environment: "</script><script>alert(1)</script>", TracesSampleRate: new(0.25)}
-	handler := Handler(sentry, config.PostHogConfig{ProjectToken: "phc_test", Host: "https://us.i.posthog.com"}, "")
+	cfg := config.NewLockedConfig(&config.Config{Web: config.WebConfig{Sentry: sentry}, PostHog: config.PostHogConfig{ProjectToken: "phc_test", Host: "https://us.i.posthog.com"}})
+	handler := Handler(cfg, "")
 
 	for _, path := range []string{"/", "/s/conversation", "/search"} {
 		response := httptest.NewRecorder()
@@ -204,6 +214,14 @@ func TestBrowserBootstrap(t *testing.T) {
 		require.Contains(t, response.Body.String(), `\u003c/script\u003e`)
 		require.Contains(t, response.Body.String(), `<script id="posthog-config" type="application/json">{"project_token":"phc_test","host":"https://us.i.posthog.com"}</script>`)
 	}
+
+	sentry.Environment, sentry.TracesSampleRate = "staging", new(0.5)
+	cfg.Store(&config.Config{Web: config.WebConfig{Sentry: sentry}})
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", http.NoBody))
+	require.Contains(t, response.Body.String(), `"environment":"staging"`)
+	require.Contains(t, response.Body.String(), `"traces_sample_rate":0.5`)
 }
 
 func TestSentryRelease(t *testing.T) {
