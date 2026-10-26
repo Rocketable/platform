@@ -296,11 +296,11 @@ SELECT DISTINCT conversation_id FROM found`, "session search candidates", func(r
 	return candidates, err
 }
 
-// passes requires any room term and any agent term to match, and every other
-// filter term. A model term matches part of the chat's model, ignoring case.
-func (c *SidebarChat) passes(terms []SearchTerm, principals []string) bool {
-	hasRoom, roomMatch := false, false
-	hasAgent, agentMatch := false, false
+// passes requires any room term to match, any agent term to match, and every other
+// filter term. An agent term matches the chat's agent or one of sandboxed, the agents
+// of the hidden runs it shows. A model term matches part of the chat's model, ignoring case.
+func (c *SidebarChat) passes(terms []SearchTerm, principals, sandboxed []string) bool {
+	hasRoom, roomMatch, hasAgent, agentMatch := false, false, false, false
 
 	for _, term := range terms {
 		var ok bool
@@ -311,7 +311,7 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals []string) bool {
 		case keyCron:
 			ok = c.CronName == term.Value
 		case keyAgent:
-			hasAgent, agentMatch = true, agentMatch || c.Session.Conversation.Agent == term.Value
+			hasAgent, agentMatch = true, agentMatch || c.Session.Conversation.Agent == term.Value || slices.Contains(sandboxed, term.Value)
 			continue
 		case keyPrincipal:
 			ok = slices.Contains(principals, term.Value)
@@ -362,6 +362,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 		found      []MessageSearchHit
 		mentions   map[string]string
 		chats      []string // nil reads every chat.
+		sandboxed  = make(map[string][]string)
 	)
 
 	rooms := make(map[string]SidebarChat)
@@ -370,6 +371,8 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 		principals, search.Principals, err = s.messagePrincipals(groupCtx)
 		return err
 	})
+
+	group.Go(func() error { return s.sandboxedAgents(groupCtx, search.Terms, sandboxed) })
 
 	if scope == SearchMessages && search.Needle != "" {
 		group.Go(func() (err error) {
@@ -426,7 +429,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 			chat.Session.Model = agents.Items[chat.Session.Conversation.Agent].Model
 		}
 
-		if chat.passes(search.Terms, principals[chat.Session.Conversation.ID]) {
+		if chat.passes(search.Terms, principals[chat.Session.Conversation.ID], sandboxed[chat.Session.Conversation.ID]) {
 			listed = append(listed, chat)
 			hits[chat.Session.Conversation.ID] = false
 		}
@@ -534,6 +537,25 @@ func (s *SessionService) modelAgents(terms []SearchTerm) (rocketcode.Agents, err
 	}
 
 	return agents, nil
+}
+
+// sandboxedAgents adds to sandboxed, for an agent: term, the agents of the hidden runs each
+// chat shows: those reporting to it and the cron run it continues.
+func (s *SessionService) sandboxedAgents(ctx context.Context, terms []SearchTerm, sandboxed map[string][]string) error {
+	if !slices.ContainsFunc(terms, func(term SearchTerm) bool { return term.Key == keyAgent }) {
+		return nil
+	}
+
+	return readRows(ctx, s.db, `SELECT reports_to, agent FROM conversations WHERE reports_to IS NOT NULL UNION SELECT c.conversation_id, r.agent FROM conversations c JOIN conversations r ON r.conversation_id = c.continues`, "sandboxed agents", func(row rowScanner) error {
+		var chat, agent string
+		if err := row.Scan(&chat, &agent); err != nil {
+			return fmt.Errorf("scan sandboxed agent: %w", err)
+		}
+
+		sandboxed[chat] = append(sandboxed[chat], agent)
+
+		return nil
+	})
 }
 
 // sortMatches puts chats whose whole model is a model: value, ignoring case,
