@@ -112,7 +112,7 @@ Dollar commands are canonical, but message text still accepts emoji prefixes (`�
 - **Goal:** Live help no longer presents emoji prefixes as something a human types.
 - **Requirements:** R4.
 - **Dependencies:** U1
-- **Files:** `cmd/rocketclaw/CHEATSHEET.md`, `internal/rocketclaw/frontend/slack/connector.go`, `internal/rocketclaw/frontend/slack/connector_test.go`, `cmd/quickbench/README.md`, `docs/solutions/best-practices/slack-bare-cron-lists-channel-jobs.md`
+- **Files:** `cmd/rocketclaw/CHEATSHEET.md`, `internal/rocketclaw/frontend/slack/connector.go`, `internal/rocketclaw/frontend/slack/connector_test.go`, `cmd/quickbench/README.md`, `docs/solutions/best-practices/slack-bare-cron-lists-channel-jobs.md` (since deleted; Slack no longer has commands)
 - **Approach:**
   1. Remove the CHEATSHEET claim that RocketClaw translates emoji and Slack aliases into dollar commands. Drop goal examples and scenario notes that teach `🏁`, `🔁`, `🔂`, `🎛` as typed commands. Keep reaction and marker rows.
   2. Help-table tests may keep emoji glyphs as labels next to dollar commands.

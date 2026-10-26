@@ -1,5 +1,7 @@
 # State Store consolidation: rehearsal and downtime runbook
 
+> Historical (2026-10-26): v0.2.5 squashed `001` through `059` into `internal/rocketclaw/backend/migrations/001_baseline.sql`, which now creates `pg_trgm`. A store adopts the baseline only once it has run `059_legacy_handoff.sql` (v0.2.0); older stores are refused. The migration numbers below describe that earlier release.
+
 This release moves the State Store to its new tables in eleven migrations, `049` to `059`. They all run at one startup of the new binary, after `048_shadow_step_limit` from the release before if an install does not have it yet. Each one commits on its own and ends with a self-check; if a check fails, the migration aborts and the binary exits.
 
 Rehearse on copies of Wallace and Gene first, then follow the same steps in the scheduled downtime. Nothing here has been run on Wallace or Gene yet. No tool automates these comparisons yet; the steps below are manual.

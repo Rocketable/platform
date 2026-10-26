@@ -37,6 +37,7 @@ On start, you must always read:
 - Use `go doc` and `gopls` (use `go run golang.org/x/tools/gopls@latest --help`) often to find issues and opportunities to improve Go code.
 - Always react to GPT comments (`// GPT:`) by doing what the human partner asked and then deleting the comment when you accomplish the stated goal.
 - Do not disable linters with `//nolint`, config changes, or command flags without explicit human approval. If a linter finding seems wrong, first fix the code or ask for approval with the exact suppression and rationale.
+- For TypeScript and React code, react-doctor (run by `make lint` in `internal/rocketclaw/web`) wins over this file's rules on inlining one-use helpers and simplifying: keep a helper, hook, or component split that react-doctor needs, even with one caller. See `docs/solutions/best-practices/react-doctor-complexity-limit-shapes-web-components.md`.
 - Prefer the same abstraction in tests that production code uses.
 - Rocketable Platform targets Unix-like systems only: Linux and macOS. Do not add Windows-specific code paths or preserve Windows compatibility unless the human partner explicitly changes this policy.
 - In the final response, state whether README impact was considered and whether a README update was needed.
