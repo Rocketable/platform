@@ -68,7 +68,7 @@ func TestSpacePermissionsRealBrowser(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Permissions: map[string][]string{"alice": {"Ops"}},
-		OpenAI: config.OpenAIConfig{APIKey: "permissions-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
+		OpenAI: config.OpenAIConfig{APIKey: "permissions-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}, Slack: liveSlack()}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -91,7 +91,7 @@ func TestSpacePermissionsRealBrowser(t *testing.T) {
 
 	var running errgroup.Group
 	running.Go(func() error {
-		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, sandbox.None{})
+		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly, sandbox.None{})
 	})
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
@@ -144,7 +144,7 @@ func TestSpacePermissionsRealBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "", nil)
+	handler := NewHTTPHandler(connection, rt.Cfg, "")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/test/unlimit" {
 			handler.ServeHTTP(w, r)

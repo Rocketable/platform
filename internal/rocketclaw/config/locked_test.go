@@ -20,7 +20,7 @@ func TestLockedConfig(t *testing.T) {
 		MCPServers:  map[string]MCPServerConfig{"tools": {Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}}},
 		Slack:       SlackConfig{Channels: []SlackChannelConfig{{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}}},
 		Permissions: map[string][]string{"alice": {"Ops"}},
-		Web:         WebConfig{Sentry: SentryConfig{TracesSampleRate: &rate}, Tsnet: &TsnetConfig{Hostname: "rocketclaw", Tags: []string{"tag:rocketclaw"}, Origin: "https://rocketclaw.example.ts.net"}},
+		Web:         WebConfig{Admins: []string{"alice"}, Sentry: SentryConfig{TracesSampleRate: &rate}, Tsnet: &TsnetConfig{Hostname: "rocketclaw", Tags: []string{"tag:rocketclaw"}, Origin: "https://rocketclaw.example.ts.net"}},
 	}
 
 	locked := NewLockedConfig(want)
@@ -37,6 +37,7 @@ func TestLockedConfig(t *testing.T) {
 		snapshot.Slack.Channels[0].Agents[0] = "changed"
 		snapshot.Slack.Channels[0].AllowedUserIDs[0] = "changed"
 		snapshot.Permissions["alice"][0] = "changed"
+		snapshot.Web.Admins[0] = "changed"
 		*snapshot.Web.Sentry.TracesSampleRate = 1
 		snapshot.Web.Tsnet.Hostname, snapshot.Web.Tsnet.Tags[0] = "changed", "changed"
 	}
@@ -51,6 +52,7 @@ func TestLockedConfig(t *testing.T) {
 	require.Equal(t, MCPServerConfig{Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}}, snapshot.MCPServers["tools"])
 	require.Equal(t, SlackChannelConfig{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}, snapshot.Slack.Channels[0])
 	require.Equal(t, map[string][]string{"alice": {"Ops"}}, snapshot.Permissions)
+	require.Equal(t, []string{"alice"}, snapshot.Web.Admins)
 	require.InDelta(t, 0.5, *snapshot.Web.Sentry.TracesSampleRate, 0.001)
 	require.Equal(t, &TsnetConfig{Hostname: "rocketclaw", Tags: []string{"tag:rocketclaw"}, Origin: "https://rocketclaw.example.ts.net"}, snapshot.Web.Tsnet)
 

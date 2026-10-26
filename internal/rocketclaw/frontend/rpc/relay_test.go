@@ -105,7 +105,7 @@ func startProxyTestRPC(t *testing.T, upstream string) (http.Handler, *backend.Se
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	return NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, servers, "", nil), sessions, openTestTurns(t, dsn).db
+	return NewHTTPHandler(connection, config.NewLockedConfig(cfg), ""), sessions, openTestTurns(t, dsn).db
 }
 
 func TestOpenCodeProxy(t *testing.T) {

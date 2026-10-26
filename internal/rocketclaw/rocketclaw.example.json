@@ -18,6 +18,7 @@
   },
   "server_display_name": "home lab",
   "web": {
+    "admins": ["alice@example.com"],
     "sentry": {
       "dsn": "",
       "environment": "production",

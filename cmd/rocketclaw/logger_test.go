@@ -48,7 +48,10 @@ func TestPostHogMirrorsCaptureEventsAndExceptions(t *testing.T) {
 	client, err := posthog.NewWithConfig("phc_test", posthog.Config{Endpoint: server.URL})
 	require.NoError(t, err)
 
-	logger := newLogger("error", postHogMirrors(client, "lab")...).With("component", "cron")
+	level := new(slog.LevelVar)
+	level.Set(slog.LevelError)
+
+	logger := newLogger(level, postHogMirrors(client, "lab")...).With("component", "cron")
 	logger.Debug("ignored")
 	logger.Info("completed cronjob", "event", "cron_completed", "outcome", "ok")
 	logger.Info("rocketclaw health", "go_goroutines", 7)

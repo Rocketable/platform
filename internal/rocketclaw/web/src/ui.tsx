@@ -27,6 +27,7 @@ import { PaletteChooser, setThemeMode, THEME_MODES, ThemeModeChooser, useTheme }
 import { CodeBlock, InlineText, MarkdownText, OUTPUT_KEY, TranscriptText, cleanText, copyText, mentionIds, setPreference, useCleanText, usePreference, useSlackNames } from "./transcript-text";
 import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
+import { BehaviorSettings } from "./behavior-settings";
 import { ThreadPRContent, ThreadPRWatch } from "./thread-pr-panel";
 import { reportTyping, TypingPill } from "./typing";
 import { Button } from "@/components/ui/button";
@@ -6115,6 +6116,7 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
         <ConfigRow label="Instrumentation" value={view.instrumentationEnabled ? "On" : "Off"} />
         <ConfigRow label="External MCP" value={view.mcpExternal ? "On" : "Off"} />
       </ConfigSection>
+      {view.canEdit ? <ConfigSection title="Behavior settings"><BehaviorSettings view={view} /></ConfigSection> : null}
     </>
   );
 }

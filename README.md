@@ -34,13 +34,27 @@ See [LICENSE](LICENSE) for the full license terms.
 go run github.com/Rocketable/platform/cmd/rocketclaw@main
 ```
 
-Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or the older `femtoclaw.json`) from the current folder. That file points at the workspace, holds the Slack credentials and channels, and turns on other integrations.
+Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or the older `femtoclaw.json`) from the current folder. That file holds setup and secrets: it points at the workspace and the database, holds the Slack and provider credentials, and turns on other integrations. Values can also come from AWS Secrets Manager.
+
+Behavior Settings live in PostgreSQL instead: `auto_approver_model`, `slack.channels`, `server_display_name`, `logging.level`, `instrumentation.hide_inputs` and `hide_outputs`, `web.sentry.environment` and `traces_sample_rate`, and `overlays`. The first start copies them from the file once every startup check passes. After that, RocketClaw ignores them in the file and logs a warning naming each one it ignored. The Web users named in the file's `web.admins` (their Tailscale logins, for example `"web": {"admins": ["alice@example.com"]}`) edit them on the Config page, one control per setting. A save is checked whole and applies to the running server at once, or is refused and changes nothing. Everyone else sees the page read-only.
+
+If the stored settings stop RocketClaw from starting (the error starts with `stored behavior settings:`), fix them in place with `psql` on the `database_url` database:
+
+```sh
+psql "$DATABASE_URL" -At -c 'SELECT document FROM behavior_settings' > behavior.json
+# fix behavior.json, then:
+psql "$DATABASE_URL" -v doc="$(cat behavior.json)" <<'SQL'
+UPDATE behavior_settings SET document = :'doc'::jsonb;
+SQL
+```
+
+Deleting the row (`DELETE FROM behavior_settings`) makes the next start import from the file again, but it discards every edit made on the Web, so use it only as a last resort.
 
 A workspace contains `AGENTS.md` and, optionally, `agents/`, `skills/`, `scripts/`, `cron/`, and `workflows/` folders.
 
 ### Web page
 
-The web page is the main way to work with RocketClaw. It is built into RocketClaw and serves HTTPS on `0.0.0.0:3000`; plain `http://` does not answer. To change the address, set `"web": {"listen_address": "127.0.0.1:3000"}`. To use your own certificate, set both `"tls_cert_file"` and `"tls_key_file"` under `web` to PEM files; without them RocketClaw makes a self-signed certificate at each start, which browsers warn about until you accept it. Over HTTPS, browsers carry every tab over one connection, so many open tabs never run out of connections. Links RocketClaw hands out use the tsnet node's HTTPS name once that node serves (see [Voice](#voice)), and this machine's Tailscale address otherwise. The browser tab reads `<name> - RocketClaw`, so several servers stay apart: `name` is `"server_display_name"` when set, else the Tailscale node name (`web.tsnet.hostname`, or this machine's node). Changing it requires restart.
+The web page is the main way to work with RocketClaw. It is built into RocketClaw and serves HTTPS on `0.0.0.0:3000`; plain `http://` does not answer. To change the address, set `"web": {"listen_address": "127.0.0.1:3000"}`. To use your own certificate, set both `"tls_cert_file"` and `"tls_key_file"` under `web` to PEM files; without them RocketClaw makes a self-signed certificate at each start, which browsers warn about until you accept it. Over HTTPS, browsers carry every tab over one connection, so many open tabs never run out of connections. Links RocketClaw hands out use the tsnet node's HTTPS name once that node serves (see [Voice](#voice)), and this machine's Tailscale address otherwise. The browser tab reads `<name> - RocketClaw`, so several servers stay apart: `name` is `"server_display_name"` when set, else the Tailscale node name (`web.tsnet.hostname`, or this machine's node). A saved change shows on pages loaded after the save.
 
 RocketClaw identifies each browser by its Tailscale login, found with a Tailscale lookup of the browser's IP address. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features and optional Sentry error tracking.
 
@@ -475,7 +489,7 @@ Skill templates read their arguments the same way OpenCode commands do: `$ARGUME
 
 ## Models and providers
 
-The top-level `openai` object is the default model provider. Add more under `providers`:
+The top-level `openai` object in the config file is the default model provider. Add more under `providers`:
 
 ```json
 {

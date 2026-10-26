@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -114,6 +115,7 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 		Workspace:   workspace,
 		DatabaseURL: dsn,
 		OpenAI:      config.OpenAIConfig{APIKey: "test", APIBaseURL: model.URL},
+		Slack:       config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"managed"}, AllowedUserIDs: []string{"U1"}}}},
 		MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0"},
 	}
 	assembler := externalMCPAssembler{started: make(chan externalMCPStarted, 1)}
@@ -122,7 +124,7 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	errRun := make(chan error, 1)
 
 	go func() {
-		errRun <- backend.Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), testLogger(), assembler, sandbox.None{})
+		errRun <- backend.Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), testLogger(), new(slog.LevelVar), assembler, sandbox.None{})
 	}()
 
 	t.Cleanup(func() {

@@ -110,7 +110,7 @@ func BenchmarkHTTPEventFraming(b *testing.B) {
 func startHTTPTestServer(t *testing.T, connection *grpc.ClientConn) *httptest.Server {
 	t.Helper()
 
-	server := httptest.NewServer(NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil))
+	server := httptest.NewServer(NewHTTPHandler(connection, new(config.LockedConfig), ""))
 	t.Cleanup(server.Close)
 
 	return server
@@ -121,7 +121,7 @@ func TestHTTPBoundary(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)
+	handler := NewHTTPHandler(connection, new(config.LockedConfig), "")
 
 	for _, tc := range []struct{ method, body, message string }{
 		{"RunCronJob", `{}`, "stem is required"},
@@ -212,7 +212,7 @@ func TestHTTPReload(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)
+	handler := NewHTTPHandler(connection, new(config.LockedConfig), "")
 
 	for _, tc := range []struct {
 		address string
@@ -448,14 +448,14 @@ func TestHTTPStreams(t *testing.T) {
 				request := httptest.NewRequest(http.MethodPost, "/api/UploadAttachment?conversationId=visible&name=original.bin", iotest.ErrReader(errors.New("broken body")))
 				request.RemoteAddr = "127.0.0.1:1234"
 				response := httptest.NewRecorder()
-				NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil).ServeHTTP(response, request)
+				NewHTTPHandler(connection, new(config.LockedConfig), "").ServeHTTP(response, request)
 				require.Equal(t, http.StatusBadRequest, response.Code)
 				require.JSONEq(t, `{"code":3,"message":"read upload body: rpc error: code = InvalidArgument desc = broken body"}`, response.Body.String())
 
 				return
 			}
 
-			server := httptest.NewServer(NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil))
+			server := httptest.NewServer(NewHTTPHandler(connection, new(config.LockedConfig), ""))
 			t.Cleanup(server.Close)
 
 			path, method := "/api/ListSessions", http.MethodGet
