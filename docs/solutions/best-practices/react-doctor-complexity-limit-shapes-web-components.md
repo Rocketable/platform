@@ -44,7 +44,7 @@ To read the exact numbers, run `bunx react-doctor@latest --no-telemetry --blocki
 
 ## Why This Matters
 
-These helpers look like the single-use abstractions that `AGENTS.md` says to inline. In the review of this work, two reviewers proposed inlining `keyCommands` and `shownTitle`. The validator rejected the `keyCommands` proposal because inlining pushes `SessionApp` back over the limit and fails `make lint`. Without this note, the next simplification pass is likely to inline them, break lint, and rediscover the limit. The Go side has the same pattern: `gocyclo`'s limit of 30 is why `shownTitle` exists in `internal/rocketclaw/backend/session_search.go`.
+These helpers look like the single-use abstractions that `AGENTS.md` says to inline. In the review of this work, two reviewers proposed inlining `keyCommands` and `shownTitle`. The validator rejected the `keyCommands` proposal because inlining pushes `SessionApp` back over the limit and fails `make lint`. Without this note, the next simplification pass is likely to inline them, break lint, and rediscover the limit. The Go side has the same pattern under `gocyclo`'s limit of 30.
 
 ## When to Apply
 

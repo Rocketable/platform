@@ -282,7 +282,7 @@ None blocking. Bare `$enqueue` follows existing dollar-command missing-arg help.
 - `CONCEPTS.md` — Slack Steer, Enqueued Slack Message, Thread Queue.
 - `docs/specs/2026-07-24-slack-dollar-commands-design.md` — commands are consumed before placeholders or ordinary submit.
 - `cmd/rocketclaw/CHEATSHEET.md` — hourglass as the current mid-turn receipt; scheduled-message tools.
-- `docs/solutions/logic-errors/slack-root-app-mention-redelivery-cleared-buffered-follow-ups.md` — create-if-absent stack sentinel; do not keep concat-on-promote.
+- `docs/solutions/logic-errors/slack-thread-parent-message-redelivery-enqueued-second-turn.md` — create-if-absent stack sentinel; do not keep concat-on-promote.
 
 ---
 

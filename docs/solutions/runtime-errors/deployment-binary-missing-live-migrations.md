@@ -47,9 +47,11 @@ The permission PR remained focused on the fix. The unread-message feature was a 
 
 ## Why This Works
 
-RocketClaw embeds migration SQL into each binary (`internal/rocketclaw/backend/store_schema.go:19-20`). Startup reads the database's `pg_migrations` ledger and rejects any applied migration ID absent from that binary's migration set (`internal/rocketclaw/backend/store_schema.go:51-77`). State-store initialization fails as a result (`internal/rocketclaw/backend/store.go:1819-1821`).
+RocketClaw embeds migration SQL into each binary (`internal/rocketclaw/backend/store_schema.go:20-21`). Startup reads the database's `pg_migrations` ledger and rejects any applied migration ID absent from that binary's migration set (`internal/rocketclaw/backend/store_schema.go:79-102`). State-store initialization fails as a result (`internal/rocketclaw/backend/store.go:2132-2134`).
 
-Building on the deployed feature baseline supplied the migrations the database already knew. Recognized, already-applied migrations are skipped (`internal/rocketclaw/backend/store_schema.go:86-93`). Recovery preserved that baseline while adding the fix; it did not remove ledger entries or bypass migration validation.
+Building on the deployed feature baseline supplied the migrations the database already knew. Recognized, already-applied migrations are skipped (`internal/rocketclaw/backend/store_schema.go:106-109`). Recovery preserved that baseline while adding the fix; it did not remove ledger entries or bypass migration validation.
+
+Since v0.2.5, startup itself first replaces the ledger rows for `001` through `059` with `001_baseline.sql` (`internal/rocketclaw/backend/store_schema.go:45-64`), so a binary older than v0.2.5 fails on an adopted database with `unknown migration in database: 001_baseline.sql`.
 
 ## Prevention
 

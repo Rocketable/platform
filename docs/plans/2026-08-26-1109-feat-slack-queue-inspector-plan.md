@@ -191,7 +191,7 @@ flowchart TB
 
 - Current two-section `$queue` and picker: `docs/plans/2026-08-24-1324-feat-slack-steer-or-enqueue-plan.md`, `CONCEPTS.md`.
 - Dollar-command help already uses a Slack table: `cmd/rocketclaw/CHEATSHEET.md`.
-- Redelivery must not wipe later work: `docs/solutions/logic-errors/slack-root-app-mention-redelivery-cleared-buffered-follow-ups.md`.
+- Redelivery must not wipe later work: `docs/solutions/logic-errors/slack-thread-parent-message-redelivery-enqueued-second-turn.md`.
 
 ---
 

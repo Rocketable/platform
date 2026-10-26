@@ -44,7 +44,7 @@ The cost lands on statements that look objects up by name across schemas. Replac
 - Do not raise test timeouts or retry timing tests to get past this.
 - `make test` without `ROCKETCLAW_TEST_DATABASE_URL` starts a fresh container per run and does not hit this.
 
-The lasting fix is for `IsolatedTestDatabaseURL` to take a `testing.TB` and drop its schema in `t.Cleanup`; its 59 callers make that a change of its own.
+The lasting fix is for `IsolatedTestDatabaseURL` to take a `testing.TB` and drop its schema in `t.Cleanup`; its 58 callers make that a change of its own.
 
 ## When to Apply
 

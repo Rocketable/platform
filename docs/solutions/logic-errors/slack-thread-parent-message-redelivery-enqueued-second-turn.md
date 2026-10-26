@@ -1,15 +1,15 @@
 ---
-title: Slack Thread Parent Message Redelivery Enqueued Second Turn
+title: Slack Mention Redelivery Must Start At Most One Turn
 date: 2026-08-26
-last_updated: 2026-10-08
+last_updated: 2026-10-26
 category: docs/solutions/logic-errors/
 module: internal/rocketclaw/frontend/slack
 problem_type: logic_error
 component: assistant
 symptoms:
-  - "A Slack hail starts a turn from the app_mention event, then the same parent message event (same ts, thread_ts=ts) is treated as a mid-turn send."
-  - "That parent is enqueued on the Thread Queue and popped as a second turn."
-  - "The second turn leaves a stuck thinking card."
+  - "A redelivered Root Slack Mention cleared a follow-up already buffered for the running turn, so the follow-up was never delivered."
+  - "Slack's redelivery of the thread parent message (same ts, thread_ts equal to ts) was enqueued and ran as a second turn for the same mention."
+  - "The phantom second turn could leave a thinking card that never cleared."
 root_cause: logic_error
 resolution_type: code_fix
 severity: high
@@ -17,95 +17,62 @@ tags:
   - slack
   - app-mention
   - redelivery
-  - thread-queue
-  - enqueued-slack-message
-  - slack-steer
   - dual-delivery
-  - thinking-card
+  - thread-queue
+  - at-most-once
+  - idempotency
 ---
 
-# Slack Thread Parent Message Redelivery Enqueued Second Turn
-
-> **Superseded (2026-10-08).** Slack intake is now mention-only. The connector handles only `app_mention` events (`handleAppMentionEvent` in `internal/rocketclaw/frontend/slack/connector.go`), so the parent `message` redelivery described here no longer reaches RocketClaw. Each accepted mention becomes Thread Queue item `slack:<channel>:<ts>`, which `threadBridgeManager.SubmitMention` (`internal/rocketclaw/backend/thread_bridges.go`) admits at most once, refusing a redelivery that is waiting, running, or already in history. Slack Steers and `$enqueue` were removed. Paths and names below are historical.
+# Slack Mention Redelivery Must Start At Most One Turn
 
 ## Problem
 
-Slack delivers a Root Slack Mention twice: first as `app_mention`, then as a `message` whose `thread_ts` equals the message `ts`. The first event correctly starts a Managed Slack Thread. The second event is the same parent, not a new human reply.
-
-`handleMessageEvent` treats any present `thread_ts` as a social thread reply (`internal/rocketclaw/slackconnector/connector.go:3254-3265`). After the mention has called `beginSlackStack` (`internal/rocketclaw/slackconnector/connector.go:3632-3633`), that parent looks like a mid-turn plain send.
-
-Steer-or-enqueue then does later-work work: a too-late send becomes an Enqueued Slack Message (`handleMidTurnPlainSend` at FinalAnswer calls `stashEnqueuedMessage`, `internal/rocketclaw/slackconnector/connector.go:4054-4057`). When the hail turn ends, `PickLaterWork` pops the Thread Queue and `ActivateEnqueue` posts a consume card plus a new thinking card (`internal/rocketclaw/slackconnector/connector.go:360-370`).
-
-`handleAppMentionEvent` already refuses real thread replies: if `thread_ts` is set and not equal to `ts`, it returns (`internal/rocketclaw/slackconnector/connector.go:3568-3570`). The message path had no matching parent swallow.
+Slack can deliver the same Root Slack Mention more than once: as a repeated `app_mention`, and as a `message` event for the thread parent whose `thread_ts` equals its own `ts`. One mention must start at most one turn, and a redelivery must not disturb work that is already waiting or running in the Managed Slack Thread.
 
 ## Symptoms
 
-- After a root hail, Slack's parent `message` redelivery entered `handleMidTurnPlainSend` while the stack was active.
-- If the hail turn was already writing the final answer, the parent was stashed as an Enqueued Slack Message (envelope on the root `ts`).
-- If the hail turn was still in the tool loop, the same parent became a Slack Steer (hourglass on the root `ts`).
-- At turn end, `PickLaterWork` treated that row as later work and `ActivateEnqueue` opened a second thinking card for the same hail text.
-- Operators saw one mention start two turns: the real hail, then a 📨 card and a thinking card that could stay up if that second turn never finished.
+Two historical failures, both in code that no longer exists:
+
+- **Redelivered root mention cleared buffered follow-ups (historical).** The connector kept an in-memory per-thread stack for mid-turn messages (Buffered Follow-Ups, later Slack Steers). Each root delivery reset that stack, so a redelivery during the first turn dropped a follow-up the user had already sent.
+- **Redelivered parent message enqueued a second turn (historical).** The connector's plain-message path treated any message with `thread_ts` set as a thread reply. The parent redelivery arrived mid-turn, became an Enqueued Slack Message on the Thread Queue, and ran as a second turn for the same text after the first finished.
 
 ## What Didn't Work
 
-Excluding every parent from `socialThreadReply` (require `thread_ts != ts` in `handleMessageEvent`) was too broad. Idle `$cron` and first-turn starts use a parent `message` with matching timestamps (`TestHandleMessageEventConsumesBareCronCommands`, `internal/rocketclaw/slackconnector/connector_test.go:10149-10180`). Those would hit the not-allowed-managed-thread return (`internal/rocketclaw/slackconnector/connector.go:3277-3280`).
+All of this is history. The connector code it names has been removed.
 
-Relying on the existing app-mention redelivery tests was not enough. They re-fire `app_mention` plus a follow-up with a distinct `ts`. They never send the parent `message` with `ts == thread_ts`.
+- **Connector-level patches, one per event shape.** The first fix made the stack initialization idempotent: create a missing key, never overwrite an active one. The second fix swallowed a mid-turn message whose `ts` equalled its `thread_ts`. Each patch closed one redelivery shape and missed the other. The tests for each sent only their own shape, so neither caught the other bug.
+- **Dropping every parent message in the reply path.** This was too broad at the time, because an idle parent message still started commands and first turns.
+- **In-memory dedup state in the connector.** The stack map was process-local. A restart, or a redelivery that arrived after the turn finished, could not be recognized from it.
 
 ## Solution
 
-Swallow only the mid-turn parent redelivery. In `handleMidTurnPlainSend`, after the stack-active check, if `MessageTS == ThreadTS`, return true. Idle parents still fall through: stack inactive → return false → `$cron` / first turn continue.
+Slack intake is now mention-only, and duplicates are refused at one durable point.
 
-The fix is in [PR #16](https://github.com/Rocketable/platform/pull/16) (unmerged as of writing).
+1. The connector handles only channel renames, `AppMentionEvent` and `AgentSessionStoppedEvent` (`internal/rocketclaw/frontend/slack/connector.go:1430-1439`). Plain messages, including the parent `message` redelivery, never reach the router. Nothing else in Slack drives an agent.
+2. `handleAppMentionEvent` (`internal/rocketclaw/frontend/slack/connector.go:1493-1581`) builds the inbound message and calls `threadRouter.SubmitMention` (line 1565). It adds the robot reaction only when the mention is accepted (lines 1577-1580). A refused redelivery returns `false, nil`, so it gets no reaction and no failure reply.
+3. `threadBridgeManager.SubmitMention` (`internal/rocketclaw/backend/thread_bridges.go:338-374`) makes the Thread Queue item ID `"slack:" + channel + ":" + message ts` (line 343). Inside one State Store transaction, holding the session history lock, it checks for that ID in two places: any model turn row (`turns` with `takes_lane`, whether waiting, running or finished) and saved history (`entries` whose `replay_input` carries that `input_id`) (SQL at lines 361-368). If it finds the ID, it returns `false, nil` (lines 372-373) and writes nothing.
 
-Before (active stack always steered or enqueued):
+Tests that pin this behavior:
 
-```go
-if !active {
-	return false
-}
-if c.threadRouter.TurnPhase(...) == harnessbridge.ThreadTurnFinalAnswer {
-	c.stashEnqueuedMessage(...)
-	return true
-}
-return c.bufferSlackStack(...)
-```
-
-After (`internal/rocketclaw/slackconnector/connector.go:4046-4060`):
-
-```go
-if !active {
-	return false
-}
-if strings.TrimSpace(replyTarget.MessageTS) == strings.TrimSpace(replyTarget.ThreadTS) {
-	return true
-}
-if c.threadRouter.TurnPhase(...) == harnessbridge.ThreadTurnFinalAnswer {
-	c.stashEnqueuedMessage(...)
-	return true
-}
-return c.bufferSlackStack(...)
-```
-
-A real mid-turn reply has `MessageTS != ThreadTS` and still becomes a Slack Steer or an Enqueued Slack Message.
+- `TestHandleAppMentionEventRedeliveryReactsOnce` (`internal/rocketclaw/frontend/slack/connector_test.go:4242-4271`) sends the root mention, the parent `message` and a threaded reply mention, twice each. It expects four `SubmitMention` calls (the two parent messages never reach the router) and exactly two robot reactions.
+- `TestHandleEventsAPIIgnoresMessagesAndReactions` (`internal/rocketclaw/frontend/slack/connector_test.go:4180-4198`) shows that a parent `message` with `ts == thread_ts`, a plain reply, a reaction and an edited mention cause no router call.
+- `TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce` (`internal/rocketclaw/backend/thread_bridges_test.go:239-305`) refuses a redelivery in each state: while the mention waits, mid-turn, after a restart, and after its turn has finished. It also checks that a mention never steers the running turn.
 
 ## Why This Works
 
-Two Slack events, one hail:
-
-1. `app_mention` starts the Managed Slack Thread and the stack (`handleAppMentionEvent`, `internal/rocketclaw/slackconnector/connector.go:3553-3673`).
-2. Parent `message` with `thread_ts == ts` hits `handleMidTurnPlainSend` (`internal/rocketclaw/slackconnector/connector.go:3418-3419`). Stack is active, timestamps match, return true. No envelope, no hourglass, no Thread Queue row.
-
-Idle parent is a different state. No active stack → return false → `$cron` or first turn still run. That is why the swallow lives in `handleMidTurnPlainSend`, not in `socialThreadReply`.
+Both historical bugs had the same cause: the connector decided whether an event was new work from its own in-memory state, and each event shape needed its own rule. Now only one kind of Slack event can create work, and the decision is made where the work is stored. The ID comes from Slack's message `ts`, which stays the same across redeliveries. Because the check and the insert happen in the same transaction, two concurrent deliveries cannot both pass. The check also covers waiting, running, finished and saved work, so a redelivery after a restart or after the answer is refused too. A refused redelivery writes nothing, so queued and running work is left as it was.
 
 ## Prevention
 
-- Do not treat "`thread_ts` present" as "this is a reply." Slack sets `thread_ts` on the parent itself.
-- Do not fold the swallow into `socialThreadReply`. Idle parent `$cron` and first turn need that flag.
-- Keep `TestHandleMessageEventIgnoresThreadParentRedelivery` (`internal/rocketclaw/slackconnector/connector_test.go:6426-6449`). It fires `handleAppMentionEvent`, then `handleMessageEvent` with `mention.TimeStamp` for both `message_ts` and `thread_ts`, and asserts no Thread Queue row, no extra submit, no envelope, and no hourglass on the parent `ts`. The stub is in FinalAnswer so a regression would enqueue.
-- App-mention-only redelivery tests with a distinct follow-up `ts` do not cover this bug.
+- Dedupe Slack redeliveries at the durable boundary, keyed by Slack's message `ts`. Never dedupe with in-memory connector state such as maps, stacks or "turn active" flags.
+- Any new Slack entry point that can create work must go through `SubmitMention` and its `slack:<channel>:<message ts>` ID. Do not write to the Thread Queue directly from the connector.
+- Do not take "`thread_ts` is set" to mean "this is a reply". Slack also sets `thread_ts` on the thread parent.
+- Do not add Slack event types to the switch in `handleEventsAPI` without deciding how their redeliveries are deduped. A plain-message handler would bring back the parent-redelivery path.
+- Any change to the admission SQL must keep the check and the insert in one transaction, and must keep both lookups: turn rows and saved history.
+- Redelivery tests must send every shape Slack uses (repeated `app_mention`, parent `message` with `ts == thread_ts`, threaded reply). Assert both the number of accepted submissions and the visible receipts.
 
 ## Related Issues
 
-- [PR #16](https://github.com/Rocketable/platform/pull/16) — this fix.
-- [Slack root app-mention redelivery cleared buffered follow-ups](slack-root-app-mention-redelivery-cleared-buffered-follow-ups.md) — same hail dual-delivery area; that doc is `app_mention` wiping the steer stack via `beginSlackStack`. Different event, different failure.
+- [Saved queue never started after restart](saved-queue-never-started-after-restart.md): the same Thread Queue rows after a restart.
+- Historical fixes, now removed: [PR #1](https://github.com/Rocketable/platform/pull/1) (idempotent stack initialization) and [PR #16](https://github.com/Rocketable/platform/pull/16) (mid-turn parent message swallowed).
+- `CONCEPTS.md`: Thread Queue, Managed Slack Thread and Root Slack Mention. Buffered Follow-Up, Slack Steer and Enqueued Slack Message are listed there as historical.

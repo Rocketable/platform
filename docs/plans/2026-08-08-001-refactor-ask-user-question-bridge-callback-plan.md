@@ -177,7 +177,7 @@ Behavior must stay the same as today; only the path should get simpler.
 - Assumes current `nativeQuestionTurn`-class rules describe today's visibility bar and must be preserved in outcome even if the mechanism is replaced by origin-supplied behavior.
 - Assumes Slack remains the only interactive human question surface in this work.
 - Related plan: `docs/plans/2026-08-07-001-refactor-two-channel-clockwork-plan.md` (question path entries are superseded by this contract where they conflict).
-- Read before coding: `CONCEPTS.md` (Managed Slack Thread, Buffered Follow-Up) and `docs/solutions/logic-errors/slack-root-app-mention-redelivery-cleared-buffered-follow-ups.md`.
+- Read before coding: `CONCEPTS.md` (Managed Slack Thread, Buffered Follow-Up) and `docs/solutions/logic-errors/slack-thread-parent-message-redelivery-enqueued-second-turn.md`.
 
 ### Outstanding Questions
 
@@ -244,7 +244,7 @@ Target path:
   **Governs R12–R13, D6.**
 
 - KTD5. **Do not touch Slack follow-up stack lifecycle while moving questions.**
-  Preserve `beginSlackStack` idempotency and redelivery behavior from `docs/solutions/logic-errors/slack-root-app-mention-redelivery-cleared-buffered-follow-ups.md`.
+  Preserve `beginSlackStack` idempotency and redelivery behavior from `docs/solutions/logic-errors/slack-thread-parent-message-redelivery-enqueued-second-turn.md`.
   **Governs R15.**
 
 ### Implementation Units

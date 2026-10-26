@@ -41,7 +41,7 @@ The State Store consolidation (commit 77fabe81) stopped copying a hidden run's h
 
 ## Solution
 
-`SessionService.externalMCPMetadataEntry` (`internal/rocketclaw/backend/store.go:1547`) now searches every conversation the chat shows: its own, the runs whose `reports_to` is the chat, and the run it continues. This is the same set `sessionHistorySQL` reads (`reporting_runs` in `internal/rocketclaw/backend/revert.go:62`). It takes the newest metadata ID across those conversations, then reads that row:
+`SessionService.externalMCPMetadataEntry` (`internal/rocketclaw/backend/store.go:1563`) now searches every conversation the chat shows: its own, the runs whose `reports_to` is the chat, and the run it continues. This is the same set `sessionHistorySQL` reads (`reporting_runs` in `internal/rocketclaw/backend/revert.go:62`). It takes the newest metadata ID across those conversations, then reads that row:
 
 ```sql
 WITH shown AS (
@@ -55,15 +55,15 @@ SELECT e.id, e.entry_json FROM latest l JOIN entries e USING (id)
 
 In this session's runs with realistic data (thousands of threads, each with a metadata row), the plan probed `session_entries_mcp_metadata` once per shown conversation with `Index Cond: (conversation_id = ...)`. With only three metadata rows, Postgres chose a bitmap scan over the whole partial index instead. The plan test now seeds 4,096 thread metadata rows, and asserts the index is used, there is no Sort, and no `Filter:` reads `entry_json`.
 
-The caller in `bridge.go` needed no change. It already matches the stored entry against the paired private run's ID and then sets `ROCKETCLAW_CONVERSATION_ID` to the thread (`internal/rocketclaw/backend/bridge.go:2284`).
+The caller in `bridge.go` needed no change. It already matches the stored entry against the paired private run's ID and then sets `ROCKETCLAW_CONVERSATION_ID` to the thread (`turnShellEnv`, `internal/rocketclaw/backend/bridge.go:2662`).
 
 Fixed in PR #613, released in v0.2.1.
 
 ## Why This Works
 
-An External MCP call runs in a private conversation and sets `SyncDestination` to its Slack thread (`cmd/rocketclaw/mcp.go:275`). Starting that turn records the thread as the run's `reports_to` (`internal/rocketclaw/backend/store_dao.go:792`). The run's first turn writes the `mcp_external_metadata` entry into the run's own conversation.
+An External MCP call runs in a private conversation and sets `SyncDestination` to its Slack thread (`cmd/rocketclaw/mcp.go:275`). Starting that turn records the thread as the run's `reports_to` (`internal/rocketclaw/backend/store_dao.go:1041`). The run's first turn writes the `mcp_external_metadata` entry into the run's own conversation.
 
-Before 77fabe81 that entry was also copied into the thread, so a lookup of the thread's own rows found it. After 77fabe81 the thread shows the run's entries through `reports_to` and holds no copy. A turn in the thread then found no metadata, so `if foundMetadata || msg.Source == protocol.SourceExternalMCP` (`bridge.go:2252`) was false for any turn not sourced from External MCP (a Web message in the thread's conversation, for example), and the whole metadata block was skipped. Searching the shown set restores exactly what the thread's history already displays.
+Before 77fabe81 that entry was also copied into the thread, so a lookup of the thread's own rows found it. After 77fabe81 the thread shows the run's entries through `reports_to` and holds no copy. A turn in the thread then found no metadata, so `if foundMetadata || origin.Source == protocol.SourceExternalMCP` (`bridge.go:2630`) was false for any turn not sourced from External MCP (a Web message in the thread's conversation, for example), and the whole metadata block was skipped. Searching the shown set restores exactly what the thread's history already displays.
 
 ## Prevention
 

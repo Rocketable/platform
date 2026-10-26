@@ -185,7 +185,7 @@ flowchart TB
 
 - `CONCEPTS.md` — Managed Slack Thread, Root Slack Mention, Adhoc Callout, `@` Channel Entry.
 - `README.md` — thread-local conversations in configured channels; the bot never auto-joins.
-- `docs/solutions/logic-errors/slack-root-app-mention-redelivery-cleared-buffered-follow-ups.md` — `beginSlackStack` is create-if-absent only.
+- `docs/solutions/logic-errors/slack-thread-parent-message-redelivery-enqueued-second-turn.md` — `beginSlackStack` is create-if-absent only.
 - Grounding dossier: `.tmp/rocketclaw/ce-brainstorm/adhoc-callouts/grounding.md`
 
 ---

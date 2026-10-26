@@ -30,14 +30,6 @@ A Slack thread that shows a cron report or an External MCP session: a cron-creat
 
 A Report Thread is read-only. RocketClaw ignores every reply and mention in it, with no reaction and no reply, while its sessions keep posting into it. Read-only means RocketClaw ignores input, not that Slack locks the thread. Work on it continues in Web.
 
-### Slack Steer
-
-Historical name for a human Slack reply injected into a running turn. Removed: Slack replies and mentions no longer steer. Steers come from Web and from agents through `rocketclaw_sessions_write`.
-
-### Enqueued Slack Message
-
-Historical name for a later-turn prompt stashed from Slack with `$enqueue`. Removed with Slack's commands. Waiting Slack work is now an accepted mention in the Thread Queue.
-
 ### Thread Queue
 
 The durable, conversation-local list of later work: accepted Slack mentions, work queued or stashed from Web, messages another session's agent queues, stashes, or sends with `stop` through `rocketclaw_sessions_write` or, into a Subagent Session, through `task`, and External MCP `session_prompt` calls that arrive while the paired thread has an active turn. Each item is a waiting turn of its conversation, queued, stashed, or held, keyed by its input ID; starting it turns that row into the running turn. Saved items that never started run after a restart without another incoming message.
@@ -45,12 +37,6 @@ The durable, conversation-local list of later work: accepted Slack mentions, wor
 An agent-written item carries its sender: the sending session and agent. Web shows that sender where a person's Principal would be, and the item can be popped, promoted, reordered, or removed like any other. It is never a person's input, even after a person promotes it. A `stop` write goes ahead of every earlier item. A `stop` write without a prompt adds no item: it only posts a line naming the sender into the transcript, once the stopped turn has saved.
 
 Each accepted mention is one item with ID `slack:<channel>:<message ts>`, accepted at most once per conversation. Web shows these items together with the conversation's scheduled messages (a one-time one is also a waiting turn, due at its time) and can promote or remove them; Slack is not told. After a turn ends, a still-continuing goal wins the next slot. Otherwise the next item is the first remaining row that is ready: a queued row is ready in its list position; a scheduled message is ready at its due time. A not-yet-due scheduled row blocks later rows until it runs or is cancelled.
-
-### Buffered Follow-Up
-
-Historical name for a mid-turn Slack message held until the active turn completed, then submitted as the next turn.
-
-Replaced by Slack Steer, which was later removed. A mid-turn mention now waits in the Thread Queue.
 
 ## Prompt Provenance
 
@@ -166,6 +152,7 @@ real in the shared workspace; output separation is not a dry-run sandbox.
 ### Private Producer Conversation
 
 A hidden conversation that runs work for a human-visible destination conversation, such as an External MCP case or a one-off cron run. Its conversation row records that destination as the one it reports to. The destination's history shows the run's visible messages in place, live while a turn runs, without copying them; what only the run's own context needs stays out of the destination. Web lists only the destination, and session tags set during the turn land on the destination.
+*Avoid:* hidden run
 
 ### External MCP Metadata
 
@@ -267,3 +254,9 @@ A running turn saves each item of its record once, as a step of its own, instead
 ## Flagged ambiguities
 
 - "'turn' had been used for both a Slack conversation occupancy slot and a RocketCode model loop — these are distinct."
+
+## Retired
+
+- **Slack Steer**: a human Slack reply injected into a running turn. Removed when Slack replies and mentions stopped steering; steers now come from Web and from agents.
+- **Enqueued Slack Message**: a later-turn prompt stashed from Slack with `$enqueue`. Removed with Slack's commands; waiting Slack work is now an accepted mention in the Thread Queue.
+- **Buffered Follow-Up**: a mid-turn Slack message held until the active turn completed. Replaced by Slack Steer, itself later removed; a mid-turn mention now waits in the Thread Queue.

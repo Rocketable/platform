@@ -28,7 +28,7 @@ tags:
 
 ## Context
 
-The indexed message search added `internal/rocketclaw/backend/migrations/030_message_search.sql`, the first RocketClaw migration that creates a PostgreSQL extension (`pg_trgm`, for a trigram GIN index on lowercased message text). Before that, every migration only created objects inside the current schema.
+The indexed message search added `030_message_search.sql` (now squashed into `internal/rocketclaw/backend/migrations/001_baseline.sql`), the first RocketClaw migration that created a PostgreSQL extension (`pg_trgm`, for a trigram GIN index on lowercased message text). Before that, every migration only created objects inside the current schema.
 
 The test harness does not give each test its own database. `harnessbridgetest.IsolatedTestDatabaseURL` (`internal/rocketclaw/backend/harnessbridgetest/database.go:38-48`) runs `CREATE SCHEMA t_<random>` on the shared `ROCKETCLAW_TEST_DATABASE_URL` database and sets `search_path` to that one schema only (`options=-csearch_path=<schema>`). The schema migration lock is per schema too: `store_schema.go:43` takes `pg_advisory_lock(hashtext('rocketclaw schema migrations'), hashtext(current_schema()))`, so many test schemas run the same migrations at the same time.
 
@@ -64,7 +64,7 @@ Without these rules the failures depend on timing and test order, and they look 
 - **No lock:** two schemas migrating at once can both see the extension as missing. Both run `CREATE EXTENSION`, and one transaction fails on the catalog's uniqueness check. `IF NOT EXISTS` does not stop this race, because both checks run before either transaction commits.
 - **No `WITH SCHEMA public`:** the first test to migrate installs the operator class in its own schema. `IF NOT EXISTS` then makes every later schema skip the install, and their `CREATE INDEX ... gin_trgm_ops` cannot find the operator class.
 - **Unqualified operator class:** fails in every test schema, because none of them has `public` on `search_path`. A production database with the default `search_path` would not show the bug, so it reaches tests first or, worse, only some environments.
-- **DROP EXTENSION in Down:** `TestBackgroundJobsMigration` in `internal/rocketclaw/backend/store_schema_test.go` rolls back to before 028 (`ExecVersionContext(..., migrate.Down, 28)`), which runs the Down of 030 and 055, while other tests use the same database. Dropping the shared extension there would break those tests, or fail because of their dependent indexes.
+- **DROP EXTENSION in Down:** tests in `internal/rocketclaw/backend/store_schema_test.go` such as `TestDropWebTabStateBlobMigration` roll back with `ExecVersionContext(..., migrate.Down, N)` while other tests use the same database. Dropping the shared extension there would break those tests, or fail because of their dependent indexes.
 
 ## When to Apply
 
@@ -84,7 +84,7 @@ DROP TABLE message_search;
 DROP EXTENSION pg_trgm;
 ```
 
-After: see the Guidance block above, which matches `internal/rocketclaw/backend/migrations/001_baseline.sql`.
+After: see the Guidance block above; `internal/rocketclaw/backend/migrations/001_baseline.sql:4-6` has the lock and extension lines, and its trigram indexes use `public.gin_trgm_ops`. The baseline has no Down step.
 
 Production note: `pg_trgm` is a trusted extension (PostgreSQL 13 and later). A role without superuser can create it if it has `CREATE` privilege on the database. Check that the production database role has that privilege before deploying a migration that creates an extension, since startup runs migrations (`README.md`: "RocketClaw upgrades the database schema at startup").
 
