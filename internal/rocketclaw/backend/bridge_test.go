@@ -2931,28 +2931,24 @@ func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
 	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.requestCh = make(chan bridgeRequest, 1)
 
-	bridge.stopCh = make(chan struct{})
-	go bridge.loop(t.Context())
-
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "changelog", false)
 	inbound.ConversationID = conversationID
 	inbound.AttachmentPresence = protocol.AttachmentPresenceUnsupported
 	responseCh := inbound.EnableResponseWait()
 	require.NoError(t, bridge.enqueue(context.Background(), &bridgeRequest{inbound: inbound, queueItemID: "q1"}, "submit enqueued message"))
+	request := <-bridge.requestCh
+	bridge.handle(t.Context(), &request)
 
 	select {
 	case response := <-responseCh:
 		require.Error(t, response.Err)
-	case <-time.After(time.Second):
+	default:
 		t.Fatal("enqueued message response was not completed")
 	}
 
-	require.Eventually(t, func() bool {
-		items, err := service.ThreadQueueForConversation(conversationID)
-		require.NoError(t, err)
-
-		return len(items) == 0
-	}, time.Second, time.Millisecond)
+	items, err := service.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Empty(t, items)
 }
 
 func TestBridgeDeletesScheduledMessageWhenTurnStarts(t *testing.T) {
