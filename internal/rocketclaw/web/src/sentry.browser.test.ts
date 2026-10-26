@@ -22,6 +22,8 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
   const envelopes: string[] = [];
   const spans: { name: string; attributes: { "sentry.op"?: { value: string }; "url.path"?: { value: string }; "url.full"?: { value: string }; "browser.script.invoker_type"?: { value: string }; "browser.script.invoker"?: { value: string }; "code.file.path"?: { value: string } } }[] = [];
   const slowScript = Promise.withResolvers<void>();
+  const scriptReady = Promise.withResolvers<void>();
+  const sentry = rate === 1 ? await Bun.build({ entrypoints: [path.join(import.meta.dir, "sentry.ts")], target: "browser", minify: true, define: { "process.env.NODE_ENV": '"production"' } }) : undefined;
   const tracing = Promise.withResolvers<void>();
   const cronNavigation = Promise.withResolvers<void>();
   const sessionNavigation = Promise.withResolvers<void>();
@@ -36,6 +38,11 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
   let breakReact = false;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (request) => {
     const url = new URL(request.url);
+    if (url.pathname === "/test/sentry.js") return new Response(sentry!.outputs[0]);
+    if (url.pathname === "/" && request.headers.get("sec-fetch-dest") === "script") {
+      await scriptReady.promise;
+      return new Response('const until = performance.now() + 150; while (performance.now() < until) {} document.body.append("slow script");', { headers: { "Content-Type": "text/javascript" } });
+    }
     if (url.pathname === "/api/1/envelope/") {
       envelopes.push(await request.text());
       for (const line of envelopes.at(-1)!.split("\n")) {
@@ -44,7 +51,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
         if (item.exception || item.logentry) events.push(item);
       }
       if (spans.some((span) => span.attributes["sentry.op"]?.value === "ui.long_animation_frame" && span.attributes["browser.script.invoker_type"]?.value === "classic-script")) slowScript.resolve();
-      if (["pageload", "navigation", "http.client"].every((op) => spans.some((span) => span.attributes["sentry.op"]?.value === op))) tracing.resolve();
+      if (spans.some((span) => span.attributes["sentry.op"]?.value === "pageload" && span.name === "/") && ["navigation", "http.client"].every((op) => spans.some((span) => span.attributes["sentry.op"]?.value === op))) tracing.resolve();
       if (spans.some((span) => span.attributes["sentry.op"]?.value === "navigation" && span.name === "/cron")) cronNavigation.resolve();
       if (spans.some((span) => span.attributes["sentry.op"]?.value === "navigation" && span.name === "/s/:id")) sessionNavigation.resolve();
       if (spans.some((span) => span.attributes["sentry.op"]?.value === "ui.action.click") && spans.some((span) => span.attributes["sentry.op"]?.value === "ui.long_animation_frame" && span.attributes["browser.script.invoker_type"]?.value === "event-listener" && /^INPUT(?:#.*)?\.onclick$/.test(span.attributes["browser.script.invoker"]?.value ?? ""))) interaction.resolve();
@@ -86,10 +93,9 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));
     if (await file.exists()) return new Response(file);
-    let html = await Bun.file(path.join(dist, "index.html")).text();
-    if (rate !== undefined) html = html.replace("</head>", `<script id="sentry-config" type="application/json">${JSON.stringify({ dsn: `http://public@127.0.0.1:${server.port}/1`, environment: "browser-test", release: "v9.8.7-browser-test", traces_sample_rate: rate })}</script></head>`);
-    // Sentry attributes a frame to its first script. Run before React can precede this classic script.
-    if (rate === 1 && url.pathname === "/") html = html.replace("<body>", `<body><script>const until = performance.now() + 150; while (performance.now() < until) {} document.body.append("slow script"); addEventListener("load", () => holdFrame("script", "^classic-script:"), { once: true });</script>`);
+    // React may be the first script in the same frame. Exercise the real Sentry entry without unrelated app work.
+    let html = url.pathname === "/test/slow-script" ? '<head></head><body><script type="module" src="/test/sentry.js"></script><script>addEventListener("DOMContentLoaded", () => holdFrame("script", "^classic-script:"), { once: true });</script><script async src="/?q=private-search"></script>' : await Bun.file(path.join(dist, "index.html")).text();
+    if (rate !== undefined) html = html.replace("</head>", `<script id="sentry-config" type="application/json">${JSON.stringify({ dsn: `http://public@127.0.0.1:${server.port}/1`, ...(url.pathname === "/test/slow-script" ? {} : { environment: "browser-test", release: "v9.8.7-browser-test" }), traces_sample_rate: rate })}</script></head>`);
     return new Response(html, { headers: { "Content-Type": "text/html" } });
   } });
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
@@ -98,6 +104,13 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     await page.addInitScript(`window.holdFrame = ${holdFrame}`);
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
+    if (rate === 1) {
+      await page.goto(`http://127.0.0.1:${server.port}/test/slow-script?q=private-search`, { waitUntil: "domcontentloaded" });
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      scriptReady.resolve();
+      await page.waitForLoadState("load");
+      await slowScript.promise;
+    }
     await page.goto(`http://127.0.0.1:${server.port}/?q=private-search`);
     await page.evaluate(() => { document.cookie = "private-cookie=secret"; });
     await page.getByRole("button", { name: "Search sessions" }).waitFor();
@@ -121,7 +134,6 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       }, { once: true }));
       await search.click();
       await interaction.promise;
-      await slowScript.promise;
       const script = spans.find((span) => span.attributes["sentry.op"]?.value === "ui.long_animation_frame" && span.attributes["browser.script.invoker_type"]?.value === "classic-script")!;
       for (const key of ["browser.script.invoker", "code.file.path"] as const) expect(script.attributes[key]?.value).toBe(`http://127.0.0.1:${server.port}/`);
       // Chromium reports slow frames with the script that caused them.
