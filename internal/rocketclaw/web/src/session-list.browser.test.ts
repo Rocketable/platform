@@ -528,6 +528,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       { stem: "retired", status: "ran", lastRun: "2026-09-01T00:00:00Z", nextRun: "old-chat", origin: "old-source" },
       { stem: "silent", status: "ran", lastRun: new Date(Date.now() - 3_600_000).toISOString(), nextRun: "", origin: "cron:silent-source" },
   ];
+  let cronJobsFail = false;
   let listResponse: ReadableStreamDefaultController;
   const transcriptStreams = new Map<string, ReturnType<typeof Promise.withResolvers<ReadableStreamDefaultController>>>();
   const transcriptStream = (id: string) => {
@@ -635,7 +636,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
           if (ctrl.holdPrompt) { const privateText = await promptHold.promise; ctrl.prompting.delete(input.id); return Response.json({ privateText }); }
           ctrl.prompting.delete(input.id);
           return Response.json({ privateText: "" });
-        case "/api/ListCronJobs": return Response.json({ jobs });
+        case "/api/ListCronJobs": return cronJobsFail ? Response.json({ code: 14, message: "cron list unavailable" }, { status: 503 }) : Response.json({ jobs });
         case "/api/RunCronJob": cronRunCalls++; return Response.json({ id: await cronHold.promise });
         case "/api/SearchSessions":
           searchQueries.push(input.query);
@@ -2035,6 +2036,16 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await timelinePage.getByRole("complementary", { name: "Selected run", exact: true }).getByRole("region", { name: "Run preview", exact: true }).getByText("Daily run report", { exact: true }).waitFor();
     await timelinePage.setViewportSize({ width: 390, height: 844 });
     await dailyDay.getByRole("region", { name: "Run preview", exact: true }).getByText("Daily run report", { exact: true }).waitFor();
+    // A failed refresh keeps the loaded journal and shows the error above it. Opening the command palette refreshes
+    // the cron list once it is older than its 10 s freshness window.
+    cronJobsFail = true;
+    await timelinePage.waitForTimeout(10_500);
+    await timelinePage.keyboard.press("Control+Shift+p");
+    await timelinePage.getByRole("dialog", { name: "Run command", exact: true }).getByPlaceholder("Type a command", { exact: true }).waitFor();
+    await timelinePage.keyboard.press("Escape");
+    await timelinePage.getByRole("alert").filter({ hasText: "cron list unavailable" }).waitFor({ timeout: 20_000 });
+    expect(await dailyDay.isVisible()).toBe(true);
+    cronJobsFail = false;
     await timelinePage.goto(`${origin}/cron?timeline=silent`);
     await timelinePage.locator("li button[aria-expanded]").filter({ hasText: "Silent" }).waitFor();
     expect(await timelinePage.locator("dl > div").filter({ hasText: /^Delivered/ }).locator("dd").first().textContent()).toBe("0");

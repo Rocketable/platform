@@ -4744,10 +4744,17 @@ const cronDayHead = "sticky top-0 z-10 flex items-baseline justify-between gap-2
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 const cronDay = (day: string) => new Date(day).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 
-// One cron's runs, newest first, in whole UTC days of about 60 runs at a time. status, when set, replaces the
-// journal: loading, a failed load, or a cron this space does not have. The picked run's transcript shows beside
-// the list on wide screens and under the run on narrow ones.
-function CronTimeline({ stem, rows, status }: { stem: string; rows: CronJob[]; status: string }) {
+// What replaces a cron's journal: loading, a failed first load, or a cron this space does not have. A failed
+// refresh keeps the journal and shows its error above it instead.
+function cronTimelineStatus(stem: string, rows: CronJob[], { isLoading, data, error }: { isLoading: boolean; data?: CronJob[]; error: Error | null }) {
+  if (isLoading) return "Loading runs…";
+  if (!data && error) return error.message;
+  return rows.some((job) => job.stem === stem) ? "" : `No cron named ${stem} in this space.`;
+}
+
+// One cron's runs, newest first, in whole UTC days of about 60 runs at a time. The picked run's transcript shows
+// beside the list on wide screens and under the run on narrow ones.
+function CronTimeline({ stem, rows, status, error }: { stem: string; rows: CronJob[]; status: string; error?: string }) {
   const [limit, setLimit] = useState(60);
   const [preview, setPreview] = useState("");
   const wide = useMedia("(min-width: 64rem)");
@@ -4770,7 +4777,7 @@ function CronTimeline({ stem, rows, status }: { stem: string; rows: CronJob[]; s
         <PageTitle><Link href="/cron" className="text-muted-foreground hover:text-foreground">Cron</Link> <span className="text-muted-foreground">/</span> {stem}
           {status ? null : <span className={cn("ml-2 rounded-full px-2 py-0.5 align-middle text-xs font-medium", job ? "bg-cyan-600/10 text-cyan-700 dark:bg-cyan-400/10 dark:text-cyan-300" : "bg-muted text-muted-foreground")}>{job ? "Active" : "Retired"}</span>}</PageTitle>
         {status ? <p role="status" className="text-sm text-muted-foreground">{status}</p> : <>
-          <CronJournalSummary job={job} runs={runs} subCalls={callRuns.length} now={now} />
+          <CronJournalSummary job={job} runs={runs} subCalls={callRuns.length} now={now} error={error} />
           {runs.length ? <CronDayBars runs={runs} byDay={byDay} active={!!job} today={today} jump={jump} /> : null}
           <div className="grid gap-8 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
             <div className="flex flex-col gap-4">
@@ -4815,7 +4822,7 @@ function CronPreviewPanel({ picked, close }: { picked?: CronJob; close: () => vo
   return picked ? <CronRunPreview tall preview={picked} onClose={close} /> : <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">Pick a run to read its transcript here.</p>;
 }
 
-function CronJournalSummary({ job, runs, subCalls, now }: { job?: CronJob; runs: CronJournalRow[]; subCalls: number; now: number }) {
+function CronJournalSummary({ job, runs, subCalls, now, error }: { job?: CronJob; runs: CronJournalRow[]; subCalls: number; now: number; error?: string }) {
   const gaps = runs.flatMap(({ gap }) => gap ? [gap] : []).toSorted((a, b) => a - b);
   const delivered = runs.filter((run) => run.delivered).length, last = runs.at(0)?.item.lastRun, next = job?.upcoming?.at(0);
   const stats = [
@@ -4837,6 +4844,7 @@ function CronJournalSummary({ job, runs, subCalls, now }: { job?: CronJob; runs:
         <dd className="truncate text-xs text-muted-foreground">{note}</dd>
       </div>)}
     </dl>
+    {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
   </>;
 }
 
@@ -4895,7 +4903,7 @@ function CronPage() {
   const inSpace = useInSpace();
   const timeline = new URLSearchParams(useSearch()).get("timeline");
   const rows = cronInSpace(jobs.data ?? [], inSpace);
-  if (timeline !== null) return <CronTimeline key={timeline} stem={timeline} rows={rows} status={jobs.isLoading ? "Loading runs…" : jobs.error?.message ?? (rows.some((job) => job.stem === timeline) ? "" : `No cron named ${timeline} in this space.`)} />;
+  if (timeline !== null) return <CronTimeline key={timeline} stem={timeline} rows={rows} status={cronTimelineStatus(timeline, rows, jobs)} error={jobs.data && jobs.error?.message} />;
   const defs = rows.filter((job) => job.status !== "ran");
   const runs = rows.filter((job) => job.status === "ran");
   const start = Date.now() - 12 * 3_600_000;
