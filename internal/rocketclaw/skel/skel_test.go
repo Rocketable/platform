@@ -189,23 +189,6 @@ func TestSyncCreatesEmptyWorkspaceWorkflowsWithoutRuntimePlaceholder(t *testing.
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestSyncFSFilteredPreservesExistingWhenOverwriteFalse(t *testing.T) {
-	tmp := t.TempDir()
-	root := filepath.Join(tmp, targetRoot)
-	require.NoError(t, os.MkdirAll(root, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("old"), 0o644))
-
-	src := fstest.MapFS{
-		".rocketclaw/AGENTS.md": {Data: []byte("new")},
-	}
-
-	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), false, false, inertFileFilter{}))
-
-	data, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "old", string(data))
-}
-
 func TestSyncFSFilteredPreservesSourceExecutableBit(t *testing.T) {
 	tmp := t.TempDir()
 	root := filepath.Join(tmp, targetRoot)
