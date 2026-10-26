@@ -109,8 +109,13 @@ func TestWebQuestionWithdrawsUnlessLeftForRestart(t *testing.T) {
 		}()
 
 		require.Eventually(t, func() bool {
-			pending, err := rt.PendingQuestions(t.Context(), conversationID)
-			return err == nil && len(pending) == 1
+			// The row can be visible before the save returns; cancel only once the ask is waiting.
+			rt.questions.mu.Lock()
+			defer rt.questions.mu.Unlock()
+
+			_, waiting := rt.questions.waiting[webQuestionKey{conversationID, req.ID}]
+
+			return waiting
 		}, 5*time.Second, 10*time.Millisecond)
 		cancel(cause)
 		require.ErrorIs(t, <-done, context.Canceled)
