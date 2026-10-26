@@ -33,8 +33,8 @@ github.com/akutz/memconn
 github.com/alexbrainman/sspi
 github.com/alexbrainman/sspi/internal/common
 github.com/alexbrainman/sspi/negotiate
-# github.com/andybalholm/brotli v1.1.1
-## explicit; go 1.13
+# github.com/andybalholm/brotli v1.2.7
+## explicit; go 1.22
 github.com/andybalholm/brotli
 github.com/andybalholm/brotli/matchfinder
 # github.com/aws/aws-sdk-go-v2 v1.47.4
@@ -259,8 +259,8 @@ github.com/go-logr/stdr
 # github.com/go4org/hashtriemap v0.0.0-20260925222741-44e5305f85d9
 ## explicit; go 1.25.1
 github.com/go4org/hashtriemap
-# github.com/goccy/go-json v0.10.6
-## explicit; go 1.19
+# github.com/goccy/go-json v0.11.2
+## explicit; go 1.23
 github.com/goccy/go-json
 github.com/goccy/go-json/internal/decoder
 github.com/goccy/go-json/internal/encoder
