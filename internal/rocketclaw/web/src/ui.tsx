@@ -1394,6 +1394,8 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
       {shown.flatMap((tab, index) => {
         const group = groups.find((item) => item.id === tab.group);
         const openEditor = () => setEditor({ id: group!.id, open: true }), chosen = tab.path !== pathname && selection.has(tab.path);
+        // A collapsed group's name goes bold, like an unread tab's title, while any of its tabs is unread.
+        const unread = group?.collapsed && shown.some((item) => item.group === group.id && rows.some((row) => row.id === pathSession(item.path) && row.unreadAt));
         return [
           group && shown[index - 1]?.group !== group.id ? <div key={group.id} data-group={group.id} draggable className="flex shrink-0 items-center pt-1" onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
             <button type="button" aria-expanded={!group.collapsed} aria-label={groupName(group)} className="flex h-7 min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => edit(group.id, { collapsed: !group.collapsed })}
@@ -1407,7 +1409,7 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
                 flushSync(() => moveGroup(group.id, neighbor.path));
                 button.focus();
               }}>
-              <span className={cn("rounded-full", group.name ? "max-w-48 truncate px-2 py-0.5 text-xs font-medium text-black" : "size-3", groupColors[group.color])}>{group.name}</span>
+              <span className={cn("rounded-full", group.name ? cn("max-w-48 truncate px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium") : "size-3", groupColors[group.color])}>{group.name}</span>
             </button>
             <button type="button" aria-label={`Edit ${groupName(group)}`} className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={openEditor}><Ellipsis className="size-3.5" /></button>
           </div> : null,
@@ -1450,6 +1452,8 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
 // handlers of theirs never act on a Shared row; only its menu and Shift+Arrow, which reorders it for everyone, change it.
 function SharedTabs({ tabs: { state, here, pathname, promote, toggleShared, swapShared }, space, openMenu }: { tabs: ReturnType<typeof useTabs>; space?: string; openMenu: (path: string, anchor: MenuAnchor) => void }) {
   const collapsed = state.groups.some((group) => group.id === "shared" && group.collapsed), stop = here.includes(pathname) ? pathname : here[0];
+  // Like a collapsed group, collapsed Shared goes bold while any of its tabs is unread for this person.
+  const { rows } = useContext(Sidebar), unread = collapsed && here.some((path) => rows.some((row) => row.id === pathSession(path) && row.unreadAt));
   const inert = () => undefined, list = useRef<HTMLDivElement>(null), moved = useRef(""), order = here.join("\n");
   // A moved row takes its new place when the reply arrives, which drops its focus, so it takes the focus back then.
   useEffect(() => { if (moved.current) list.current!.querySelector<HTMLElement>(`[data-tab="${CSS.escape(moved.current)}"] [role="tab"]`)?.focus(); moved.current = ""; }, [order]);
@@ -1458,7 +1462,7 @@ function SharedTabs({ tabs: { state, here, pathname, promote, toggleShared, swap
     <div className="flex max-h-1/2 shrink-0 flex-col gap-0.5 overflow-y-auto px-1 pt-1 [scrollbar-width:thin]">
       <div className="flex shrink-0 items-center pt-1">
         <button type="button" aria-expanded={!collapsed} className="flex h-7 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={toggleShared}>
-          <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium text-black", groupColors.Grey)}><Users aria-hidden="true" className="size-3" />Shared</span>
+          <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium", groupColors.Grey)}><Users aria-hidden="true" className="size-3" />Shared</span>
         </button>
       </div>
       <div ref={list} role="tablist" aria-label="Shared tabs" aria-orientation="vertical" className="flex flex-col gap-0.5" onKeyDown={(event) => tabKeys(event, pathname, openMenu, (path, other) => { moved.current = path; swapShared(path, other); })}>
