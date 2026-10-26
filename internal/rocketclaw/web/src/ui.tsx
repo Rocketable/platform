@@ -3783,8 +3783,9 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   const previewLines = useMemo(() => previewing && preview.data ? historyLines(preview.data.messages) : undefined, [previewing, preview.data]);
   const draft = useComposerDraft(id, drafts, onDraftChange);
   const route = useRoute();
+  // This Transcript stays mounted, hidden, on other pages; a created chat opens once the new-chat page shows again.
   useLayoutEffect(() => {
-    if (id === "" && draft.sessionId !== "" && drafts.get("") === draft) {
+    if (location.pathname === "/" && id === "" && draft.sessionId !== "" && drafts.get("") === draft) {
       drafts.delete("");
       onCreated(draft.sessionId);
       route.goSession(draft.sessionId);
