@@ -86,10 +86,12 @@ type AssistantDeleted string                                  // Always "assista
 type AudioSample string                                       // Always "audio_sample"
 type AudioVoice string                                        // Always "audio.voice"
 type AudioVoiceConsent string                                 // Always "audio.voice_consent"
+type AudioVoiceDeleted string                                 // Always "audio.voice.deleted"
 type AudioPCM string                                          // Always "audio/pcm"
 type AudioPCMA string                                         // Always "audio/pcma"
 type AudioPCMU string                                         // Always "audio/pcmu"
 type Auto string                                              // Always "auto"
+type Automations string                                       // Always "automations"
 type Aws string                                               // Always "aws"
 type Azure string                                             // Always "azure"
 type Base64 string                                            // Always "base64"
@@ -250,6 +252,7 @@ type InputAudioBufferSpeechStopped string                     // Always "input_a
 type InputAudioBufferTimeoutTriggered string                  // Always "input_audio_buffer.timeout_triggered"
 type InputFile string                                         // Always "input_file"
 type InputImage string                                        // Always "input_image"
+type InputJSON string                                         // Always "input_json"
 type InputText string                                         // Always "input_text"
 type InterruptSubagentCall string                             // Always "interrupt_subagent_call"
 type InvalidRequestError string                               // Always "invalid_request_error"
@@ -736,10 +739,12 @@ func (c AssistantDeleted) Default() AssistantDeleted           { return "assista
 func (c AudioSample) Default() AudioSample                     { return "audio_sample" }
 func (c AudioVoice) Default() AudioVoice                       { return "audio.voice" }
 func (c AudioVoiceConsent) Default() AudioVoiceConsent         { return "audio.voice_consent" }
+func (c AudioVoiceDeleted) Default() AudioVoiceDeleted         { return "audio.voice.deleted" }
 func (c AudioPCM) Default() AudioPCM                           { return "audio/pcm" }
 func (c AudioPCMA) Default() AudioPCMA                         { return "audio/pcma" }
 func (c AudioPCMU) Default() AudioPCMU                         { return "audio/pcmu" }
 func (c Auto) Default() Auto                                   { return "auto" }
+func (c Automations) Default() Automations                     { return "automations" }
 func (c Aws) Default() Aws                                     { return "aws" }
 func (c Azure) Default() Azure                                 { return "azure" }
 func (c Base64) Default() Base64                               { return "base64" }
@@ -946,6 +951,7 @@ func (c InputAudioBufferTimeoutTriggered) Default() InputAudioBufferTimeoutTrigg
 }
 func (c InputFile) Default() InputFile                           { return "input_file" }
 func (c InputImage) Default() InputImage                         { return "input_image" }
+func (c InputJSON) Default() InputJSON                           { return "input_json" }
 func (c InputText) Default() InputText                           { return "input_text" }
 func (c InterruptSubagentCall) Default() InterruptSubagentCall   { return "interrupt_subagent_call" }
 func (c InvalidRequestError) Default() InvalidRequestError       { return "invalid_request_error" }
@@ -1600,10 +1606,12 @@ func (c AssistantDeleted) MarshalJSON() ([]byte, error)                 { return
 func (c AudioSample) MarshalJSON() ([]byte, error)                      { return marshalString(c) }
 func (c AudioVoice) MarshalJSON() ([]byte, error)                       { return marshalString(c) }
 func (c AudioVoiceConsent) MarshalJSON() ([]byte, error)                { return marshalString(c) }
+func (c AudioVoiceDeleted) MarshalJSON() ([]byte, error)                { return marshalString(c) }
 func (c AudioPCM) MarshalJSON() ([]byte, error)                         { return marshalString(c) }
 func (c AudioPCMA) MarshalJSON() ([]byte, error)                        { return marshalString(c) }
 func (c AudioPCMU) MarshalJSON() ([]byte, error)                        { return marshalString(c) }
 func (c Auto) MarshalJSON() ([]byte, error)                             { return marshalString(c) }
+func (c Automations) MarshalJSON() ([]byte, error)                      { return marshalString(c) }
 func (c Aws) MarshalJSON() ([]byte, error)                              { return marshalString(c) }
 func (c Azure) MarshalJSON() ([]byte, error)                            { return marshalString(c) }
 func (c Base64) MarshalJSON() ([]byte, error)                           { return marshalString(c) }
@@ -1772,6 +1780,7 @@ func (c InputAudioBufferSpeechStopped) MarshalJSON() ([]byte, error)       { ret
 func (c InputAudioBufferTimeoutTriggered) MarshalJSON() ([]byte, error)    { return marshalString(c) }
 func (c InputFile) MarshalJSON() ([]byte, error)                           { return marshalString(c) }
 func (c InputImage) MarshalJSON() ([]byte, error)                          { return marshalString(c) }
+func (c InputJSON) MarshalJSON() ([]byte, error)                           { return marshalString(c) }
 func (c InputText) MarshalJSON() ([]byte, error)                           { return marshalString(c) }
 func (c InterruptSubagentCall) MarshalJSON() ([]byte, error)               { return marshalString(c) }
 func (c InvalidRequestError) MarshalJSON() ([]byte, error)                 { return marshalString(c) }

@@ -8,7 +8,7 @@ filippo.io/edwards25519/field
 # github.com/Arize-ai/openinference/go/openinference-instrumentation v0.1.2
 ## explicit; go 1.25.0
 github.com/Arize-ai/openinference/go/openinference-instrumentation
-# github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.11
+# github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.12
 ## explicit; go 1.25
 github.com/Arize-ai/openinference/go/openinference-semantic-conventions
 # github.com/JohannesKaufmann/dom v0.3.1
@@ -373,7 +373,7 @@ github.com/modelcontextprotocol/go-sdk/internal/xcontext
 github.com/modelcontextprotocol/go-sdk/jsonrpc
 github.com/modelcontextprotocol/go-sdk/mcp
 github.com/modelcontextprotocol/go-sdk/oauthex
-# github.com/openai/openai-go/v3 v3.85.1
+# github.com/openai/openai-go/v3 v3.87.0
 ## explicit; go 1.26.0
 github.com/openai/openai-go/v3
 github.com/openai/openai-go/v3/auth
