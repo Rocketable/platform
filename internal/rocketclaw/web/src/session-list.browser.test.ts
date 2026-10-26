@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
-import type { Attachment, PromptDelivery, QueueItem, Session, SessionBatch, TranscriptEvent } from "./types";
+import type { Attachment, CronJob, PromptDelivery, QueueItem, Session, SessionBatch, TranscriptEvent } from "./types";
 import { RPCError } from "./api";
 import { timelineLevels } from "./timeline-detail";
 
@@ -521,7 +521,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1kAAAAASUVORK5CYII=", "base64");
   const image: Attachment = { id: "history-image", name: "history.png", mimeType: "image/png", size: String(imageBytes.length), conversationId: "private-source", originalUnverified: true };
   const downloadConversations: string[] = [];
-  const jobs = [
+  const jobs: CronJob[] = [
       { stem: "daily", status: "", lastRun: "", nextRun: "", schedule: "24h", body: "Daily prompt", agent: "planner", channel: "#ops", upcoming: [new Date(Date.now() + 3_600_000).toISOString(), new Date(Date.now() + 18 * 3_600_000).toISOString()], origin: "cron/daily.md" },
       { stem: "unused", status: "", lastRun: "", nextRun: "", upcoming: [] },
       { stem: "daily", status: "ran", lastRun: new Date(Date.now() - 3_600_000).toISOString(), nextRun: "cron-chat", origin: "cron-source" },
@@ -886,7 +886,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "Help: Keyboard Shortcuts", "List Agents", "List Skills",
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "Cron: Timeline", "Help: Keyboard Shortcuts", "List Agents", "List Skills",
       "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Next⌘]", "Tabs: Previous⌘[", "Tabs: Toggle sidebar⌘B",
       // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
       "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
@@ -2002,6 +2002,52 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await cronPage.getByRole("button", { name: "Show sidebar", exact: true }).click();
     await cronPage.getByRole("tab", { name: "daily", exact: true }).waitFor();
     await cronPage.close();
+
+    // A run is one origin however many chats list it; a sub-call folds under its run; opening a silent run's chat
+    // (web:<origin>) does not make it delivered; a long history scrolls its day bars, not the page.
+    const jobCount = jobs.length;
+    const dailyRun = jobs.find((job) => job.stem === "daily" && job.status === "ran")!, silentRun = jobs.find((job) => job.stem === "silent")!;
+    jobs.push({ ...dailyRun, nextRun: "cron-copy" }, { ...dailyRun, nextRun: "", origin: "cron-source/call_abc" }, { ...silentRun, nextRun: "web:cron:silent-source" },
+      ...Array.from({ length: 200 }, (_, day) => ({ stem: "longlived", status: "ran", lastRun: new Date(Date.now() - day * 86_400_000).toISOString(), nextRun: "", origin: `long-${day}` })));
+    const timelinePage = await context.newPage();
+    await timelinePage.setViewportSize({ width: 1280, height: 844 });
+    await timelinePage.goto(`${origin}/`);
+    await timelinePage.keyboard.press("Control+Shift+p");
+    await timelinePage.keyboard.type("Cron: Timeline");
+    await timelinePage.getByRole("dialog", { name: "Run command", exact: true }).getByRole("button", { name: "Cron: Timeline", exact: true }).click();
+    const timelinePicker = timelinePage.getByRole("dialog", { name: "Cron timeline", exact: true });
+    await timelinePicker.getByRole("button").filter({ hasText: /^daily/ }).filter({ hasText: "1 run · last" }).waitFor();
+    expect(await timelinePicker.getByRole("button").filter({ hasText: /^retired/ }).textContent()).toContain("Retired");
+    await timelinePicker.getByRole("button").filter({ hasText: /^daily/ }).click();
+    await timelinePage.waitForURL(`${origin}/cron?timeline=daily`);
+    const runsCard = timelinePage.locator("dl > div").filter({ hasText: /^Runs/ });
+    await runsCard.waitFor();
+    expect(await runsCard.locator("dd").allTextContents()).toEqual(["1", "1 sub-call"]);
+    await timelinePage.getByRole("heading", { name: "Cron / dailyActive", exact: true }).waitFor();
+    expect(await timelinePage.locator("code").filter({ visible: true }).allTextContents()).toEqual(["24h"]);
+    await timelinePage.getByRole("region", { name: "Upcoming runs", exact: true }).waitFor();
+    const dailyDay = timelinePage.getByRole("region", { name: dailyRun.lastRun.slice(0, 10), exact: true });
+    expect(await dailyDay.locator("li button[aria-expanded]").allTextContents()).toEqual([`${dailyRun.lastRun.slice(11, 16)}Delivered1 sub-call`]);
+    await dailyDay.locator("li button[aria-expanded]").click();
+    await timelinePage.getByRole("complementary", { name: "Selected run", exact: true }).getByRole("region", { name: "Run preview", exact: true }).getByText("Daily run report", { exact: true }).waitFor();
+    await timelinePage.setViewportSize({ width: 390, height: 844 });
+    await dailyDay.getByRole("region", { name: "Run preview", exact: true }).getByText("Daily run report", { exact: true }).waitFor();
+    await timelinePage.goto(`${origin}/cron?timeline=silent`);
+    await timelinePage.locator("li button[aria-expanded]").filter({ hasText: "Silent" }).waitFor();
+    expect(await timelinePage.locator("dl > div").filter({ hasText: /^Delivered/ }).locator("dd").first().textContent()).toBe("0");
+    await timelinePage.goto(`${origin}/cron?timeline=retired`);
+    await timelinePage.locator("li button[aria-expanded]").waitFor();
+    await timelinePage.getByRole("heading", { name: "Cron / retiredRetired", exact: true }).waitFor();
+    await timelinePage.goto(`${origin}/cron?timeline=no-such-cron`);
+    await timelinePage.getByText("No cron named no-such-cron in this space.", { exact: true }).waitFor();
+    await timelinePage.goto(`${origin}/cron?timeline=longlived`);
+    const newestBar = timelinePage.getByRole("button", { name: `${new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })} · 1 run`, exact: true });
+    await newestBar.waitFor();
+    expect(await timelinePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const newestBounds = (await newestBar.boundingBox())!;
+    expect(newestBounds.x >= 0 && newestBounds.x + newestBounds.width <= 390).toBe(true);
+    await timelinePage.close();
+    jobs.length = jobCount;
 
     ctrl.history = Array.from({ length: 20 }, (_, i) => [
       { role: "user", text: `Prompt ${i + 1}` },

@@ -1577,7 +1577,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   // The screen stays on while the Voice page is open or a call runs.
   const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
   useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
-  const [palette, setPalette] = useState<{ mode: "sessions" | "commands" | "cron" | undefined; key: number }>({ mode: undefined, key: 0 });
+  const [palette, setPalette] = useState<{ mode: "sessions" | "commands" | "cron" | "timeline" | undefined; key: number }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
   const drafts = useMemo(() => new Map<string, ComposerDraft>(), [scope]);
   const [, setDraftVersion] = useState(0);
@@ -1872,23 +1872,28 @@ function SessionCommandPicker({ items, query, setQuery, forking, disabled }: { i
 }
 
 function paletteRows(
-  mode: "sessions" | "commands" | "cron",
+  mode: "sessions" | "commands" | "cron" | "timeline",
   typed: string,
   rows: Session[],
-  jobs: { stem: string; status: string; schedule?: string; agent?: string; channel?: string }[] | undefined,
+  jobs: CronJob[],
   newChat: () => void,
   open: (path: string) => void,
-  openCron: () => void,
+  openCron: (mode: "cron" | "timeline") => void,
   runStem: (stem: string) => void,
   actions: { key: string; label: string; detail?: string; keep?: boolean; disabled?: boolean; run: () => void }[],
   recent: string[],
 ): { key: string; label?: string; detail?: string; session?: Session; keep?: boolean; disabled?: boolean; run: () => void }[] {
   const needle = typed.toLowerCase();
   if (mode === "cron") {
-    return (jobs ?? []).filter((job) => job.status !== "ran" && (needle === "" || `${job.stem} ${job.schedule ?? ""} ${job.agent ?? ""} ${job.channel ?? ""}`.toLowerCase().includes(needle))).map((job) => ({
+    return jobs.filter((job) => job.status !== "ran" && (needle === "" || `${job.stem} ${job.schedule ?? ""} ${job.agent ?? ""} ${job.channel ?? ""}`.toLowerCase().includes(needle))).map((job) => ({
       key: job.stem, label: job.stem, detail: [job.schedule, job.agent, job.channel].filter(Boolean).join(" · "), keep: true, run: () => runStem(job.stem),
     }));
   }
+  // Every stem with a definition or runs; a run is one origin, and sub-calls do not count as runs.
+  if (mode === "timeline") return [...Map.groupBy(jobs, (job) => job.stem)].filter(([stem]) => stem.toLowerCase().includes(needle)).map(([stem, rows]) => {
+    const runs = rows.filter((job) => job.status === "ran" && !job.origin!.includes("/call_"));
+    return { key: stem, label: stem, detail: [runs[0] ? `${plural(new Set(runs.map((job) => job.origin)).size, "run")} · last ${cronWhen(runs[0].lastRun)} UTC` : "No runs yet", rows.some((job) => job.status !== "ran") ? "" : "Retired"].filter(Boolean).join(" · "), run: () => navigate(`/cron?${new URLSearchParams({ timeline: stem })}`) };
+  });
   // Match quality: 0 the whole label, 1 one contiguous run, 2 three or more letters in order with gaps, 3 none; all case-insensitive.
   const tier = (label: string) => {
     const text = label.toLowerCase(), letters = [...needle];
@@ -1903,7 +1908,8 @@ function paletteRows(
     ...actions,
     { key: "new", label: "Sessions: New", run: newChat },
     { key: "search", label: "Sessions: Search", run: () => navigate("/search") },
-    { key: "run-cron", label: "Cron: Run", keep: true, run: openCron },
+    { key: "run-cron", label: "Cron: Run", keep: true, run: () => openCron("cron") },
+    { key: "cron-timeline", label: "Cron: Timeline", keep: true, run: () => openCron("timeline") },
     ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["shortcuts", "Help: Keyboard Shortcuts"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
   ].filter((item) => tier(item.label) < 3).sort((a, b) => {
@@ -2016,7 +2022,7 @@ function usePaletteSessions(query: string, sessions: boolean, entered: boolean) 
 const filterKeys = "tag|cron|agent|room|principal|server|model|is|sort";
 
 const paletteCopy = { sessions: { title: "Go to session or command", desc: "Search and open a session, or run a command.", placeholder: "Search sessions and commands" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
-  cron: { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" } };
+  cron: { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" }, timeline: { title: "Cron timeline", desc: "Pick a cron job to see all its runs.", placeholder: "Search cron jobs" } };
 
 // "Sessions: New on <server>" turns the palette into a folder picker for a remote OpenCode
 // session: a typed folder, or one of that server's sessions' folders, those the person picked most recently first,
@@ -2058,7 +2064,7 @@ function usePalettePage<T>(items: T[], selected: number, key: string) {
   };
 }
 
-function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void; keyCommands: { key: string; label: string; run: () => void }[] }) {
+function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { drafts: Map<string, ComposerDraft>; mode: "sessions" | "commands" | "cron" | "timeline" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | "timeline" | undefined) => void; newChat: () => void; keyCommands: { key: string; label: string; run: () => void }[] }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
   // Arrowing onto a session shows it in the preview tab. The palette remounts per opening and keeps acting on the
@@ -2120,7 +2126,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: mode === "sessions" });
   const active = useRef<HTMLButtonElement>(null);
   const { search, filtered, free, matches, rows } = usePaletteSessions(query, mode === "sessions", entered);
-  const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" });
+  const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" || mode === "timeline" });
   const runCron = useMutation({
     mutationFn: mutations.runCron,
     onSuccess: (id, { stem }) => {
@@ -2135,13 +2141,13 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
   // The folder picker leaves session search, so typed folders are never sent as a search.
   const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(0); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent);
   const inSpace = useInSpace();
-  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, jobs.data?.filter(inSpace), newChat, tabs.open, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...timeline, ...outputs], recent));
+  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, cronInSpace(jobs.data ?? [], inSpace), newChat, tabs.open, (next) => { setQuery(""); setPick(0); setMode(next); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...timeline, ...outputs], recent));
   const selected = items.length === 0 ? 0 : pick % items.length;
   // Draw more rows only as scrolling or the keyboard needs them; every choice stays reachable.
   const { shown, next } = usePalettePage(items, selected, `${mode}:${query}`);
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
-    if (mode !== "cron" && !item.session) {
+    if ((mode === "sessions" || mode === "commands") && !item.session) {
       const next = [item.key, ...recent.filter((key) => key !== item.key)].slice(0, 50);
       localStorage.setItem("command-history", JSON.stringify(next));
       setRecent(next);
@@ -2199,9 +2205,9 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
   );
 }
 
-function PaletteCommandContent({ item, mode }: { item: ReturnType<typeof paletteRows>[number]; mode: "sessions" | "commands" | "cron" | undefined }) {
+function PaletteCommandContent({ item, mode }: { item: ReturnType<typeof paletteRows>[number]; mode: "sessions" | "commands" | "cron" | "timeline" | undefined }) {
   return <>
-    <span className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1"><span className="font-medium">{item.label}</span>{mode !== "cron" ? <Keys id={item.key} hidden /> : null}</span>
+    <span className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1"><span className="font-medium">{item.label}</span>{mode === "sessions" || mode === "commands" ? <Keys id={item.key} hidden /> : null}</span>
     {item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}
   </>;
 }
@@ -2235,11 +2241,11 @@ function ShortcutsPage({ show }: { show: boolean }) {
   </div>;
 }
 
-function paletteEmpty(mode: "sessions" | "commands" | "cron" | undefined, sidebar: SidebarView, search: ReturnType<typeof useSessionSearch>, loadingJobs: boolean, folders?: string) {
+function paletteEmpty(mode: "sessions" | "commands" | "cron" | "timeline" | undefined, sidebar: SidebarView, search: ReturnType<typeof useSessionSearch>, loadingJobs: boolean, folders?: string) {
   if (folders) return folders;
   if (mode === "sessions" && search.error) return "Search incomplete";
   if (mode === "sessions" && (!searchIsAuthoritative(sidebar) || search.pending || search.missing)) return "loading...";
-  return mode === "cron" && loadingJobs ? "Loading…" : "No matches";
+  return (mode === "cron" || mode === "timeline") && loadingJobs ? "Loading…" : "No matches";
 }
 
 function paletteMove(event: { key: string; preventDefault: () => void }, selected: number, count: number, enter: () => void) {
@@ -4705,7 +4711,7 @@ function CronChatLink({ job, className, children }: { job: CronJob; className: s
   </>;
 }
 
-function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () => void }) {
+function CronRunPreview({ preview, onClose, tall }: { preview: CronJob; onClose: () => void; tall?: boolean }) {
   const conversationId = preview.nextRun || preview.origin!;
   const history = useQuery(queries.history({ id: conversationId, sourceConversationId: preview.nextRun ? preview.origin : undefined }));
   const previewLines = useMemo(() => historyLines(history.data?.messages ?? []), [history.data]);
@@ -4719,12 +4725,163 @@ function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () =>
       {history.isLoading ? <p role="status" className="text-sm text-muted-foreground">Loading run…</p> : null}
       {history.error ? <p role="alert" className="text-sm text-destructive">{history.error.message}</p> : null}
       {!preview.nextRun ? <p className="text-sm text-muted-foreground">No delivered chat · Run traces</p> : null}
-      <div className="mt-2 max-h-64 overflow-y-auto">
+      <div className={cn("mt-2 overflow-y-auto", tall ? "max-h-[calc(100dvh-14rem)]" : "max-h-64")}>
         <TranscriptLines rows={previewLines.map((line) => ({ kind: "line", line }))} conversationId={conversationId} hasSandboxed={hasSandboxed} />
         {history.data?.messages.length === 0 ? <p className="text-sm text-muted-foreground">No recorded messages for this run.</p> : null}
       </div>
     </section>
   );
+}
+
+// Runs carry no space, so a job outside this space hides its runs too.
+function cronInSpace(jobs: CronJob[], inSpace: (item: { space?: string }) => boolean) {
+  const away = new Set(jobs.filter((job) => !inSpace(job)).map((job) => job.stem));
+  return jobs.filter((job) => !away.has(job.stem));
+}
+
+const cronDot = "absolute -left-[5px] top-3 size-2.5 rounded-full border-2";
+const cronDayHead = "sticky top-0 z-10 flex items-baseline justify-between gap-2 bg-background/95 py-2 text-xs font-medium text-muted-foreground backdrop-blur";
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+const cronDay = (day: string) => new Date(day).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+
+// One cron's journal: a summary, runs per day, and every run newest first, whole UTC days of about 60 runs at a time.
+// On wide screens the picked run's transcript stays beside the list; on narrow ones it opens under the run.
+// status, when set, replaces the journal: loading, a failed load, or a cron this space does not have.
+function CronTimeline({ stem, rows, status }: { stem: string; rows: CronJob[]; status: string }) {
+  const [limit, setLimit] = useState(60);
+  const [preview, setPreview] = useState("");
+  const job = rows.find((item) => item.stem === stem && item.status !== "ran");
+  const all = rows.filter((item) => item.stem === stem && item.status === "ran");
+  const callRuns = cronRuns(all.filter((item) => item.origin!.includes("/call_")));
+  const calls = Map.groupBy(callRuns, ({ item }) => item.origin!.split("/call_")[0]);
+  const runs = cronRuns(all.filter((item) => !item.origin!.includes("/call_"))).map((run, i, list) => ({ ...run, gap: list[i + 1] && Date.parse(run.item.lastRun) - Date.parse(list[i + 1].item.lastRun) }));
+  const byDay = Map.groupBy(runs, ({ item }) => item.lastRun.slice(0, 10));
+  let shown = 0;
+  const days = [...byDay].filter(([, list]) => shown < limit && (shown += list.length));
+  const now = Date.now(), today = new Date(now).toISOString().slice(0, 10);
+  const jump = (day: string) => {
+    flushSync(() => setLimit(Math.max(limit, runs.findLastIndex(({ item }) => item.lastRun.startsWith(day)) + 1)));
+    document.getElementById(`cron-day-${day}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  };
+  return (
+    <div className="flex w-full flex-col overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 pt-4 pb-16 md:px-8">
+        <PageTitle><Link href="/cron" className="text-muted-foreground hover:text-foreground">Cron</Link> <span className="text-muted-foreground">/</span> {stem}
+          {status ? null : <span className={cn("ml-2 rounded-full px-2 py-0.5 align-middle text-xs font-medium", job ? "bg-cyan-600/10 text-cyan-700 dark:bg-cyan-400/10 dark:text-cyan-300" : "bg-muted text-muted-foreground")}>{job ? "Active" : "Retired"}</span>}</PageTitle>
+        {status ? <p role="status" className="text-sm text-muted-foreground">{status}</p> : <>
+          <CronJournalSummary job={job} runs={runs} subCalls={callRuns.length} now={now} />
+          {runs.length ? <CronDayBars runs={runs} byDay={byDay} active={!!job} today={today} jump={jump} /> : null}
+          <div className="grid gap-8 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+            <div className="flex flex-col gap-4">
+              <CronUpcoming upcoming={job?.upcoming ?? []} now={now} />
+              {days.map(([day, list]) => <section key={day} id={`cron-day-${day}`} aria-label={day}>
+                <h2 className={cronDayHead}><span className="text-foreground">{day === today ? "Today · " : ""}{cronDay(day)}</span><span>{plural(list.length, "run")}</span></h2>
+                <ol className="ml-1.5 border-l">{list.map((run) => <CronJournalRun key={run.item.origin} run={run} calls={calls.get(run.item.origin!) ?? []} preview={preview} setPreview={setPreview} />)}</ol>
+              </section>)}
+              {all.length === 0 ? <p className="text-sm text-muted-foreground">No runs yet.</p> : null}
+              {shown < runs.length ? <Button variant="outline" className="self-center" onClick={() => setLimit(limit + 100)}>Show older runs ({runs.length - shown} more)</Button> : null}
+            </div>
+            <aside aria-label="Selected run" className="hidden lg:block">
+              <div className="sticky top-2"><CronPreviewPanel picked={[...runs, ...callRuns].find(({ item }) => item.origin === preview)?.item} close={() => setPreview("")} /></div>
+            </aside>
+          </div>
+        </>}
+      </div>
+    </div>
+  );
+}
+
+type CronJournalRow = { item: CronJob; delivered: boolean; gap?: number };
+
+// ListCronJobs lists a run once per chat that holds it (CronRunSources), so a run is one origin. It shows its first
+// row with a chat, and is delivered unless its only chat is web:<origin>, the one CreateSession opens to continue it.
+function cronRuns(rows: CronJob[]): CronJournalRow[] {
+  return [...Map.groupBy(rows, (row) => row.origin!).values()].map((same) => ({ item: same.find((row) => row.nextRun) ?? same[0], delivered: same.some((row) => row.nextRun && row.nextRun !== `web:${row.origin}`) }));
+}
+
+function CronUpcoming({ upcoming, now }: { upcoming: string[]; now: number }) {
+  if (!upcoming.length) return null;
+  return <section aria-label="Upcoming runs">
+    <h2 className={cronDayHead}>Upcoming</h2>
+    <ol className="ml-1.5 border-l border-dashed border-amber-600/50">{upcoming.slice(0, 3).toReversed().map((at) => <li key={at} className="relative flex items-baseline gap-3 py-1.5 pl-5 text-sm text-muted-foreground">
+      <span className={cn(cronDot, "border-amber-600 bg-background dark:border-amber-400")} />
+      <span className="w-11 font-medium tabular-nums">{at.slice(11, 16)}</span><span className="text-xs">in {cronGap(Date.parse(at) - now)}</span>
+    </li>)}</ol>
+  </section>;
+}
+
+function CronPreviewPanel({ picked, close }: { picked?: CronJob; close: () => void }) {
+  return picked ? <CronRunPreview tall preview={picked} onClose={close} /> : <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">Pick a run to read its transcript here.</p>;
+}
+
+function CronJournalSummary({ job, runs, subCalls, now }: { job?: CronJob; runs: CronJournalRow[]; subCalls: number; now: number }) {
+  const gaps = runs.flatMap(({ gap }) => gap ? [gap] : []).toSorted((a, b) => a - b);
+  const delivered = runs.filter((run) => run.delivered).length, last = runs.at(0)?.item.lastRun, next = job?.upcoming?.at(0);
+  const stats = [
+    ["Runs", String(runs.length), subCalls ? plural(subCalls, "sub-call") : ""],
+    ["Delivered", String(delivered), runs.length ? `${Math.round((delivered / runs.length) * 100)}% of runs` : ""],
+    ["Typical gap", gaps.length ? cronGap(gaps[gaps.length >> 1]) : "—", gaps.length ? `Longest ${cronGap(gaps.at(-1)!)}` : ""],
+    ["Last run", last ? `${cronGap(now - Date.parse(last))} ago` : "—", last ? `${cronWhen(last)} UTC` : ""],
+    ["Next run", next ? `in ${cronGap(Date.parse(next) - now)}` : "—", next ? `${cronWhen(next)} UTC` : job ? "" : "Retired"],
+  ];
+  return <>
+    <div className="-mt-4 flex flex-col gap-2 text-sm text-muted-foreground">
+      <p>{[job?.agent && `Agent ${job.agent}`, job?.channel, job ? "" : "Definition no longer available", "Times in UTC"].filter(Boolean).join(" · ")}</p>
+      {job?.schedule ? <p className="flex flex-wrap gap-1.5">{job.schedule.split(/,\s+/).map((part) => <code key={part} className="rounded-md border bg-muted/40 px-1.5 py-0.5 text-xs">{part}</code>)}</p> : null}
+    </div>
+    <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      {stats.map(([label, value, note]) => <div key={label} className="rounded-lg border bg-card p-3">
+        <dt className="text-xs text-muted-foreground">{label}</dt>
+        <dd className="mt-1 text-xl font-semibold tabular-nums">{value}</dd>
+        <dd className="truncate text-xs text-muted-foreground">{note}</dd>
+      </div>)}
+    </dl>
+  </>;
+}
+
+// A bar per day from the first run through today, or through the last run once the cron is retired; solid is the delivered share.
+// Bars keep a minimum width, so a long history scrolls the strip, which opens on the newest day.
+function CronDayBars({ runs, byDay, active, today, jump }: { runs: CronJournalRow[]; byDay: Map<string, CronJournalRow[]>; active: boolean; today: string; jump: (day: string) => void }) {
+  const first = Date.parse(runs.at(-1)!.item.lastRun.slice(0, 10)), end = Date.parse(active ? today : runs[0].item.lastRun.slice(0, 10));
+  const span = Array.from({ length: Math.floor((end - first) / 86_400_000) + 1 }, (_, i) => new Date(first + i * 86_400_000).toISOString().slice(0, 10));
+  const peak = Math.max(...[...byDay.values()].map((list) => list.length));
+  return <section aria-label="Runs per day" className="flex flex-col gap-1">
+    <div className="flex h-12 flex-row-reverse items-end gap-[3px] overflow-x-auto">{span.toReversed().map((day) => {
+      const list = byDay.get(day) ?? [], sent = list.filter((run) => run.delivered).length;
+      const label = `${cronDay(day)} · ${plural(list.length, "run")}${sent ? ` · ${sent} delivered` : ""}`;
+      return <button key={day} type="button" title={label} aria-label={label} disabled={!list.length} onClick={() => jump(day)} className="group flex h-full min-w-1.5 flex-1 items-end rounded-sm hover:bg-accent disabled:hover:bg-transparent">
+        <span className="mx-auto flex w-full max-w-4 flex-col justify-end overflow-hidden rounded-t-sm bg-cyan-600/25 group-hover:bg-cyan-600/45 dark:bg-cyan-400/25" style={{ height: list.length ? `${Math.max(6, (list.length / peak) * 100)}%` : "2px" }}>
+          <span className="w-full bg-cyan-600 dark:bg-cyan-400" style={{ height: `${(sent / Math.max(1, list.length)) * 100}%` }} />
+        </span>
+      </button>;
+    })}</div>
+    <div className="flex justify-between text-[10px] text-muted-foreground"><span>{cronDay(span[0])}</span><span>Runs per day · solid = delivered</span><span>{span.at(-1) === today ? "Today" : cronDay(span.at(-1)!)}</span></div>
+  </section>;
+}
+
+function cronGap(ms: number) {
+  const minutes = Math.round(ms / 60_000), hours = Math.floor(minutes / 60);
+  return minutes < 60 ? `${minutes}m` : hours < 24 ? `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ""}` : `${Math.floor(hours / 24)}d${hours % 24 ? ` ${hours % 24}h` : ""}`;
+}
+
+// A run on the journal line; opening it lists its sub-calls and, on narrow screens, previews it or the sub-call picked.
+function CronJournalRun({ run: { item, gap, delivered }, calls, preview, setPreview }: { run: CronJournalRow; calls: CronJournalRow[]; preview: string; setPreview: (origin: string) => void }) {
+  const picked = [item, ...calls.map((call) => call.item)].find((each) => each.origin === preview);
+  return <li className="relative pl-4">
+    <span className={cn(cronDot, "border-cyan-600 dark:border-cyan-400", delivered ? "bg-cyan-600 ring-4 ring-cyan-600/15 dark:bg-cyan-400 dark:ring-cyan-400/15" : "bg-background")} />
+    <button type="button" aria-expanded={!!picked} className={cn("flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent", picked && "bg-accent")} onClick={() => setPreview(picked ? "" : item.origin!)}>
+      <span className="w-11 font-medium tabular-nums">{item.lastRun.slice(11, 16)}</span>
+      {delivered ? <span className="rounded-full bg-cyan-600/10 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-400/10 dark:text-cyan-300">Delivered</span> : <span className="text-xs text-muted-foreground">Silent</span>}
+      {calls.length ? <span className="text-xs text-muted-foreground">{plural(calls.length, "sub-call")}</span> : null}
+      {gap ? <span className="ml-auto text-xs tabular-nums text-muted-foreground" title="Time since the previous run">+{cronGap(gap)}</span> : null}
+    </button>
+    {picked && calls.length ? <div className="flex flex-col gap-0.5 py-1 pl-2">
+      {calls.map((call) => <button key={call.item.origin} type="button" className={cn("truncate rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-accent", preview === call.item.origin && "bg-accent text-foreground")} onClick={() => setPreview(call.item.origin!)}>
+        ↳ Sub-call {call.item.origin!.split("/call_").at(-1)!.slice(0, 8)} · {call.delivered ? "Delivered" : "Silent"}
+      </button>)}
+    </div> : null}
+    {picked ? <div className="py-2 lg:hidden"><CronRunPreview preview={picked} onClose={() => setPreview("")} /></div> : null}
+  </li>;
 }
 
 function CronPage() {
@@ -4736,9 +4893,9 @@ function CronPage() {
   const confirmTrigger = useRef<HTMLButtonElement>(null);
   const [preview, setPreview] = useState<CronJob | null>(null);
   const inSpace = useInSpace();
-  // Runs carry no space, so a job outside this space hides its runs too.
-  const away = new Set((jobs.data ?? []).filter((job) => !inSpace(job)).map((job) => job.stem));
-  const rows = (jobs.data ?? []).filter((job) => !away.has(job.stem));
+  const timeline = new URLSearchParams(useSearch()).get("timeline");
+  const rows = cronInSpace(jobs.data ?? [], inSpace);
+  if (timeline !== null) return <CronTimeline key={timeline} stem={timeline} rows={rows} status={jobs.isLoading ? "Loading runs…" : jobs.error?.message ?? (rows.some((job) => job.stem === timeline) ? "" : `No cron named ${timeline} in this space.`)} />;
   const defs = rows.filter((job) => job.status !== "ran");
   const runs = rows.filter((job) => job.status === "ran");
   const start = Date.now() - 12 * 3_600_000;

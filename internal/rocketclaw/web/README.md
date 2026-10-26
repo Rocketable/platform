@@ -526,8 +526,8 @@ active tab.
   as its description, such as “Group Work, Space: Main”.
 - **Agents and crons in spaces.** An agent or cron whose frontmatter sets
   `space:` belongs to the space of that name, ignoring case; a cron without one
-  takes its agent's. The Cron page and Run cron palette hide crons, and their
-  runs, that belong to another space.
+  takes its agent's. The Cron page, its timelines, and the Run cron and Cron
+  timeline palettes hide crons, and their runs, that belong to another space.
 - **Birth space.** A session is born in its agent's space; a Run cron session, a
   cron's report thread, or a chat continuing a cron run in its cron's space, else
   the cron agent's; any other Web session in the space you were in. A space named
@@ -771,9 +771,13 @@ hit from a stopped or failed turn opens its chat without jumping to a message. A
 failed search shows an error with Retry, and the next keystroke also retries.
 Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
 **Sessions: New**, **Sessions: Search**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
-**List Agents**, **List Skills**, **Settings**, **Tabs: Previous**, **Tabs: Next**,
-and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
-works (the desktop sidebar, not the narrow-screen drawer). In both palettes a command bound to a
+**Cron: Timeline**, **List Agents**, **List Skills**, **Settings**, **Tabs: Previous**,
+**Tabs: Next**, and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
+works (the desktop sidebar, not the narrow-screen drawer). **Cron: Timeline** picks a cron, retired
+ones included, and opens `/cron?timeline=<cron>`: a summary, a bar per UTC day, and every run newest
+first by UTC day, where a run is counted once however many chats hold it and its sub-calls fold
+under it. A run is delivered when a chat other than the one opened to continue it holds it. Picking a
+run shows its transcript beside the list on wide screens and under the run on narrow ones. In both palettes a command bound to a
 key shows it on the right of its row, OpenCode style: **⌘ Option N** on Mac or
 **Ctrl Alt N** elsewhere for **Sessions: New**, **⌘ [** and **⌘ ]** for the tab
 commands, and **⌘ B** for the sidebar toggle. Unbound commands have no shortcut
