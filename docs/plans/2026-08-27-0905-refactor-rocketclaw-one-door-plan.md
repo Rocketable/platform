@@ -178,7 +178,7 @@ None blocking. Planning resolved the origin's deferred items in KTD1–KTD5.
 - CONCEPTS.md — Managed Slack Thread, Slack Steer, Enqueued Slack Message, Thread Queue.
 - README.md — new External MCP id creates a private MCP session and a managed Slack session on the same thread.
 - docs/solutions/logic-errors/slack-thread-parent-message-redelivery-enqueued-second-turn.md — do not route MCP through Slack parent-swallow.
-- docs/solutions/logic-errors/slack-root-app-mention-redelivery-cleared-buffered-follow-ups.md — `beginSlackStack` stays idempotent.
+- docs/solutions/logic-errors/slack-thread-parent-message-redelivery-enqueued-second-turn.md — `beginSlackStack` stays idempotent.
 
 ---
 

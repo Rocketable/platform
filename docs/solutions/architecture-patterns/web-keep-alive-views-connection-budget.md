@@ -1,125 +1,103 @@
 ---
-title: Keeping RocketClaw Web Views Mounted Needs a Stream Budget and a Remount Audit
+title: Keeping Web Views Mounted Needs a Remount Audit
 date: 2026-10-07
+last_updated: 2026-10-26
 category: docs/solutions/architecture-patterns/
 module: internal/rocketclaw/web
 problem_type: architecture_pattern
 component: frontend
 severity: high
 applies_when:
-  - Mounting more than one Transcript at a time (warm tabs, split panes, previews)
-  - Adding any long-lived EventSource or streaming fetch to the web client
   - Turning a view that remounts on navigation into one that stays mounted while hidden
-related_components:
-  - cmd/rocketclaw
-  - internal/rocketclaw/frontend/rpc
+  - Adding a page to WarmTabs or wrapping a view in TabPane
+  - Mounting a second Transcript at once (warm session tabs, split panes, previews)
+  - Adding a context ref, document-wide id lookup, or navigation or URL effect to a view that can be hidden
 tags:
   - web
-  - eventsource
-  - http1-connection-limit
   - keep-alive
   - warm-tabs
   - remount
+  - hidden-views
+  - react-effects
+  - eventsource
 ---
 
-# Keeping RocketClaw Web Views Mounted Needs a Stream Budget and a Remount Audit
+# Keeping Web Views Mounted Needs a Remount Audit
 
 ## Context
 
-The RocketClaw web client shows one session at a time. `SessionApp` re-keys a
-single `MessageScrollerProvider`/`Transcript` on every navigation
-(`key={conversation.key}` in `internal/rocketclaw/web/src/ui.tsx`), so each
-session view mounts fresh and unmounts on the way out. Much of the client
-quietly depends on that.
+Much of the web client assumes that a view mounts when it becomes visible and unmounts when the user
+leaves. Keeping a view mounted but hidden breaks that assumption in places spread across unrelated
+components. In `internal/rocketclaw/web/src/ui.tsx` today:
 
-The warm-tabs variant of the web tabs work (closed PR #212, plan
-`docs/plans/2026-10-07-1521-feat-web-tabs-replace-sidebar-plan.md`, U6) kept
-several session views mounted and hid the inactive ones. Two kinds of breakage
-followed: a connection budget problem, and code that relied on remounting.
+- `WarmTabs` keeps Cron, Agents, Skills and Config mounted once visited (or after preload) and hides
+  the inactive ones with `TabPane`.
+- `SessionApp` renders one `MessageScrollerProvider key={conversation.key}` and `Transcript` inside
+  `TabPane show={showChat}`. `conversation` changes only while a chat route shows, so on any
+  non-chat page the last session's `Transcript` stays mounted and hidden.
+
+The warm-tabs variant of the tabs work (closed PR #212, plan U6) kept several session transcripts
+mounted at once and hit most of the breakage below. Its rule that only the active view may open
+`/stream` came from the server speaking plain HTTP/1.1, where browsers allow about six connections per
+host; the server now serves HTTPS (`cmd/rocketclaw/web.go`, `cmd/rocketclaw/tailnet.go`), so browsers
+carry every request over one HTTP/2 connection and that limit is gone.
 
 ## Guidance
 
-### 1. One live stream per page
+Before a view stays mounted while hidden, or before a second instance of it mounts, check each risk:
 
-Each mounted `Transcript` opens a long-lived `GET /stream` EventSource in
-`useSessionStream`. The web server is a plain `http.Server` serving a TCP
-listener with no TLS (`cmd/rocketclaw/web.go`), so browsers speak HTTP/1.1 to
-it. Browsers then allow about six connections per host. Every request shares
-that pool: streams, the 2-second polls (`Protocol`, identity, and each
-composer's agents and queue queries), `GET /api/ListSessions`, and RPC
-`POST`s.
-
-When several transcripts each held a stream, the streams used up the pool.
-RPCs and polls then queued behind them and the UI hung. The working design:
-
-- Only the active view opens `/stream`. The effect depends on an `active` flag
-  and closes the stream when the view hides.
-- A hidden view catches up when it becomes active again. Opening the stream
-  already triggers a History delta read from the last applied revision.
-- Background running state comes from the session list (`ListSessions`), not
-  from a per-view stream.
-
-The same budget applies to any new feature that adds a long-lived connection,
-and to the user's other RocketClaw browser tabs on the same host. Count the
-streams before adding one. The limit goes away only if the server moves to
-HTTP/2, which needs TLS or h2c.
-
-### 2. Audit what relied on remounting
-
-Hidden views that stay mounted keep running their effects and keep their
-registrations. Check these four groups:
-
-| What to check | What broke under warm mounting | Fix used |
+| Risk | Current example | What to do |
 |---|---|---|
-| Context singletons | `SessionCommands.composer` is one ref set through `useImperativeHandle`. The composer that mounted last owned it, so palette `$` commands went to a hidden tab. | Hidden views get a context copy whose `composer` points at an unused ref. Only the active view registers the real one. |
-| Global DOM IDs | `SelectionQuote` reads `document.getElementById("transcript-scroll")`. With several transcripts mounted, it returned the first one in the DOM. | Pass each view's own viewport ref down. Only the active viewport gets the `id`. |
-| Navigation side effects in effects | The new-chat creation handoff (`useLayoutEffect` in `Transcript`) calls `route.goSession(...)`. A hidden composer that had created a session could still navigate. | Run the handoff only when the view is active. |
-| Effects that relied on remount to reset or re-run | `SearchPage` keeps its saved-search state when it stays mounted, so closing the last inner tab did not start a fresh draft. Its URL-sync effect (`history.replaceState` to `/search?...`, deps `[tab, search]`) did not re-run when the user came back. It could also rewrite the URL while another tab was showing. | Reset the state explicitly on close. Add `pathname` to the effect's deps and return early when the path is not `/search`. |
+| Single global ref in context | `SessionCommands.composer` is one ref created in `SessionApp`. One composer mounts today, so palette `$` commands are unambiguous, but on a non-chat page the ref still points at the hidden composer. | With several instances, give hidden views a context copy whose ref is unused. Only the active view gets the real one. |
+| Imperative handle bound to one instance | `Composer` binds that ref with `useImperativeHandle` and no deps. With several composers the one that rendered last owns it, and an unmounting one resets it to `null` even if another owned it. | Bind the handle only from the active view. |
+| Document-wide id lookup | `SelectionQuote` calls `document.getElementById("transcript-scroll")`, and `openCall` queries `#transcript-scroll [data-tool-call-id=...]`. Only `Transcript` renders that viewport, so the id is unique today. | With two transcripts mounted these return the first one in DOM order. Pass each view its own viewport ref, or set the id only on the active viewport. |
+| Effects that assume mount means visible | The new-chat handoff in `Transcript` is a `useLayoutEffect` that calls `route.goSession(...)` once the draft gets its session id. Nothing checks whether the chat pane is showing. `SearchPage` focuses its input in a mount-only layout effect. | Gate navigation, focus and similar user-facing side effects on the view being active. Re-run them when the view becomes active, not only on mount. |
+| URL-sync effects that would fight the active tab | `SearchPage` calls `history.replaceState` to `/search?...` in an effect with deps `[tab, search]`. That is safe only because `SearchPage` mounts only while the route is `/search`. | If such a page becomes warm, add the pathname to the deps and return early off its own path. Reset state that relied on remount (the warm-tabs variant kept a stale saved-search draft) explicitly on close. |
 
-Hidden panes also caused layout trouble:
+Hidden panes also need two layout checks:
 
-- A `display: none` viewport measures 0x0. `MessageScrollerProvider`'s
-  `autoScroll` reads that as "at the end" and pins there, so pass
-  `autoScroll` only to the active view.
-- Reordering mounted panes moves their DOM nodes and resets their scroll
-  position. Render panes in mount order, not recency order.
+- A `display: none` viewport measures 0x0. In the warm-tabs variant `MessageScrollerProvider`'s
+  `autoScroll` read that as "at the end" and pinned there. The hidden `Transcript` still gets
+  `autoScroll` today, so check the scroll position after coming back from a non-chat page.
+- Reordering mounted panes moves their DOM nodes and resets scroll. Render panes in a stable order,
+  as `WarmTabs` does.
+
+### Hidden views keep working
+
+A hidden view keeps its stream and effects running, so its per-view work still costs while nobody sees
+it. `useSessionStream` opens `/stream` with deps `[id, scope, refreshHistory]` and has no visibility
+gate, so the hidden `Transcript` keeps its EventSource open and re-reads History on every change to that
+session. Warm pages keep whatever queries and effects they started. Decide for each one whether it
+should keep running while hidden.
 
 ## Why This Matters
 
-The stream budget fails silently. Nothing logs an error. Requests just wait for
-a free connection, and the UI freezes in ways that look like a backend stall.
-The remount assumptions are spread across unrelated components. The tests
-passed with one mounted view, because one view never exercises them.
+None of these failures throws. They show up as commands going to the wrong composer, navigation the
+user did not ask for, a rewritten URL, or a wrong scroll position. Tests with one visible view never
+exercise them.
 
 ## When to Apply
 
-- Before mounting a second `Transcript`, or anything else that calls
-  `useSessionStream`.
-- Before adding a new EventSource, streaming `fetch`, or long-poll to the web
-  client.
-- When converting any page or pane from remount-on-navigate to hidden-but-mounted
-  (`TabPane`, `WarmTabs`, or a new keep-alive wrapper).
+- Before adding a page to `WarmTabs`, wrapping a view in `TabPane`, or adding another keep-alive wrapper.
+- Before mounting a second `Transcript`, or anything that uses `useSessionStream` or `#transcript-scroll`.
+- When adding a context ref, document-level lookup, or navigation, URL or focus effect to a view that
+  can be hidden.
 
 ## Examples
 
-The stream gate from the warm-tabs variant:
+The chat pane stays mounted, hidden on non-chat pages:
 
 ```tsx
-// HTTP/1.1 allows about six connections per host, so only the active tab streams; others catch up on activation.
-useEffect(() => {
-  if (!id || !scope || !active) return;
-  const stream = new EventSource(`/stream?${new URLSearchParams({ id })}`);
-  // ...
-  return () => { stream.close(); };
-}, [id, scope, active, refreshHistory]);
+<TabPane show={showChat}>
+  <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
+    <Transcript id={conversation.id} /* ... */ />
+  </MessageScrollerProvider>
+</TabPane>
 ```
-
-Test that matches the budget: with three session tabs open, at most one
-`/stream` connection is open at a time (plan U6 test scenarios).
 
 ## Related
 
-- `docs/plans/2026-10-07-1521-feat-web-tabs-replace-sidebar-plan.md`: Risks
-  ("V4 complexity") and U6.
-- `internal/rocketclaw/web/README.md`: Attachment HTTP contract, which describes
-  `/stream`, `ListSessions`, and `Protocol` polling.
+- `docs/plans/2026-10-07-1521-feat-web-tabs-replace-sidebar-plan.md`: Risks ("V4 complexity") and U6.
+- `docs/solutions/performance-issues/search-page-froze-rendering-every-result.md`: another web
+  constraint that only shows with realistic usage.
+- `internal/rocketclaw/web/README.md`: Attachment HTTP contract, which describes `/stream`.

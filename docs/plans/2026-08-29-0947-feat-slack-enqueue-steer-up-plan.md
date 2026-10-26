@@ -192,7 +192,7 @@ flowchart TD
 - Thread Queue and Slack Steer: `CONCEPTS.md`
 - Jump index (superseded for steer-on-card only): `docs/plans/2026-08-28-1257-feat-slack-queue-jump-index-plan.md`
 - Grounding: `.tmp/ce-brainstorm/enqueue-steer-up/grounding.md`
-- Stack vs later-work: `docs/solutions/logic-errors/slack-root-app-mention-redelivery-cleared-buffered-follow-ups.md`
+- Stack vs later-work: `docs/solutions/logic-errors/slack-thread-parent-message-redelivery-enqueued-second-turn.md`
 - Parent hail redelivery: `docs/solutions/logic-errors/slack-thread-parent-message-redelivery-enqueued-second-turn.md`
 
 ---

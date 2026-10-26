@@ -486,7 +486,7 @@ These defaults were chosen in pipeline mode, without a user to ask; each is reve
   - `internal/rocketclaw/skel/agents/main.md`
   - `internal/rocketclaw/skel/.rocketclaw/skills/main-create-or-update-agent/SKILL.md`
   - `docs/solutions/logic-errors/slack-thread-parent-message-redelivery-enqueued-second-turn.md`
-  - `docs/solutions/logic-errors/slack-root-app-mention-redelivery-cleared-buffered-follow-ups.md`
+  - `docs/solutions/logic-errors/slack-thread-parent-message-redelivery-enqueued-second-turn.md`
 - **Approach:**
   1. Rewrite the AGENTS.md Slack bullet and the README Slack paragraphs (mention contract, `$agent`, steering, `$stop`, `$enqueue`, queue references).
   2. In `CONCEPTS.md`, rewrite the Slack Conversations section: Managed Slack Thread, Root Slack Mention, Adhoc Callout, Slack Steer, Enqueued Slack Message, Buffered Follow-Up. Add "Report Thread" with its read-only rule.
