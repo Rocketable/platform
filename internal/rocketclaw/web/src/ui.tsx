@@ -1615,25 +1615,29 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     return () => { newChatOwner.current = undefined; };
   }, [newChat]);
   const onKey = useEffectEvent((event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.repeat || inTerminal(event)) return;
+    if (event.defaultPrevented) return;
     if ((event.metaKey || event.ctrlKey) && !event.altKey && event.code === "KeyP") {
       event.preventDefault();
-      openPalette(event.shiftKey ? "commands" : "sessions");
+      event.stopPropagation();
+      if (!event.repeat) openPalette(event.shiftKey ? "commands" : "sessions");
       return;
     }
     if (sidebar.medium && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.code === "KeyB") {
       event.preventDefault();
-      sidebar.toggle();
+      event.stopPropagation();
+      if (!event.repeat) sidebar.toggle();
       return;
     }
     if ((event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey && event.code === "KeyN") {
       event.preventDefault();
-      newChat();
+      event.stopPropagation();
+      if (!event.repeat) newChat();
       return;
     }
     if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.code === "BracketLeft" || event.code === "BracketRight")) {
       event.preventDefault();
-      tabs.step(event.code === "BracketLeft");
+      event.stopPropagation();
+      if (!event.repeat) tabs.step(event.code === "BracketLeft");
     }
   });
 
@@ -2283,8 +2287,6 @@ const SessionRowContent = memo(function SessionRowContent({ session, age = relat
 });
 
 const remoteView = { route: "", shown: "", openPalette: () => {} };
-
-const inTerminal = (event: KeyboardEvent) => event.target instanceof Element && !!event.target.closest('[data-component="terminal"]');
 
 // A remote session's link on its own server, for the session the open view shows, and that view's palette.
 // The link is OpenCode's own session route; the server asks whoever opens it to sign in.

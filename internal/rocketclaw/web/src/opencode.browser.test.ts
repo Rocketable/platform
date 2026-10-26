@@ -27,12 +27,12 @@ function start() {
   let failCreate = true;
   let failFork = true;
   // Terminal sockets the view holds open, counted where OpenCode would serve them.
-  const terminals = { open: 0 };
+  const terminals = { open: 0, input: [] as string[] };
   // A test holds session creates here to press again while one is still running.
   const creates = { hold: Promise.resolve() };
   // Loads of the view's entry left to fail, as a network blip or a deploy mid-load would.
   const entryFailures = { remaining: 0 };
-  const web = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, websocket: { open() { terminals.open++; }, close() { terminals.open--; }, message() {} }, async fetch(request, server) {
+  const web = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, websocket: { open() { terminals.open++; }, close() { terminals.open--; }, message(_socket, message) { terminals.input.push(message.toString()); } }, async fetch(request, server) {
     const url = new URL(request.url);
     if (/^\/oc\/box\/api\/pty\/[^/]+\/connect$/.test(url.pathname)) return server.upgrade(request) ? undefined : new Response("not a WebSocket", { status: 400 });
     if (url.pathname.startsWith("/oc/box/api/")) return openCode(request);
@@ -167,15 +167,35 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await page.keyboard.press("Escape");
     await until(async () => await palette.count() === 0);
 
-    // OpenCode's own terminal opens with Ctrl+` and keeps every key while it has focus, RocketClaw's shortcuts included.
+    // The terminal keeps unbound keys, but host shortcuts must not also reach its socket.
     await view.locator("[data-component=composer] [contenteditable=true]").click();
     await page.keyboard.press("Control+Backquote");
     await view.locator('[data-component="terminal"]').waitFor();
     await until(() => terminals.open === 1);
+    for (const modifier of ["Control", "Meta"]) {
+      for (const mode of ["sessions", "commands"] as const) {
+        await view.locator('[data-component="terminal"]').click();
+        await page.keyboard.press(`${modifier}+${mode === "commands" ? "Shift+" : ""}p`);
+        await rocketPalette(mode).waitFor();
+        expect(await palette.count()).toBe(0);
+        await page.locator('[data-slot="dialog-overlay"]').click({ position: { x: 5, y: 5 } });
+      }
+    }
     await view.locator('[data-component="terminal"]').click();
-    await page.keyboard.press("ControlOrMeta+p");
-    await Bun.sleep(100);
+    await page.keyboard.down("Control");
+    await page.keyboard.down("p");
+    await rocketPalette("sessions").waitFor();
+    await page.keyboard.up("Control");
+    await page.locator('[data-slot="dialog-overlay"]').click({ position: { x: 5, y: 5 } });
+    await view.locator('[data-component="terminal"]').click();
+    await page.keyboard.down("Control");
+    await page.keyboard.down("p");
+    await page.keyboard.up("p");
+    await page.keyboard.up("Control");
+    await page.keyboard.press("x");
+    await until(() => terminals.input.join("").endsWith("x"));
     expect(await rocketPalette("sessions").count()).toBe(0);
+    expect(terminals.input.join("")).toBe("x");
 
     // Leaving the session closes the terminal's socket with the rest of the view.
     await page.goBack();
