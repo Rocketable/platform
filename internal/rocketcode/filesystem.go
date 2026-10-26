@@ -787,7 +787,8 @@ func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) 
 
 	results := make([]globMatch, 0, len(matches))
 	for _, match := range matches {
-		if sfs.deniedPath(filepath.Join(hostRoot, match)) != "" {
+		full := filepath.Join(hostRoot, match)
+		if sfs.deniedPath(full) != "" {
 			continue
 		}
 
@@ -800,7 +801,7 @@ func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) 
 			continue
 		}
 
-		results = append(results, globMatch{path: filepath.Join(hostRoot, match), mtime: info.ModTime().UnixMilli()})
+		results = append(results, globMatch{path: full, mtime: info.ModTime().UnixMilli()})
 	}
 
 	if len(results) == 0 {

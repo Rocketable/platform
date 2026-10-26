@@ -441,6 +441,62 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 	})
 }
 
+func globAllocationFixture(tb testing.TB) (sfs *sandboxedFileSystem, output string) {
+	tb.Helper()
+
+	rg, err := exec.LookPath("rg")
+	require.NoError(tb, err)
+	// Keep executable lookup costs independent of the caller's PATH length.
+	tb.Setenv("PATH", filepath.Dir(rg))
+	root, err := os.OpenRoot(tb.TempDir())
+	require.NoError(tb, err)
+	tb.Cleanup(func() { require.NoError(tb, root.Close()) })
+
+	paths := make([]string, 512)
+	mtime := time.Unix(1_700_000_000, 0)
+
+	for i := range paths {
+		name := fmt.Sprintf("file-%03d.txt", i)
+		require.NoError(tb, root.WriteFile(name, nil, 0o644))
+		require.NoError(tb, root.Chtimes(name, mtime, mtime))
+		paths[i] = filepath.Join(root.Name(), name)
+	}
+
+	return &sandboxedFileSystem{root: root}, strings.Join(paths, "\n")
+}
+
+func TestSandboxedFileSystemGlobPathAllocations(t *testing.T) {
+	sfs, want := globAllocationFixture(t)
+	perMatch := testing.AllocsPerRun(10, func() {
+		full := filepath.Join(sfs.root.Name(), "file-000.txt")
+		if denied := sfs.deniedPath(full); denied != "" {
+			t.Fatal(denied)
+		}
+
+		if _, err := sfs.root.Lstat("file-000.txt"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	allocs := testing.AllocsPerRun(3, func() {
+		if got := sfs.Glob(t.Context(), "*.txt", ""); got != want {
+			t.Fatal("glob output differs from the sorted file paths")
+		}
+	})
+	// Allow command and result bookkeeping, but not a second path allocation per match.
+	require.LessOrEqual(t, allocs, 512*perMatch+200)
+}
+
+func BenchmarkSandboxedFileSystemGlob(b *testing.B) {
+	sfs, want := globAllocationFixture(b)
+	b.ReportAllocs()
+
+	for b.Loop() {
+		if got := sfs.Glob(b.Context(), "*.txt", ""); got != want {
+			b.Fatal("glob output differs from the sorted file paths")
+		}
+	}
+}
+
 func TestRunRipgrepExitResults(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
