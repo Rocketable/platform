@@ -748,6 +748,33 @@ test("an unread tab shows a bold title", () => withPage({}, async (page, origin,
   expect(await weight("Foxtrot")).toBe("700");
   expect(await weight("Alpha")).toBe("400");
   expect(await tab("Foxtrot").getAttribute("aria-description")).toBe("Space: Main, Turn running, Unread");
+
+  // A collapsed group holding an unread tab shows a bold name.
+  const header = strip(page).getByRole("button", { name: "Work", exact: true });
+  const groupWeight = () => header.locator("span").evaluate((name: HTMLElement) => getComputedStyle(name).fontWeight);
+  await openSaved(page, origin, href("bravo"), "Bravo", saved);
+  const field = page.getByRole("textbox", { name: "Group name" });
+  await menu(page, "Alpha", "Add to group", "New group");
+  await field.waitFor();
+  await page.keyboard.type("Work");
+  await page.keyboard.press("Escape");
+  await field.waitFor({ state: "detached" });
+  await menu(page, "Foxtrot", "Add to group", "Work");
+  expect(await groupWeight()).toBe("500");
+  await header.click();
+  expect(await header.getAttribute("aria-expanded")).toBe("false");
+  expect(await groupWeight()).toBe("700");
+}), 60_000);
+
+test("collapsed Shared with a tab unread for this person shows a bold name", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const header = page.getByRole("button", { name: "Shared", exact: true });
+  const weight = () => header.locator("span").evaluate((name: HTMLElement) => getComputedStyle(name).fontWeight);
+  saved.shared = [{ space: "main", path: href("foxtrot") }];
+  await openSaved(page, origin, href("bravo"), "Bravo", saved);
+  expect(await weight()).toBe("500");
+  await header.click();
+  expect(await header.getAttribute("aria-expanded")).toBe("false");
+  expect(await weight()).toBe("700");
 }), 60_000);
 
 test("tab groups take a name and color, collapse, adopt opened tabs, follow drags, and survive reload", () => withPage({}, async (page, origin, _prompts, saved) => {
