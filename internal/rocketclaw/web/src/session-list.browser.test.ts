@@ -983,7 +983,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await listAgents.waitFor({ state: "detached" });
     await search.fill("lag");
     await search.press("Enter"); // A fuzzy command on top yields to the sessions; none match, so Search takes the text.
-    await page.waitForURL("**/search?q=lag");
+    await page.waitForURL((url: URL) => url.pathname.startsWith("/search/") && url.searchParams.get("q") === "lag");
     await page.goBack();
     await page.waitForURL(origin + "/");
     await navigationSearch.click();
@@ -1777,7 +1777,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await navPage.keyboard.press("Control+Shift+p");
     await navPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await navPage.getByRole("dialog").waitFor({ state: "detached" });
-    await navPage.waitForURL("**/search");
+    await navPage.waitForURL((url: URL) => url.pathname.startsWith("/search/"));
     await navMain.getByPlaceholder("Search or agent: or room:").fill("agent:");
     for (let i = 0; i < 10; i++) await navPage.keyboard.press("ArrowDown");
     expect(await navMain.getByRole("button", { name: "agent9", exact: true }).evaluate((node: HTMLElement) => {
@@ -1785,9 +1785,14 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       return node.classList.contains("bg-accent") && node.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
     })).toBe(true);
     await navPage.keyboard.press("Escape");
-    expect(new URL(navPage.url()).pathname).toBe("/search");
+    const searchPage = new URL(navPage.url()).pathname;
+    expect(searchPage.startsWith("/search/")).toBe(true);
     expect(await navMain.getByPlaceholder("Search or agent: or room:").inputValue()).toBe("");
+    // A Search page holds its searches, so Escape leaves it open; its close button closes it.
     await navPage.keyboard.press("Escape");
+    await navPage.waitForTimeout(100);
+    expect(new URL(navPage.url()).pathname).toBe(searchPage);
+    await navTabs.getByRole("button", { name: "Close Search", exact: true }).click();
     await closed("Search");
     // The width loop below opens and closes every page; only Config's content is checked here.
     await openPage("Config");

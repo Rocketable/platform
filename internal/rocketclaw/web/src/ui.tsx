@@ -37,7 +37,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
-import type { Agent, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, TranscriptEvent, VoiceSettings } from "@/types";
+import type { Agent, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, TranscriptEvent, VoiceSettings } from "@/types";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import type { MountOptions, Mounted } from "../../oc/host/api";
@@ -435,7 +435,7 @@ function useRoute() {
   // Skill names are lowercase letters, digits and hyphens (internal/rocketcode skills.go), so paths hold them as-is.
   const skill = pathname.startsWith("/skills/") ? pathname.slice("/skills/".length) : "";
   const config = pathname === "/config";
-  const search = pathname === "/search";
+  const search = isSearch(pathname);
   const voice = pathname === "/voice";
   const pages = pathname === "/pages";
   const shortcuts = pathname === "/shortcuts";
@@ -891,13 +891,17 @@ function ResizableAside({ side, className, children, ...props }: ComponentProps<
 }
 
 // An unplaced tab is a session opened before its sidebar row told which space it was born in.
-type Tab = { path: string; preview?: boolean; group?: string; space?: string; unplaced?: boolean };
+type Tab = { path: string; preview?: boolean; group?: string; space?: string; unplaced?: boolean; search?: SearchPageState };
 type TabGroup = { id: string; name: string; color: string; collapsed?: boolean };
 type Space = { id: string; name: string };
 // last names each space's last active tab.
 type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string; last: Record<string, string> };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
-const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/search": ["Search", Search], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard] };
+const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard] };
+
+// A Search page is /search or a location under it, each its own tab; it is titled with its name, else the query it shows.
+const isSearch = (path: string) => /^\/search(\/|$)/.test(path);
+const searchTitle = (search?: SearchPageState) => search?.name || search?.searches.find((item) => item.id === search.active)?.query || "Search";
 
 // A hosted page, from its escaped agent and file path, is labeled "<agent> · <path>".
 function pageLabel(page: string) {
@@ -932,7 +936,7 @@ function arrange(tabs: Tab[]) {
 // A tab joining a group moves after its last member, into the group's space; a tab from another space becomes permanent.
 function join(tabs: Tab[], path: string, group: string, space: string) {
   const rest = tabs.filter((tab) => tab.path !== path), tab = tabs.find((item) => item.path === path);
-  return rest.toSpliced(rest.findLastIndex((item) => item.group === group) + 1, 0, { path, preview: tab?.space === space && tab.preview, group, space, unplaced: tab?.unplaced });
+  return rest.toSpliced(rest.findLastIndex((item) => item.group === group) + 1, 0, { ...tab, path, preview: tab?.space === space && tab.preview, group, space });
 }
 
 // New session is one location, so the space that opens it takes its tab, out of any group.
@@ -946,8 +950,10 @@ function home(tabs: Tab[], space: string) {
 // Activating any other tab enters its space, where it becomes the last active tab, and expands its group.
 // A session opens where the link points, marked unplaced until TabSettling moves it to the space it was born in.
 // A location shared in the current space opens there without a tab of this person's, even if they have one elsewhere.
+// A Search page always opens permanent, so opening one of its results never replaces it.
 function openTab(state: TabState, link: string, shared: SavedTabs["shared"], preview = true): TabState {
   const [path, target] = pageSpace(state, link);
+  preview &&= !isSearch(path);
   if (isShared(shared, state.space, path)) return { ...state, active: path, last: { ...state.last, [state.space]: path } };
   const open = state.tabs.find((tab) => tab.path === path), current = open && path !== "/" ? open.space! : target;
   const slot = preview ? state.tabs.findIndex((tab) => tab.preview && tab.space === current) : -1;
@@ -968,8 +974,11 @@ function entry(state: Pick<TabState, "tabs" | "last">, space: string, shared: Sa
 // Leaving deleted space doomed moves its tabs, made permanent, and their groups to the first remaining space, as the server
 // does its Shared tabs.
 function leave(state: TabState, doomed: string, spaces: Space[]): TabState {
-  return { ...state, spaces, space: spaces[0].id, tabs: state.tabs.map((tab) => tab.space === doomed ? { path: tab.path, group: tab.group, space: spaces[0].id } : tab) };
+  return { ...state, spaces, space: spaces[0].id, tabs: state.tabs.map((tab) => tab.space === doomed ? permanent(tab, spaces[0].id) : tab) };
 }
+
+// A tab moved to space as a permanent tab keeps everything else it holds.
+const permanent = ({ preview: _preview, unplaced: _unplaced, ...tab }: Tab, space: string): Tab => ({ ...tab, space });
 
 // The server's saved tabs; tabs left in a lost space or group belong to the first space and no group.
 function savedTabs(owner?: string, saved?: Pick<SavedTabs, "spaces" | "state">): TabState {
@@ -989,19 +998,22 @@ function loadTabs(path: string, owner?: string, saved?: SavedTabs, shared: Saved
 
 // The saved form drops groups without members, except "shared", which holds whether this person collapsed Shared.
 const savedState = (state: TabState): SavedTabs["state"] => ({
-  tabs: state.tabs.map(({ path, preview, group, space }) => ({ path, preview, group, space })), groups: state.groups.filter((group) => group.id === "shared" || state.tabs.some((tab) => tab.group === group.id)),
+  tabs: state.tabs.map(({ path, preview, group, space, search }) => ({ path, preview, group, space, search })), groups: state.groups.filter((group) => group.id === "shared" || state.tabs.some((tab) => tab.group === group.id)),
   space: state.space, last: state.last,
 });
 
 const noShared: SavedTabs["shared"] = [], noMutes: SavedTabs["mutes"] = [];
-const isShared = (shared: SavedTabs["shared"], space: string, path: string) => shared.some((tab) => tab.space === space && tab.path === path);
+const sharedTab = (shared: SavedTabs["shared"], space: string, path: string) => shared.find((tab) => tab.space === space && tab.path === path);
+const isShared = (shared: SavedTabs["shared"], space: string, path: string) => !!sharedTab(shared, space, path);
 // A tab's mute, or its snooze until it ends; the next Tabs reply drops an ended snooze.
 const muteOf = (mutes: SavedTabs["mutes"], path: string) => mutes.find((mute) => mute.path === path && (!mute.until || Date.parse(mute.until) > Date.now()));
 
 // Every Tabs reply carries every space's Shared tabs and this person's mutes, which replace the cached ones when they
 // changed, as a cache write redraws the app; this person's tabs are left to the revision merge in useTabs.
-async function tabsCall(input: Parameters<typeof mutations.tabs>[0]) {
+// received sees the reply before the cache takes it.
+async function tabsCall(input: Parameters<typeof mutations.tabs>[0], received?: (reply: SavedTabs) => void) {
   const reply = await mutations.tabs(input);
+  received?.(reply);
   queryClient.setQueriesData<SavedTabs>({ queryKey: ["tabs"] }, (old) => old && !reply.stale && JSON.stringify([old.shared, old.mutes]) !== JSON.stringify([reply.shared, reply.mutes]) ? { ...old, shared: reply.shared, mutes: reply.mutes } : undefined);
   return reply;
 }
@@ -1023,7 +1035,7 @@ function mergeList<T>(base: T[], local: T[], server: T[], key: (item: T) => stri
 function mergeTabs(base: SavedTabs["state"], local: SavedTabs["state"], server: SavedTabs["state"]): SavedTabs["state"] {
   const shared = (list: SavedTabs["state"]["tabs"], other: SavedTabs["state"]["tabs"]) => list.flatMap((tab) => other.some((item) => item.path === tab.path) ? [tab.path] : []).join("\n");
   return {
-    tabs: mergeList(base.tabs, local.tabs, server.tabs, (tab) => tab.path, (tab) => [tab.path, !!tab.preview, tab.group ?? "", tab.space ?? ""].join("\n"), shared(local.tabs, base.tabs) !== shared(base.tabs, local.tabs) || shared(server.tabs, base.tabs) === shared(base.tabs, server.tabs)),
+    tabs: mergeList(base.tabs, local.tabs, server.tabs, (tab) => tab.path, (tab) => [tab.path, !!tab.preview, tab.group ?? "", tab.space ?? "", JSON.stringify(tab.search ?? null)].join("\n"), shared(local.tabs, base.tabs) !== shared(base.tabs, local.tabs) || shared(server.tabs, base.tabs) === shared(base.tabs, server.tabs)),
     groups: mergeList(base.groups, local.groups, server.groups, (group) => group.id, (group) => [group.id, group.name, group.color, !!group.collapsed].join("\n"), false),
     space: local.space !== base.space ? local.space : server.space,
     last: { ...server.last, ...Object.fromEntries(Object.entries(local.last).filter(([space, path]) => base.last[space] !== path)) },
@@ -1043,8 +1055,8 @@ function useTabs() {
   const [snoozing, setSnoozing] = useState<string>();
   // base is the saved state this window last saved or took in, at revision; at stamps the read last taken in.
   const sync = useRef<{ saving: boolean; dirty: boolean; next?: TabState; applied?: TabState; base?: SavedTabs["state"]; revision: number; at?: number }>({ saving: false, dirty: false, revision: 0 });
-  const spaceChange = useMutation({ mutationFn: tabsCall, onSuccess: (view) => setState((current) => ({ ...current, spaces: view.spaces })), onError: () => queryClient.invalidateQueries({ queryKey: ["tabs"] }) });
-  const sharing = useMutation({ mutationFn: tabsCall, onError: () => queryClient.invalidateQueries({ queryKey: ["tabs"] }) });
+  const spaceChange = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[0]) => tabsCall(input), onSuccess: (view) => setState((current) => ({ ...current, spaces: view.spaces })), onError: () => queryClient.invalidateQueries({ queryKey: ["tabs"] }) });
+  const sharing = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[0]) => tabsCall(input), onError: () => queryClient.invalidateQueries({ queryKey: ["tabs"] }) });
   if (state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname, shared));
   // A page link whose space segment was rewritten shows the rewritten path, once the owner's spaces are known.
   useEffect(() => {
@@ -1109,7 +1121,7 @@ function useTabs() {
     if (!queue.saving) flush();
   }, [state]);
   // Moving a tab makes it permanent and takes it out of its group; moving the active tab follows it to its new space.
-  const moveTo = (paths: Set<string>, space: string) => setState((current) => openTab({ ...current, tabs: current.tabs.map((tab) => paths.has(tab.path) ? { path: tab.path, space } : tab) }, current.active, shared));
+  const moveTo = (paths: Set<string>, space: string) => setState((current) => openTab({ ...current, tabs: current.tabs.map((tab) => paths.has(tab.path) ? { ...permanent(tab, space), group: undefined } : tab) }, current.active, shared));
   // An unplaced session moves to the space it was born in once its row names it; an unknown new space is fetched first.
   // A background window holds stale tabs, so it waits until it is focused and has reloaded.
   const settle = (rows: Session[]) => {
@@ -1147,6 +1159,14 @@ function useTabs() {
     if (path !== pathname) navigate(path);
   };
   const mute = (path: string, until: string) => sharing.mutate({ mute: { path, until } });
+  // A Shared Search page's edit saves only onto the page it was made from. Refused because someone changed the page
+  // meanwhile, it is made again onto theirs, keeping their searches and this person's change.
+  const saveShared = (space: string, path: string, base: SearchPageState | undefined, page: SearchPageState) => sharing.mutate({ editShared: { space, path, base, search: page } }, { onSuccess: (reply) => {
+    const theirs = sharedTab(reply.shared, space, path)?.search;
+    if (!reply.stale) return;
+    queryClient.setQueriesData<SavedTabs>({ queryKey: ["tabs"] }, (old) => old && { ...old, shared: reply.shared });
+    if (theirs) saveShared(space, path, theirs, rebase(base, page, theirs));
+  } });
   return {
     state, shown, groups, here, shared, mutes, pathname, close, enter, edit, editor, setEditor, settle, snoozing, setSnoozing, mute, pending: spaceChange.isPending,
     swapShared: (path: string, other: string) => sharing.mutate({ swapShared: { space: state.space, path, with: other } }),
@@ -1177,7 +1197,16 @@ function useTabs() {
       if (target !== pathname) navigate(target);
     },
     // The tab is opened with the navigation, in one render, so the URL never shows it as a preview first.
-    open: (path: string) => flushSync(() => { setState((current) => openTab(current, path, shared, false)); navigate(path); }),
+    open: (path: string, query = "", space?: string) => flushSync(() => { setState((current) => openTab(space ? { ...current, space } : current, path, shared, false)); navigate(path + query); }),
+    // A Search page's change merges into the person's own page or, inShared, into the one page everyone in this space
+    // shares, which the cache takes at once so the next change merges into it.
+    editSearch: (path: string, change: Partial<SearchPageState>, inShared = false) => {
+      const merge = <T extends { path: string; search?: SearchPageState }>(tab: T) => tab.path === path ? { ...tab, search: { searches: [], active: "", ...tab.search, ...change } } : tab;
+      if (!inShared) return setState((current) => ({ ...current, tabs: current.tabs.map(merge) }));
+      const next = shared.map((tab) => tab.space === state.space ? merge(tab) : tab);
+      queryClient.setQueriesData<SavedTabs>({ queryKey: ["tabs"] }, (old) => old && { ...old, shared: next });
+      saveShared(state.space, path, sharedTab(shared, state.space, path)?.search, sharedTab(next, state.space, path)!.search!);
+    },
     // A moved tab takes the group of the tab it lands on.
     move: (from: string, to: string) => update((tabs) => moveQueueId(tabs.map((tab) => tab.path), from, to).map((path) => tabs.find((tab) => tab.path === path)!).map((tab) => tab.path === from ? { ...tab, group: tabs.find((other) => other.path === to)?.group } : tab)),
     // A moved group lands whole before or after the tab it lands on, or that tab's whole group, the way a moved tab does.
@@ -1195,8 +1224,13 @@ function useTabs() {
       const birth = paths.size === 1 && state.spaces.find((space) => space.id === rows.find((row) => rowPath(row) === path)?.spaceId);
       // Shared changes act on this one tab, for everyone. A Shared tab that is not this person's offers only its removal
       // and its notifications.
-      const share = here.includes(path) ? [{ key: "unshare", label: "Remove from Shared", run: () => sharing.mutate({ unshare: { space: state.space, path } }) }]
-        : path === "/" ? [] : [{ key: "share", label: "Add to Shared", run: () => sharing.mutate({ share: { space: state.space, path } }) }];
+      // Taking a Search page out of Shared keeps the page it held, as the server returns it, as this person's own, with
+      // any searches of their own page there, so nobody's searches are lost.
+      const keep = ({ unshared: page }: SavedTabs) => page && setState((current) => ({ ...current, tabs: current.tabs.some((item) => item.path === path)
+        ? current.tabs.map((item) => item.path === path ? { ...item, search: { ...page, searches: [...page.searches, ...item.search?.searches.filter((own) => !page.searches.some((other) => other.id === own.id)) ?? []] } } : item)
+        : [...current.tabs, { path, space: state.space, search: page }] }));
+      const share = here.includes(path) ? [{ key: "unshare", label: "Remove from Shared", run: () => void tabsCall({ unshare: { space: state.space, path } }, keep).catch(() => queryClient.invalidateQueries({ queryKey: ["tabs"] })) }]
+        : path === "/" ? [] : [{ key: "share", label: "Add to Shared", run: () => sharing.mutate({ share: { space: state.space, path, search: tab?.search } }) }];
       // Muting and snoozing are this person's, and only sessions notify. Snooze ends are reckoned when chosen, in local time.
       const nine = (days: number) => new Date().setHours(24 * days + 9, 0, 0, 0);
       const notify = !pathSession(path) ? [] : muteOf(mutes, path) ? [{ key: "notify-unmute", label: "Unmute notifications", run: () => sharing.mutate({ unmute: path }) }] : [
@@ -1233,7 +1267,7 @@ function useTabs() {
       { key: "ungroup", label: "Ungroup", run: () => regroup((tab) => tab.group === id) },
       { key: "close", label: "Close group", run: () => close(state.tabs.flatMap((tab) => tab.group === id ? [tab.path] : [])) },
       // A group moves whole, keeping its name, color, and collapsed state; its tabs become permanent, and the active tab follows.
-      ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move group to "${space.name}"`, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? { path: tab.path, group: id, space: space.id } : tab) }, state.active, shared)) })),
+      ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move group to "${space.name}"`, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? permanent(tab, space.id) : tab) }, state.active, shared)) })),
     ],
   };
 }
@@ -1327,10 +1361,16 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
   } else rendered[position].focus();
 }
 
+// Sessions and Search pages can be renamed from their tab, and a Search page from its Shared row, which otherwise offers
+// only its Shared and notification items.
+function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { path: string; shared?: boolean }, rows: Session[], targets: Set<string>, rename: () => void) {
+  const renaming = targets.size === 1 && (isSearch(menu.path) || (pathSession(menu.path) && !menu.shared)) ? [{ key: "rename", label: isSearch(menu.path) ? "Rename search" : "Rename session", run: rename }] : [];
+  return [...renaming, ...menu.shared ? commands(menu.path, rows).filter(({ key }) => key === "unshare" || key.startsWith("notify")) : commands(menu.path, rows, targets)];
+}
+
 function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat: () => void }) {
   const { rows } = useContext(Sidebar);
   const { state, shown, groups, pathname, close, promote, move, moveGroup, commands, edit, editor, setEditor, groupCommands } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
-  // A Shared row's menu offers only its Shared and notification items.
   const [menu, setMenu] = useState<{ path: string; anchor: MenuAnchor; shared?: boolean }>();
   const [editing, setEditing] = useState<string>();
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
@@ -1344,14 +1384,13 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
   const selection = new Set(shown.flatMap((tab) => tab.path === pathname || (picked.at === pathname && picked.paths.has(tab.path)) ? [tab.path] : []));
   // The menu of a selected tab acts on every selected tab; any other tab's menu acts on that tab alone.
   const targets = menu && !selection.has(menu.path) ? new Set([menu.path]) : selection;
-  const items: ReturnType<typeof commands> = !menu ? [] : menu.shared ? commands(menu.path, rows).filter(({ key }) => key === "unshare" || key.startsWith("notify"))
-    : [...pathSession(menu.path) && targets.size === 1 ? [{ key: "rename", label: "Rename session", run: () => setEditing(menu.path) }] : [], ...commands(menu.path, rows, targets)];
+  const items: ReturnType<typeof commands> = !menu ? [] : menuItems(commands, menu, rows, targets, () => setEditing(`${menu.shared ? "shared:" : ""}${menu.path}`));
   // The active tab is the list's keyboard stop, else, while it shows only in Shared, the first rendered tab.
   const stop = shown.some((tab) => tab.path === pathname) ? pathname : shown.find((tab) => !groups.find((item) => item.id === tab.group)?.collapsed)?.path;
   const option = ({ key, label, run }: (typeof items)[number]) => <Menu.Item key={key} onClick={() => { refocus.current = key; run(); }} className={itemClass}>{label}</Menu.Item>;
   return <div data-tab-lists className="flex h-full shrink-0 flex-col">
     <SpaceMenu tabs={tabs} name={space} />
-    <SharedTabs tabs={tabs} space={space} openMenu={(path, anchor) => setMenu({ path, anchor, shared: true })} />
+    <SharedTabs tabs={tabs} space={space} editing={editing} endEdit={() => setEditing(undefined)} openMenu={(path, anchor) => setMenu({ path, anchor, shared: true })} />
     <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation="vertical" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1 [scrollbar-width:thin]"
       // A selecting click keeps the active tab; Shift+click selects the rendered tabs from the active one to it.
       onClickCapture={(event) => {
@@ -1450,7 +1489,7 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
 // Shared shows the space's Shared tabs, the same for everyone, above this person's tabs, and hides while it has none. It
 // is a list of its own, so the
 // handlers of theirs never act on a Shared row; only its menu and Shift+Arrow, which reorders it for everyone, change it.
-function SharedTabs({ tabs: { state, here, pathname, promote, toggleShared, swapShared }, space, openMenu }: { tabs: ReturnType<typeof useTabs>; space?: string; openMenu: (path: string, anchor: MenuAnchor) => void }) {
+function SharedTabs({ tabs: { state, here, shared, pathname, promote, toggleShared, swapShared }, space, editing, endEdit, openMenu }: { tabs: ReturnType<typeof useTabs>; space?: string; editing?: string; endEdit: () => void; openMenu: (path: string, anchor: MenuAnchor) => void }) {
   const collapsed = state.groups.some((group) => group.id === "shared" && group.collapsed), stop = here.includes(pathname) ? pathname : here[0];
   // Like a collapsed group, collapsed Shared goes bold while any of its tabs is unread for this person.
   const { rows } = useContext(Sidebar), unread = collapsed && here.some((path) => rows.some((row) => row.id === pathSession(path) && row.unreadAt));
@@ -1466,7 +1505,7 @@ function SharedTabs({ tabs: { state, here, pathname, promote, toggleShared, swap
         </button>
       </div>
       <div ref={list} role="tablist" aria-label="Shared tabs" aria-orientation="vertical" className="flex flex-col gap-0.5" onKeyDown={(event) => tabKeys(event, pathname, openMenu, (path, other) => { moved.current = path; swapShared(path, other); })}>
-        {here.map((path) => collapsed && path !== pathname ? null : <TabItem key={path} tab={{ path }} shared description={`Shared, Space: ${space}`} chosen={false} rule="Grey" active={path === pathname} stop={path === stop} editing={false} endEdit={inert} promote={() => promote(path)} close={inert} openMenu={(anchor) => openMenu(path, anchor)} />)}
+        {here.map((path) => collapsed && path !== pathname ? null : <TabItem key={path} tab={{ path, search: sharedTab(shared, state.space, path)?.search }} shared description={`Shared, Space: ${space}`} chosen={false} rule="Grey" active={path === pathname} stop={path === stop} editing={editing === `shared:${path}`} endEdit={endEdit} promote={() => promote(path)} close={inert} openMenu={(anchor) => openMenu(path, anchor)} />)}
       </div>
     </div>
     <div className="mx-2.5 mt-1 h-px shrink-0 bg-border" />
@@ -1512,7 +1551,7 @@ function TabItem({ tab, description, chosen, rule, active, stop, shared, editing
   const id = pathSession(tab.path);
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
   const [activity, SessionIcon] = tabActivity(session);
-  const [label, Icon] = pageTab(tab.path) ?? [sessionTitle(session), SessionIcon];
+  const [label, Icon] = isSearch(tab.path) ? [searchTitle(tab.search), Search] : pageTab(tab.path) ?? [sessionTitle(session), SessionIcon];
   const title = useCleanText(label), mute = muteOf(useContext(TabActions).mutes, tab.path);
   const quiet = mute && (mute.until ? `Snoozed until ${new Date(mute.until).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}` : "Muted");
   const ref = useRef<HTMLDivElement>(null);
@@ -1524,7 +1563,7 @@ function TabItem({ tab, description, chosen, rule, active, stop, shared, editing
       <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={[description, activity, quiet].filter(Boolean).join(", ")} tabIndex={stop ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
         <Icon aria-hidden="true" className="size-4 shrink-0" />
-        {editing ? <TabRename session={session} placeholder={title} endEdit={endEdit} /> : <span className="truncate group-data-[unread=true]:font-bold motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>}
+        {editing ? <TabRename session={session} tab={tab} shared={shared} placeholder={title} endEdit={endEdit} /> : <span className="truncate group-data-[unread=true]:font-bold motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>}
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{title}</TooltipContent></Tooltip>
     {quiet ? <span title={quiet} className="flex size-6 shrink-0 items-center justify-center text-muted-foreground"><BellOff aria-hidden="true" className="size-3.5" /></span> : null}
@@ -1535,20 +1574,25 @@ function TabItem({ tab, description, chosen, rule, active, stop, shared, editing
 }
 
 // Enter and leaving the field save; Escape restores the old name first, so its blur saves nothing.
-function TabRename({ session, placeholder, endEdit }: { session: Session; placeholder: string; endEdit: () => void }) {
-  const sidebar = useContext(Sidebar);
+function TabRename({ session, tab, shared, placeholder, endEdit }: { session: Session; tab: Tab; shared?: boolean; placeholder: string; endEdit: () => void }) {
+  const sidebar = useContext(Sidebar), { editSearch } = useContext(TabActions), search = isSearch(tab.path);
   const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); endEdit(); } });
-  const name = session.name ?? "";
+  const name = (search ? tab.search?.name : session.name) ?? "";
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => input.current!.focus(), []);
-  return <input ref={input} aria-label="Session name" defaultValue={name} placeholder={placeholder} aria-invalid={!!update.error} title={update.error?.message} className="min-w-0 flex-1 rounded-sm bg-background px-1 text-foreground not-italic outline-1 outline-ring aria-invalid:outline-destructive"
+  return <input ref={input} aria-label={search ? "Search page name" : "Session name"} defaultValue={name} placeholder={placeholder} aria-invalid={!!update.error} title={update.error?.message} className="min-w-0 flex-1 rounded-sm bg-background px-1 text-foreground not-italic outline-1 outline-ring aria-invalid:outline-destructive"
     onFocus={(event) => event.currentTarget.select()}
     onClick={(event) => event.stopPropagation()}
     onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); event.currentTarget.value = name; }
       if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
     }}
-    onBlur={(event) => { const value = event.currentTarget.value; if (value === name) endEdit(); else update.mutate({ id: session.id, name: value }); }} />;
+    onBlur={(event) => {
+      const value = event.currentTarget.value;
+      if (value === name) endEdit();
+      else if (search) { editSearch(tab.path, { name: value }, shared); endEdit(); }
+      else update.mutate({ id: session.id, name: value });
+    }} />;
 }
 
 function persistComposerDraft(draft: ComposerDraft) {
@@ -1642,7 +1686,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   });
 
   const onEscape = useEffectEvent((event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape" || route.remote) return;
+    // Escape closes pages that hold nothing, so never a session or a Search page, whose searches would go with it.
+    if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape" || route.remote || route.search) return;
     if (document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [role="tooltip"]')) return;
     event.preventDefault();
     closeTab([location.pathname]);
@@ -1881,13 +1926,13 @@ function paletteRows(
   rows: Session[],
   jobs: { stem: string; status: string; schedule?: string; agent?: string; channel?: string }[] | undefined,
   newChat: () => void,
-  open: (path: string) => void,
+  tabs: ReturnType<typeof useTabs>,
   openCron: () => void,
   runStem: (stem: string) => void,
   actions: { key: string; label: string; detail?: string; keep?: boolean; disabled?: boolean; run: () => void }[],
   recent: string[],
 ): { key: string; label?: string; detail?: string; session?: Session; keep?: boolean; disabled?: boolean; run: () => void }[] {
-  const needle = typed.toLowerCase();
+  const needle = typed.toLowerCase(), pages = searchPages(tabs), fresh = () => `/search/${crypto.getRandomValues(new Uint32Array(2)).join("-")}`;
   if (mode === "cron") {
     return (jobs ?? []).filter((job) => job.status !== "ran" && (needle === "" || `${job.stem} ${job.schedule ?? ""} ${job.agent ?? ""} ${job.channel ?? ""}`.toLowerCase().includes(needle))).map((job) => ({
       key: job.stem, label: job.stem, detail: [job.schedule, job.agent, job.channel].filter(Boolean).join(" · "), keep: true, run: () => runStem(job.stem),
@@ -1906,7 +1951,7 @@ function paletteRows(
   const commands = mode === "sessions" && (needle === "" || new RegExp(`(?:^|\\s)(?:${filterKeys}):\\S`).test(needle)) ? [] : [
     ...actions,
     { key: "new", label: "Sessions: New", run: newChat },
-    { key: "search", label: "Sessions: Search", run: () => navigate("/search") },
+    { key: "search", label: "Sessions: Search", run: () => tabs.open(fresh()) },
     { key: "run-cron", label: "Cron: Run", keep: true, run: openCron },
     ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["shortcuts", "Help: Keyboard Shortcuts"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
@@ -1916,12 +1961,24 @@ function paletteRows(
     const rank = (key: string) => level(key) >= 0 ? Infinity : recent.indexOf(key) + 1 || Infinity;
     return tier(a.label) - tier(b.label) || rank(a.key) - rank(b.key) || (level(a.key) >= 0 && level(b.key) >= 0 ? level(a.key) - level(b.key) : a.label.localeCompare(b.label));
   });
-  // Each session is one row, as in the session list; message and field hits belong to /search, which typed text can open last.
-  return mode === "commands" ? commands : [...commands, ...rows.map((session) => ({ key: session.id, session, run: () => open(rowPath(session)) })),
-    ...typed ? [{ key: searchEverywhereKey, label: `Search everywhere for '${typed}'`, run: () => navigate(`/search?${new URLSearchParams({ q: typed })}`) }] : []];
+  // Typed text lists every space's Search pages next, matched by title or any of their queries; choosing one enters its
+  // space. An empty query lists sessions only, so Enter still opens the first session.
+  const searches = pages.filter((tab) => needle && [searchTitle(tab.search), ...tab.search?.searches.map((item) => item.query) ?? []].some((text) => tier(text) < 3))
+    .map((tab) => ({ key: `page-${tab.space} ${tab.path}`, label: `Search: ${searchTitle(tab.search)}`, detail: tabs.state.spaces.find((space) => space.id === tab.space)?.name, run: () => tabs.open(tab.path, "", tab.space) }));
+  // Each session is one row, as in the session list; message and field hits belong to a Search page, which typed text can
+  // open last: the one already searching for exactly that text, else a new one.
+  const searchEverywhere = () => {
+    const found = pages.find((tab) => tab.search?.searches.some((item) => item.query === typed));
+    tabs.open(found?.path ?? fresh(), `?${new URLSearchParams({ q: typed })}`, found?.space);
+  };
+  return mode === "commands" ? commands : [...commands, ...searches, ...rows.map((session) => ({ key: session.id, session, run: () => tabs.open(rowPath(session)) })),
+    ...typed ? [{ key: searchEverywhereKey, label: `Search everywhere for '${typed}'`, run: searchEverywhere }] : []];
 }
 
 const searchEverywhereKey = "search-everywhere";
+
+// A person's own Search page whose location is shared in its space shows the Shared one there, so only that one lists.
+const searchPages = ({ state, shared }: ReturnType<typeof useTabs>) => [...state.tabs.filter((tab) => isSearch(tab.path) && !isShared(shared, tab.space!, tab.path)), ...shared.filter((tab) => isSearch(tab.path))];
 
 // The server reads and matches the query. While typing, an unfinished last word is left out; Enter sends everything.
 // Requests start after a 250 ms pause (and by 1 s with messages), a newer one aborts the older, and they rerun when sidebar chats change.
@@ -2135,7 +2192,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
   // The folder picker leaves session search, so typed folders are never sent as a search.
   const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(0); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent);
   const inSpace = useInSpace();
-  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, jobs.data?.filter(inSpace), newChat, tabs.open, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...timeline, ...outputs], recent));
+  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, jobs.data?.filter(inSpace), newChat, tabs, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...timeline, ...outputs], recent));
   const selected = items.length === 0 ? 0 : pick % items.length;
   // Draw more rows only as scrolling or the keyboard needs them; every choice stays reachable.
   const { shown, next } = usePalettePage(items, selected, `${mode}:${query}`);
@@ -2214,7 +2271,7 @@ const shortcuts = [
   { id: "tab-previous", label: "Previous tab", keys: ["mod", "["] },
   { id: "tab-next", label: "Next tab", keys: ["mod", "]"] },
   { id: "tab-sidebar", label: "Show or hide the tab sidebar", where: "Tabs in the left sidebar, on a wide window", keys: ["mod", "B"] },
-  { id: "page-close", label: "Close the tab", where: "Pages other than sessions", keys: ["Escape"] },
+  { id: "page-close", label: "Close the tab", where: "Pages other than sessions and Search pages", keys: ["Escape"] },
   { id: "message-steer", label: "Steer the running turn", where: "Message box, while a turn runs", keys: ["mod", "Enter"] },
   { id: "message-stash", label: "Stash the message", where: "Message box", keys: ["mod", "Alt", "Enter"] },
 ];
@@ -2455,49 +2512,103 @@ function NameSessionDialog({ id, tag = false }: { id: string; tag?: boolean }) {
     </Dialog>;
 }
 
-type SavedSearch = { id: string; name?: string; query: string };
+type SavedSearch = SearchPageState["searches"][number];
+
+type LegacySearch = SavedSearch & { agentFilter?: string; roomFilter?: string };
+
+// mine, made from base, made again onto theirs: their searches with mine's changes, those mine added, and none mine
+// closed; mine's name and shown search when it changed them.
+function rebase(base: SearchPageState | undefined, mine: SearchPageState, theirs: SearchPageState): SearchPageState {
+  const find = (page: SearchPageState | undefined, id: string) => page?.searches.find((item) => item.id === id);
+  const searches = [
+    ...theirs.searches.flatMap((item) => {
+      const own = find(mine, item.id), was = find(base, item.id);
+      return !own ? (was ? [] : [item]) : comparablePage([own]) === comparablePage(was && [was]) ? [item] : [own];
+    }),
+    ...mine.searches.filter((item) => !find(theirs, item.id) && !find(base, item.id)),
+  ];
+  const active = mine.active !== base?.active ? mine.active : theirs.active;
+  return { name: mine.name !== base?.name ? mine.name : theirs.name, searches, active: searches.some((item) => item.id === active) ? active : searches[0]?.id ?? "" };
+}
+
+const comparablePage = (searches: SavedSearch[] = [], active = "") => JSON.stringify([searches.map(({ id, name, query }) => [id, name ?? "", query]), active]);
 
 // Legacy agent and room filters fold into the query once, in one canonical form.
 function foldFilters(query: string, agent?: string | null, room?: string | null) {
   return [agent ? `agent:${termValue(agent)}` : "", room ? `room:${termValue(room)}` : "", query].filter(Boolean).join(" ");
 }
-type SavedSearches = { tabs: SavedSearch[]; active: string };
+type SavedSearches = Pick<SearchPageState, "searches" | "active">;
 
 // withQuery activates a saved search for query, the active one first, or adds one.
-function withQuery({ tabs, active }: SavedSearches, query: string): SavedSearches {
-  const match = tabs.toSorted((a, b) => Number(b.id === active) - Number(a.id === active)).find((item) => item.query === query);
+function withQuery({ searches, active }: SavedSearches, query: string): SavedSearches {
+  const match = searches.toSorted((a, b) => Number(b.id === active) - Number(a.id === active)).find((item) => item.query === query);
   const id = match?.id ?? crypto.getRandomValues(new Uint32Array(4)).join("-");
-  return { tabs: match ? tabs : [...tabs, { id, query }], active: id };
+  return { searches: match ? searches : [...searches, { id, query }], active: id };
 }
 
+// A Search page waits for this person's saved tabs, which hold its searches. A page shared in this space shows the one
+// page everyone there edits. A link's query opens once, in the page it led to; a page opened again in place, as when it
+// is shared, shows what it holds.
 function SearchPage() {
-  const identity = useQuery(queries.identity());
-  if (!identity.data) return null;
-  return <SearchTabs key={identity.data.username} owner={identity.data.username} />;
+  const { state, shared } = useContext(TabActions), path = usePathname(), inShared = sharedTab(shared, state.space, path);
+  const [pendingLink, setPendingLink] = useState({ path, search: location.search });
+  if (pendingLink.path !== path) setPendingLink({ path, search: location.search });
+  if (state.owner === undefined) return null;
+  return <SearchTabs key={`${state.owner} ${path} ${!!inShared}`} path={path} owner={state.owner} inShared={!!inShared} page={(inShared ?? state.tabs.find((tab) => tab.path === path))?.search} link={pendingLink.search}
+    consumeLink={() => setPendingLink((current) => current.search ? { path, search: "" } : current)} />;
 }
 
-function SearchTabs({ owner }: { owner: string }) {
-  const storageKey = `search-tabs:${owner}`;
+// A page's searches are saved with its tab: typing after a pause, as each tab change redraws the app, anything else and
+// leaving the page at once. Searches this browser kept before Search pages were tabs move into the first page without any.
+function SearchTabs({ path, owner, inShared, page, link, consumeLink }: { path: string; owner: string; inShared: boolean; page?: SearchPageState; link: string; consumeLink: () => void }) {
+  // Only the person's own page takes this browser's old searches; a Shared one would hand them to everyone.
+  const legacy = `search-tabs:${owner}`, tabs = useContext(TabActions), owned = !inShared && tabs.state.tabs.some((tab) => tab.path === path);
+  // Only the page that took them in deletes them, once its tab holds them.
+  const [imported] = useState(() => !page?.searches.length && !inShared && localStorage.getItem(legacy) !== null);
   const [rename, setRename] = useState<string | null>(null);
   const [saved, setSaved] = useState<SavedSearches>(() => {
-    const stored = JSON.parse(localStorage.getItem(storageKey) ?? '{"tabs":[]}') as { tabs: (SavedSearch & { agentFilter?: string; roomFilter?: string })[]; active: string };
-    const tabs = stored.tabs.map(({ agentFilter, roomFilter, ...tab }) => ({ ...tab, query: foldFilters(tab.query, agentFilter, roomFilter) }));
-    const params = new URLSearchParams(location.search);
+    const stored = (page?.searches.length || inShared ? { tabs: page?.searches ?? [], active: page?.active ?? "" } : JSON.parse(localStorage.getItem(legacy) ?? '{"tabs":[]}')) as { tabs: LegacySearch[]; active: string };
+    const searches = stored.tabs.map(({ agentFilter, roomFilter, ...tab }) => ({ ...tab, query: foldFilters(tab.query, agentFilter, roomFilter) }));
+    const params = new URLSearchParams(link);
     const query = foldFilters(params.get("q") ?? "", params.get("agent"), params.get("room"));
-    if (tabs.length && !query) {
-      localStorage.setItem(storageKey, JSON.stringify({ tabs, active: stored.active }));
-      return { tabs, active: stored.active };
-    }
-    const next = withQuery({ tabs, active: stored.active }, query);
-    if (query) localStorage.setItem(storageKey, JSON.stringify(next));
-    return next;
+    return searches.length && !query ? { searches, active: stored.active } : withQuery({ searches, active: stored.active }, query);
   });
-  const draft = useRef(localStorage.getItem(storageKey) === null);
-  const savedRef = useRef(saved);
-  // A link to /search?q= while this page is open, like Cmd/Ctrl+P's hand-off, opens that query as at mount; replaceState sends no popstate.
+  const savedRef = useRef(saved), typing = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const shown = useMemo(() => comparablePage(page?.searches, page?.active), [page]), lastPageSeen = useRef(shown);
+  // Saving what the page already holds sends nothing.
+  const persist = () => {
+    clearTimeout(typing.current);
+    typing.current = undefined;
+    if (comparablePage(savedRef.current.searches, savedRef.current.active) === shown) return;
+    tabs.editSearch(path, savedRef.current, inShared);
+    if (owned && imported) localStorage.removeItem(legacy);
+  };
+  // Opening saves what it opened; leaving saves typing that waits, unless another person signed in meanwhile.
+  const settle = useEffectEvent((leaving: boolean) => {
+    if (!leaving || (typing.current && tabs.state.owner === owner)) persist();
+    clearTimeout(typing.current);
+    typing.current = undefined;
+  });
+  useEffect(() => {
+    settle(false);
+    return () => settle(true);
+  }, []);
+  const consume = useEffectEvent(consumeLink);
+  useEffect(() => consume(), []);
+  // A newer page saved elsewhere, by another window or person, replaces what this one shows unless typing waits to be
+  // saved; the page as it opened, and this page's own saves coming back, change nothing.
+  const adoptNewerPage = useEffectEvent(() => {
+    if (lastPageSeen.current === shown) return;
+    lastPageSeen.current = shown;
+    if (typing.current || !page?.searches.length || shown === comparablePage(savedRef.current.searches, savedRef.current.active)) return;
+    savedRef.current = { searches: page.searches, active: page.active };
+    setSaved(savedRef.current);
+  });
+  useEffect(() => adoptNewerPage(), [shown]);
+  // A link to the page with ?q= while it is open, like Cmd/Ctrl+P's hand-off, opens that query as at mount; replaceState sends no popstate.
   const opened = useEffectEvent(() => {
     const query = new URLSearchParams(location.search).get("q");
-    if (location.pathname === "/search" && query) update(withQuery(savedRef.current, query));
+    if (location.pathname === path && query) update(withQuery(savedRef.current, query));
   });
   useEffect(() => {
     const listener = () => opened();
@@ -2510,13 +2621,13 @@ function SearchTabs({ owner }: { owner: string }) {
   useLayoutEffect(() => { input.current?.focus(); }, []);
   const sidebar = useContext(Sidebar);
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000 });
-  const selected = saved.tabs.findIndex((tab) => tab.id === saved.active);
-  const tab = saved.tabs[selected];
+  const selected = saved.searches.findIndex((tab) => tab.id === saved.active);
+  const tab = saved.searches[selected];
   const search = useSearch();
   useEffect(() => {
     const params = new URLSearchParams(tab.query ? { q: tab.query } : {});
-    history.replaceState(history.state, "", `/search${params.size ? `?${params}` : ""}`);
-  }, [tab, search]);
+    history.replaceState(history.state, "", `${path}${params.size ? `?${params}` : ""}`);
+  }, [tab, search, path]);
   useLayoutEffect(() => {
     if (rename !== null) { activeTab.current!.focus(); window.getSelection()?.selectAllChildren(activeTab.current!); }
     if (focusAfterClose.current) {
@@ -2524,34 +2635,29 @@ function SearchTabs({ owner }: { owner: string }) {
       focusAfterClose.current = false;
     }
   }, [saved, rename]);
-  const update = (next: SavedSearches) => {
+  const update = (next: SavedSearches, typed = false) => {
     savedRef.current = next;
     setSaved(next);
-    draft.current = false;
-    localStorage.setItem(storageKey, JSON.stringify(next));
+    clearTimeout(typing.current);
+    // A Shared page waits too, so clicking through its searches sends one change, not one per click.
+    if (typed || inShared) typing.current = setTimeout(persist, 500); else persist();
   };
-  const edit = (change: (item: SavedSearch) => Partial<SavedSearch>) => update({ ...savedRef.current, tabs: savedRef.current.tabs.map((item) => item.id === tab.id ? { ...item, ...change(item) } : item) });
-  const select = (active: string) => {
-    const next = { ...savedRef.current, active };
-    savedRef.current = next;
-    setSaved(next);
-    if (!draft.current) localStorage.setItem(storageKey, JSON.stringify(next));
-  };
+  const edit = (change: (item: SavedSearch) => Partial<SavedSearch>, typed = false) => update({ ...savedRef.current, searches: savedRef.current.searches.map((item) => item.id === tab.id ? { ...item, ...change(item) } : item) }, typed);
+  const select = (active: string) => update({ ...savedRef.current, active });
+  // Closing the last search closes the page and returns to the last message this person saw.
   const close = (index: number) => {
-    const tabs = saved.tabs.filter((_, position) => position !== index);
-    if (!tabs.length) {
-      localStorage.removeItem(storageKey);
+    const rest = saved.searches.filter((_, position) => position !== index);
+    if (!rest.length) {
       const last = localStorage.getItem(`last-seen:${owner}`);
-      navigate(last ?? "/");
-      return;
+      return owned ? tabs.close([path], last ?? undefined) : navigate(last ?? "/");
     }
     focusAfterClose.current = true;
-    update({ tabs, active: saved.active === saved.tabs[index].id ? tabs[Math.min(index, tabs.length - 1)].id : saved.active });
+    update({ searches: rest, active: saved.active === saved.searches[index].id ? rest[Math.min(index, rest.length - 1)].id : saved.active });
   };
   return <section aria-label="Saved searches" className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 p-4 sm:p-6">
     <div className="flex min-w-0 items-center gap-2">
       <div role="tablist" aria-label="Searches" className="flex min-w-0 gap-1 overflow-x-auto">
-        {saved.tabs.map((item, index) => <div key={item.id} className="flex shrink-0 items-center rounded-md border border-sidebar-border bg-background">
+        {saved.searches.map((item, index) => <div key={item.id} className="flex shrink-0 items-center rounded-md border border-sidebar-border bg-background">
           <div role={item.id === saved.active && rename !== null ? "textbox" : "tab"} aria-label={item.id === saved.active && rename !== null ? "Search name" : undefined} contentEditable={item.id === saved.active && rename !== null ? "plaintext-only" : false} suppressContentEditableWarning ref={item.id === saved.active ? activeTab : null} tabIndex={item.id === saved.active ? 0 : -1} aria-selected={rename === null || item.id !== saved.active ? item.id === saved.active : undefined} aria-controls="search-tab-panel" className={cn("max-w-44 truncate rounded-l-md px-3 py-2 text-sm", item.id === saved.active && "bg-sidebar-row-active", item.id === saved.active && rename !== null ? "cursor-text" : "cursor-pointer")} onClick={() => { if (item.id !== saved.active) select(item.id); else if (rename === null) setRename(item.name || item.query || `Search ${index + 1}`); }} onBlur={(event) => {
             if (item.id !== saved.active || rename === null) return;
             const name = event.currentTarget.textContent!.trim();
@@ -2572,10 +2678,10 @@ function SearchTabs({ owner }: { owner: string }) {
               if (item.id === saved.active) setRename(item.name || item.query || `Search ${index + 1}`); else select(item.id);
               return;
             }
-            const position = event.key === "ArrowRight" ? (index + 1) % saved.tabs.length : event.key === "ArrowLeft" ? (index + saved.tabs.length - 1) % saved.tabs.length : event.key === "Home" ? 0 : event.key === "End" ? saved.tabs.length - 1 : -1;
+            const position = event.key === "ArrowRight" ? (index + 1) % saved.searches.length : event.key === "ArrowLeft" ? (index + saved.searches.length - 1) % saved.searches.length : event.key === "Home" ? 0 : event.key === "End" ? saved.searches.length - 1 : -1;
             if (position < 0) return;
             event.preventDefault();
-            select(saved.tabs[position].id);
+            select(saved.searches[position].id);
             event.currentTarget.parentElement?.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]')[position]?.focus();
           }}>{item.name || item.query || `Search ${index + 1}`}</div>
           <button type="button" aria-label={`Close search ${index + 1}`} className="rounded-r-md px-2 py-2 text-muted-foreground hover:text-foreground" onClick={() => close(index)}><X className="size-4" /></button>
@@ -2583,11 +2689,11 @@ function SearchTabs({ owner }: { owner: string }) {
       </div>
       <Button variant="outline" size="icon" aria-label="New search" onClick={() => {
         const id = crypto.getRandomValues(new Uint32Array(4)).join("-");
-        update({ tabs: [...saved.tabs, { id, query: "" }], active: id });
+        update({ searches: [...saved.searches, { id, query: "" }], active: id });
         requestAnimationFrame(() => input.current?.focus());
       }}><Plus className="size-4" /></Button>
     </div>
-    <SearchResults key={tab.id} tab={tab} rows={sidebar.rows} catalog={agents.data?.agents ?? []} edit={edit} input={input} onFirstSubmit={() => { if (draft.current) update(savedRef.current); }} />
+    <SearchResults key={tab.id} tab={tab} rows={sidebar.rows} catalog={agents.data?.agents ?? []} edit={edit} input={input} />
   </section>;
 }
 
@@ -2637,7 +2743,7 @@ function SearchStatus({ search, empty = false, incomplete = false }: { search: R
 
 const searchPage = 200;
 
-function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab: SavedSearch; rows: Session[]; catalog: Agent[]; edit: (change: (item: SavedSearch) => Partial<SavedSearch>) => void; input: RefObject<HTMLInputElement | null>; onFirstSubmit: () => void }) {
+function SearchResults({ tab, rows, catalog, edit, input }: { tab: SavedSearch; rows: Session[]; catalog: Agent[]; edit: (change: (item: SavedSearch) => Partial<SavedSearch>, typed?: boolean) => void; input: RefObject<HTMLInputElement | null> }) {
   const sidebar = useContext(Sidebar);
   // Opening a saved search or a link sends its whole query.
   const [entered, setEntered] = useState(true);
@@ -2660,7 +2766,7 @@ function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab
   }, [response, search.found, rowsDrawn]);
   return <>
     <div id="search-tab-panel" role="tabpanel" aria-label="Search" className="min-w-0">
-      <SessionSearch rows={rows} catalog={catalog} query={tab.query} setQuery={(update) => { setEntered(false); edit((item) => ({ query: update(item.query) })); }} search={search} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { onFirstSubmit(); setEntered(true); void search.run(tab.query.trimEnd()); } }} />
+      <SessionSearch rows={rows} catalog={catalog} query={tab.query} setQuery={(update) => { setEntered(false); edit((item) => ({ query: update(item.query) }), true); }} search={search} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { setEntered(true); void search.run(tab.query.trimEnd()); } }} />
     </div>
     <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
       <SearchStatus search={search} empty={!!search.sent && !search.pending && !search.error && search.found.length === 0} incomplete={!searchIsAuthoritative(sidebar) || search.missing} />

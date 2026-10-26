@@ -133,7 +133,7 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 
 	// A turn of a session in a space's Shared group marks every Web person, whoever sent it, except one viewing it.
 	require.NoError(t, service.UpsertThread("web:shared", ThreadState{Agent: "main"}))
-	require.NoError(t, service.ShareTab(ctx, "main", "/s/"+base64.RawURLEncoding.EncodeToString([]byte("web:shared"))))
+	require.NoError(t, service.ShareTab(ctx, "main", "/s/"+base64.RawURLEncoding.EncodeToString([]byte("web:shared")), nil))
 	require.NoError(t, startTurnDB(ctx, service.db, "turn:shared", "web:shared", slack))
 	require.NoError(t, saveTestTurn(ctx, service, "web:shared", "turn:shared", nil, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "turn:shared"}))
 	require.NoError(t, service.ViewSession(ctx, alice, "web:elsewhere"))

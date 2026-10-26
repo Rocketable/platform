@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
+import type { SearchPage } from "./types";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
@@ -15,15 +16,17 @@ const rows: { id: string; name: string; agent: string; running?: boolean; backgr
   { id: "foxtrot", name: "Foxtrot", agent: "main", running: true, unreadAt: "2026-10-22T10:00:00Z" },
 ];
 const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
-type SharedTab = { space: string; path: string };
+type SharedTab = { space: string; path: string; search?: SearchPage };
+// A Search page as the server compares it: field order and empty names do not matter.
+const plain = (page?: SearchPage) => JSON.stringify(page ? [page.name ?? "", page.searches.map(({ id, name, query }) => [id, name ?? "", query]), page.active] : null);
 type Mute = { path: string; until: string };
-type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string> }; revision: number; refused: number; shared: SharedTab[]; mutes: Mute[] };
+type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: { name?: string; searches: { query: string }[] } }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string> }; revision: number; refused: number; shared: SharedTab[]; mutes: Mute[] };
 
 // Mirrors the server's Tabs call: it saves the state, changes one space, adds, removes, or swaps Shared tabs, or mutes or
 // unmutes one tab, then answers with every space, the saved state, every space's Shared tabs in order, and the mutes.
 // A taken name, ignoring case, deleting the last space, and sharing New session are refused, and a save made from an
 // older revision is stale. A deleted space's Shared tabs join the first remaining space's, once each, keeping their order.
-function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SharedTab; unshare?: SharedTab; swapShared?: SharedTab & { with: string }; mute?: Mute; unmute?: string }) {
+function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SharedTab; unshare?: SharedTab; editShared?: SharedTab & { base?: SearchPage }; swapShared?: SharedTab & { with: string }; mute?: Mute; unmute?: string }) {
   const taken = (name: string, id?: string) => saved.spaces.some((space) => space.id !== id && space.name.toLowerCase() === name.toLowerCase());
   const has = (space: string, path: string) => saved.shared.some((tab) => tab.space === space && tab.path === path);
   if ([input.createSpace && taken(input.createSpace), input.renameSpace && taken(input.renameSpace.name, input.renameSpace.id), input.deleteSpace && saved.spaces.length === 1, input.share?.path === "/"].some(Boolean)) {
@@ -39,7 +42,14 @@ function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: numb
     saved.shared = saved.shared.filter((tab) => tab.space !== input.deleteSpace || !has(first, tab.path)).map((tab) => tab.space === input.deleteSpace ? { ...tab, space: first } : tab);
   }
   if (input.share && !has(input.share.space, input.share.path)) saved.shared.push(input.share);
+  // An edit replaces a Shared Search page's one page when made from the page as saved; one made from a page that has
+  // since changed, or that is no longer shared, is refused as stale. Taking a page out of Shared returns it.
+  const edited = input.editShared && saved.shared.find((tab) => tab.space === input.editShared!.space && tab.path === input.editShared!.path);
+  if (input.editShared && (!edited || plain(edited.search) !== plain(input.editShared.base))) return Response.json({ ...saved, stale: true });
+  if (edited) edited.search = input.editShared!.search;
+  const unshared = input.unshare && saved.shared.find((tab) => tab.space === input.unshare!.space && tab.path === input.unshare!.path)?.search;
   if (input.unshare) saved.shared = saved.shared.filter((tab) => tab.space !== input.unshare!.space || tab.path !== input.unshare!.path);
+  if (unshared) return Response.json({ ...saved, unshared });
   if (input.swapShared) {
     const { space, path: from, with: to } = input.swapShared, [i, j] = [from, to].map((link) => saved.shared.findIndex((tab) => tab.space === space && tab.path === link));
     [saved.shared[i], saved.shared[j]] = [saved.shared[j], saved.shared[i]];
@@ -340,7 +350,7 @@ for (const width of [1280, 320]) test(`copy page link across pages at ${width}px
   await page.keyboard.press("Control+Shift+p");
   await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "detached" });
-  await page.waitForURL((url: URL) => url.pathname === "/search");
+  await page.waitForURL((url: URL) => url.pathname.startsWith("/search/"));
   await page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true }).fill("two words & +%");
   await page.waitForURL((url: URL) => url.searchParams.get("q") === "two words & +%");
   await page.evaluate(() => { location.hash = "match%2Ftwo"; });
@@ -1119,6 +1129,113 @@ test("New session offers every agent, and a space shows its own and spaceless cr
   await strip(page).getByRole("tab", { name: "Cron", exact: true }).click();
   expect(await dashboard()).toEqual(["daily", "opsreport", "retired"]);
 }), 60_000);
+
+test("Search pages are tabs of their own: never preview, renamed in place, shared as one page, grouped and moved with their searches", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const query = page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true });
+  await openSaved(page, origin, "/search/one", "Search", saved);
+  // An unnamed page is titled by its query, and a result opening a session does not replace it.
+  await query.fill("deploys");
+  await tab("deploys").waitFor();
+  await follow(page, "alpha");
+  expect(await names(page)).toEqual(["deploys", "Alpha"]);
+  expect(await italic(tab("deploys"))).toBe(false);
+  // Another page opened in the app takes a tab of its own beside the preview tab, which the next result replaces.
+  await page.evaluate(() => { history.pushState(null, "", "/search/two"); dispatchEvent(new PopStateEvent("popstate")); });
+  await tab("Search").waitFor();
+  await follow(page, "bravo");
+  expect(await names(page)).toEqual(["deploys", "Bravo", "Search"]);
+
+  await menu(page, "deploys", "Rename search");
+  const field = page.getByRole("textbox", { name: "Search page name", exact: true });
+  await field.fill("Discarded");
+  await field.press("Escape");
+  await tab("deploys").waitFor();
+  await menu(page, "deploys", "Rename search");
+  await field.fill("Deploys");
+  await field.press("Enter");
+
+  // Shared, it is one page for everyone in the space: its row is titled by that page, and edits there save to it.
+  await menu(page, "Deploys", "Add to Shared");
+  const row = (name: string) => shared(page).getByRole("tab", { name, exact: true });
+  await row("Deploys").waitFor();
+  expect(saved.shared).toMatchObject([{ space: "main", path: "/search/one", search: { name: "Deploys", searches: [{ query: "deploys" }] } }]);
+  await row("Deploys").click();
+  await query.fill("deploys prod");
+  await until(() => saved.shared[0].search?.searches[0].query === "deploys prod");
+  await row("Deploys").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename search", exact: true }).click();
+  await field.fill("Prod deploys");
+  await field.press("Enter");
+  await row("Prod deploys").waitFor();
+  await until(() => saved.shared[0].search?.name === "Prod deploys" && saved.shared[0].search.searches[0].query === "deploys prod");
+  // Another person's change reaches the open page when its window is focused.
+  saved.shared[0].search = { name: "Prod deploys", searches: [{ id: "x", query: "rollback" }], active: "x" };
+  await focus(page);
+  await page.waitForFunction(() => (document.querySelector('main input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "rollback");
+  // An edit made from a page someone changed meanwhile is made again onto theirs, keeping both.
+  saved.shared[0].search = { name: "Prod deploys", searches: [{ id: "x", query: "rollback" }, { id: "y", query: "other person" }], active: "x" };
+  await page.getByRole("button", { name: "New search", exact: true }).click();
+  await query.fill("mine");
+  await until(() => JSON.stringify(saved.shared[0].search?.searches.map((item) => item.query)) === JSON.stringify(["rollback", "other person", "mine"]));
+  // Taken out of Shared, the page as saved stays as this person's own, with their own searches there, so nothing anyone
+  // added is lost.
+  expect(await sharedMenu(page, "Prod deploys")).toEqual(["Rename search", "Remove from Shared"]);
+  await page.getByRole("menuitem", { name: "Remove from Shared", exact: true }).click();
+  await row("Prod deploys").waitFor({ state: "detached" });
+  await tab("Prod deploys").waitFor();
+  await until(() => JSON.stringify(saved.state.tabs.find((item) => item.path === "/search/one")?.search?.searches.map((item) => item.query)) === JSON.stringify(["rollback", "other person", "mine", "deploys"]));
+  await page.waitForFunction(() => (document.querySelector('main input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "mine");
+
+  // Grouped, then moved to another space, the page keeps its name and searches, also after reload.
+  await menu(page, "Prod deploys", "Add to group", "New group");
+  await page.getByRole("textbox", { name: "Group name" }).waitFor();
+  await page.keyboard.press("Escape");
+  expect(await tab("Prod deploys").getAttribute("aria-description")).toMatch(/^Group /);
+  await chooseSpace(page, "New space");
+  await page.getByRole("textbox", { name: "Space name" }).waitFor();
+  await page.keyboard.type("Ops");
+  await page.keyboard.press("Enter");
+  await chooseSpace(page, "Main", "menuitemradio");
+  await menu(page, "Prod deploys", "Move to space", "Ops");
+  await until(() => saved.state.tabs.some((item) => item.path === "/search/one" && item.space !== "main" && item.search?.name === "Prod deploys" && item.search.searches[0].query === "rollback"));
+  await page.reload();
+  await chooseSpace(page, "Ops", "menuitemradio");
+  await tab("Prod deploys").click();
+  await page.waitForURL((url: URL) => url.pathname === "/search/one");
+  expect(await query.inputValue()).toBe("mine");
+}), 30_000);
+
+test("a Search page keeps its page through a group moved to another space and that space deleted, and taking someone else's Shared page out keeps it", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const kept = (space?: string) => saved.state.tabs.some((item) => item.path === "/search/g" && (!space || item.space === space) && item.search?.searches[0]?.query === "grouped");
+  await openSaved(page, origin, "/search/g", "Search", saved);
+  await page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true }).fill("grouped");
+  await tab("grouped").waitFor();
+  await menu(page, "grouped", "Add to group", "New group");
+  await page.getByRole("textbox", { name: "Group name" }).waitFor();
+  await page.keyboard.type("Work");
+  await page.keyboard.press("Escape");
+  await chooseSpace(page, "New space");
+  await page.getByRole("textbox", { name: "Space name" }).waitFor();
+  await page.keyboard.type("Ops");
+  await page.keyboard.press("Enter");
+  await chooseSpace(page, "Main", "menuitemradio");
+  await strip(page).getByRole("button", { name: "Edit Work", exact: true }).click();
+  await page.getByRole("button", { name: 'Move group to "Ops"', exact: true }).click();
+  await until(() => kept() && saved.state.tabs.find((item) => item.path === "/search/g")!.space !== "main");
+  await chooseSpace(page, "Ops", "menuitemradio");
+  await chooseSpace(page, "Delete space");
+  await until(() => kept("main"));
+
+  saved.shared.push({ space: "main", path: "/search/team", search: { name: "Team", searches: [{ id: "t", query: "team" }], active: "t" } });
+  await focus(page);
+  await shared(page).getByRole("tab", { name: "Team", exact: true }).waitFor();
+  await sharedMenu(page, "Team");
+  await page.getByRole("menuitem", { name: "Remove from Shared", exact: true }).click();
+  await tab("Team").waitFor();
+  await until(() => saved.state.tabs.some((item) => item.path === "/search/team" && item.space === "main" && item.search?.searches[0]?.query === "team"));
+}), 30_000);
 
 test("a group lives in one space: menus offer only this space's groups, groups move whole, and New tab in group brings New session", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });

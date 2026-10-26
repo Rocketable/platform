@@ -191,6 +191,12 @@ The server keeps one list, oldest first, with names unique ignoring case, and th
 
 The one grey tab group named Shared that every space has, shown first in the Web sidebar. Its tabs are the same for every Web user, oldest added first, and anyone can add a tab to it or remove one, which removes it for everyone. A tab can be in a space's Shared Group and in a person's own tabs at once. Collapsing it is each person's own choice. Deleting a space moves its Shared Group's tabs into the first remaining space's.
 
+### Search Page
+
+A Web tab for searching sessions, one of as many as a person opens, each with its own address under `/search`.
+
+It holds its own searches, shown as tabs inside the page, and can be named; unnamed, it is titled by the query it shows. Its name and searches are the person's own and are saved with their tabs, so they follow the page into groups and other spaces and across devices. Added to a space's Shared Group, it becomes one page everyone in that space sees and edits, its searches and which one is shown included, while the person's own copy stays as it was; whoever takes it out of Shared keeps that one page as their own, together with any searches of their own copy. A Search page never opens as a preview tab, Escape does not close it, and closing its tab discards it. Cmd/Ctrl+P finds every space's Search pages by name or query once something is typed.
+
 ### Birth Space
 
 The Space a session was born in.

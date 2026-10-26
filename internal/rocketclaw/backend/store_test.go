@@ -2449,6 +2449,30 @@ VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	require.NoError(t, err)
 	assert.Equal(t, TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}}, Space: "main", Last: last}, state, "every space keeps its own last tab")
 
+	// A Search tab keeps its page through saves that move it; other tabs have none.
+	page := `{"name":"Triage","searches":[{"id":"1","query":"is:unread"}],"active":"1"}`
+	for i, tab := range []Tab{{Path: "/search/a", Space: "main", Search: []byte(page)}, {Path: "/search/a", Group: "g", Space: "ops", Search: []byte(page)}} {
+		saved, err = store.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}, tab}, Space: "main"}, int64(3+i))
+		require.NoError(t, err)
+		require.True(t, saved)
+
+		state, _, err = store.TabState(ctx, "alice")
+		require.NoError(t, err)
+		require.Len(t, state.Tabs, 2)
+		assert.Nil(t, state.Tabs[0].Search)
+		assert.JSONEq(t, page, string(state.Tabs[1].Search))
+		assert.Equal(t, tab.Space, state.Tabs[1].Space)
+	}
+
+	// A Web from before Search pages saves the tab without its page, which stays.
+	saved, err = store.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: "/search/a", Space: "main"}}, Space: "main"}, 5)
+	require.NoError(t, err)
+	require.True(t, saved)
+
+	state, _, err = store.TabState(ctx, "alice")
+	require.NoError(t, err)
+	assert.JSONEq(t, page, string(state.Tabs[0].Search))
+
 	state, revision, err = store.TabState(ctx, "bob")
 	require.NoError(t, err)
 	assert.Zero(t, state, "each person has their own state")
@@ -2470,7 +2494,7 @@ func TestWebSharedTabs(t *testing.T) {
 	ops, dev := spaces[1].ID, spaces[2].ID
 	share := func(space, path string) {
 		t.Helper()
-		require.NoError(t, store.ShareTab(ctx, space, path))
+		require.NoError(t, store.ShareTab(ctx, space, path, nil))
 	}
 	shared := func() []SharedTab {
 		t.Helper()
@@ -2498,8 +2522,17 @@ func TestWebSharedTabs(t *testing.T) {
 	share(ops, "/cron")
 	share(ops, "/s/YQ")
 	share(dev, "/agents")
-	require.NoError(t, store.UnshareTab(ctx, "main", "/s/YQ"))
-	require.NoError(t, store.UnshareTab(ctx, "main", "/pages"))
+
+	unshare := func(space, path string) []byte {
+		t.Helper()
+
+		page, err := store.UnshareTab(ctx, space, path)
+		require.NoError(t, err)
+
+		return page
+	}
+	assert.Nil(t, unshare("main", "/s/YQ"))
+	assert.Nil(t, unshare("main", "/pages"))
 	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: ops, Path: "/cron"}, {Space: ops, Path: "/s/YQ"}, {Space: dev, Path: "/agents"}}, shared(),
 		"removing a tab from one space leaves it in another; removing one not shared changes nothing")
 
@@ -2517,6 +2550,48 @@ func TestWebSharedTabs(t *testing.T) {
 	require.ErrorIs(t, store.DeleteSpace(ctx, "main"), ErrSpaceRejected)
 	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/cron"}, {Space: "main", Path: "/agents"}}, shared(),
 		"deleting a session takes it out of every space; the last space keeps its tabs")
+
+	// A Shared Search page holds its one page: sharing it again keeps the page, an edit replaces it, an edit to a
+	// page no longer shared adds nothing, and the page moves with the tab when its space is deleted.
+	require.NoError(t, store.CreateSpace(ctx, "Docs"))
+
+	spaces, err = store.Spaces(ctx)
+	require.NoError(t, err)
+
+	docs := spaces[1].ID
+	first, second := `{"name":"Triage","searches":[{"id":"1","query":"is:unread"}],"active":"1"}`, `{"name":"Deploys","searches":[],"active":""}`
+	page := func(space string) string {
+		t.Helper()
+
+		index := slices.IndexFunc(shared(), func(tab SharedTab) bool { return tab.Space == space && tab.Path == "/search/x" })
+		require.GreaterOrEqual(t, index, 0)
+
+		return string(shared()[index].Search)
+	}
+
+	require.NoError(t, store.ShareTab(ctx, docs, "/search/x", []byte(first)))
+	assert.JSONEq(t, first, page(docs))
+	require.NoError(t, store.ShareTab(ctx, docs, "/search/x", []byte(second)))
+	assert.JSONEq(t, first, page(docs))
+
+	edit := func(path, base, search string) bool {
+		t.Helper()
+
+		edited, err := store.EditSharedSearch(ctx, docs, path, []byte(base), []byte(search))
+		require.NoError(t, err)
+
+		return edited
+	}
+	assert.False(t, edit("/search/x", second, second), "an edit made from a page that has since changed is refused")
+	assert.JSONEq(t, first, page(docs))
+	assert.True(t, edit("/search/x", first, second))
+	assert.JSONEq(t, second, page(docs))
+	assert.False(t, edit("/search/y", "", second))
+	assert.False(t, slices.ContainsFunc(shared(), func(tab SharedTab) bool { return tab.Path == "/search/y" }))
+	require.NoError(t, store.DeleteSpace(ctx, docs))
+	assert.JSONEq(t, second, page("main"))
+	assert.Nil(t, shared()[0].Search, "other tabs have no page")
+	assert.JSONEq(t, second, string(unshare("main", "/search/x")), "taking it out of Shared returns the page it held")
 }
 
 func TestWebTabMutes(t *testing.T) {

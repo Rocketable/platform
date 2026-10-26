@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -336,8 +337,8 @@ func (s *SessionService) DeleteSpace(ctx context.Context, id string) error {
 	deleted, err := execRows(ctx, s.db, "delete space", "count deleted space", `WITH locked AS (SELECT id, created_at FROM web_spaces ORDER BY id FOR UPDATE),
 others AS (SELECT id FROM locked WHERE id <> $1 ORDER BY created_at, id LIMIT 1),
 moved AS (
-    INSERT INTO web_shared_tabs (space, path, conversation_id, added_at)
-    SELECT o.id, t.path, t.conversation_id, t.added_at FROM web_shared_tabs t CROSS JOIN others o WHERE t.space = $1
+    INSERT INTO web_shared_tabs (space, path, conversation_id, added_at, search)
+    SELECT o.id, t.path, t.conversation_id, t.added_at, t.search FROM web_shared_tabs t CROSS JOIN others o WHERE t.space = $1
     ON CONFLICT DO NOTHING
 ),
 pages AS (
@@ -351,11 +352,13 @@ DELETE FROM web_spaces USING others WHERE web_spaces.id = $1`, id)
 	return err
 }
 
-// Tab is one open Web tab; Group and Space are the ids of its group and space.
+// Tab is one open Web tab; Group and Space are the ids of its group and space. Search is a Search tab's page as
+// JSON, which only the Web reads, and nil for other tabs.
 type Tab struct {
 	Path         string
 	Preview      bool
 	Group, Space string
+	Search       []byte
 }
 
 // TabGroup is one Web tab group.
@@ -427,9 +430,9 @@ func (s *SessionService) TabState(ctx context.Context, username string) (TabStat
 		return TabState{}, 0, fmt.Errorf("decode last tabs: %w", err)
 	}
 
-	state.Tabs, err = queryRows(ctx, tx, `SELECT path, preview, group_id, space FROM web_tabs WHERE username = $1 AND position IS NOT NULL ORDER BY position`, "tabs", func(row rowScanner) (Tab, error) {
+	state.Tabs, err = queryRows(ctx, tx, `SELECT path, preview, group_id, space, search FROM web_tabs WHERE username = $1 AND position IS NOT NULL ORDER BY position`, "tabs", func(row rowScanner) (Tab, error) {
 		var tab Tab
-		return tab, row.Scan(&tab.Path, &tab.Preview, &tab.Group, &tab.Space)
+		return tab, row.Scan(&tab.Path, &tab.Preview, &tab.Group, &tab.Space, &tab.Search)
 	}, username)
 	if err != nil {
 		return TabState{}, 0, err
@@ -474,15 +477,28 @@ WHERE web_tab_states.revision = $3`, username, state.Space, revision, lastSpaces
 	}
 
 	var (
-		paths, conversations, groups, spaces []string
-		previews                             []bool
-		groupIDs, names, colors              []string
-		collapsed                            []bool
+		paths, conversations, groups, spaces, searches []string
+		previews                                       []bool
+		groupIDs, names, colors                        []string
+		collapsed                                      []bool
 	)
 
+	// A Web from before Search pages saves their tabs without their pages, so a tab saved without one keeps its own.
+	pages, err := queryRows(ctx, tx, `SELECT path, search FROM web_tabs WHERE username = $1 AND search IS NOT NULL`, "tab search pages", func(row rowScanner) (Tab, error) {
+		var tab Tab
+		return tab, row.Scan(&tab.Path, &tab.Search)
+	}, username)
+	if err != nil {
+		return false, err
+	}
+
 	for _, tab := range state.Tabs {
+		if i := slices.IndexFunc(pages, func(page Tab) bool { return page.Path == tab.Path }); tab.Search == nil && i >= 0 {
+			tab.Search = pages[i].Search
+		}
+
 		paths, conversations, groups, spaces = append(paths, tab.Path), append(conversations, TabConversation(tab.Path)), append(groups, tab.Group), append(spaces, tab.Space)
-		previews = append(previews, tab.Preview)
+		previews, searches = append(previews, tab.Preview), append(searches, string(tab.Search))
 	}
 
 	for _, group := range state.Groups {
@@ -494,7 +510,7 @@ WHERE web_tab_states.revision = $3`, username, state.Space, revision, lastSpaces
 ), closed AS (
     DELETE FROM web_tabs WHERE username = $1 AND unread_at IS NULL
 )
-UPDATE web_tabs SET position = NULL, preview = FALSE, group_id = '', space = ''
+UPDATE web_tabs SET position = NULL, preview = FALSE, group_id = '', space = '', search = NULL
 WHERE username = $1 AND unread_at IS NOT NULL`, username); err != nil {
 		return false, err
 	}
@@ -504,16 +520,16 @@ WHERE username = $1 AND unread_at IS NOT NULL`, username); err != nil {
     INSERT INTO web_tab_groups (username, id, position, name, color, collapsed)
     SELECT $1, id, n - 1, name, color, collapsed FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[]) WITH ORDINALITY AS g(id, name, color, collapsed, n)
 ), incoming AS (
-    SELECT COALESCE(`+tabPathSQL+`, t.path) AS path, c.conversation_id, t.n - 1 AS position, t.preview, t.group_id, t.space
-    FROM unnest($6::text[], $7::text[], $8::boolean[], $9::text[], $10::text[]) WITH ORDINALITY AS t(path, conversation_id, preview, group_id, space, n)
+    SELECT COALESCE(`+tabPathSQL+`, t.path) AS path, c.conversation_id, t.n - 1 AS position, t.preview, t.group_id, t.space, NULLIF(t.search, '')::jsonb AS search
+    FROM unnest($6::text[], $7::text[], $8::boolean[], $9::text[], $10::text[], $11::text[]) WITH ORDINALITY AS t(path, conversation_id, preview, group_id, space, search, n)
     LEFT JOIN conversations c ON c.conversation_id = t.conversation_id
     WHERE t.conversation_id = '' OR c.conversation_id IS NOT NULL
 )
-INSERT INTO web_tabs (username, path, conversation_id, position, preview, group_id, space)
-SELECT DISTINCT ON (path) $1, path, conversation_id, position, preview, group_id, space FROM incoming ORDER BY path, position
+INSERT INTO web_tabs (username, path, conversation_id, position, preview, group_id, space, search)
+SELECT DISTINCT ON (path) $1, path, conversation_id, position, preview, group_id, space, search FROM incoming ORDER BY path, position
 ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversation_id, position = excluded.position,
-    preview = excluded.preview, group_id = excluded.group_id, space = excluded.space`,
-		username, groupIDs, names, colors, collapsed, paths, conversations, previews, groups, spaces); err != nil {
+    preview = excluded.preview, group_id = excluded.group_id, space = excluded.space, search = excluded.search`,
+		username, groupIDs, names, colors, collapsed, paths, conversations, previews, groups, spaces, searches); err != nil {
 		return false, err
 	}
 
@@ -524,34 +540,53 @@ ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversati
 	return true, nil
 }
 
-// SharedTab is one tab in a space's Shared group, which every Web user sees.
-type SharedTab struct{ Space, Path string }
+// SharedTab is one tab in a space's Shared group, which every Web user sees. Search is a Search tab's one
+// page as JSON, which everyone in the space sees and edits, and nil for other tabs.
+type SharedTab struct {
+	Space, Path string
+	Search      []byte
+}
 
 // SharedTabs lists every space's Shared tabs, oldest added first.
 func (s *SessionService) SharedTabs(ctx context.Context) ([]SharedTab, error) {
-	return queryRows(ctx, s.db, `SELECT space, path FROM web_shared_tabs ORDER BY added_at, path`, "shared tabs", func(row rowScanner) (SharedTab, error) {
+	return queryRows(ctx, s.db, `SELECT space, path, search FROM web_shared_tabs ORDER BY added_at, path`, "shared tabs", func(row rowScanner) (SharedTab, error) {
 		var tab SharedTab
-		return tab, row.Scan(&tab.Space, &tab.Path)
+		return tab, row.Scan(&tab.Space, &tab.Path, &tab.Search)
 	})
 }
 
-// ShareTab adds path to space's Shared tabs under the path SaveTabState saves it as. A tab already
-// shared there keeps its place; a missing space or session stores nothing.
-func (s *SessionService) ShareTab(ctx context.Context, space, path string) error {
-	_, err := execState(ctx, s.db, "share tab", `INSERT INTO web_shared_tabs (space, path, conversation_id)
-SELECT w.id, COALESCE(`+tabPathSQL+`, $2), c.conversation_id FROM web_spaces w
+// ShareTab adds path to space's Shared tabs under the path SaveTabState saves it as, with search, a Search
+// page's JSON. A tab already shared there keeps its place and page; a missing space or session stores nothing.
+func (s *SessionService) ShareTab(ctx context.Context, space, path string, search []byte) error {
+	_, err := execState(ctx, s.db, "share tab", `INSERT INTO web_shared_tabs (space, path, conversation_id, search)
+SELECT w.id, COALESCE(`+tabPathSQL+`, $2), c.conversation_id, NULLIF($4, '')::jsonb FROM web_spaces w
 LEFT JOIN conversations c ON c.conversation_id = $3
 WHERE w.id = $1 AND ($3 = '' OR c.conversation_id IS NOT NULL)
-ON CONFLICT DO NOTHING`, space, path, TabConversation(path))
+ON CONFLICT DO NOTHING`, space, path, TabConversation(path), string(search))
 
 	return err
 }
 
-// UnshareTab takes path out of space's Shared tabs.
-func (s *SessionService) UnshareTab(ctx context.Context, space, path string) error {
-	_, err := execState(ctx, s.db, "unshare tab", `DELETE FROM web_shared_tabs WHERE space = $1 AND path = $2`, space, path)
+// EditSharedSearch replaces the page of the Search tab path in space's Shared tabs with search when the saved page is
+// still base, the page the edit was made from, and reports whether it did. One no longer shared stays unshared.
+func (s *SessionService) EditSharedSearch(ctx context.Context, space, path string, base, search []byte) (bool, error) {
+	edited, err := execRows(ctx, s.db, "edit shared search", "count edited shared search", `UPDATE web_shared_tabs SET search = NULLIF($3, '')::jsonb
+WHERE space = $1 AND path = $2 AND search IS NOT DISTINCT FROM NULLIF($4, '')::jsonb`, space, path, string(search), string(base))
 
-	return err
+	return edited > 0, err
+}
+
+// UnshareTab takes path out of space's Shared tabs and returns the Search page it held, nil for other tabs.
+func (s *SessionService) UnshareTab(ctx context.Context, space, path string) ([]byte, error) {
+	tabs, err := queryRows(ctx, s.db, `DELETE FROM web_shared_tabs WHERE space = $1 AND path = $2 RETURNING search`, "unshare tab", func(row rowScanner) (SharedTab, error) {
+		var tab SharedTab
+		return tab, row.Scan(&tab.Search)
+	}, space, path)
+	if err != nil || len(tabs) == 0 {
+		return nil, err
+	}
+
+	return tabs[0].Search, nil
 }
 
 // SwapSharedTabs swaps when path and with were added to space's Shared tabs, which swaps their places.

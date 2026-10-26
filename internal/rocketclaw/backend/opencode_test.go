@@ -629,7 +629,7 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	assert.Empty(t, unread("carol"))
 
 	// In a space's Shared group, Carol's turn marks every Web person but Carol, who is viewing it.
-	require.NoError(t, s.ShareTab(ctx, "main", "/oc/"+base64.RawURLEncoding.EncodeToString([]byte(id))))
+	require.NoError(t, s.ShareTab(ctx, "main", "/oc/"+base64.RawURLEncoding.EncodeToString([]byte(id)), nil))
 	_, err = s.db.ExecContext(ctx, `DELETE FROM web_tabs; DELETE FROM web_tab_states`)
 	require.NoError(t, err)
 	_, err = s.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, viewing, viewed_at) VALUES ('alice', 0, '', now()), ('bob', 0, '', now()), ('carol', 0, $1, now())`, id)

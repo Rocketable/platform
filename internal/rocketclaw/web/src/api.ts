@@ -1,5 +1,5 @@
 import { captureException } from "@sentry/react";
-import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, TranscriptEvent, VoiceSettings, Workflow } from "./types";
+import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TranscriptEvent, VoiceSettings, Workflow } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -104,5 +104,5 @@ export const mutations = {
   stopBackgroundJob: (input: { conversationId: string; jobId: string }) => rpc("StopBackgroundJob", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
   voiceSettings: (input: { action: "START" | "RESET" | "UPDATE"; conversationId?: string; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
-  tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; swapShared?: SavedTabs["shared"][number] & { with: string }; mute?: SavedTabs["mutes"][number]; unmute?: string }) => rpc<SavedTabs>("Tabs", input),
+  tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; swapShared?: SavedTabs["shared"][number] & { with: string }; mute?: SavedTabs["mutes"][number]; unmute?: string }) => rpc<SavedTabs>("Tabs", input),
 };

@@ -15,9 +15,35 @@ const response = (query: string, matches: Match[] = [], terms: (string | [string
   text: query, needle: query.toLowerCase(), matches: matches.map((match) => ({ field: "Preview", text: "", ...match })), messages: [], mentionIds: [], ...extra,
 });
 
+type SavedTab = { path: string; search?: { name?: string; searches: { id: string; name?: string; query: string }[]; active: string } };
+// tabsApi keeps each person's saved tabs as the server does, so a reload reopens Search pages with their searches.
+function tabsApi(owner: () => string) {
+  const saved = new Map<string, { tabs: SavedTab[] }>();
+  let revision = 0;
+  return {
+    tabs: (who = owner()) => saved.get(who)?.tabs ?? [],
+    reply: async (request: Request) => {
+      const { state } = await request.json() as { state?: { tabs: SavedTab[] } };
+      if (state) {
+        saved.set(owner(), state);
+        revision++;
+      }
+      return Response.json({ spaces: [{ id: "main", name: "Main" }], state: saved.get(owner()) ?? { tabs: [], groups: [], space: "main", last: {} }, revision: String(revision) });
+    },
+  };
+}
+
+// until polls check, as saves follow typing after a pause.
+async function until(check: () => boolean) {
+  for (let tries = 0; !check(); tries++) {
+    if (tries > 100) throw new Error("timed out waiting for a save");
+    await Bun.sleep(50);
+  }
+}
+
 // serve answers the App's requests with rows and a SearchSessions fixture, and records every API path.
 function serve(rows: object[], search: (input: { query: string; filters?: boolean; messages?: boolean }) => Promise<object> | object, agents: object[] = [{ name: "main" }]) {
-  const paths = new Set<string>();
+  const paths = new Set<string>(), tabs = tabsApi(() => "tester");
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     paths.add(url.pathname);
@@ -33,17 +59,18 @@ function serve(rows: object[], search: (input: { query: string; filters?: boolea
         return Response.json({ message: (error as Error).message, code: 13 }, { status: 500 });
       }
     }
-    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+    if (url.pathname === "/api/Tabs") return tabs.reply(request);
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));
     return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
   } });
-  return { server, paths, origin: `http://127.0.0.1:${server.port}` };
+  return { server, paths, tabs, origin: `http://127.0.0.1:${server.port}` };
 }
 
 for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
   let owner = "alice";
+  const api = tabsApi(() => owner);
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (request) => {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -56,7 +83,7 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
       const { query } = await request.json() as { query: string };
       return Response.json(response(query, [], ({ 'tag:"Needs review" is:forked': ['tag:"Needs review"', "is:forked"], "is:forked": ["is:forked"] } as Record<string, string[]>)[query]));
     }
-    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+    if (url.pathname === "/api/Tabs") return api.reply(request);
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));
     return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
@@ -66,6 +93,8 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     const page = await browser.newPage({ viewport: { width, height: 800 } });
     const searches = page.getByRole("tablist", { name: "Searches" });
     const tabs = searches.getByRole("tab");
+    const shown = (who = owner) => api.tabs(who).find((tab) => tab.path === new URL(page.url()).pathname)?.search;
+    const opened = (url: URL) => url.pathname.startsWith("/search/");
     await page.goto(`http://127.0.0.1:${server.port}/`);
     // The footer Search button is Cmd/Ctrl+P; the Search page is the "Sessions: Search" command, also under Cmd/Ctrl+Shift+P.
     await page.getByRole("button", { name: "Search sessions" }).click();
@@ -75,7 +104,7 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
-    await page.waitForURL("**/search");
+    await page.waitForURL(opened);
     const search = page.getByRole("textbox", { name: "Search sessions" });
     await search.waitFor();
     expect(await tabs.count()).toBe(1);
@@ -89,9 +118,12 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     await search.fill("same");
     await page.getByRole("button", { name: "New search" }).click();
     await search.fill("same");
-    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem("search-tabs:alice")!));
-    expect(saved.tabs).toHaveLength(2);
-    expect(saved.tabs[0].id).not.toBe(saved.tabs[1].id);
+    // Each "Sessions: Search" opens a page of its own, saved with this person's tabs.
+    expect(api.tabs().filter((tab) => opened(new URL(tab.path, page.url())))).toHaveLength(2);
+    await until(() => shown()?.searches.at(-1)?.query === "same");
+    const saved = shown()!;
+    expect(saved.searches).toHaveLength(2);
+    expect(saved.searches[0].id).not.toBe(saved.searches[1].id);
     await page.reload();
     await search.waitFor();
     expect(await tabs.last().getAttribute("aria-selected")).toBe("true");
@@ -152,6 +184,7 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     await pills.nth(1).waitFor();
     expect(await search.inputValue()).toBe("");
     expect(await pills.allTextContents()).toEqual(['tag:"Needs review"', "is:forked"]);
+    await until(() => !!shown()?.searches.some((item) => item.query === 'tag:"Needs review" is:forked '));
     await page.reload();
     await pills.nth(1).waitFor();
     expect(await search.inputValue()).toBe("");
@@ -175,8 +208,8 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     expect(await tabs.count()).toBe(1);
     expect(await tabs.first().evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
     expect(await search.inputValue()).toBe("same");
-    await search.fill(""); // An owner switch imports the URL search; an empty one keeps Bob's tab a draft.
-    await page.waitForURL("**/search");
+    await search.fill(""); // An owner switch opens the URL search for the new owner, from an empty one.
+    await page.waitForURL((url: URL) => opened(url) && !url.search);
     await tabs.first().click();
     await name.fill("Alice");
     await name.press("Enter");
@@ -184,13 +217,12 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     owner = "bob";
     await searches.getByRole("tab", { name: "Search 1" }).waitFor({ timeout: 10_000 });
     expect(await search.inputValue()).toBe("");
-    expect(await page.evaluate(() => localStorage.getItem("search-tabs:bob"))).toBeNull();
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("search-tabs:alice")!).tabs)).toHaveLength(1);
-    await search.press("Enter");
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("search-tabs:bob")!).tabs)).toHaveLength(1);
+    expect(shown("alice")!.searches.map((item) => item.name)).toEqual(["Alice"]);
+    await until(() => shown("bob")?.searches.length === 1);
+    // Closing Bob's only search closes his page, not to Alice's last message.
     await page.getByRole("button", { name: "Close search 1" }).click();
     await page.waitForURL(`http://127.0.0.1:${server.port}/`);
-    expect(await page.evaluate(() => localStorage.getItem("search-tabs:bob"))).toBeNull();
+    expect(api.tabs("bob").filter((tab) => tab.search)).toEqual([]);
     await page.keyboard.press("Control+p");
     const dialog = page.getByRole("dialog", { name: "Go to session" });
     await dialog.getByPlaceholder("Search sessions").fill("temporary");
@@ -201,7 +233,29 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     await page.keyboard.press("Control+Shift+p");
     await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
     await page.getByRole("dialog").waitFor({ state: "detached" });
-    await page.waitForURL("**/search");
+    await page.waitForURL(opened);
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
+
+test("searches this browser kept stay when a page that already has searches is edited", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const { server, tabs: api, origin } = serve([], ({ query }) => response(query));
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    const first = () => api.tabs().find((tab) => tab.path === "/search/a")?.search?.searches[0].query;
+    await page.goto(`${origin}/search/a`);
+    const search = page.getByRole("textbox", { name: "Search sessions" });
+    await search.fill("server");
+    await until(() => first() === "server");
+    await page.evaluate(() => localStorage.setItem("search-tabs:tester", JSON.stringify({ tabs: [{ id: "old", query: "kept" }], active: "old" })));
+    await page.reload();
+    await search.fill("edited");
+    await until(() => first() === "edited");
+    expect(await page.evaluate(() => localStorage.getItem("search-tabs:tester"))).not.toBeNull();
   } finally {
     await browser.close();
     server.stop(true);
@@ -247,7 +301,7 @@ test("principal filters retain links, pills and quoted suggestions", async () =>
 test("search URL follows the active tab, folds legacy filters, and reopens a matching tab", async () => {
   const { chromium: engine } = await import(playwright!);
   const folded = "agent:alitu-cs-support outage";
-  const { server, paths, origin } = serve([{ id: "chat", name: "Outage chat", preview: "", agent: "alitu-cs-support" }], ({ query }) => query === folded ? response(query, [{ conversationId: "chat", field: "Name", text: "Outage chat" }], ["agent:alitu-cs-support"]) : response(query));
+  const { server, paths, tabs: api, origin } = serve([{ id: "chat", name: "Outage chat", preview: "", agent: "alitu-cs-support" }], ({ query }) => query === folded ? response(query, [{ conversationId: "chat", field: "Name", text: "Outage chat" }], ["agent:alitu-cs-support"]) : response(query));
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
@@ -257,7 +311,7 @@ test("search URL follows the active tab, folds legacy filters, and reopens a mat
     const search = page.getByRole("textbox", { name: "Search sessions" });
     const tabs = page.getByRole("tablist", { name: "Searches" }).getByRole("tab");
     const opened = async (count: number) => {
-      await page.getByRole("button", { name: "agent:alitu-cs-support" }).waitFor();
+      await page.getByRole("button", { name: "agent:alitu-cs-support", exact: true }).waitFor();
       expect(await tabs.count()).toBe(count);
       expect(await tabs.first().getAttribute("aria-selected")).toBe("true");
       expect(await search.inputValue()).toBe("outage");
@@ -265,8 +319,11 @@ test("search URL follows the active tab, folds legacy filters, and reopens a mat
     await page.goto(`${origin}/`);
     await page.evaluate(() => localStorage.setItem("search-tabs:tester", JSON.stringify({ tabs: [{ id: "legacy", query: "outage", agentFilter: "alitu-cs-support", roomFilter: "" }], active: "legacy" })));
     await page.goto(origin + link);
-    await opened(1); // The legacy tab, folded once into its query, matches the folded link.
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("search-tabs:tester")!).tabs)).toEqual([{ id: "legacy", query: folded }]);
+    await opened(1); // The legacy tab, folded once into its query, matches the folded link, and moves into the page's tab.
+    const saved = () => api.tabs().find((tab) => tab.path === "/search")?.search?.searches;
+    await until(() => !!saved());
+    expect(saved()).toEqual([{ id: "legacy", query: folded }]);
+    expect(await page.evaluate(() => localStorage.getItem("search-tabs:tester"))).toBeNull();
     await at(canonical);
     await page.reload();
     await opened(1);
@@ -274,6 +331,7 @@ test("search URL follows the active tab, folds legacy filters, and reopens a mat
     await at("/search");
     await search.fill("other room");
     await at("/search?q=other+room");
+    await until(() => saved()?.at(-1)?.query === "other room");
     await page.goto(origin + link);
     await opened(2);
     await page.getByLabel("Search results").getByRole("heading").getByRole("link", { name: "Outage chat" }).click();
@@ -406,7 +464,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     { id: "fourth", name: "Origin chat", preview: "Other text", agent: "main" },
   ];
   const message = (messageId: string, role: string, text: string) => ({ conversationId: "third", message: { messageId, role, text, complete: true } });
-  const { server, paths, origin } = serve(rows, async (input) => {
+  const { server, paths, tabs: api, origin } = serve(rows, async (input) => {
     requests.push(input);
     const { query } = input;
     if (query === "agent:main" && requests.filter((request) => request.query === query).length === 1) await hold.promise;
@@ -428,7 +486,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     await page.goto(`${origin}/search`);
     const search = page.getByRole("textbox", { name: "Search sessions" });
     const results = page.getByLabel("Search results");
-    const stored = () => page.evaluate(() => JSON.parse(localStorage.getItem("search-tabs:tester")!).tabs[0].query);
+    const stored = (query: string) => until(() => api.tabs().find((tab) => tab.path === "/search")?.search?.searches[0].query === query);
     const sent = async (query: string) => { while (requests.at(-1)?.query !== query) await page.waitForTimeout(50); };
     await search.fill("needle");
     await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="Search results"] [role="group"]')].map((node) => node.getAttribute("aria-label")).join("|") === "Pinned conversation|Needle notes|Origin chat", undefined, { timeout: 5000 });
@@ -446,6 +504,7 @@ test("/search renders the server's groups, notices and pills", async () => {
 
     await search.fill("chat is:pinned"); // A saved query ending in a filter reopens with that filter.
     await results.getByRole("group", { name: "Pinned conversation" }).waitFor();
+    await stored("chat is:pinned");
     requests.length = 0;
     await page.reload();
     await results.getByRole("group", { name: "Pinned conversation" }).waitFor();
@@ -457,6 +516,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     await search.press("Enter");
     await results.getByRole("group", { name: "Origin chat" }).waitFor();
     expect(requests.at(-1)!.query).toBe("outage tag:");
+    await stored("outage tag:");
     requests.length = 0;
     await page.reload();
     await results.getByRole("group", { name: "Origin chat" }).waitFor();
@@ -475,7 +535,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     await tagPill.waitFor();
     expect(await search.inputValue()).toBe("foo bar");
     for (const key of ["ArrowLeft", "ArrowLeft", "ArrowLeft", "Backspace"]) await search.press(key);
-    expect(await stored()).toBe("tag:bug foobar");
+    await stored("tag:bug foobar");
     await sent("tag:bug foobar");
     await tagPill.waitFor();
     expect(await search.inputValue()).toBe("foobar");
@@ -484,7 +544,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     await search.fill("foo tag:bug bar");
     await tagPill.waitFor();
     await search.fill("outage"); // Select-all and type.
-    expect(await stored()).toBe("tag:bug outage");
+    await stored("tag:bug outage");
     await sent("tag:bug outage");
     await tagPill.waitFor();
     expect(await search.inputValue()).toBe("outage");
@@ -501,7 +561,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     await agentPill("other").waitFor();
     expect(await search.inputValue()).toBe("");
     expect(await agentPill("main").count()).toBe(1);
-    expect(await stored()).toBe("agent:main agent:other ");
+    await stored("agent:main agent:other ");
     hold.resolve();
     await page.reload();
     await agentPill("main").waitFor();
@@ -509,7 +569,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     await agentPill("main").click();
     await sent("agent:other");
     expect(await agentPill("other").count()).toBe(1);
-    expect(await stored()).toBe("agent:other ");
+    await stored("agent:other ");
     await agentPill("other").click();
 
     await search.fill("late"); // A match the sidebar has not loaded is pending, not "No matches".
@@ -536,7 +596,7 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
     { id: "long", name: "Weekly report about many unrelated things and then the deploy checklist", agent: "main" },
   ];
   const message = (messageId: string, role: string, text: string) => ({ conversationId: "third", message: { messageId, role, text, complete: true } });
-  const { server, origin } = serve(rows, (input) => {
+  const { server, tabs: api, origin } = serve(rows, (input) => {
     requests.push(input);
     return response(input.query, [{ conversationId: "third", field: "" }, { conversationId: "second", text: "Needle notes\nOther text" }], [], { messages: [message("1:0", "user", "Context before NEEDLE then needle")] });
   }, [{ name: "main", model: "gpt-6.1-sol" }]);
@@ -575,28 +635,50 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
     await palette.getByText("No matches", { exact: true }).waitFor();
     await input.fill("needle");
     await handoff.click();
-    await page.waitForURL("**/search?q=needle");
+    const at = (query: string) => page.waitForURL((url: URL) => url.pathname.startsWith("/search/") && url.searchParams.get("q") === query);
+    await at("needle");
+    const first = new URL(page.url()).pathname;
     const results = page.getByLabel("Search results");
     await results.getByRole("link", { name: /Context before NEEDLE/ }).waitFor();
     expect(requests).toEqual([{ query: "needle", messages: true }]);
 
-    // From the Search page itself, the hand-off opens the new text there too.
+    // New text opens a Search page of its own, even from a Search page.
     await page.keyboard.press("Control+p");
     await input.fill("pinned");
     await palette.getByRole("button", { name: "Search everywhere for 'pinned'", exact: true }).click();
-    await page.waitForURL("**/search?q=pinned");
+    await at("pinned");
     await palette.waitFor({ state: "hidden" });
+    expect(new URL(page.url()).pathname).not.toBe(first);
     expect(await page.getByRole("textbox", { name: "Search sessions", exact: true }).inputValue()).toBe("pinned");
-    expect(await page.getByRole("tablist", { name: "Searches" }).getByRole("tab").allTextContents()).toEqual(["needle", "pinned"]);
+    expect(await page.getByRole("tablist", { name: "Searches" }).getByRole("tab").allTextContents()).toEqual(["pinned"]);
+    const strip = page.getByRole("tablist", { name: "Open tabs" });
+    for (const name of ["needle", "pinned"]) await strip.getByRole("tab", { name, exact: true }).waitFor();
     // Back and Forward between the two entries switch the open search with the address.
     const searchInput = page.getByRole("textbox", { name: "Search sessions", exact: true });
     await page.goBack();
-    await page.waitForURL("**/search?q=needle");
+    await at("needle");
     await page.waitForFunction(() => (document.querySelector('input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "needle");
     await page.goForward();
-    await page.waitForURL("**/search?q=pinned");
+    await at("pinned");
     await page.waitForFunction(() => (document.querySelector('input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === "pinned");
     expect(await searchInput.inputValue()).toBe("pinned");
+    // Typed text in Cmd+P lists the Search pages by title or query, never an empty query, whose Enter opens the first
+    // session; text one already searches for reopens it.
+    await page.keyboard.press("Control+p");
+    const pages = palette.getByRole("button", { name: /^Search: / });
+    await palette.getByRole("button").filter({ hasText: "Needle notes" }).waitFor();
+    expect(await pages.count()).toBe(0);
+    await input.fill("e");
+    await pages.nth(1).waitFor();
+    expect(await pages.allTextContents()).toEqual(["Search: needleMain", "Search: pinnedMain"]);
+    await input.fill("need");
+    await palette.getByRole("button", { name: /^Search: pinned/ }).waitFor({ state: "detached" });
+    expect(await pages.allTextContents()).toEqual(["Search: needleMain"]);
+    await input.fill("needle");
+    await palette.getByRole("button", { name: "Search everywhere for 'needle'", exact: true }).click();
+    await at("needle");
+    expect(new URL(page.url()).pathname).toBe(first);
+    expect(api.tabs().filter((tab) => tab.path.startsWith("/search/"))).toHaveLength(2);
   } finally {
     await browser.close();
     server.stop(true);
@@ -860,6 +942,7 @@ test("message matches jump after history loads and last close returns to the las
   const pending = Promise.withResolvers<void>();
   let delayHistory = true;
   let owner = "tester";
+  const api = tabsApi(() => owner);
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -877,7 +960,7 @@ test("message matches jump after history loads and last close returns to the las
       if (delayHistory && id === "one") await pending.promise;
       return Response.json({ messages: messages(id), origin: "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages(id).map((message) => message.entryKey))], running: false, terminal: "" });
     }
-    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+    if (url.pathname === "/api/Tabs") return api.reply(request);
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));
     return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
@@ -906,15 +989,13 @@ test("message matches jump after history loads and last close returns to the las
       return !!viewport && !!target && target.bottom > viewport.top && target.top < viewport.bottom;
     });
     await page.getByRole("button", { name: "sandboxed" }).click();
-    await page.keyboard.press("Control+Shift+p");
-    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
-    await page.getByRole("dialog").waitFor({ state: "detached" });
+    // The Search page's tab, titled by its query, returns to it.
+    const searchTab = page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: "one", exact: true });
+    await searchTab.click();
     await page.getByRole("link", { name: /one user 1/ }).click();
     await page.waitForFunction(() => document.querySelector('[data-message-id="one-u1"]')?.getBoundingClientRect().height !== 0);
     expect(await page.getByRole("button", { name: "sandboxed" }).getAttribute("aria-pressed")).toBe("true");
-    await page.keyboard.press("Control+Shift+p");
-    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search" }).click();
-    await page.getByRole("dialog").waitFor({ state: "detached" });
+    await searchTab.click();
     await page.getByRole("link", { name: /one assistant 1/ }).click();
     await page.waitForURL("**/s/b25l?message=one-a1");
     await page.waitForFunction(() => {
@@ -931,7 +1012,7 @@ test("message matches jump after history loads and last close returns to the las
       const target = document.querySelector('[data-message-id="one-u14"]')?.getBoundingClientRect();
       return !!viewport && !!target && target.bottom > viewport.top && target.top < viewport.bottom;
     }, undefined, { timeout: 5000 });
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("search-tabs:tester")!).tabs)).toHaveLength(1);
+    expect(api.tabs().find((tab) => tab.path === "/search")!.search!.searches).toHaveLength(1);
     await page.evaluate(() => {
       history.pushState(null, "", "/s/dHdv");
       window.dispatchEvent(new PopStateEvent("popstate"));

@@ -74,9 +74,10 @@ func TestTabs(t *testing.T) {
 		return out
 	}
 
-	// /search is the ops space's last tab, though closed.
+	// /search is the ops space's last tab, though closed. A Search page keeps its name and searches.
 	saved := &TabState{
-		Tabs:   []*Tab{{Path: "/", Space: "main"}, {Path: "/s/YQ", Group: "g", Space: "main"}, {Path: "/s/Yg", Preview: true, Space: "ops"}},
+		Tabs: []*Tab{{Path: "/", Space: "main"}, {Path: "/s/YQ", Group: "g", Space: "main"}, {Path: "/s/Yg", Preview: true, Space: "ops"},
+			{Path: "/search/a", Space: "ops", Search: &SearchPage{Name: "Triage", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}, {Id: "2", Name: "Mine", Query: "principal:alice"}}, Active: "2"}}},
 		Groups: []*TabGroup{{Id: "g", Name: "Work", Color: "Blue", Collapsed: true}},
 		Space:  "main",
 		Last:   map[string]string{"main": "/s/YQ", "ops": "/search"},
@@ -183,6 +184,41 @@ func TestTabs(t *testing.T) {
 	response, err = call("192.0.2.2", &TabsRequest{SwapShared: &SharedSwap{Space: space, Path: "/cron", With: "/search"}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{space + " /cron", space + " /search"}, shared(response))
+
+	// A Shared Search page carries its one page to everyone, and an edit replaces the page for everyone.
+	triage := &SearchPage{Name: "Triage", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}}, Active: "1"}
+	_, err = call("127.0.0.1", &TabsRequest{Share: &SharedTab{Space: space, Path: "/search/a", Search: triage}})
+	require.NoError(t, err)
+	response, err = call("192.0.2.2", &TabsRequest{})
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(&SharedTab{Space: space, Path: "/search/a", Search: triage}, response.Shared[2]))
+	assert.Nil(t, response.Shared[0].Search, "other Shared tabs have no page")
+
+	// An edit made from the page as saved replaces it; one made from a page that has since changed is refused as stale.
+	edited := &SearchPage{Name: "Triage", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}, {Id: "2", Query: "tag:bug"}}, Active: "1"}
+	response, err = call("192.0.2.2", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: edited, Search: edited}})
+	require.NoError(t, err)
+	assert.True(t, response.Stale)
+	assert.True(t, proto.Equal(triage, response.Shared[2].Search), "a refused edit answers with the page as saved")
+
+	response, err = call("192.0.2.2", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: triage, Search: edited}})
+	require.NoError(t, err)
+	assert.False(t, response.Stale)
+	assert.Equal(t, []string{space + " /cron", space + " /search", space + " /search/a"}, shared(response), "an edit keeps its place")
+	assert.True(t, proto.Equal(edited, response.Shared[2].Search))
+
+	// Taking it out of Shared answers with the page it held, and a later edit does not share it again.
+	response, err = call("127.0.0.1", &TabsRequest{Unshare: &SharedTab{Space: space, Path: "/search/a"}})
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(edited, response.Unshared))
+	response, err = call("192.0.2.2", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: edited, Search: edited}})
+	require.NoError(t, err)
+	assert.True(t, response.Stale)
+	assert.Equal(t, []string{space + " /cron", space + " /search"}, shared(response), "an edit after unsharing does not share again")
+
+	// A saved page with a field a later Web dropped still reads.
+	_, err = searchPage([]byte(`{"name":"x","gone":1}`))
+	require.NoError(t, err)
 
 	// Alice mutes a and snoozes c, and Bob mutes c: every reply carries only the caller's live mutes.
 	mutes := func(response *TabsResponse) []string {
