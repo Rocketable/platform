@@ -15,6 +15,7 @@ import (
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/packages/respjson"
 	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 	"github.com/openai/openai-go/v3/shared/constant"
 )
 
@@ -419,11 +420,19 @@ func (r *ClientConfigParam) UnmarshalJSON(data []byte) error {
 type ClientDelegation struct {
 	// The delegation owner. Always `client` for tasks handled by your application.
 	Type constant.Client `json:"type" default:"client"`
+	// Milliseconds to wait before requesting an automatic spoken acknowledgement for a
+	// delegation. The model may still speak before this delay. Any commentary or
+	// thinking appended to the session cancels all pending acknowledgements, including
+	// those for other delegations. Defaults to 400 for Decisions sessions and 0
+	// (request immediately) for other sessions. Omission in a session update preserves
+	// the current value. Updates apply to subsequent delegations.
+	AcknowledgementDelayMs int64 `json:"acknowledgement_delay_ms"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
-		Type        respjson.Field
-		ExtraFields map[string]respjson.Field
-		raw         string
+		Type                   respjson.Field
+		AcknowledgementDelayMs respjson.Field
+		ExtraFields            map[string]respjson.Field
+		raw                    string
 	} `json:"-"`
 }
 
@@ -451,8 +460,15 @@ func NewClientDelegationParam() ClientDelegationParam {
 // Delegate tasks to your application. The Live session emits delegation events
 // that your backend handles.
 //
-// This struct has a constant value, construct it with [NewClientDelegationParam].
+// Use [NewClientDelegationParam] to initialize the constant fields.
 type ClientDelegationParam struct {
+	// Milliseconds to wait before requesting an automatic spoken acknowledgement for a
+	// delegation. The model may still speak before this delay. Any commentary or
+	// thinking appended to the session cancels all pending acknowledgements, including
+	// those for other delegations. Defaults to 400 for Decisions sessions and 0
+	// (request immediately) for other sessions. Omission in a session update preserves
+	// the current value. Updates apply to subsequent delegations.
+	AcknowledgementDelayMs param.Opt[int64] `json:"acknowledgement_delay_ms,omitzero"`
 	// The delegation owner. Always `client` for tasks handled by your application.
 	Type constant.Client `json:"type" default:"client"`
 	paramObj
@@ -898,6 +914,23 @@ func (u clientEventUnionParamSessionDelegation) GetType() *string {
 	return nil
 }
 
+// Returns a pointer to the underlying variant's property, if present.
+func (u clientEventUnionParamSessionDelegation) GetAcknowledgementDelayMs() *int64 {
+	switch vt := u.any.(type) {
+	case *ClientDelegationParam:
+		return paramutil.AddrIfPresent(vt.AcknowledgementDelayMs)
+	case *SessionConfigDelegationResponsesParam:
+		return paramutil.AddrIfPresent(vt.AcknowledgementDelayMs)
+	case *SessionConfigDelegationDecisionsParam:
+		return paramutil.AddrIfPresent(vt.AcknowledgementDelayMs)
+	case *SessionUpdateConfigDelegationResponsesParam:
+		return paramutil.AddrIfPresent(vt.AcknowledgementDelayMs)
+	case *SessionUpdateConfigDelegationDecisionsParam:
+		return paramutil.AddrIfPresent(vt.AcknowledgementDelayMs)
+	}
+	return nil
+}
+
 // Returns a subunion which exports methods to access subproperties
 //
 // Or use AsAny() to get the underlying value
@@ -985,7 +1018,7 @@ func init() {
 }
 
 // Provide context the Live model can communicate to the user, optionally for an
-// existing client delegation.
+// existing client delegation. Rejected while an audio fixture is active.
 //
 // The properties Content, DelegationID, Type are required.
 type CommentaryAppendEventParam struct {
@@ -2230,8 +2263,8 @@ func (r *DecisionTriggerDecisionsQuestionUnion) UnmarshalJSON(data []byte) error
 
 // Estimate how likely it is that a statement about the input is true.
 type DecisionTriggerDecisionsQuestionPredicate struct {
-	Instructions string `json:"instructions" api:"required"`
-	Name         string `json:"name"`
+	Instructions DecisionTriggerDecisionsQuestionPredicateInstructionsUnion `json:"instructions" api:"required"`
+	Name         string                                                     `json:"name"`
 	// The type of the object. Always `predicate`.
 	Type constant.Predicate `json:"type" default:"predicate"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
@@ -2250,12 +2283,51 @@ func (r *DecisionTriggerDecisionsQuestionPredicate) UnmarshalJSON(data []byte) e
 	return apijson.UnmarshalRoot(data, r)
 }
 
+// DecisionTriggerDecisionsQuestionPredicateInstructionsUnion contains all possible
+// properties and values from [string], [[]shared.DecisionQuestionInputPartUnion].
+//
+// Use the methods beginning with 'As' to cast the union to one of its variants.
+//
+// If the underlying value is not a json object, one of the following properties
+// will be valid: OfString OfArrayOfDecisionQuestionInputPartUnion]
+type DecisionTriggerDecisionsQuestionPredicateInstructionsUnion struct {
+	// This field will be present if the value is a [string] instead of an object.
+	OfString string `json:",inline"`
+	// This field will be present if the value is a
+	// [[]shared.DecisionQuestionInputPartUnion] instead of an object.
+	OfArrayOfDecisionQuestionInputPartUnion []shared.DecisionQuestionInputPartUnion `json:",inline"`
+	JSON                                    struct {
+		OfString                                respjson.Field
+		OfArrayOfDecisionQuestionInputPartUnion respjson.Field
+		raw                                     string
+	} `json:"-"`
+}
+
+func (u DecisionTriggerDecisionsQuestionPredicateInstructionsUnion) AsString() (v string) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u DecisionTriggerDecisionsQuestionPredicateInstructionsUnion) AsArrayOfDecisionQuestionInputPartUnion() (v []shared.DecisionQuestionInputPartUnion) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+// Returns the unmodified JSON received from the API
+func (u DecisionTriggerDecisionsQuestionPredicateInstructionsUnion) RawJSON() string {
+	return u.JSON.raw
+}
+
+func (r *DecisionTriggerDecisionsQuestionPredicateInstructionsUnion) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
 // Choose from the supplied options based on the input.
 type DecisionTriggerDecisionsQuestionChoice struct {
 	// Provide between 2 and 255 choices. Each choice must be unique.
-	Choices      []DecisionTriggerDecisionsQuestionChoiceChoice `json:"choices" api:"required"`
-	Instructions string                                         `json:"instructions" api:"required"`
-	Name         string                                         `json:"name"`
+	Choices      []DecisionTriggerDecisionsQuestionChoiceChoice          `json:"choices" api:"required"`
+	Instructions DecisionTriggerDecisionsQuestionChoiceInstructionsUnion `json:"instructions" api:"required"`
+	Name         string                                                  `json:"name"`
 	// The type of the object. Always `choice`.
 	Type constant.Choice `json:"type" default:"choice"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
@@ -2330,11 +2402,48 @@ func (r *DecisionTriggerDecisionsQuestionChoiceChoiceValueUnion) UnmarshalJSON(d
 	return apijson.UnmarshalRoot(data, r)
 }
 
+// DecisionTriggerDecisionsQuestionChoiceInstructionsUnion contains all possible
+// properties and values from [string], [[]shared.DecisionQuestionInputPartUnion].
+//
+// Use the methods beginning with 'As' to cast the union to one of its variants.
+//
+// If the underlying value is not a json object, one of the following properties
+// will be valid: OfString OfArrayOfDecisionQuestionInputPartUnion]
+type DecisionTriggerDecisionsQuestionChoiceInstructionsUnion struct {
+	// This field will be present if the value is a [string] instead of an object.
+	OfString string `json:",inline"`
+	// This field will be present if the value is a
+	// [[]shared.DecisionQuestionInputPartUnion] instead of an object.
+	OfArrayOfDecisionQuestionInputPartUnion []shared.DecisionQuestionInputPartUnion `json:",inline"`
+	JSON                                    struct {
+		OfString                                respjson.Field
+		OfArrayOfDecisionQuestionInputPartUnion respjson.Field
+		raw                                     string
+	} `json:"-"`
+}
+
+func (u DecisionTriggerDecisionsQuestionChoiceInstructionsUnion) AsString() (v string) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u DecisionTriggerDecisionsQuestionChoiceInstructionsUnion) AsArrayOfDecisionQuestionInputPartUnion() (v []shared.DecisionQuestionInputPartUnion) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+// Returns the unmodified JSON received from the API
+func (u DecisionTriggerDecisionsQuestionChoiceInstructionsUnion) RawJSON() string { return u.JSON.raw }
+
+func (r *DecisionTriggerDecisionsQuestionChoiceInstructionsUnion) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
 // Rate the input against the supplied ordered levels.
 type DecisionTriggerDecisionsQuestionScore struct {
-	Instructions string                                       `json:"instructions" api:"required"`
-	Levels       []DecisionTriggerDecisionsQuestionScoreLevel `json:"levels" api:"required"`
-	Name         string                                       `json:"name"`
+	Instructions DecisionTriggerDecisionsQuestionScoreInstructionsUnion `json:"instructions" api:"required"`
+	Levels       []DecisionTriggerDecisionsQuestionScoreLevel           `json:"levels" api:"required"`
+	Name         string                                                 `json:"name"`
 	// The type of the object. Always `score`.
 	Type constant.Score `json:"type" default:"score"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
@@ -2351,6 +2460,43 @@ type DecisionTriggerDecisionsQuestionScore struct {
 // Returns the unmodified JSON received from the API
 func (r DecisionTriggerDecisionsQuestionScore) RawJSON() string { return r.JSON.raw }
 func (r *DecisionTriggerDecisionsQuestionScore) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// DecisionTriggerDecisionsQuestionScoreInstructionsUnion contains all possible
+// properties and values from [string], [[]shared.DecisionQuestionInputPartUnion].
+//
+// Use the methods beginning with 'As' to cast the union to one of its variants.
+//
+// If the underlying value is not a json object, one of the following properties
+// will be valid: OfString OfArrayOfDecisionQuestionInputPartUnion]
+type DecisionTriggerDecisionsQuestionScoreInstructionsUnion struct {
+	// This field will be present if the value is a [string] instead of an object.
+	OfString string `json:",inline"`
+	// This field will be present if the value is a
+	// [[]shared.DecisionQuestionInputPartUnion] instead of an object.
+	OfArrayOfDecisionQuestionInputPartUnion []shared.DecisionQuestionInputPartUnion `json:",inline"`
+	JSON                                    struct {
+		OfString                                respjson.Field
+		OfArrayOfDecisionQuestionInputPartUnion respjson.Field
+		raw                                     string
+	} `json:"-"`
+}
+
+func (u DecisionTriggerDecisionsQuestionScoreInstructionsUnion) AsString() (v string) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u DecisionTriggerDecisionsQuestionScoreInstructionsUnion) AsArrayOfDecisionQuestionInputPartUnion() (v []shared.DecisionQuestionInputPartUnion) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+// Returns the unmodified JSON received from the API
+func (u DecisionTriggerDecisionsQuestionScoreInstructionsUnion) RawJSON() string { return u.JSON.raw }
+
+func (r *DecisionTriggerDecisionsQuestionScoreInstructionsUnion) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -2451,18 +2597,6 @@ func (u DecisionTriggerDecisionsQuestionUnionParam) GetLevels() []DecisionTrigge
 }
 
 // Returns a pointer to the underlying variant's property, if present.
-func (u DecisionTriggerDecisionsQuestionUnionParam) GetInstructions() *string {
-	if vt := u.OfPredicate; vt != nil {
-		return (*string)(&vt.Instructions)
-	} else if vt := u.OfChoice; vt != nil {
-		return (*string)(&vt.Instructions)
-	} else if vt := u.OfScore; vt != nil {
-		return (*string)(&vt.Instructions)
-	}
-	return nil
-}
-
-// Returns a pointer to the underlying variant's property, if present.
 func (u DecisionTriggerDecisionsQuestionUnionParam) GetType() *string {
 	if vt := u.OfPredicate; vt != nil {
 		return (*string)(&vt.Type)
@@ -2486,6 +2620,34 @@ func (u DecisionTriggerDecisionsQuestionUnionParam) GetName() *string {
 	return nil
 }
 
+// Returns a subunion which exports methods to access subproperties
+//
+// Or use AsAny() to get the underlying value
+func (u DecisionTriggerDecisionsQuestionUnionParam) GetInstructions() (res decisionTriggerDecisionsQuestionUnionParamInstructions) {
+	if vt := u.OfPredicate; vt != nil {
+		res.any = vt.Instructions.asAny()
+	} else if vt := u.OfChoice; vt != nil {
+		res.any = vt.Instructions.asAny()
+	} else if vt := u.OfScore; vt != nil {
+		res.any = vt.Instructions.asAny()
+	}
+	return
+}
+
+// Can have the runtime types [*string],
+// [\*[]shared.DecisionQuestionInputPartUnionParam]
+type decisionTriggerDecisionsQuestionUnionParamInstructions struct{ any }
+
+// Use the following switch statement to get the type of the union:
+//
+//	switch u.AsAny().(type) {
+//	case *string:
+//	case *[]shared.DecisionQuestionInputPartUnionParam:
+//	default:
+//	    fmt.Errorf("not present")
+//	}
+func (u decisionTriggerDecisionsQuestionUnionParamInstructions) AsAny() any { return u.any }
+
 func init() {
 	apijson.RegisterUnion[DecisionTriggerDecisionsQuestionUnionParam](
 		"type",
@@ -2499,8 +2661,8 @@ func init() {
 //
 // The properties Instructions, Type are required.
 type DecisionTriggerDecisionsQuestionPredicateParam struct {
-	Instructions string            `json:"instructions" api:"required"`
-	Name         param.Opt[string] `json:"name,omitzero"`
+	Instructions DecisionTriggerDecisionsQuestionPredicateInstructionsUnionParam `json:"instructions,omitzero" api:"required"`
+	Name         param.Opt[string]                                               `json:"name,omitzero"`
 	// The type of the object. Always `predicate`.
 	//
 	// This field can be elided, and will marshal its zero value as "predicate".
@@ -2516,14 +2678,39 @@ func (r *DecisionTriggerDecisionsQuestionPredicateParam) UnmarshalJSON(data []by
 	return apijson.UnmarshalRoot(data, r)
 }
 
+// Only one field can be non-zero.
+//
+// Use [param.IsOmitted] to confirm if a field is set.
+type DecisionTriggerDecisionsQuestionPredicateInstructionsUnionParam struct {
+	OfString                    param.Opt[string]                            `json:",omitzero,inline"`
+	OfArrayOfQuestionInputParts []shared.DecisionQuestionInputPartUnionParam `json:",omitzero,inline"`
+	paramUnion
+}
+
+func (u DecisionTriggerDecisionsQuestionPredicateInstructionsUnionParam) MarshalJSON() ([]byte, error) {
+	return param.MarshalUnion(u, u.OfString, u.OfArrayOfQuestionInputParts)
+}
+func (u *DecisionTriggerDecisionsQuestionPredicateInstructionsUnionParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, u)
+}
+
+func (u *DecisionTriggerDecisionsQuestionPredicateInstructionsUnionParam) asAny() any {
+	if !param.IsOmitted(u.OfString) {
+		return &u.OfString.Value
+	} else if !param.IsOmitted(u.OfArrayOfQuestionInputParts) {
+		return &u.OfArrayOfQuestionInputParts
+	}
+	return nil
+}
+
 // Choose from the supplied options based on the input.
 //
 // The properties Choices, Instructions, Type are required.
 type DecisionTriggerDecisionsQuestionChoiceParam struct {
 	// Provide between 2 and 255 choices. Each choice must be unique.
-	Choices      []DecisionTriggerDecisionsQuestionChoiceChoiceParam `json:"choices,omitzero" api:"required"`
-	Instructions string                                              `json:"instructions" api:"required"`
-	Name         param.Opt[string]                                   `json:"name,omitzero"`
+	Choices      []DecisionTriggerDecisionsQuestionChoiceChoiceParam          `json:"choices,omitzero" api:"required"`
+	Instructions DecisionTriggerDecisionsQuestionChoiceInstructionsUnionParam `json:"instructions,omitzero" api:"required"`
+	Name         param.Opt[string]                                            `json:"name,omitzero"`
 	// The type of the object. Always `choice`.
 	//
 	// This field can be elided, and will marshal its zero value as "choice".
@@ -2571,13 +2758,38 @@ func (u *DecisionTriggerDecisionsQuestionChoiceChoiceValueUnionParam) UnmarshalJ
 	return apijson.UnmarshalRoot(data, u)
 }
 
+// Only one field can be non-zero.
+//
+// Use [param.IsOmitted] to confirm if a field is set.
+type DecisionTriggerDecisionsQuestionChoiceInstructionsUnionParam struct {
+	OfString                    param.Opt[string]                            `json:",omitzero,inline"`
+	OfArrayOfQuestionInputParts []shared.DecisionQuestionInputPartUnionParam `json:",omitzero,inline"`
+	paramUnion
+}
+
+func (u DecisionTriggerDecisionsQuestionChoiceInstructionsUnionParam) MarshalJSON() ([]byte, error) {
+	return param.MarshalUnion(u, u.OfString, u.OfArrayOfQuestionInputParts)
+}
+func (u *DecisionTriggerDecisionsQuestionChoiceInstructionsUnionParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, u)
+}
+
+func (u *DecisionTriggerDecisionsQuestionChoiceInstructionsUnionParam) asAny() any {
+	if !param.IsOmitted(u.OfString) {
+		return &u.OfString.Value
+	} else if !param.IsOmitted(u.OfArrayOfQuestionInputParts) {
+		return &u.OfArrayOfQuestionInputParts
+	}
+	return nil
+}
+
 // Rate the input against the supplied ordered levels.
 //
 // The properties Instructions, Levels, Type are required.
 type DecisionTriggerDecisionsQuestionScoreParam struct {
-	Instructions string                                            `json:"instructions" api:"required"`
-	Levels       []DecisionTriggerDecisionsQuestionScoreLevelParam `json:"levels,omitzero" api:"required"`
-	Name         param.Opt[string]                                 `json:"name,omitzero"`
+	Instructions DecisionTriggerDecisionsQuestionScoreInstructionsUnionParam `json:"instructions,omitzero" api:"required"`
+	Levels       []DecisionTriggerDecisionsQuestionScoreLevelParam           `json:"levels,omitzero" api:"required"`
+	Name         param.Opt[string]                                           `json:"name,omitzero"`
 	// The type of the object. Always `score`.
 	//
 	// This field can be elided, and will marshal its zero value as "score".
@@ -2591,6 +2803,31 @@ func (r DecisionTriggerDecisionsQuestionScoreParam) MarshalJSON() (data []byte, 
 }
 func (r *DecisionTriggerDecisionsQuestionScoreParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
+}
+
+// Only one field can be non-zero.
+//
+// Use [param.IsOmitted] to confirm if a field is set.
+type DecisionTriggerDecisionsQuestionScoreInstructionsUnionParam struct {
+	OfString                    param.Opt[string]                            `json:",omitzero,inline"`
+	OfArrayOfQuestionInputParts []shared.DecisionQuestionInputPartUnionParam `json:",omitzero,inline"`
+	paramUnion
+}
+
+func (u DecisionTriggerDecisionsQuestionScoreInstructionsUnionParam) MarshalJSON() ([]byte, error) {
+	return param.MarshalUnion(u, u.OfString, u.OfArrayOfQuestionInputParts)
+}
+func (u *DecisionTriggerDecisionsQuestionScoreInstructionsUnionParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, u)
+}
+
+func (u *DecisionTriggerDecisionsQuestionScoreInstructionsUnionParam) asAny() any {
+	if !param.IsOmitted(u.OfString) {
+		return &u.OfString.Value
+	} else if !param.IsOmitted(u.OfArrayOfQuestionInputParts) {
+		return &u.OfArrayOfQuestionInputParts
+	}
+	return nil
 }
 
 // The property Label is required.
@@ -2716,8 +2953,8 @@ func (r *DecisionsDelegationConfigQuestionUnion) UnmarshalJSON(data []byte) erro
 
 // Estimate how likely it is that a statement about the input is true.
 type DecisionsDelegationConfigQuestionPredicate struct {
-	Instructions string `json:"instructions" api:"required"`
-	Name         string `json:"name"`
+	Instructions DecisionsDelegationConfigQuestionPredicateInstructionsUnion `json:"instructions" api:"required"`
+	Name         string                                                      `json:"name"`
 	// The type of the object. Always `predicate`.
 	Type constant.Predicate `json:"type" default:"predicate"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
@@ -2736,12 +2973,52 @@ func (r *DecisionsDelegationConfigQuestionPredicate) UnmarshalJSON(data []byte) 
 	return apijson.UnmarshalRoot(data, r)
 }
 
+// DecisionsDelegationConfigQuestionPredicateInstructionsUnion contains all
+// possible properties and values from [string],
+// [[]shared.DecisionQuestionInputPartUnion].
+//
+// Use the methods beginning with 'As' to cast the union to one of its variants.
+//
+// If the underlying value is not a json object, one of the following properties
+// will be valid: OfString OfArrayOfDecisionQuestionInputPartUnion]
+type DecisionsDelegationConfigQuestionPredicateInstructionsUnion struct {
+	// This field will be present if the value is a [string] instead of an object.
+	OfString string `json:",inline"`
+	// This field will be present if the value is a
+	// [[]shared.DecisionQuestionInputPartUnion] instead of an object.
+	OfArrayOfDecisionQuestionInputPartUnion []shared.DecisionQuestionInputPartUnion `json:",inline"`
+	JSON                                    struct {
+		OfString                                respjson.Field
+		OfArrayOfDecisionQuestionInputPartUnion respjson.Field
+		raw                                     string
+	} `json:"-"`
+}
+
+func (u DecisionsDelegationConfigQuestionPredicateInstructionsUnion) AsString() (v string) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u DecisionsDelegationConfigQuestionPredicateInstructionsUnion) AsArrayOfDecisionQuestionInputPartUnion() (v []shared.DecisionQuestionInputPartUnion) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+// Returns the unmodified JSON received from the API
+func (u DecisionsDelegationConfigQuestionPredicateInstructionsUnion) RawJSON() string {
+	return u.JSON.raw
+}
+
+func (r *DecisionsDelegationConfigQuestionPredicateInstructionsUnion) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
 // Choose from the supplied options based on the input.
 type DecisionsDelegationConfigQuestionChoice struct {
 	// Provide between 2 and 255 choices. Each choice must be unique.
-	Choices      []DecisionsDelegationConfigQuestionChoiceChoice `json:"choices" api:"required"`
-	Instructions string                                          `json:"instructions" api:"required"`
-	Name         string                                          `json:"name"`
+	Choices      []DecisionsDelegationConfigQuestionChoiceChoice          `json:"choices" api:"required"`
+	Instructions DecisionsDelegationConfigQuestionChoiceInstructionsUnion `json:"instructions" api:"required"`
+	Name         string                                                   `json:"name"`
 	// The type of the object. Always `choice`.
 	Type constant.Choice `json:"type" default:"choice"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
@@ -2816,11 +3093,48 @@ func (r *DecisionsDelegationConfigQuestionChoiceChoiceValueUnion) UnmarshalJSON(
 	return apijson.UnmarshalRoot(data, r)
 }
 
+// DecisionsDelegationConfigQuestionChoiceInstructionsUnion contains all possible
+// properties and values from [string], [[]shared.DecisionQuestionInputPartUnion].
+//
+// Use the methods beginning with 'As' to cast the union to one of its variants.
+//
+// If the underlying value is not a json object, one of the following properties
+// will be valid: OfString OfArrayOfDecisionQuestionInputPartUnion]
+type DecisionsDelegationConfigQuestionChoiceInstructionsUnion struct {
+	// This field will be present if the value is a [string] instead of an object.
+	OfString string `json:",inline"`
+	// This field will be present if the value is a
+	// [[]shared.DecisionQuestionInputPartUnion] instead of an object.
+	OfArrayOfDecisionQuestionInputPartUnion []shared.DecisionQuestionInputPartUnion `json:",inline"`
+	JSON                                    struct {
+		OfString                                respjson.Field
+		OfArrayOfDecisionQuestionInputPartUnion respjson.Field
+		raw                                     string
+	} `json:"-"`
+}
+
+func (u DecisionsDelegationConfigQuestionChoiceInstructionsUnion) AsString() (v string) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u DecisionsDelegationConfigQuestionChoiceInstructionsUnion) AsArrayOfDecisionQuestionInputPartUnion() (v []shared.DecisionQuestionInputPartUnion) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+// Returns the unmodified JSON received from the API
+func (u DecisionsDelegationConfigQuestionChoiceInstructionsUnion) RawJSON() string { return u.JSON.raw }
+
+func (r *DecisionsDelegationConfigQuestionChoiceInstructionsUnion) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
 // Rate the input against the supplied ordered levels.
 type DecisionsDelegationConfigQuestionScore struct {
-	Instructions string                                        `json:"instructions" api:"required"`
-	Levels       []DecisionsDelegationConfigQuestionScoreLevel `json:"levels" api:"required"`
-	Name         string                                        `json:"name"`
+	Instructions DecisionsDelegationConfigQuestionScoreInstructionsUnion `json:"instructions" api:"required"`
+	Levels       []DecisionsDelegationConfigQuestionScoreLevel           `json:"levels" api:"required"`
+	Name         string                                                  `json:"name"`
 	// The type of the object. Always `score`.
 	Type constant.Score `json:"type" default:"score"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
@@ -2837,6 +3151,43 @@ type DecisionsDelegationConfigQuestionScore struct {
 // Returns the unmodified JSON received from the API
 func (r DecisionsDelegationConfigQuestionScore) RawJSON() string { return r.JSON.raw }
 func (r *DecisionsDelegationConfigQuestionScore) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// DecisionsDelegationConfigQuestionScoreInstructionsUnion contains all possible
+// properties and values from [string], [[]shared.DecisionQuestionInputPartUnion].
+//
+// Use the methods beginning with 'As' to cast the union to one of its variants.
+//
+// If the underlying value is not a json object, one of the following properties
+// will be valid: OfString OfArrayOfDecisionQuestionInputPartUnion]
+type DecisionsDelegationConfigQuestionScoreInstructionsUnion struct {
+	// This field will be present if the value is a [string] instead of an object.
+	OfString string `json:",inline"`
+	// This field will be present if the value is a
+	// [[]shared.DecisionQuestionInputPartUnion] instead of an object.
+	OfArrayOfDecisionQuestionInputPartUnion []shared.DecisionQuestionInputPartUnion `json:",inline"`
+	JSON                                    struct {
+		OfString                                respjson.Field
+		OfArrayOfDecisionQuestionInputPartUnion respjson.Field
+		raw                                     string
+	} `json:"-"`
+}
+
+func (u DecisionsDelegationConfigQuestionScoreInstructionsUnion) AsString() (v string) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u DecisionsDelegationConfigQuestionScoreInstructionsUnion) AsArrayOfDecisionQuestionInputPartUnion() (v []shared.DecisionQuestionInputPartUnion) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+// Returns the unmodified JSON received from the API
+func (u DecisionsDelegationConfigQuestionScoreInstructionsUnion) RawJSON() string { return u.JSON.raw }
+
+func (r *DecisionsDelegationConfigQuestionScoreInstructionsUnion) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -2908,18 +3259,6 @@ func (u DecisionsDelegationConfigQuestionUnionParam) GetLevels() []DecisionsDele
 }
 
 // Returns a pointer to the underlying variant's property, if present.
-func (u DecisionsDelegationConfigQuestionUnionParam) GetInstructions() *string {
-	if vt := u.OfPredicate; vt != nil {
-		return (*string)(&vt.Instructions)
-	} else if vt := u.OfChoice; vt != nil {
-		return (*string)(&vt.Instructions)
-	} else if vt := u.OfScore; vt != nil {
-		return (*string)(&vt.Instructions)
-	}
-	return nil
-}
-
-// Returns a pointer to the underlying variant's property, if present.
 func (u DecisionsDelegationConfigQuestionUnionParam) GetType() *string {
 	if vt := u.OfPredicate; vt != nil {
 		return (*string)(&vt.Type)
@@ -2943,6 +3282,34 @@ func (u DecisionsDelegationConfigQuestionUnionParam) GetName() *string {
 	return nil
 }
 
+// Returns a subunion which exports methods to access subproperties
+//
+// Or use AsAny() to get the underlying value
+func (u DecisionsDelegationConfigQuestionUnionParam) GetInstructions() (res decisionsDelegationConfigQuestionUnionParamInstructions) {
+	if vt := u.OfPredicate; vt != nil {
+		res.any = vt.Instructions.asAny()
+	} else if vt := u.OfChoice; vt != nil {
+		res.any = vt.Instructions.asAny()
+	} else if vt := u.OfScore; vt != nil {
+		res.any = vt.Instructions.asAny()
+	}
+	return
+}
+
+// Can have the runtime types [*string],
+// [\*[]shared.DecisionQuestionInputPartUnionParam]
+type decisionsDelegationConfigQuestionUnionParamInstructions struct{ any }
+
+// Use the following switch statement to get the type of the union:
+//
+//	switch u.AsAny().(type) {
+//	case *string:
+//	case *[]shared.DecisionQuestionInputPartUnionParam:
+//	default:
+//	    fmt.Errorf("not present")
+//	}
+func (u decisionsDelegationConfigQuestionUnionParamInstructions) AsAny() any { return u.any }
+
 func init() {
 	apijson.RegisterUnion[DecisionsDelegationConfigQuestionUnionParam](
 		"type",
@@ -2956,8 +3323,8 @@ func init() {
 //
 // The properties Instructions, Type are required.
 type DecisionsDelegationConfigQuestionPredicateParam struct {
-	Instructions string            `json:"instructions" api:"required"`
-	Name         param.Opt[string] `json:"name,omitzero"`
+	Instructions DecisionsDelegationConfigQuestionPredicateInstructionsUnionParam `json:"instructions,omitzero" api:"required"`
+	Name         param.Opt[string]                                                `json:"name,omitzero"`
 	// The type of the object. Always `predicate`.
 	//
 	// This field can be elided, and will marshal its zero value as "predicate".
@@ -2973,14 +3340,39 @@ func (r *DecisionsDelegationConfigQuestionPredicateParam) UnmarshalJSON(data []b
 	return apijson.UnmarshalRoot(data, r)
 }
 
+// Only one field can be non-zero.
+//
+// Use [param.IsOmitted] to confirm if a field is set.
+type DecisionsDelegationConfigQuestionPredicateInstructionsUnionParam struct {
+	OfString                            param.Opt[string]                            `json:",omitzero,inline"`
+	OfArrayOfDecisionQuestionInputParts []shared.DecisionQuestionInputPartUnionParam `json:",omitzero,inline"`
+	paramUnion
+}
+
+func (u DecisionsDelegationConfigQuestionPredicateInstructionsUnionParam) MarshalJSON() ([]byte, error) {
+	return param.MarshalUnion(u, u.OfString, u.OfArrayOfDecisionQuestionInputParts)
+}
+func (u *DecisionsDelegationConfigQuestionPredicateInstructionsUnionParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, u)
+}
+
+func (u *DecisionsDelegationConfigQuestionPredicateInstructionsUnionParam) asAny() any {
+	if !param.IsOmitted(u.OfString) {
+		return &u.OfString.Value
+	} else if !param.IsOmitted(u.OfArrayOfDecisionQuestionInputParts) {
+		return &u.OfArrayOfDecisionQuestionInputParts
+	}
+	return nil
+}
+
 // Choose from the supplied options based on the input.
 //
 // The properties Choices, Instructions, Type are required.
 type DecisionsDelegationConfigQuestionChoiceParam struct {
 	// Provide between 2 and 255 choices. Each choice must be unique.
-	Choices      []DecisionsDelegationConfigQuestionChoiceChoiceParam `json:"choices,omitzero" api:"required"`
-	Instructions string                                               `json:"instructions" api:"required"`
-	Name         param.Opt[string]                                    `json:"name,omitzero"`
+	Choices      []DecisionsDelegationConfigQuestionChoiceChoiceParam          `json:"choices,omitzero" api:"required"`
+	Instructions DecisionsDelegationConfigQuestionChoiceInstructionsUnionParam `json:"instructions,omitzero" api:"required"`
+	Name         param.Opt[string]                                             `json:"name,omitzero"`
 	// The type of the object. Always `choice`.
 	//
 	// This field can be elided, and will marshal its zero value as "choice".
@@ -3028,13 +3420,38 @@ func (u *DecisionsDelegationConfigQuestionChoiceChoiceValueUnionParam) Unmarshal
 	return apijson.UnmarshalRoot(data, u)
 }
 
+// Only one field can be non-zero.
+//
+// Use [param.IsOmitted] to confirm if a field is set.
+type DecisionsDelegationConfigQuestionChoiceInstructionsUnionParam struct {
+	OfString                            param.Opt[string]                            `json:",omitzero,inline"`
+	OfArrayOfDecisionQuestionInputParts []shared.DecisionQuestionInputPartUnionParam `json:",omitzero,inline"`
+	paramUnion
+}
+
+func (u DecisionsDelegationConfigQuestionChoiceInstructionsUnionParam) MarshalJSON() ([]byte, error) {
+	return param.MarshalUnion(u, u.OfString, u.OfArrayOfDecisionQuestionInputParts)
+}
+func (u *DecisionsDelegationConfigQuestionChoiceInstructionsUnionParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, u)
+}
+
+func (u *DecisionsDelegationConfigQuestionChoiceInstructionsUnionParam) asAny() any {
+	if !param.IsOmitted(u.OfString) {
+		return &u.OfString.Value
+	} else if !param.IsOmitted(u.OfArrayOfDecisionQuestionInputParts) {
+		return &u.OfArrayOfDecisionQuestionInputParts
+	}
+	return nil
+}
+
 // Rate the input against the supplied ordered levels.
 //
 // The properties Instructions, Levels, Type are required.
 type DecisionsDelegationConfigQuestionScoreParam struct {
-	Instructions string                                             `json:"instructions" api:"required"`
-	Levels       []DecisionsDelegationConfigQuestionScoreLevelParam `json:"levels,omitzero" api:"required"`
-	Name         param.Opt[string]                                  `json:"name,omitzero"`
+	Instructions DecisionsDelegationConfigQuestionScoreInstructionsUnionParam `json:"instructions,omitzero" api:"required"`
+	Levels       []DecisionsDelegationConfigQuestionScoreLevelParam           `json:"levels,omitzero" api:"required"`
+	Name         param.Opt[string]                                            `json:"name,omitzero"`
 	// The type of the object. Always `score`.
 	//
 	// This field can be elided, and will marshal its zero value as "score".
@@ -3048,6 +3465,31 @@ func (r DecisionsDelegationConfigQuestionScoreParam) MarshalJSON() (data []byte,
 }
 func (r *DecisionsDelegationConfigQuestionScoreParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
+}
+
+// Only one field can be non-zero.
+//
+// Use [param.IsOmitted] to confirm if a field is set.
+type DecisionsDelegationConfigQuestionScoreInstructionsUnionParam struct {
+	OfString                            param.Opt[string]                            `json:",omitzero,inline"`
+	OfArrayOfDecisionQuestionInputParts []shared.DecisionQuestionInputPartUnionParam `json:",omitzero,inline"`
+	paramUnion
+}
+
+func (u DecisionsDelegationConfigQuestionScoreInstructionsUnionParam) MarshalJSON() ([]byte, error) {
+	return param.MarshalUnion(u, u.OfString, u.OfArrayOfDecisionQuestionInputParts)
+}
+func (u *DecisionsDelegationConfigQuestionScoreInstructionsUnionParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, u)
+}
+
+func (u *DecisionsDelegationConfigQuestionScoreInstructionsUnionParam) asAny() any {
+	if !param.IsOmitted(u.OfString) {
+		return &u.OfString.Value
+	} else if !param.IsOmitted(u.OfArrayOfDecisionQuestionInputParts) {
+		return &u.OfArrayOfDecisionQuestionInputParts
+	}
+	return nil
 }
 
 // The property Label is required.
@@ -3114,18 +3556,6 @@ func (u DecisionsDelegationUpdateConfigQuestionUnionParam) GetLevels() []Decisio
 }
 
 // Returns a pointer to the underlying variant's property, if present.
-func (u DecisionsDelegationUpdateConfigQuestionUnionParam) GetInstructions() *string {
-	if vt := u.OfPredicate; vt != nil {
-		return (*string)(&vt.Instructions)
-	} else if vt := u.OfChoice; vt != nil {
-		return (*string)(&vt.Instructions)
-	} else if vt := u.OfScore; vt != nil {
-		return (*string)(&vt.Instructions)
-	}
-	return nil
-}
-
-// Returns a pointer to the underlying variant's property, if present.
 func (u DecisionsDelegationUpdateConfigQuestionUnionParam) GetType() *string {
 	if vt := u.OfPredicate; vt != nil {
 		return (*string)(&vt.Type)
@@ -3149,6 +3579,34 @@ func (u DecisionsDelegationUpdateConfigQuestionUnionParam) GetName() *string {
 	return nil
 }
 
+// Returns a subunion which exports methods to access subproperties
+//
+// Or use AsAny() to get the underlying value
+func (u DecisionsDelegationUpdateConfigQuestionUnionParam) GetInstructions() (res decisionsDelegationUpdateConfigQuestionUnionParamInstructions) {
+	if vt := u.OfPredicate; vt != nil {
+		res.any = vt.Instructions.asAny()
+	} else if vt := u.OfChoice; vt != nil {
+		res.any = vt.Instructions.asAny()
+	} else if vt := u.OfScore; vt != nil {
+		res.any = vt.Instructions.asAny()
+	}
+	return
+}
+
+// Can have the runtime types [*string],
+// [\*[]shared.DecisionQuestionInputPartUnionParam]
+type decisionsDelegationUpdateConfigQuestionUnionParamInstructions struct{ any }
+
+// Use the following switch statement to get the type of the union:
+//
+//	switch u.AsAny().(type) {
+//	case *string:
+//	case *[]shared.DecisionQuestionInputPartUnionParam:
+//	default:
+//	    fmt.Errorf("not present")
+//	}
+func (u decisionsDelegationUpdateConfigQuestionUnionParamInstructions) AsAny() any { return u.any }
+
 func init() {
 	apijson.RegisterUnion[DecisionsDelegationUpdateConfigQuestionUnionParam](
 		"type",
@@ -3162,8 +3620,8 @@ func init() {
 //
 // The properties Instructions, Type are required.
 type DecisionsDelegationUpdateConfigQuestionPredicateParam struct {
-	Instructions string            `json:"instructions" api:"required"`
-	Name         param.Opt[string] `json:"name,omitzero"`
+	Instructions DecisionsDelegationUpdateConfigQuestionPredicateInstructionsUnionParam `json:"instructions,omitzero" api:"required"`
+	Name         param.Opt[string]                                                      `json:"name,omitzero"`
 	// The type of the object. Always `predicate`.
 	//
 	// This field can be elided, and will marshal its zero value as "predicate".
@@ -3179,14 +3637,39 @@ func (r *DecisionsDelegationUpdateConfigQuestionPredicateParam) UnmarshalJSON(da
 	return apijson.UnmarshalRoot(data, r)
 }
 
+// Only one field can be non-zero.
+//
+// Use [param.IsOmitted] to confirm if a field is set.
+type DecisionsDelegationUpdateConfigQuestionPredicateInstructionsUnionParam struct {
+	OfString                            param.Opt[string]                            `json:",omitzero,inline"`
+	OfArrayOfDecisionQuestionInputParts []shared.DecisionQuestionInputPartUnionParam `json:",omitzero,inline"`
+	paramUnion
+}
+
+func (u DecisionsDelegationUpdateConfigQuestionPredicateInstructionsUnionParam) MarshalJSON() ([]byte, error) {
+	return param.MarshalUnion(u, u.OfString, u.OfArrayOfDecisionQuestionInputParts)
+}
+func (u *DecisionsDelegationUpdateConfigQuestionPredicateInstructionsUnionParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, u)
+}
+
+func (u *DecisionsDelegationUpdateConfigQuestionPredicateInstructionsUnionParam) asAny() any {
+	if !param.IsOmitted(u.OfString) {
+		return &u.OfString.Value
+	} else if !param.IsOmitted(u.OfArrayOfDecisionQuestionInputParts) {
+		return &u.OfArrayOfDecisionQuestionInputParts
+	}
+	return nil
+}
+
 // Choose from the supplied options based on the input.
 //
 // The properties Choices, Instructions, Type are required.
 type DecisionsDelegationUpdateConfigQuestionChoiceParam struct {
 	// Provide between 2 and 255 choices. Each choice must be unique.
-	Choices      []DecisionsDelegationUpdateConfigQuestionChoiceChoiceParam `json:"choices,omitzero" api:"required"`
-	Instructions string                                                     `json:"instructions" api:"required"`
-	Name         param.Opt[string]                                          `json:"name,omitzero"`
+	Choices      []DecisionsDelegationUpdateConfigQuestionChoiceChoiceParam          `json:"choices,omitzero" api:"required"`
+	Instructions DecisionsDelegationUpdateConfigQuestionChoiceInstructionsUnionParam `json:"instructions,omitzero" api:"required"`
+	Name         param.Opt[string]                                                   `json:"name,omitzero"`
 	// The type of the object. Always `choice`.
 	//
 	// This field can be elided, and will marshal its zero value as "choice".
@@ -3234,13 +3717,38 @@ func (u *DecisionsDelegationUpdateConfigQuestionChoiceChoiceValueUnionParam) Unm
 	return apijson.UnmarshalRoot(data, u)
 }
 
+// Only one field can be non-zero.
+//
+// Use [param.IsOmitted] to confirm if a field is set.
+type DecisionsDelegationUpdateConfigQuestionChoiceInstructionsUnionParam struct {
+	OfString                            param.Opt[string]                            `json:",omitzero,inline"`
+	OfArrayOfDecisionQuestionInputParts []shared.DecisionQuestionInputPartUnionParam `json:",omitzero,inline"`
+	paramUnion
+}
+
+func (u DecisionsDelegationUpdateConfigQuestionChoiceInstructionsUnionParam) MarshalJSON() ([]byte, error) {
+	return param.MarshalUnion(u, u.OfString, u.OfArrayOfDecisionQuestionInputParts)
+}
+func (u *DecisionsDelegationUpdateConfigQuestionChoiceInstructionsUnionParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, u)
+}
+
+func (u *DecisionsDelegationUpdateConfigQuestionChoiceInstructionsUnionParam) asAny() any {
+	if !param.IsOmitted(u.OfString) {
+		return &u.OfString.Value
+	} else if !param.IsOmitted(u.OfArrayOfDecisionQuestionInputParts) {
+		return &u.OfArrayOfDecisionQuestionInputParts
+	}
+	return nil
+}
+
 // Rate the input against the supplied ordered levels.
 //
 // The properties Instructions, Levels, Type are required.
 type DecisionsDelegationUpdateConfigQuestionScoreParam struct {
-	Instructions string                                                   `json:"instructions" api:"required"`
-	Levels       []DecisionsDelegationUpdateConfigQuestionScoreLevelParam `json:"levels,omitzero" api:"required"`
-	Name         param.Opt[string]                                        `json:"name,omitzero"`
+	Instructions DecisionsDelegationUpdateConfigQuestionScoreInstructionsUnionParam `json:"instructions,omitzero" api:"required"`
+	Levels       []DecisionsDelegationUpdateConfigQuestionScoreLevelParam           `json:"levels,omitzero" api:"required"`
+	Name         param.Opt[string]                                                  `json:"name,omitzero"`
 	// The type of the object. Always `score`.
 	//
 	// This field can be elided, and will marshal its zero value as "score".
@@ -3254,6 +3762,31 @@ func (r DecisionsDelegationUpdateConfigQuestionScoreParam) MarshalJSON() (data [
 }
 func (r *DecisionsDelegationUpdateConfigQuestionScoreParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
+}
+
+// Only one field can be non-zero.
+//
+// Use [param.IsOmitted] to confirm if a field is set.
+type DecisionsDelegationUpdateConfigQuestionScoreInstructionsUnionParam struct {
+	OfString                            param.Opt[string]                            `json:",omitzero,inline"`
+	OfArrayOfDecisionQuestionInputParts []shared.DecisionQuestionInputPartUnionParam `json:",omitzero,inline"`
+	paramUnion
+}
+
+func (u DecisionsDelegationUpdateConfigQuestionScoreInstructionsUnionParam) MarshalJSON() ([]byte, error) {
+	return param.MarshalUnion(u, u.OfString, u.OfArrayOfDecisionQuestionInputParts)
+}
+func (u *DecisionsDelegationUpdateConfigQuestionScoreInstructionsUnionParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, u)
+}
+
+func (u *DecisionsDelegationUpdateConfigQuestionScoreInstructionsUnionParam) asAny() any {
+	if !param.IsOmitted(u.OfString) {
+		return &u.OfString.Value
+	} else if !param.IsOmitted(u.OfArrayOfDecisionQuestionInputParts) {
+		return &u.OfArrayOfDecisionQuestionInputParts
+	}
+	return nil
 }
 
 // The property Label is required.
@@ -3450,6 +3983,13 @@ func (r *ForkSessionConfigAudioParam) UnmarshalJSON(data []byte) error {
 //
 // The property Type is required.
 type ForkSessionConfigDelegationParam struct {
+	// Milliseconds to wait before requesting an automatic spoken acknowledgement for a
+	// delegation. The model may still speak before this delay. Any commentary or
+	// thinking appended to the session cancels all pending acknowledgements, including
+	// those for other delegations. Defaults to 400 for Decisions sessions and 0
+	// (request immediately) for other sessions. Omission in a session update preserves
+	// the current value. Updates apply to subsequent delegations.
+	AcknowledgementDelayMs param.Opt[int64] `json:"acknowledgement_delay_ms,omitzero"`
 	// Responses backend settings to update. Omitted settings keep their existing
 	// values.
 	Responses ResponsesDelegationUpdateConfigParam `json:"responses,omitzero"`
@@ -4221,7 +4761,7 @@ func init() {
 type InitialItemAssistantContentUnionParam struct {
 	OfText       *InitialItemAssistantContentTextParam       `json:",omitzero,inline"`
 	OfOutputText *InitialItemAssistantContentOutputTextParam `json:",omitzero,inline"`
-	paramUnion
+	paramUnion   `default:"text"`
 }
 
 func (u InitialItemAssistantContentUnionParam) MarshalJSON() ([]byte, error) {
@@ -4362,8 +4902,9 @@ func (r *InputAudioMuteEventParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-// Returned when a session.input_audio.mute command is accepted. Input audio is no
-// longer sent to the model; sideband audio reflection continues.
+// Acknowledges a session.input_audio.mute command. An independent input mute sends
+// silence to the model and preserves sideband audio reflection. Fixture playback
+// does not emit this event.
 type InputAudioMutedEvent struct {
 	// The unique ID of the Live server event.
 	EventID string `json:"event_id" api:"required"`
@@ -4389,7 +4930,8 @@ func (r *InputAudioMutedEvent) UnmarshalJSON(data []byte) error {
 }
 
 // Resume audio input to a Live model after muting it. The server acknowledges with
-// `session.input_audio.unmuted`.
+// `session.input_audio.unmuted`. An active audio fixture still pauses inference
+// until playback finishes.
 //
 // The property Type is required.
 type InputAudioUnmuteEventParam struct {
@@ -4412,8 +4954,9 @@ func (r *InputAudioUnmuteEventParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-// Returned when a session.input_audio.unmute command is accepted. Input audio is
-// sent to the model again.
+// Acknowledges a session.input_audio.unmute command, removing the independent
+// input mute. An active audio fixture still pauses inference until playback
+// finishes. Fixture playback does not emit this event.
 type InputAudioUnmutedEvent struct {
 	// The unique ID of the Live server event.
 	EventID string `json:"event_id" api:"required"`
@@ -4477,8 +5020,11 @@ func (r *InputTranscriptDeltaEvent) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-// Append instructions to the Live conversation while it is running, optionally
-// associating them with an existing client delegation.
+// Append developer instructions to the Live conversation while it is running,
+// optionally associating them with an existing client delegation. Rejected while
+// an audio fixture is active. These instructions remain in conversation history
+// through compaction and are included in future backend delegations. For external
+// audio, describe content already delivered so the assistant does not repeat it.
 //
 // The properties Content, DelegationID, Type are required.
 type InstructionsAppendEventParam struct {
@@ -4699,6 +5245,18 @@ func (u MediaSessionConfigDelegationUnionParam) GetType() *string {
 	return nil
 }
 
+// Returns a pointer to the underlying variant's property, if present.
+func (u MediaSessionConfigDelegationUnionParam) GetAcknowledgementDelayMs() *int64 {
+	if vt := u.OfClient; vt != nil && vt.AcknowledgementDelayMs.Valid() {
+		return &vt.AcknowledgementDelayMs.Value
+	} else if vt := u.OfResponses; vt != nil && vt.AcknowledgementDelayMs.Valid() {
+		return &vt.AcknowledgementDelayMs.Value
+	} else if vt := u.OfDecisions; vt != nil && vt.AcknowledgementDelayMs.Valid() {
+		return &vt.AcknowledgementDelayMs.Value
+	}
+	return nil
+}
+
 func init() {
 	apijson.RegisterUnion[MediaSessionConfigDelegationUnionParam](
 		"type",
@@ -4715,6 +5273,13 @@ type MediaSessionConfigDelegationResponsesParam struct {
 	// Backend model, prompt, and tools used when the Live session delegates a task to
 	// Responses.
 	Responses ResponsesDelegationConfigParam `json:"responses,omitzero" api:"required"`
+	// Milliseconds to wait before requesting an automatic spoken acknowledgement for a
+	// delegation. The model may still speak before this delay. Any commentary or
+	// thinking appended to the session cancels all pending acknowledgements, including
+	// those for other delegations. Defaults to 400 for Decisions sessions and 0
+	// (request immediately) for other sessions. Omission in a session update preserves
+	// the current value. Updates apply to subsequent delegations.
+	AcknowledgementDelayMs param.Opt[int64] `json:"acknowledgement_delay_ms,omitzero"`
 	// The delegation owner. Always `responses` for tasks handled by the Responses API.
 	//
 	// This field can be elided, and will marshal its zero value as "responses".
@@ -4733,6 +5298,12 @@ func (r *MediaSessionConfigDelegationResponsesParam) UnmarshalJSON(data []byte) 
 // The properties Decisions, Type are required.
 type MediaSessionConfigDelegationDecisionsParam struct {
 	Decisions DecisionsDelegationConfigParam `json:"decisions" api:"required"`
+	// Milliseconds to wait before requesting an automatic spoken acknowledgement for a
+	// delegation. The model may still speak before this delay. Any commentary or
+	// thinking appended to the session cancels all pending acknowledgements, including
+	// those for other delegations. Defaults to 400. Updates apply to subsequent
+	// delegations.
+	AcknowledgementDelayMs param.Opt[int64] `json:"acknowledgement_delay_ms,omitzero"`
 	// This field can be elided, and will marshal its zero value as "decisions".
 	Type constant.Decisions `json:"type" default:"decisions"`
 	paramObj
@@ -4776,6 +5347,13 @@ func (r *MediaSessionForkConfigParam) UnmarshalJSON(data []byte) error {
 //
 // The property Type is required.
 type MediaSessionForkConfigDelegationParam struct {
+	// Milliseconds to wait before requesting an automatic spoken acknowledgement for a
+	// delegation. The model may still speak before this delay. Any commentary or
+	// thinking appended to the session cancels all pending acknowledgements, including
+	// those for other delegations. Defaults to 400 for Decisions sessions and 0
+	// (request immediately) for other sessions. Omission in a session update preserves
+	// the current value. Updates apply to subsequent delegations.
+	AcknowledgementDelayMs param.Opt[int64] `json:"acknowledgement_delay_ms,omitzero"`
 	// Responses backend settings to update. Omitted settings keep their existing
 	// values.
 	Responses ResponsesDelegationUpdateConfigParam `json:"responses,omitzero"`
@@ -6192,9 +6770,9 @@ func (r *ServerEventUnion) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-// unmarshalWebsocketEvent decodes only the event selected by its type. Public
+// unmarshalWebsocketEventWithRawType decodes only the event selected by its type. Public
 // UnmarshalJSON keeps the existing general-purpose union decoding behavior.
-func (r *ServerEventUnion) unmarshalWebsocketEvent(data []byte) error {
+func (r *ServerEventUnion) unmarshalWebsocketEventWithRawType(data []byte) error {
 	var envelope struct {
 		Type json.RawMessage `json:"type"`
 	}
@@ -6801,6 +7379,18 @@ func (u SessionConfigDelegationUnionParam) GetType() *string {
 	return nil
 }
 
+// Returns a pointer to the underlying variant's property, if present.
+func (u SessionConfigDelegationUnionParam) GetAcknowledgementDelayMs() *int64 {
+	if vt := u.OfClient; vt != nil && vt.AcknowledgementDelayMs.Valid() {
+		return &vt.AcknowledgementDelayMs.Value
+	} else if vt := u.OfResponses; vt != nil && vt.AcknowledgementDelayMs.Valid() {
+		return &vt.AcknowledgementDelayMs.Value
+	} else if vt := u.OfDecisions; vt != nil && vt.AcknowledgementDelayMs.Valid() {
+		return &vt.AcknowledgementDelayMs.Value
+	}
+	return nil
+}
+
 func init() {
 	apijson.RegisterUnion[SessionConfigDelegationUnionParam](
 		"type",
@@ -6817,6 +7407,13 @@ type SessionConfigDelegationResponsesParam struct {
 	// Backend model, prompt, and tools used when the Live session delegates a task to
 	// Responses.
 	Responses ResponsesDelegationConfigParam `json:"responses,omitzero" api:"required"`
+	// Milliseconds to wait before requesting an automatic spoken acknowledgement for a
+	// delegation. The model may still speak before this delay. Any commentary or
+	// thinking appended to the session cancels all pending acknowledgements, including
+	// those for other delegations. Defaults to 400 for Decisions sessions and 0
+	// (request immediately) for other sessions. Omission in a session update preserves
+	// the current value. Updates apply to subsequent delegations.
+	AcknowledgementDelayMs param.Opt[int64] `json:"acknowledgement_delay_ms,omitzero"`
 	// The delegation owner. Always `responses` for tasks handled by the Responses API.
 	//
 	// This field can be elided, and will marshal its zero value as "responses".
@@ -6835,6 +7432,12 @@ func (r *SessionConfigDelegationResponsesParam) UnmarshalJSON(data []byte) error
 // The properties Decisions, Type are required.
 type SessionConfigDelegationDecisionsParam struct {
 	Decisions DecisionsDelegationConfigParam `json:"decisions" api:"required"`
+	// Milliseconds to wait before requesting an automatic spoken acknowledgement for a
+	// delegation. The model may still speak before this delay. Any commentary or
+	// thinking appended to the session cancels all pending acknowledgements, including
+	// those for other delegations. Defaults to 400. Updates apply to subsequent
+	// delegations.
+	AcknowledgementDelayMs param.Opt[int64] `json:"acknowledgement_delay_ms,omitzero"`
 	// This field can be elided, and will marshal its zero value as "decisions".
 	Type constant.Decisions `json:"type" default:"decisions"`
 	paramObj
@@ -7020,15 +7623,24 @@ func (r *SessionResourceAudioOutputVoiceUnion) UnmarshalJSON(data []byte) error 
 //
 // Use the methods beginning with 'As' to cast the union to one of its variants.
 type SessionResourceDelegationUnion struct {
-	OfClientDelegation                   ClientDelegation                   `json:",inline"`
-	OfSessionResourceDelegationResponses SessionResourceDelegationResponses `json:",inline"`
-	OfSessionResourceDelegationDecisions SessionResourceDelegationDecisions `json:",inline"`
+	OfClientDelegation ClientDelegation `json:",inline"`
+	// Any of "client", "responses", "decisions".
 	Type                                 string                             `json:"type"`
-	JSON                                 struct {
+	AcknowledgementDelayMs               int64                              `json:"acknowledgement_delay_ms"`
+	OfSessionResourceDelegationResponses SessionResourceDelegationResponses `json:",inline"`
+	// This field is from variant [SessionResourceDelegationResponses].
+	Responses                            ResponsesDelegationConfig          `json:"responses"`
+	OfSessionResourceDelegationDecisions SessionResourceDelegationDecisions `json:",inline"`
+	// This field is from variant [SessionResourceDelegationDecisions].
+	Decisions DecisionsDelegationConfig `json:"decisions"`
+	JSON      struct {
 		OfClientDelegation                   respjson.Field
-		OfSessionResourceDelegationResponses respjson.Field
-		OfSessionResourceDelegationDecisions respjson.Field
 		Type                                 respjson.Field
+		AcknowledgementDelayMs               respjson.Field
+		OfSessionResourceDelegationResponses respjson.Field
+		Responses                            respjson.Field
+		OfSessionResourceDelegationDecisions respjson.Field
+		Decisions                            respjson.Field
 		raw                                  string
 	} `json:"-"`
 }
@@ -7089,6 +7701,13 @@ func (r *SessionResourceDelegationUnion) UnmarshalJSON(data []byte) error {
 
 // Delegate tasks to a Responses model managed by the Live session.
 type SessionResourceDelegationResponses struct {
+	// Milliseconds to wait before requesting an automatic spoken acknowledgement for a
+	// delegation. The model may still speak before this delay. Any commentary or
+	// thinking appended to the session cancels all pending acknowledgements, including
+	// those for other delegations. Defaults to 400 for Decisions sessions and 0
+	// (request immediately) for other sessions. Omission in a session update preserves
+	// the current value. Updates apply to subsequent delegations.
+	AcknowledgementDelayMs int64 `json:"acknowledgement_delay_ms"`
 	// Backend model, prompt, and tools used when the Live session delegates a task to
 	// Responses.
 	Responses ResponsesDelegationConfig `json:"responses" api:"required"`
@@ -7096,10 +7715,11 @@ type SessionResourceDelegationResponses struct {
 	Type constant.Responses `json:"type" default:"responses"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
-		Responses   respjson.Field
-		Type        respjson.Field
-		ExtraFields map[string]respjson.Field
-		raw         string
+		AcknowledgementDelayMs respjson.Field
+		Responses              respjson.Field
+		Type                   respjson.Field
+		ExtraFields            map[string]respjson.Field
+		raw                    string
 	} `json:"-"`
 }
 
@@ -7110,14 +7730,21 @@ func (r *SessionResourceDelegationResponses) UnmarshalJSON(data []byte) error {
 }
 
 type SessionResourceDelegationDecisions struct {
-	Decisions DecisionsDelegationConfig `json:"decisions" api:"required"`
-	Type      constant.Decisions        `json:"type" default:"decisions"`
+	// Milliseconds to wait before requesting an automatic spoken acknowledgement for a
+	// delegation. The model may still speak before this delay. Any commentary or
+	// thinking appended to the session cancels all pending acknowledgements, including
+	// those for other delegations. Defaults to 400. Updates apply to subsequent
+	// delegations.
+	AcknowledgementDelayMs int64                     `json:"acknowledgement_delay_ms"`
+	Decisions              DecisionsDelegationConfig `json:"decisions" api:"required"`
+	Type                   constant.Decisions        `json:"type" default:"decisions"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
-		Decisions   respjson.Field
-		Type        respjson.Field
-		ExtraFields map[string]respjson.Field
-		raw         string
+		AcknowledgementDelayMs respjson.Field
+		Decisions              respjson.Field
+		Type                   respjson.Field
+		ExtraFields            map[string]respjson.Field
+		raw                    string
 	} `json:"-"`
 }
 
@@ -7260,6 +7887,18 @@ func (u SessionUpdateConfigDelegationUnionParam) GetType() *string {
 	return nil
 }
 
+// Returns a pointer to the underlying variant's property, if present.
+func (u SessionUpdateConfigDelegationUnionParam) GetAcknowledgementDelayMs() *int64 {
+	if vt := u.OfClient; vt != nil && vt.AcknowledgementDelayMs.Valid() {
+		return &vt.AcknowledgementDelayMs.Value
+	} else if vt := u.OfResponses; vt != nil && vt.AcknowledgementDelayMs.Valid() {
+		return &vt.AcknowledgementDelayMs.Value
+	} else if vt := u.OfDecisions; vt != nil && vt.AcknowledgementDelayMs.Valid() {
+		return &vt.AcknowledgementDelayMs.Value
+	}
+	return nil
+}
+
 func init() {
 	apijson.RegisterUnion[SessionUpdateConfigDelegationUnionParam](
 		"type",
@@ -7274,6 +7913,13 @@ func init() {
 //
 // The property Type is required.
 type SessionUpdateConfigDelegationResponsesParam struct {
+	// Milliseconds to wait before requesting an automatic spoken acknowledgement for a
+	// delegation. The model may still speak before this delay. Any commentary or
+	// thinking appended to the session cancels all pending acknowledgements, including
+	// those for other delegations. Defaults to 400 for Decisions sessions and 0
+	// (request immediately) for other sessions. Omission in a session update preserves
+	// the current value. Updates apply to subsequent delegations.
+	AcknowledgementDelayMs param.Opt[int64] `json:"acknowledgement_delay_ms,omitzero"`
 	// Responses backend settings to update. Omitted settings keep their existing
 	// values.
 	Responses ResponsesDelegationUpdateConfigParam `json:"responses,omitzero"`
@@ -7294,7 +7940,14 @@ func (r *SessionUpdateConfigDelegationResponsesParam) UnmarshalJSON(data []byte)
 
 // The property Type is required.
 type SessionUpdateConfigDelegationDecisionsParam struct {
-	Decisions DecisionsDelegationUpdateConfigParam `json:"decisions,omitzero"`
+	// Milliseconds to wait before requesting an automatic spoken acknowledgement for a
+	// delegation. The model may still speak before this delay. Any commentary or
+	// thinking appended to the session cancels all pending acknowledgements, including
+	// those for other delegations. Defaults to 400 for Decisions sessions and 0
+	// (request immediately) for other sessions. Omission in a session update preserves
+	// the current value. Updates apply to subsequent delegations.
+	AcknowledgementDelayMs param.Opt[int64]                     `json:"acknowledgement_delay_ms,omitzero"`
+	Decisions              DecisionsDelegationUpdateConfigParam `json:"decisions,omitzero"`
 	// This field can be elided, and will marshal its zero value as "decisions".
 	Type constant.Decisions `json:"type" default:"decisions"`
 	paramObj
@@ -7439,7 +8092,7 @@ func (r *SessionUsageUpdatedEventContextWindow) UnmarshalJSON(data []byte) error
 }
 
 // Provide silent reasoning or progress context to the Live model, optionally for
-// an existing client delegation.
+// an existing client delegation. Rejected while an audio fixture is active.
 //
 // The properties Content, DelegationID, Type are required.
 type ThinkingAppendEventParam struct {

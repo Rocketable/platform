@@ -5,7 +5,7 @@ go 1.27.3
 require (
 	cirello.io/pglock v1.18.0
 	github.com/Arize-ai/openinference/go/openinference-instrumentation v0.1.2
-	github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.11
+	github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.12
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/aws/aws-sdk-go-v2 v1.47.4
 	github.com/aws/aws-sdk-go-v2/config v1.33.10
@@ -17,7 +17,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/openai/openai-go/v3 v3.85.1
+	github.com/openai/openai-go/v3 v3.87.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rubenv/sql-migrate v1.8.1
 	github.com/slack-go/slack v0.30.1
