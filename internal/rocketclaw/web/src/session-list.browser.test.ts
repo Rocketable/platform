@@ -2060,6 +2060,22 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await timelinePage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     const newestBounds = (await newestBar.boundingBox())!;
     expect(newestBounds.x >= 0 && newestBounds.x + newestBounds.width <= 390).toBe(true);
+    // The first page holds about 60 runs; Show older adds 100 at a time until every run is listed.
+    const runRows = timelinePage.locator("li button[aria-expanded]");
+    await timelinePage.getByRole("button", { name: "Show older runs (140 more)", exact: true }).click();
+    await timelinePage.getByRole("button", { name: "Show older runs (40 more)", exact: true }).click();
+    await timelinePage.getByRole("button", { name: /^Show older runs/ }).waitFor({ state: "detached" });
+    expect(await runRows.count()).toBe(200);
+    // A day bar past the first page loads through that day and scrolls to it.
+    await timelinePage.reload();
+    await runRows.first().waitFor();
+    const oldestDay = jobs.find((job) => job.origin === "long-199")!.lastRun.slice(0, 10);
+    await timelinePage.getByRole("button", { name: `${new Date(oldestDay).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })} · 1 run`, exact: true }).click();
+    await timelinePage.waitForFunction((day: string) => {
+      const top = document.getElementById(`cron-day-${day}`)?.getBoundingClientRect().top;
+      return top !== undefined && top >= -1 && top < innerHeight;
+    }, oldestDay);
+    expect(await runRows.count()).toBe(200);
     await timelinePage.close();
     jobs.length = jobCount;
 
