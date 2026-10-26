@@ -1891,7 +1891,7 @@ function paletteRows(
   }
   // Every stem with a definition or runs, retired ones included.
   if (mode === "timeline") return [...Map.groupBy(jobs, (job) => job.stem)].filter(([stem]) => stem.toLowerCase().includes(needle)).map(([stem, rows]) => {
-    const runs = cronRuns(rows.filter((job) => job.status === "ran" && !job.origin!.includes("/call_")));
+    const { runs } = cronRuns(rows);
     return { key: stem, label: stem, detail: [runs[0] ? `${plural(runs.length, "run")} · last ${cronWhen(runs[0].item.lastRun)} UTC` : "No runs yet", rows.some((job) => job.status !== "ran") ? "" : "Retired"].filter(Boolean).join(" · "), run: () => navigate(`/cron?${new URLSearchParams({ timeline: stem })}`) };
   });
   // Match quality: 0 the whole label, 1 one contiguous run, 2 three or more letters in order with gaps, 3 none; all case-insensitive.
@@ -4759,10 +4759,9 @@ function CronTimeline({ stem, rows, status, error }: { stem: string; rows: CronJ
   const [preview, setPreview] = useState("");
   const wide = useMedia("(min-width: 64rem)");
   const job = rows.find((item) => item.stem === stem && item.status !== "ran");
-  const all = rows.filter((item) => item.stem === stem && item.status === "ran");
-  const callRuns = cronRuns(all.filter((item) => item.origin!.includes("/call_")));
+  const { runs: own, calls: callRuns } = cronRuns(rows.filter((item) => item.stem === stem));
   const calls = Map.groupBy(callRuns, ({ item }) => item.origin!.split("/call_")[0]);
-  const runs = cronRuns(all.filter((item) => !item.origin!.includes("/call_"))).map((run, i, list) => ({ ...run, gap: list[i + 1] && Date.parse(run.item.lastRun) - Date.parse(list[i + 1].item.lastRun) }));
+  const runs = own.map((run, i, list) => ({ ...run, gap: list[i + 1] && Date.parse(run.item.lastRun) - Date.parse(list[i + 1].item.lastRun) }));
   const byDay = Map.groupBy(runs, ({ item }) => item.lastRun.slice(0, 10));
   let shown = 0;
   const days = [...byDay].filter(([, list]) => shown < limit && (shown += list.length));
@@ -4786,7 +4785,7 @@ function CronTimeline({ stem, rows, status, error }: { stem: string; rows: CronJ
                 <h2 className={cronDayHead}><span className="text-foreground">{day === today ? "Today · " : ""}{cronDay(day)}</span><span>{plural(list.length, "run")}</span></h2>
                 <ol className="ml-1.5 border-l">{list.map((run) => <CronJournalRun key={run.item.origin} run={run} calls={calls.get(run.item.origin!) ?? []} preview={preview} setPreview={setPreview} inline={!wide} />)}</ol>
               </section>)}
-              {all.length === 0 ? <p className="text-sm text-muted-foreground">No runs yet.</p> : null}
+              {runs.length + callRuns.length === 0 ? <p className="text-sm text-muted-foreground">No runs yet.</p> : null}
               {shown < runs.length ? <Button variant="outline" className="self-center" onClick={() => setLimit(limit + 100)}>Show older runs ({runs.length - shown} more)</Button> : null}
             </div>
             {wide ? <aside aria-label="Selected run">
@@ -4801,10 +4800,13 @@ function CronTimeline({ stem, rows, status, error }: { stem: string; rows: CronJ
 
 type CronJournalRow = { item: CronJob; delivered: boolean; gap?: number };
 
-// ListCronJobs lists a run once per chat that holds it (CronRunSources), so a run is one origin. It shows its first
+// The runs and sub-calls among ListCronJobs rows. ListCronJobs lists a run once per chat that holds it
+// (CronRunSources), so a run is one origin, and a sub-call's origin is its run's plus /call_. A run shows its first
 // row with a chat, and is delivered unless its only chat is web:<origin>, the one CreateSession opens to continue it.
-function cronRuns(rows: CronJob[]): CronJournalRow[] {
-  return [...Map.groupBy(rows, (row) => row.origin!).values()].map((same) => ({ item: same.find((row) => row.nextRun) ?? same[0], delivered: same.some((row) => row.nextRun && row.nextRun !== `web:${row.origin}`) }));
+function cronRuns(rows: CronJob[]) {
+  const all = [...Map.groupBy(rows.filter((row) => row.status === "ran"), (row) => row.origin!).values()]
+    .map((same): CronJournalRow => ({ item: same.find((row) => row.nextRun) ?? same[0], delivered: same.some((row) => row.nextRun && row.nextRun !== `web:${row.origin}`) }));
+  return { runs: all.filter(({ item }) => !item.origin!.includes("/call_")), calls: all.filter(({ item }) => item.origin!.includes("/call_")) };
 }
 
 function CronUpcoming({ upcoming, now }: { upcoming: string[]; now: number }) {
