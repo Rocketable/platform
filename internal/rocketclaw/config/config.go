@@ -43,6 +43,50 @@ type Config struct {
 	Permissions          map[string][]string                         `json:"permissions,omitempty"`
 }
 
+type Behavior struct {
+	AutoApproverModel string `json:"auto_approver_model"`
+	Slack             struct {
+		Channels []SlackChannelConfig `json:"channels"`
+	} `json:"slack"`
+	ServerDisplayName string        `json:"server_display_name"`
+	Logging           LoggingConfig `json:"logging"`
+	Instrumentation   struct {
+		HideInputs  bool `json:"hide_inputs"`
+		HideOutputs bool `json:"hide_outputs"`
+	} `json:"instrumentation"`
+	Web struct {
+		Sentry struct {
+			Environment      string   `json:"environment"`
+			TracesSampleRate *float64 `json:"traces_sample_rate"`
+		} `json:"sentry"`
+	} `json:"web"`
+	Overlays []string `json:"overlays"`
+}
+
+func (c *Config) Behavior() Behavior {
+	var b Behavior
+
+	b.AutoApproverModel, b.Slack.Channels = c.AutoApproverModel, c.Slack.Channels
+	b.ServerDisplayName, b.Logging, b.Overlays = c.ServerDisplayName, c.Logging, c.Overlays
+	b.Instrumentation.HideInputs, b.Instrumentation.HideOutputs = c.Instrumentation.HideInputs, c.Instrumentation.HideOutputs
+	b.Web.Sentry.Environment, b.Web.Sentry.TracesSampleRate = c.Web.Sentry.Environment, c.Web.Sentry.TracesSampleRate
+
+	return b
+}
+
+func (c *Config) SetBehavior(b *Behavior) {
+	c.AutoApproverModel, c.Slack.Channels = b.AutoApproverModel, b.Slack.Channels
+	c.ServerDisplayName, c.Logging, c.Overlays = b.ServerDisplayName, b.Logging, b.Overlays
+	c.Instrumentation.HideInputs, c.Instrumentation.HideOutputs = b.Instrumentation.HideInputs, b.Instrumentation.HideOutputs
+	c.Web.Sentry.Environment, c.Web.Sentry.TracesSampleRate = b.Web.Sentry.Environment, b.Web.Sentry.TracesSampleRate
+}
+
+func (b *Behavior) RedactUsers() {
+	for i := range b.Slack.Channels {
+		b.Slack.Channels[i].AllowedUserIDs = nil
+	}
+}
+
 const DefaultRuntimeDir = ".rocketclaw"
 
 type AttachmentDriver string
@@ -93,6 +137,7 @@ func (c *Config) RuntimeDirName() string {
 
 type WebConfig struct {
 	ListenAddress string       `json:"listen_address,omitempty"`
+	Admins        []string     `json:"admins,omitempty"`
 	TLSCertFile   string       `json:"tls_cert_file,omitempty"`
 	TLSKeyFile    string       `json:"tls_key_file,omitempty"`
 	Sentry        SentryConfig `json:"sentry,omitzero"`
@@ -121,10 +166,6 @@ func (c *WebConfig) validate() error {
 }
 
 func (c SentryConfig) validate() error {
-	if rate := c.TracesSampleRate; rate != nil && (*rate < 0 || *rate > 1) {
-		return errors.New("web.sentry.traces_sample_rate must be between 0 and 1")
-	}
-
 	if c.DSN != "" {
 		parsed, err := url.Parse(c.DSN)
 		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Hostname() == "" || parsed.User == nil || parsed.User.Username() == "" || parsed.Path == "" || parsed.Path == "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -317,10 +358,6 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 
 	cfg.Workspace = filepath.Clean(cfg.Workspace)
 
-	if strings.TrimSpace(cfg.Logging.Level) == "" {
-		cfg.Logging.Level = "debug"
-	}
-
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -391,8 +428,6 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	c.Overlays = normalizeStrings(c.Overlays)
-
 	if err := normalizeOpenAIConfig("openai", &c.OpenAI); err != nil {
 		return err
 	}
@@ -408,13 +443,6 @@ func (c *Config) Validate() error {
 		}
 
 		c.Providers[name] = provider
-	}
-
-	var err error
-
-	c.AutoApproverModel, err = normalizeOpenAIModel("auto_approver_model", c.AutoApproverModel)
-	if err != nil {
-		return err
 	}
 
 	if err := c.validateDecision(); err != nil {
@@ -443,6 +471,33 @@ func (c *Config) Validate() error {
 
 	if err := c.validatePermissions(); err != nil {
 		return err
+	}
+
+	for _, field := range [...]struct{ value, message string }{{c.Slack.BotToken, "slack.bot_token is required"}, {c.Slack.AppToken, "slack.app_token is required"}} {
+		if strings.TrimSpace(field.value) == "" {
+			return errors.New(field.message)
+		}
+	}
+
+	return nil
+}
+
+func (c *Config) ValidateBehavior() error {
+	if strings.TrimSpace(c.Logging.Level) == "" {
+		c.Logging.Level = "debug"
+	}
+
+	c.Overlays = normalizeStrings(c.Overlays)
+
+	var err error
+
+	c.AutoApproverModel, err = normalizeOpenAIModel("auto_approver_model", c.AutoApproverModel)
+	if err != nil {
+		return err
+	}
+
+	if rate := c.Web.Sentry.TracesSampleRate; rate != nil && (*rate < 0 || *rate > 1) {
+		return errors.New("web.sentry.traces_sample_rate must be between 0 and 1")
 	}
 
 	return c.validateSlack()
@@ -516,12 +571,6 @@ func normalizeStringList(values []string) []string {
 }
 
 func (c *Config) validateSlack() error {
-	for _, field := range [...]struct{ value, message string }{{c.Slack.BotToken, "slack.bot_token is required"}, {c.Slack.AppToken, "slack.app_token is required"}} {
-		if strings.TrimSpace(field.value) == "" {
-			return errors.New(field.message)
-		}
-	}
-
 	normalized := make([]SlackChannelConfig, 0, len(c.Slack.Channels))
 	for _, channel := range c.Slack.Channels {
 		channel.Channel = strings.TrimSpace(channel.Channel)

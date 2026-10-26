@@ -89,12 +89,12 @@ func startAgentDraftTest(t *testing.T, agents map[string]string, answer func(w h
 		},
 	}
 
-	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, AutoApproverModel: "gpt-review", OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, AutoApproverModel: "gpt-review", OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: testSlack()}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 
 	go func() {
-		done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(t.Output(), nil)), assembler, sandbox.None{})
+		done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(t.Output(), nil)), new(slog.LevelVar), assembler, sandbox.None{})
 	}()
 
 	t.Cleanup(func() {

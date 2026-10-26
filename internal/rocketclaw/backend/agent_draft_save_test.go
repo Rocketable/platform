@@ -42,12 +42,12 @@ func startAgentDraftSave(t *testing.T, workspace, dsn string, overlays ...string
 		},
 	}
 
-	cfg := &config.Config{Workspace: workspace, Overlays: overlays, DatabaseURL: dsn, AutoApproverModel: "gpt-review", OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: "http://127.0.0.1:1"}}
+	cfg := &config.Config{Workspace: workspace, Overlays: overlays, DatabaseURL: dsn, AutoApproverModel: "gpt-review", OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: "http://127.0.0.1:1"}, Slack: testSlack()}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 
 	go func() {
-		done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembler, sandbox.None{})
+		done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler, sandbox.None{})
 	}()
 
 	ds.stop = sync.OnceFunc(func() {

@@ -31,10 +31,10 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 )
 
-func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, posthog config.PostHogConfig, servers map[string]config.OpenCodeConfig, serverName string, remotes map[string]config.RemoteRocketClawConfig) http.Handler {
+func NewHTTPHandler(connection *grpc.ClientConn, cfg *config.LockedConfig, serverName string) http.Handler {
 	mux := http.NewServeMux()
 	protection := http.NewCrossOriginProtection()
-	app := web.Handler(sentry, posthog, serverName, remotes)
+	app := web.Handler(cfg, serverName)
 
 	var gzipWriters sync.Pool
 
@@ -42,13 +42,13 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, pos
 	mux.Handle("GET /api/", http.NotFoundHandler())
 	mux.Handle("POST /api/", http.NotFoundHandler())
 
-	handleOpenCode(mux, connection, servers)
+	handleOpenCode(mux, connection, cfg.Clone().OpenCode)
 
 	for _, route := range []string{"GET /pages/{space}/{agent}/{path...}", "GET /pages-raw/{agent}/{path...}"} {
 		mux.HandleFunc(route, servePage(connection, app))
 	}
 
-	for method := range strings.FieldsSeq("Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions Board SlackNames Handoff ListAgents CreateSession ListConfig ListSkills ListWorkflows UpdateSession ListCronJobs RunCronJob GetPage ListPages ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs ReportTyping " + editorMethods) {
+	for method := range strings.FieldsSeq("Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions Board SlackNames Handoff ListAgents CreateSession ListConfig SaveBehaviorSettings InspectAgents ListSkills ListWorkflows UpdateSession ListCronJobs RunCronJob GetPage ListPages ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs ReportTyping " + editorMethods) {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 		responseType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Output().FullName())
@@ -178,11 +178,23 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, pos
 			return
 		}
 
-		ctx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-principal", address.Addr().Unmap().String()))
+		ip := address.Addr().Unmap()
+
+		ctx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-principal", ip.String(), "rocketclaw-direct-local", strconv.FormatBool(directLocal(r, ip))))
 		defer cancel()
 
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	}))
+}
+
+func directLocal(r *http.Request, ip netip.Addr) bool {
+	for name := range r.Header {
+		if name == "X-Forwarded-For" || name == "Forwarded" || strings.HasPrefix(name, "Tailscale-") {
+			return false
+		}
+	}
+
+	return ip.IsLoopback()
 }
 
 func servePage(connection *grpc.ClientConn, app http.Handler) http.HandlerFunc {
@@ -448,6 +460,8 @@ func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, me
 		required = "conversationId askId"
 	case "Voice":
 		required = "conversationId sdp"
+	case "SaveBehaviorSettings":
+		required = "documentJson"
 	}
 
 	for name := range strings.FieldsSeq(required) {

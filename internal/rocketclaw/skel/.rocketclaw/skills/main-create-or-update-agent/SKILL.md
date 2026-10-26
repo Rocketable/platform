@@ -21,7 +21,7 @@ Only use these runtime paths:
 - read the current effective agent from `.rocketclaw`
 - copy the current effective content from `.rocketclaw` into `agents/` before editing an existing agent
 - make the requested edits in `agents/`
-- after all requested `agents/` overlay edits are complete, call `rocketclaw_reload` exactly once so the runtime validates and reloads the updated agent definitions. Use `rocketclaw_restart` instead only when runtime configuration or overlay-list entries changed. Do not call reload or restart for memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.
+- after all requested `agents/` overlay edits are complete, call `rocketclaw_reload` exactly once so the runtime validates and reloads the updated agent definitions. Use `rocketclaw_restart` instead only when setup fields in `rocketclaw.json` changed. Model mappings, Slack channel agents, and the overlay list are Behavior Settings that an admin changes on the Web Config page; they apply on save and need neither reload nor restart. Do not call reload or restart for memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.
 - never edit `.rocketclaw` directly
 
 ## Required inputs
@@ -403,7 +403,7 @@ When the effective file has `mode: easy`, keep it easy: never add advanced keys,
 5. Create or update the overlay file in `agents/`.
 6. If this is a rename and an old overlay file exists at the previous path, remove that old overlay file.
 7. If the agent names a decision model, check that its provider is under `decision` in `rocketclaw.json`; if not, add it with `main-update-rocketclaw-json` before reloading.
-8. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, run `rocketclaw lint`, resolve or explicitly suppress findings approved by the human, then optionally tell the human you are applying them now and call `rocketclaw_reload` exactly once. Use `rocketclaw_restart` only when runtime configuration or overlay-list entries changed.
+8. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, run `rocketclaw lint`, resolve or explicitly suppress findings approved by the human, then optionally tell the human you are applying them now and call `rocketclaw_reload` exactly once. Use `rocketclaw_restart` only when setup fields in `rocketclaw.json` changed.
 
 ## Important
 
