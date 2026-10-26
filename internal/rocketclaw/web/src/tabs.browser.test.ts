@@ -1554,3 +1554,22 @@ test("any session tab, Shared or not, mutes or snoozes its notifications from it
   await until(() => saved.mutes.length === 1);
   expect(Date.parse(saved.mutes[0].until)).toBe(await page.evaluate(() => new Date("2099-01-02T10:30").getTime()));
 }), 30_000);
+
+// The new-chat Transcript stays mounted, hidden, on other pages; its creation must not pull the person off the page they chose.
+test("a new chat created while another page shows opens when New session shows again", () => withPage({}, async (page, origin, prompts) => {
+  const held = Promise.withResolvers<void>(), requested = Promise.withResolvers<void>();
+  await page.route("**/api/CreateSession", async (route: { continue(): Promise<void> }) => { requested.resolve(); await held.promise; await route.continue(); });
+  await page.goto(`${origin}/`);
+  const box = page.getByPlaceholder("Message a new session");
+  await box.fill("hello");
+  await box.press("Enter");
+  await requested.promise;
+  await page.evaluate(() => { history.pushState(null, "", "/cron"); dispatchEvent(new PopStateEvent("popstate")); });
+  await page.waitForURL("**/cron");
+  held.resolve();
+  await until(() => prompts.some((prompt) => prompt.id === "fresh"));
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  expect(new URL(page.url()).pathname).toBe("/cron");
+  await page.evaluate(() => { history.pushState(null, "", "/"); dispatchEvent(new PopStateEvent("popstate")); });
+  await page.waitForURL(`**${href("fresh")}`);
+}), 30_000);
