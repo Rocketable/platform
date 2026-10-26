@@ -41,8 +41,13 @@ func TestWebFetchRequestAcceptHeader(t *testing.T) {
 }
 
 func TestWebFetchFormatsHTML(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+		if r.URL.Path == "/without-type" {
+			w.Header().Set("Content-Type", "text/plain")
+		}
+
 		_, _ = w.Write([]byte(`<html><body><h1>Title</h1><script>hidden()</script><p>Hello <strong>world</strong>.</p><a href="guide">Guide</a></body></html>`))
 	}))
 	t.Cleanup(server.Close)
@@ -58,6 +63,10 @@ func TestWebFetchFormatsHTML(t *testing.T) {
 	require.Contains(t, text.Output, "Title")
 	require.Contains(t, text.Output, "Hello")
 	require.NotContains(t, text.Output, "hidden")
+
+	fallback, err := webFetch(t.Context(), testWebFetchParams(server.URL+"/without-type", "markdown"))
+	require.NoError(t, err)
+	require.Equal(t, "# Title\n\nHello **world**.\n\n[Guide](guide)", fallback.Output)
 }
 
 func TestWebFetchReturnsImageAndPDFAttachments(t *testing.T) {
@@ -70,6 +79,10 @@ func TestWebFetchReturnsImageAndPDFAttachments(t *testing.T) {
 	}{
 		{name: "image", content: []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, contentTyp: "image/png", wantOutput: "Image fetched successfully", wantMIME: "image/png"},
 		{name: "pdf", content: []byte("%PDF-1.7\n"), contentTyp: "application/pdf", wantOutput: "PDF fetched successfully", wantMIME: "application/pdf"},
+		{name: "jpeg signature", content: []byte{0xff, 0xd8, 0xff}, contentTyp: "application/octet-stream", wantOutput: "Image fetched successfully", wantMIME: "image/jpeg"},
+		{name: "gif signature", content: []byte("GIF8"), contentTyp: "application/octet-stream", wantOutput: "Image fetched successfully", wantMIME: "image/gif"},
+		{name: "bmp signature", content: []byte("BM"), contentTyp: "application/octet-stream", wantOutput: "Image fetched successfully", wantMIME: "image/bmp"},
+		{name: "webp signature", content: []byte("RIFF\x00\x00\x00\x00WEBP"), contentTyp: "application/octet-stream", wantOutput: "Image fetched successfully", wantMIME: "image/webp"},
 	}
 
 	for _, tt := range tests {
