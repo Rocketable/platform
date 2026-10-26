@@ -6,22 +6,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
-	"strings"
 
 	"github.com/posthog/posthog-go"
 )
 
-func newLogger(levelText string, mirrors ...slog.Handler) *slog.Logger {
-	levelText = strings.TrimSpace(strings.ToUpper(levelText))
-	if levelText == "WARNING" {
-		levelText = "WARN"
-	}
-
-	level := slog.LevelInfo
-	if err := level.UnmarshalText([]byte(levelText)); err != nil {
-		level = slog.LevelDebug
-	}
-
+func newLogger(level *slog.LevelVar, mirrors ...slog.Handler) *slog.Logger {
 	logger := slog.New(slog.NewMultiHandler(append(mirrors, slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))...))
 	slog.SetDefault(logger)
 

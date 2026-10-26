@@ -1185,7 +1185,7 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 }
 
 func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
-	_, limit, err := s.spaceLimit(ctx)
+	username, limit, err := s.spaceLimit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1195,7 +1195,16 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 		Workspace: cfg.Workspace, Overlays: cfg.Overlays,
 		LoggingLevel: cfg.Logging.Level, AutoApproverModel: cfg.AutoApproverModel,
 		InstrumentationEnabled: cfg.Instrumentation.Enabled, McpExternal: cfg.MCPExternal.Enabled,
-		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)), Providers: cfg.ProviderNames(),
+		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)), Providers: cfg.ProviderNames(), CanEdit: slices.Contains(cfg.Web.Admins, username),
+	}
+
+	if view.CanEdit {
+		document, err := json.MarshalIndent(cfg.Behavior(), "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("web config: %w", err)
+		}
+
+		view.BehaviorJson = string(document)
 	}
 
 	if login := metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-login-bin"); len(login) == 1 {
@@ -1223,6 +1232,43 @@ func (s *Server) testModel(ctx context.Context, request *TestModelRequest) *Test
 	}
 
 	return &TestModelResponse{ElapsedMs: elapsed.Milliseconds()}
+}
+
+func (s *Server) saveBehaviorSettings(ctx context.Context, request *SaveBehaviorSettingsRequest) (*ListConfigResponse, error) {
+	username, _, err := s.principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if !slices.Contains(s.cfg.Clone().Web.Admins, username) {
+		return nil, fmt.Errorf("web behavior settings: %w", status.Error(codes.PermissionDenied, "only admins may edit behavior settings"))
+	}
+
+	var behavior config.Behavior
+	if err := json.Unmarshal([]byte(request.DocumentJson), &behavior); err != nil {
+		return nil, fmt.Errorf("web behavior settings: %w", status.Error(codes.InvalidArgument, err.Error()))
+	}
+
+	if err := s.backend.SaveBehavior(&behavior); err != nil {
+		return nil, fmt.Errorf("%w: %w", status.Error(codes.InvalidArgument, "web behavior settings"), err)
+	}
+
+	return s.listConfig(ctx)
+}
+
+func (s *Server) inspectAgents(ctx context.Context, request *InspectAgentsRequest) (*InspectAgentsResponse, error) {
+	if !slices.Contains(metadata.ValueFromIncomingContext(ctx, "rocketclaw-direct-local"), "true") {
+		if _, _, err := s.principal(ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	output, findings, err := s.backend.InspectAgents(protocol.InspectTarget(request.Target), protocol.InspectKind(request.Kind))
+	if err != nil {
+		return nil, fmt.Errorf("web inspect agents: %w", err)
+	}
+
+	return &InspectAgentsResponse{Output: output, Findings: int32(findings)}, nil
 }
 
 func (s *Server) listWorkflows(ctx context.Context) (*ListWorkflowsResponse, error) {

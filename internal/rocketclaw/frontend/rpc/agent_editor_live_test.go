@@ -132,7 +132,7 @@ func TestAgentEditorRealBackendBrowser(t *testing.T) {
 
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Permissions: map[string][]string{"bob": {"Ops"}}, AgentEditorModel: "gpt-editor", Overlays: []string{"github.com/acme/team"},
 		OpenAI:    config.OpenAIConfig{APIKey: "key", APIBaseURL: strings.Replace(openai.URL, "http://", "ws://", 1)},
-		Providers: map[string]config.OpenAIConfig{"work": {APIKey: "key", APIBaseURL: work.URL, Auth: "api_key"}}}
+		Providers: map[string]config.OpenAIConfig{"work": {APIKey: "key", APIBaseURL: work.URL, Auth: "api_key"}}, Slack: liveSlack()}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -156,7 +156,7 @@ func TestAgentEditorRealBackendBrowser(t *testing.T) {
 
 	var running errgroup.Group
 	running.Go(func() error {
-		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, sandbox.None{})
+		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly, sandbox.None{})
 	})
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
@@ -175,7 +175,7 @@ func TestAgentEditorRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "", nil)
+	handler := NewHTTPHandler(connection, rt.Cfg, "")
 	alice := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/test/unlimit":

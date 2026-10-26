@@ -268,7 +268,7 @@ func (r *Runtime) ValidateAgentFile(name string, data []byte) error {
 			return err
 		}
 
-		return r.assemble.ValidateAssets(cfg, runtimeDir)
+		return r.Assemble.ValidateAssets(cfg, runtimeDir)
 	}); err != nil {
 		return fmt.Errorf("validate runtime assets with agent %q: %w", name, err)
 	}

@@ -4,12 +4,15 @@ import (
 	"context"
 	"iter"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
 type Backend interface {
 	Reload(string) (string, error)
 	ValidateAgentFile(string, []byte) error
+	SaveBehavior(*config.Behavior) error
+	InspectAgents(protocol.InspectTarget, protocol.InspectKind) (string, int, error)
 	Subscribe(context.Context) iter.Seq[protocol.Event]
 	CreateConversation(context.Context, protocol.Conversation) error
 	ContinueRun(context.Context, string, string, bool) (string, error)

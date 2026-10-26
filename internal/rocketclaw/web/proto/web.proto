@@ -628,9 +628,15 @@ message ConfigView {
   string tailscale_user = 11;
   // Configured provider names, the openai provider always included; the server never lists models.
   repeated string providers = 12;
+  string behavior_json = 13;
+  bool can_edit = 14;
 }
 
 message ListConfigRequest {}
+
+message SaveBehaviorSettingsRequest {
+  string document_json = 1;
+}
 
 message ListConfigResponse {
   ConfigView config = 1;
@@ -994,6 +1000,16 @@ message DecideProposalRequest {
   bool accept = 3;
 }
 
+message InspectAgentsRequest {
+  string target = 1;
+  string kind = 2;
+}
+
+message InspectAgentsResponse {
+  string output = 1;
+  int32 findings = 2;
+}
+
 message UpdateSessionRequest {
   string id = 1;
   optional bool pinned = 2;
@@ -1355,6 +1371,8 @@ service Web {
   rpc StopWaiting(StopWaitingRequest) returns (SaveDraftResponse);
   rpc ProposeDraftChanges(ProposeDraftChangesRequest) returns (AgentDraftProposal);
   rpc DecideProposal(DecideProposalRequest) returns (AgentDraftProposal);
+  rpc SaveBehaviorSettings(SaveBehaviorSettingsRequest) returns (ListConfigResponse);
+  rpc InspectAgents(InspectAgentsRequest) returns (InspectAgentsResponse);
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
   rpc Identity(IdentityRequest) returns (IdentityResponse);
