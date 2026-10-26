@@ -721,8 +721,9 @@ one phrase.
 case-sensitive matches on the agent or on a Slack thread's room; quote values
 with spaces, such as `room:"general chat"`. Typing `agent:` or `room:` suggests
 values; choosing one by click, arrows, Tab, or Enter writes the filter into the
-query. Choosing an agent replaces earlier agent filters; choosing a room keeps
-earlier rooms. Multiple room filters match either room.
+query without replacing earlier agents or rooms. Multiple agent filters match
+any listed agent; multiple room filters match any listed room. Other filters
+still narrow those results.
 A remote OpenCode session's agent is the one it has selected, so `agent:build`
 also finds those. `server:box` keeps the remote sessions of the configured
 OpenCode server `box`, exactly. `model:opus` keeps conversations whose model

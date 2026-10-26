@@ -296,10 +296,11 @@ SELECT DISTINCT conversation_id FROM found`, "session search candidates", func(r
 	return candidates, err
 }
 
-// passes requires any room term to match, and every other filter term. A model
-// term matches part of the chat's model, ignoring case.
+// passes requires any room term and any agent term to match, and every other
+// filter term. A model term matches part of the chat's model, ignoring case.
 func (c *SidebarChat) passes(terms []SearchTerm, principals []string) bool {
 	hasRoom, roomMatch := false, false
+	hasAgent, agentMatch := false, false
 
 	for _, term := range terms {
 		var ok bool
@@ -310,7 +311,8 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals []string) bool {
 		case keyCron:
 			ok = c.CronName == term.Value
 		case keyAgent:
-			ok = c.Session.Conversation.Agent == term.Value
+			hasAgent, agentMatch = true, agentMatch || c.Session.Conversation.Agent == term.Value
+			continue
 		case keyPrincipal:
 			ok = slices.Contains(principals, term.Value)
 		case keyServer:
@@ -332,7 +334,7 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals []string) bool {
 		}
 	}
 
-	return !hasRoom || roomMatch
+	return (!hasRoom || roomMatch) && (!hasAgent || agentMatch)
 }
 
 // Label is what Web calls the chat when it has no name or preview.
