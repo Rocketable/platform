@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/sync/errgroup"
 )
 
 func TestRunRejectsInvalidArgs(t *testing.T) {
@@ -89,6 +92,50 @@ func TestRunCanceledContext(t *testing.T) {
 
 	if err := Run(ctx, "funneld", []string{"--unknown"}); err != context.Canceled {
 		t.Fatalf("Run with canceled context error = %v; want %v", err, context.Canceled)
+	}
+}
+
+func TestRunShutsDownOnCancellation(t *testing.T) {
+	path := writeConfig(t, `{"addr":"127.0.0.1:0","http_addr":"127.0.0.1:0","host":"example.ts.net","routes":[{"path":"/hook","target":"http://localhost:7070/hook"}]}`)
+	reader, writer := io.Pipe()
+	defer func() { _ = reader.Close() }()
+	logger := slog.Default()
+	output, flags := log.Writer(), log.Flags()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(writer, nil)))
+	defer func() {
+		slog.SetDefault(logger)
+		log.SetOutput(output)
+		log.SetFlags(flags)
+	}()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var group errgroup.Group
+	group.Go(func() error {
+		defer func() { _ = writer.Close() }()
+		return Run(ctx, "funneld", []string{"--config", path})
+	})
+
+	var messages []string
+	decoder := json.NewDecoder(reader)
+	for {
+		var record struct {
+			Message string `json:"msg"`
+		}
+		if err := decoder.Decode(&record); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		messages = append(messages, record.Message)
+		if record.Message == "funneld started" {
+			cancel()
+		}
+	}
+	if err := group.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"funneld route configured", "funneld started", "funneld shutting down", "funneld shut down"}; !slices.Equal(messages, want) {
+		t.Fatalf("lifecycle messages = %q; want %q", messages, want)
 	}
 }
 
