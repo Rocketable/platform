@@ -263,7 +263,9 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 		{`cron:"bad\q"`, nil, `cron:"bad\q"`, nil},
 		{"agent:main", []string{"agent=main"}, "", []string{searchChatA, searchChatX, searchChatD, searchChatE}},
 		{"AGENT:other", []string{"agent=other"}, "", []string{searchChatW}},
-		{"agent:main agent:other", []string{"agent=main", "agent=other"}, "", nil},
+		{"agent:main agent:other", []string{"agent=main", "agent=other"}, "", []string{searchChatA, searchChatX, searchChatW, searchChatD, searchChatE}},
+		{"agent:unknown agent:other", []string{"agent=unknown", "agent=other"}, "", []string{searchChatW}},
+		{`agent:other AGENT:"two words" agent:other`, []string{"agent=other", "agent=two words", "agent=other"}, "", []string{searchChatB, searchChatW}},
 		{`agent:"two words"`, []string{"agent=two words"}, "", []string{searchChatB}},
 		{"room:support", []string{"room=support"}, "", []string{searchChatA}},
 		{"room:C9", []string{"room=C9"}, "", []string{searchChatB}},
@@ -273,7 +275,7 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 		{"room:unknown room:C9", []string{"room=unknown", "room=C9"}, "", []string{searchChatB}},
 		{"room:Support room:unknown", []string{"room=Support", "room=unknown"}, "", nil},
 		{"room:support tag:customer room:C9 agent:main is:forked", []string{"room=support", "tag=customer", "room=C9", "agent=main", "is=forked"}, "", []string{searchChatA}},
-		{"room:support room:C9 agent:main agent:other", []string{"room=support", "room=C9", "agent=main", "agent=other"}, "", nil},
+		{"room:support room:C9 agent:main agent:other", []string{"room=support", "room=C9", "agent=main", "agent=other"}, "", []string{searchChatA}},
 		{"room:support room:C9 sort:oldest", []string{"room=support", "room=C9", "sort=oldest"}, "", []string{searchChatB, searchChatA}},
 	} {
 		calls := len(slack.SidebarChannelAgentChoicesCalls())
@@ -465,6 +467,7 @@ func TestSearchSessionsMessageHits(t *testing.T) {
 		want     []searchTestMatch
 	}{
 		{"billing", []string{hitB, "billing question"}, nil, []searchTestMatch{{searchChatB, "", ""}, {searchChatW, "", ""}}},
+		{`agent:other agent:"two words" billing`, []string{hitB, "billing question"}, nil, []searchTestMatch{{searchChatB, "", ""}, {searchChatW, "", ""}}},
 		{"support", []string{hitB}, nil, []searchTestMatch{{searchChatB, "", ""}, {searchChatA, fieldRoom, "support"}, {searchChatW, fieldName, "support"}}},
 		{"support sort:oldest", []string{hitB}, nil, []searchTestMatch{{searchChatW, fieldName, "support"}, {searchChatB, "", ""}, {searchChatA, fieldRoom, "support"}}},
 		{"tag:customer billing", nil, nil, nil},

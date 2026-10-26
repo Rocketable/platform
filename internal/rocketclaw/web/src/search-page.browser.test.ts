@@ -500,15 +500,17 @@ test("/search renders the server's groups, notices and pills", async () => {
     await page.getByRole("button", { name: "other", exact: true }).click();
     await agentPill("other").waitFor();
     expect(await search.inputValue()).toBe("");
-    expect(await agentPill("main").count()).toBe(0);
-    expect(await stored()).toBe("agent:other ");
+    expect(await agentPill("main").count()).toBe(1);
+    expect(await stored()).toBe("agent:main agent:other ");
     hold.resolve();
-    await search.pressSequentially("agent:");
-    await page.getByRole("button", { name: "main", exact: true }).click();
+    await page.reload();
     await agentPill("main").waitFor();
-    expect(await agentPill("other").count()).toBe(0);
-    expect(await stored()).toBe("agent:main ");
+    await agentPill("other").waitFor();
     await agentPill("main").click();
+    await sent("agent:other");
+    expect(await agentPill("other").count()).toBe(1);
+    expect(await stored()).toBe("agent:other ");
+    await agentPill("other").click();
 
     await search.fill("late"); // A match the sidebar has not loaded is pending, not "No matches".
     await results.getByText("Session search is still loading.").waitFor();

@@ -1933,7 +1933,6 @@ function useSessionSearch(query: string, scope: "messages" | "filters", entered:
   const principalChoices = !sent && /^principal:/i.test(word);
   const [result, setResult] = useState<{ query: string; response?: SearchSessionsResponse; error?: string }>({ query: "" });
   const request = useRef<{ key: string; version: number; failed?: boolean; controller?: AbortController; pending?: Promise<SearchSessionsResponse | undefined> }>({ key: "", version: 0 });
-  const waiting = useRef<((read: string, response: SearchSessionsResponse) => void)[]>([]);
   const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
   const deadline = useRef<ReturnType<typeof setTimeout>>(undefined);
   const firstEdit = useRef(0);
@@ -1949,7 +1948,6 @@ function useSessionSearch(query: string, scope: "messages" | "filters", entered:
     const pending = text || principalChoices ? rpc<SearchSessionsResponse>("SearchSessions", { query: text, [scope]: true }, controller.signal).then((response) => {
       if (!current()) return undefined;
       setResult({ query: text, response });
-      for (const resolve of waiting.current.splice(0)) resolve(text, response);
       return response;
     }, (error: Error) => {
       if (current()) { request.current.failed = true; setResult({ query: text, error: error.message }); }
@@ -1984,8 +1982,6 @@ function useSessionSearch(query: string, scope: "messages" | "filters", entered:
       if (!text || text === sent && !pending) return shown();
       void run(text).then((response) => open(matchedRows(response, rows).found.map(({ session }) => session)));
     },
-    // next calls resolve with the next response and the text it read.
-    next: (resolve: (read: string, response: SearchSessionsResponse) => void) => { waiting.current.push(resolve); },
   };
 }
 
@@ -2727,18 +2723,7 @@ function usePills(query: string, setQuery: (update: (query: string) => string) =
       change(query.slice(0, front) + kept + query.slice(front, start) + value.slice(same, value.length - tail) + query.slice(end), start + kept.length + at - same);
     },
     remove: (term: { start: number; end: number }) => change(cutTerms(query, [term]), cutTerms(query.slice(0, caret.current), [term]).length),
-    // Picking an agent: value removes earlier agents, by the offsets of the response for the sent text once it is here.
-    pick: (key: string, name: string) => {
-      const term = `${key}:${key === "is" || key === "sort" ? name : termValue(name)} `;
-      if (key !== "agent") return change(head + term);
-      if (search.result.query === search.sent && response) return change(cutTerms(head, terms.filter((item) => item.key === key && item.end < head.length)) + term);
-      change(head + term);
-      search.next((text, later) => setQuery((latest) => {
-        const valid = later.terms.filter((item) => latest.slice(0, item.end) === text.slice(0, item.end));
-        return valid.some((item) => item.key === key && item.start === head.length) ? cutTerms(latest, valid.filter((item) => item.key === key && item.start < head.length)) : latest;
-      }));
-      void search.run((head + term).trimEnd());
-    },
+    pick: (key: string, name: string) => change(`${head}${key}:${key === "is" || key === "sort" ? name : termValue(name)} `),
   };
 }
 

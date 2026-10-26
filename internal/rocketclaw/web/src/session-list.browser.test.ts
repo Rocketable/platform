@@ -268,7 +268,7 @@ test("room autocomplete keeps selections and full labels on each search surface"
   const longRooms = ["synthetic-observatory-room-with-a-long-shared-prefix-for-wrapping-amber", "synthetic observatory room with a long shared prefix for wrapping blue"];
   const results: Record<string, number[]> = {
     "room:amber": [0], 'room:amber room:"Blue garden"': [0, 1], 'room:"Blue garden"': [1],
-    'room:"Blue garden" agent:main': [1], 'room:"Blue garden" agent:other': [],
+    'room:"Blue garden" agent:main': [1], 'room:"Blue garden" agent:other': [], 'room:"Blue garden" agent:main agent:other': [1],
     '😀 room:"Blue garden" room:amber': [],
   };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
@@ -327,9 +327,11 @@ test("room autocomplete keeps selections and full labels on each search surface"
       await input.fill("agent:oth");
       await input.press("Enter");
       await surface.getByRole("button", { name: "agent:other", exact: true }).waitFor();
-      expect(await surface.getByRole("button", { name: "agent:main", exact: true }).count()).toBe(0);
+      expect(await surface.getByRole("button", { name: "agent:main", exact: true }).count()).toBe(1);
+      expect(await found.allTextContents()).toEqual(palette ? ["Blue result"] : ["Blue result(1)"]);
       expect(await surface.getByRole("button", { name: 'room:"Blue garden"', exact: true }).count()).toBe(1);
       await surface.getByRole("button", { name: "agent:other", exact: true }).click();
+      await surface.getByRole("button", { name: "agent:main", exact: true }).click();
       await surface.getByRole("button", { name: 'room:"Blue garden"', exact: true }).click();
       await input.fill(longRooms.map((room) => `room:${JSON.stringify(room)} `).join(""));
       // The search spinner animates until the response; let it settle before waiting on animations.
