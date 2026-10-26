@@ -1045,8 +1045,12 @@ func TestPublishFinalPreservesTurnID(t *testing.T) {
 func TestPublishFinalMarksCurrentGoalCompletion(t *testing.T) {
 	t.Parallel()
 
-	bus := newTestBus()
-	defer bus.Close()
+	bus := &outboundPublisherMock{PublishOutboundFunc: func(_ context.Context, outbound *protocol.OutboundMessage) error {
+		assert.True(t, outbound.GoalComplete)
+		outbound.MarkDelivered(nil)
+
+		return nil
+	}}
 
 	bridge := new(Bridge)
 	bridge.bus = bus
@@ -1056,13 +1060,8 @@ func TestPublishFinalMarksCurrentGoalCompletion(t *testing.T) {
 	inbound.ConversationID = "thread-1"
 	result := runResult{turnID: "turn-1", text: "done", goalCompleted: true}
 
-	var group errgroup.Group
-	group.Go(func() error { return publishTestFinal(context.Background(), bridge, inbound, &result) })
-
-	outbound := readRocketCodeOutbound(t, bus)
-	assert.True(t, outbound.GoalComplete)
-	outbound.MarkDelivered(nil)
-	require.NoError(t, group.Wait())
+	require.NoError(t, publishTestFinal(t.Context(), bridge, inbound, &result))
+	require.Len(t, bus.PublishOutboundCalls(), 1)
 }
 
 func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
