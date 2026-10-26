@@ -1497,10 +1497,10 @@ test("any session tab, Shared or not, mutes or snoozes its notifications from it
   expect(await choices.allInnerTexts()).toEqual(["1 hour", "4 hours", "Tomorrow, 9:00", "Next Monday, 9:00", "Pick date & time…"]);
   await page.getByRole("menuitem", { name: "Next Monday, 9:00" }).click();
   await until(() => saved.mutes.length === 1);
-  // The page's local time, which may differ from this process's.
+  // Seven calendar days at 9:00 can be more than 168 hours away on Monday morning.
   expect(await page.evaluate((until: string) => {
     const monday = new Date(until);
-    return [monday.getDay(), monday.getHours(), monday.getMinutes(), monday > new Date(), monday.getTime() - Date.now() <= 7 * 864e5];
+    return [monday.getDay(), monday.getHours(), monday.getMinutes(), monday > new Date(), monday.getTime() <= new Date().setHours(7 * 24 + 9, 0, 0, 0)];
   }, saved.mutes[0].until)).toEqual([1, 9, 0, true, true]);
   const description = await strip(page).getByTitle(/^Snoozed until /).getAttribute("title");
   expect(await tab("Alpha").getAttribute("aria-description")).toBe(`Space: Main, ${description}`);
