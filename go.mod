@@ -17,7 +17,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/openai/openai-go/v3 v3.88.0
+	github.com/openai/openai-go/v3 v3.89.0
 	github.com/posthog/posthog-go v1.38.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rubenv/sql-migrate v1.8.1
@@ -61,7 +61,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.38.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.43.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.5 // indirect
-	github.com/aws/smithy-go v1.28.6 // indirect
+	github.com/aws/smithy-go v1.28.7 // indirect
 	github.com/axiomhq/hyperloglog v0.2.6 // indirect
 	github.com/benbjohnson/immutable v0.4.3 // indirect
 	github.com/bradfitz/reco v0.0.0-20260929154613-b883fbd17e3f // indirect

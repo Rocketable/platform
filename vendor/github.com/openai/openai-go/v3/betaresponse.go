@@ -2562,6 +2562,201 @@ func (r *BetaFileSearchToolFiltersComparisonFilterValueArrayItemUnion) Unmarshal
 	return apijson.UnmarshalRoot(data, r)
 }
 
+// Combine multiple filters using `and` or `or`.
+type BetaFileSearchToolFiltersCompoundFilter struct {
+	// Array of filters to combine. Items can be `ComparisonFilter` or
+	// `CompoundFilter`.
+	Filters []BetaFileSearchToolFiltersCompoundFilterFilterUnion `json:"filters" api:"required"`
+	// Type of operation: `and` or `or`.
+	//
+	// Any of "and", "or".
+	Type string `json:"type" api:"required"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Filters     respjson.Field
+		Type        respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaFileSearchToolFiltersCompoundFilter) RawJSON() string { return r.JSON.raw }
+func (r *BetaFileSearchToolFiltersCompoundFilter) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// BetaFileSearchToolFiltersCompoundFilterFilterUnion contains all possible
+// properties and values from [BetaFileSearchToolFiltersCompoundFilterFilter],
+// [BetaFileSearchToolFiltersCompoundFilter].
+//
+// Use the methods beginning with 'As' to cast the union to one of its variants.
+type BetaFileSearchToolFiltersCompoundFilterFilterUnion struct {
+	// This field is from variant [BetaFileSearchToolFiltersCompoundFilterFilter].
+	Key string `json:"key"`
+	// This field is from variant [BetaFileSearchToolFiltersCompoundFilterFilter].
+	Type string `json:"type"`
+	// This field is from variant [BetaFileSearchToolFiltersCompoundFilterFilter].
+	Value                                     BetaFileSearchToolFiltersCompoundFilterFilterValueUnion `json:"value"`
+	OfBetaFileSearchToolFiltersCompoundFilter BetaFileSearchToolFiltersCompoundFilter                 `json:",inline"`
+	JSON                                      struct {
+		Key                                       respjson.Field
+		Type                                      respjson.Field
+		Value                                     respjson.Field
+		OfBetaFileSearchToolFiltersCompoundFilter respjson.Field
+		raw                                       string
+	} `json:"-"`
+}
+
+func (u BetaFileSearchToolFiltersCompoundFilterFilterUnion) AsFileSearchToolFiltersCompound() (v BetaFileSearchToolFiltersCompoundFilterFilter) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u BetaFileSearchToolFiltersCompoundFilterFilterUnion) AsBetaFileSearchToolFiltersCompoundFilter() (v BetaFileSearchToolFiltersCompoundFilter) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+// Returns the unmodified JSON received from the API
+func (u BetaFileSearchToolFiltersCompoundFilterFilterUnion) RawJSON() string { return u.JSON.raw }
+
+func (r *BetaFileSearchToolFiltersCompoundFilterFilterUnion) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// A filter used to compare a specified attribute key to a given value using a
+// defined comparison operation.
+type BetaFileSearchToolFiltersCompoundFilterFilter struct {
+	// The key to compare against the value.
+	Key string `json:"key" api:"required"`
+	// Specifies the comparison operator: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`,
+	// `nin`.
+	//
+	// - `eq`: equals
+	// - `ne`: not equal
+	// - `gt`: greater than
+	// - `gte`: greater than or equal
+	// - `lt`: less than
+	// - `lte`: less than or equal
+	// - `in`: in
+	// - `nin`: not in
+	//
+	// Any of "eq", "ne", "gt", "gte", "lt", "lte", "in", "nin".
+	Type string `json:"type" api:"required"`
+	// The value to compare against the attribute key; supports string, number, or
+	// boolean types.
+	Value BetaFileSearchToolFiltersCompoundFilterFilterValueUnion `json:"value" api:"required"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Key         respjson.Field
+		Type        respjson.Field
+		Value       respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaFileSearchToolFiltersCompoundFilterFilter) RawJSON() string { return r.JSON.raw }
+func (r *BetaFileSearchToolFiltersCompoundFilterFilter) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// BetaFileSearchToolFiltersCompoundFilterFilterValueUnion contains all possible
+// properties and values from [string], [float64], [bool],
+// [[]BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion].
+//
+// Use the methods beginning with 'As' to cast the union to one of its variants.
+//
+// If the underlying value is not a json object, one of the following properties
+// will be valid: OfString OfFloat OfBool
+// OfBetaFileSearchToolFiltersCompoundFilterFilterValueArray]
+type BetaFileSearchToolFiltersCompoundFilterFilterValueUnion struct {
+	// This field will be present if the value is a [string] instead of an object.
+	OfString string `json:",inline"`
+	// This field will be present if the value is a [float64] instead of an object.
+	OfFloat float64 `json:",inline"`
+	// This field will be present if the value is a [bool] instead of an object.
+	OfBool bool `json:",inline"`
+	// This field will be present if the value is a
+	// [[]BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion] instead of
+	// an object.
+	OfBetaFileSearchToolFiltersCompoundFilterFilterValueArray []BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion `json:",inline"`
+	JSON                                                      struct {
+		OfString                                                  respjson.Field
+		OfFloat                                                   respjson.Field
+		OfBool                                                    respjson.Field
+		OfBetaFileSearchToolFiltersCompoundFilterFilterValueArray respjson.Field
+		raw                                                       string
+	} `json:"-"`
+}
+
+func (u BetaFileSearchToolFiltersCompoundFilterFilterValueUnion) AsString() (v string) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u BetaFileSearchToolFiltersCompoundFilterFilterValueUnion) AsFloat() (v float64) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u BetaFileSearchToolFiltersCompoundFilterFilterValueUnion) AsBool() (v bool) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u BetaFileSearchToolFiltersCompoundFilterFilterValueUnion) AsBetaFileSearchToolFiltersCompoundFilterFilterValueArray() (v []BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+// Returns the unmodified JSON received from the API
+func (u BetaFileSearchToolFiltersCompoundFilterFilterValueUnion) RawJSON() string { return u.JSON.raw }
+
+func (r *BetaFileSearchToolFiltersCompoundFilterFilterValueUnion) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion contains all
+// possible properties and values from [string], [float64].
+//
+// Use the methods beginning with 'As' to cast the union to one of its variants.
+//
+// If the underlying value is not a json object, one of the following properties
+// will be valid: OfString OfFloat]
+type BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion struct {
+	// This field will be present if the value is a [string] instead of an object.
+	OfString string `json:",inline"`
+	// This field will be present if the value is a [float64] instead of an object.
+	OfFloat float64 `json:",inline"`
+	JSON    struct {
+		OfString respjson.Field
+		OfFloat  respjson.Field
+		raw      string
+	} `json:"-"`
+}
+
+func (u BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion) AsString() (v string) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion) AsFloat() (v float64) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+// Returns the unmodified JSON received from the API
+func (u BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion) RawJSON() string {
+	return u.JSON.raw
+}
+
+func (r *BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
 // Ranking options for search.
 type BetaFileSearchToolRankingOptions struct {
 	// Weights that control how reciprocal rank fusion balances semantic embedding
@@ -2993,201 +3188,6 @@ func (r BetaFileSearchToolRankingOptionsHybridSearchParam) MarshalJSON() (data [
 	return param.MarshalObject(r, (*shadow)(&r))
 }
 func (r *BetaFileSearchToolRankingOptionsHybridSearchParam) UnmarshalJSON(data []byte) error {
-	return apijson.UnmarshalRoot(data, r)
-}
-
-// Combine multiple filters using `and` or `or`.
-type BetaFileSearchToolFiltersCompoundFilter struct {
-	// Array of filters to combine. Items can be `ComparisonFilter` or
-	// `CompoundFilter`.
-	Filters []BetaFileSearchToolFiltersCompoundFilterFilterUnion `json:"filters" api:"required"`
-	// Type of operation: `and` or `or`.
-	//
-	// Any of "and", "or".
-	Type string `json:"type" api:"required"`
-	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
-	JSON struct {
-		Filters     respjson.Field
-		Type        respjson.Field
-		ExtraFields map[string]respjson.Field
-		raw         string
-	} `json:"-"`
-}
-
-// Returns the unmodified JSON received from the API
-func (r BetaFileSearchToolFiltersCompoundFilter) RawJSON() string { return r.JSON.raw }
-func (r *BetaFileSearchToolFiltersCompoundFilter) UnmarshalJSON(data []byte) error {
-	return apijson.UnmarshalRoot(data, r)
-}
-
-// BetaFileSearchToolFiltersCompoundFilterFilterUnion contains all possible
-// properties and values from [BetaFileSearchToolFiltersCompoundFilterFilter],
-// [BetaFileSearchToolFiltersCompoundFilter].
-//
-// Use the methods beginning with 'As' to cast the union to one of its variants.
-type BetaFileSearchToolFiltersCompoundFilterFilterUnion struct {
-	// This field is from variant [BetaFileSearchToolFiltersCompoundFilterFilter].
-	Key string `json:"key"`
-	// This field is from variant [BetaFileSearchToolFiltersCompoundFilterFilter].
-	Type string `json:"type"`
-	// This field is from variant [BetaFileSearchToolFiltersCompoundFilterFilter].
-	Value                                     BetaFileSearchToolFiltersCompoundFilterFilterValueUnion `json:"value"`
-	OfBetaFileSearchToolFiltersCompoundFilter BetaFileSearchToolFiltersCompoundFilter                 `json:",inline"`
-	JSON                                      struct {
-		Key                                       respjson.Field
-		Type                                      respjson.Field
-		Value                                     respjson.Field
-		OfBetaFileSearchToolFiltersCompoundFilter respjson.Field
-		raw                                       string
-	} `json:"-"`
-}
-
-func (u BetaFileSearchToolFiltersCompoundFilterFilterUnion) AsFileSearchToolFiltersCompound() (v BetaFileSearchToolFiltersCompoundFilterFilter) {
-	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
-	return
-}
-
-func (u BetaFileSearchToolFiltersCompoundFilterFilterUnion) AsBetaFileSearchToolFiltersCompoundFilter() (v BetaFileSearchToolFiltersCompoundFilter) {
-	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
-	return
-}
-
-// Returns the unmodified JSON received from the API
-func (u BetaFileSearchToolFiltersCompoundFilterFilterUnion) RawJSON() string { return u.JSON.raw }
-
-func (r *BetaFileSearchToolFiltersCompoundFilterFilterUnion) UnmarshalJSON(data []byte) error {
-	return apijson.UnmarshalRoot(data, r)
-}
-
-// A filter used to compare a specified attribute key to a given value using a
-// defined comparison operation.
-type BetaFileSearchToolFiltersCompoundFilterFilter struct {
-	// The key to compare against the value.
-	Key string `json:"key" api:"required"`
-	// Specifies the comparison operator: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`,
-	// `nin`.
-	//
-	// - `eq`: equals
-	// - `ne`: not equal
-	// - `gt`: greater than
-	// - `gte`: greater than or equal
-	// - `lt`: less than
-	// - `lte`: less than or equal
-	// - `in`: in
-	// - `nin`: not in
-	//
-	// Any of "eq", "ne", "gt", "gte", "lt", "lte", "in", "nin".
-	Type string `json:"type" api:"required"`
-	// The value to compare against the attribute key; supports string, number, or
-	// boolean types.
-	Value BetaFileSearchToolFiltersCompoundFilterFilterValueUnion `json:"value" api:"required"`
-	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
-	JSON struct {
-		Key         respjson.Field
-		Type        respjson.Field
-		Value       respjson.Field
-		ExtraFields map[string]respjson.Field
-		raw         string
-	} `json:"-"`
-}
-
-// Returns the unmodified JSON received from the API
-func (r BetaFileSearchToolFiltersCompoundFilterFilter) RawJSON() string { return r.JSON.raw }
-func (r *BetaFileSearchToolFiltersCompoundFilterFilter) UnmarshalJSON(data []byte) error {
-	return apijson.UnmarshalRoot(data, r)
-}
-
-// BetaFileSearchToolFiltersCompoundFilterFilterValueUnion contains all possible
-// properties and values from [string], [float64], [bool],
-// [[]BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion].
-//
-// Use the methods beginning with 'As' to cast the union to one of its variants.
-//
-// If the underlying value is not a json object, one of the following properties
-// will be valid: OfString OfFloat OfBool
-// OfBetaFileSearchToolFiltersCompoundFilterFilterValueArray]
-type BetaFileSearchToolFiltersCompoundFilterFilterValueUnion struct {
-	// This field will be present if the value is a [string] instead of an object.
-	OfString string `json:",inline"`
-	// This field will be present if the value is a [float64] instead of an object.
-	OfFloat float64 `json:",inline"`
-	// This field will be present if the value is a [bool] instead of an object.
-	OfBool bool `json:",inline"`
-	// This field will be present if the value is a
-	// [[]BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion] instead of
-	// an object.
-	OfBetaFileSearchToolFiltersCompoundFilterFilterValueArray []BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion `json:",inline"`
-	JSON                                                      struct {
-		OfString                                                  respjson.Field
-		OfFloat                                                   respjson.Field
-		OfBool                                                    respjson.Field
-		OfBetaFileSearchToolFiltersCompoundFilterFilterValueArray respjson.Field
-		raw                                                       string
-	} `json:"-"`
-}
-
-func (u BetaFileSearchToolFiltersCompoundFilterFilterValueUnion) AsString() (v string) {
-	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
-	return
-}
-
-func (u BetaFileSearchToolFiltersCompoundFilterFilterValueUnion) AsFloat() (v float64) {
-	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
-	return
-}
-
-func (u BetaFileSearchToolFiltersCompoundFilterFilterValueUnion) AsBool() (v bool) {
-	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
-	return
-}
-
-func (u BetaFileSearchToolFiltersCompoundFilterFilterValueUnion) AsBetaFileSearchToolFiltersCompoundFilterFilterValueArray() (v []BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion) {
-	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
-	return
-}
-
-// Returns the unmodified JSON received from the API
-func (u BetaFileSearchToolFiltersCompoundFilterFilterValueUnion) RawJSON() string { return u.JSON.raw }
-
-func (r *BetaFileSearchToolFiltersCompoundFilterFilterValueUnion) UnmarshalJSON(data []byte) error {
-	return apijson.UnmarshalRoot(data, r)
-}
-
-// BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion contains all
-// possible properties and values from [string], [float64].
-//
-// Use the methods beginning with 'As' to cast the union to one of its variants.
-//
-// If the underlying value is not a json object, one of the following properties
-// will be valid: OfString OfFloat]
-type BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion struct {
-	// This field will be present if the value is a [string] instead of an object.
-	OfString string `json:",inline"`
-	// This field will be present if the value is a [float64] instead of an object.
-	OfFloat float64 `json:",inline"`
-	JSON    struct {
-		OfString respjson.Field
-		OfFloat  respjson.Field
-		raw      string
-	} `json:"-"`
-}
-
-func (u BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion) AsString() (v string) {
-	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
-	return
-}
-
-func (u BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion) AsFloat() (v float64) {
-	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
-	return
-}
-
-// Returns the unmodified JSON received from the API
-func (u BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion) RawJSON() string {
-	return u.JSON.raw
-}
-
-func (r *BetaFileSearchToolFiltersCompoundFilterFilterValueArrayItemUnion) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -13599,9 +13599,9 @@ type BetaResponseInputFile struct {
 	FileURL string `json:"file_url" format:"uri"`
 	// The name of the file to be sent to the model.
 	Filename string `json:"filename"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseInputFilePromptCacheBreakpoint `json:"prompt_cache_breakpoint"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -13645,9 +13645,9 @@ const (
 	BetaResponseInputFileDetailHigh BetaResponseInputFileDetail = "high"
 )
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type BetaResponseInputFilePromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -13690,9 +13690,9 @@ type BetaResponseInputFileParam struct {
 	//
 	// Any of "auto", "low", "high".
 	Detail BetaResponseInputFileDetail `json:"detail,omitzero"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseInputFilePromptCacheBreakpointParam `json:"prompt_cache_breakpoint,omitzero"`
 	// The type of the input item. Always `input_file`.
 	//
@@ -13715,9 +13715,9 @@ func NewBetaResponseInputFilePromptCacheBreakpointParam() BetaResponseInputFileP
 	}
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 //
 // Use [NewBetaResponseInputFilePromptCacheBreakpointParam] to initialize the
 // constant fields.
@@ -13765,9 +13765,9 @@ type BetaResponseInputFileContent struct {
 	FileURL string `json:"file_url" api:"nullable" format:"uri"`
 	// The name of the file to be sent to the model.
 	Filename string `json:"filename" api:"nullable"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseInputFileContentPromptCacheBreakpoint `json:"prompt_cache_breakpoint" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -13812,9 +13812,9 @@ const (
 	BetaResponseInputFileContentDetailHigh BetaResponseInputFileContentDetail = "high"
 )
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type BetaResponseInputFileContentPromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -13849,9 +13849,9 @@ type BetaResponseInputFileContentParam struct {
 	FileURL param.Opt[string] `json:"file_url,omitzero" format:"uri"`
 	// The name of the file to be sent to the model.
 	Filename param.Opt[string] `json:"filename,omitzero"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseInputFileContentPromptCacheBreakpointParam `json:"prompt_cache_breakpoint,omitzero"`
 	// The detail level of the file to be sent to the model. Use `auto` to let the
 	// system select the detail level; for GPT-5.6 and later models, `auto` uses
@@ -13882,9 +13882,9 @@ func NewBetaResponseInputFileContentPromptCacheBreakpointParam() BetaResponseInp
 	}
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 //
 // Use [NewBetaResponseInputFileContentPromptCacheBreakpointParam] to initialize
 // the constant fields.
@@ -13927,9 +13927,9 @@ type BetaResponseInputImage struct {
 	// The URL of the image to be sent to the model. A fully qualified URL or base64
 	// encoded image in a data URL.
 	ImageURL string `json:"image_url" api:"nullable" format:"uri"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseInputImagePromptCacheBreakpoint `json:"prompt_cache_breakpoint"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -13969,9 +13969,9 @@ const (
 	BetaResponseInputImageDetailOriginal BetaResponseInputImageDetail = "original"
 )
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type BetaResponseInputImagePromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -14009,9 +14009,9 @@ type BetaResponseInputImageParam struct {
 	// The URL of the image to be sent to the model. A fully qualified URL or base64
 	// encoded image in a data URL.
 	ImageURL param.Opt[string] `json:"image_url,omitzero" format:"uri"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseInputImagePromptCacheBreakpointParam `json:"prompt_cache_breakpoint,omitzero"`
 	// The type of the input item. Always `input_image`.
 	//
@@ -14034,9 +14034,9 @@ func NewBetaResponseInputImagePromptCacheBreakpointParam() BetaResponseInputImag
 	}
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 //
 // Use [NewBetaResponseInputImagePromptCacheBreakpointParam] to initialize the
 // constant fields.
@@ -14079,9 +14079,9 @@ type BetaResponseInputImageContent struct {
 	// The URL of the image to be sent to the model. A fully qualified URL or base64
 	// encoded image in a data URL.
 	ImageURL string `json:"image_url" api:"nullable" format:"uri"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseInputImageContentPromptCacheBreakpoint `json:"prompt_cache_breakpoint" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -14122,9 +14122,9 @@ const (
 	BetaResponseInputImageContentDetailOriginal BetaResponseInputImageContentDetail = "original"
 )
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type BetaResponseInputImageContentPromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -14162,9 +14162,9 @@ type BetaResponseInputImageContentParam struct {
 	//
 	// Any of "low", "high", "auto", "original".
 	Detail BetaResponseInputImageContentDetail `json:"detail,omitzero"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseInputImageContentPromptCacheBreakpointParam `json:"prompt_cache_breakpoint,omitzero"`
 	// The type of the input item. Always `input_image`.
 	//
@@ -14187,9 +14187,9 @@ func NewBetaResponseInputImageContentPromptCacheBreakpointParam() BetaResponseIn
 	}
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 //
 // Use [NewBetaResponseInputImageContentPromptCacheBreakpointParam] to initialize
 // the constant fields.
@@ -21991,9 +21991,9 @@ type BetaResponseInputText struct {
 	Text string `json:"text" api:"required"`
 	// The type of the input item. Always `input_text`.
 	Type constant.InputText `json:"type" default:"input_text"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseInputTextPromptCacheBreakpoint `json:"prompt_cache_breakpoint"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -22020,9 +22020,9 @@ func (r BetaResponseInputText) ToParam() BetaResponseInputTextParam {
 	return param.Override[BetaResponseInputTextParam](json.RawMessage(r.RawJSON()))
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type BetaResponseInputTextPromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -22051,9 +22051,9 @@ func (r *BetaResponseInputTextPromptCacheBreakpoint) UnmarshalJSON(data []byte) 
 type BetaResponseInputTextParam struct {
 	// The text input to the model.
 	Text string `json:"text" api:"required"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseInputTextPromptCacheBreakpointParam `json:"prompt_cache_breakpoint,omitzero"`
 	// The type of the input item. Always `input_text`.
 	//
@@ -22076,9 +22076,9 @@ func NewBetaResponseInputTextPromptCacheBreakpointParam() BetaResponseInputTextP
 	}
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 //
 // Use [NewBetaResponseInputTextPromptCacheBreakpointParam] to initialize the
 // constant fields.
@@ -22112,9 +22112,9 @@ type BetaResponseInputTextContent struct {
 	Text string `json:"text" api:"required"`
 	// The type of the input item. Always `input_text`.
 	Type constant.InputText `json:"type" default:"input_text"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseInputTextContentPromptCacheBreakpoint `json:"prompt_cache_breakpoint" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -22142,9 +22142,9 @@ func (r BetaResponseInputTextContent) ToParam() BetaResponseInputTextContentPara
 	return param.Override[BetaResponseInputTextContentParam](json.RawMessage(r.RawJSON()))
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type BetaResponseInputTextContentPromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -22173,9 +22173,9 @@ func (r *BetaResponseInputTextContentPromptCacheBreakpoint) UnmarshalJSON(data [
 type BetaResponseInputTextContentParam struct {
 	// The text input to the model.
 	Text string `json:"text" api:"required"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseInputTextContentPromptCacheBreakpointParam `json:"prompt_cache_breakpoint,omitzero"`
 	// The type of the input item. Always `input_text`.
 	//
@@ -22198,9 +22198,9 @@ func NewBetaResponseInputTextContentPromptCacheBreakpointParam() BetaResponseInp
 	}
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 //
 // Use [NewBetaResponseInputTextContentPromptCacheBreakpointParam] to initialize
 // the constant fields.
@@ -22512,8 +22512,6 @@ func (BetaResponseOutputMessage) implBetaResponseItemUnion()               {}
 //	}
 func (u BetaResponseItemUnion) AsAny() anyBetaResponseItem {
 	switch u.Type {
-	case "message":
-		return u.AsOutputMessage()
 	case "file_search_call":
 		return u.AsFileSearchCall()
 	case "computer_call":
@@ -22576,6 +22574,8 @@ func (u BetaResponseItemUnion) AsAny() anyBetaResponseItem {
 		return u.AsCustomToolCall()
 	case "custom_tool_call_output":
 		return u.AsCustomToolCallOutput()
+	case "message":
+		return u.AsOutputMessage()
 	}
 	return nil
 }
@@ -23393,9 +23393,9 @@ type BetaResponseItemAgentMessageContentComputerScreenshot struct {
 	// Specifies the event type. For a computer screenshot, this property is always set
 	// to `computer_screenshot`.
 	Type constant.ComputerScreenshot `json:"type" default:"computer_screenshot"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseItemAgentMessageContentComputerScreenshotPromptCacheBreakpoint `json:"prompt_cache_breakpoint"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -23415,9 +23415,9 @@ func (r *BetaResponseItemAgentMessageContentComputerScreenshot) UnmarshalJSON(da
 	return apijson.UnmarshalRoot(data, r)
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type BetaResponseItemAgentMessageContentComputerScreenshotPromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -25814,9 +25814,9 @@ type BetaResponseOutputItemAgentMessageContentComputerScreenshot struct {
 	// Specifies the event type. For a computer screenshot, this property is always set
 	// to `computer_screenshot`.
 	Type constant.ComputerScreenshot `json:"type" default:"computer_screenshot"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint BetaResponseOutputItemAgentMessageContentComputerScreenshotPromptCacheBreakpoint `json:"prompt_cache_breakpoint"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -25838,9 +25838,9 @@ func (r *BetaResponseOutputItemAgentMessageContentComputerScreenshot) UnmarshalJ
 	return apijson.UnmarshalRoot(data, r)
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type BetaResponseOutputItemAgentMessageContentComputerScreenshotPromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -33497,11 +33497,14 @@ type BetaResponseToolSearchOutputItemParamToolImageGeneration struct {
 	// Optional mask for inpainting. Contains `image_url` (string, optional) and
 	// `file_id` (string, optional).
 	InputImageMask BetaResponseToolSearchOutputItemParamToolImageGenerationInputImageMaskResp `json:"input_image_mask"`
-	// The image generation model to use. One of `gpt-image-1`, `gpt-image-1-mini`,
-	// `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2-2026-04-21`,
-	// `gpt-image-2.5-sunburst`, `gpt-image-2.5-sunburst-2026-09-08`,
-	// `gpt-image-2.5-flare`, `gpt-image-2.5-flare-2026-09-08`, or
-	// `chatgpt-image-latest`. Default: `gpt-image-1`.
+	// The image generation model to use. One of `gpt-image-1-mini`, `gpt-image-1.5`,
+	// `gpt-image-2`, `gpt-image-2-2026-04-21`, `gpt-image-2.5-sunburst`,
+	// `gpt-image-2.5-sunburst-2026-09-08`, `gpt-image-2.5-flare`,
+	// `gpt-image-2.5-flare-2026-09-08`, or `chatgpt-image-latest`. Default:
+	// `gpt-image-2`.
+	//
+	// `gpt-image-1` was shut down on October 23, 2026. Use `gpt-image-2.5-sunburst` or
+	// `gpt-image-2.5-flare` instead.
 	Model string `json:"model"`
 	// Moderation level for the generated image. Default: `auto`.
 	//
@@ -34780,11 +34783,14 @@ type BetaResponseToolSearchOutputItemParamToolImageGenerationParam struct {
 	// Optional mask for inpainting. Contains `image_url` (string, optional) and
 	// `file_id` (string, optional).
 	InputImageMask BetaResponseToolSearchOutputItemParamToolImageGenerationInputImageMask `json:"input_image_mask,omitzero"`
-	// The image generation model to use. One of `gpt-image-1`, `gpt-image-1-mini`,
-	// `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2-2026-04-21`,
-	// `gpt-image-2.5-sunburst`, `gpt-image-2.5-sunburst-2026-09-08`,
-	// `gpt-image-2.5-flare`, `gpt-image-2.5-flare-2026-09-08`, or
-	// `chatgpt-image-latest`. Default: `gpt-image-1`.
+	// The image generation model to use. One of `gpt-image-1-mini`, `gpt-image-1.5`,
+	// `gpt-image-2`, `gpt-image-2-2026-04-21`, `gpt-image-2.5-sunburst`,
+	// `gpt-image-2.5-sunburst-2026-09-08`, `gpt-image-2.5-flare`,
+	// `gpt-image-2.5-flare-2026-09-08`, or `chatgpt-image-latest`. Default:
+	// `gpt-image-2`.
+	//
+	// `gpt-image-1` was shut down on October 23, 2026. Use `gpt-image-2.5-sunburst` or
+	// `gpt-image-2.5-flare` instead.
 	Model string `json:"model,omitzero"`
 	// Moderation level for the generated image. Default: `auto`.
 	//
@@ -41005,11 +41011,14 @@ type BetaToolImageGeneration struct {
 	// Optional mask for inpainting. Contains `image_url` (string, optional) and
 	// `file_id` (string, optional).
 	InputImageMask BetaToolImageGenerationInputImageMask `json:"input_image_mask"`
-	// The image generation model to use. One of `gpt-image-1`, `gpt-image-1-mini`,
-	// `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2-2026-04-21`,
-	// `gpt-image-2.5-sunburst`, `gpt-image-2.5-sunburst-2026-09-08`,
-	// `gpt-image-2.5-flare`, `gpt-image-2.5-flare-2026-09-08`, or
-	// `chatgpt-image-latest`. Default: `gpt-image-1`.
+	// The image generation model to use. One of `gpt-image-1-mini`, `gpt-image-1.5`,
+	// `gpt-image-2`, `gpt-image-2-2026-04-21`, `gpt-image-2.5-sunburst`,
+	// `gpt-image-2.5-sunburst-2026-09-08`, `gpt-image-2.5-flare`,
+	// `gpt-image-2.5-flare-2026-09-08`, or `chatgpt-image-latest`. Default:
+	// `gpt-image-2`.
+	//
+	// `gpt-image-1` was shut down on October 23, 2026. Use `gpt-image-2.5-sunburst` or
+	// `gpt-image-2.5-flare` instead.
 	Model string `json:"model"`
 	// Moderation level for the generated image. Default: `auto`.
 	//
@@ -42284,11 +42293,14 @@ type BetaToolImageGenerationParam struct {
 	// Optional mask for inpainting. Contains `image_url` (string, optional) and
 	// `file_id` (string, optional).
 	InputImageMask BetaToolImageGenerationInputImageMaskParam `json:"input_image_mask,omitzero"`
-	// The image generation model to use. One of `gpt-image-1`, `gpt-image-1-mini`,
-	// `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2-2026-04-21`,
-	// `gpt-image-2.5-sunburst`, `gpt-image-2.5-sunburst-2026-09-08`,
-	// `gpt-image-2.5-flare`, `gpt-image-2.5-flare-2026-09-08`, or
-	// `chatgpt-image-latest`. Default: `gpt-image-1`.
+	// The image generation model to use. One of `gpt-image-1-mini`, `gpt-image-1.5`,
+	// `gpt-image-2`, `gpt-image-2-2026-04-21`, `gpt-image-2.5-sunburst`,
+	// `gpt-image-2.5-sunburst-2026-09-08`, `gpt-image-2.5-flare`,
+	// `gpt-image-2.5-flare-2026-09-08`, or `chatgpt-image-latest`. Default:
+	// `gpt-image-2`.
+	//
+	// `gpt-image-1` was shut down on October 23, 2026. Use `gpt-image-2.5-sunburst` or
+	// `gpt-image-2.5-flare` instead.
 	Model string `json:"model,omitzero"`
 	// Moderation level for the generated image. Default: `auto`.
 	//
