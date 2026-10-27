@@ -775,8 +775,8 @@ Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
 **Tabs: Next**, and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
 works (the desktop sidebar, not the narrow-screen drawer). **Cron: Timeline** picks a cron, retired
 ones included, and opens `/cron?timeline=<cron>`: a summary, a bar per UTC day, and every run newest
-first by UTC day, where a run is counted once however many chats hold it and its sub-calls fold
-under it. A run is delivered when a chat other than the one opened to continue it holds it. Picking a
+first by UTC day, where a run is counted once however many chats hold it; its helper sessions show
+in its chat, not as runs. A run is delivered when a chat other than the one opened to continue it holds it. Picking a
 run shows its transcript beside the list on wide screens and under the run on narrow ones. In both palettes a command bound to a
 key shows it on the right of its row, OpenCode style: **⌘ Option N** on Mac or
 **Ctrl Alt N** elsewhere for **Sessions: New**, **⌘ [** and **⌘ ]** for the tab

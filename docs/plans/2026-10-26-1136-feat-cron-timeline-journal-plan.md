@@ -39,10 +39,10 @@ The Cron dashboard shows a 36-hour window and a flat list of runs per cron. Peop
 
 **The journal page**
 - R4. The page shows the cron's name with an Active or Retired label, its agent and channel, and its schedule split into one tag per cron expression.
-- R5. Summary cards show the run count (and sub-call count), delivered runs as a count and percentage, the typical (median) and longest gap between runs, the last run as a relative and absolute time, and the next expected run.
+- R5. Summary cards show the run count, delivered runs as a count and percentage, the typical (median) and longest gap between runs, the last run as a relative and absolute time, and the next expected run.
 - R6. A bar per UTC day, from the first run through today (or through the last run for a retired cron), shows that day's run count with the delivered share solid. Bars keep a minimum width; when the days do not fit, the strip scrolls sideways inside its own row, opening on the newest day, and the page itself never scrolls sideways. Clicking a bar scrolls the list to that day, loading older days if needed.
-- R7. Runs are listed newest first under a sticky header per UTC day. Each row shows the time, Delivered or Silent, its sub-call count, and the gap since the previous run. Upcoming expected runs appear above the list.
-- R8. A run is one distinct `origin`. `ListCronJobs` returns a row per chat a run reached (the chat it reports to, chats continuing it, copies), so rows sharing an `origin` are one run. Sub-call rows (`origin` containing `/call_`) are not runs; they fold under their parent run and can be previewed from it.
+- R7. Runs are listed newest first under a sticky header per UTC day. Each row shows the time, Delivered or Silent, and the gap since the previous run. Upcoming expected runs appear above the list.
+- R8. A run is one distinct `origin`. `ListCronJobs` returns a row per chat a run reached (the chat it reports to, chats continuing it, copies), so rows sharing an `origin` are one run. Rows for a run's helper sessions (`origin` containing `/call_`) are not runs and are left out; the run's chat already shows them.
 - R12. A run is Delivered when one of its rows has a chat other than `web:<origin>`. That chat is the continuation `CreateSession` makes when someone opens a silent run, so opening a run never turns it Delivered.
 - R9. Picking a run shows its transcript with the existing run preview and its Open chat link. On wide screens the preview stays in a column beside the list; on narrow screens it opens under the run.
 - R10. The list shows whole days of about 60 runs at first, with a button to show older runs.
@@ -79,7 +79,7 @@ The Cron dashboard shows a 36-hour window and a flat list of runs per cron. Peop
 ### Assumptions
 
 - The `ListCronJobs` response lists run rows newest first (it sorts by `lastRun` descending), as the dashboard already relies on; gaps are computed from that order.
-- A sub-call's parent run is the `origin` prefix before `/call_`, as in the live data. Providers whose tool-call IDs do not start with `call_` would show their sub-calls as runs.
+- A helper session's `origin` is its run's plus `/call_…`, as in the live data. Providers whose tool-call IDs do not start with `call_` would show their helper sessions as runs.
 
 ### Sources
 
@@ -96,7 +96,7 @@ The Cron dashboard shows a 36-hour window and a flat list of runs per cron. Peop
 - **Files:** `internal/rocketclaw/web/src/ui.tsx`, `internal/rocketclaw/web/src/session-list.browser.test.ts`.
 - **Approach:**
   1. Keep the prototype's palette code as the approved implementation: the `"timeline"` mode, its `paletteCopy` entry, the `cronJobs` query and "Loading…" in that mode, and `cronInSpace` shared with `CronPage`.
-  2. Change the picker's run count to count distinct non-sub-call `origin`s (KTD6).
+  2. Change the picker's run count to count distinct `origin`s, leaving out helper sessions (KTD6).
 - **Patterns to follow:** the `Cron: Run` command and `mode === "cron"` branch of `paletteRows`.
 - **Test scenarios:**
   - The command palette's full command list (the existing exact-list assertion) includes `Cron: Timeline` in its sorted place.
@@ -122,7 +122,7 @@ The Cron dashboard shows a 36-hour window and a flat list of runs per cron. Peop
   - Runs spanning about 200 days at 390 px wide leave the page without horizontal overflow, with the newest day's bar visible.
   - Clicking the `daily` run shows the run preview with its Open chat link; at 390 px wide it renders under the run, at 1280 px in the side column.
   - `/cron?timeline=retired` shows the Retired label and its run; `/cron?timeline=no-such-cron` shows the "No cron named no-such-cron in this space." message.
-  - A run whose origin is `<parent>/call_x` is counted as a sub-call of `<parent>`, not as a run (extend the mock jobs with one such row).
+  - A run whose origin is `<parent>/call_x` is a helper session of `<parent>`, not a run (extend the mock jobs with one such row).
 - **Verification:** the browser test passes at both widths; react-doctor reports no issue in `ui.tsx`.
 
 ### U3. README and embedded SPA

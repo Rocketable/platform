@@ -1891,7 +1891,7 @@ function paletteRows(
   }
   // Every stem with a definition or runs, retired ones included.
   if (mode === "timeline") return [...Map.groupBy(jobs, (job) => job.stem)].filter(([stem]) => stem.toLowerCase().includes(needle)).map(([stem, rows]) => {
-    const { runs } = cronRuns(rows);
+    const runs = cronRuns(rows);
     return { key: stem, label: stem, detail: [runs[0] ? `${plural(runs.length, "run")} · last ${cronWhen(runs[0].item.lastRun)} UTC` : "No runs yet", rows.some((job) => job.status !== "ran") ? "" : "Retired"].filter(Boolean).join(" · "), run: () => navigate(`/cron?${new URLSearchParams({ timeline: stem })}`) };
   });
   // Match quality: 0 the whole label, 1 one contiguous run, 2 three or more letters in order with gaps, 3 none; all case-insensitive.
@@ -4763,9 +4763,7 @@ function CronTimeline({ stem, rows, status, error }: { stem: string; rows: CronJ
   const [preview, setPreview] = useState("");
   const wide = useMedia("(min-width: 64rem)");
   const job = rows.find((item) => item.stem === stem && item.status !== "ran");
-  const { runs: own, calls: callRuns } = cronRuns(rows.filter((item) => item.stem === stem));
-  const calls = Map.groupBy(callRuns, ({ item }) => item.origin!.split("/call_")[0]);
-  const runs = own.map((run, i, list) => ({ ...run, gap: list[i + 1] && Date.parse(run.item.lastRun) - Date.parse(list[i + 1].item.lastRun) }));
+  const runs = cronRuns(rows.filter((item) => item.stem === stem)).map((run, i, list) => ({ ...run, gap: list[i + 1] && Date.parse(run.item.lastRun) - Date.parse(list[i + 1].item.lastRun) }));
   const byDay = Map.groupBy(runs, ({ item }) => item.lastRun.slice(0, 10));
   let shown = 0;
   const days = [...byDay].filter(([, list]) => shown < limit && (shown += list.length));
@@ -4780,20 +4778,20 @@ function CronTimeline({ stem, rows, status, error }: { stem: string; rows: CronJ
         <PageTitle><Link href="/cron" className="text-muted-foreground hover:text-foreground">Cron</Link> <span className="text-muted-foreground">/</span> {stem}
           {status ? null : <span className={cn("ml-2 rounded-full px-2 py-0.5 align-middle text-xs font-medium", job ? "bg-cyan-600/10 text-cyan-700 dark:bg-cyan-400/10 dark:text-cyan-300" : "bg-muted text-muted-foreground")}>{job ? "Active" : "Retired"}</span>}</PageTitle>
         {status ? <p role="status" className="text-sm text-muted-foreground">{status}</p> : <>
-          <CronJournalSummary job={job} runs={runs} subCalls={callRuns.length} now={now} error={error} />
+          <CronJournalSummary job={job} runs={runs} now={now} error={error} />
           {runs.length ? <CronDayBars runs={runs} byDay={byDay} active={!!job} today={today} jump={jump} /> : null}
           <div className="grid gap-8 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
             <div className="flex flex-col gap-4">
               <CronUpcoming upcoming={job?.upcoming ?? []} now={now} />
               {days.map(([day, list]) => <section key={day} id={`cron-day-${day}`} aria-label={day}>
                 <h2 className={cronDayHead}><span className="text-foreground">{day === today ? "Today · " : ""}{cronDay(day)}</span><span>{plural(list.length, "run")}</span></h2>
-                <ol className="ml-1.5 border-l">{list.map((run) => <CronJournalRun key={run.item.origin} run={run} calls={calls.get(run.item.origin!) ?? []} preview={preview} setPreview={setPreview} inline={!wide} />)}</ol>
+                <ol className="ml-1.5 border-l">{list.map((run) => <CronJournalRun key={run.item.origin} run={run} preview={preview} setPreview={setPreview} inline={!wide} />)}</ol>
               </section>)}
-              {runs.length + callRuns.length === 0 ? <p className="text-sm text-muted-foreground">No runs yet.</p> : null}
+              {runs.length === 0 ? <p className="text-sm text-muted-foreground">No runs yet.</p> : null}
               {shown < runs.length ? <Button variant="outline" className="self-center" onClick={() => setLimit(limit + 100)}>Show older runs ({runs.length - shown} more)</Button> : null}
             </div>
             {wide ? <aside aria-label="Selected run">
-              <div className="sticky top-2"><CronPreviewPanel picked={[...runs, ...callRuns].find(({ item }) => item.origin === preview)?.item} close={() => setPreview("")} /></div>
+              <div className="sticky top-2"><CronPreviewPanel picked={runs.find(({ item }) => item.origin === preview)?.item} close={() => setPreview("")} /></div>
             </aside> : null}
           </div>
         </>}
@@ -4804,13 +4802,12 @@ function CronTimeline({ stem, rows, status, error }: { stem: string; rows: CronJ
 
 type CronJournalRow = { item: CronJob; delivered: boolean; gap?: number };
 
-// The runs and sub-calls among ListCronJobs rows. ListCronJobs lists a run once per chat that holds it
-// (CronRunSources), so a run is one origin, and a sub-call's origin is its run's plus /call_. A run shows its first
-// row with a chat, and is delivered when any of its rows is.
+// The runs among ListCronJobs rows. ListCronJobs lists a run once per chat that holds it (CronRunSources), so a run
+// is one origin; it also lists the helper sessions a run starts (<origin>/call_…), which the run's chat shows. A run
+// shows its first row with a chat, and is delivered when any of its rows is.
 function cronRuns(rows: CronJob[]) {
-  const all = [...Map.groupBy(rows.filter((row) => row.status === "ran"), (row) => row.origin!).values()]
+  return [...Map.groupBy(rows.filter((row) => row.status === "ran" && !row.origin!.includes("/call_")), (row) => row.origin!).values()]
     .map((same): CronJournalRow => ({ item: same.find((row) => row.nextRun) ?? same[0], delivered: same.some(cronDelivered) }));
-  return { runs: all.filter(({ item }) => !item.origin!.includes("/call_")), calls: all.filter(({ item }) => item.origin!.includes("/call_")) };
 }
 
 function CronUpcoming({ upcoming, now }: { upcoming: string[]; now: number }) {
@@ -4828,11 +4825,11 @@ function CronPreviewPanel({ picked, close }: { picked?: CronJob; close: () => vo
   return picked ? <CronRunPreview tall preview={picked} onClose={close} /> : <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">Pick a run to read its transcript here.</p>;
 }
 
-function CronJournalSummary({ job, runs, subCalls, now, error }: { job?: CronJob; runs: CronJournalRow[]; subCalls: number; now: number; error?: string }) {
+function CronJournalSummary({ job, runs, now, error }: { job?: CronJob; runs: CronJournalRow[]; now: number; error?: string }) {
   const gaps = runs.flatMap(({ gap }) => gap ? [gap] : []).toSorted((a, b) => a - b);
   const delivered = runs.filter((run) => run.delivered).length, last = runs.at(0)?.item.lastRun, next = job?.upcoming?.at(0);
   const stats = [
-    ["Runs", String(runs.length), subCalls ? plural(subCalls, "sub-call") : ""],
+    ["Runs", String(runs.length), ""],
     ["Delivered", String(delivered), runs.length ? `${Math.round((delivered / runs.length) * 100)}% of runs` : ""],
     ["Typical gap", gaps.length ? cronGap(gaps[gaps.length >> 1]) : "—", gaps.length ? `Longest ${cronGap(gaps.at(-1)!)}` : ""],
     ["Last run", last ? `${cronGap(now - Date.parse(last))} ago` : "—", last ? `${cronWhen(last)} UTC` : ""],
@@ -4879,22 +4876,16 @@ function cronGap(ms: number) {
   return minutes < 60 ? `${minutes}m` : hours < 24 ? `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ""}` : `${Math.floor(hours / 24)}d${hours % 24 ? ` ${hours % 24}h` : ""}`;
 }
 
-function CronJournalRun({ run: { item, gap, delivered }, calls, preview, setPreview, inline }: { run: CronJournalRow; calls: CronJournalRow[]; preview: string; setPreview: (origin: string) => void; inline: boolean }) {
-  const picked = [item, ...calls.map((call) => call.item)].find((each) => each.origin === preview);
+function CronJournalRun({ run: { item, gap, delivered }, preview, setPreview, inline }: { run: CronJournalRow; preview: string; setPreview: (origin: string) => void; inline: boolean }) {
+  const picked = item.origin === preview;
   return <li className="relative pl-4">
     <span className={cn(cronDot, "border-cyan-600 dark:border-cyan-400", delivered ? "bg-cyan-600 ring-4 ring-cyan-600/15 dark:bg-cyan-400 dark:ring-cyan-400/15" : "bg-background")} />
-    <button type="button" aria-expanded={!!picked} className={cn("flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent", picked && "bg-accent")} onClick={() => setPreview(picked ? "" : item.origin!)}>
+    <button type="button" aria-expanded={picked} className={cn("flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent", picked && "bg-accent")} onClick={() => setPreview(picked ? "" : item.origin!)}>
       <span className="w-11 font-medium tabular-nums">{item.lastRun.slice(11, 16)}</span>
       {delivered ? <span className="rounded-full bg-cyan-600/10 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-400/10 dark:text-cyan-300">Delivered</span> : <span className="text-xs text-muted-foreground">Silent</span>}
-      {calls.length ? <span className="text-xs text-muted-foreground">{plural(calls.length, "sub-call")}</span> : null}
       {gap ? <span className="ml-auto text-xs tabular-nums text-muted-foreground" title="Time since the previous run">+{cronGap(gap)}</span> : null}
     </button>
-    {picked && calls.length ? <div className="flex flex-col gap-0.5 py-1 pl-2">
-      {calls.map((call) => <button key={call.item.origin} type="button" className={cn("truncate rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-accent", preview === call.item.origin && "bg-accent text-foreground")} onClick={() => setPreview(call.item.origin!)}>
-        ↳ Sub-call {call.item.origin!.split("/call_").at(-1)!.slice(0, 8)} · {call.delivered ? "Delivered" : "Silent"}
-      </button>)}
-    </div> : null}
-    {picked && inline ? <div className="py-2"><CronRunPreview preview={picked} onClose={() => setPreview("")} /></div> : null}
+    {picked && inline ? <div className="py-2"><CronRunPreview preview={item} onClose={() => setPreview("")} /></div> : null}
   </li>;
 }
 

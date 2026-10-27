@@ -2004,7 +2004,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await cronPage.getByRole("tab", { name: "daily", exact: true }).waitFor();
     await cronPage.close();
 
-    // A run is one origin however many chats list it; a sub-call folds under its run; opening a silent run's chat
+    // A run is one origin however many chats list it; a run's helper sessions are not runs; opening a silent run's chat
     // (web:<origin>) does not make it delivered; a long history scrolls its day bars, not the page.
     const jobCount = jobs.length;
     const dailyRun = jobs.find((job) => job.stem === "daily" && job.status === "ran")!, silentRun = jobs.find((job) => job.stem === "silent")!;
@@ -2026,12 +2026,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await timelinePage.waitForURL(`${origin}/cron?timeline=daily`);
     const runsCard = timelinePage.locator("dl > div").filter({ hasText: /^Runs/ });
     await runsCard.waitFor();
-    expect(await runsCard.locator("dd").allTextContents()).toEqual(["1", "1 sub-call"]);
+    expect(await runsCard.locator("dd").allTextContents()).toEqual(["1", ""]);
     await timelinePage.getByRole("heading", { name: "Cron / dailyActive", exact: true }).waitFor();
     expect(await timelinePage.locator("code").filter({ visible: true }).allTextContents()).toEqual(["24h"]);
     await timelinePage.getByRole("region", { name: "Upcoming runs", exact: true }).waitFor();
     const dailyDay = timelinePage.getByRole("region", { name: dailyRun.lastRun.slice(0, 10), exact: true });
-    expect(await dailyDay.locator("li button[aria-expanded]").allTextContents()).toEqual([`${dailyRun.lastRun.slice(11, 16)}Delivered1 sub-call`]);
+    expect(await dailyDay.locator("li button[aria-expanded]").allTextContents()).toEqual([`${dailyRun.lastRun.slice(11, 16)}Delivered`]);
     await dailyDay.locator("li button[aria-expanded]").click();
     await timelinePage.getByRole("complementary", { name: "Selected run", exact: true }).getByRole("region", { name: "Run preview", exact: true }).getByText("Daily run report", { exact: true }).waitFor();
     await timelinePage.setViewportSize({ width: 390, height: 844 });
