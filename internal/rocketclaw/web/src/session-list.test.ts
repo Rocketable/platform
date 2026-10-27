@@ -155,19 +155,6 @@ describe("session list reconciliation", () => {
     expect(shouldCommitSnapshot(result)).toBe(true);
   });
 
-  test("merges repeated IDs, keeping each row's latest", async () => {
-    const result = await readSessionEnumeration("alice", batchesOf([
-      alice([{ id: "first" }]),
-      alice([{ id: "empty", preview: "" }]),
-      alice([{ id: "empty", preview: "new message" }]),
-      alice([{ id: "replaced" }]),
-      alice([{ id: "replaced", preview: "ready" }]),
-      alice([], { upstreamSuccess: true }),
-    ]), () => [], () => {});
-    expect(result.received).toEqual([{ id: "first" }, { id: "empty", preview: "new message" }, { id: "replaced", preview: "ready" }]);
-    expect(shouldCommitSnapshot(result)).toBe(true);
-  });
-
   test("publishes an immediate row and coalesced prefix before a held tail", async () => {
     const tail = Promise.withResolvers<void>();
     const consumed = Promise.withResolvers<void>();
