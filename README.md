@@ -124,7 +124,7 @@ Release note for Slack answering mentions only:
 - Cron jobs no longer take `channel`; a leftover `channel` line is ignored. Every scheduled run with a non-empty reply opens a new Web chat, also for jobs that never had a channel.
 - `session_prompt` ignores `slack_channel`, so older MCP callers keep working.
 - Existing cron report and MCP Slack threads become Web chats. They keep their history, and an MCP session keeps its private run; their Slack threads stay read-only and get no new messages.
-- Every chat, in Web or Slack, is now deleted 30 days after its last message. Before, Web chats with messages were kept forever.
+- Every chat, in Web or Slack, is now deleted 90 days after its last message. Before, Web chats with messages were kept forever.
 
 ### MCP and scheduled jobs
 
@@ -134,9 +134,9 @@ A job file in `cron/` runs its agent on its schedule. An empty reply reports not
 
 Cron definition bodies expand shell snippets (an exclamation mark followed by a backtick-quoted command) before the model reads them. These are trusted commands, like those in agent prompts: they run in the workspace through the selected agent's `customShell`, when set, without a tool permission review. Ordinary messages, scheduled messages, and Background Job completion notes stay literal.
 
-Agents can use `rocketclaw_schedule_message` for a follow-up in the current conversation. `send_this_in` accepts positive durations up to `5040h` (210 days), including `12h` and `168h`. Set `recurring` to `false` for one message or `true` to repeat at that interval (at least `1m`) until scheduled messages are reset. Pending schedules protect their conversations and explicit owners from normal retention cleanup.
+Agents can use `rocketclaw_schedule_message` for a follow-up in the current conversation. `send_this_in` accepts positive durations up to `15120h` (630 days), including `12h` and `168h`. Set `recurring` to `false` for one message or `true` to repeat at that interval (at least `1m`) until scheduled messages are reset. Pending schedules protect their conversations and explicit owners from normal retention cleanup.
 
-Retention cleanup deletes every chat, in Web or Slack and pinned or not, 30 days after its last message; an MCP chat goes with its private MCP session. A chat with no messages counts from when it was created. Queued work and pending schedules keep a chat.
+Retention cleanup deletes every chat, in Web or Slack and pinned or not, 90 days after its last message; an MCP chat goes with its private MCP session. A chat with no messages counts from when it was created. Queued work and pending schedules keep a chat.
 
 ## How a request runs
 
