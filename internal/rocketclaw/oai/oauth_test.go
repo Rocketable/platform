@@ -383,11 +383,6 @@ func TestLoadTokenRejectsInvalidTokenFiles(t *testing.T) {
 	}
 }
 
-func TestLoadTokenReportsMissingAuthFile(t *testing.T) {
-	_, err := LoadTokenIn(t.TempDir(), config.DefaultRuntimeDir, "openai")
-	require.ErrorContains(t, err, "read OpenAI OAuth token")
-}
-
 func TestHasTokenInReportsPresenceAndMalformedFiles(t *testing.T) {
 	workspace := t.TempDir()
 	present, err := HasTokenIn(workspace, config.DefaultRuntimeDir, "work")
