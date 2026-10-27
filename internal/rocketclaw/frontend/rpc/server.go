@@ -183,16 +183,12 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		}
 	}
 
-	var allChoices []string
-
-	// One definitions load serves every row's agent choices and the remote tags.
+	// One definitions load serves the remote tags, with errors checked before sending rows.
 	agents := sync.OnceValues(func() (rocketcode.Agents, error) {
 		definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
 		if err != nil {
 			return rocketcode.Agents{}, fmt.Errorf("load web agents: %w", err)
 		}
-
-		allChoices = definitions.PrimaryNames()
 
 		return definitions, nil
 	})
@@ -224,17 +220,8 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 			return err
 		}
 
-		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, AllowedAgents: allChoices, Running: row.Running, Background: row.Background, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
+		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
 			Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label()}
-
-		if row.SlackChannel != "" {
-			session.AllowedAgents = make([]string, 0, min(len(allChoices), len(chat.RoomAgents)))
-			for _, name := range allChoices {
-				if slices.Contains(chat.RoomAgents, name) {
-					session.AllowedAgents = append(session.AllowedAgents, name)
-				}
-			}
-		}
 
 		if summary := row.Summary; summary != nil {
 			session.Preview = summary.LastMessage

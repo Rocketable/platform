@@ -9,7 +9,7 @@ export type PendingQuestion = { id: string; question: string; details: string; o
 export type SessionEntryMeta = { id: string; type?: string; timestamp?: string };
 export type SessionEntryData = { id: string; json?: string };
 export type QueueItem = { id: string; text: string; editText?: string; attachments?: Attachment[]; delivery?: PromptDelivery; principal?: string };
-export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; allowedAgents?: string[]; running?: boolean; background?: boolean; pinned?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean; spaceId?: string; reply?: string; model?: string; kind?: ConversationKind; remoteSessionId?: string; label?: string; unreadAt?: string };
+export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; running?: boolean; background?: boolean; pinned?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean; spaceId?: string; reply?: string; model?: string; kind?: ConversationKind; remoteSessionId?: string; label?: string; unreadAt?: string };
 export type ConversationKind = "WEB_CHAT" | "SLACK_THREAD" | "CRON_RUN" | "ONE_OFF_CRON_RUN" | "EXTERNAL_MCP_RUN" | "SUBAGENT" | "REVIEW" | "SHADOW" | "REMOTE_OPENCODE";
 // Remote OpenCode servers with their origins, and the tags people may set on their sessions.
 export type Remote = { servers: Record<string, string>; agentTags: Record<string, string[]> };

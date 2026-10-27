@@ -56,10 +56,8 @@ const (
 // SidebarChat is a sidebar row with the room, cron and origin Web shows for it.
 type SidebarChat struct {
 	Session SidebarSession
-	// Room is a Slack thread's stored channel name, or its channel ID when unknown;
-	// RoomAgents are the agents that room allows. Both are empty for other chats.
-	Room       string
-	RoomAgents []string
+	// Room is a Slack thread's stored channel name, or its channel ID when unknown; empty for other chats.
+	Room string
 	// Cron reports a chat a cron run created; CronName is that job's stem.
 	Cron     bool
 	CronName string
@@ -220,18 +218,18 @@ func sidebarChat(ctx context.Context, slack slackLookup, rooms map[string]Sideba
 			return SidebarChat{}, err
 		}
 
-		chat.Room, chat.RoomAgents = room.Room, room.RoomAgents
+		chat.Room = room.Room
 	}
 
 	return chat, nil
 }
 
-// sidebarRoom is the room of channel and the agents it allows, which rooms holds once resolved through slack.
+// sidebarRoom is the name of channel, which rooms holds once resolved through slack.
 func sidebarRoom(ctx context.Context, slack slackLookup, rooms map[string]SidebarChat, channel string) (SidebarChat, error) {
 	room, loaded := rooms[channel]
 	if !loaded {
 		var err error
-		if room.Room, room.RoomAgents, err = slack.SidebarChannelAgentChoices(ctx, channel); err != nil {
+		if room.Room, _, err = slack.SidebarChannelAgentChoices(ctx, channel); err != nil {
 			return SidebarChat{}, fmt.Errorf("resolve sidebar room: %w", err)
 		}
 

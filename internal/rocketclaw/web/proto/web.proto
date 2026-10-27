@@ -19,7 +19,8 @@ message Session {
   string updated_at = 4;
   string agent = 5;
   reserved 6;
-  repeated string allowed_agents = 7;
+  reserved 7;
+  reserved "allowed_agents";
   bool running = 8;
   bool pinned = 9;
   string name = 10;

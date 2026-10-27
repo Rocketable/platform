@@ -2177,10 +2177,8 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.Len(t, listedSessions.Sessions, 3)
 	require.Equal(t, "slack-thread:C1:2.2", listedSessions.Sessions[1].Id)
 	require.Equal(t, "triage", listedSessions.Sessions[1].Title)
-	require.Equal(t, []string{"main", "planner"}, listedSessions.Sessions[1].AllowedAgents)
 	require.Equal(t, "slack-thread:C2:3.3", listedSessions.Sessions[2].Id)
 	require.Equal(t, "C2", listedSessions.Sessions[2].Title)
-	require.Empty(t, listedSessions.Sessions[2].AllowedAgents, "unknown channel must not guess policy")
 	require.Equal(t, identity.Username, listedSessions.Owner)
 	require.True(t, listedSessions.UpstreamSuccess)
 
@@ -2197,10 +2195,8 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 			require.Empty(t, session.Title)
 		case "C1":
 			require.Equal(t, "renamed", session.Title)
-			require.Equal(t, []string{"main", "planner"}, session.AllowedAgents)
 		case "C2":
 			require.Equal(t, "C2", session.Title)
-			require.Empty(t, session.AllowedAgents)
 		}
 	}
 
@@ -2690,7 +2686,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 				index := slices.IndexFunc(listed.Sessions, func(session *Session) bool { return session.Id == webID })
 				require.NotEqual(t, -1, index)
 				require.Equal(t, opsID, listed.Sessions[index].SpaceId, "the chat keeps the space its cron named when it was opened")
-				require.ElementsMatch(t, test.want, listed.Sessions[index].AllowedAgents)
 				require.True(t, listed.Sessions[index].Cron, "cron origin survives follow-ups and config changes")
 
 				for _, agent := range []string{"main", "planner", "selected"} {
