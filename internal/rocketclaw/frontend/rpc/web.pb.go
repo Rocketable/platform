@@ -249,18 +249,17 @@ func (x *ListSessionsRequest) GetSince() string {
 }
 
 type Session struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
-	Preview       string                 `protobuf:"bytes,3,opt,name=preview,proto3" json:"preview,omitempty"`
-	UpdatedAt     string                 `protobuf:"bytes,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	Agent         string                 `protobuf:"bytes,5,opt,name=agent,proto3" json:"agent,omitempty"`
-	AllowedAgents []string               `protobuf:"bytes,7,rep,name=allowed_agents,json=allowedAgents,proto3" json:"allowed_agents,omitempty"`
-	Running       bool                   `protobuf:"varint,8,opt,name=running,proto3" json:"running,omitempty"`
-	Pinned        bool                   `protobuf:"varint,9,opt,name=pinned,proto3" json:"pinned,omitempty"`
-	Name          string                 `protobuf:"bytes,10,opt,name=name,proto3" json:"name,omitempty"`
-	ForkedFrom    string                 `protobuf:"bytes,13,opt,name=forked_from,json=forkedFrom,proto3" json:"forked_from,omitempty"`
-	Tags          []string               `protobuf:"bytes,14,rep,name=tags,proto3" json:"tags,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Id         string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Title      string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	Preview    string                 `protobuf:"bytes,3,opt,name=preview,proto3" json:"preview,omitempty"`
+	UpdatedAt  string                 `protobuf:"bytes,4,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Agent      string                 `protobuf:"bytes,5,opt,name=agent,proto3" json:"agent,omitempty"`
+	Running    bool                   `protobuf:"varint,8,opt,name=running,proto3" json:"running,omitempty"`
+	Pinned     bool                   `protobuf:"varint,9,opt,name=pinned,proto3" json:"pinned,omitempty"`
+	Name       string                 `protobuf:"bytes,10,opt,name=name,proto3" json:"name,omitempty"`
+	ForkedFrom string                 `protobuf:"bytes,13,opt,name=forked_from,json=forkedFrom,proto3" json:"forked_from,omitempty"`
+	Tags       []string               `protobuf:"bytes,14,rep,name=tags,proto3" json:"tags,omitempty"`
 	// The chat's recorded origin is a cron run, even after human follow-ups.
 	Cron     bool   `protobuf:"varint,15,opt,name=cron,proto3" json:"cron,omitempty"`
 	CronName string `protobuf:"bytes,16,opt,name=cron_name,json=cronName,proto3" json:"cron_name,omitempty"`
@@ -351,13 +350,6 @@ func (x *Session) GetAgent() string {
 		return x.Agent
 	}
 	return ""
-}
-
-func (x *Session) GetAllowedAgents() []string {
-	if x != nil {
-		return x.AllowedAgents
-	}
-	return nil
 }
 
 func (x *Session) GetRunning() bool {
@@ -7005,15 +6997,14 @@ const file_web_proto_rawDesc = "" +
 	"\tweb.proto\x12\x03rpc\"E\n" +
 	"\x13ListSessionsRequest\x12\x18\n" +
 	"\aviewing\x18\x01 \x01(\tR\aviewing\x12\x14\n" +
-	"\x05since\x18\x02 \x01(\tR\x05since\"\xa4\x05\n" +
+	"\x05since\x18\x02 \x01(\tR\x05since\"\x93\x05\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
 	"\apreview\x18\x03 \x01(\tR\apreview\x12\x1d\n" +
 	"\n" +
 	"updated_at\x18\x04 \x01(\tR\tupdatedAt\x12\x14\n" +
-	"\x05agent\x18\x05 \x01(\tR\x05agent\x12%\n" +
-	"\x0eallowed_agents\x18\a \x03(\tR\rallowedAgents\x12\x18\n" +
+	"\x05agent\x18\x05 \x01(\tR\x05agent\x12\x18\n" +
 	"\arunning\x18\b \x01(\bR\arunning\x12\x16\n" +
 	"\x06pinned\x18\t \x01(\bR\x06pinned\x12\x12\n" +
 	"\x04name\x18\n" +
@@ -7035,7 +7026,7 @@ const file_web_proto_rawDesc = "" +
 	"\x04kind\x18\x18 \x01(\x0e2\x15.rpc.ConversationKindR\x04kind\x12*\n" +
 	"\x11remote_session_id\x18\x19 \x01(\tR\x0fremoteSessionId\x12\x14\n" +
 	"\x05label\x18\x1a \x01(\tR\x05label\x12\x1b\n" +
-	"\tunread_at\x18\x1b \x01(\tR\bunreadAtJ\x04\b\x06\x10\aJ\x04\b\v\x10\fJ\x04\b\f\x10\r\"\xba\x01\n" +
+	"\tunread_at\x18\x1b \x01(\tR\bunreadAtJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\x0eallowed_agents\"\xba\x01\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
 	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\x12\x1a\n" +

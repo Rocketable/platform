@@ -151,9 +151,9 @@ list. An SSE `complete` event is sent only after successful gRPC EOF. HTTP itera
 failure or wire cut can leave a visible prefix, which is not a completed list.
 Cancellation cancels the gRPC call, including pending reads, and releases database
 rows. `Identity` returns the Go-mapped username separately from `Protocol` negotiation.
-`ListAgents` loads the current runtime definitions. Session `allowed_agents` comes
-from those definitions for Web conversations and the existing Slack channel policy
-for Slack Y. `$agent name` persists selection and updates the live bridge without
+`ListAgents` loads the current runtime definitions and supplies the agent picker,
+using the existing Slack channel policy for Slack Y. Session rows do not repeat
+the agent choices. `$agent name` persists selection and updates the live bridge without
 resetting history; private producer X cannot be selected. Removed choices are not
 re-added merely because they remain the current selection.
 

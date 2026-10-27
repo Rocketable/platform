@@ -24,8 +24,39 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestSidebarRowSizeIndependentOfAgentCatalog(t *testing.T) {
+	server, ctx := sidebarChoicesFixture(t, 2)
+	rows := 0
+
+	require.NoError(t, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
+		for _, session := range message.(*ListSessionsResponse).Sessions {
+			require.Less(t, proto.Size(session), 256, "session rows must not repeat the agent catalog")
+
+			rows++
+		}
+
+		return nil
+	}}))
+	require.Equal(t, 2, rows)
+}
+
+func BenchmarkSidebarResponses(b *testing.B) {
+	server, ctx := sidebarChoicesFixture(b, 64)
+	b.ReportAllocs()
+
+	for b.Loop() {
+		require.NoError(b, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
+			_, err := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(message.(*ListSessionsResponse))
+			require.NoError(b, err)
+
+			return nil
+		}}))
+	}
+}
 
 func sidebarChoicesFixture(tb testing.TB, count int) (*Server, context.Context) {
 	tb.Helper()
@@ -56,51 +87,6 @@ func sidebarChoicesFixture(tb testing.TB, count int) (*Server, context.Context) 
 	return New(&mockBackend{}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}), metadata.NewIncomingContext(tb.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 }
 
-func TestSidebarReusesAgentChoices(t *testing.T) {
-	server, ctx := sidebarChoicesFixture(t, 2)
-
-	for count := 32; count <= 33; count++ {
-		var choices []string
-
-		rows := 0
-
-		require.NoError(t, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
-			for _, session := range message.(*ListSessionsResponse).Sessions {
-				require.Len(t, session.AllowedAgents, count)
-
-				for i, name := range session.AllowedAgents {
-					require.Equal(t, fmt.Sprintf("choice-%02d", i), name)
-				}
-
-				if choices != nil {
-					require.Same(t, &choices[0], &session.AllowedAgents[0], "rows reuse the request's sorted names")
-				}
-
-				choices = session.AllowedAgents
-				rows++
-			}
-
-			return nil
-		}}))
-		require.Equal(t, 2, rows)
-
-		if count == 32 {
-			cfg := server.cfg.Clone()
-			root, err := os.OpenRoot(cfg.Workspace)
-			require.NoError(t, err)
-			require.NoError(t, root.WriteFile(cfg.RuntimeDirName()+"/agents/choice-32.md", []byte("---\nmodel: example-model\n---\nHelp."), 0o600))
-			require.NoError(t, root.Close())
-		}
-	}
-}
-
-func BenchmarkSidebarAgentChoices(b *testing.B) {
-	server, ctx := sidebarChoicesFixture(b, 64)
-	for b.Loop() {
-		require.NoError(b, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(any) error { return nil }}))
-	}
-}
-
 func TestSidebarFingerprintAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkSidebarFingerprints)
 	require.Positive(t, result.N)
@@ -115,55 +101,6 @@ func BenchmarkSidebarFingerprints(b *testing.B) {
 		_, err := server.sessions.UpdateConversationDetails(ctx, fmt.Sprintf("chat-%02d", i), nil, &name)
 		require.NoError(b, err)
 	}
-
-	b.ReportAllocs()
-
-	for b.Loop() {
-		require.NoError(b, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(any) error { return nil }}))
-	}
-}
-
-func TestSidebarChannelChoices(t *testing.T) {
-	server, ctx := sidebarChoicesFixture(t, 2)
-	db := openTestTurns(t, server.cfg.Clone().DatabaseURL)
-	_, err := db.db.ExecContext(ctx, `UPDATE conversations SET slack_channel = 'CEXAMPLE'`)
-	require.NoError(t, err)
-
-	for _, allowed := range [][]string{{"choice-03", "missing", "choice-01", "choice-03"}, {}, {"missing"}} {
-		server.channels = &mockChannels{SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) {
-			return "example", allowed, nil
-		}}
-		rows := 0
-
-		require.NoError(t, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
-			for _, session := range message.(*ListSessionsResponse).Sessions {
-				if len(allowed) == 4 {
-					require.Equal(t, []string{"choice-01", "choice-03"}, session.AllowedAgents)
-					session.AllowedAgents[0] = "changed"
-				} else {
-					require.Empty(t, session.AllowedAgents)
-				}
-
-				require.LessOrEqual(t, cap(session.AllowedAgents), len(allowed), "channel choices must not retain every agent")
-
-				rows++
-			}
-
-			return nil
-		}}))
-		require.Equal(t, 2, rows)
-	}
-}
-
-func BenchmarkSidebarChannelChoices(b *testing.B) {
-	server, ctx := sidebarChoicesFixture(b, 64)
-	db := openTestTurns(b, server.cfg.Clone().DatabaseURL)
-	_, err := db.db.ExecContext(ctx, `UPDATE conversations SET slack_channel = 'CEXAMPLE'`)
-	require.NoError(b, err)
-
-	server.channels = &mockChannels{SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) {
-		return "example", []string{"choice-00"}, nil
-	}}
 
 	b.ReportAllocs()
 
@@ -216,7 +153,7 @@ func TestSidebarSendFailures(t *testing.T) {
 		response *ListSessionsResponse
 	}{
 		{"empty completion", &ListSessionsResponse{Owner: "alice", UpstreamSuccess: true, Version: strings.Repeat("v", 26)}}, // rand.Text is 26 characters.
-		{"session row", &ListSessionsResponse{Owner: "alice", Sessions: []*Session{{Id: "web", Agent: "main", AllowedAgents: []string{"main"}, Label: "web"}}}},
+		{"session row", &ListSessionsResponse{Owner: "alice", Sessions: []*Session{{Id: "web", Agent: "main", Label: "web"}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.name == "session row" {
