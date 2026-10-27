@@ -11918,9 +11918,9 @@ type ResponseInputFile struct {
 	FileURL string `json:"file_url" format:"uri"`
 	// The name of the file to be sent to the model.
 	Filename string `json:"filename"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint ResponseInputFilePromptCacheBreakpoint `json:"prompt_cache_breakpoint"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -11966,9 +11966,9 @@ const (
 	ResponseInputFileDetailHigh ResponseInputFileDetail = "high"
 )
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type ResponseInputFilePromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -12011,9 +12011,9 @@ type ResponseInputFileParam struct {
 	//
 	// Any of "auto", "low", "high".
 	Detail ResponseInputFileDetail `json:"detail,omitzero"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint ResponseInputFilePromptCacheBreakpointParam `json:"prompt_cache_breakpoint,omitzero"`
 	// The type of the input item. Always `input_file`.
 	//
@@ -12036,9 +12036,9 @@ func NewResponseInputFilePromptCacheBreakpointParam() ResponseInputFilePromptCac
 	}
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 //
 // Use [NewResponseInputFilePromptCacheBreakpointParam] to initialize the constant
 // fields.
@@ -12086,9 +12086,9 @@ type ResponseInputFileContent struct {
 	FileURL string `json:"file_url" api:"nullable" format:"uri"`
 	// The name of the file to be sent to the model.
 	Filename string `json:"filename" api:"nullable"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint ResponseInputFileContentPromptCacheBreakpoint `json:"prompt_cache_breakpoint" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -12133,9 +12133,9 @@ const (
 	ResponseInputFileContentDetailHigh ResponseInputFileContentDetail = "high"
 )
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type ResponseInputFileContentPromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -12170,9 +12170,9 @@ type ResponseInputFileContentParam struct {
 	FileURL param.Opt[string] `json:"file_url,omitzero" format:"uri"`
 	// The name of the file to be sent to the model.
 	Filename param.Opt[string] `json:"filename,omitzero"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint ResponseInputFileContentPromptCacheBreakpointParam `json:"prompt_cache_breakpoint,omitzero"`
 	// The detail level of the file to be sent to the model. Use `auto` to let the
 	// system select the detail level; for GPT-5.6 and later models, `auto` uses
@@ -12203,9 +12203,9 @@ func NewResponseInputFileContentPromptCacheBreakpointParam() ResponseInputFileCo
 	}
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 //
 // Use [NewResponseInputFileContentPromptCacheBreakpointParam] to initialize the
 // constant fields.
@@ -12248,9 +12248,9 @@ type ResponseInputImage struct {
 	// The URL of the image to be sent to the model. A fully qualified URL or base64
 	// encoded image in a data URL.
 	ImageURL string `json:"image_url" api:"nullable" format:"uri"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint ResponseInputImagePromptCacheBreakpoint `json:"prompt_cache_breakpoint"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -12292,9 +12292,9 @@ const (
 	ResponseInputImageDetailOriginal ResponseInputImageDetail = "original"
 )
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type ResponseInputImagePromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -12332,9 +12332,9 @@ type ResponseInputImageParam struct {
 	// The URL of the image to be sent to the model. A fully qualified URL or base64
 	// encoded image in a data URL.
 	ImageURL param.Opt[string] `json:"image_url,omitzero" format:"uri"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint ResponseInputImagePromptCacheBreakpointParam `json:"prompt_cache_breakpoint,omitzero"`
 	// The type of the input item. Always `input_image`.
 	//
@@ -12357,9 +12357,9 @@ func NewResponseInputImagePromptCacheBreakpointParam() ResponseInputImagePromptC
 	}
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 //
 // Use [NewResponseInputImagePromptCacheBreakpointParam] to initialize the constant
 // fields.
@@ -12402,9 +12402,9 @@ type ResponseInputImageContent struct {
 	// The URL of the image to be sent to the model. A fully qualified URL or base64
 	// encoded image in a data URL.
 	ImageURL string `json:"image_url" api:"nullable" format:"uri"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint ResponseInputImageContentPromptCacheBreakpoint `json:"prompt_cache_breakpoint" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -12445,9 +12445,9 @@ const (
 	ResponseInputImageContentDetailOriginal ResponseInputImageContentDetail = "original"
 )
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type ResponseInputImageContentPromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -12485,9 +12485,9 @@ type ResponseInputImageContentParam struct {
 	//
 	// Any of "low", "high", "auto", "original".
 	Detail ResponseInputImageContentDetail `json:"detail,omitzero"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint ResponseInputImageContentPromptCacheBreakpointParam `json:"prompt_cache_breakpoint,omitzero"`
 	// The type of the input item. Always `input_image`.
 	//
@@ -12510,9 +12510,9 @@ func NewResponseInputImageContentPromptCacheBreakpointParam() ResponseInputImage
 	}
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 //
 // Use [NewResponseInputImageContentPromptCacheBreakpointParam] to initialize the
 // constant fields.
@@ -18039,9 +18039,9 @@ type ResponseInputText struct {
 	Text string `json:"text" api:"required"`
 	// The type of the input item. Always `input_text`.
 	Type constant.InputText `json:"type" default:"input_text"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint ResponseInputTextPromptCacheBreakpoint `json:"prompt_cache_breakpoint"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -18070,9 +18070,9 @@ func (r ResponseInputText) ToParam() ResponseInputTextParam {
 	return param.Override[ResponseInputTextParam](json.RawMessage(r.RawJSON()))
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type ResponseInputTextPromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -18101,9 +18101,9 @@ func (r *ResponseInputTextPromptCacheBreakpoint) UnmarshalJSON(data []byte) erro
 type ResponseInputTextParam struct {
 	// The text input to the model.
 	Text string `json:"text" api:"required"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint ResponseInputTextPromptCacheBreakpointParam `json:"prompt_cache_breakpoint,omitzero"`
 	// The type of the input item. Always `input_text`.
 	//
@@ -18126,9 +18126,9 @@ func NewResponseInputTextPromptCacheBreakpointParam() ResponseInputTextPromptCac
 	}
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 //
 // Use [NewResponseInputTextPromptCacheBreakpointParam] to initialize the constant
 // fields.
@@ -18162,9 +18162,9 @@ type ResponseInputTextContent struct {
 	Text string `json:"text" api:"required"`
 	// The type of the input item. Always `input_text`.
 	Type constant.InputText `json:"type" default:"input_text"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint ResponseInputTextContentPromptCacheBreakpoint `json:"prompt_cache_breakpoint" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -18192,9 +18192,9 @@ func (r ResponseInputTextContent) ToParam() ResponseInputTextContentParam {
 	return param.Override[ResponseInputTextContentParam](json.RawMessage(r.RawJSON()))
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 type ResponseInputTextContentPromptCacheBreakpoint struct {
 	// The breakpoint mode. Always `explicit`.
 	Mode constant.Explicit `json:"mode" default:"explicit"`
@@ -18223,9 +18223,9 @@ func (r *ResponseInputTextContentPromptCacheBreakpoint) UnmarshalJSON(data []byt
 type ResponseInputTextContentParam struct {
 	// The text input to the model.
 	Text string `json:"text" api:"required"`
-	// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-	// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-	// token block.
+	// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+	// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+	// not rounded to a token block.
 	PromptCacheBreakpoint ResponseInputTextContentPromptCacheBreakpointParam `json:"prompt_cache_breakpoint,omitzero"`
 	// The type of the input item. Always `input_text`.
 	//
@@ -18248,9 +18248,9 @@ func NewResponseInputTextContentPromptCacheBreakpointParam() ResponseInputTextCo
 	}
 }
 
-// Marks the exact end of a reusable prompt prefix. The breakpoint inherits its TTL
-// from the request's `prompt_cache_options.ttl`; the boundary is not rounded to a
-// token block.
+// Marks the exact end of a reusable prompt prefix. When `ttl` is omitted, the
+// breakpoint inherits the request's `prompt_cache_options.ttl`; the boundary is
+// not rounded to a token block.
 //
 // Use [NewResponseInputTextContentPromptCacheBreakpointParam] to initialize the
 // constant fields.
@@ -18519,8 +18519,6 @@ func (ResponseOutputMessage) implResponseItemUnion()               {}
 //	}
 func (u ResponseItemUnion) AsAny() anyResponseItem {
 	switch u.Type {
-	case "message":
-		return u.AsOutputMessage()
 	case "file_search_call":
 		return u.AsFileSearchCall()
 	case "computer_call":
@@ -18577,6 +18575,8 @@ func (u ResponseItemUnion) AsAny() anyResponseItem {
 		return u.AsCustomToolCall()
 	case "custom_tool_call_output":
 		return u.AsCustomToolCallOutput()
+	case "message":
+		return u.AsOutputMessage()
 	}
 	return nil
 }
@@ -26985,11 +26985,14 @@ type ResponseToolSearchOutputItemParamToolImageGeneration struct {
 	// Optional mask for inpainting. Contains `image_url` (string, optional) and
 	// `file_id` (string, optional).
 	InputImageMask ResponseToolSearchOutputItemParamToolImageGenerationInputImageMaskResp `json:"input_image_mask"`
-	// The image generation model to use. One of `gpt-image-1`, `gpt-image-1-mini`,
-	// `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2-2026-04-21`,
-	// `gpt-image-2.5-sunburst`, `gpt-image-2.5-sunburst-2026-09-08`,
-	// `gpt-image-2.5-flare`, `gpt-image-2.5-flare-2026-09-08`, or
-	// `chatgpt-image-latest`. Default: `gpt-image-1`.
+	// The image generation model to use. One of `gpt-image-1-mini`, `gpt-image-1.5`,
+	// `gpt-image-2`, `gpt-image-2-2026-04-21`, `gpt-image-2.5-sunburst`,
+	// `gpt-image-2.5-sunburst-2026-09-08`, `gpt-image-2.5-flare`,
+	// `gpt-image-2.5-flare-2026-09-08`, or `chatgpt-image-latest`. Default:
+	// `gpt-image-2`.
+	//
+	// `gpt-image-1` was shut down on October 23, 2026. Use `gpt-image-2.5-sunburst` or
+	// `gpt-image-2.5-flare` instead.
 	Model string `json:"model"`
 	// Moderation level for the generated image. Default: `auto`.
 	//
@@ -28247,11 +28250,14 @@ type ResponseToolSearchOutputItemParamToolImageGenerationParam struct {
 	// Optional mask for inpainting. Contains `image_url` (string, optional) and
 	// `file_id` (string, optional).
 	InputImageMask ResponseToolSearchOutputItemParamToolImageGenerationInputImageMask `json:"input_image_mask,omitzero"`
-	// The image generation model to use. One of `gpt-image-1`, `gpt-image-1-mini`,
-	// `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2-2026-04-21`,
-	// `gpt-image-2.5-sunburst`, `gpt-image-2.5-sunburst-2026-09-08`,
-	// `gpt-image-2.5-flare`, `gpt-image-2.5-flare-2026-09-08`, or
-	// `chatgpt-image-latest`. Default: `gpt-image-1`.
+	// The image generation model to use. One of `gpt-image-1-mini`, `gpt-image-1.5`,
+	// `gpt-image-2`, `gpt-image-2-2026-04-21`, `gpt-image-2.5-sunburst`,
+	// `gpt-image-2.5-sunburst-2026-09-08`, `gpt-image-2.5-flare`,
+	// `gpt-image-2.5-flare-2026-09-08`, or `chatgpt-image-latest`. Default:
+	// `gpt-image-2`.
+	//
+	// `gpt-image-1` was shut down on October 23, 2026. Use `gpt-image-2.5-sunburst` or
+	// `gpt-image-2.5-flare` instead.
 	Model string `json:"model,omitzero"`
 	// Moderation level for the generated image. Default: `auto`.
 	//
@@ -33454,11 +33460,14 @@ type ToolImageGeneration struct {
 	// Optional mask for inpainting. Contains `image_url` (string, optional) and
 	// `file_id` (string, optional).
 	InputImageMask ToolImageGenerationInputImageMask `json:"input_image_mask"`
-	// The image generation model to use. One of `gpt-image-1`, `gpt-image-1-mini`,
-	// `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2-2026-04-21`,
-	// `gpt-image-2.5-sunburst`, `gpt-image-2.5-sunburst-2026-09-08`,
-	// `gpt-image-2.5-flare`, `gpt-image-2.5-flare-2026-09-08`, or
-	// `chatgpt-image-latest`. Default: `gpt-image-1`.
+	// The image generation model to use. One of `gpt-image-1-mini`, `gpt-image-1.5`,
+	// `gpt-image-2`, `gpt-image-2-2026-04-21`, `gpt-image-2.5-sunburst`,
+	// `gpt-image-2.5-sunburst-2026-09-08`, `gpt-image-2.5-flare`,
+	// `gpt-image-2.5-flare-2026-09-08`, or `chatgpt-image-latest`. Default:
+	// `gpt-image-2`.
+	//
+	// `gpt-image-1` was shut down on October 23, 2026. Use `gpt-image-2.5-sunburst` or
+	// `gpt-image-2.5-flare` instead.
 	Model string `json:"model"`
 	// Moderation level for the generated image. Default: `auto`.
 	//
@@ -34648,11 +34657,14 @@ type ToolImageGenerationParam struct {
 	// Optional mask for inpainting. Contains `image_url` (string, optional) and
 	// `file_id` (string, optional).
 	InputImageMask ToolImageGenerationInputImageMaskParam `json:"input_image_mask,omitzero"`
-	// The image generation model to use. One of `gpt-image-1`, `gpt-image-1-mini`,
-	// `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2-2026-04-21`,
-	// `gpt-image-2.5-sunburst`, `gpt-image-2.5-sunburst-2026-09-08`,
-	// `gpt-image-2.5-flare`, `gpt-image-2.5-flare-2026-09-08`, or
-	// `chatgpt-image-latest`. Default: `gpt-image-1`.
+	// The image generation model to use. One of `gpt-image-1-mini`, `gpt-image-1.5`,
+	// `gpt-image-2`, `gpt-image-2-2026-04-21`, `gpt-image-2.5-sunburst`,
+	// `gpt-image-2.5-sunburst-2026-09-08`, `gpt-image-2.5-flare`,
+	// `gpt-image-2.5-flare-2026-09-08`, or `chatgpt-image-latest`. Default:
+	// `gpt-image-2`.
+	//
+	// `gpt-image-1` was shut down on October 23, 2026. Use `gpt-image-2.5-sunburst` or
+	// `gpt-image-2.5-flare` instead.
 	Model string `json:"model,omitzero"`
 	// Moderation level for the generated image. Default: `auto`.
 	//
