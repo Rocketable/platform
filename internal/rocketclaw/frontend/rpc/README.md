@@ -187,15 +187,17 @@ Historical Cron rows use existing `sync_source_entry_id` links to surviving sour
 entries. Backend entry reads expose generic source conversation provenance; RPC
 decodes the Cron prefix and the timestamp/random suffix from the right. The stored
 path label is used as-is, including previously stored underscores, without matching
-current definitions. Runs are deduplicated by source X within each recorded human Y
-and link only to Y. Rows sort newest-first by the source run timestamp, with Y and X
-as tie-breakers. A synced row proves a copy, not successful model execution or delivery.
+current definitions. Each run X is one row, whatever chats hold its output and
+whatever subagent or review sessions ran under it; those sessions count as X. The
+row links to a recorded human Y holding a copy, the greatest ID if several. Rows sort
+newest-first by the source run timestamp, with X as tie-breaker. A synced row proves a
+copy, not successful model execution or delivery.
 Recorded private Cron conversations with saved entries or visible turn checkpoints
 also supply run timestamps through the same metadata query, without reading replay
 content. Checkpoint visibility follows the transcript's terminal, supersession, and
 revert rules.
-When no human destination has a copy, Web shows “No delivered chat” with an
-**Open chat** action. `CreateSession.source_conversation_id` accepts a recorded Cron
+When no human destination has a copy, Web's **Open chat** action uses
+`CreateSession.source_conversation_id`, which accepts a recorded Cron
 producer and creates or reuses `web:<source ID>`, which continues the run: it shows
 the run's messages under their own IDs before its own, without copying them, and
 adopts a run that reports to no chat. Creation is idempotent, including concurrent
@@ -205,16 +207,14 @@ agent choices in the picker, session list, and server-side agent changes. Choice
 the current configured channel agent order intersected with loaded agents; if no
 list can be computed, all loaded agents are allowed. Creation selects the first
 allowed loaded agent; reopening does not overwrite a conversation's selection.
-Existing delivered chat links are preserved. Authenticated users can read
-Cron producer history through `History`, including runs without a delivered chat;
-this does not grant prompt, queue, deletion, or other mutation access to producers.
-A delivered copy takes precedence over the undelivered row for the same source.
+Authenticated users can read Cron producer history through `History`; this does not
+grant prompt, queue, deletion, or other mutation access to producers. Web previews a
+run from that history.
 Missing source entries cannot supply history; no migration, backfill, or history
-rewrite is performed. Web groups runs beneath their definition, retaining groups
-whose definition is gone. `History.source_conversation_id` optionally restricts
+rewrite is performed. Web lists runs by cron, including crons whose definition is
+gone. `History.source_conversation_id` optionally restricts
 the authorized destination's history to one source run before replay decoding;
-it does not change access to other private source conversations. The grid uses this
-filter for quick previews, with a link to the destination chat.
+it does not change access to other private source conversations.
 
 ## Attachments
 

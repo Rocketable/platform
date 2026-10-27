@@ -992,26 +992,33 @@ Remote OpenCode names sync both ways: renaming or clearing the name here updates
 OpenCode, and a title changed or cleared in OpenCode appears here on the next sync.
 A failed OpenCode update leaves the local name unchanged.
 
-Cron runs are grouped beneath their definition, with links to their chat.
-Search above the grid filters both the grid and the groups by case-insensitive
-text matching across definitions, metadata, and run times, keeping matching groups together.
-Each cron group starts collapsed, with a separate, initially collapsed Definition
-disclosure containing labeled schedule, agent, channel, and source fields above
-its body. Long field values wrap instead of truncating. The grid distinguishes
+The Cron page shows one line per cron, each name linking to that cron's journal,
+where its runs are listed. Search above the grid filters the lines by case-insensitive
+text matching across definitions, metadata, and run times. The grid distinguishes
 recorded runs (filled cyan) from expected runs (outlined amber), with time labels.
 The grid shows the past 12 hours and next 24 hours, including runs whose definition
 is gone. Marker tooltips open on hover, keyboard focus, or tap; Escape dismisses them.
-Runs without a delivered chat still appear, with their timestamp and “No delivered
-chat” with **Open chat** to inspect their recorded reasoning and tool activity.
-Click a recorded run marker or the bar (for the latest run) to preview that run;
-every recorded run offers **Open chat**. Undelivered runs create or reuse a writable
-Web chat that shows the run's history, without rerunning the job or creating a Slack
-thread. Repeated opens return the same chat. Its agent choices follow the current
+Each run is one run of the cron; its subagents and sessions are inside it. Click a
+recorded run marker or the bar (for the latest run) to preview that run's own
+reasoning and tool activity. **Open chat** opens the chat that holds
+the run's output, or else creates or reuses a writable Web chat that shows the
+run's history, without rerunning the job or creating a Slack thread. Repeated opens
+return the same chat. Its agent choices follow the current
 cron definition's channel and configured channel agents; if those choices cannot
 be computed, all loaded agents are available. The first allowed loaded agent is
-selected when the chat is created. Delivered runs keep opening their existing chat.
-Previews include only history from the selected run. Removed definitions keep
-their recorded runs visible. A play icon beside each cron name opens an in-app confirmation dialog
+selected when the chat is created. Removed definitions keep
+their recorded runs visible.
+A cron's journal opens from its name on the Cron page or from **Cron: Timeline** in
+the command palette, which lists every cron, retired ones too, with its run count
+and last run. It opens in its own tab and lists the cron's runs, newest first under
+a header per UTC day, each with the time since the run before it. Above them are the
+schedule, a collapsed Definition with the cron's source and body, the run count, the
+typical and longest gap, the last and next run, upcoming runs, and one bar per UTC
+day; clicking a bar jumps to that day. The journal shows 60 runs, and **Show older
+runs** adds 100 more. Picking a run previews it beside the list on a wide window and
+under the run on a narrow one. If loading the runs fails, the page keeps what it
+shows and retries until it loads. A play icon beside a cron with a definition, on its
+Cron page line and in its journal, opens an in-app confirmation dialog
 before running. It shows a spinner until
 execution finishes, then opens the resulting chat.
 Each turn shows its activity and replies in the order they happened. How much
