@@ -33,6 +33,38 @@ func BenchmarkDecideCronOrigin(b *testing.B) {
 	}
 }
 
+func TestDecideExternalOriginAllocationBudget(t *testing.T) {
+	result := testing.Benchmark(BenchmarkDecideExternalOrigin)
+	require.Positive(t, result.N)
+	require.LessOrEqual(t, result.AllocsPerOp(), int64(15))
+}
+
+func BenchmarkDecideExternalOrigin(b *testing.B) {
+	facts := ChatOriginFacts{ConversationID: "sample-chat", Binding: ExternalMCPSessionState{
+		ManagedConversationID: "sample-chat", Agent: "Helper Ω", OriginPairs: map[string]string{"topic": "BILLING", "Path": "/Notes", "empty": "", "": "blank"},
+	}, ExternalConversationID: "sample-external"}
+	want := []originPair{{Key: "", Value: "blank"}, {Key: "Path", Value: "/Notes"}, {Key: "empty", Value: ""}, {Key: "topic", Value: "BILLING"}}
+
+	const wantText = "external mcp external conversation: sample-external agent: helper ω =blank path=/notes empty= topic=billing"
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		origin, text := DecideOrigin(&facts)
+
+		got := origin.(externalMCPOrigin)
+		if text != wantText || got.Agent != facts.Binding.Agent || got.ExternalConversationID != facts.ExternalConversationID || got.Kind != originExternalMCP || len(got.Pairs) != len(want) {
+			b.Fatalf("origin = %#v, text = %q", origin, text)
+		}
+
+		for i, pair := range got.Pairs {
+			if pair != want[i] {
+				b.Fatalf("pair %d = %#v, want %#v", i, pair, want[i])
+			}
+		}
+	}
+}
+
 func TestChatOriginFactsAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkChatOriginFacts)
 	require.Positive(t, result.N)
