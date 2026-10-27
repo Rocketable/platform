@@ -10,10 +10,10 @@ const api = new API({ cwd: import.meta.dir });
 const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
 await api.close();
 const transpiler = new Bun.Transpiler({ loader: "tsx" });
-const names = ["historyPage", "shadowHistory", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "revertComposer", "unsavedRequest", "restoreFiles", "promoteComposer", "popComposer", "switchQueueAgent", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle", "comparisonRows", "turnKey", "mergeShadowBindings"];
+const names = ["historyPage", "shadowHistory", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "firstMessages", "revertComposer", "unsavedRequest", "restoreFiles", "promoteComposer", "popComposer", "switchQueueAgent", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle", "comparisonRows", "turnKey", "mergeShadowBindings"];
 const functions = source.statements.filter((node) => (isFunctionDeclaration(node) ? names.includes(node.name?.text ?? "") : isVariableStatement(node) && node.declarationList.declarations.some((declaration) => names.includes(declaration.name.getText(source))))).map((node) => node.getText(source)).join("\n");
 const javascript = transpiler.transformSync(`import { QueryClient, queryOptions } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { captureException } from ${JSON.stringify(Bun.resolveSync("@sentry/react", import.meta.dir))};\nimport { queries, mutations, RPCError } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand", "switchQueueAgent"].includes(name)).join(", ")}, queryClient };`);
-const { shadowHistory, applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, revertComposer, promoteComposer, popComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, comparisonRows, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+const { shadowHistory, applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, firstMessages, revertComposer, promoteComposer, popComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, comparisonRows, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 
 test("comparison rows pair producer-scoped IDs, retain pending and unavailable turns, and omit child seed history", () => {
   const parent = historyLines([
@@ -467,6 +467,7 @@ test("revert replaces only the captured untouched draft, Redo leaves it alone, a
   const other = { text: "another session" };
   try {
     const staging = revertComposer(owner, "9007199254740993:4", false, async () => {}, () => {});
+    await revertComposer(owner, "other-message", false, async () => {}, () => {});
     response.resolve(Response.json({ revertMessageId: "9007199254740993:4", prompt: { text: "  $skill original\n", attachments: [attachment] } }));
     await staging;
     expect(owner).toMatchObject({ text: "  $skill original\n", agent: "current", focus: 1 });
@@ -670,6 +671,47 @@ for (const [text, delivery, sent] of [
   const texts: string[] = [];
   await sendComposer({ draft, onDraftChange: () => {}, text, files: [], delivery, busy: false, sessionId: "opaque", selected: "other", currentAgent: "retired", prompt: { mutateAsync: async (request: { text: string }) => { texts.push(request.text); return ""; } }, scrollToEnd: () => true, setBusy: () => {}, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory: async () => {} });
   expect(texts).toEqual([...sent]);
+});
+
+for (const failure of ["", "create", "upload", "prompt"]) test(`new-session sends reject duplicates and retain failed drafts: failure=${failure || "none"}`, async () => {
+  const file = new File(["contents"], "request.txt", { type: "text/plain" });
+  const files = [{ id: "selected", file }];
+  const text = "  first request\nsecond line  ";
+  const draft = { text, files, agent: "planner", edit: 0, submission: 0, sending: false, lines: [] as Line[] };
+  const id = `created-${failure || "success"}`;
+  const creating = Promise.withResolvers<string>();
+  const calls: string[] = [];
+  let busy = false, error = "";
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: unknown, init: RequestInit) => {
+    calls.push("upload");
+    expect(String(url)).toBe(`/api/UploadAttachment?conversationId=${id}&name=request.txt`);
+    expect(init).toMatchObject({ method: "POST", body: file });
+    return failure === "upload" ? new Response("unavailable", { status: 503 }) : Response.json({ id: "uploaded", name: file.name, mimeType: file.type, conversationId: id });
+  }) as typeof fetch;
+  const send = () => sendComposer({ draft, text, files, busy: false, sessionId: "", selected: "planner", currentAgent: "", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setBusy: (value: boolean) => { busy = value; }, setSendError: (value: string) => { error = value; }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); }, refreshHistory: async () => { calls.push("history"); }, create: { mutateAsync: (request: object) => { calls.push("create"); expect(request).toEqual({ agent: "planner" }); return creating.promise; } }, goSession: (sessionId: string) => { calls.push("navigate"); expect(sessionId).toBe(id); expect(firstMessages.get(id)).toBe("first request"); }, prompt: { mutateAsync: async (request: object) => {
+    calls.push("prompt");
+    expect(request).toEqual({ id, text, delivery: "STEER", attachmentIds: ["uploaded"], messageId: expect.any(String) });
+    if (failure === "prompt") throw new Error("prompt refused");
+    return "";
+  } } });
+  try {
+    const sending = send();
+    await send(); // A second submit while session creation is pending must not create another session.
+    expect(calls).toEqual(["create"]);
+    if (failure === "create") creating.reject(new Error("create refused"));
+    else creating.resolve(id);
+    await sending;
+    expect(calls).toEqual(failure === "create" ? ["create"] : failure === "upload" ? ["create", "navigate", "upload"] : ["create", "navigate", "upload", "prompt", ...(failure ? [] : ["history"])]);
+    expect(draft).toMatchObject({ text: failure ? text : "", files: failure ? files : [], agent: failure ? "planner" : "", sending: false });
+    expect(draft.lines).toHaveLength(failure ? 0 : 1);
+    if (!failure) expect(draft.lines[0]).toMatchObject({ role: "user", text, complete: true, attachments: [{ id: "uploaded", file }] });
+    expect(error).toBe(failure === "upload" ? "Upload failed: request.txt" : failure ? `${failure} refused` : "");
+    expect(busy).toBe(!failure);
+  } finally {
+    firstMessages.delete(id);
+    globalThis.fetch = original;
+  }
 });
 
 test("composer renders exact input before Prompt completes and history failure does not undo acceptance", async () => {
