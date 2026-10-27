@@ -1234,7 +1234,7 @@ func (l *looper) appendToolOutputReplay(record *SessionEntry, turnItems *[]respo
 }
 
 func (l *looper) promptTurnItems(ctx context.Context, input *PromptInput) ([]responses.ResponseInputItemUnionParam, error) {
-	if l.expandInputPrompts && input.DirectSkill == nil {
+	if (l.expandInputPrompts || input.ExpandShellCommands) && input.DirectSkill == nil {
 		texts := make([]string, len(input.Texts))
 		for i, text := range input.Texts {
 			texts[i] = l.promptExpansion.expandShellCommands(ctx, text)

@@ -3292,6 +3292,78 @@ func TestAskUserQuestionToolOmitsResponseChannel(t *testing.T) {
 	assert.Equal(t, "slack-thread:C1:1", got.ConversationID)
 }
 
+func TestRunTurnExpandsOnlyCronDefinitionShellCommands(t *testing.T) {
+	t.Parallel()
+
+	const prompt = "!`printf x >> expansion-count; printf sample-value`"
+
+	for _, tc := range []struct {
+		name   string
+		source protocol.Source
+		cron   bool
+		wake   bool
+		want   string
+	}{
+		{"cron", protocol.SourceSystem, true, false, "sample-value"},
+		{"cron completion", protocol.SourceSystem, true, true, prompt},
+		{"system", protocol.SourceSystem, false, false, prompt},
+		{"web", protocol.SourceWeb, false, false, prompt},
+		{"channel", protocol.SourceSlack, false, false, prompt},
+		{"external", protocol.SourceExternalMCP, false, false, prompt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newBridge, _, requests, _ := newResumeTestBridges(t, false)
+			bridge := newBridge()
+
+			msg := protocol.NewInboundMessage(tc.source, protocol.InboundKindPrompt, prompt, false)
+			if tc.cron {
+				msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/report.md", Agent: "main"}
+			}
+
+			if tc.wake {
+				msg.Metadata = map[string]string{backgroundNotesMetadataKey: "finished-job"}
+			}
+
+			result, err := runTestTurn(t.Context(), bridge, msg, "turn-input")
+			require.NoError(t, err)
+			assert.Equal(t, "answer", result.text)
+
+			var request struct {
+				Input []json.RawMessage `json:"input"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(<-requests), &request))
+			messages, err := replayInputMessages(request.Input)
+			require.NoError(t, err)
+			require.NotEmpty(t, messages)
+			assert.Equal(t, "user", messages[len(messages)-1].role)
+
+			prefix := map[protocol.Source]string{protocol.SourceSystem: "System", protocol.SourceWeb: "Web", protocol.SourceSlack: "Slack", protocol.SourceExternalMCP: "ExternalMCP"}[tc.source]
+			assert.Equal(t, "["+prefix+" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n"+tc.want, messages[len(messages)-1].text)
+			assert.Equal(t, prompt, msg.Text, "the admitted input stays unchanged")
+
+			snapshot, captured, err := bridge.turnInputs(t.Context(), "turn-input")
+			require.NoError(t, err)
+			require.True(t, captured)
+			require.Equal(t, tc.cron && !tc.wake, snapshot.Inputs[0].ExpandShellCommands, "the consumed input retains its expansion policy")
+
+			root, err := os.OpenRoot(bridge.runtime.Clone().Workspace)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+			if tc.cron && !tc.wake {
+				_, err = runTestTurn(t.Context(), bridge, msg, "turn-input")
+				require.NoError(t, err)
+				count, err := root.ReadFile("expansion-count")
+				require.NoError(t, err)
+				assert.Equal(t, "x", string(count), "resuming reuses the journaled expansion")
+			} else {
+				_, err := root.Stat("expansion-count")
+				assert.True(t, os.IsNotExist(err), "untrusted input must not run a shell command")
+			}
+		})
+	}
+}
+
 func TestRunTurnExposesPrincipalEnv(t *testing.T) {
 	t.Parallel()
 
