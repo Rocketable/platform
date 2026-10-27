@@ -37,6 +37,9 @@ type PromptInput struct {
 	// each piece carries its own separators. More than one piece is sent as
 	// separate text parts, which a provider's prompt cache marker can target.
 	Texts []string
+	// ExpandShellCommands enables !`command` expansion for this trusted input,
+	// even when input expansion is disabled for the runtime as a whole.
+	ExpandShellCommands bool `json:",omitempty"`
 	// Header is the exact generated prefix of the first piece, saved only in local replay.
 	Header      string
 	Attachments []Attachment

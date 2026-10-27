@@ -2437,6 +2437,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 		header, _, _ = strings.Cut(prompt, "\n\n")
 		prepared = rocketcode.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey], turnID+"/initial"), TurnID: journalKey, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: inboundDirectSkill(msg)}
+		prepared.ExpandShellCommands = msg.Cronjob != nil && msg.Metadata[backgroundNotesMetadataKey] == ""
 		snapshot.Inputs, snapshot.Environment, snapshot.ChildContext = []rocketcode.PromptInput{prepared}, shellEnv, childContext
 
 		snapshot.GoalTurn = msg.GoalTurn
