@@ -28,7 +28,7 @@ var ErrRestartRequested = errors.New("restart requested")
 var errShutdown = fmt.Errorf("%w: %w", protocol.ErrBridgeStopped, rocketcode.ErrShutdown)
 
 const (
-	stateRetention = 30 * 24 * time.Hour
+	stateRetention = 90 * 24 * time.Hour
 	// statePruneInterval separates background retention passes; statePrunePace
 	// is the pause after each deletion, a tenth of it after each check.
 	statePruneInterval = time.Hour
