@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -56,9 +55,16 @@ func DecideOrigin(facts *ChatOriginFacts) (origin any, text string) {
 		pairs := make([]originPair, 0, len(facts.Binding.OriginPairs))
 		texts := make([]string, 0, len(facts.Binding.OriginPairs))
 
-		for _, key := range slices.Sorted(maps.Keys(facts.Binding.OriginPairs)) {
-			pairs = append(pairs, originPair{Key: key, Value: facts.Binding.OriginPairs[key]})
-			texts = append(texts, key+"="+facts.Binding.OriginPairs[key])
+		for key, value := range facts.Binding.OriginPairs {
+			pairs = append(pairs, originPair{Key: key, Value: value})
+		}
+
+		slices.SortFunc(pairs, func(a, b originPair) int {
+			return strings.Compare(a.Key, b.Key)
+		})
+
+		for _, pair := range pairs {
+			texts = append(texts, pair.Key+"="+pair.Value)
 		}
 
 		return externalMCPOrigin{Kind: originExternalMCP, ExternalConversationID: facts.ExternalConversationID, Agent: facts.Binding.Agent, Pairs: pairs},
