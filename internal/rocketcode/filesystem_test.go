@@ -830,6 +830,29 @@ func TestApplyPatchAbsolutePaths(t *testing.T) {
 }
 
 func TestApplyPatchParity(t *testing.T) {
+	// OpenCode packages/opencode/src/patch/index.ts appends insertion-only
+	// hunks and tolerates a final blank context line absent from the file.
+	for _, tc := range []struct {
+		name, before, chunk, want string
+	}{
+		{"append", "first\n", "+last", "first\nlast\n"},
+		{"blank context", "first\nlast\nmore\n", "-last\n+changed\n ", "first\nchanged\nmore\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, err := os.OpenRoot(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
+			require.NoError(t, root.WriteFile("file.txt", []byte(tc.before), 0o644))
+			sfs := &sandboxedFileSystem{root: root}
+
+			require.Equal(t, "Success. Updated the following files:\nM file.txt", sfs.ApplyPatch("*** Begin Patch\n*** Update File: file.txt\n@@\n"+tc.chunk+"\n*** End Patch"))
+
+			got, err := root.ReadFile("file.txt")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(got))
+		})
+	}
+
 	t.Run("requires patchText", func(t *testing.T) {
 		requireParity(t, "", nil)
 	})
