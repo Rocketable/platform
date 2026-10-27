@@ -1018,7 +1018,8 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
   await until(() => saved.state.space !== "main" && Object.values(saved.state.last).includes(href("bravo")));
   await page.reload();
-  await tab("Bravo").waitFor();
+  // Bravo comes from the URL before saved spaces load; New session waits for the saved tabs.
+  await tab("New session").waitFor();
   expect(await space.getAttribute("aria-label")).toBe("Space: Ops");
   expect(await names(page)).toEqual(["New session", "Bravo"]);
   await page.keyboard.press("Control+BracketRight");
