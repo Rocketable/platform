@@ -39,7 +39,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	mvdan.cc/sh/v3 v3.14.1
 	sigs.k8s.io/yaml v1.6.0
-	tailscale.com v1.104.2
+	tailscale.com v1.104.4
 )
 
 require (
