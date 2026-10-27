@@ -4711,6 +4711,10 @@ function CronChatLink({ job, className, children }: { job: CronJob; className: s
   </>;
 }
 
+// A run row holds a delivered chat unless it has none or only web:<origin>, the chat CreateSession opens when
+// someone opens a run that delivered nothing.
+const cronDelivered = (row: CronJob) => row.nextRun !== "" && row.nextRun !== `web:${row.origin}`;
+
 function CronRunPreview({ preview, onClose, tall }: { preview: CronJob; onClose: () => void; tall?: boolean }) {
   const conversationId = preview.nextRun || preview.origin!;
   const history = useQuery(queries.history({ id: conversationId, sourceConversationId: preview.nextRun ? preview.origin : undefined }));
@@ -4724,7 +4728,7 @@ function CronRunPreview({ preview, onClose, tall }: { preview: CronJob; onClose:
       </div>
       {history.isLoading ? <p role="status" className="text-sm text-muted-foreground">Loading run…</p> : null}
       {history.error ? <p role="alert" className="text-sm text-destructive">{history.error.message}</p> : null}
-      {!preview.nextRun ? <p className="text-sm text-muted-foreground">No delivered chat · Run traces</p> : null}
+      {!cronDelivered(preview) ? <p className="text-sm text-muted-foreground">No delivered chat · Run traces</p> : null}
       <div className={cn("mt-2 overflow-y-auto", tall ? "max-h-[calc(100dvh-14rem)]" : "max-h-64")}>
         <TranscriptLines rows={previewLines.map((line) => ({ kind: "line", line }))} conversationId={conversationId} hasSandboxed={hasSandboxed} />
         {history.data?.messages.length === 0 ? <p className="text-sm text-muted-foreground">No recorded messages for this run.</p> : null}
@@ -4802,10 +4806,10 @@ type CronJournalRow = { item: CronJob; delivered: boolean; gap?: number };
 
 // The runs and sub-calls among ListCronJobs rows. ListCronJobs lists a run once per chat that holds it
 // (CronRunSources), so a run is one origin, and a sub-call's origin is its run's plus /call_. A run shows its first
-// row with a chat, and is delivered unless its only chat is web:<origin>, the one CreateSession opens to continue it.
+// row with a chat, and is delivered when any of its rows is.
 function cronRuns(rows: CronJob[]) {
   const all = [...Map.groupBy(rows.filter((row) => row.status === "ran"), (row) => row.origin!).values()]
-    .map((same): CronJournalRow => ({ item: same.find((row) => row.nextRun) ?? same[0], delivered: same.some((row) => row.nextRun && row.nextRun !== `web:${row.origin}`) }));
+    .map((same): CronJournalRow => ({ item: same.find((row) => row.nextRun) ?? same[0], delivered: same.some(cronDelivered) }));
   return { runs: all.filter(({ item }) => !item.origin!.includes("/call_")), calls: all.filter(({ item }) => item.origin!.includes("/call_")) };
 }
 
@@ -4913,7 +4917,7 @@ function CronPage() {
   const matchingStems = new Set(rows.filter((job) => runNeedle === "" || [
     ...Object.values(job).flat(),
     ...[job.lastRun, ...(job.upcoming ?? [])].filter(Boolean).map((at) => `${cronWhen(at)} UTC`),
-    job.status === "ran" ? (job.nextRun ? "Open chat" : "No delivered chat") : "",
+    job.status === "ran" ? (cronDelivered(job) ? "Open chat" : "No delivered chat") : "",
   ].join(" ").toLowerCase().includes(runNeedle)).map((job) => job.stem));
   const stems = [...new Set([...defs.map((job) => job.stem), ...runs.map((job) => job.stem)])].filter((stem) => matchingStems.has(stem));
   const groups = stems.map((stem) => ({
@@ -4955,7 +4959,7 @@ function CronPage() {
               {jobRuns.map((item) => {
                 const pct = ((Date.parse(item.lastRun) - start) / (36 * 3_600_000)) * 100;
                 if (!Number.isFinite(pct) || pct < 0 || pct > 100) return null;
-                return <CronMarker key={`${item.origin}:${item.nextRun}`} label={`Preview ${item.stem} at ${cronWhen(item.lastRun)} UTC`} tooltip={`Ran ${cronWhen(item.lastRun)} UTC${item.nextRun ? "" : " · No delivered chat"}`} pct={pct} ran onClick={() => setPreview(item)} />;
+                return <CronMarker key={`${item.origin}:${item.nextRun}`} label={`Preview ${item.stem} at ${cronWhen(item.lastRun)} UTC`} tooltip={`Ran ${cronWhen(item.lastRun)} UTC${cronDelivered(item) ? "" : " · No delivered chat"}`} pct={pct} ran onClick={() => setPreview(item)} />;
               })}
             </div>
           </div>
@@ -5000,7 +5004,7 @@ function CronPage() {
               {jobRuns.map((item) => (
                 <li key={`${item.origin}:${item.nextRun}`}>
                   <CronChatLink job={item} className="block rounded-md px-2 py-2 text-sm hover:bg-accent">
-                    {cronWhen(item.lastRun)} UTC · {!item.nextRun ? "No delivered chat · " : ""}Open chat →
+                    {cronWhen(item.lastRun)} UTC · {!cronDelivered(item) ? "No delivered chat · " : ""}Open chat →
                   </CronChatLink>
                 </li>
               ))}

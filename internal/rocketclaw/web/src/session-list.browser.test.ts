@@ -2049,6 +2049,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await timelinePage.goto(`${origin}/cron?timeline=silent`);
     await timelinePage.locator("li button[aria-expanded]").filter({ hasText: "Silent" }).waitFor();
     expect(await timelinePage.locator("dl > div").filter({ hasText: /^Delivered/ }).locator("dd").first().textContent()).toBe("0");
+    // The opened silent run still delivered nothing in its preview card and on the Cron dashboard.
+    await timelinePage.locator("li button[aria-expanded]").filter({ hasText: "Silent" }).click();
+    await timelinePage.getByRole("region", { name: "Run preview", exact: true }).getByText("No delivered chat · Run traces", { exact: true }).waitFor();
+    await timelinePage.goto(`${origin}/cron`);
+    const silentGroup = timelinePage.getByRole("region", { name: "silent", exact: true });
+    await silentGroup.locator("summary").first().click();
+    expect((await silentGroup.locator("li").allTextContents()).map((text: string) => text.includes("No delivered chat"))).toEqual([true, true]);
     await timelinePage.goto(`${origin}/cron?timeline=retired`);
     await timelinePage.locator("li button[aria-expanded]").waitFor();
     await timelinePage.getByRole("heading", { name: "Cron / retiredRetired", exact: true }).waitFor();
