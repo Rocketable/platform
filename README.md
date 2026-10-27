@@ -134,7 +134,7 @@ A job file in `cron/` runs its agent on its schedule. An empty reply reports not
 
 Cron definition bodies expand shell snippets (an exclamation mark followed by a backtick-quoted command) before the model reads them. These are trusted commands, like those in agent prompts: they run in the workspace through the selected agent's `customShell`, when set, without a tool permission review. Ordinary messages, scheduled messages, and Background Job completion notes stay literal.
 
-Agents can use `rocketclaw_schedule_message` for a follow-up in the current conversation. `send_this_in` accepts positive durations up to `15120h` (630 days), including `12h` and `168h`. Set `recurring` to `false` for one message or `true` to repeat at that interval (at least `1m`) until scheduled messages are reset. Pending schedules protect their conversations and explicit owners from normal retention cleanup.
+Agents can use `rocketclaw_schedule_message` for a follow-up in the current conversation. `send_this_in` accepts positive durations up to `2160h` (90 days), the retention window, including `12h` and `168h`. Set `recurring` to `false` for one message or `true` to repeat at that interval (at least `1m`) until scheduled messages are reset. Pending schedules protect their conversations and explicit owners from normal retention cleanup.
 
 Retention cleanup deletes every chat, in Web or Slack and pinned or not, 90 days after its last message; an MCP chat goes with its private MCP session. A chat with no messages counts from when it was created. Queued work and pending schedules keep a chat.
 

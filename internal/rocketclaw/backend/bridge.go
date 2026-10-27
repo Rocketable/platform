@@ -2954,7 +2954,7 @@ func reloadTool(requestReload runtimeReloader) rocketcode.Tool {
 }
 
 func (b *Bridge) scheduleMessageTool(origin *protocol.InboundMessage) rocketcode.Tool {
-	return rocketcode.Tool{Name: scheduleMessageToolName, Description: "Schedule a message to the current rocketclaw conversation after a positive delay up to " + (7 * stateRetention).String() + ", such as 12h or 168h. Set recurring to false for one-shot schedules or true to repeat at intervals of at least 1m until scheduled messages are reset.", Permission: "rocketclaw", VisibilitySubjects: []string{scheduleMessageToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{scheduleMessageToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"message": map[string]any{"type": "string"}, "send_this_in": map[string]any{"type": "string"}, "recurring": map[string]any{"type": "boolean"}}, "required": []string{"message", "send_this_in", "recurring"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return rocketcode.Tool{Name: scheduleMessageToolName, Description: "Schedule a message to the current rocketclaw conversation after a positive delay up to " + stateRetention.String() + ", such as 12h or 168h. Set recurring to false for one-shot schedules or true to repeat at intervals of at least 1m until scheduled messages are reset.", Permission: "rocketclaw", VisibilitySubjects: []string{scheduleMessageToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{scheduleMessageToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"message": map[string]any{"type": "string"}, "send_this_in": map[string]any{"type": "string"}, "recurring": map[string]any{"type": "boolean"}}, "required": []string{"message", "send_this_in", "recurring"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		b.log.Info("rocketclaw schedule message tool called")
 
 		var input struct {
@@ -2977,8 +2977,8 @@ func (b *Bridge) scheduleMessageTool(origin *protocol.InboundMessage) rocketcode
 			return rocketcode.ToolResult{}, fmt.Errorf("parse send_this_in: %w", err)
 		}
 
-		if delay <= 0 || delay > 7*stateRetention {
-			return rocketcode.ToolResult{}, fmt.Errorf("send_this_in must be greater than 0 and at most %s", 7*stateRetention)
+		if delay <= 0 || delay > stateRetention {
+			return rocketcode.ToolResult{}, fmt.Errorf("send_this_in must be greater than 0 and at most %s", stateRetention)
 		}
 
 		if input.Recurring && delay < time.Minute {
