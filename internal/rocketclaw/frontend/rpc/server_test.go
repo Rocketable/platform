@@ -2408,8 +2408,8 @@ UPDATE entries e SET entry_json = jsonb_set(e.entry_json::jsonb, '{replay_input}
 	again, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(jobs, again))
-	t.Run("cron run lists every public destination without its private execution", func(t *testing.T) {
-		const destination = "opaque-human-Y"
+	t.Run("a cron run is one row whatever chats and sessions it has", func(t *testing.T) {
+		const destination, subagent = "opaque-human-Y", "cron-subagent"
 		require.NoError(t, sessions.UpsertThread(destination, backend.ThreadState{Agent: "main"}))
 		source, err := sessions.ObserveEntries(ctx, sources[0])
 		require.NoError(t, err)
@@ -2418,19 +2418,24 @@ UPDATE entries e SET entry_json = jsonb_set(e.entry_json::jsonb, '{replay_input}
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, source[0].ID, copied)
 		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, call_turn, call_id)
+VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, sources[0])
+		require.NoError(t, err)
+		_, err = sessions.AppendEntryID(ctx, subagent, &entry)
+		require.NoError(t, err)
 
 		listed, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 		require.NoError(t, err)
-
-		want := &ListCronJobsResponse{Jobs: append(slices.Clone(jobs.Jobs[:3]), &CronJob{Stem: "report:daily", Status: "ran", LastRun: "2026-09-05T01:00:00.000000001Z", NextRun: destination, Origin: sources[0]}, jobs.Jobs[3])}
-		require.True(t, proto.Equal(want, listed), "unexpected cron destinations: %v", listed)
+		require.True(t, proto.Equal(jobs, listed), "unexpected cron runs: %v", listed)
 
 		// A wipe keeps a copied cron report, so remove the copy itself.
-		_, err = db.ExecContext(ctx, `DELETE FROM entries WHERE conversation_id = $1`, destination)
+		_, err = db.ExecContext(ctx, `DELETE FROM entries WHERE conversation_id IN ($1, $2)`, destination, subagent)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `DELETE FROM conversations WHERE conversation_id = $1`, subagent)
 		require.NoError(t, err)
 	})
 
-	// A destination's revert cutoff hides the deliveries after it; that run stays a private execution.
+	// A destination's revert cutoff hides the deliveries after it; that run has no chat.
 	_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = $2`, fmt.Sprintf("%d:0", observed[2].ID), id)
 	require.NoError(t, err)
 	reverted, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})

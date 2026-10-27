@@ -1182,21 +1182,21 @@ type CronRunSource struct {
 	Run protocol.CronRun
 }
 
-// CronRunSources returns, in one query, every recorded cron run, or recorded
-// session under one, with effective history (including checkpoints) paired with
-// itself, and with each recorded conversation people may see whose effective
-// history holds its output: the chat it reports to, chats continuing it, and chats
-// holding copies, following chained copies. Only each conversation's own revert
-// cutoff applies.
+// CronRunSources returns, in one query, every recorded cron run whose own effective
+// history (including checkpoints), or that of a recorded session under it, is not
+// empty, paired with itself, and with each recorded conversation people may see whose
+// effective history holds output of the run or a session under it: the chat it
+// reports to, chats continuing it, and chats holding copies, following chained
+// copies. Only each conversation's own revert cutoff applies.
 func (s *SessionService) CronRunSources(ctx context.Context) ([]CronRunSource, error) {
 	// = ANY rules out hash and merge joins, so each hop stays an index probe of
 	// session_entries_sync_source_id; those joins read every synced entry_json
 	// from TOAST to compare the key.
 	return queryRows(ctx, s.db, `WITH RECURSIVE runs AS (
-    SELECT conversation_id, reports_to, revert_message_id, retention, cron_path, cron_run_at_unix_ns FROM conversations WHERE kind IN ('cron_run', 'one_off_cron_run')
+    SELECT conversation_id, conversation_id AS run_id, reports_to, revert_message_id, retention, cron_path, cron_run_at_unix_ns FROM conversations WHERE kind IN ('cron_run', 'one_off_cron_run')
     UNION ALL
-    -- A run's subagent and review sessions are located at the run.
-    SELECT c.conversation_id, c.reports_to, c.revert_message_id, c.retention, r.cron_path, r.cron_run_at_unix_ns FROM runs r JOIN conversations c ON c.parent_conversation_id = r.conversation_id
+    -- A run's subagent and review sessions belong to the run.
+    SELECT c.conversation_id, r.run_id, c.reports_to, c.revert_message_id, c.retention, r.cron_path, r.cron_run_at_unix_ns FROM runs r JOIN conversations c ON c.parent_conversation_id = r.conversation_id
 ), deliveries AS (
     SELECT e.id, e.conversation_id, e.conversation_id AS source FROM runs r JOIN entries e USING (conversation_id)
     UNION ALL
@@ -1217,16 +1217,16 @@ func (s *SessionService) CronRunSources(ctx context.Context) ([]CronRunSource, e
     WHERE NOT e.entry_json::jsonb ? 'sync_source_entry_id' OR COALESCE(e.entry_json->>'sync_source_conversation_id', source.conversation_id, '') = t.conversation_id
 ), located AS (
     -- A run whose start migration 051 could not read from its ID has no location and is left out.
-    SELECT conversation_id, cron_path, cron_run_at_unix_ns FROM runs WHERE cron_path IS NOT NULL
+    SELECT conversation_id, run_id, cron_path, cron_run_at_unix_ns FROM runs WHERE cron_path IS NOT NULL
 )
-SELECT DISTINCT d.conversation_id, d.source, r.cron_path, r.cron_run_at_unix_ns FROM deliveries d
+SELECT DISTINCT CASE WHEN d.conversation_id = d.source THEN r.run_id ELSE d.conversation_id END, r.run_id, r.cron_path, r.cron_run_at_unix_ns FROM deliveries d
 JOIN conversations c ON c.conversation_id = d.conversation_id JOIN located r ON r.conversation_id = d.source
 LEFT JOIN runs own ON own.conversation_id = d.conversation_id
 WHERE c.retention = 'record' AND (c.revert_message_id = '' OR d.id < split_part(c.revert_message_id, ':', 1)::bigint
         OR d.id = split_part(c.revert_message_id, ':', 1)::bigint AND split_part(c.revert_message_id, ':', 2)::integer > 0)
     AND (d.conversation_id = d.source OR own.conversation_id IS NULL AND c.kind <> 'external_mcp_run')
 UNION
-SELECT t.conversation_id, t.conversation_id AS source, r.cron_path, r.cron_run_at_unix_ns FROM shown_turns t JOIN located r USING (conversation_id)
+SELECT r.run_id AS conversation_id, r.run_id, r.cron_path, r.cron_run_at_unix_ns FROM shown_turns t JOIN located r USING (conversation_id)
 LEFT JOIN saved_turns s USING (id) WHERE s.id IS NULL`, "cron run sources", func(row rowScanner) (CronRunSource, error) {
 		var (
 			source CronRunSource

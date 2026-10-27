@@ -1019,37 +1019,24 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 		return nil, fmt.Errorf("read cron history provenance: %w", err)
 	}
 
-	var (
-		runs       []*CronJob
-		executions []*CronJob
-	)
-
-	delivered := map[string]bool{}
+	// One row per run. NextRun is a chat holding the run's output, if any; with several, the greatest ID.
+	runs := map[string]*CronJob{}
 
 	for _, source := range sources {
-		row := &CronJob{Stem: cronStem(source.Run.Path), Status: "ran", LastRun: source.Run.At.Format("2006-01-02T15:04:05.000000000Z"), NextRun: source.ConversationID, Origin: source.SourceConversationID}
-		// Private cron records contribute timing only, never replay content.
-		if source.ConversationID == source.SourceConversationID {
-			row.NextRun = ""
-			executions = append(executions, row)
-
-			continue
+		row, ok := runs[source.SourceConversationID]
+		if !ok {
+			row = &CronJob{Stem: cronStem(source.Run.Path), Status: "ran", LastRun: source.Run.At.Format("2006-01-02T15:04:05.000000000Z"), Origin: source.SourceConversationID}
+			runs[row.Origin] = row
 		}
 
-		delivered[row.Origin] = true
-		runs = append(runs, row)
-	}
-
-	for _, run := range executions {
-		if !delivered[run.Origin] {
-			runs = append(runs, run)
+		if source.ConversationID != source.SourceConversationID {
+			row.NextRun = max(row.NextRun, source.ConversationID)
 		}
 	}
 
-	slices.SortFunc(runs, func(a, b *CronJob) int {
-		return cmp.Or(cmp.Compare(b.LastRun, a.LastRun), cmp.Compare(a.NextRun, b.NextRun), cmp.Compare(a.Origin, b.Origin))
-	})
-	response.Jobs = append(response.Jobs, runs...)
+	response.Jobs = append(response.Jobs, slices.SortedFunc(maps.Values(runs), func(a, b *CronJob) int {
+		return cmp.Or(cmp.Compare(b.LastRun, a.LastRun), cmp.Compare(a.Origin, b.Origin))
+	})...)
 
 	return response, nil
 }
