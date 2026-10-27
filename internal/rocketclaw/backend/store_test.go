@@ -1808,7 +1808,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			scheduled := protocol.ScheduledMessageState{ConversationID: tc.conversation, Agent: "planner", Message: "pending follow-up", DueAt: cutoff.Add(5040 * time.Hour)}
+			scheduled := protocol.ScheduledMessageState{ConversationID: tc.conversation, Agent: "planner", Message: "pending follow-up", DueAt: cutoff.Add(2160 * time.Hour)}
 			require.NoError(t, store.PutScheduledMessage("pending", &scheduled))
 			_, err := store.PruneStateBefore(ctx, cutoff, 0)
 			require.NoError(t, err)
@@ -1860,7 +1860,7 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 		require.NoError(t, err)
 
 		origin := &protocol.InboundMessage{SyncDestination: managedID}
-		require.NoError(t, bridge.ScheduleMessage(origin, 5040*time.Hour, "pending follow-up", false))
+		require.NoError(t, bridge.ScheduleMessage(origin, 2160*time.Hour, "pending follow-up", false))
 
 		_, err = store.PruneStateBefore(ctx, cutoff, 0)
 		require.NoError(t, err)
