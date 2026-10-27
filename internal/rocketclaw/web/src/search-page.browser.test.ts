@@ -568,6 +568,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     await agentPill("other").waitFor();
     await agentPill("main").click();
     await sent("agent:other");
+    await agentPill("other").waitFor();
     expect(await agentPill("other").count()).toBe(1);
     await stored("agent:other ");
     await agentPill("other").click();
