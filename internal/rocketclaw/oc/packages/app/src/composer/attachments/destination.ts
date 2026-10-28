@@ -47,6 +47,7 @@ export function useAttachmentDestination(controls: Accessor<ComposerControls>) {
 // (upstream packages/app/src/composer/attachments/destination.ts)
 function write(url: URL, file: File, report: (loaded: number) => void, signal: AbortSignal) {
   return new Promise<string>((resolve, reject) => {
+    if (signal.aborted) return reject(new DOMException("Upload aborted", "AbortError"))
     const xhr = new XMLHttpRequest()
     xhr.open("POST", url)
     xhr.responseType = "json"

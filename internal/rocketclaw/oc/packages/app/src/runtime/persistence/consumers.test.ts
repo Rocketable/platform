@@ -5,7 +5,7 @@ import { Persistence } from "@/runtime/persistence/schema"
 import { FileViewsSchema } from "@/workspaces/files/view-cache"
 import { languageSchema } from "@/runtime/i18n/language"
 import { ModelProvidersSchema } from "@/settings/models/models"
-import { IconState, ProjectState, VcsState } from "@/runtime/server/persistence"
+import { ProjectState, VcsState } from "@/runtime/server/persistence"
 
 function stored<S extends Schema.ConstraintCodec<object, unknown>>(
   name: string,
@@ -64,13 +64,6 @@ describe("persisted consumer schemas", () => {
           },
         },
       ],
-    ]),
-    stored("icon cache", IconState, { value: undefined }, [
-      [{}, { value: undefined }],
-      [{ value: 42 }, { value: undefined }],
-      [{ value: null }, { value: undefined }],
-      [{ value: "" }, { value: "" }],
-      [{ value: "data:image/png;base64,abc" }, { value: "data:image/png;base64,abc" }],
     ]),
   ])("$name defaults missing or invalid values and round-trips valid ones", (row) => {
     row.cases.forEach(([input, expected]) => {

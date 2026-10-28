@@ -1,9 +1,10 @@
 import { DataProvider } from "@opencode/session-ui/context"
 import { MarkdownProvider, type ReadMarkdownImage } from "@opencode/session-ui/context/markdown"
 import { useNavigate, useParams } from "@solidjs/router"
-import { createMemo, useContext, type ParentProps } from "solid-js"
+import { createMemo, onCleanup, useContext, type ParentProps } from "solid-js"
 // rocketclaw: navigation that leaves this session goes to RocketClaw (upstream packages/app/src/shell/routes/session-ui-provider.tsx)
 import { NavigationContext } from "@rocketclaw/host/navigation"
+import { useQuery } from "@tanstack/solid-query"
 import { useProviders } from "@/providers/catalog/providers"
 import { LocalProvider } from "@/providers/models/selection"
 import type { ServerConnection } from "@/runtime/server/registry"
@@ -15,6 +16,7 @@ import { readLocalImage } from "@/runtime/server/image"
 import { useLanguage } from "@/runtime/i18n/language"
 import { showToast } from "@/shell/notifications/toast"
 import { createTurnDiffCache } from "@/session/timeline/turn-diffs"
+import { useSettings } from "@/settings/model"
 
 export function SessionUIProvider(
   props: ParentProps<{
@@ -29,6 +31,7 @@ export function SessionUIProvider(
   const tabs = useTabs()
   const language = useLanguage()
   const navigation = useContext(NavigationContext)
+  const settings = useSettings()
   const directory = () => props.directory
 
   const readImage = createMemo<ReadMarkdownImage>(() => {
@@ -69,7 +72,33 @@ export function SessionUIProvider(
     navigation.openSession(session.id)
   }
 
+  const sessionTitle = (id: string) => {
+    const session = data.session.get(id)
+
+    // rocketclaw: without the home session index, resolve unknown mentions on click (upstream packages/app/src/shell/routes/session-ui-provider.tsx)
+    return session ? (!session.time.archived ? session.title || language.t("command.session.new") : undefined) : id
+  }
+
   const providers = useProviders(directory)
+
+  const config = useQuery(() => ({
+    queryKey: [serverSDK.scope, "session-ui-config", directory()],
+    enabled: serverSDK.connection.status() === "connected",
+    queryFn: () => serverSDK.api.config.get({ location: { directory: directory() } }),
+  }))
+
+  onCleanup(
+    serverSDK.event.on("config.updated", (event) => {
+      if (event.location && event.location.directory !== directory()) return
+      void config.refetch()
+    }),
+  )
+
+  // Matches the server: the highest-priority document that sets `experimental` decides.
+  const backgroundCompaction = () =>
+    config.data
+      ?.flatMap((entry) => (entry.type === "document" && entry.info.experimental ? [entry.info.experimental] : []))
+      .at(-1)?.background_compaction === true
 
   // Turn diffs live in the tab's in-memory state, so they outlast timeline remounts and go when the tab closes.
   const turnDiffs = () => {
@@ -105,22 +134,26 @@ export function SessionUIProvider(
   }))
 
   return (
-    <DataProvider
-      data={sessionUIData()}
-      directory={directory()}
-      sessionID={params.id}
-      shellRunning={(id) => !!data.shell.get(id)}
-      shellOutput={(input) => serverSDK.api.shell.output(input)}
-      turnDiff={{
-        get: (input) => turnDiffs()?.get(input),
-        load: (input) => turnDiffs()?.load(input, () => serverSDK.api.session.diff(input)),
-      }}
-      onNavigateToSession={navigateToSession}
-      onSessionHref={href}
-    >
-      <MarkdownProvider readImage={readImage()} openSession={openReferencedSession}>
-        <LocalProvider>{props.children}</LocalProvider>
-      </MarkdownProvider>
-    </DataProvider>
+    <LocalProvider>
+      <DataProvider
+        data={sessionUIData()}
+        directory={directory()}
+        sessionID={params.id}
+        agents={settings.visibility.customAgents()}
+        shellRunning={(id) => !!data.shell.get(id)}
+        shellOutput={(input) => serverSDK.api.shell.output(input)}
+        turnDiff={{
+          get: (input) => turnDiffs()?.get(input),
+          load: (input) => turnDiffs()?.load(input, () => serverSDK.api.session.diff(input)),
+        }}
+        onNavigateToSession={navigateToSession}
+        onSessionHref={href}
+        backgroundCompaction={backgroundCompaction()}
+      >
+        <MarkdownProvider readImage={readImage()} openSession={openReferencedSession} sessionTitle={sessionTitle}>
+          {props.children}
+        </MarkdownProvider>
+      </DataProvider>
+    </LocalProvider>
   )
 }

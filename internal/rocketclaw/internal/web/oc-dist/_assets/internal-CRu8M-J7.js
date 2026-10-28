@@ -1,0 +1,1 @@
+import{y as e}from"./solid-Zk_90kIj.js";var t=e(),n=e(),r=e(),i=e(),a=Symbol.for(`opencode.plugin.live`);function o(e){return Object.assign(e,{[a]:!0})}function s(e){return a in e}export{s as a,t as i,n,o,r,i as t};

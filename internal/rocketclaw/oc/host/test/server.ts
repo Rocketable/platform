@@ -1,5 +1,6 @@
 // A fake OpenCode server behind RocketClaw's proxy route, http://host.test/oc/box/api, for the host tests. It serves
 // what the session view loads, streams events until the request is aborted, and can reject or drop requests.
+import { tag } from "../../manifest.json"
 
 export const origin = "http://host.test"
 export const url = `${origin}/oc/box`
@@ -31,6 +32,7 @@ const messages = (id: string) => [
     model: { id: "m", providerID: "p" },
     content: [
       { type: "text", text: `answer in ${id}` },
+      ...(server.extraText ? [{ type: "text", text: server.extraText }] : []),
       ...(id === "ses_a"
         ? [
             { type: "text", text: `Picks up where ${linked} left off.` },
@@ -62,17 +64,19 @@ const sessions = () =>
   ])
 
 export const server = {
-  version: "2.1.3",
+  version: tag.slice(1),
   state: "up" as "up" | "unauthorized" | "down",
   sessions: sessions(),
   requests: [] as string[],
   streams: 0,
+  extraText: "",
 }
 
 /** Puts the server back as it starts: up, on the copy's version, with its sessions. */
 export function reset() {
-  server.version = "2.1.3"
+  server.version = tag.slice(1)
   server.state = "up"
+  server.extraText = ""
   server.sessions = sessions()
 }
 

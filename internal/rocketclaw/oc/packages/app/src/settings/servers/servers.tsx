@@ -11,7 +11,6 @@ import "@/settings/settings.css"
 // OpenCode's server manager (connection row, sign-in, add and edit) (upstream packages/app/src/settings/servers/servers.tsx)
 export const SettingsServerGeneral: Component<{
   entry: SettingsServer
-  nested?: boolean
 }> = (props) => {
   const language = useLanguage()
 
@@ -20,9 +19,7 @@ export const SettingsServerGeneral: Component<{
       <div class="settings-tab-header">
         <div class="settings-tab-header-row">
           <div class="flex flex-col gap-1">
-            <h2 class="settings-tab-title">
-              {props.nested ? props.entry.name : language.t("settings.section.server")}
-            </h2>
+            <h2 class="settings-tab-title">{language.t("settings.section.server")}</h2>
           </div>
         </div>
       </div>

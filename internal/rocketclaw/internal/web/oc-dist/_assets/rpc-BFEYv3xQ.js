@@ -1,0 +1,1 @@
+import{n as e}from"./rolldown-runtime-hePW80VL.js";var t=e({Rpc:()=>t,define:()=>n});function n(e){let t=Object.values(e.methods).flatMap(e=>Object.keys(e.errors??{})).find(e=>e.startsWith(`rpc.`));if(t)throw Error(`RPC error names starting with "rpc." are reserved: ${t}`);return e}export{t as n,n as t};
