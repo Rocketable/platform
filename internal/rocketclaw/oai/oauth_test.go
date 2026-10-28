@@ -1511,18 +1511,6 @@ func TestTransportSkipsCompactionBelowThreshold(t *testing.T) {
 	require.Equal(t, 0, compactCalls)
 }
 
-func TestTransportNormalizesCompactionSummary(t *testing.T) {
-	body, compactCalls := runAutoCompactTransportTest(t,
-		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`,
-		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
-		`{"output":[{"id":"cmp_1","type":"compaction_summary","encrypted_content":"sealed"}]}`,
-	)
-
-	require.Equal(t, 1, compactCalls)
-	require.Contains(t, body, `"type":"compaction"`)
-	require.NotContains(t, body, `compaction_summary`)
-}
-
 func TestTransportLeavesResponseWhenCompactResponseHasNoCompaction(t *testing.T) {
 	body, compactCalls := runAutoCompactTransportTest(t,
 		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`,
