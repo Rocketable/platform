@@ -367,13 +367,14 @@ type TabGroup struct {
 	Collapsed       bool
 }
 
-// TabState is one person's Web tabs and groups in strip order, the space they are in, and the last
-// active tab of each space by space id.
+// TabState is one person's Web tabs and groups in strip order, the space they are in, the last
+// active tab of each space by space id, and their own order of Shared tabs by path.
 type TabState struct {
-	Tabs   []Tab
-	Groups []TabGroup
-	Space  string
-	Last   map[string]string
+	Tabs        []Tab
+	Groups      []TabGroup
+	Space       string
+	Last        map[string]string
+	SharedOrder []string
 }
 
 // tabPathSQL is conversation c's Web tab path, as the Web's rowPath and encodeSessionId spell it.
@@ -412,12 +413,12 @@ func (s *SessionService) TabState(ctx context.Context, username string) (TabStat
 	defer func() { _ = tx.Rollback() }()
 
 	var (
-		state    TabState
-		last     []byte
-		revision int64
+		state       TabState
+		last, order []byte
+		revision    int64
 	)
 
-	err = tx.QueryRowContext(ctx, `SELECT space, last, revision FROM web_tab_states WHERE username = $1`, username).Scan(&state.Space, &last, &revision)
+	err = tx.QueryRowContext(ctx, `SELECT space, last, shared_order, revision FROM web_tab_states WHERE username = $1`, username).Scan(&state.Space, &last, &order, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TabState{}, 0, nil
 	}
@@ -428,6 +429,10 @@ func (s *SessionService) TabState(ctx context.Context, username string) (TabStat
 
 	if err := json.Unmarshal(last, &state.Last); err != nil {
 		return TabState{}, 0, fmt.Errorf("decode last tabs: %w", err)
+	}
+
+	if err := json.Unmarshal(order, &state.SharedOrder); err != nil {
+		return TabState{}, 0, fmt.Errorf("decode shared order: %w", err)
 	}
 
 	state.Tabs, err = queryRows(ctx, tx, `SELECT path, preview, group_id, space, search FROM web_tabs WHERE username = $1 AND position IS NOT NULL ORDER BY position`, "tabs", func(row rowScanner) (Tab, error) {
@@ -470,9 +475,9 @@ func (s *SessionService) SaveTabState(ctx context.Context, username string, stat
     FROM unnest($4::text[], $5::text[], $6::text[]) AS l(space, path, conversation_id)
     LEFT JOIN conversations c ON c.conversation_id = l.conversation_id
 )
-INSERT INTO web_tab_states (username, space, last, revision) SELECT $1, $2, last, $3 + 1 FROM lasts
-ON CONFLICT (username) DO UPDATE SET space = excluded.space, last = excluded.last, revision = excluded.revision
-WHERE web_tab_states.revision = $3`, username, state.Space, revision, lastSpaces, lastPaths, lastConversations); err != nil || claimed == 0 {
+INSERT INTO web_tab_states (username, space, last, shared_order, revision) SELECT $1, $2, last, COALESCE(to_jsonb($7::text[]), '[]'), $3 + 1 FROM lasts
+ON CONFLICT (username) DO UPDATE SET space = excluded.space, last = excluded.last, shared_order = excluded.shared_order, revision = excluded.revision
+WHERE web_tab_states.revision = $3`, username, state.Space, revision, lastSpaces, lastPaths, lastConversations, state.SharedOrder); err != nil || claimed == 0 {
 		return false, err
 	}
 
@@ -587,18 +592,6 @@ func (s *SessionService) UnshareTab(ctx context.Context, space, path string) ([]
 	}
 
 	return tabs[0].Search, nil
-}
-
-// SwapSharedTabs swaps when path and with were added to space's Shared tabs, which swaps their places.
-// Unless both are shared there, it changes nothing.
-func (s *SessionService) SwapSharedTabs(ctx context.Context, space, path, with string) error {
-	_, err := execState(ctx, s.db, "swap shared tabs", `WITH pair AS (
-    SELECT path, added_at FROM web_shared_tabs WHERE space = $1 AND path IN ($2, $3)
-)
-UPDATE web_shared_tabs t SET added_at = other.added_at FROM pair this JOIN pair other ON other.path <> this.path
-WHERE t.space = $1 AND t.path = this.path`, space, path, with)
-
-	return err
 }
 
 // TabMute is a session tab whose desktop notifications a person muted until Until, or until unmuted

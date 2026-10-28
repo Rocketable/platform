@@ -14,7 +14,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// tabs saves the caller's tab state, changes one space, adds, removes, swaps, or edits Shared tabs, or mutes or
+// tabs saves the caller's tab state, changes one space, adds, removes, or edits Shared tabs, or mutes or
 // unmutes one session tab for the caller, then returns every space, the caller's saved state, every Shared
 // tab, and the caller's live mutes. New session and sessions people may not open are never shared or muted.
 func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse, error) {
@@ -57,7 +57,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		var errState error
 
 		state, response.Revision, err = s.sessions.TabState(ctx, username)
-		response.State, errState = tabState(state)
+		response.State, errState = tabState(&state)
 		err = errors.Join(err, errState)
 	}
 
@@ -115,8 +115,6 @@ func (s *Server) changeTabs(ctx context.Context, username string, request *TabsR
 		refused = !edited
 	case request.Unshare != nil:
 		unshared, err = s.sessions.UnshareTab(ctx, request.Unshare.Space, request.Unshare.Path)
-	case request.SwapShared != nil:
-		err = s.sessions.SwapSharedTabs(ctx, request.SwapShared.Space, request.SwapShared.Path, request.SwapShared.With)
 	case request.Mute != nil:
 		err = s.muteTab(ctx, username, request.Mute)
 	case request.Unmute != "":
@@ -187,8 +185,8 @@ func sharedTabs(shared []backend.SharedTab) ([]*SharedTab, error) {
 }
 
 // tabState is the backend's saved state as the Web reads it.
-func tabState(state backend.TabState) (out *TabState, err error) {
-	out = &TabState{Space: state.Space, Last: state.Last}
+func tabState(state *backend.TabState) (out *TabState, err error) {
+	out = &TabState{Space: state.Space, Last: state.Last, SharedOrder: state.SharedOrder}
 	for _, tab := range state.Tabs {
 		page, errPage := searchPage(tab.Search)
 		err = errors.Join(err, errPage)
@@ -205,7 +203,7 @@ func tabState(state backend.TabState) (out *TabState, err error) {
 
 // savedTabState is state as the backend saves it.
 func savedTabState(state *TabState) *backend.TabState {
-	saved := &backend.TabState{Space: state.Space, Last: state.Last}
+	saved := &backend.TabState{Space: state.Space, Last: state.Last, SharedOrder: state.SharedOrder}
 	for _, tab := range state.Tabs {
 		saved.Tabs = append(saved.Tabs, backend.Tab{Path: tab.Path, Preview: tab.Preview, Group: tab.Group, Space: tab.Space, Search: searchJSON(tab.Search)})
 	}

@@ -20,13 +20,13 @@ type SharedTab = { space: string; path: string; search?: SearchPage };
 // A Search page as the server compares it: field order and empty names do not matter.
 const plain = (page?: SearchPage) => JSON.stringify(page ? [page.name ?? "", page.searches.map(({ id, name, query }) => [id, name ?? "", query]), page.active] : null);
 type Mute = { path: string; until: string };
-type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: { name?: string; searches: { query: string }[] } }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string> }; revision: number; refused: number; shared: SharedTab[]; mutes: Mute[] };
+type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: { name?: string; searches: { query: string }[] } }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; mutes: Mute[] };
 
-// Mirrors the server's Tabs call: it saves the state, changes one space, adds, removes, or swaps Shared tabs, or mutes or
+// Mirrors the server's Tabs call: it saves the state, changes one space, adds, removes, or edits Shared tabs, or mutes or
 // unmutes one tab, then answers with every space, the saved state, every space's Shared tabs in order, and the mutes.
 // A taken name, ignoring case, deleting the last space, and sharing New session are refused, and a save made from an
 // older revision is stale. A deleted space's Shared tabs join the first remaining space's, once each, keeping their order.
-function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SharedTab; unshare?: SharedTab; editShared?: SharedTab & { base?: SearchPage }; swapShared?: SharedTab & { with: string }; mute?: Mute; unmute?: string }) {
+function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SharedTab; unshare?: SharedTab; editShared?: SharedTab & { base?: SearchPage }; mute?: Mute; unmute?: string }) {
   const taken = (name: string, id?: string) => saved.spaces.some((space) => space.id !== id && space.name.toLowerCase() === name.toLowerCase());
   const has = (space: string, path: string) => saved.shared.some((tab) => tab.space === space && tab.path === path);
   if ([input.createSpace && taken(input.createSpace), input.renameSpace && taken(input.renameSpace.name, input.renameSpace.id), input.deleteSpace && saved.spaces.length === 1, input.share?.path === "/"].some(Boolean)) {
@@ -50,10 +50,6 @@ function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: numb
   const unshared = input.unshare && saved.shared.find((tab) => tab.space === input.unshare!.space && tab.path === input.unshare!.path)?.search;
   if (input.unshare) saved.shared = saved.shared.filter((tab) => tab.space !== input.unshare!.space || tab.path !== input.unshare!.path);
   if (unshared) return Response.json({ ...saved, unshared });
-  if (input.swapShared) {
-    const { space, path: from, with: to } = input.swapShared, [i, j] = [from, to].map((link) => saved.shared.findIndex((tab) => tab.space === space && tab.path === link));
-    [saved.shared[i], saved.shared[j]] = [saved.shared[j], saved.shared[i]];
-  }
   if (input.mute) saved.mutes = [...saved.mutes.filter((mute) => mute.path !== input.mute!.path), input.mute];
   if (input.unmute) saved.mutes = saved.mutes.filter((mute) => mute.path !== input.unmute);
   return Response.json(saved);
@@ -63,7 +59,7 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
   const { chromium: engine } = await import(playwright!);
   const prompts: { id: string; text: string }[] = [];
   const sessions = structuredClone(rows);
-  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {} }, revision: 0, refused: 0, shared: [], mutes: [] };
+  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, sharedOrder: [] }, revision: 0, refused: 0, shared: [], mutes: [] };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -1415,7 +1411,7 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
   await page.waitForURL(`**${href("alpha")}`);
   expect([await row("Alpha").getAttribute("aria-selected"), await tab("Alpha").getAttribute("aria-selected")]).toEqual(["true", "true"]);
 
-  // A Shared row has no close button, offers no closing, ignores middle-clicks, and takes no drops.
+  // A Shared row has no close button, offers no closing, ignores middle-clicks, and takes no drops of this person's tabs.
   expect(await shared(page).getByRole("button", { name: "Close Alpha" }).count()).toBe(0);
   expect(await sharedMenu(page, "Alpha")).toEqual(["Remove from Shared", "Mute notifications", "Snooze notifications"]);
   await page.keyboard.press("Escape");
@@ -1601,11 +1597,25 @@ test("Shared rows step, arrow, and reorder like this person's tabs, and Escape l
   expect(await focused(tab("Alpha"))).toBe(true);
   await page.keyboard.press("ArrowUp");
   expect(await focused(row("Bravo"))).toBe(true);
-  // Shift+Arrow moves a Shared row among the Shared rows, for everyone, and keeps it focused.
+  // Shift+Arrow and dragging move a Shared row among the Shared rows for this person alone, and Shift+Arrow keeps it
+  // focused. The order survives a reload, and a row shared since goes last. A Shared row dropped on this person's tabs
+  // moves nothing.
+  const order = (...paths: string[]) => until(() => JSON.stringify(saved.state.sharedOrder) === JSON.stringify(paths));
   await row("Shortcuts").focus();
   await page.keyboard.press("Shift+ArrowDown");
   await shared(page).getByRole("tab").last().filter({ hasText: "Shortcuts" }).waitFor();
-  expect([saved.shared.map((item) => item.path), await sharedNames(page), await focused(row("Shortcuts"))]).toEqual([[href("bravo"), "/shortcuts"], ["Bravo", "Shortcuts"], true]);
+  expect([await sharedNames(page), await focused(row("Shortcuts"))]).toEqual([["Bravo", "Shortcuts"], true]);
+  await order(href("bravo"), "/shortcuts");
+  expect(saved.shared.map((item) => item.path)).toEqual(["/shortcuts", href("bravo")]);
+  await row("Shortcuts").dragTo(tab("Alpha"));
+  expect([await names(page), await sharedNames(page)]).toEqual([["Alpha", "Bravo"], ["Bravo", "Shortcuts"]]);
+  saved.shared.push({ space: "main", path: href("charlie") });
+  await page.reload();
+  await row("Charlie").waitFor();
+  expect(await sharedNames(page)).toEqual(["Bravo", "Shortcuts", "Charlie"]);
+  await row("Charlie").dragTo(row("Bravo"));
+  await order(href("charlie"), href("bravo"), "/shortcuts");
+  expect(await sharedNames(page)).toEqual(["Charlie", "Bravo", "Shortcuts"]);
 }), 30_000);
 
 test("any session tab, Shared or not, mutes or snoozes its notifications from its menu or the palette", () => withPage({}, async (page, origin, _prompts, saved) => {

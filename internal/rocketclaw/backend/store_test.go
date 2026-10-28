@@ -2444,18 +2444,19 @@ VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 
 	state, revision, err = store.TabState(ctx, "alice")
 	require.NoError(t, err)
-	assert.Equal(t, TabState{Space: "second", Last: map[string]string{}}, state)
+	assert.Equal(t, TabState{Space: "second", Last: map[string]string{}, SharedOrder: []string{}}, state)
 	assert.Equal(t, int64(2), revision)
 
-	// A space's last tab may be a Shared tab whose own copy sits in another space, or a closed tab.
-	last := map[string]string{"main": "/cron", "ops": "/cron", "dev": "/search"}
-	saved, err := store.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}}, Space: "main", Last: last}, revision)
+	// A space's last tab may be a Shared tab whose own copy sits in another space, or a closed tab. The person's
+	// Shared order is kept as saved.
+	last, order := map[string]string{"main": "/cron", "ops": "/cron", "dev": "/search"}, []string{"/search", "/cron"}
+	saved, err := store.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}}, Space: "main", Last: last, SharedOrder: order}, revision)
 	require.NoError(t, err)
 	require.True(t, saved)
 
 	state, _, err = store.TabState(ctx, "alice")
 	require.NoError(t, err)
-	assert.Equal(t, TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}}, Space: "main", Last: last}, state, "every space keeps its own last tab")
+	assert.Equal(t, TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}}, Space: "main", Last: last, SharedOrder: order}, state, "every space keeps its own last tab")
 
 	// A Search tab keeps its page through saves that move it; other tabs have none.
 	page := `{"name":"Triage","searches":[{"id":"1","query":"is:unread"}],"active":"1"}`
@@ -2520,12 +2521,6 @@ func TestWebSharedTabs(t *testing.T) {
 	share("gone", "/cron")
 	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/s/YQ"}}, shared(),
 		"oldest first; a legacy spelling is stored canonical; sharing again, a missing session, or a missing space changes nothing")
-
-	require.NoError(t, store.SwapSharedTabs(ctx, "main", "/s/YQ", "/search"))
-	require.NoError(t, store.SwapSharedTabs(ctx, "main", "/search", "/cron"))
-	require.NoError(t, store.SwapSharedTabs(ctx, ops, "/search", "/s/YQ"))
-	assert.Equal(t, []SharedTab{{Space: "main", Path: "/s/YQ"}, {Space: "main", Path: "/search"}}, shared(),
-		"swapping two tabs swaps their places; swapping with a tab not shared there changes nothing")
 
 	share(ops, "/cron")
 	share(ops, "/s/YQ")
