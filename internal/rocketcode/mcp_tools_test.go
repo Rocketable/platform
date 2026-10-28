@@ -23,6 +23,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCodeModeHostInputSchemaRequiredFields(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		tool     string
+		required any
+		want     []string
+	}{
+		{name: "string slice", tool: "custom", required: []string{"second", "first"}, want: []string{"second", "first"}},
+		{name: "decoded array", tool: "custom", required: []any{"second", "", 17, "first"}, want: []string{"second", "first"}},
+		{name: "absent", tool: "custom"},
+		{name: "webfetch override", tool: "webfetch", required: []string{"url", "format", "timeout_s"}, want: []string{"url"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			properties := map[string]any{
+				"first": map[string]any{"type": "string"}, "second": map[string]any{"type": "string"},
+				"url": map[string]any{"type": "string"}, "format": map[string]any{"type": "string"},
+				"timeout_s": map[string]any{"type": "integer"},
+			}
+			definition := responses.FunctionToolParam{Parameters: map[string]any{
+				"type": "object", "properties": properties, "required": tc.required,
+			}}
+			schema := codeModeHostInputSchema(tc.tool, &definition)
+			require.Equal(t, tc.want, schema["required"])
+			require.Equal(t, "object", schema["type"])
+			require.Equal(t, properties, schema["properties"])
+			require.Equal(t, false, schema["additionalProperties"])
+
+			if len(tc.want) > 0 {
+				schema["required"].([]string)[0] = "changed"
+
+				require.Equal(t, tc.want, codeModeHostInputSchema(tc.tool, &definition)["required"])
+			}
+		})
+	}
+}
+
 func TestMCPToolsOmitsWithoutAllow(t *testing.T) {
 	t.Parallel()
 
