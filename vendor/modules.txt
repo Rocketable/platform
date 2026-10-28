@@ -457,7 +457,7 @@ github.com/segmentio/asm/keyset
 github.com/segmentio/encoding/ascii
 github.com/segmentio/encoding/iso8601
 github.com/segmentio/encoding/json
-# github.com/slack-go/slack v0.31.0
+# github.com/slack-go/slack v0.32.0
 ## explicit; go 1.26
 github.com/slack-go/slack
 github.com/slack-go/slack/internal/backoff
