@@ -259,15 +259,38 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 	}
 }
 
+// An External MCP chat's row carries its binding and when its work arrived: its last update while
+// no turn of it or its run waits or runs.
+func TestListSessionsExternalArrival(t *testing.T) {
+	server, ctx := sidebarChoicesFixture(t, 0)
+	require.NoError(t, server.sessions.RegisterExternalMCPConversation("ticket", "choice-00", &backend.ExternalMCPSessionState{Agent: "choice-00", PrivateConversationID: "private", ManagedConversationID: "mcp"}))
+	_, err := server.sessions.AppendEntryID(ctx, "mcp", &harness.SessionEntry{Timestamp: time.Unix(1, 0)})
+	require.NoError(t, err)
+
+	var sessions []*Session
+
+	require.NoError(t, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
+		sessions = append(sessions, message.(*ListSessionsResponse).Sessions...)
+		return nil
+	}}))
+	require.Len(t, sessions, 1)
+	require.True(t, sessions[0].External)
+	require.Equal(t, WorkState_IDLE, sessions[0].WorkState)
+	require.Equal(t, "1970-01-01T00:00:01Z", sessions[0].ArrivedAt)
+	require.Equal(t, "1970-01-01T00:00:01Z", sessions[0].StateSince)
+}
+
 // A poll naming a listing the server still holds gets only the rows changed since; every listing ends
 // with all IDs in order, so the browser keeps unchanged rows and drops missing ones.
 func TestListSessionsSendsChangesSince(t *testing.T) {
 	server, ctx := sidebarChoicesFixture(t, 3)
+	rows := make(map[string]*Session) // Each chat's last sent row.
 	list := func(ctx context.Context, since string) (sent []string, done *ListSessionsResponse) {
 		require.NoError(t, server.listSessions(&ListSessionsRequest{Since: since}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
 			response := message.(*ListSessionsResponse)
 			for _, session := range response.Sessions {
 				sent = append(sent, session.Id)
+				rows[session.Id] = session
 			}
 
 			if response.UpstreamSuccess {
@@ -290,14 +313,22 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 	require.Equal(t, full.Order, unchanged.Order)
 	require.NotEqual(t, full.Version, unchanged.Version)
 
+	queuedAt := time.Now()
+	require.NoError(t, server.sessions.PutThreadQueueItem("later", &protocol.ThreadQueueItem{ConversationID: "chat-00", Message: "later", StashAt: queuedAt}))
+
+	sent, queued := list(ctx, unchanged.Version)
+	require.Equal(t, []string{"chat-00"}, sent, "queueing work into an idle chat changes its work state")
+	require.Equal(t, WorkState_QUEUED, rows["chat-00"].WorkState)
+	require.Equal(t, queuedAt.UTC().Format(time.RFC3339Nano), rows["chat-00"].StateSince, "a queued chat's state began when its turn was queued")
+
 	_, err := server.updateSession(ctx, &UpdateSessionRequest{Id: "chat-01", Name: new("Renamed")})
 	require.NoError(t, err)
 
-	sent, renamed := list(ctx, unchanged.Version)
+	sent, renamed := list(ctx, queued.Version)
 	require.Equal(t, []string{"chat-01"}, sent, "only the changed row")
 
 	sent, _ = list(ctx, full.Version)
-	require.Equal(t, []string{"chat-01"}, sent, "an older listing the server still holds works too")
+	require.ElementsMatch(t, []string{"chat-00", "chat-01"}, sent, "an older listing the server still holds works too")
 
 	_, err = server.sessions.DeleteSession(t.Context(), "chat-02")
 	require.NoError(t, err)

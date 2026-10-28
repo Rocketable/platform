@@ -9,7 +9,7 @@ export type PendingQuestion = { id: string; question: string; details: string; o
 export type SessionEntryMeta = { id: string; type?: string; timestamp?: string };
 export type SessionEntryData = { id: string; json?: string };
 export type QueueItem = { id: string; text: string; editText?: string; attachments?: Attachment[]; delivery?: PromptDelivery; principal?: string };
-export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; running?: boolean; background?: boolean; pinned?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean; spaceId?: string; reply?: string; model?: string; kind?: ConversationKind; remoteSessionId?: string; label?: string; unreadAt?: string; asking?: boolean };
+export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; running?: boolean; background?: boolean; pinned?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean; spaceId?: string; reply?: string; model?: string; kind?: ConversationKind; remoteSessionId?: string; label?: string; unreadAt?: string; asking?: boolean; workState?: "IDLE" | "NEEDS_YOU" | "RUNNING" | "QUEUED"; stateSince?: string; external?: boolean; arrivedAt?: string };
 export type ConversationKind = "WEB_CHAT" | "SLACK_THREAD" | "CRON_RUN" | "ONE_OFF_CRON_RUN" | "EXTERNAL_MCP_RUN" | "SUBAGENT" | "REVIEW" | "SHADOW" | "REMOTE_OPENCODE";
 // Remote OpenCode servers with their origins, and the tags people may set on their sessions.
 export type Remote = { servers: Record<string, string>; agentTags: Record<string, string[]> };
@@ -37,8 +37,9 @@ export type SlackNamesResponse = { names?: Record<string, string> };
 export type VoiceRoute = "public" | "codex";
 export type VoiceEndReason = "stopped" | "replaced" | "expired" | "safety" | "closed" | "lost" | "error";
 export type VoiceEvent = { answer?: { sdp: string; route: VoiceRoute }; notice?: string; typed?: boolean; reply?: string; reconnecting?: boolean; ended?: { reason: VoiceEndReason } };
-// SearchPage is a Search tab's name and its searches, active naming the shown one by id.
-export type SearchPage = { name?: string; searches: { id: string; name?: string; query: string }[]; active: string };
+// SearchPage is a Search tab's name and its searches, active naming the shown one by id. A Dashboard's board names its
+// style, and its searches are lanes, notify marking one whose new sessions notify.
+export type SearchPage = { name?: string; board?: string; searches: { id: string; name?: string; query: string; notify?: boolean }[]; active: string };
 // SavedTabs is every Web space and the signed-in person's saved tabs; last names the last tab of each space by space id,
 // and sharedOrder is the person's own order of Shared tabs by path.
 // revision counts saves; stale reports a save refused because it was made from an older revision than the one saved.

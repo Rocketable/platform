@@ -213,27 +213,11 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 			return err
 		}
 
-		row := &chat.Session
-		conversation := row.Conversation
-
 		if _, err := agents(); err != nil {
 			return err
 		}
 
-		session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
-			Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label()}
-
-		if summary := row.Summary; summary != nil {
-			session.Preview = summary.LastMessage
-			if !summary.LastUpdated.IsZero() {
-				session.UpdatedAt = summary.LastUpdated.Format(time.RFC3339Nano)
-			}
-		}
-
-		if !row.UnreadAt.IsZero() {
-			session.UnreadAt = row.UnreadAt.Format(time.RFC3339Nano)
-		}
-
+		session := sidebarSession(&chat)
 		encoded, _ = proto.MarshalOptions{Deterministic: true}.MarshalAppend(encoded[:0], session) // A built Session always encodes.
 		fingerprint := fnv.New64a()
 		_, _ = fingerprint.Write(encoded)
@@ -277,6 +261,33 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	}
 
 	return nil
+}
+
+// sidebarSession is chat as ListSessions lists it and a Board lane shows it.
+func sidebarSession(chat *backend.SidebarChat) *Session {
+	row := &chat.Session
+	conversation := row.Conversation
+	workStates := map[backend.WorkState]WorkState{backend.WorkIdle: WorkState_IDLE, backend.WorkNeedsYou: WorkState_NEEDS_YOU, backend.WorkRunning: WorkState_RUNNING, backend.WorkQueued: WorkState_QUEUED}
+
+	session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
+		Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label(), External: row.External, WorkState: workStates[row.Work]}
+
+	if !row.StateSince.IsZero() {
+		session.StateSince, session.ArrivedAt = row.StateSince.Format(time.RFC3339Nano), row.ArrivedAt.Format(time.RFC3339Nano)
+	}
+
+	if summary := row.Summary; summary != nil {
+		session.Preview = summary.LastMessage
+		if !summary.LastUpdated.IsZero() {
+			session.UpdatedAt = summary.LastUpdated.Format(time.RFC3339Nano)
+		}
+	}
+
+	if !row.UnreadAt.IsZero() {
+		session.UnreadAt = row.UnreadAt.Format(time.RFC3339Nano)
+	}
+
+	return session
 }
 
 // historyRevision is a stateless inventory, not an event-log cursor. The database

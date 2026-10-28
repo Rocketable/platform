@@ -329,8 +329,8 @@ func listSessionsTool(service *SessionService, threads *threadBridgeManager) har
 	return harness.Tool{
 		Name: sessionsListToolName, Description: fmt.Sprintf("List durable conversations of this State Store, newest first. Supply all five fields: criteria, since (required), until (empty for no upper bound), limit (1 to %d) and include_message_preview. Returns TSV with a header, one session per row with entry counts, timestamps and optional message previews. "+
 			"Empty criteria lists every stored conversation by latest entry, including private MCP and cron sessions. "+
-			"Other criteria is a Web /search query and returns what /search would: only the chats Web lists, never private External MCP or cron producer chats, filtered before the limit; since, until and order then use each chat's summary time. "+
-			"Query language: tag:V, cron:V, agent:V and room:V match V exactly and case-sensitively; space:V matches the complete Birth Space name ignoring case, not tab placement; model:V matches part of the agent's configured model, ignoring case; V may be a JSON-quoted string such as tag:\"Needs review\"; is:pinned, is:forked and is:cron; sort:newest or sort:oldest. agent:V also matches chats showing a hidden cron or External MCP run of agent V. Room terms match any one room and agent terms any one agent; other filters use AND. Unknown or malformed terms are searched as text. "+
+			"Other criteria is a Web /search query and returns what /search would: only the chats Web lists, never private External MCP or cron producer chats, filtered before the limit; order then uses each chat's summary time, and since and until the later of it and when the chat's newest running or waiting turn was created, so current work counts as recent. "+
+			"Query language: tag:V, cron:V, agent:V and room:V match V exactly and case-sensitively; space:V matches the complete Birth Space name ignoring case, not tab placement; model:V matches part of the agent's configured model, ignoring case; V may be a JSON-quoted string such as tag:\"Needs review\"; is:pinned, is:forked and is:cron; is:running (a running turn or background work), is:queued (waiting turns other than scheduled ones), is:waiting (waiting on a person: a pending question, form or permission request) and is:external (bound to External MCP), all but is:waiting counting the hidden runs reporting to a chat as its own; sort:newest or sort:oldest. agent:V also matches chats showing a hidden cron or External MCP run of agent V. Room terms match any one room and agent terms any one agent; other filters use AND. Unknown or malformed terms are searched as text. "+
 			"All remaining text is ONE case-insensitive phrase, not separate keywords, matched against name, room, agent, preview, session label, chat origin and message text. "+
 			"With criteria, rows add name, agent, room, tags and matched (the field holding the phrase, or messages when only message text did), and a messages block lists up to 3 matching messages per listed chat; rocketclaw_sessions_get with a row's before_entry_id and limit 1 shows that message. Messages of stopped turns are not listed. "+
 			"Trailing lines show how criteria was read and whether the limit cut results.", maxListedSessions),
@@ -510,8 +510,9 @@ ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, v.conversation_id CO
 }
 
 // searchSessionsWithin runs SearchSessions for criteria with message search and
-// keeps the matches whose summary time is within the normalized since and until
-// bounds, newest first unless criteria has a sort: term.
+// keeps the matches whose summary time, or newest running or waiting turn's creation
+// when later, is within the normalized since and until bounds, newest summary time
+// first unless criteria has a sort: term.
 func (s *SessionService) searchSessionsWithin(ctx context.Context, criteria string, params *sessionListParams, slack slackLookup) (*SessionSearch, []SessionMatch, error) {
 	search, err := s.SearchSessions(ctx, "", criteria, SearchMessages, slack)
 	if err != nil {
@@ -521,10 +522,11 @@ func (s *SessionService) searchSessionsWithin(ctx context.Context, criteria stri
 	var matches []SessionMatch
 
 	for i := range search.Matches {
-		// Summary times compare as the bounds do: UTC RFC3339Nano text without Z.
+		// Times compare as the bounds do: UTC RFC3339Nano text without Z. Arriving work counts as
+		// activity, since queuing it does not update the chat.
 		// Remote OpenCode sessions are for people only; agents never see them.
-		if summary := search.Matches[i].Chat.Session.Summary; summary != nil && search.Matches[i].Chat.Session.Server == "" {
-			if at := strings.TrimSuffix(summary.LastUpdated.Format(time.RFC3339Nano), "Z"); at >= params.Since && (params.Until == "" || at < params.Until) {
+		if row := &search.Matches[i].Chat.Session; row.Summary != nil && row.Server == "" {
+			if at := strings.TrimSuffix(slices.MaxFunc([]time.Time{row.Summary.LastUpdated, row.ArrivedAt}, time.Time.Compare).Format(time.RFC3339Nano), "Z"); at >= params.Since && (params.Until == "" || at < params.Until) {
 				matches = append(matches, search.Matches[i])
 			}
 		}

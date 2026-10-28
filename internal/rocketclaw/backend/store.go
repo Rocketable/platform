@@ -1060,7 +1060,30 @@ type SidebarSession struct {
 	UnreadAt time.Time
 	// Origin holds the facts that decide its chat origin, as ChatOriginFacts reads them.
 	Origin ChatOriginFacts
+	// Work is the chat's work state, and StateSince when the turn defining it started, or its last
+	// update when idle. A Private Producer Conversation's turns count as those of the chat it reports to.
+	Work       WorkState
+	StateSince time.Time
+	// Queued reports waiting turns other than scheduled reminders.
+	Queued bool
+	// External reports an External MCP binding, the chat's own or a run's reporting to it.
+	External bool
+	// ArrivedAt is when the chat's newest running or waiting turn was created, else its last update:
+	// delivered turns are deleted.
+	ArrivedAt time.Time
 }
+
+// WorkState is the first of asking (see SidebarSession.Asking), running work and queued turns a chat
+// has, else idle.
+type WorkState string
+
+// The work states.
+const (
+	WorkIdle     WorkState = "idle"
+	WorkNeedsYou WorkState = "needs_you"
+	WorkRunning  WorkState = "running"
+	WorkQueued   WorkState = "queued"
+)
 
 // ChatOriginFacts are the stored facts that decide a conversation's chat origin.
 type ChatOriginFacts struct {
@@ -1277,19 +1300,25 @@ running AS (
     SELECT DISTINCT ON (conversation_id) conversation_id, inbound_json->>'Text' AS prompt, to_timestamp(created_at_unix_ns / 1e9) AS started_at
     FROM turns WHERE phase NOT IN ('waiting', 'done') AND takes_lane
     ORDER BY conversation_id, created_at_unix_ns
-), jobs AS (
-    SELECT conversation_id FROM turns WHERE NOT takes_lane AND phase = 'running'
-), background AS (
-    SELECT conversation_id FROM jobs
-    UNION
-    SELECT c.reports_to FROM jobs j JOIN conversations c USING (conversation_id) WHERE c.reports_to IS NOT NULL
-    UNION
-    SELECT c.reports_to FROM running r JOIN conversations c USING (conversation_id) WHERE c.reports_to IS NOT NULL
+), live AS (
+    -- Running lane turns and Background Jobs, then waiting turns other than scheduled reminders.
+    SELECT conversation_id, created_at_unix_ns AS since, takes_lane, FALSE AS queued FROM turns WHERE phase = 'running' OR phase = 'delivering' AND takes_lane
+    UNION ALL SELECT conversation_id, created_at_unix_ns, TRUE, TRUE FROM turns WHERE phase = 'waiting' AND reason <> 'scheduled'
+), credited AS (
+    SELECT conversation_id, since, takes_lane, queued, TRUE AS own FROM live
+    UNION ALL SELECT c.reports_to, l.since, l.takes_lane, l.queued, FALSE FROM live l JOIN conversations c USING (conversation_id) WHERE c.reports_to IS NOT NULL
+), work AS (
+    -- Background work is a chat's Background Jobs and everything running of the runs reporting to it.
+    SELECT conversation_id, bool_or(NOT queued AND NOT (own AND takes_lane)) AS background, min(since) FILTER (WHERE NOT queued) AS running_since,
+        min(since) FILTER (WHERE queued) AS queued_since, max(since) AS arrived
+    FROM credited GROUP BY conversation_id
 ), asking AS (
     SELECT DISTINCT q.conversation_id FROM running r
     JOIN steps q ON q.conversation_id = r.conversation_id AND q.key LIKE '%`+webQuestionStep+`'
     LEFT JOIN steps a ON a.conversation_id = q.conversation_id AND a.key = left(q.key, -length('`+webQuestionStep+`')) || '/answer'
     WHERE a.key IS NULL
+), external_runs AS (
+    SELECT DISTINCT reports_to AS conversation_id FROM conversations WHERE kind = 'external_mcp_run' AND reports_to IS NOT NULL
 ), reads AS (
     SELECT conversation_id, unread_at FROM web_tabs WHERE username = $6 AND conversation_id IS NOT NULL
 ), local AS (
@@ -1300,7 +1329,7 @@ SELECT
     CASE WHEN c.found THEN c.preview ELSE convert_to(r.prompt, 'UTF8') END AS preview,
     CASE WHEN c.found THEN c.last_updated ELSE r.started_at END AS updated,
     c.running,
-    b.conversation_id IS NOT NULL AS background,
+    COALESCE(w.background, FALSE) AS background,
     k.conversation_id IS NOT NULL AS asking,
     c.pinned,
     c.name,
@@ -1317,17 +1346,25 @@ SELECT
     c.kind,
     '' AS remote_session,
     u.unread_at,
+    -- Idle chats read NULL and zeros, which cost no allocation per row.
+    CASE WHEN k.conversation_id IS NOT NULL THEN 'needs_you' WHEN w.running_since IS NOT NULL THEN 'running' WHEN w.queued_since IS NOT NULL THEN 'queued' END AS work,
+    COALESCE(w.running_since, w.queued_since, 0) AS state_since,
+    w.queued_since IS NOT NULL AS queued,
+    c.external <> '' OR x.conversation_id IS NOT NULL AS external_mcp,
+    COALESCE(w.arrived, 0) AS arrived,
     `+originColumns+`
 FROM shown c
 LEFT JOIN reads u ON u.conversation_id = c.conversation_id
 LEFT JOIN conversations run ON run.conversation_id = c.cron_run
 LEFT JOIN running r ON r.conversation_id = c.conversation_id
-LEFT JOIN background b ON b.conversation_id = c.conversation_id
+LEFT JOIN work w ON w.conversation_id = c.conversation_id
 LEFT JOIN asking k ON k.conversation_id = c.conversation_id
+LEFT JOIN external_runs x ON x.conversation_id = c.conversation_id
 WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY($5))
 ), remote AS (
 SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.pinned, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
     o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at,
+    CASE WHEN o.asking THEN 'needs_you' WHEN o.running OR o.background THEN 'running' END, 0, FALSE AS queued, FALSE AS external_mcp, 0,
     '', '', '', 'null'::jsonb, '', '', '', NULL::bigint, FALSE
 FROM conversations o
 LEFT JOIN reads u ON u.conversation_id = o.conversation_id
@@ -1345,25 +1382,29 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 		defer func() { _ = rows.Close() }()
 
 		var (
-			sessions []*SidebarSession
-			preview  sql.NullString
-			tags     []byte
-			updated  sql.NullTime
-			unread   sql.NullTime
+			sessions       []*SidebarSession
+			preview        sql.NullString
+			tags           []byte
+			updated        sql.NullTime
+			unread         sql.NullTime
+			work           sql.NullString
+			since, arrived int64
 		)
 
-		dest := make([]any, 0, 32)
+		dest := make([]any, 0, 37)
 
 		for rows.Next() {
 			var row SidebarSession
 
-			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread)
+			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread,
+				&work, &since, &row.Queued, &row.External, &arrived)
 			if err := scanChatOrigin(rows, &row.Origin, dest...); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
 			}
 
 			row.Origin.ConversationID, row.Origin.CreatedBy, row.UnreadAt = row.Conversation.ID, ThreadCreator(row.Conversation.CreatedBy), unread.Time.UTC()
+			row.Work, row.StateSince, row.ArrivedAt = cmp.Or(WorkState(work.String), WorkIdle), cmp.Or(timeFromUnixNano(since), updated.Time.UTC()), cmp.Or(timeFromUnixNano(arrived), updated.Time.UTC())
 
 			if err := json.Unmarshal(tags, &row.Tags); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("decode sidebar tags: %w", err))

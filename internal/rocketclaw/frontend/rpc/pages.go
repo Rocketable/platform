@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// pageCall answers GetPage and ListPages by their request, and Protocol, which negotiates the schema, not a browser principal.
+// pageCall answers GetPage, ListPages, Tabs and Board, and any other request as Protocol.
 func (s *Server) pageCall(ctx context.Context, request any) (any, error) {
 	switch request := request.(type) {
 	case *PageRequest:
@@ -20,6 +20,8 @@ func (s *Server) pageCall(ctx context.Context, request any) (any, error) {
 		return s.listPages(ctx)
 	case *TabsRequest:
 		return s.tabs(ctx, request)
+	case *BoardRequest:
+		return s.board(ctx, request)
 	default:
 		return &ProtocolResponse{ProtoSha256: protoSHA256}, nil
 	}

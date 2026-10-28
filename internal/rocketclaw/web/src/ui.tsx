@@ -1,6 +1,6 @@
 "use client";
 
-import { QueryClient, QueryCache, MutationCache, QueryClientProvider, queryOptions, useQuery, useMutation, useIsMutating } from "@tanstack/react-query";
+import { QueryClient, QueryCache, MutationCache, QueryClientProvider, keepPreviousData, queryOptions, useQuery, useMutation, useIsMutating } from "@tanstack/react-query";
 import { captureException } from "@sentry/react";
 import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
@@ -116,7 +116,7 @@ function slackRooms(sessions: { id: string; title?: string; kind?: ConversationK
 function typingWord(query: string) {
   const word = /(?:^|\s)((?:tag|cron|agent|room|principal|server|model|space):"(?:[^"\\]|\\.)*\\?|\S*)$/i.exec(query)![1];
   const lower = word.toLowerCase();
-  return { word, unfinished: /^(?:tag|cron|agent|room|principal|server|model|space):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:pinned", "is:forked", "is:cron", "is:unread", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
+  return { word, unfinished: /^(?:tag|cron|agent|room|principal|server|model|space):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:pinned", "is:forked", "is:cron", "is:unread", "is:running", "is:queued", "is:waiting", "is:external", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
 }
 
 function termValue(value: string) {
@@ -903,6 +903,8 @@ const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session",
 // A Search page is /search or a location under it, each its own tab; it is titled with its name, else the query it shows.
 const isSearch = (path: string) => /^\/search(\/|$)/.test(path);
 const searchTitle = (search?: SearchPageState) => search?.name || search?.searches.find((item) => item.id === search.active)?.query || "Search";
+const freshSearch = () => `/search/${crypto.getRandomValues(new Uint32Array(2)).join("-")}`;
+const newDashboard: SearchPageState = { board: "strips", active: "0", searches: ([["Needs you", "is:waiting", true], ["Running", "is:running", false], ["Queued", "is:queued", true], ["External", "is:external", true]] as const).map(([name, query, notify], i) => ({ id: String(i), name, query, notify })) };
 
 // A hosted page, from its escaped agent and file path, is labeled "<agent> · <path>".
 function pageLabel(page: string) {
@@ -953,7 +955,7 @@ function home(tabs: Tab[], space: string) {
 // A session opens where the link points, marked unplaced until TabSettling moves it to the space it was born in.
 // A location shared in the current space opens there without a tab of this person's, even if they have one elsewhere.
 // A Search page always opens permanent, so opening one of its results never replaces it.
-function openTab(state: TabState, link: string, shared: SavedTabs["shared"], preview = true): TabState {
+function openTab(state: TabState, link: string, shared: SavedTabs["shared"], preview = true, search?: SearchPageState): TabState {
   const [path, target] = pageSpace(state, link);
   preview &&= !isSearch(path);
   if (isShared(shared, state.space, path)) return { ...state, active: path, last: { ...state.last, [state.space]: path } };
@@ -961,7 +963,7 @@ function openTab(state: TabState, link: string, shared: SavedTabs["shared"], pre
   const slot = preview ? state.tabs.findIndex((tab) => tab.preview && tab.space === current) : -1;
   const group = state.tabs.find((tab) => tab.path === state.active && tab.space === current)?.group;
   const at = slot >= 0 ? slot : state.tabs.findIndex((tab) => tab.path === state.active) + 1 || state.tabs.length;
-  const added = state.tabs.toSpliced(at, Number(slot >= 0), { path, preview, group, space: current, unplaced: pathSession(path) !== "" || undefined });
+  const added = state.tabs.toSpliced(at, Number(slot >= 0), { path, preview, group, space: current, unplaced: pathSession(path) !== "" || undefined, search });
   return { ...state, active: path, space: current, last: { ...state.last, [current]: path },
     groups: state.groups.map((item) => item.id === open?.group && path !== state.active ? { ...item, collapsed: false } : item),
     tabs: !open ? arrange(group && state.tabs[at]?.group !== group ? join(added, path, group, current) : added) : path === "/" ? home(state.tabs, current) : preview ? state.tabs : state.tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab) };
@@ -1180,8 +1182,14 @@ function useTabs() {
     queryClient.setQueriesData<SavedTabs>({ queryKey: ["tabs"] }, (old) => old && { ...old, shared: reply.shared });
     if (theirs) saveShared(space, path, theirs, rebase(base, page, theirs));
   } });
+  // The tab is opened with the navigation, in one render, so the URL never shows it as a preview first.
+  const open = (path: string, query = "", space?: string, list = shared, search?: SearchPageState) => flushSync(() => { setState((current) => openTab(space ? { ...current, space } : current, path, list, false, search)); navigate(path + query); });
+  const addSearch = (page: SearchPageState, inShared: boolean) => {
+    const path = freshSearch(), id = (i: number) => `${path.slice("/search/".length)}-${i}`, search = { ...page, searches: page.searches.map((item, i) => ({ ...item, id: id(i) })), active: id(page.searches.findIndex((item) => item.id === page.active)) };
+    return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, reply.shared) }) : open(path, "", undefined, shared, search);
+  };
   return {
-    state, shown, groups, here, shared, mutes, pathname, close, enter, edit, editor, setEditor, settle, snoozing, setSnoozing, mute, pending: spaceChange.isPending,
+    state, shown, groups, here, shared, mutes, pathname, close, enter, edit, editor, setEditor, settle, snoozing, setSnoozing, mute, open, addSearch, pending: spaceChange.isPending,
     // A moved Shared row moves for this person alone; their order keeps only paths still shared somewhere.
     moveShared: (from: string, to: string) => setState((current) => ({ ...current, sharedOrder: [...new Set([...moveQueueId(here, from, to), ...current.sharedOrder])].filter((path) => shared.some((tab) => tab.path === path)) })),
     // Collapsing Shared is this person's choice for every space, kept as the member-less group "shared".
@@ -1210,8 +1218,6 @@ function useTabs() {
       const target = order[at < 0 ? (back ? order.length - 1 : 0) : (at + (back ? order.length - 1 : 1)) % order.length];
       if (target !== pathname) navigate(target);
     },
-    // The tab is opened with the navigation, in one render, so the URL never shows it as a preview first.
-    open: (path: string, query = "", space?: string) => flushSync(() => { setState((current) => openTab(space ? { ...current, space } : current, path, shared, false)); navigate(path + query); }),
     // A Search page's change merges into the person's own page or, inShared, into the one page everyone in this space
     // shares, which the cache takes at once so the next change merges into it.
     editSearch: (path: string, change: Partial<SearchPageState>, inShared = false) => {
@@ -1236,8 +1242,8 @@ function useTabs() {
     commands: (path: string, rows: Session[], paths = new Set([path])): { key: string; label: string; sub?: { menu: string; label: string }; run: () => void }[] => {
       const tab = state.tabs.find((item) => item.path === path), selected = state.tabs.filter((item) => paths.has(item.path));
       const birth = paths.size === 1 && state.spaces.find((space) => space.id === rows.find((row) => rowPath(row) === path)?.spaceId);
-      // Shared changes act on this one tab, for everyone. A Shared tab that is not this person's offers only its removal
-      // and its notifications.
+      // Shared changes act on this one tab, for everyone. A Shared tab that is not this person's offers only its removal,
+      // its notifications, and, for a Search page, Duplicate.
       // Taking a Search page out of Shared keeps the page it held, as the server returns it, as this person's own, with
       // any searches of their own page there, so nobody's searches are lost.
       const keep = ({ unshared: page }: SavedTabs) => page && setState((current) => ({ ...current, tabs: current.tabs.some((item) => item.path === path)
@@ -1245,6 +1251,8 @@ function useTabs() {
         : [...current.tabs, { path, space: state.space, search: page }] }));
       const share = here.includes(path) ? [{ key: "unshare", label: "Remove from Shared", run: () => void tabsCall({ unshare: { space: state.space, path } }, keep).catch(() => queryClient.invalidateQueries({ queryKey: ["tabs"] })) }]
         : path === "/" ? [] : [{ key: "share", label: "Add to Shared", run: () => sharing.mutate({ share: { space: state.space, path, search: tab?.search } }) }];
+      const source = sharedTab(shared, state.space, path)?.search ?? tab?.search;
+      const copy = isSearch(path) ? [{ key: "duplicate", label: "Duplicate", run: () => addSearch({ ...source!, name: `${searchTitle(source)} copy` }, here.includes(path)) }] : [];
       // Muting and snoozing are this person's, and only sessions notify. Snooze ends are reckoned when chosen, in local time.
       const nine = (days: number) => new Date().setHours(24 * days + 9, 0, 0, 0);
       const notify = !pathSession(path) ? [] : muteOf(mutes, path) ? [{ key: "notify-unmute", label: "Unmute notifications", run: () => sharing.mutate({ unmute: path }) }] : [
@@ -1254,13 +1262,13 @@ function useTabs() {
           .map(([key, label, sub, until]) => ({ key: `notify-${key}`, label: `Snooze notifications ${label}`, sub: { menu: "Snooze notifications", label: sub }, run: () => mute(path, new Date(until()).toISOString()) })),
         { key: "notify-pick", label: "Snooze notifications until a picked time…", sub: { menu: "Snooze notifications", label: "Pick date & time…" }, run: () => setSnoozing(path) },
       ];
-      if (!shown.some((item) => item.path === path)) return [...share, ...notify];
+      if (!shown.some((item) => item.path === path)) return [...share, ...copy, ...notify];
       return [
         { key: "close", label: "Close", run: () => close([...paths]) },
         { key: "close-others", label: "Close others", run: () => close(shown.flatMap((tab) => tab.path === path ? [] : [tab.path]), path) },
         { key: "close-right", label: "Close to the right", run: () => close(shown.slice(shown.findIndex((tab) => tab.path === path) + 1).map((tab) => tab.path), path) },
         { key: "close-all", label: "Close all", run: () => close(shown.map((tab) => tab.path)) },
-        ...share,
+        ...share, ...copy,
         ...notify,
         { key: "group-new", label: "Add to new group", sub: { menu: "Add to group", label: "New group" }, run: () => {
           const id = crypto.getRandomValues(new Uint32Array(2)).join("-");
@@ -1286,8 +1294,8 @@ function useTabs() {
   };
 }
 
-// Sessions follow their sidebar rows to the spaces they were born in. Only this and TabNotifications read the rows
-// at the top, so their updates do not redraw the whole app.
+// Sessions follow their sidebar rows to the spaces they were born in. Only this, TabNotifications, and
+// BoardNotifications read the rows at the top, so their updates do not redraw the whole app.
 function TabSettling() {
   const { rows } = useContext(Sidebar), { settle } = useContext(TabActions);
   useEffect(() => settle(rows), [rows, settle]);
@@ -1344,6 +1352,19 @@ function TabNotifications() {
   return null;
 }
 
+function BoardNotifications() {
+  const { board: { data }, boards } = useBoard();
+  const notify = useEffectEvent(() => {
+    if (!data || !("Notification" in window) || Notification.permission !== "granted") return;
+    for (const [path, lanes] of boards) for (const lane of lanes) for (const row of lane.notify && data.get(lane.key)?.fresh || []) {
+      // As in TabNotifications: renotify is missing from TypeScript's DOM types, and Android Chrome's constructor throws.
+      try { new Notification(`${lane.dashboard}: ${lane.name}`, { body: cleanText(sessionTitle(row), {}), tag: `${path}:${row.id}`, renotify: true } as NotificationOptions).onclick = function () { focus(); navigate(rowPath(row)); this.close(); }; } catch { return; }
+    }
+  });
+  useEffect(() => notify(), [data]);
+  return null;
+}
+
 // Agents and cron jobs without a space show in every space; the rest only in the space of that name, ignoring case.
 function useInSpace() {
   const { state } = useContext(TabActions);
@@ -1381,10 +1402,10 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
 }
 
 // Sessions and Search pages can be renamed from their tab, and a Search page from its Shared row, which otherwise offers
-// only its Shared and notification items.
+// only its Shared, Duplicate, and notification items.
 function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { path: string; shared?: boolean }, rows: Session[], targets: Set<string>, rename: () => void) {
   const renaming = targets.size === 1 && (isSearch(menu.path) || (pathSession(menu.path) && !menu.shared)) ? [{ key: "rename", label: isSearch(menu.path) ? "Rename search" : "Rename session", run: rename }] : [];
-  return [...renaming, ...menu.shared ? commands(menu.path, rows).filter(({ key }) => key === "unshare" || key.startsWith("notify")) : commands(menu.path, rows, targets)];
+  return [...renaming, ...menu.shared ? commands(menu.path, rows).filter(({ key }) => key === "unshare" || key === "duplicate" || key.startsWith("notify")) : commands(menu.path, rows, targets)];
 }
 
 function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat: () => void }) {
@@ -1745,7 +1766,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     setConversation({ id: route.id, created: "", key: created ? conversation.key : conversation.key + 1 });
   }
   return (
-          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabSettling /><TabNotifications />
+          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabSettling /><TabNotifications /><BoardNotifications />
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
             {tabs.snoozing ? <SnoozeDialog path={tabs.snoozing} /> : null}
             <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} keyCommands={keyCommands(tabs.step, sidebar.toggle, sidebar.medium)} />
@@ -1971,7 +1992,7 @@ function paletteRows(
   recent: string[],
   origin: Space,
 ): { key: string; label?: string; detail?: string; session?: Session; keep?: boolean; disabled?: boolean; run: () => void }[] {
-  const needle = typed.toLowerCase(), pages = searchPages(tabs), fresh = () => `/search/${crypto.getRandomValues(new Uint32Array(2)).join("-")}`;
+  const needle = typed.toLowerCase(), pages = searchPages(tabs);
   if (mode === "cron") {
     return jobs.filter((job) => job.status !== "ran" && (needle === "" || `${job.stem} ${job.schedule ?? ""} ${job.agent ?? ""}`.toLowerCase().includes(needle))).map((job) => ({
       key: job.stem, label: job.stem, detail: [job.schedule, job.agent].filter(Boolean).join(" · "), keep: true, run: () => runStem(job.stem),
@@ -1997,7 +2018,8 @@ function paletteRows(
   const commands = mode === "sessions" && (needle === "" || new RegExp(`(?:^|\\s)(?:${filterKeys}):\\S`).test(needle)) ? [] : [
     ...actions,
     { key: "new", label: "Sessions: New", run: newChat },
-    { key: "search", label: "Sessions: Search", run: () => tabs.open(fresh()) },
+    { key: "search", label: "Sessions: Search", run: () => tabs.open(freshSearch()) },
+    { key: "dashboard", label: "New dashboard", run: () => tabs.addSearch(newDashboard, true) },
     { key: "run-cron", label: "Cron: Run", keep: true, run: () => openCron("cron") },
     { key: "cron-timeline", label: "Cron: Timeline", keep: true, run: () => openCron("timeline") },
     ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["shortcuts", "Help: Keyboard Shortcuts"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
@@ -2014,7 +2036,7 @@ function paletteRows(
     .map((tab) => ({ key: `page-${tab.space} ${tab.path}`, label: `Search: ${searchTitle(tab.search)}`, detail: tabs.state.spaces.find((space) => space.id === tab.space)?.name, run: () => tabs.open(tab.path, "", tab.space) }));
   const search = (query: string) => {
     const found = pages.find((tab) => tab.space === origin.id && tab.search?.searches.some((item) => item.query === query));
-    tabs.open(found?.path ?? fresh(), `?${new URLSearchParams({ q: query })}`, origin.id);
+    tabs.open(found?.path ?? freshSearch(), `?${new URLSearchParams({ q: query })}`, origin.id);
   };
   return mode === "commands" ? commands : [...commands, ...searches, ...rows.map((session) => ({ key: session.id, session, run: () => tabs.open(rowPath(session)) })),
     ...typed ? [{ key: searchInSpaceKey, label: `Search in this space for '${typed}'`, run: () => search(`space:${termValue(origin.name)} ${typed}`) },
@@ -2565,7 +2587,7 @@ type SavedSearch = SearchPageState["searches"][number];
 type LegacySearch = SavedSearch & { agentFilter?: string; roomFilter?: string };
 
 // mine, made from base, made again onto theirs: their searches with mine's changes, those mine added, and none mine
-// closed; mine's name and shown search when it changed them.
+// closed; mine's name, board style, and shown search when it changed them.
 function rebase(base: SearchPageState | undefined, mine: SearchPageState, theirs: SearchPageState): SearchPageState {
   const find = (page: SearchPageState | undefined, id: string) => page?.searches.find((item) => item.id === id);
   const searches = [
@@ -2576,10 +2598,10 @@ function rebase(base: SearchPageState | undefined, mine: SearchPageState, theirs
     ...mine.searches.filter((item) => !find(theirs, item.id) && !find(base, item.id)),
   ];
   const active = mine.active !== base?.active ? mine.active : theirs.active;
-  return { name: mine.name !== base?.name ? mine.name : theirs.name, searches, active: searches.some((item) => item.id === active) ? active : searches[0]?.id ?? "" };
+  return { name: mine.name !== base?.name ? mine.name : theirs.name, board: mine.board !== base?.board ? mine.board : theirs.board, searches, active: searches.some((item) => item.id === active) ? active : searches[0]?.id ?? "" };
 }
 
-const comparablePage = (searches: SavedSearch[] = [], active = "") => JSON.stringify([searches.map(({ id, name, query }) => [id, name ?? "", query]), active]);
+const comparablePage = (searches: SavedSearch[] = [], active = "") => JSON.stringify([searches.map(({ id, name, query, notify }) => [id, name ?? "", query, !!notify]), active]);
 
 // Legacy agent and room filters fold into the query once, in one canonical form.
 function foldFilters(query: string, agent?: string | null, room?: string | null) {
@@ -2740,8 +2762,11 @@ function SearchTabs({ path, owner, inShared, page, link, consumeLink }: { path: 
         update({ searches: [...saved.searches, { id, query: "" }], active: id });
         requestAnimationFrame(() => input.current?.focus());
       }}><Plus className="size-4" /></Button>
+      <Select items={boardChoices} value={page?.board ?? ""} onValueChange={(board) => tabs.editSearch(path, { board: board as string }, inShared)}><SelectTrigger aria-label="Board style" className="shrink-0"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{boardChoices.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent></Select>
+      {page?.board ? <Button variant={tab.notify ? "default" : "outline"} size="icon" aria-label="Notify" title="Notify when a session enters this lane" aria-pressed={!!tab.notify} onClick={() => edit(() => ({ notify: !tab.notify }))}><BellRing className="size-4" /></Button> : null}
     </div>
-    <SearchResults key={tab.id} tab={tab} rows={sidebar.rows} catalog={agents.data?.agents ?? []} edit={edit} input={input} />
+    <SearchResults key={tab.id} tab={tab} rows={sidebar.rows} catalog={agents.data?.agents ?? []} edit={edit} input={input} board={page?.board} />
+    {page?.board ? <Board style={page.board} /> : null}
   </section>;
 }
 
@@ -2780,7 +2805,7 @@ function SearchResultGroup({ session, hits, text, field, needle, tagIds, drawn }
 }
 
 // The palette lists sessions itself when nothing matched, so only /search passes empty.
-function SearchStatus({ search, empty = false, incomplete = false }: { search: ReturnType<typeof useSessionSearch>; empty?: boolean; incomplete?: boolean }) {
+function SearchStatus({ search, empty = false, incomplete = false }: { search: { pending: boolean; error?: string; sent: string; run: (text: string) => unknown }; empty?: boolean; incomplete?: boolean }) {
   const { pending, error } = search;
   return <>
     {pending ? <p role="status" className="text-muted-foreground">Searching…</p> : null}
@@ -2791,7 +2816,7 @@ function SearchStatus({ search, empty = false, incomplete = false }: { search: R
 
 const searchPage = 200;
 
-function SearchResults({ tab, rows, catalog, edit, input }: { tab: SavedSearch; rows: Session[]; catalog: Agent[]; edit: (change: (item: SavedSearch) => Partial<SavedSearch>, typed?: boolean) => void; input: RefObject<HTMLInputElement | null> }) {
+function SearchResults({ tab, rows, catalog, edit, input, board }: { tab: SavedSearch; rows: Session[]; catalog: Agent[]; edit: (change: (item: SavedSearch) => Partial<SavedSearch>, typed?: boolean) => void; input: RefObject<HTMLInputElement | null>; board?: string }) {
   const sidebar = useContext(Sidebar);
   // Opening a saved search or a link sends its whole query.
   const [entered, setEntered] = useState(true);
@@ -2816,7 +2841,7 @@ function SearchResults({ tab, rows, catalog, edit, input }: { tab: SavedSearch; 
     <div id="search-tab-panel" role="tabpanel" aria-label="Search" className="min-w-0">
       <SessionSearch rows={rows} catalog={catalog} query={tab.query} setQuery={(update) => { setEntered(false); edit((item) => ({ query: update(item.query) }), true); }} search={search} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { setEntered(true); void search.run(tab.query.trimEnd()); } }} />
     </div>
-    <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
+    {board ? null : <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
       <SearchStatus search={search} empty={!!search.sent && !search.pending && !search.error && search.found.length === 0} incomplete={!searchIsAuthoritative(sidebar) || search.missing} />
       {search.sent ? <ul data-pending={search.pending} className="flex min-w-0 flex-col gap-4 data-[pending=true]:opacity-50">
         {groups}
@@ -2828,8 +2853,51 @@ function SearchResults({ tab, rows, catalog, edit, input }: { tab: SavedSearch; 
           return () => observer.disconnect();
         }} /> : null}
       </ul> : <p className="text-muted-foreground">Type to search messages and conversations.</p>}
-    </div>
+    </div>}
   </>;
+}
+
+// Board styles by id: a label, then cards in order of arrival or of the start of their state, oldest first (1) or newest first (-1).
+const boardStyles: Record<string, [string, "arrivedAt" | "stateSince", number]> = { strips: ["Strip Bay", "arrivedAt", -1], dispatch: ["Dispatch Console", "stateSince", 1], triage: ["Triage Census", "stateSince", 1], kanban: ["Kanban", "arrivedAt", 1], radar: ["Radar Scope", "stateSince", 1] };
+const boardChoices = [{ value: "", label: "List" }, ...Object.entries(boardStyles).map(([value, [label]]) => ({ value, label }))], workStates = { IDLE: "Idle", NEEDS_YOU: "Needs you", RUNNING: "Running", QUEUED: "Queued" };
+
+let boardSeen = new Map<string, { sessions: Session[]; total: number; fresh: Set<Session>; layout: string }>();
+function useBoard() {
+  const { rows } = useContext(Sidebar), { state: { tabs, space }, shared } = useContext(TabActions);
+  const boards = [...new Map([...tabs, ...shared].flatMap((tab) => tab.space === space && tab.search?.board ? [[tab.path, tab.search.searches.map((lane, i) => ({ ...lane, name: lane.name || lane.query || `Search ${i + 1}`, dashboard: searchTitle(tab.search), key: `${space} ${tab.path} ${lane.id}\n${lane.query}` }))] as const] : []))];
+  const board = useQuery({ queryKey: ["board", boards.map(([, lanes]) => lanes.map((lane) => lane.key))], gcTime: 0, refetchOnWindowFocus: false, retry: false, placeholderData: keepPreviousData, queryFn: async ({ signal }) => {
+    const { dashboards } = boards.length ? await rpc<{ dashboards: { lanes: { sessions?: Session[]; total?: number }[] }[] }>("Board", { spaceId: space, dashboards: boards.map(([, lanes]) => ({ lanes: lanes.map((lane) => lane.query) })) }, signal) : { dashboards: [] };
+    const last = boardSeen, arrived = (row?: Session) => Date.parse(row?.arrivedAt ?? "");
+    // A lane lists its newest 200 arrivals: when it held more, one sliding in from beyond them as another leaves is not new.
+    // A session sits only in the first lane it matches, so when a Dashboard's lanes change, nothing in it is new once.
+    return boardSeen = new Map(boards.flatMap(([, own], d) => own.map(({ key }, i) => {
+      const { sessions = [], total = 0 } = dashboards[d].lanes[i], was = last.get(key), held = new Set(was?.sessions.map((row) => row.id)), layout = own.map((lane) => lane.key).join("\0");
+      return [key, { sessions, total, layout, fresh: new Set(sessions.filter((row) => was?.layout === layout && !held.has(row.id) && (was.total <= was.sessions.length || arrived(row) > arrived(was.sessions.at(-1))))) }];
+    })));
+  } });
+  const seen = useRef({ rows, again: false });
+  const refresh = useEffectEvent(() => {
+    const old = new Set(boards.length ? seen.current.rows : []), again = boards.length > 0 && (seen.current.again || rows.some((row) => !old.has(row) && (!row.spaceId || row.spaceId === space)));
+    seen.current = { rows, again: again && board.isFetching };
+    if (again && !board.isFetching) void board.refetch({ cancelRefetch: false });
+  });
+  useEffect(() => refresh(), [rows, board.isFetching]);
+  return { board, boards };
+}
+
+function Board({ style }: { style: string }) {
+  const { board, boards } = useBoard(), { data } = board, path = usePathname();
+  const [, field, order] = boardStyles[style], since = (at?: string) => Math.floor((Date.now() - Date.parse(at!)) / 60_000), lanes = boards.find(([at]) => at === path)?.[1] ?? [];
+  return <div aria-label="Board" className="min-h-0 flex-1 overflow-auto text-sm">
+    <SearchStatus search={{ pending: board.isPending, error: board.error?.message, sent: "", run: () => board.refetch() }} />
+    {data ? <div data-board={style} style={{ "--lanes": lanes.length } as CSSProperties}>{lanes.map((lane, i) => {
+      const { sessions = [], total = 0, fresh = new Set<Session>() } = data.get(lane.key) ?? {};
+      return <section key={lane.id} aria-label={lane.name} style={{ "--lane": i } as CSSProperties}><h3>{lane.name} <span>{total}</span></h3><ol>
+        {sessions.toSorted((a, b) => order * (Date.parse(a[field]!) - Date.parse(b[field]!))).map((row, j) => <li key={row.id} data-state={row.workState ?? "IDLE"} data-new={fresh.has(row)} data-external={!!row.external} style={{ "--age": since(row.stateSince), "--i": j } as CSSProperties}>
+          <Link href={rowPath(row)}><b><InlineText text={sessionTitle(row)} /></b> <span>{row.agent}</span> <em>{workStates[row.workState ?? "IDLE"]}</em> <time dateTime={row.arrivedAt}>{new Date(row.arrivedAt!).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time> <span data-age>{since(row.stateSince)}</span></Link></li>)}
+      </ol></section>;
+    })}</div> : null}
+  </div>;
 }
 
 // Values offered for the operator word being typed; a completed value commits on space or Enter instead of offering itself again.
@@ -2839,7 +2907,7 @@ function searchChoices(word: string, rows: Session[], catalog: Agent[], principa
   const key = typed?.[1].toLowerCase() ?? "", needle = typed?.[2].toLowerCase() ?? "";
   const remote = (field: "server" | "agent" | "model") => [...new Set(rows.flatMap((row) => row.server && row[field] ? [row[field]!] : []))];
   const names = key === "space" ? spaces.map(({ name }) => name) : key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "cron" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"]
-    : key === "server" ? remote("server") : key === "model" ? [...new Set([...catalog.flatMap(({ model }) => model ? [model] : []), ...remote("model")])] : ["pinned", "forked", "cron", "unread"];
+    : key === "server" ? remote("server") : key === "model" ? [...new Set([...catalog.flatMap(({ model }) => model ? [model] : []), ...remote("model")])] : ["pinned", "forked", "cron", "unread", "running", "queued", "waiting", "external"];
   const agents = [...catalog.map(({ name, model, reasoning }) => ({ key: name, detail: [model, reasoning].filter(Boolean).join(" · ") })), ...remote("agent").filter((name) => !catalog.some((agent) => agent.name === name)).map((name) => ({ key: name, detail: "OpenCode" }))];
   const quoted = word.includes(':"');
   const spelling = (name: string) => quoted ? JSON.stringify(name).slice(1, -1) : name;

@@ -892,7 +892,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "Cron: Timeline", "Help: Keyboard Shortcuts", "List Agents", "List Skills",
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "Cron: Timeline", "Help: Keyboard Shortcuts", "List Agents", "List Skills", "New dashboard",
       "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Next⌘]", "Tabs: Previous⌘[", "Tabs: Toggle sidebar⌘B",
       // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
       "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
@@ -1637,10 +1637,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await matrixPills.first().waitFor();
     expect(await matrixSearch.inputValue()).toBe("");
     await matrixPills.first().click();
-    const operatorChoices = matrixDialog.getByRole("button", { name: /^(?:pinned|forked|unread|newest|oldest)$/ });
+    const operatorChoices = matrixDialog.getByRole("button", { name: /^(?:pinned|forked|unread|running|queued|waiting|external|newest|oldest)$/ });
     await matrixSearch.fill("is:");
     await matrixDialog.getByRole("button", { name: "pinned", exact: true }).waitFor();
-    expect(await operatorChoices.allTextContents()).toEqual(["pinned", "forked", "unread"]);
+    expect(await operatorChoices.allTextContents()).toEqual(["pinned", "forked", "unread", "running", "queued", "waiting", "external"]);
     await matrixSearch.fill("sort:");
     await matrixDialog.getByRole("button", { name: "newest", exact: true }).waitFor();
     expect(await operatorChoices.allTextContents()).toEqual(["newest", "oldest"]);

@@ -216,6 +216,57 @@ func (work sessionSearch) search(scanCtx context.Context, s *Server) (any, error
 	return response, nil
 }
 
+func (s *Server) board(ctx context.Context, request *BoardRequest) (*BoardResponse, error) {
+	username, _, err := s.principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	work := boardSearch{username: username, space: request.SpaceId}
+	for _, dashboard := range request.Dashboards {
+		work.dashboards = append(work.dashboards, dashboard.Lanes)
+	}
+
+	// A leading space and a letter keep this key apart from the session and message searches' keys.
+	found, err := s.sharedSearch(ctx, fmt.Sprintf(" board %q %q %q", username, request.SpaceId, work.dashboards), work)
+	if err != nil {
+		return nil, err
+	}
+
+	return found.(*BoardResponse), nil
+}
+
+type boardSearch struct {
+	username, space string
+	dashboards      [][]string
+}
+
+func (work boardSearch) search(scanCtx context.Context, s *Server) (any, error) {
+	board, err := s.sessions.Board(scanCtx, work.username, work.space, work.dashboards, s.channels)
+	if err != nil {
+		return nil, fmt.Errorf("web board: %w", err)
+	}
+
+	response := &BoardResponse{}
+
+	for _, lanes := range board {
+		dashboard := &BoardLanes{}
+
+		for _, lane := range lanes {
+			found := &BoardLane{Total: int32(lane.Total)}
+			for i := range lane.Chats {
+				found.Sessions = append(found.Sessions, sidebarSession(&lane.Chats[i]))
+			}
+
+			dashboard.Lanes = append(dashboard.Lanes, found)
+		}
+
+		response.Dashboards = append(response.Dashboards, dashboard)
+	}
+
+	return response, nil
+}
+
 func messageMatches(hits []backend.MessageSearchHit) []*MessageMatch {
 	matches := make([]*MessageMatch, 0, len(hits))
 	for _, hit := range hits {
