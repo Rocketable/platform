@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Rocketable/platform/internal/justbash"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"golang.org/x/sync/errgroup"
@@ -155,10 +156,12 @@ func newBackgroundRegistry(store *SessionService, notes backgroundNotes, log *sl
 	return &backgroundRegistry{store: store, notes: notes, log: log, runnerID: rand.Text(), runs: map[backgroundKey]*backgroundRun{}, finished: make(chan struct{})}
 }
 
-// turnRoot is a turn's workspace root. The jobs the turn starts keep using it through their
-// tools after the turn ends, so its last user, the turn or one of its jobs, closes it.
+// turnRoot is a turn's workspace root and just-bash session. The jobs the turn starts keep using them
+// through their tools after the turn ends, so their last user, the turn or one of its jobs, ends them.
 type turnRoot struct {
 	root *os.Root
+	// justbash is the turn's just-bash session; nil when no agent of the turn uses just-bash.
+	justbash *justbash.Session
 
 	mu    sync.Mutex
 	users int
@@ -178,6 +181,10 @@ func (r *turnRoot) release() {
 
 	if last {
 		_ = r.root.Close()
+
+		if r.justbash != nil {
+			r.justbash.Release()
+		}
 	}
 }
 

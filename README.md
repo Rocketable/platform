@@ -161,7 +161,7 @@ permission:
 
 For the `bash` tool, RocketCode checks every command in a script on its own, and each command must be allowed. When several rules match, the last one wins. Scripts it cannot parse are refused, even with `bash: allow`.
 
-Bash rules match command text, not everything a program can do. An executable-path wildcard such as `./scripts/*` does not match executable paths containing `..`; name such an executable explicitly if it is intended. This check is not a shell sandbox: an approved script can still launch other programs or follow symlinks. To put a sandbox in front of one agent's shell commands, set `customShell` in that agent's frontmatter to the absolute path of a wrapper program; see the [cheatsheet](cmd/rocketclaw/CHEATSHEET.md#agent-frontmatter-and-permissions) for what the wrapper must do.
+Bash rules match command text, not everything a program can do. An executable-path wildcard such as `./scripts/*` does not match executable paths containing `..`; name such an executable explicitly if it is intended. This check is not a shell sandbox: an approved script can still launch other programs or follow symlinks. To put a sandbox in front of one agent's shell commands, set `customShell` in that agent's frontmatter to the absolute path of a wrapper program; see the [cheatsheet](cmd/rocketclaw/CHEATSHEET.md#agent-frontmatter-and-permissions) for what the wrapper must do. To run them in a bash emulator instead, see [just-bash shell](#just-bash-shell).
 
 A turn that a person starts from Web, voice, or Slack tells its shell commands who asked:
 
@@ -202,6 +202,34 @@ Release note for agent session control:
 - A continue that names a different `subagent_type` switches the subagent to that type instead of failing. The type must exist, the caller needs `task` permission for it, and its guardrail reviews the prompt and the answer. A steer switches a running subagent from its next step.
 - Every subagent now runs as a session of its own, on the same turn runner as other sessions, so its queue, steers, stops, and restart recovery work as a top-level session's do. A subagent session is not listed in the sidebar or search. Its Background Jobs report to the subagent itself. It acts for its top-level session's running turn: it writes sessions and tags for that session, the sessions it creates keep that turn's creator and agent limits, the files it attaches go out with that turn's reply, and `rocketclaw_sessions_current_id` returns that session's ID. It is not offered `rocketclaw_schedule_message` or `rocketclaw_reset_scheduled_messages`. Its first prompt carries a header naming the session and agent that delegated it.
 - Stopping a turn while its foreground `task` call waits also stops the subagent's current turn, and so on down a chain of foreground subagents, unless a background `task` job waits on that turn. The prompt the call sent, if still queued, is not withdrawn but held: it stays in the subagent's queue, shown in Web like a stash, through restarts, while the rest of the queue moves on. The next message sent to the subagent, by `task`, `rocketclaw_sessions_write`, or a person in Web, releases it to run just before that message, and a person's `$goal` releases it to run before the goal; a stash releases nothing, and a person's stash is never released this way. The stopped session gets no note. A restart is not a stop: the call waits again.
+
+### just-bash shell
+
+An agent can run its shell commands in [just-bash](https://github.com/vercel-labs/just-bash), a bash emulator, instead of host bash. Set `shell: just-bash` in its frontmatter. Every shell command made for that agent runs there: `bash` tool calls, `execute`'s `bash()`, `` !`…` `` lines, goal checks, and workflow workers. The emulator has the usual tools (`awk`, `sed`, `grep`, `jq`, `find`, `tar` and more), plus `python3`, `js-exec` (JavaScript and TypeScript) and `sqlite3`. Shell variables, functions and `cd` do not carry from one call to the next; files do.
+
+```yaml
+shell: just-bash
+workingDirectory: justbash/$ROCKETCLAW_CONVERSATION_ID # the default
+secretsARN:
+  - arn:aws:secretsmanager:us-east-1:123456789012:secret:marketing-read
+commands:
+  stripe-write: "stripe -c $ROCKETCLAW_METADATA_CUSTOMER_ID"
+allowedNetworkTargets: # or auto, the default
+  - api.stripe.com
+  - "*.googleapis.com"
+  - localhost:8080
+  - 10.0.0.0/8
+  - target: https://api.example.com/v1/
+    methods: [GET]
+```
+
+- `workingDirectory` is the only host folder the commands see, at its real path, and writes land on disk. The call's `TMPDIR` is visible too. A relative path starts at the workspace, `$VAR` uses the turn's variables, and `$ROCKETCLAW_CONVERSATION_ID` is the conversation even when the commands do not get that variable (a subagent uses its top-level session). RocketClaw creates the folder. It may not be or contain the workspace, the `.rocketclaw` directory, the config file or RocketClaw's just-bash cache, and it may not lie inside `.rocketclaw`, so an agent cannot rewrite its own definition from bash. Other paths exist only in memory for that call.
+- `secretsARN` lists Secrets Manager secrets holding JSON objects of strings. RocketClaw reads them once per turn with its AWS credentials, and each key becomes a variable. A secret that fails to load fails the bash call, naming the ARN.
+- `commands` are the only host programs the commands can start. Calling `stripe-write a b` runs `stripe -c $ROCKETCLAW_METADATA_CUSTOMER_ID a b` with host bash, in the matching host folder, with the script's variables and input; `PATH` comes from the turn, and variables that change what bash or the loader runs are dropped. Output returns when the program ends. When the bash call times out, the program is stopped.
+- `allowedNetworkTargets` controls `curl`, Python's `jb_http` and JavaScript's `fetch`. RocketClaw makes each request. `auto` allows any public address. A list allows only requests that match an entry: a host or address (with an optional port), a `*.` wildcard, a CIDR range, or a URL prefix, which matches the same origin and whole path segments. Any entry can be limited to `methods`. Loopback, link-local (including `169.254.169.254`), private and other non-public addresses are refused, after resolving the name and on every redirect, unless the request matches an entry that names that host exactly or an address or range containing it; wildcards and `auto` never do.
+- A script the commands run, including a goal check, runs as bash whatever its first line says, and must sit inside `workingDirectory`; name it by an absolute path or one that starts from that folder.
+- `customShell` cannot be combined with `shell: just-bash`, and the other keys require it. `rocketclaw lint` reports `edit` permissions that cover a just-bash agent's file.
+- The `rocketclaw` binary carries just-bash, and unpacks it under the OS user cache directory (`rocketclaw/justbash`) on the first such turn. Running it needs `node` 20.19 or later on the `PATH` the commands see; without it, each bash call fails and says so. RocketClaw and other agents run without Node.
 
 ### Shadow agents
 
@@ -357,6 +385,7 @@ Traces carry the text of prompts, replies, and tool calls unless `instrumentatio
 - `internal/rocketcode/`: the agent engine.
 - `internal/rocketclaw/`: the service around RocketCode.
 - `internal/funneld/`: the HTTPS proxy and its config loading.
+- `internal/justbash/`: the just-bash shell for agents that set `shell: just-bash`.
 - `vendor/`: copies of Go dependencies.
 
 ## Development

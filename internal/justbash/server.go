@@ -36,8 +36,11 @@ const (
 // Server serves the just-bash wrapper's Sandbox RPCs on a Unix socket. It unpacks the runtime and
 // opens the socket on the first Register, so RocketClaw starts without touching disk or Node.
 type Server struct {
+	// cacheDir holds the unpacked runtime; empty uses rocketclaw/justbash under the user cache directory.
 	cacheDir string
-	secrets  config.SecretFetcher
+	// configFile is RocketClaw's config file; no working directory may contain it.
+	configFile string
+	secrets    config.SecretFetcher
 
 	mu       sync.Mutex
 	sessions map[string]*Session
@@ -47,9 +50,10 @@ type Server struct {
 	grpc    *grpc.Server
 }
 
-// NewServer returns a server that unpacks the runtime under cacheDir and loads secrets with secrets.
-func NewServer(cacheDir string, secrets config.SecretFetcher) *Server {
-	return &Server{cacheDir: cacheDir, secrets: secrets, sessions: map[string]*Session{}}
+// NewServer returns a server that unpacks the runtime under cacheDir (empty for the default), keeps
+// working directories away from configFile, and loads secrets with secrets.
+func NewServer(cacheDir, configFile string, secrets config.SecretFetcher) *Server {
+	return &Server{cacheDir: cacheDir, configFile: configFile, secrets: secrets, sessions: map[string]*Session{}}
 }
 
 // Turn is what a turn registers.
@@ -58,8 +62,6 @@ type Turn struct {
 	// RuntimeDir is the workspace's RocketClaw directory; no working directory may contain it or lie
 	// inside it.
 	RuntimeDir string
-	// ConfigFile is RocketClaw's config file; no working directory may contain it.
-	ConfigFile string
 	Agents     map[string]Settings
 	// Env is the environment the turn's bash calls get on top of RocketClaw's own.
 	Env map[string]string
@@ -69,6 +71,7 @@ type Turn struct {
 type Session struct {
 	server *Server
 	token  string
+	socket string
 	turn   Turn
 
 	mu      sync.Mutex
@@ -86,7 +89,7 @@ func (s *Server) Register(turn Turn) (*Session, error) {
 		}
 	}
 
-	session := &Session{server: s, token: rand.Text(), turn: turn, secrets: map[string]map[string]string{}}
+	session := &Session{server: s, token: rand.Text(), socket: filepath.Join(s.dir, "s"), turn: turn, secrets: map[string]map[string]string{}}
 	s.sessions[session.token] = session
 
 	return session, nil
@@ -102,16 +105,48 @@ func (s *Server) Close() error {
 	}
 
 	s.grpc.Stop()
-	s.grpc = nil
 
-	if err := os.RemoveAll(s.dir); err != nil {
+	dir := s.dir
+	s.grpc, s.dir = nil, ""
+
+	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("remove just-bash socket dir: %w", err)
 	}
 
 	return nil
 }
 
+// Launcher returns the program to use as a just-bash agent's customShell. The server must have a
+// registered turn.
+func (s *Server) Launcher(agent string) (string, error) {
+	s.mu.Lock()
+	dir, wrapper := s.dir, s.wrapper
+	s.mu.Unlock()
+
+	if dir == "" {
+		return "", errors.New("just-bash launcher: no turn registered")
+	}
+
+	return writeLauncher(dir, wrapper, agent)
+}
+
 func (s *Server) start() error {
+	if s.cacheDir == "" {
+		dir, err := os.UserCacheDir()
+		if err != nil {
+			return fmt.Errorf("locate just-bash cache dir: %w", err)
+		}
+
+		s.cacheDir = filepath.Join(dir, "rocketclaw", "justbash")
+	}
+
+	configFile, err := filepath.Abs(s.configFile)
+	if err != nil {
+		return fmt.Errorf("resolve config file: %w", err)
+	}
+
+	s.configFile = configFile
+
 	if err := os.MkdirAll(s.cacheDir, 0o700); err != nil {
 		return fmt.Errorf("create just-bash cache dir: %w", err)
 	}
@@ -147,14 +182,9 @@ func (s *Server) start() error {
 // Env returns the variables a bash call needs to reach this session.
 func (s *Session) Env() map[string]string {
 	return map[string]string{
-		"ROCKETCLAW_JUSTBASH_SOCKET": filepath.Join(s.server.dir, "s"),
+		"ROCKETCLAW_JUSTBASH_SOCKET": s.socket,
 		"ROCKETCLAW_JUSTBASH_TOKEN":  s.token,
 	}
-}
-
-// Launcher returns the program to use as agent's customShell.
-func (s *Session) Launcher(agent string) (string, error) {
-	return writeLauncher(s.server.dir, s.server.wrapper, agent)
 }
 
 // Release ends the session; later calls with its token fail.
@@ -220,7 +250,7 @@ func (s *Session) workingDirectory(settings *Settings) (string, error) {
 		return "", fmt.Errorf("workingDirectory: %s lies inside RocketClaw's directory %s", dir, runtimeDir)
 	}
 
-	for _, protected := range []string{s.turn.Workspace, runtimeDir, s.turn.ConfigFile, s.server.cacheDir} {
+	for _, protected := range []string{s.turn.Workspace, runtimeDir, s.server.configFile, s.server.cacheDir} {
 		if p := realPath(protected); within(p, dir) {
 			return "", fmt.Errorf("workingDirectory: %s contains %s, which a just-bash agent must not change", dir, p)
 		}

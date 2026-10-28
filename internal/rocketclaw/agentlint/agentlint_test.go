@@ -187,12 +187,14 @@ func TestLintCustomShell(t *testing.T) {
 	runtimeRoot, workspace := t.TempDir(), t.TempDir()
 	writeAgent(t, runtimeRoot, "boxed.md", "---\ndescription: boxed\ncustomShell: "+filepath.Join(workspace, "bin", "enter.sh")+"\n---\nboxed\n")
 	writeAgent(t, runtimeRoot, "outside.md", "---\ndescription: outside\ncustomShell: /usr/local/bin/agent-sandbox\n---\noutside\n")
+	writeAgent(t, runtimeRoot, "emulated.md", "---\ndescription: emulated\nshell: just-bash\n---\nemulated\n")
 	writeAgent(t, runtimeRoot, "editor.md", `---
 description: editor
 permission:
   edit:
     "bin/*": allow
     "agents/boxed.md": allow
+    "agents/emulated.md": allow
 ---
 editor
 `)
@@ -204,6 +206,7 @@ editor
 	assert.Equal(t, []Finding{
 		{Code: rc009, Severity: "error", Path: "agents/typo.md", Message: "custom_shell is ignored; the field is customShell", keys: []string{"custom_shell"}},
 		{Code: rc010, Severity: "error", Path: "agents/editor.md", Message: "editor can edit agents/boxed.md, which defines boxed and its customShell", keys: []string{"edit", "agents/boxed.md"}},
+		{Code: rc010, Severity: "error", Path: "agents/editor.md", Message: "editor can edit agents/emulated.md, which defines emulated and its just-bash shell", keys: []string{"edit", "agents/emulated.md"}},
 		{Code: rc010, Severity: "error", Path: "agents/editor.md", Message: "editor can edit bin/enter.sh, the customShell of boxed", keys: []string{"edit", "bin/*"}},
 	}, result.Findings)
 }

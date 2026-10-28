@@ -9,6 +9,7 @@ import (
 	"maps"
 	"sync"
 
+	"github.com/Rocketable/platform/internal/justbash"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
@@ -49,6 +50,7 @@ type Runtime struct {
 	TextRouter protocol.PrimaryTextRouter
 	threads    *threadBridgeManager
 	background *backgroundRegistry
+	justbash   *justbash.Server
 	questions  *webQuestions
 
 	eventsMu    sync.Mutex

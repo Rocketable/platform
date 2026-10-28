@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Rocketable/platform/internal/justbash"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
@@ -214,6 +215,10 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 
 	questions := &webQuestions{store: rocketcodeSessions, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}
 
+	justBash := justbash.NewServer("", configPath, config.AWSFetcher{})
+	// A socket directory left behind is harmless: each process makes its own.
+	defer func() { _ = justBash.Close() }()
+
 	threadBridges = newThreadBridgeManager(s.cfg, rocketcodeSessions, logger, conversationFactory{rt: rt, restart: shutdown})
 	background = newBackgroundRegistry(rocketcodeSessions, threadBridges, logger.With("component", "background_jobs"))
 	rocketcodeSessions.jobs = background
@@ -247,7 +252,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		Sessions:          rocketcodeSessions,
 		ExternalMCPUsers:  externalMCPUsers,
 		ExternalMCPAgents: inertExternalMCPAgents{}, assemble: s.assemble,
-		TextRouter: threadBridges, threads: threadBridges, background: background,
+		TextRouter: threadBridges, threads: threadBridges, background: background, justbash: justBash,
 		questions: questions,
 	}
 
@@ -348,6 +353,7 @@ func (f conversationFactory) newBridge(cfg *Config) directBridge {
 
 	bridge := NewConversation(f.rt.Cfg, f.rt, cfg, f.rt.Log)
 	bridge.background = f.rt.background
+	bridge.justbash = f.rt.justbash
 
 	return bridge
 }

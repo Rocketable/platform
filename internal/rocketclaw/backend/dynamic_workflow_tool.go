@@ -135,6 +135,10 @@ func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversati
 	}
 	defer func() { err = errors.Join(err, agentRun.Close()) }()
 
+	if err := b.setJustBashLaunchers(agentRun.agents); err != nil {
+		return "", err
+	}
+
 	agentRun.shellEnv = shellEnv
 
 	result, errRun := workflow.Run(ctx, definition, workflow.RunRequest{

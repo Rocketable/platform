@@ -280,12 +280,16 @@ func parseNoLint(comment string) (string, bool) {
 }
 
 // lintCustomShellEdits reports edit grants that could rewrite a sandboxed agent's wrapper or agent file.
+// An agent with shell: just-bash is sandboxed too.
 func lintCustomShellEdits(infos map[string]*agentInfo, workspace string, writes []capability) []Finding {
 	findings := []Finding{}
 
 	for _, write := range writes {
 		for name, info := range infos {
-			if info.agent.CustomShell == "" {
+			shell := "customShell"
+			if info.agent.Frontmatter["shell"] == "just-bash" {
+				shell = "just-bash shell"
+			} else if info.agent.CustomShell == "" {
 				continue
 			}
 
@@ -294,7 +298,7 @@ func lintCustomShellEdits(infos map[string]*agentInfo, workspace string, writes 
 			}
 
 			if pathsOverlap(write.pattern, info.filePath) {
-				findings = append(findings, Finding{Code: rc010, Severity: "error", Path: write.file, Message: fmt.Sprintf("%s can edit %s, which defines %s and its customShell", write.agent, info.filePath, name), keys: []string{write.bucket, write.pattern}})
+				findings = append(findings, Finding{Code: rc010, Severity: "error", Path: write.file, Message: fmt.Sprintf("%s can edit %s, which defines %s and its %s", write.agent, info.filePath, name, shell), keys: []string{write.bucket, write.pattern}})
 			}
 		}
 	}

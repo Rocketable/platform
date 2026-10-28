@@ -36,7 +36,7 @@ func testServer(t *testing.T, secrets map[string]string) (*Server, *secretFetche
 		return body, nil
 	}}
 
-	server := NewServer(cache, fetcher)
+	server := NewServer(cache, filepath.Join(cache, "rocketclaw.json"), fetcher)
 
 	t.Cleanup(func() { require.NoError(t, server.Close()) })
 
@@ -53,7 +53,6 @@ func testTurn(t *testing.T, agents map[string]Settings) Turn {
 	return Turn{
 		Workspace:  workspace,
 		RuntimeDir: filepath.Join(workspace, ".rocketclaw"),
-		ConfigFile: filepath.Join(workspace, "rocketclaw.json"),
 		Agents:     agents,
 		Env:        map[string]string{"ROCKETCLAW_CONVERSATION_ID": "conv1"},
 	}

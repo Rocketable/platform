@@ -35,6 +35,7 @@ import (
 
 	instrumentation "github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
+	"github.com/Rocketable/platform/internal/justbash"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
@@ -119,6 +120,8 @@ type Bridge struct {
 	threads *threadBridgeManager
 	// background runs the turns' execute and task calls of agents allowed to background them.
 	background *backgroundRegistry
+	// justbash serves the bash calls of agents that set shell: just-bash.
+	justbash *justbash.Server
 	// shadow is explicit stored ownership, fixed before the worker starts. underShadow marks a subagent
 	// session of a shadow, which runs as a session of its own but under the shadow's tool limits.
 	shadow, underShadow bool
@@ -1946,7 +1949,16 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 		return result, err
 	}
 
-	runner.shellEnv = b.shellEnvFor(shellEnv)
+	runEnv, justBashSession, err := b.startJustBash(runner.agents, b.shellEnvFor(shellEnv), b.config.ConversationID)
+	if err != nil {
+		return result, err
+	}
+
+	if justBashSession != nil {
+		defer justBashSession.Release()
+	}
+
+	runner.shellEnv = runEnv
 
 	request := workflow.RunRequest{RunID: turnID, Args: msg.Workflow.Args}
 
@@ -2232,6 +2244,14 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 	}
 
+	// The captured shellEnv never holds the just-bash session's variables: a resumed turn gets a new session.
+	runEnv, justBashSession, err := b.startJustBash(agents, b.shellEnvFor(shellEnv), self)
+	if err != nil {
+		return runResult{}, err
+	}
+
+	shared.justbash = justBashSession
+
 	providerLog := b.log.With("conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName, "source", string(msg.Source), "kind", string(msg.Kind), "human", msg.Human, "goal_turn", msg.GoalTurn, "attachment_count", len(msg.Attachments))
 	resolver := newModelResolver(runtimeCfg, providerLog)
 
@@ -2311,7 +2331,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 	}
 
-	if tool, ok := b.maybeDynamicWorkflowTool(root, &agent, agentName, tagConversationID, b.shellEnvFor(shellEnv)); ok {
+	if tool, ok := b.maybeDynamicWorkflowTool(root, &agent, agentName, tagConversationID, runEnv); ok {
 		customTools = append(customTools, tool)
 	}
 
@@ -2322,7 +2342,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	customTools = append(customTools, sessionsWriteTool(b, origin, rootAgent, self))
 	customTools = append(customTools, pageTools(b.config.SessionService, root, b.threads, rootAgent, agents.Items[rootAgent].Space, "")...)
 
-	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, customTools...)
+	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, runEnv, customTools...)
 
 	rocketcodeConfig.ChildContext = childContext
 	if !b.shadow && !b.underShadow {
@@ -2818,6 +2838,12 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 
 		groups, err := agentTagGroups(&agent)
 		if err != nil {
+			err = fmt.Errorf("permission.rocketclaw.rocketclaw_set_tag: %w", err)
+		} else if _, _, errJustBash := justbash.ParseSettings(agent.Frontmatter); errJustBash != nil {
+			err = errJustBash
+		}
+
+		if err != nil {
 			if strings.Contains(name, "/") {
 				slog.Warn("load shadow definition", "path", agent.Location, "error", err)
 				delete(agents.Items, name)
@@ -2825,7 +2851,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 				continue
 			}
 
-			return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("%s: permission.rocketclaw.rocketclaw_set_tag: %w", agent.Location, err)
+			return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("%s: %w", agent.Location, err)
 		}
 
 		agent.Permission.Buckets = slices.DeleteFunc(agent.Permission.Buckets, func(bucket rocketcode.PermissionBucket) bool {
@@ -3199,6 +3225,10 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string, shellEnv map[s
 
 	agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime, runtimeCfg.RuntimeDirName(), toolModePersistent)
 	if err != nil {
+		return "goal check failed before execution: " + err.Error(), false
+	}
+
+	if err := b.setJustBashLaunchers(agents); err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}
 

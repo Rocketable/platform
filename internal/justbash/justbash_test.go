@@ -37,7 +37,7 @@ func newBashCall(t *testing.T, server *Server, turn Turn) *bashCall {
 	session, err := server.Register(turn)
 	require.NoError(t, err)
 
-	launcher, err := session.Launcher("main")
+	launcher, err := server.Launcher("main")
 	require.NoError(t, err)
 
 	tmp := filepath.Join(turn.RuntimeDir, ".rocketcode", "tmp", "conv1")
