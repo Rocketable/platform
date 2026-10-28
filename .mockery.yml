@@ -49,6 +49,14 @@ packages:
       runLockWork:
         config:
           structname: runLockWorkMock
+  github.com/Rocketable/platform/internal/rocketclaw/config:
+    interfaces:
+      SecretFetcher:
+        config:
+          dir: '{{.ConfigDir}}/internal/justbash'
+          pkgname: justbash
+          structname: secretFetcherMock
+          inpackage: false
   github.com/Rocketable/platform/internal/rocketclaw/frontend:
     interfaces:
       Backend:

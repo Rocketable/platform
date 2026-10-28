@@ -1,0 +1,2 @@
+import{createRequire} from"node:module";const require=createRequire(import.meta.url);
+var t=class extends Error{code="ENOSYS";constructor(e,r){super(`ENOSYS: filesystem cannot create entries atomically, ${r} '${e}'`),this.name="ExclusiveCreateUnsupportedError"}};async function a(c,e,r){if(!c.createExclusive)throw new t(e,r.directory?"mkdir":"open");await c.createExclusive(e,r)}export{t as a,a as b};

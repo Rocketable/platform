@@ -10,11 +10,13 @@ test-rocketclaw:
 test-others:
 	cd internal/rocketcode; $(MAKE) test
 	cd internal/funneld; $(MAKE) test
+	cd internal/justbash; $(MAKE) test
 
 lint:
 	cd internal/rocketclaw; $(MAKE) lint
 	cd internal/rocketcode; $(MAKE) lint
 	cd internal/funneld; $(MAKE) lint
+	cd internal/justbash; $(MAKE) lint
 
 build:
 	cd internal/rocketclaw; $(MAKE) build
@@ -26,6 +28,7 @@ cloc:
 	cd internal/funneld; $(MAKE) cloc
 	cd internal/rocketclaw/web; $(MAKE) cloc
 	cd internal/rocketclaw/oc; $(MAKE) cloc
+	cd internal/justbash; $(MAKE) cloc
 
 check-cloc-budget:
 	cd internal/rocketclaw; $(MAKE) check-cloc-budget

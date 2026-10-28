@@ -48,6 +48,11 @@ jobs:
         with:
           path: internal/rocketclaw/oc/node_modules
           key: oc-node-modules-${{ hashFiles('internal/rocketclaw/oc/bun.lock') }}
+      # just-bash needs Node 20.19 or later; the wrapper's type check and the runtime build use Bun.
+      - &setup-node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
       # Ubuntu's package mirror sometimes takes minutes, so no job installs from it. This is the same
       # cloc 1.98 as Ubuntu 24.04's package, as one Perl script.
       - name: Install cloc
@@ -56,6 +61,7 @@ jobs:
           echo "94cba5168e6d1b72100513d6660a31ebb6a91670cf501816efa71d6e1da6d58a  $RUNNER_TEMP/cloc" | sha256sum -c -
           sudo install "$RUNNER_TEMP/cloc" /usr/local/bin/cloc
       - run: make -C internal/rocketclaw generate
+      - run: make -C internal/justbash runtime
       - name: Generated files are committed
         run: git diff --exit-code && test -z "$(git status --porcelain)"
       - run: make -C internal/rocketclaw/oc lint test
@@ -63,6 +69,7 @@ jobs:
       - run: make -C internal/rocketclaw -o web-assets -o vendor lint
       - run: make -C internal/rocketcode lint
       - run: make -C internal/funneld lint
+      - run: make -C internal/justbash lint
       - if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
         with:
@@ -94,6 +101,9 @@ jobs:
         working-directory: internal/rocketcode
       - run: go test ../../cmd/funneld ./...
         working-directory: internal/funneld
+      - *setup-node
+      - run: go test -race -count 1 ./...
+        working-directory: internal/justbash
       # Matrix shards compile the same packages, so only the first saves.
       - &save-go-build
         if: github.ref == 'refs/heads/main' && strategy.job-index == 0
@@ -119,6 +129,7 @@ jobs:
       - *setup-go
       - *restore-go-build
       - *setup-bun
+      - *setup-node
       - *node-modules
       - run: bun install --frozen-lockfile
         working-directory: internal/rocketclaw/web
