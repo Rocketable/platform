@@ -53,22 +53,32 @@ func DecideOrigin(facts *ChatOriginFacts) (origin any, text string) {
 
 	if mcpOn {
 		pairs := make([]originPair, 0, len(facts.Binding.OriginPairs))
-		texts := make([]string, 0, len(facts.Binding.OriginPairs))
+		size := max(0, len(facts.Binding.OriginPairs)-1)
 
 		for key, value := range facts.Binding.OriginPairs {
 			pairs = append(pairs, originPair{Key: key, Value: value})
+			size += len(key) + len(value) + 1
 		}
 
 		slices.SortFunc(pairs, func(a, b originPair) int {
 			return strings.Compare(a.Key, b.Key)
 		})
 
-		for _, pair := range pairs {
-			texts = append(texts, pair.Key+"="+pair.Value)
+		var joined strings.Builder
+		joined.Grow(size)
+
+		for i, pair := range pairs {
+			if i > 0 {
+				joined.WriteByte(' ')
+			}
+
+			joined.WriteString(pair.Key)
+			joined.WriteByte('=')
+			joined.WriteString(pair.Value)
 		}
 
 		return externalMCPOrigin{Kind: originExternalMCP, ExternalConversationID: facts.ExternalConversationID, Agent: facts.Binding.Agent, Pairs: pairs},
-			strings.ToLower("External MCP External conversation: " + facts.ExternalConversationID + " Agent: " + facts.Binding.Agent + " " + strings.Join(texts, " "))
+			strings.ToLower("External MCP External conversation: " + facts.ExternalConversationID + " Agent: " + facts.Binding.Agent + " " + joined.String())
 	}
 
 	kind := cronScheduled
