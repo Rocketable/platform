@@ -908,11 +908,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await search.fill("tabs: close");
     await sessionPalette.getByRole("button", { name: "Tabs: Close", exact: true }).waitFor();
     // An exact match leads; recent then alphabetical contiguous matches follow, ahead of the sessions, and the Search hand-off comes last.
-    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close", "Tabs: Close others", "Tabs: Close all", "Tabs: Close to the right", "Search everywhere for 'tabs: close'"]);
+    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close", "Tabs: Close others", "Tabs: Close all", "Tabs: Close to the right", "Search in this space for 'tabs: close'", "Search everywhere for 'tabs: close'"]);
     expect(await sessionPalette.locator("ul > li > button").first().textContent()).toBe("Tabs: Close");
     await search.fill("tabs: close t");
     await sessionPalette.getByRole("button", { name: "Tabs: Close all", exact: true }).waitFor({ state: "detached" });
-    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close to the right", "Tabs: Close others", "Search everywhere for 'tabs: close t'"]); // A contiguous match beats a recent fuzzy one.
+    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close to the right", "Tabs: Close others", "Search in this space for 'tabs: close t'", "Search everywhere for 'tabs: close t'"]); // A contiguous match beats a recent fuzzy one.
     await search.fill("cron: run"); // A bare key is not a filter.
     await sessionPalette.getByRole("button", { name: "Cron: Run", exact: true }).waitFor();
     await search.fill("is:pinned cron: run");

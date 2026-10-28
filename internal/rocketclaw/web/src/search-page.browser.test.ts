@@ -267,7 +267,7 @@ test("principal filters retain links, pills and quoted suggestions", async () =>
   const principal = 'Writer "One"', term = `principal:${JSON.stringify(principal)}`;
   const { server, origin } = serve([{ id: "written", name: "Written conversation", tags: ["x"] }], ({ query }) => response(query,
     query.includes(term) ? [{ conversationId: "written", text: "recorded prompt" }] : [],
-    [...(query.includes(term) ? [term] : []), ...(query.includes("tag:x") ? ["tag:x"] : [])].sort((a, b) => query.indexOf(a) - query.indexOf(b)), { principals: [principal], text: "", needle: "" }));
+    [...(query.includes(term) ? [term] : []), ...(query.includes("tag:x") ? ["tag:x"] : []), ...(query.includes("space:Main") ? ["space:Main"] : [])].sort((a, b) => query.indexOf(a) - query.indexOf(b)), { principals: [principal], text: "", needle: "" }));
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
@@ -292,6 +292,15 @@ test("principal filters retain links, pills and quoted suggestions", async () =>
     await page.getByRole("button", { name: "New search", exact: true }).click();
     await input.fill("principal:");
     await suggestion.waitFor();
+    await input.fill("space:");
+    await page.getByRole("button", { name: "Main", exact: true }).click();
+    const spacePill = page.getByRole("button", { name: "space:Main", exact: true });
+    await spacePill.waitFor();
+    expect(await input.inputValue()).toBe("");
+    await page.reload();
+    await spacePill.waitFor();
+    await spacePill.click();
+    expect(new URL(page.url()).searchParams.has("q")).toBe(false);
   } finally {
     await browser.close();
     server.stop(true);
@@ -362,12 +371,14 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
   const held = Promise.withResolvers<void>();
   const started = Promise.withResolvers<void>();
   const filterHeld = Promise.withResolvers<void>();
+  const removedHeld = Promise.withResolvers<void>();
   let failing = true;
   const { server, paths, origin } = serve([{ id: "a", name: "Alpha", agent: "main", tags: ["bug"] }, { id: "b", name: "Bravo", agent: "main", preview: "charlie in the body" }, { id: "c", name: "Charlie", agent: "main" }], async (input) => {
     requests.push(input);
     const { query } = input;
     if (query === "tag:bug x") { started.resolve(); await held.promise; }
     if (query === "CHAR is:pinned") await filterHeld.promise;
+    if (query === "rlie is:pinned") await removedHeld.promise;
     if (query === "is:pinned brav" && failing) throw new Error("search unavailable");
     // As the server does for Cmd+P, the fixture applies only the filters: Alpha and Bravo are pinned, Alpha is tagged bug.
     const ids = query.startsWith("tag:bug ") ? ["a"] : query.includes("is:pinned") ? ["a", "b"] : [];
@@ -396,8 +407,13 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     await input.fill("CHAR is:pinned"); // Adding a filter keeps the title matches, dimmed, until the server answers.
     await page.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null);
     await titles(["Charlie"]);
+    await input.press("ArrowDown");
     filterHeld.resolve();
     await titles([]);
+    expect(await palette.locator("li > button.bg-accent").textContent()).toBe("Search in this space for 'CHAR is:pinned'");
+    await input.press("Enter");
+    await page.waitForURL((url: URL) => url.pathname.startsWith("/search/") && url.searchParams.get("q") === "space:Main CHAR is:pinned");
+    await page.keyboard.press("Control+p");
 
     const pills = palette.getByRole("button", { name: /^tag:/ });
     await input.fill("tag:bu");
@@ -430,6 +446,7 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     const opened = page.url();
     await input.fill("is:pinned nothing");
     await palette.getByText("No matches", { exact: true }).waitFor();
+    expect(await palette.locator("li > button.bg-accent").textContent()).toBe("Search everywhere for 'is:pinned nothing'");
     await input.press("Enter"); // A filtered query with no result opens nothing, not even Search everywhere.
     await page.waitForTimeout(100);
     expect(await palette.isVisible()).toBe(true);
@@ -446,9 +463,24 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     await titles(["Bravo"]);
     expect(await palette.getByRole("alert").count()).toBe(0);
     expect(paths.has("/api/SearchOrigins")).toBe(false);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Control+p");
+    await input.fill("rlie is:pinned");
+    await page.waitForFunction(() => document.querySelector('[role="dialog"] ul[data-pending="true"]') !== null);
+    await titles(["Charlie"]);
+    await input.press("ArrowDown");
+    await input.press("ArrowUp");
+    removedHeld.resolve();
+    await titles([]);
+    expect(await palette.locator("li > button.bg-accent").textContent()).toBe("Search everywhere for 'rlie is:pinned'");
+    await input.press("End");
+    await input.press("Enter");
+    await page.waitForTimeout(100);
+    expect(await palette.isVisible()).toBe(true); // A removed session never turns into a deliberate handoff.
   } finally {
     held.resolve();
     filterHeld.resolve();
+    removedHeld.resolve();
     await browser.close();
     server.stop(true);
   }
@@ -614,7 +646,7 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
     await handoff.waitFor();
     await palette.getByRole("button").filter({ hasText: "Needle notes" }).waitFor();
     // The title match is one row, with no message or field rows, and the hand-off comes last.
-    expect(await palette.locator("li > button").evaluateAll((buttons: Element[]) => buttons.map((button) => button.querySelector('[data-slot="session-title"]')?.textContent ?? button.textContent))).toEqual(["Needle notes", "Search everywhere for 'needle'"]);
+    expect(await palette.locator("li > button").evaluateAll((buttons: Element[]) => buttons.map((button) => button.querySelector('[data-slot="session-title"]')?.textContent ?? button.textContent))).toEqual(["Needle notes", "Search in this space for 'needle'", "Search everywhere for 'needle'"]);
     expect(requests).toEqual([]);
 
     // Remote sessions suggest their servers, agents and models; RocketClaw agents their configured models.
@@ -705,7 +737,8 @@ test("Cmd+P draws large session lists only as scrolling and keyboard navigation 
     const buttons = palette.locator("li > button");
     expect(await buttons.count()).toBe(50);
     expect(await palette.locator('[data-slot="session-title"]').allTextContents()).toEqual(rows.slice(0, 50).map(({ name }) => name));
-    await input.press("ArrowUp"); // Wrap past the hand-off to the last session, without dropping choices.
+    await input.press("ArrowUp"); // Wrap past both hand-offs to the last session, without dropping choices.
+    await page.keyboard.press("ArrowUp");
     await page.keyboard.press("ArrowUp");
     await page.waitForURL(`**/s/${btoa("report-599").replaceAll("=", "")}`);
     expect(await palette.getByText("Report 0599", { exact: true }).evaluate((node: HTMLElement) => {
@@ -719,7 +752,7 @@ test("Cmd+P draws large session lists only as scrolling and keyboard navigation 
     await palette.locator("ul[data-pending]").evaluate((node: HTMLElement) => { node.scrollTop = node.scrollHeight; });
     await page.waitForFunction(() => document.querySelectorAll('[role="dialog"] li > button').length > 50);
     expect(await palette.getByText("Report 0050", { exact: true }).count()).toBe(1);
-    while (await buttons.count() < rows.length + 1) {
+    while (await buttons.count() < rows.length + 2) {
       const drawn = await buttons.count();
       await palette.locator("ul[data-pending]").evaluate((node: HTMLElement) => { node.scrollTop = node.scrollHeight; });
       await page.waitForFunction((count: number) => document.querySelectorAll('[role="dialog"] li > button').length > count, drawn);

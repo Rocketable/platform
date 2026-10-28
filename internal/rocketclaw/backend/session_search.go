@@ -31,6 +31,7 @@ const (
 	keyPrincipal SearchKey = "principal"
 	keyServer    SearchKey = "server"
 	keyModel     SearchKey = "model"
+	keySpace     SearchKey = "space"
 )
 
 // SearchTerm is a filter term of a session search query: its text, decoded value
@@ -100,7 +101,7 @@ type SessionSearch struct {
 }
 
 // parseSessionQuery reads query as Web's search regex
-// /(?:^|\s)(is:(?:pinned|forked|cron|unread)|sort:(?:newest|oldest)|(?:tag|cron|agent|room|principal|server|model):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi
+// /(?:^|\s)(is:(?:pinned|forked|cron|unread)|sort:(?:newest|oldest)|(?:tag|cron|agent|room|principal|server|model|space):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi
 // did, decoding quoted values as JSON; a value that is empty or does not decode
 // leaves its term as text. text is query without each term and the one
 // whitespace character before it, trimmed.
@@ -132,7 +133,7 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 			found = found && (term.Value == "pinned" || term.Value == "forked" || term.Value == "cron" || term.Value == "unread")
 		case keySort:
 			found = found && (term.Value == "newest" || term.Value == "oldest")
-		case keyTag, keyCron, keyAgent, keyRoom, keyPrincipal, keyServer, keyModel:
+		case keyTag, keyCron, keyAgent, keyRoom, keyPrincipal, keyServer, keyModel, keySpace:
 			term.Value = value
 			if strings.HasPrefix(value, `"`) {
 				start := pos + len(key) + 1
@@ -297,7 +298,7 @@ SELECT DISTINCT conversation_id FROM found`, "session search candidates", func(r
 // passes requires any room term to match, any agent term to match, and every other
 // filter term. An agent term matches the chat's agent or one of sandboxed, the agents
 // of the hidden runs it shows. A model term matches part of the chat's model, ignoring case.
-func (c *SidebarChat) passes(terms []SearchTerm, principals, sandboxed []string) bool {
+func (c *SidebarChat) passes(terms []SearchTerm, principals, sandboxed []string, spaces []Space) bool {
 	hasRoom, roomMatch, hasAgent, agentMatch := false, false, false, false
 
 	for _, term := range terms {
@@ -315,6 +316,10 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals, sandboxed []string)
 			ok = slices.Contains(principals, term.Value)
 		case keyServer:
 			ok = c.Session.Server == term.Value
+		case keySpace:
+			ok = slices.ContainsFunc(spaces, func(space Space) bool {
+				return space.ID == c.Session.SpaceID && strings.EqualFold(space.Name, term.Value)
+			})
 		case keyModel:
 			ok = strings.Contains(strings.ToLower(c.Session.Model), strings.ToLower(term.Value))
 		case keyRoom:
@@ -408,7 +413,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 		}
 	}
 
-	agents, err := s.modelAgents(search.Terms)
+	agents, spaces, err := s.searchDefinitions(ctx, search.Terms)
 	if err != nil {
 		return nil, err
 	}
@@ -427,7 +432,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 			chat.Session.Model = agents.Items[chat.Session.Conversation.Agent].Model
 		}
 
-		if chat.passes(search.Terms, principals[chat.Session.Conversation.ID], sandboxed[chat.Session.Conversation.ID]) {
+		if chat.passes(search.Terms, principals[chat.Session.Conversation.ID], sandboxed[chat.Session.Conversation.ID], spaces) {
 			listed = append(listed, chat)
 			hits[chat.Session.Conversation.ID] = false
 		}
@@ -523,18 +528,25 @@ func (s *SessionService) sidebarRows(ctx context.Context, username string, chats
 	return rows, nil
 }
 
-// modelAgents are the agents whose configured models are RocketClaw chats' models, loaded only for a model: term.
-func (s *SessionService) modelAgents(terms []SearchTerm) (rocketcode.Agents, error) {
+// searchDefinitions loads only the definitions the query's model: and space: terms need.
+func (s *SessionService) searchDefinitions(ctx context.Context, terms []SearchTerm) (agents rocketcode.Agents, spaces []Space, err error) {
+	if slices.ContainsFunc(terms, func(term SearchTerm) bool { return term.Key == keySpace }) {
+		spaces, err = s.Spaces(ctx)
+		if err != nil {
+			return agents, nil, err
+		}
+	}
+
 	if !slices.ContainsFunc(terms, func(term SearchTerm) bool { return term.Key == keyModel }) {
-		return rocketcode.Agents{}, nil
+		return agents, spaces, nil
 	}
 
-	agents, _, err := LoadRuntimeDefinitions(s.definitions, s.definitions.Clone().RuntimeDirName())
+	agents, _, err = LoadRuntimeDefinitions(s.definitions, s.definitions.Clone().RuntimeDirName())
 	if err != nil {
-		return rocketcode.Agents{}, fmt.Errorf("load agents for model search: %w", err)
+		return agents, spaces, fmt.Errorf("load agents for model search: %w", err)
 	}
 
-	return agents, nil
+	return agents, spaces, nil
 }
 
 // sandboxedAgents adds to sandboxed, for an agent: term, the agents of the hidden runs each
