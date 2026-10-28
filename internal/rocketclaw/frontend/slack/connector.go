@@ -1247,7 +1247,7 @@ func slackAdoptHistory(messages []slack.Message, hailTS string) string {
 			continue
 		}
 
-		text := strings.TrimSpace(messages[i].Text)
+		text := messageText(&messages[i])
 		if text == "" {
 			continue
 		}
@@ -1265,6 +1265,34 @@ func slackAdoptHistory(messages []slack.Message, hailTS string) string {
 	}
 
 	return packed
+}
+
+func messageText(message *slack.Message) string {
+	texts := []string{message.Text}
+	for _, block := range message.Blocks.BlockSet {
+		var fields []*slack.TextBlockObject
+
+		switch block := block.(type) {
+		case *slack.SectionBlock:
+			fields = append([]*slack.TextBlockObject{block.Text}, block.Fields...)
+		case *slack.ContextBlock:
+			for _, element := range block.ContextElements.Elements {
+				if text, ok := element.(*slack.TextBlockObject); ok {
+					fields = append(fields, text)
+				}
+			}
+		case *slack.HeaderBlock:
+			fields = []*slack.TextBlockObject{block.Text}
+		}
+
+		for _, field := range fields {
+			if field != nil {
+				texts = append(texts, field.Text)
+			}
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(texts, "\n"))
 }
 
 func (c *Connector) stripSlackBotMention(text string) string {
@@ -1642,7 +1670,7 @@ func renderSlackForward(forward slackNativeForward, messages []slack.Message, fi
 			transcript.WriteByte('\n')
 		}
 
-		transcript.WriteString(strings.TrimSpace(messages[i].User) + ": " + strings.TrimSpace(messages[i].Text))
+		fmt.Fprintf(&transcript, "%s: %s", strings.TrimSpace(messages[i].User), messageText(&messages[i]))
 	}
 
 	remaining := protocol.MaxInboundTextAttachmentBytes - len(result) - len(threadHeading)
