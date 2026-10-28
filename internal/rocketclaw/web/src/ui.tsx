@@ -1669,6 +1669,10 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   }, [newChat]);
   const onKey = useEffectEvent((event: KeyboardEvent) => {
     if (event.defaultPrevented) return;
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && event.shiftKey && event.key.toLowerCase() === "r") {
+      event.stopPropagation(); // Keep hard refresh native, ahead of embedded shortcuts and terminal input.
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && !event.altKey && event.code === "KeyP") {
       event.preventDefault();
       event.stopPropagation();

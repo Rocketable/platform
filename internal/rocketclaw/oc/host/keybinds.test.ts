@@ -11,12 +11,13 @@ const sources = [...new Glob("{app,gui-plugins,plugin,session-ui,ui}/src/**/*.{t
 const modifier = "(?:ctrl|control|mod|meta|cmd|command|alt|option|shift)"
 const combo = new RegExp(`^${modifier}\\+(?:${modifier}\\+)*[^+,\\s]+$`, "i")
 
-// RocketClaw's shortcuts win every clash (R10): mod+P, mod+Shift+P, mod+B, Ctrl+B, mod+Alt+N, mod+[ and mod+].
+// RocketClaw and browser shortcuts win every clash (R10): mod+P, mod+Shift+P, mod+Shift+R, mod+B, Ctrl+B, mod+Alt+N, mod+[ and mod+].
 // mod is ⌘ on macOS and Ctrl elsewhere, so each is pressed with both; Ctrl+B is mod+B's Ctrl form.
 const rocketclaw = [{ metaKey: true }, { ctrlKey: true }].flatMap((mod) =>
   [
     { key: "p", code: "KeyP" },
     { key: "P", code: "KeyP", shiftKey: true },
+    { key: "R", code: "KeyR", shiftKey: true },
     { key: "b", code: "KeyB" },
     { key: "n", code: "KeyN", altKey: true },
     { key: "[", code: "BracketLeft" },

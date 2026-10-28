@@ -519,7 +519,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     viewCommand({
       id: "review.toggle",
       title: language.t("command.review.toggle"),
-      keybind: "mod+shift+r",
+      // rocketclaw: no default keybind; mod+Shift+R is the browser's hard refresh (upstream packages/app/src/session/commands/use-session-commands.tsx).
       onSelect: actions.region.toggle,
     }),
     ...(actions.region.pane("bottom").keys().length > 0
