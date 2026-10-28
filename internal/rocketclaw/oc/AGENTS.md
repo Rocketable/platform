@@ -25,7 +25,8 @@ upstream's tagged v2 releases. The root `AGENTS.md` also applies here.
   `@solid-primitives/media`'s `createMediaQuery` for every importer. Code a new release adds is covered
   without edits.
 - `host/defaults.ts` sets RocketClaw's defaults for settings nobody changed: Show agent on, terminal at the
-  bottom, follow-ups queued, and timeline detail at Everything. It also sets them once in each browser's saved
+  bottom, follow-ups queued, and timeline detail at Everything. The terminal uses native panel placement and remembers
+  a person's later moves, even after every terminal closes. The other defaults are set once in each browser's saved
   settings, since saving one setting saves all of them. Keep them through every merge; a merge that renames
   one of these settings, or the `settings.v3` storage key, updates `host/defaults.ts` to match.
 - Keep each edit minimal and local. Mark each edit with a `rocketclaw:` comment that says why the edit

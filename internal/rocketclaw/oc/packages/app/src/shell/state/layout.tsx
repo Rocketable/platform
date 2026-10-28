@@ -19,12 +19,14 @@ import {
   closeSessionTab,
   moveSessionTab,
   openSessionTab,
-  placeSessionTabs,
   previewSessionTab,
   type SessionPane,
   type SessionTabs,
   type SessionTabState,
 } from "./session-tabs"
+// rocketclaw: apply host terminal defaults while explicit launcher targets are still available
+// (upstream packages/app/src/shell/state/layout.tsx)
+import { placeTerminalTabs } from "@rocketclaw/host/defaults"
 
 const DEFAULT_SIDEBAR_WIDTH = 344
 
@@ -262,7 +264,8 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         const previous = store.sessionTabs[session] ?? { all: [] }
         const target = ephemeral.sessionTabTarget[session]
         const pending = target && Date.now() - target.at < PANE_TARGET_TTL_MS ? target.pane : undefined
-        const placed = placeSessionTabs(previous, next, pending)
+        // rocketclaw: see the import (upstream packages/app/src/shell/state/layout.tsx)
+        const placed = placeTerminalTabs(session, previous, next, pending)
 
         batch(() => {
           setStore("sessionTabs", session, {

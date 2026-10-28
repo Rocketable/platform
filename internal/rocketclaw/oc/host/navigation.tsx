@@ -1,7 +1,8 @@
 import { type createMemoryHistory, useLocation } from "@solidjs/router"
 import { createContext, createEffect, createMemo, useContext } from "solid-js"
 import { useLanguage } from "@/runtime/i18n/language"
-import { useCommand } from "@/shell/commands/command"
+import { COMMAND_SEARCH_ID, useCommand } from "@/shell/commands/command"
+import { useDialog } from "@opencode/ui/context/dialog"
 import type { Navigation } from "./api"
 
 const inertNavigation: Navigation = {
@@ -27,11 +28,21 @@ export function routeSession(pathname: string) {
 export function ViewHistory(props: { history: ReturnType<typeof createMemoryHistory> }) {
   const command = useCommand()
   const language = useLanguage()
+  const dialog = useDialog()
   const navigation = useContext(NavigationContext)
   const location = useLocation()
   const session = createMemo(() => routeSession(location.pathname))
 
   command.register(() => [
+    {
+      id: COMMAND_SEARCH_ID,
+      title: language.t("command.commands.search"),
+      category: language.t("command.category.view"),
+      onSelect: async () => {
+        const { DialogCommandSearch } = await import("@/shell/commands/command-search")
+        void dialog.show(() => <DialogCommandSearch />)
+      },
+    },
     {
       id: "common.goBack",
       title: language.t("common.goBack"),
