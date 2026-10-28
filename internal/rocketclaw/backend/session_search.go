@@ -53,7 +53,7 @@ const (
 	fieldPreview SessionField = "Preview"
 )
 
-// SidebarChat is a sidebar row with the room, cron and origin Web shows for it.
+// SidebarChat is a sidebar row with the room and cron Web shows for it.
 type SidebarChat struct {
 	Session SidebarSession
 	// Room is a Slack thread's stored channel name, or its channel ID when unknown; empty for other chats.
@@ -61,8 +61,6 @@ type SidebarChat struct {
 	// Cron reports a chat a cron run created; CronName is that job's stem.
 	Cron     bool
 	CronName string
-	// Origin is the lowercased origin text, empty without an origin.
-	Origin string
 }
 
 // SearchScope is what a session search's free text matches.
@@ -188,7 +186,7 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 }
 
 // SidebarChats yields the sidebar's chats, or only those of chats when not nil, with their room,
-// resolved through slack once per channel, cron, origin and username's unread marks.
+// resolved through slack once per channel, cron and username's unread marks.
 func (s *SessionService) SidebarChats(ctx context.Context, username string, slack slackLookup, chats []string) iter.Seq2[SidebarChat, error] {
 	return func(yield func(SidebarChat, error) bool) {
 		rooms := make(map[string]SidebarChat)
@@ -206,11 +204,12 @@ func (s *SessionService) SidebarChats(ctx context.Context, username string, slac
 	}
 }
 
-// sidebarChat is row with its cron, origin and room (sidebarRoom).
+// sidebarChat is row with its cron and room (sidebarRoom).
 func sidebarChat(ctx context.Context, slack slackLookup, rooms map[string]SidebarChat, row *SidebarSession) (SidebarChat, error) {
-	origin, text := DecideOrigin(&row.Origin)
-	cron, ok := origin.(cronOrigin)
-	chat := SidebarChat{Session: *row, Cron: ok, CronName: cron.Stem, Origin: text}
+	chat := SidebarChat{Session: *row, Cron: row.Origin.Run != nil && row.Origin.Binding.ManagedConversationID != row.Origin.ConversationID}
+	if chat.Cron {
+		chat.CronName = strings.TrimSuffix(strings.TrimPrefix(row.Origin.Run.Path, "cron/"), ".md")
+	}
 
 	if row.SlackChannel != "" {
 		room, err := sidebarRoom(ctx, slack, rooms, row.SlackChannel)
@@ -457,13 +456,14 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 			}
 
 			label := row.Label()
+			_, origin := DecideOrigin(&row.Origin)
 
 			var preview string
 			if row.Summary != nil {
 				preview = row.Summary.LastMessage
 			}
 
-			if !withHits && search.Needle != "" && !strings.Contains(strings.ToLower(row.Name+" "+chat.Room+" "+preview+" "+row.Conversation.Agent+" "+label+" "+row.Server+" "+row.Directory), search.Needle) && !strings.Contains(chat.Origin, search.Needle) {
+			if !withHits && search.Needle != "" && !strings.Contains(strings.ToLower(row.Name+" "+chat.Room+" "+preview+" "+row.Conversation.Agent+" "+label+" "+row.Server+" "+row.Directory), search.Needle) && !strings.Contains(origin, search.Needle) {
 				continue
 			}
 
@@ -472,7 +472,7 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 			for _, field := range []struct {
 				name SessionField
 				text string
-			}{{fieldName, row.Name}, {fieldRoom, chat.Room}, {fieldAgent, row.Conversation.Agent}, {fieldSession, label}, {fieldOrigin, chat.Origin}} {
+			}{{fieldName, row.Name}, {fieldRoom, chat.Room}, {fieldAgent, row.Conversation.Agent}, {fieldSession, label}, {fieldOrigin, origin}} {
 				if search.Needle != "" && strings.Contains(strings.ToLower(field.text), search.Needle) {
 					match.Field, match.Text = field.name, field.text
 					break

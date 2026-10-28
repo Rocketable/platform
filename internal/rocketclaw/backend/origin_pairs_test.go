@@ -11,6 +11,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSidebarChatAllocationBudget(t *testing.T) {
+	result := testing.Benchmark(BenchmarkSidebarChat)
+	require.Positive(t, result.N)
+	require.Zero(t, result.AllocsPerOp())
+}
+
+func BenchmarkSidebarChat(b *testing.B) {
+	cron := &protocol.CronRun{Path: "cron/Weekly report.md", At: time.Date(2001, time.January, 2, 3, 4, 5, 0, time.UTC)}
+	binding := ExternalMCPSessionState{ManagedConversationID: "sample-chat", Agent: "helper", OriginPairs: map[string]string{"topic": "Example", "note": "Sample"}}
+	cases := []struct {
+		facts ChatOriginFacts
+		cron  bool
+		stem  string
+	}{
+		{facts: ChatOriginFacts{ConversationID: "sample-chat"}},
+		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: cron}, cron: true, stem: "Weekly report"},
+		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: &protocol.CronRun{Path: "cron/.md", OneOff: true}}, cron: true},
+		{facts: ChatOriginFacts{ConversationID: "sample-chat", Binding: binding}},
+		{facts: ChatOriginFacts{ConversationID: "sample-chat", Binding: binding, Run: cron}},
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		for i := range cases {
+			tc := &cases[i]
+			row := SidebarSession{Conversation: protocol.Conversation{ID: "sample-chat"}, Origin: tc.facts}
+
+			chat, err := sidebarChat(b.Context(), noSlackLookups{}, nil, &row)
+			if err != nil || chat.Cron != tc.cron || chat.CronName != tc.stem || chat.Session.Conversation.ID != row.Conversation.ID {
+				b.Fatalf("sidebarChat = %#v, %v; want cron %t, stem %q", chat, err, tc.cron, tc.stem)
+			}
+		}
+	}
+}
+
 func TestDecideCronOriginAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkDecideCronOrigin)
 	require.Positive(t, result.N)
