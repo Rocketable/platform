@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,7 +78,12 @@ func TestHandleAppMentionEventAdoptsUnknownThreadWithHistory(t *testing.T) {
 	router := newMentionRouter(false, nil)
 
 	server := newAdhocSlackServer(t, "random", []map[string]any{
-		{"ts": "171234.0001", "user": "U555", "text": "old"},
+		{"ts": "171234.0001", "user": "U555", "text": "old", "blocks": slack.Blocks{BlockSet: []slack.Block{
+			slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, "Worker failure", false, false)),
+			slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, "<https://example.com/issues/42|Failure>", false, false), nil, nil),
+			slack.NewSectionBlock(nil, []*slack.TextBlockObject{slack.NewTextBlockObject(slack.MarkdownType, "State: New", false, false)}, nil),
+			slack.NewContextBlock("", slack.NewTextBlockObject(slack.MarkdownType, "Component: worker", false, false)),
+		}}},
 		{"ts": "171234.0002", "user": "U555", "text": "keep-1"},
 		{"ts": "171234.9999", "user": "U123", "text": "<@U999> $review jump in"},
 	}, &writes)
@@ -92,6 +98,10 @@ func TestHandleAppMentionEventAdoptsUnknownThreadWithHistory(t *testing.T) {
 	assert.Equal(t, "171234.0001", started[0].Target.ThreadID)
 	assert.Contains(t, started[0].Inbound.Text, "jump in")
 	assert.Contains(t, started[0].Inbound.Text, "old")
+	assert.Contains(t, started[0].Inbound.Text, "<https://example.com/issues/42|Failure>")
+	assert.Contains(t, started[0].Inbound.Text, "Component: worker")
+	assert.Contains(t, started[0].Inbound.Text, "Worker failure")
+	assert.Contains(t, started[0].Inbound.Text, "State: New")
 	assert.Contains(t, started[0].Inbound.Text, "keep-1")
 	assert.Equal(t, "$review jump in", started[0].Inbound.Metadata[protocol.InboundRawTextMetadataKey])
 	assert.Equal(t, []string{"/reactions.add " + slackRobotReaction + " 171234.9999"}, writes, "the placeholder waits for the turn to start")
