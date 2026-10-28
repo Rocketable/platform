@@ -94,7 +94,15 @@ func TestTargetNames(t *testing.T) {
 func TestFetch(t *testing.T) {
 	t.Parallel()
 
-	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("other")) }))
+	otherSaw := make(chan string, 1)
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case otherSaw <- r.Header.Get("Authorization") + "|" + r.Header.Get("Cookie") + "|" + r.Header.Get("X-Keep"):
+		default:
+		}
+
+		_, _ = w.Write([]byte("other"))
+	}))
 	t.Cleanup(other.Close)
 
 	big := strings.Repeat("x", 6<<20)
@@ -150,7 +158,7 @@ func TestFetch(t *testing.T) {
 	t.Run("redirect re-checked per hop", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := fetch(t.Context(), listed, &justbashpb.FetchRequest{Url: srv.URL + "/redirect", FollowRedirects: true})
+		_, err := fetch(t.Context(), listed, &justbashpb.FetchRequest{Url: srv.URL + "/redirect", FollowRedirects: true, MaxRedirects: 20})
 		require.ErrorIs(t, err, errNetworkDenied)
 
 		resp, err := fetch(t.Context(), listed, &justbashpb.FetchRequest{Url: srv.URL + "/redirect"})
@@ -162,9 +170,13 @@ func TestFetch(t *testing.T) {
 		t.Parallel()
 
 		both := rulesOf(t, host, strings.TrimPrefix(other.URL, "http://"))
-		resp, err := fetch(t.Context(), both, &justbashpb.FetchRequest{Url: srv.URL + "/redirect", FollowRedirects: true})
+		resp, err := fetch(t.Context(), both, &justbashpb.FetchRequest{Url: srv.URL + "/redirect", FollowRedirects: true, MaxRedirects: 20, Headers: map[string]string{"authorization": "Bearer s3cret", "cookie": "a=b", "x-keep": "1"}})
 		require.NoError(t, err)
 		require.Equal(t, "other", string(resp.GetBody()))
 		require.Len(t, resp.GetRedirectChain(), 1)
+		require.Equal(t, "||1", <-otherSaw, "credentials never follow a redirect to another origin")
+
+		_, err = fetch(t.Context(), both, &justbashpb.FetchRequest{Url: srv.URL + "/redirect", FollowRedirects: true, MaxRedirects: 0})
+		require.ErrorContains(t, err, "too many redirects (0)", "--max-redirs 0 follows no redirect")
 	})
 }

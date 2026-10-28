@@ -78,7 +78,7 @@ func writeLauncher(dir, wrapper, agent string) (string, error) {
 	path := filepath.Join(dir, agentHex)
 	script := "#!/bin/sh\n" +
 		"command -v node >/dev/null 2>&1 || { echo 'just-bash needs node 20.19 or later on PATH' >&2; exit 127; }\n" +
-		"exec node " + shellQuote(wrapper) + " " + agentHex + " \"$1\"\n"
+		"exec node '" + strings.ReplaceAll(wrapper, "'", `'\''`) + "' " + agentHex + " \"$1\"\n"
 
 	// Write and rename, so a bash call never runs a half-written launcher.
 	tmp, err := os.CreateTemp(dir, "launcher-")
@@ -94,8 +94,4 @@ func writeLauncher(dir, wrapper, agent string) (string, error) {
 	}
 
 	return path, nil
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

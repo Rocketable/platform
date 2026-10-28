@@ -29,9 +29,31 @@ import (
 const (
 	// maxMessage lets payloads up to just-bash's normal maxOutputSize cross the socket.
 	maxMessage = 256 << 20
-	// hostCommandKillDelay matches RocketCode's bash: SIGTERM, then SIGKILL after this delay.
+	// hostCommandKillDelay separates SIGTERM and SIGKILL when a host command is stopped.
 	hostCommandKillDelay = 3 * time.Second
+	// maxHostOutput bounds each of a host command's stdout and stderr, so their reply fits in one message.
+	maxHostOutput = (maxMessage - 1<<20) / 2
 )
+
+var errOutputTooLarge = errors.New("host command output is too large")
+
+// outputBuffer keeps up to left bytes of a host command's output, so a noisy command cannot exhaust
+// RocketClaw's memory. Past that, writes fail and the command gets SIGPIPE.
+type outputBuffer struct {
+	buf  bytes.Buffer
+	left int
+}
+
+func (o *outputBuffer) Write(p []byte) (int, error) {
+	if len(p) > o.left {
+		return 0, errOutputTooLarge
+	}
+
+	o.left -= len(p)
+	_, _ = o.buf.Write(p) // bytes.Buffer.Write never fails.
+
+	return len(p), nil
+}
 
 // Server serves the just-bash wrapper's Sandbox RPCs on a Unix socket. It unpacks the runtime and
 // opens the socket on the first Register, so RocketClaw starts without touching disk or Node.
@@ -334,9 +356,8 @@ func (sb sandbox) RunCommand(ctx context.Context, req *justbashpb.RunCommandRequ
 	cmd := exec.CommandContext(ctx, "/bin/bash", append([]string{"--noprofile", "--norc", "-c", prefix + ` "$@"`, req.GetName()}, req.GetArgs()...)...)
 	cmd.Dir, cmd.Env, cmd.Stdin = dir, hostEnv(req.GetEnv(), session.turn.Env), bytes.NewReader(req.GetStdin())
 
-	var stdout, stderr bytes.Buffer
-
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	stdout, stderr := &outputBuffer{left: maxHostOutput}, &outputBuffer{left: maxHostOutput}
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) }
 	cmd.WaitDelay = hostCommandKillDelay
@@ -355,7 +376,7 @@ func (sb sandbox) RunCommand(ctx context.Context, req *justbashpb.RunCommandRequ
 		code = 128 + int(ws.Signal())
 	}
 
-	return &justbashpb.RunCommandResponse{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), ExitCode: int32(code)}, nil
+	return &justbashpb.RunCommandResponse{Stdout: stdout.buf.Bytes(), Stderr: stderr.buf.Bytes(), ExitCode: int32(code)}, nil
 }
 
 // hostEnv is the script's environment for a host command, without the variables that change what bash

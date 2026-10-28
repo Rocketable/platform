@@ -146,7 +146,7 @@ func (t *target) matches(u *url.URL, method string) bool {
 		addr, err := netip.ParseAddr(host)
 
 		return err == nil && t.prefix.Contains(addr.Unmap())
-	case t.port != "" && t.port != urlPort(u):
+	case t.port != "" && t.port != cmp.Or(u.Port(), defaultPort(u.Scheme)):
 		return false
 	case t.addr.IsValid():
 		addr, err := netip.ParseAddr(host)
@@ -183,10 +183,6 @@ func origin(u *url.URL) string {
 	return strings.ToLower(u.Scheme) + "://" + host
 }
 
-func urlPort(u *url.URL) string {
-	return cmp.Or(u.Port(), defaultPort(u.Scheme))
-}
-
 func defaultPort(scheme string) string {
 	if strings.EqualFold(scheme, "https") {
 		return "443"
@@ -200,7 +196,7 @@ func defaultPort(scheme string) string {
 func ambiguousPath(path string) bool {
 	candidate := path
 	for range 3 {
-		if strings.ContainsAny(candidate, `\;`) || badEscape(candidate) {
+		if strings.ContainsAny(candidate, `\;`) {
 			return true
 		}
 
@@ -224,20 +220,6 @@ func ambiguousPath(path string) bool {
 	}
 
 	return strings.Contains(candidate, "%")
-}
-
-func badEscape(s string) bool {
-	for i := range len(s) {
-		if s[i] == '%' && (i+2 >= len(s) || !isHex(s[i+1]) || !isHex(s[i+2])) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func isHex(c byte) bool {
-	return ('0' <= c && c <= '9') || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F')
 }
 
 // nonPublic reports loopback, private, link-local and other addresses that are not on the public
@@ -277,17 +259,13 @@ func fetch(ctx context.Context, rules networkRules, req *justbashpb.FetchRequest
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	maxRedirects := defaultMaxRedirects
-	if req.GetMaxRedirects() > 0 {
-		maxRedirects = min(maxRedirects, int(req.GetMaxRedirects()))
-	}
-
-	method, body, rawURL := cmp.Or(strings.ToUpper(req.GetMethod()), http.MethodGet), req.GetBody(), req.GetUrl()
+	maxRedirects := min(defaultMaxRedirects, int(req.GetMaxRedirects()))
+	method, body, rawURL, headers := cmp.Or(strings.ToUpper(req.GetMethod()), http.MethodGet), req.GetBody(), req.GetUrl(), req.GetHeaders()
 
 	var chain []*justbashpb.Redirect
 
 	for hop := 0; ; hop++ {
-		resp, err := fetchHop(ctx, rules, method, rawURL, req.GetHeaders(), body)
+		resp, err := fetchHop(ctx, rules, method, rawURL, headers, body)
 		if err != nil {
 			return nil, err
 		}
@@ -305,11 +283,17 @@ func fetch(ctx context.Context, rules networkRules, req *justbashpb.FetchRequest
 
 		chain = append(chain, &justbashpb.Redirect{Status: int32(resp.StatusCode), StatusText: http.StatusText(resp.StatusCode), Headers: flatHeaders(resp.Header)})
 
-		base, _ := url.Parse(rawURL) // fetchHop already parsed rawURL.
-
-		next, err := base.Parse(location)
+		next, err := resp.Location()
 		if err != nil {
 			return nil, fmt.Errorf("redirect location %q: %w", location, err)
+		}
+
+		// Like upstream just-bash's secure fetch, credentials never follow a redirect to another origin.
+		if origin(next) != origin(resp.Request.URL) {
+			headers = maps.Clone(headers)
+			maps.DeleteFunc(headers, func(k, _ string) bool {
+				return slices.Contains([]string{"authorization", "cookie", "proxy-authorization"}, strings.ToLower(k))
+			})
 		}
 
 		rawURL = next.String()

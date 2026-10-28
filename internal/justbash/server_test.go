@@ -183,21 +183,28 @@ func TestRunCommandIgnoresSandboxShellHooks(t *testing.T) {
 	t.Parallel()
 
 	server, _ := testServer(t, nil)
-	turn := testTurn(t, map[string]Settings{"main": settings(t, "commands: {hello: 'printf ok'}\n")})
+	// env is an external program, so a PATH or function hijack would replace it.
+	turn := testTurn(t, map[string]Settings{"main": settings(t, "commands: {hello: 'env printf ok'}\n")})
 	session, err := server.Register(turn)
 	require.NoError(t, err)
 
 	dir := filepath.Join(turn.Workspace, "justbash", "conv1")
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "bin"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "hook"), []byte("echo HOOKED\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "bin", "printf"), []byte("#!/bin/sh\necho HIJACKED\n"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "hook"), []byte("echo HOOKED >&2\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bin", "env"), []byte("#!/bin/sh\necho HIJACKED\n"), 0o755))
 
-	resp, err := sandbox{server}.RunCommand(t.Context(), &justbashpb.RunCommandRequest{
-		Token: session.token, Agent: "main", Name: "hello", Cwd: dir,
-		Env: map[string]string{"BASH_ENV": filepath.Join(dir, "hook"), "PATH": filepath.Join(dir, "bin"), "LD_PRELOAD": "x"},
-	})
-	require.NoError(t, err)
-	require.Equal(t, "ok", string(resp.GetStdout()))
+	for name, env := range map[string]map[string]string{
+		"BASH_ENV":   {"BASH_ENV": filepath.Join(dir, "hook")},
+		"PATH":       {"PATH": filepath.Join(dir, "bin")},
+		"BASH_FUNC":  {"BASH_FUNC_env%%": "() { echo HIJACKED; }"},
+		"SHELLOPTS":  {"SHELLOPTS": "xtrace", "PS4": "$(echo HOOKED >&2)"},
+		"LD_PRELOAD": {"LD_PRELOAD": "x"},
+	} {
+		resp, err := sandbox{server}.RunCommand(t.Context(), &justbashpb.RunCommandRequest{Token: session.token, Agent: "main", Name: "hello", Cwd: dir, Env: env})
+		require.NoError(t, err, name)
+		require.Equal(t, "ok", string(resp.GetStdout()), name)
+		require.Empty(t, string(resp.GetStderr()), name)
+	}
 }
 
 func TestRunCommandCancelStopsProcessGroup(t *testing.T) {
@@ -248,4 +255,18 @@ func TestFetchRefusalIsPermissionDenied(t *testing.T) {
 
 	_, err = sandbox{server}.Fetch(t.Context(), &justbashpb.FetchRequest{Token: session.token, Agent: "main", Url: "http://127.0.0.1:1/"})
 	require.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+func TestOutputBufferStopsAtLimit(t *testing.T) {
+	t.Parallel()
+
+	out := &outputBuffer{left: 4}
+
+	n, err := out.Write([]byte("abc"))
+	require.NoError(t, err)
+	require.Equal(t, 3, n)
+
+	_, err = out.Write([]byte("de"))
+	require.ErrorIs(t, err, errOutputTooLarge)
+	require.Equal(t, "abc", out.buf.String())
 }

@@ -26601,7 +26601,7 @@ function call(method, input, output, init, signal) {
     signal?.addEventListener("abort", () => pending.cancel());
   }));
 }
-var setup = await call("Setup", SetupRequestSchema, SetupResponseSchema, { token, agent }).catch((err) => fail(`just-bash: ${err.message}`));
+var setup = await call("Setup", SetupRequestSchema, SetupResponseSchema, { token, agent }).catch((err) => fail(err.message.startsWith("just-bash:") ? err.message : `just-bash: ${err.message}`));
 var inside = (path, dir) => path === dir || path.startsWith(dir.endsWith("/") ? dir : `${dir}/`);
 var mounts = [];
 for (const dir of [setup.workingDirectory, process.env.TMPDIR ?? ""].filter(Boolean).sort((a, b) => a.length - b.length)) {
@@ -26636,10 +26636,7 @@ var customCommands = setup.commands.map((name) => jb.defineCommand(name, async (
   }
 }));
 var fetch = async (url, options = {}) => {
-  const headers = {};
-  new Headers(options.headers).forEach((v, k) => {
-    headers[k] = v;
-  });
+  const headers = Object.fromEntries(new Headers(options.headers));
   const body = options.body === undefined ? undefined : typeof options.body === "string" ? Buffer.from(options.body) : options.body;
   const res = await call("Fetch", FetchRequestSchema, FetchResponseSchema, {
     token,
@@ -26649,7 +26646,7 @@ var fetch = async (url, options = {}) => {
     headers,
     body,
     followRedirects: options.followRedirects ?? true,
-    maxRedirects: options.maxRedirects ?? 0,
+    maxRedirects: options.maxRedirects ?? 20,
     timeoutMs: BigInt(options.timeoutMs ?? 0)
   }, options.signal);
   return {

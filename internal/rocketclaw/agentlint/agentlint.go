@@ -280,7 +280,6 @@ func parseNoLint(comment string) (string, bool) {
 }
 
 // lintCustomShellEdits reports edit grants that could rewrite a sandboxed agent's wrapper or agent file.
-// An agent with shell: just-bash is sandboxed too.
 func lintCustomShellEdits(infos map[string]*agentInfo, workspace string, writes []capability) []Finding {
 	findings := []Finding{}
 

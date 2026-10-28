@@ -58,8 +58,9 @@ function call<I extends DescMessage, O extends DescMessage>(
   );
 }
 
+// RocketClaw's errors already start with "just-bash:".
 const setup = await call("Setup", SetupRequestSchema, SetupResponseSchema, { token, agent }).catch((err: Error) =>
-  fail(`just-bash: ${err.message}`),
+  fail(err.message.startsWith("just-bash:") ? err.message : `just-bash: ${err.message}`),
 );
 
 // Mounts keep their real absolute paths, so paths match the rest of RocketClaw. just-bash rejects a
@@ -109,10 +110,7 @@ const customCommands = setup.commands.map((name) =>
 );
 
 const fetch: import("just-bash").SecureFetch = async (url, options = {}) => {
-  const headers: Record<string, string> = {};
-  new Headers(options.headers).forEach((v, k) => {
-    headers[k] = v;
-  });
+  const headers = Object.fromEntries(new Headers(options.headers));
   const body = options.body === undefined ? undefined : typeof options.body === "string" ? Buffer.from(options.body) : options.body;
   const res = await call(
     "Fetch",
@@ -126,7 +124,7 @@ const fetch: import("just-bash").SecureFetch = async (url, options = {}) => {
       headers,
       body,
       followRedirects: options.followRedirects ?? true,
-      maxRedirects: options.maxRedirects ?? 0,
+      maxRedirects: options.maxRedirects ?? 20,
       timeoutMs: BigInt(options.timeoutMs ?? 0),
     },
     options.signal,
