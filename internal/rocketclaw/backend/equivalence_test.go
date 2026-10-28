@@ -564,9 +564,10 @@ func (c *equivCapture) capture() {
 			chat := &chats[i]
 			row := &chat.Session
 			channel, cronPath := equivSidebarFacts(row)
+			_, origin := DecideOrigin(&row.Origin)
 
 			value := equivSidebarRow{Agent: row.Conversation.Agent, CreatedBy: equivHash(row.Conversation.CreatedBy), Room: equivHash(chat.Room), Name: equivHash(row.Name), Running: row.Running, Background: row.Background, Pinned: row.Pinned,
-				Forked: row.ForkedFrom, Tags: equivHashes(row.Tags), Cron: chat.Cron, CronName: chat.CronName, CronPath: cronPath, Origin: equivHash(chat.Origin), Channel: channel, Server: row.Server, Directory: equivHash(row.Directory),
+				Forked: row.ForkedFrom, Tags: equivHashes(row.Tags), Cron: chat.Cron, CronName: chat.CronName, CronPath: cronPath, Origin: equivHash(origin), Channel: channel, Server: row.Server, Directory: equivHash(row.Directory),
 				Offline: row.Offline, SpaceID: row.SpaceID, Reply: equivHash(row.Reply), Model: row.Model}
 			if row.Summary != nil {
 				value.Summary, value.Preview, value.Updated = true, equivHash(row.Summary.LastMessage), equivTime(row.Summary.LastUpdated)
