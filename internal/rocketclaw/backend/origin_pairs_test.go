@@ -36,7 +36,12 @@ func BenchmarkDecideCronOrigin(b *testing.B) {
 func TestDecideExternalOriginAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkDecideExternalOrigin)
 	require.Positive(t, result.N)
-	require.LessOrEqual(t, result.AllocsPerOp(), int64(15))
+	require.LessOrEqual(t, result.AllocsPerOp(), int64(9))
+
+	facts := ChatOriginFacts{ConversationID: "sample-chat", Binding: ExternalMCPSessionState{ManagedConversationID: "sample-chat", Agent: "helper"}, ExternalConversationID: "sample-external"}
+	origin, text := DecideOrigin(&facts)
+	require.Equal(t, externalMCPOrigin{Kind: originExternalMCP, ExternalConversationID: "sample-external", Agent: "helper", Pairs: []originPair{}}, origin)
+	require.Equal(t, "external mcp external conversation: sample-external agent: helper ", text)
 }
 
 func BenchmarkDecideExternalOrigin(b *testing.B) {
