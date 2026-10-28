@@ -5,10 +5,10 @@ import { createComponent, render } from "solid-js/web"
 mock.module("@/runtime/platform/platform", () => ({ usePlatform: () => ({ platform: "web" }) }))
 mock.module("@/settings/surface", () => ({ useSettingsSurface: () => ({ active: () => false }) }))
 mock.module("@/runtime/i18n/language", () => ({ useLanguage: () => ({ t: (key: string) => key }) }))
-mock.module("@/runtime/extension/server-shell", () => ({
-  ExtensionServerCover: (props: ParentProps) => props.children,
+mock.module("@/runtime/plugin/server-shell", () => ({
+  PluginServerCover: (props: ParentProps) => props.children,
 }))
-mock.module("@/runtime/extension/render", () => ({ ExtensionSlot: () => null }))
+mock.module("@/runtime/plugin/render", () => ({ PluginSlot: () => null }))
 
 const { default: Shell } = await import("@/shell/shell")
 const { showToast } = await import("@/shell/notifications/toast")

@@ -74,7 +74,9 @@ describe("the committed build", () => {
         if (widthQuery(rule.params)) outside.push(`@media ${rule.params}`)
       })
       root.walkRules((rule) => {
-        if (rule.parent?.type === "rule" || /keyframes$/.test((rule.parent as { name?: string })?.name ?? "")) return
+        for (let parent = rule.parent; parent && parent.type !== "root"; parent = parent.parent) {
+          if (parent.type === "rule" || /keyframes$/.test((parent as { name?: string }).name ?? "")) return
+        }
 
         for (const selector of rule.selectors) {
           if (!selector.includes("[data-oc-view]") || /(^|[\s,(>+~])(:root|:host|html|body)(?![-\w])/.test(selector))

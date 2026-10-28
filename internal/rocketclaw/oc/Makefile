@@ -22,7 +22,7 @@ test:
 	cd packages/app && bun test --conditions=browser --isolate --preload ../ui/test/solid-jsx.ts --preload ./happydom.ts ./test-browser
 	cd packages/ui && bun test --only-failures --preload ./test/solid-jsx.ts src
 	cd packages/session-ui && bun test --only-failures --preload ../ui/test/solid-jsx.ts src
-	cd packages/gui-extensions && bun test --preload ./happydom.ts src
+	cd packages/gui-plugins && bun test --preload ./happydom.ts src
 	cd packages/client && bun test --timeout 5000
 	cd packages/schema && bun test --only-failures
 	cd packages/util && bun test --only-failures

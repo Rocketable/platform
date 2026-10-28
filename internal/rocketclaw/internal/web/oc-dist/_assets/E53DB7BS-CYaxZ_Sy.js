@@ -1,1 +1,0 @@
-import{n as e}from"./dist-CAogbCvn.js";import{r as t}from"./JNCCF6MP-CCEPR8VH.js";function n(n={}){let[r,i]=t({value:()=>e(n.open),defaultValue:()=>!!e(n.defaultOpen),onChange:e=>n.onOpenChange?.(e)}),a=()=>{i(!0)},o=()=>{i(!1)};return{isOpen:r,setIsOpen:i,open:a,close:o,toggle:()=>{r()?o():a()}}}export{n as t};

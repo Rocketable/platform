@@ -4,7 +4,6 @@ import { defaultSettings, type Settings } from "@/settings/model"
 // RocketClaw's defaults for settings nobody has changed, replacing upstream's in packages/app/src/settings/model.tsx.
 const defaults = {
   showCustomAgents: true,
-  terminalPlacement: "bottom",
   followUpBehavior: "queue",
   timelineDetail: { ...timelinePresets.find((preset) => preset.id === "everything")!.value },
 } satisfies Partial<Settings["general"]>

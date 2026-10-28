@@ -4,8 +4,8 @@ import { usePlatform } from "@/runtime/platform/platform"
 import { ToastRegion } from "@/shell/notifications/toast"
 import { UploadToastHost } from "@/composer/attachments/uploads"
 import { useSettingsSurface } from "@/settings/surface"
-import { ExtensionServerCover } from "@/runtime/extension/server-shell"
-import { ExtensionSlot } from "@/runtime/extension/render"
+import { PluginServerCover } from "@/runtime/plugin/server-shell"
+import { PluginSlot } from "@/runtime/plugin/render"
 
 // rocketclaw: no titlebar, tab strip, or vertical tab sidebar, and no insets for them; RocketClaw's own tabs
 // replace them (upstream packages/app/src/shell/shell.tsx)
@@ -38,12 +38,12 @@ export default function Layout(props: ParentProps) {
               "--settings-bottom-inset": "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))",
             }}
           >
-            <ExtensionServerCover>
+            <PluginServerCover>
               <Suspense>{props.children}</Suspense>
-            </ExtensionServerCover>
+            </PluginServerCover>
           </main>
         </div>
-        <ExtensionSlot at="window.bottom" input={{}} />
+        <PluginSlot at="window.bottom" input={{}} />
         <ToastRegion />
         <UploadToastHost />
       </div>

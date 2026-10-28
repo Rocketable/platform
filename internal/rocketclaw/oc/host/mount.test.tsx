@@ -251,14 +251,13 @@ test("settings open in the view without the light/dark switch, keep the color th
   expect(calls.reported.at(-1)).toBe("ses_a")
 })
 
-test("settings nobody changed show RocketClaw's defaults: agent shown, terminal at the bottom, follow-ups queued, full timeline", async () => {
+test("settings nobody changed show RocketClaw's defaults: agent shown, follow-ups queued, full timeline", async () => {
   const view = show()
   await answered(view)
 
   press(document.body, ",", modK)
   const setting = (action: string) => until(() => view.root.querySelector<HTMLElement>(`[data-action=${action}]`))
   expect((await setting("settings-show-custom-agents")).querySelector("input")?.checked).toBe(true)
-  expect((await setting("settings-terminal-placement")).textContent).toContain("Bottom")
   expect((await setting("settings-follow-up-behavior")).textContent).toContain("Queue")
   expect(view.root.querySelector("[data-slot=timeline-detail-summary]")?.textContent).toContain("Everything")
 })
@@ -288,11 +287,12 @@ test("a key RocketClaw handled, or one pressed outside the view, reaches no Open
   press(document.body, "k", modK)
   window.removeEventListener("keydown", prevent, { capture: true })
 
+  outside.focus()
   press(outside, "k", modK)
   press(outside, "a")
   await new Promise((resolve) => setTimeout(resolve, 100))
   expect(palettes()).toBe(0)
-  expect(view.root.contains(document.activeElement)).toBe(false)
+  expect(document.activeElement).toBe(outside)
   outside.remove()
 })
 
@@ -365,16 +365,16 @@ const fresh = () => new Promise((resolve) => setTimeout(resolve, 800))
 
 test("a server on another minor version gets the pill, and the session still renders", async () => {
   await fresh()
-  server.version = "2.2.0"
+  server.version = "2.0.0"
   const view = show()
   await answered(view)
   const pill = await until(() => view.root.querySelector("[data-component=rocketclaw-version-pill]"))
-  expect(pill.textContent).toContain("2.2.0")
+  expect(pill.textContent).toContain("2.0.0")
   expect(pill.textContent).toContain(tag.slice(1))
   view.dispose()
   await fresh()
 
-  server.version = "2.1.9"
+  server.version = `${tag.slice(1).split(".").slice(0, 2).join(".")}.99`
   const patch = show()
   await answered(patch)
   expect(patch.root.querySelector("[data-component=rocketclaw-version-pill]") === null).toBe(true)
@@ -415,7 +415,7 @@ test("deleting the shown session closes its RocketClaw tab", async () => {
 test("selecting the project in the session's project menu goes nowhere", async () => {
   const view = show()
   await answered(view)
-  const trigger = view.root.querySelector<HTMLElement>("[data-slot=session-project-trigger]")!
+  const trigger = view.root.querySelector<HTMLElement>("[data-slot=session-location-trigger]")!
   trigger.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }))
   trigger.click()
   const project = await until(() => view.portal.querySelector<HTMLElement>("[role=menuitem]"))

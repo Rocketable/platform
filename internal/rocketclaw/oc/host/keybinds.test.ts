@@ -5,7 +5,7 @@ import { DEFAULT_PALETTE_KEYBIND, matchKeybind, parseKeybind } from "@/shell/com
 // OpenCode's default keybinds are string literals in the command registrations of the copied packages. The desktop
 // menu's accelerators belong to the desktop app's native menu, which the web view never has.
 const packages = new URL("../packages/", import.meta.url).pathname
-const sources = [...new Glob("{app,gui-extensions,session-ui,ui}/src/**/*.{ts,tsx}").scanSync(packages)]
+const sources = [...new Glob("{app,gui-plugins,plugin,session-ui,ui}/src/**/*.{ts,tsx}").scanSync(packages)]
   .filter((path) => !/\.test\.tsx?$/.test(path) && path !== "app/src/shell/commands/desktop-menu.ts")
   .map((path) => ({ path, text: Bun.file(packages + path).text() }))
 const modifier = "(?:ctrl|control|mod|meta|cmd|command|alt|option|shift)"

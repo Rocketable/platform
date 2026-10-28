@@ -1,0 +1,1 @@
+[data-component=usage-dialog]:where([data-oc-view],[data-oc-view] *){--usage-reached:var(--v2-red-900)}[data-color-scheme=dark]:where([data-oc-view],[data-oc-view] *) [data-component=usage-dialog]{--usage-reached:var(--v2-state-fg-danger)}

@@ -1,0 +1,1 @@
+import{O as e,Q as t}from"./solid-Zk_90kIj.js";function n(n){let[r,i]=e(n.initialValue),a=()=>n.value?.()!==void 0,o=()=>a()?n.value?.():r();return[o,e=>t(()=>{let t;return t=typeof e==`function`?e(o()):e,Object.is(t,o())||(a()||i(t),n.onChange?.(t)),t})]}var r=n;export{r as t};

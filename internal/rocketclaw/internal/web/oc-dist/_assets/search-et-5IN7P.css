@@ -1,0 +1,1 @@
+[data-component=slash]:where([data-oc-view],[data-oc-view] *){color:var(--v2-icon-icon-faint);margin-inline:max(0px, calc(var(--slash-gap,6px) - .5px));flex-shrink:0}[data-component=slash]:where([data-oc-view],[data-oc-view] *):before{content:"/";font-weight:var(--font-weight-normal);margin-inline:-.25px -.34px}

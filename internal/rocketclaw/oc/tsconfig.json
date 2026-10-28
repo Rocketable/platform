@@ -49,8 +49,239 @@
       "@opencode/app/index.css": [
         "./packages/app/src/index.css"
       ],
+      "@opencode/client": [
+        "./packages/client/src/promise/index.ts"
+      ],
+      "@opencode/client/promise": [
+        "./packages/client/src/promise/index.ts"
+      ],
+      "@opencode/client/promise/api": [
+        "./packages/client/src/promise/api.ts"
+      ],
+      "@opencode/client/service": [
+        "./packages/client/src/promise/service.ts"
+      ],
+      "@opencode/client/solid": [
+        "./packages/client/src/solid/index.ts"
+      ],
+      "@opencode/client/effect": [
+        "./packages/client/src/effect/index.ts"
+      ],
+      "@opencode/client/effect/api": [
+        "./packages/client/src/effect/api.ts"
+      ],
+      "@opencode/client/effect/service": [
+        "./packages/client/src/effect/service.ts"
+      ],
+      "@opencode/client/mcp": [
+        "./packages/client/src/mcp.ts"
+      ],
+      "@opencode/gui-plugins/renderer": [
+        "./packages/gui-plugins/src/renderer.ts"
+      ],
+      "@opencode/gui-plugins/main": [
+        "./packages/gui-plugins/src/main.ts"
+      ],
+      "@opencode/gui-plugins/terminal": [
+        "./packages/gui-plugins/src/terminal/index.ts"
+      ],
+      "@opencode/gui-plugins/debug/options": [
+        "./packages/gui-plugins/src/debug/options.ts"
+      ],
+      "@opencode/patchmark": [
+        "./packages/patchmark/src/index.ts"
+      ],
+      "@opencode/plugin": [
+        "./packages/plugin/src/promise/index.ts"
+      ],
+      "@opencode/plugin/effect": [
+        "./packages/plugin/src/effect/index.ts"
+      ],
+      "@opencode/plugin/host": [
+        "./packages/plugin/src/host.ts"
+      ],
+      "@opencode/plugin/runtime": [
+        "./packages/plugin/src/runtime.ts"
+      ],
+      "@opencode/plugin/tui": [
+        "./packages/plugin/src/tui/index.ts"
+      ],
+      "@opencode/plugin/gui": [
+        "./packages/plugin/src/gui/index.ts"
+      ],
+      "@opencode/plugin/gui/main": [
+        "./packages/plugin/src/gui/main.ts"
+      ],
+      "@opencode/plugin/gui/host": [
+        "./packages/plugin/src/gui/host.ts"
+      ],
+      "@opencode/plugin/gui/builtin": [
+        "./packages/plugin/src/gui/builtin.ts"
+      ],
+      "@opencode/plugin/gui/file": [
+        "./packages/plugin/src/gui/file.ts"
+      ],
+      "@opencode/plugin/gui/review": [
+        "./packages/plugin/src/gui/review.ts"
+      ],
+      "@opencode/plugin/gui/browser": [
+        "./packages/plugin/src/gui/browser.ts"
+      ],
+      "@opencode/plugin/gui/updater": [
+        "./packages/plugin/src/gui/updater.ts"
+      ],
+      "@opencode/plugin/gui/vite": [
+        "./packages/plugin/src/gui/vite.ts"
+      ],
+      "@opencode/plugin/*": [
+        "./packages/plugin/src/*.ts"
+      ],
+      "@opencode/protocol/simulation": [
+        "./packages/protocol/src/simulation.ts"
+      ],
+      "@opencode/protocol/*": [
+        "./packages/protocol/src/*.ts"
+      ],
+      "@opencode/schema": [
+        "./packages/schema/src/index.ts"
+      ],
+      "@opencode/schema/*": [
+        "./packages/schema/src/*.ts"
+      ],
+      "@opencode/session-ui/actions": [
+        "./packages/session-ui/src/actions.ts"
+      ],
+      "@opencode/session-ui/document": [
+        "./packages/session-ui/src/document.ts"
+      ],
+      "@opencode/session-ui/message": [
+        "./packages/session-ui/src/message/current-message.tsx"
+      ],
+      "@opencode/session-ui/timeline/projection": [
+        "./packages/session-ui/src/timeline/projection.ts"
+      ],
+      "@opencode/session-ui/timeline/detail": [
+        "./packages/session-ui/src/timeline/detail.ts"
+      ],
+      "@opencode/session-ui/timeline/row": [
+        "./packages/session-ui/src/timeline/session-timeline-row.tsx"
+      ],
+      "@opencode/session-ui/timeline": [
+        "./packages/session-ui/src/timeline/session-timeline.tsx"
+      ],
+      "@opencode/session-ui/basic-tool": [
+        "./packages/session-ui/src/components/basic-tool.tsx"
+      ],
+      "@opencode/session-ui/dock-prompt": [
+        "./packages/session-ui/src/components/dock-prompt.tsx"
+      ],
+      "@opencode/session-ui/file": [
+        "./packages/session-ui/src/components/file.tsx"
+      ],
+      "@opencode/session-ui/file-media": [
+        "./packages/session-ui/src/components/file-media.tsx"
+      ],
+      "@opencode/session-ui/file-search": [
+        "./packages/session-ui/src/components/file-search.tsx"
+      ],
+      "@opencode/session-ui/line-comment": [
+        "./packages/session-ui/src/components/line-comment.tsx"
+      ],
+      "@opencode/session-ui/line-comment-annotations": [
+        "./packages/session-ui/src/components/line-comment-annotations.tsx"
+      ],
+      "@opencode/session-ui/markdown": [
+        "./packages/session-ui/src/components/markdown.tsx"
+      ],
+      "@opencode/session-ui/message-part": [
+        "./packages/session-ui/src/components/message-part.tsx"
+      ],
+      "@opencode/session-ui/message-nav": [
+        "./packages/session-ui/src/components/message-nav.tsx"
+      ],
+      "@opencode/session-ui/session-review": [
+        "./packages/session-ui/src/components/session-review.tsx"
+      ],
+      "@opencode/session-ui/session-retry": [
+        "./packages/session-ui/src/components/session-retry.tsx"
+      ],
+      "@opencode/session-ui/tool-count-label": [
+        "./packages/session-ui/src/components/tool-count-label.tsx"
+      ],
+      "@opencode/session-ui/tool-count-summary": [
+        "./packages/session-ui/src/components/tool-count-summary.tsx"
+      ],
+      "@opencode/session-ui/tool-error-card": [
+        "./packages/session-ui/src/components/tool-error-card.tsx"
+      ],
+      "@opencode/session-ui/tool-status-title": [
+        "./packages/session-ui/src/components/tool-status-title.tsx"
+      ],
+      "@opencode/session-ui/session-diff": [
+        "./packages/session-ui/src/components/session-diff.ts"
+      ],
+      "@opencode/session-ui/message-file": [
+        "./packages/session-ui/src/components/message-file.ts"
+      ],
+      "@opencode/session-ui/attachment-card": [
+        "./packages/session-ui/src/message/attachment-card.tsx"
+      ],
+      "@opencode/session-ui/comment-card": [
+        "./packages/session-ui/src/message/comment-card.tsx"
+      ],
+      "@opencode/session-ui/markdown-stream": [
+        "./packages/session-ui/src/components/markdown-stream.ts"
+      ],
+      "@opencode/session-ui/markdown-cache": [
+        "./packages/session-ui/src/components/markdown-cache.tsx"
+      ],
+      "@opencode/session-ui/line-comment-styles": [
+        "./packages/session-ui/src/components/line-comment-styles.ts"
+      ],
+      "@opencode/session-ui/pierre": [
+        "./packages/session-ui/src/pierre/index.ts"
+      ],
+      "@opencode/session-ui/pierre/*": [
+        "./packages/session-ui/src/pierre/*.ts"
+      ],
+      "@opencode/session-ui/context": [
+        "./packages/session-ui/src/context/index.ts"
+      ],
+      "@opencode/session-ui/context/*": [
+        "./packages/session-ui/src/context/*.tsx"
+      ],
+      "@opencode/session-ui/sources": [
+        "./packages/session-ui/src/sources/sources.ts"
+      ],
+      "@opencode/session-ui/sources/experiment": [
+        "./packages/session-ui/src/sources/experiment.ts"
+      ],
+      "@opencode/session-ui/sources/panel": [
+        "./packages/session-ui/src/sources/sources-panel.tsx"
+      ],
+      "@opencode/session-ui/sources/title": [
+        "./packages/session-ui/src/sources/sources-title.tsx"
+      ],
+      "@opencode/session-ui/styles": [
+        "./packages/session-ui/src/styles/index.css"
+      ],
+      "@opencode/session-ui/storybook": [
+        "./packages/session-ui/src/storybook/index.ts"
+      ],
+      "@opencode/session-ui/v2/*.css": [
+        "./packages/session-ui/src/v2/components/*.css"
+      ],
+      "@opencode/session-ui/v2/*": [
+        "./packages/session-ui/src/v2/components/*.tsx"
+      ],
+      "@opencode/ui/package.json": [
+        "./packages/ui/package.json"
+      ],
       "@opencode/ui/accordion": [
         "./packages/ui/src/data-display/accordion/accordion.tsx"
+      ],
+      "@opencode/ui/activity-ring": [
+        "./packages/ui/src/feedback/activity-ring/activity-ring.tsx"
       ],
       "@opencode/ui/avatar": [
         "./packages/ui/src/data-display/avatar/avatar.tsx"
@@ -106,6 +337,21 @@
       "@opencode/ui/menu": [
         "./packages/ui/src/navigation/menu/menu.tsx"
       ],
+      "@opencode/ui/motion": [
+        "./packages/ui/src/motion/index.ts"
+      ],
+      "@opencode/ui/motion/solid": [
+        "./packages/ui/src/motion/solid.ts"
+      ],
+      "@opencode/ui/motion-tuning": [
+        "./packages/ui/src/motion-tuning.ts"
+      ],
+      "@opencode/ui/motion-tuning-features": [
+        "./packages/ui/src/motion-tuning-features.ts"
+      ],
+      "@opencode/ui/motion-tuning-fields": [
+        "./packages/ui/src/motion-tuning-fields.ts"
+      ],
       "@opencode/ui/progress-circle": [
         "./packages/ui/src/feedback/progress-circle/progress-circle.tsx"
       ],
@@ -114,6 +360,9 @@
       ],
       "@opencode/ui/radio": [
         "./packages/ui/src/forms/radio/radio.tsx"
+      ],
+      "@opencode/ui/search-list": [
+        "./packages/ui/src/forms/search-list/search-list.tsx"
       ],
       "@opencode/ui/segmented-control": [
         "./packages/ui/src/navigation/segmented-control/segmented-control.tsx"
@@ -141,6 +390,12 @@
       ],
       "@opencode/ui/textarea": [
         "./packages/ui/src/forms/textarea/textarea.tsx"
+      ],
+      "@opencode/ui/typeahead": [
+        "./packages/ui/src/forms/typeahead/typeahead.tsx"
+      ],
+      "@opencode/ui/slash": [
+        "./packages/ui/src/typography/slash/slash.tsx"
       ],
       "@opencode/ui/text-shimmer": [
         "./packages/ui/src/typography/text-shimmer/text-shimmer.tsx"
@@ -210,174 +465,6 @@
       ],
       "@opencode/ui/audio/*": [
         "./packages/ui/src/assets/audio/*"
-      ],
-      "@opencode/session-ui/actions": [
-        "./packages/session-ui/src/actions.ts"
-      ],
-      "@opencode/session-ui/document": [
-        "./packages/session-ui/src/document.ts"
-      ],
-      "@opencode/session-ui/message": [
-        "./packages/session-ui/src/message/current-message.tsx"
-      ],
-      "@opencode/session-ui/timeline/projection": [
-        "./packages/session-ui/src/timeline/projection.ts"
-      ],
-      "@opencode/session-ui/timeline/detail": [
-        "./packages/session-ui/src/timeline/detail.ts"
-      ],
-      "@opencode/session-ui/timeline/row": [
-        "./packages/session-ui/src/timeline/session-timeline-row.tsx"
-      ],
-      "@opencode/session-ui/timeline": [
-        "./packages/session-ui/src/timeline/session-timeline.tsx"
-      ],
-      "@opencode/session-ui/basic-tool": [
-        "./packages/session-ui/src/components/basic-tool.tsx"
-      ],
-      "@opencode/session-ui/dock-prompt": [
-        "./packages/session-ui/src/components/dock-prompt.tsx"
-      ],
-      "@opencode/session-ui/file": [
-        "./packages/session-ui/src/components/file.tsx"
-      ],
-      "@opencode/session-ui/file-media": [
-        "./packages/session-ui/src/components/file-media.tsx"
-      ],
-      "@opencode/session-ui/file-search": [
-        "./packages/session-ui/src/components/file-search.tsx"
-      ],
-      "@opencode/session-ui/file-ssr": [
-        "./packages/session-ui/src/components/file-ssr.tsx"
-      ],
-      "@opencode/session-ui/line-comment": [
-        "./packages/session-ui/src/components/line-comment.tsx"
-      ],
-      "@opencode/session-ui/line-comment-annotations": [
-        "./packages/session-ui/src/components/line-comment-annotations.tsx"
-      ],
-      "@opencode/session-ui/markdown": [
-        "./packages/session-ui/src/components/markdown.tsx"
-      ],
-      "@opencode/session-ui/message-part": [
-        "./packages/session-ui/src/components/message-part.tsx"
-      ],
-      "@opencode/session-ui/message-nav": [
-        "./packages/session-ui/src/components/message-nav.tsx"
-      ],
-      "@opencode/session-ui/session-review": [
-        "./packages/session-ui/src/components/session-review.tsx"
-      ],
-      "@opencode/session-ui/session-retry": [
-        "./packages/session-ui/src/components/session-retry.tsx"
-      ],
-      "@opencode/session-ui/tool-count-label": [
-        "./packages/session-ui/src/components/tool-count-label.tsx"
-      ],
-      "@opencode/session-ui/tool-count-summary": [
-        "./packages/session-ui/src/components/tool-count-summary.tsx"
-      ],
-      "@opencode/session-ui/tool-error-card": [
-        "./packages/session-ui/src/components/tool-error-card.tsx"
-      ],
-      "@opencode/session-ui/tool-status-title": [
-        "./packages/session-ui/src/components/tool-status-title.tsx"
-      ],
-      "@opencode/session-ui/session-diff": [
-        "./packages/session-ui/src/components/session-diff.ts"
-      ],
-      "@opencode/session-ui/message-file": [
-        "./packages/session-ui/src/components/message-file.ts"
-      ],
-      "@opencode/session-ui/attachment-card": [
-        "./packages/session-ui/src/message/attachment-card.tsx"
-      ],
-      "@opencode/session-ui/comment-card": [
-        "./packages/session-ui/src/message/comment-card.tsx"
-      ],
-      "@opencode/session-ui/markdown-stream": [
-        "./packages/session-ui/src/components/markdown-stream.ts"
-      ],
-      "@opencode/session-ui/markdown-cache": [
-        "./packages/session-ui/src/components/markdown-cache.tsx"
-      ],
-      "@opencode/session-ui/line-comment-styles": [
-        "./packages/session-ui/src/components/line-comment-styles.ts"
-      ],
-      "@opencode/session-ui/pierre": [
-        "./packages/session-ui/src/pierre/index.ts"
-      ],
-      "@opencode/session-ui/pierre/*": [
-        "./packages/session-ui/src/pierre/*.ts"
-      ],
-      "@opencode/session-ui/context": [
-        "./packages/session-ui/src/context/index.ts"
-      ],
-      "@opencode/session-ui/context/*": [
-        "./packages/session-ui/src/context/*.tsx"
-      ],
-      "@opencode/session-ui/styles": [
-        "./packages/session-ui/src/styles/index.css"
-      ],
-      "@opencode/session-ui/storybook": [
-        "./packages/session-ui/src/storybook/index.ts"
-      ],
-      "@opencode/session-ui/v2/*.css": [
-        "./packages/session-ui/src/v2/components/*.css"
-      ],
-      "@opencode/session-ui/v2/*": [
-        "./packages/session-ui/src/v2/components/*.tsx"
-      ],
-      "@opencode/gui-extensions/renderer": [
-        "./packages/gui-extensions/src/renderer.ts"
-      ],
-      "@opencode/gui-extensions/main": [
-        "./packages/gui-extensions/src/main.ts"
-      ],
-      "@opencode/gui-extensions/sdk": [
-        "./packages/gui-extensions/src/sdk/index.ts"
-      ],
-      "@opencode/gui-extensions/sdk/main": [
-        "./packages/gui-extensions/src/sdk/main.ts"
-      ],
-      "@opencode/gui-extensions/sdk/bridge": [
-        "./packages/gui-extensions/src/sdk/bridge.ts"
-      ],
-      "@opencode/gui-extensions/updater": [
-        "./packages/gui-extensions/src/updater/contract.ts"
-      ],
-      "@opencode/client": [
-        "./packages/client/src/promise/index.ts"
-      ],
-      "@opencode/client/promise": [
-        "./packages/client/src/promise/index.ts"
-      ],
-      "@opencode/client/promise/api": [
-        "./packages/client/src/promise/api.ts"
-      ],
-      "@opencode/client/service": [
-        "./packages/client/src/promise/service.ts"
-      ],
-      "@opencode/client/solid": [
-        "./packages/client/src/solid/index.ts"
-      ],
-      "@opencode/client/effect": [
-        "./packages/client/src/effect/index.ts"
-      ],
-      "@opencode/client/effect/api": [
-        "./packages/client/src/effect/api.ts"
-      ],
-      "@opencode/client/effect/service": [
-        "./packages/client/src/effect/service.ts"
-      ],
-      "@opencode/client/mcp": [
-        "./packages/client/src/mcp.ts"
-      ],
-      "@opencode/schema": [
-        "./packages/schema/src/index.ts"
-      ],
-      "@opencode/schema/*": [
-        "./packages/schema/src/*.ts"
       ],
       "@opencode/util/effect/layer-node": [
         "./packages/util/src/effect/layer-node.ts"

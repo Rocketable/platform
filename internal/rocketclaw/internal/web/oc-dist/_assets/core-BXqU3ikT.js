@@ -1,0 +1,1 @@
+var e={global:(e,t,n)=>({scope:`global`,schema:e,initial:t,from:n}),session:(e,t,n)=>({scope:`session`,schema:e,initial:t,from:n})},t={define:e=>({kind:`registry`,id:e})},n={define:e=>({kind:`contract`,id:e})},r={define:e=>({kind:`ipc`,id:e.id,spec:e})};export{e as i,r as n,t as r,n as t};

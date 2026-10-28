@@ -11,7 +11,7 @@ import { LayoutProvider } from "@/shell/state/layout"
 import { SettingsSurfaceProvider } from "@/settings/surface"
 import Shell from "@/shell/shell"
 import { requireServerKey } from "./session"
-import { ExtensionAttachment } from "@/runtime/extension/root"
+import { PluginAttachment } from "@/runtime/plugin/root"
 
 export const File = lazy(() => import("@opencode/session-ui/file").then((module) => ({ default: module.File })))
 
@@ -106,9 +106,9 @@ function AppLayout(props: ParentProps) {
     <Show when={servers.list.length > 0 && !signedOut()}>
       <LayoutProvider>
         <SettingsSurfaceProvider>
-          <ExtensionAttachment>
+          <PluginAttachment>
             <Shell>{props.children}</Shell>
-          </ExtensionAttachment>
+          </PluginAttachment>
         </SettingsSurfaceProvider>
       </LayoutProvider>
     </Show>
