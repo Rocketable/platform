@@ -896,8 +896,8 @@ function ResizableAside({ side, className, children, ...props }: ComponentProps<
 type Tab = { path: string; preview?: boolean; group?: string; space?: string; unplaced?: boolean; search?: SearchPageState };
 type TabGroup = { id: string; name: string; color: string; collapsed?: boolean };
 type Space = { id: string; name: string };
-// last names each space's last active tab.
-type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string; last: Record<string, string> };
+// last names each space's last active tab; sharedOrder is this person's order of Shared tabs by path.
+type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string; last: Record<string, string>; sharedOrder: string[] };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
 const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard] };
 
@@ -988,7 +988,7 @@ function savedTabs(owner?: string, saved?: Pick<SavedTabs, "spaces" | "state">):
   const spaces = saved?.spaces ?? [{ id: "main", name: "Main" }], known = (id?: string) => spaces.some((space) => space.id === id);
   const groups = saved?.state.groups ?? [];
   const tabs = (saved?.state.tabs ?? []).map(({ group, space, ...tab }) => ({ ...tab, group: groups.some((item) => item.id === group) ? group : undefined, space: known(space) ? space : spaces[0].id }));
-  return { owner, tabs: arrange(tabs), active: "", groups, spaces, space: known(saved?.state.space) ? saved!.state.space : spaces[0].id, last: saved?.state.last ?? {} };
+  return { owner, tabs: arrange(tabs), active: "", groups, spaces, space: known(saved?.state.space) ? saved!.state.space : spaces[0].id, last: saved?.state.last ?? {}, sharedOrder: saved?.state.sharedOrder ?? [] };
 }
 
 // The URL is the active tab, so a reload keeps it and any other URL not shared in the space opens as a permanent tab.
@@ -1002,7 +1002,7 @@ function loadTabs(path: string, owner?: string, saved?: SavedTabs, shared: Saved
 // The saved form drops groups without members, except "shared", which holds whether this person collapsed Shared.
 const savedState = (state: TabState): SavedTabs["state"] => ({
   tabs: state.tabs.map(({ path, preview, group, space, search }) => ({ path, preview, group, space, search })), groups: state.groups.filter((group) => group.id === "shared" || state.tabs.some((tab) => tab.group === group.id)),
-  space: state.space, last: state.last,
+  space: state.space, last: state.last, sharedOrder: state.sharedOrder,
 });
 
 const noShared: SavedTabs["shared"] = [], noMutes: SavedTabs["mutes"] = [];
@@ -1041,6 +1041,7 @@ function mergeTabs(base: SavedTabs["state"], local: SavedTabs["state"], server: 
     tabs: mergeList(base.tabs, local.tabs, server.tabs, (tab) => tab.path, (tab) => [tab.path, !!tab.preview, tab.group ?? "", tab.space ?? "", JSON.stringify(tab.search ?? null)].join("\n"), shared(local.tabs, base.tabs) !== shared(base.tabs, local.tabs) || shared(server.tabs, base.tabs) === shared(base.tabs, server.tabs)),
     groups: mergeList(base.groups, local.groups, server.groups, (group) => group.id, (group) => [group.id, group.name, group.color, !!group.collapsed].join("\n"), false),
     space: local.space !== base.space ? local.space : server.space,
+    sharedOrder: JSON.stringify(local.sharedOrder) !== JSON.stringify(base.sharedOrder) ? local.sharedOrder : server.sharedOrder,
     last: { ...server.last, ...Object.fromEntries(Object.entries(local.last).filter(([space, path]) => base.last[space] !== path)) },
   };
 }
@@ -1052,7 +1053,9 @@ function useTabs() {
   const shared = saved.data?.shared ?? noShared, mutes = saved.data?.mutes ?? noMutes;
   const pathname = usePathname() || "/";
   const [state, setState] = useState(() => loadTabs(pathname));
-  const here = shared.flatMap((tab) => tab.space === state.space ? [tab.path] : []);
+  // This person's order puts the space's Shared tabs it names first; the rest follow, oldest added first.
+  const rank = (path: string) => state.sharedOrder.indexOf(path) + 1 || Infinity;
+  const here = shared.flatMap((tab) => tab.space === state.space ? [tab.path] : []).toSorted((a, b) => rank(a) - rank(b) || 0);
   const [editor, setEditor] = useState<{ id: string; open: boolean }>();
   // The tab whose notifications Pick date & time snoozes.
   const [snoozing, setSnoozing] = useState<string>();
@@ -1172,7 +1175,8 @@ function useTabs() {
   } });
   return {
     state, shown, groups, here, shared, mutes, pathname, close, enter, edit, editor, setEditor, settle, snoozing, setSnoozing, mute, pending: spaceChange.isPending,
-    swapShared: (path: string, other: string) => sharing.mutate({ swapShared: { space: state.space, path, with: other } }),
+    // A moved Shared row moves for this person alone; their order keeps only paths still shared somewhere.
+    moveShared: (from: string, to: string) => setState((current) => ({ ...current, sharedOrder: [...new Set([...moveQueueId(here, from, to), ...current.sharedOrder])].filter((path) => shared.some((tab) => tab.path === path)) })),
     // Collapsing Shared is this person's choice for every space, kept as the member-less group "shared".
     toggleShared: () => setState((current) => ({ ...current, groups: [...current.groups.filter((group) => group.id !== "shared"), { id: "shared", name: "", color: "Grey", collapsed: !current.groups.some((group) => group.id === "shared" && group.collapsed) }] })),
     // A new space takes the first free "Space N" name; the server keeps names unique ignoring case.
@@ -1335,7 +1339,7 @@ function useInSpace() {
   return (item: { space?: string }) => !item.space || item.space.toLowerCase() === name;
 }
 
-const arrows: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
+const arrows: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }, sharedDrag = "application/x-rocketclaw-shared";
 type MenuAnchor = Element | { getBoundingClientRect: () => DOMRect };
 const popupClass = "min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none", itemClass = "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent";
 
@@ -1418,7 +1422,7 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
         const group = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group;
         event.dataTransfer.setData(group ? "application/x-rocketclaw-group" : "application/x-rocketclaw-tab", group ?? pathOf(event)!);
       }}
-      onDragOver={(event) => event.preventDefault()}
+      onDragOver={(event) => { if (!event.dataTransfer.types.includes(sharedDrag)) event.preventDefault(); }}
       // A group header stands for its first tab, the only drop target a collapsed group shows.
       onDrop={(event) => {
         const header = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group, group = event.dataTransfer.getData("application/x-rocketclaw-group");
@@ -1489,16 +1493,14 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
   </div>;
 }
 
-// Shared shows the space's Shared tabs, the same for everyone, above this person's tabs, and hides while it has none. It
-// is a list of its own, so the
-// handlers of theirs never act on a Shared row; only its menu and Shift+Arrow, which reorders it for everyone, change it.
-function SharedTabs({ tabs: { state, here, shared, pathname, promote, toggleShared, swapShared }, space, editing, endEdit, openMenu }: { tabs: ReturnType<typeof useTabs>; space?: string; editing?: string; endEdit: () => void; openMenu: (path: string, anchor: MenuAnchor) => void }) {
+// Shared shows the space's Shared tabs, the same for everyone, in this person's order, above their tabs, and hides while
+// it has none. It is a list of its own, so the handlers of theirs never act on a Shared row; only its menu changes it for
+// everyone, and dragging a row onto another or Shift+Arrow reorders it for this person alone.
+function SharedTabs({ tabs: { state, here, shared, pathname, promote, toggleShared, moveShared }, space, editing, endEdit, openMenu }: { tabs: ReturnType<typeof useTabs>; space?: string; editing?: string; endEdit: () => void; openMenu: (path: string, anchor: MenuAnchor) => void }) {
   const collapsed = state.groups.some((group) => group.id === "shared" && group.collapsed), stop = here.includes(pathname) ? pathname : here[0];
   // Like a collapsed group, collapsed Shared goes bold while any of its tabs is unread for this person.
   const { rows } = useContext(Sidebar), unread = collapsed && here.some((path) => rows.some((row) => row.id === pathSession(path) && row.unreadAt));
-  const inert = () => undefined, list = useRef<HTMLDivElement>(null), moved = useRef(""), order = here.join("\n");
-  // A moved row takes its new place when the reply arrives, which drops its focus, so it takes the focus back then.
-  useEffect(() => { if (moved.current) list.current!.querySelector<HTMLElement>(`[data-tab="${CSS.escape(moved.current)}"] [role="tab"]`)?.focus(); moved.current = ""; }, [order]);
+  const inert = () => undefined, pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   if (!here.length) return null;
   return <>
     <div className="flex max-h-1/2 shrink-0 flex-col gap-0.5 overflow-y-auto px-1 pt-1 [scrollbar-width:thin]">
@@ -1507,7 +1509,11 @@ function SharedTabs({ tabs: { state, here, shared, pathname, promote, toggleShar
           <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium", groupColors.Grey)}><Users aria-hidden="true" className="size-3" />Shared</span>
         </button>
       </div>
-      <div ref={list} role="tablist" aria-label="Shared tabs" aria-orientation="vertical" className="flex flex-col gap-0.5" onKeyDown={(event) => tabKeys(event, pathname, openMenu, (path, other) => { moved.current = path; swapShared(path, other); })}>
+      <div role="tablist" aria-label="Shared tabs" aria-orientation="vertical" className="flex flex-col gap-0.5" onKeyDown={(event) => tabKeys(event, pathname, openMenu, moveShared)}
+        onDragStart={(event) => event.dataTransfer.setData(sharedDrag, pathOf(event)!)}
+        // Only Shared rows drop here, and nowhere else.
+        onDragOver={(event) => { if (event.dataTransfer.types.includes(sharedDrag)) event.preventDefault(); }}
+        onDrop={(event) => { const to = pathOf(event); if (to) moveShared(event.dataTransfer.getData(sharedDrag), to); }}>
         {here.map((path) => collapsed && path !== pathname ? null : <TabItem key={path} tab={{ path, search: sharedTab(shared, state.space, path)?.search }} shared description={`Shared, Space: ${space}`} chosen={false} rule="Grey" active={path === pathname} stop={path === stop} editing={editing === `shared:${path}`} endEdit={endEdit} promote={() => promote(path)} close={inert} openMenu={(anchor) => openMenu(path, anchor)} />)}
       </div>
     </div>
@@ -1559,7 +1565,7 @@ function TabItem({ tab, description, chosen, rule, active, stop, shared, editing
   const quiet = mute && (mute.until ? `Snoozed until ${new Date(mute.until).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}` : "Muted");
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
-  return <div data-tab={tab.path} data-running={session.running} data-unread={!!session.unreadAt} draggable={!editing && !shared} className={cn("group flex shrink-0 items-center rounded-md", active ? "bg-sidebar-row-active" : "hover:bg-accent", { "bg-accent": chosen })}
+  return <div data-tab={tab.path} data-running={session.running} data-unread={!!session.unreadAt} draggable={!editing} className={cn("group flex shrink-0 items-center rounded-md", active ? "bg-sidebar-row-active" : "hover:bg-accent", { "bg-accent": chosen })}
     onContextMenu={(event) => { event.preventDefault(); openMenu({ getBoundingClientRect: () => DOMRect.fromRect({ x: event.clientX, y: event.clientY }) }); }}>
     {rule && <span className={cn("pointer-events-none my-1.5 ml-1 w-0.5 shrink-0 self-stretch", groupColors[rule])} />}
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className="flex min-w-0 flex-1" />}>

@@ -177,13 +177,19 @@ func TestTabs(t *testing.T) {
 	_, err = call("127.0.0.1", &TabsRequest{DeleteSpace: response.Spaces[0].Id})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "the last space stays")
 
-	// Bob moves a newer Shared tab above an older one for everyone.
+	// Bob moves a newer Shared tab above an older one for himself alone.
 	space := response.Spaces[0].Id
 	_, err = call("127.0.0.1", &TabsRequest{Share: &SharedTab{Space: space, Path: "/cron"}})
 	require.NoError(t, err)
-	response, err = call("192.0.2.2", &TabsRequest{SwapShared: &SharedSwap{Space: space, Path: "/cron", With: "/search"}})
+	_, err = call("192.0.2.2", &TabsRequest{State: &TabState{Space: space, SharedOrder: []string{"/cron", "/search"}}, Revision: 2})
 	require.NoError(t, err)
-	assert.Equal(t, []string{space + " /cron", space + " /search"}, shared(response))
+	response, err = call("192.0.2.2", &TabsRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/cron", "/search"}, response.State.SharedOrder)
+	assert.Equal(t, []string{space + " /search", space + " /cron"}, shared(response))
+	response, err = call("127.0.0.1", &TabsRequest{})
+	require.NoError(t, err)
+	assert.Empty(t, response.State.SharedOrder, "a person's Shared order is their own")
 
 	// A Shared Search page carries its one page to everyone, and an edit replaces the page for everyone.
 	triage := &SearchPage{Name: "Triage", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}}, Active: "1"}
@@ -204,7 +210,7 @@ func TestTabs(t *testing.T) {
 	response, err = call("192.0.2.2", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: triage, Search: edited}})
 	require.NoError(t, err)
 	assert.False(t, response.Stale)
-	assert.Equal(t, []string{space + " /cron", space + " /search", space + " /search/a"}, shared(response), "an edit keeps its place")
+	assert.Equal(t, []string{space + " /search", space + " /cron", space + " /search/a"}, shared(response), "an edit keeps its place")
 	assert.True(t, proto.Equal(edited, response.Shared[2].Search))
 
 	// Taking it out of Shared answers with the page it held, and a later edit does not share it again.
@@ -214,7 +220,7 @@ func TestTabs(t *testing.T) {
 	response, err = call("192.0.2.2", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: edited, Search: edited}})
 	require.NoError(t, err)
 	assert.True(t, response.Stale)
-	assert.Equal(t, []string{space + " /cron", space + " /search"}, shared(response), "an edit after unsharing does not share again")
+	assert.Equal(t, []string{space + " /search", space + " /cron"}, shared(response), "an edit after unsharing does not share again")
 
 	// A saved page with a field a later Web dropped still reads.
 	_, err = searchPage([]byte(`{"name":"x","gone":1}`))

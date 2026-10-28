@@ -549,23 +549,26 @@ active tab.
   group's space as well as the group.
 - **Shared.** Every space has one grey **Shared** group, shown first in the
   sidebar above your own tabs, and hidden while it has no tabs. Its tabs are the
-  same for everyone, newly added ones last. The tab menu and the command palette
-  offer **Add to Shared** and **Remove from Shared**; both change the group for
-  everyone in the space, one tab at a time, so two people's changes never undo
-  each other. New session and sessions no Web user may open cannot be shared.
-  A tab can be in Shared and among your own tabs at once, and both rows light up
-  while it is open. Opening a Shared tab adds no tab of your own and keeps you in
-  the current space. Shared tabs show a people icon instead of a close button,
-  and their menu offers only **Remove from Shared** and the notification items;
-  dragging, middle-click, and selection never act on them. Otherwise the keyboard
-  treats them as tabs: Cmd/Ctrl+[ and ] step through the Shared rows and then
-  your own tabs, each tab once; arrows, Home, and End cross between the two
-  lists; and Shift+Arrow on a Shared row moves it among the Shared rows, for
-  everyone. Collapsing Shared is your own choice, for every
+  same for everyone; their order is your own, newly added ones last. The tab
+  menu and the command palette offer **Add to Shared** and **Remove from
+  Shared**; both change the group for everyone in the space, one tab at a time,
+  so two people's changes never undo each other. New session and sessions no Web
+  user may open cannot be shared. A tab can be in Shared and among your own tabs
+  at once, and both rows light up while it is open. Opening a Shared tab adds no
+  tab of your own and keeps you in the current space. Shared tabs show a people
+  icon instead of a close button, and their menu offers only **Remove from
+  Shared** and the notification items; middle-click and selection never act on
+  them. Drag a Shared row onto another to reorder Shared; your own tabs and
+  Shared rows never drop on each other. Otherwise the keyboard treats them as
+  tabs: Cmd/Ctrl+[ and ] step through the Shared rows and then your own tabs,
+  each tab once; arrows, Home, and End cross between the two lists; and
+  Shift+Arrow on a Shared row moves it among the Shared rows. Your Shared order
+  follows you across devices. Collapsing Shared is your own choice, for every
   space. When the Shared tab you are viewing is removed, the window enters its
-  space as it does for a tab closed elsewhere. Other people's changes arrive when
-  a window regains focus. Deleting a space moves its Shared tabs into the first
-  remaining space's, and deleting a session takes it out of every Shared group.
+  space as it does for a tab closed elsewhere. Other people's changes arrive
+  when a window regains focus. Deleting a space moves its Shared tabs into the
+  first remaining space's, and deleting a session takes it out of every Shared
+  group.
 - **Running turns** make the tab's title shimmer with a moving gradient, so the
   title stays in place. With reduced motion the title shows a still gradient
   that fades toward its end. Screen readers hear “Turn running” in the tab's
