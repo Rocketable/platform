@@ -734,6 +734,8 @@ WHERE c.conversation_id = v.id`)
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `UPDATE conversations SET preview = NULL, last_updated = NULL WHERE conversation_id = 'web-session:lower'`)
 	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET space_id = 'main' WHERE conversation_id = 'slack-thread:C1:1.1'`)
+	require.NoError(t, err)
 
 	channels := &mockChannels{
 		SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) { return "support", []string{"main"}, nil },
@@ -746,13 +748,13 @@ WHERE c.conversation_id = v.id`)
 	require.Empty(t, channels.SidebarChannelAgentChoicesCalls(), "no search runs for an unauthenticated caller")
 	require.Empty(t, channels.SlackTagsMatchingCalls(), "no search runs for an unauthenticated caller")
 
-	response, err := server.searchSessions(ctx, &SearchSessionsRequest{Query: "tag:A Billing", Messages: true})
+	response, err := server.searchSessions(ctx, &SearchSessionsRequest{Query: "space:Main tag:A Billing", Messages: true})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(&SearchSessionsResponse{
-		Terms:   []*SearchTerm{{Key: "tag", Text: "tag:A", Start: 0, End: 5}},
+		Terms:   []*SearchTerm{{Key: "space", Text: "space:Main", Start: 0, End: 10}, {Key: "tag", Text: "tag:A", Start: 11, End: 16}},
 		Text:    "Billing",
 		Needle:  "billing",
-		Matches: []*SessionMatch{{ConversationId: "slack-thread:C1:1.1"}, {ConversationId: "web-session:desk", Field: "Name", Text: "Billing desk"}},
+		Matches: []*SessionMatch{{ConversationId: "slack-thread:C1:1.1"}},
 		Messages: []*MessageMatch{{ConversationId: "slack-thread:C1:1.1", Message: &TranscriptEvent{
 			Role: "user", Text: "ping <@U7> about billing", MessageId: fmt.Sprintf("%d:0", entries["slack-thread:C1:1.1"]),
 		}}},

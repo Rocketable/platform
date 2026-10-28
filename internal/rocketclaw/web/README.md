@@ -685,9 +685,13 @@ Search page is the deep dig: the palette matches only the title a row shows (its
 name, else its preview's first line), as it reads on screen, so `**Done.**` matches
 "done." and a Slack mention matches the name it shows. It never matches message
 text or other fields, and lists each conversation once. A match past the start of
-a long title shows the title from just before it, highlighted. Typed text ends the list with **Search everywhere
-for '…'**, which opens the Search page with that text, also when it is already
-open. Each dialog opening clears text, pills, and result selection and focuses
+a long title shows the title from just before it, highlighted. Typed text ends the list with
+**Search in this space for '…'** and **Search everywhere for '…'**. Both open the same
+Search screen in the space where the palette opened. The scoped action prefixes an
+editable `space:<name>` filter; everywhere adds no space restriction. Each reuses an
+exact-query Search page only in the opening space, otherwise it creates one there.
+Explicitly choosing a saved Search-page match still enters that page's own space.
+Each dialog opening clears text, pills, and result selection and focuses
 the input.
 Once text is typed, matching commands appear above the conversations; an empty
 query, or one with a filter such as `tag:customer` or `is:pinned`, lists
@@ -697,7 +701,8 @@ it, then, once three or more characters are typed, labels containing them in ord
 with gaps. Within each group the command order below applies. Enter runs the
 highlighted command at once when its label contains the text or it was picked
 with the arrow keys; otherwise Enter opens the first conversation, as above, and
-plain text that matches no conversation opens Search everywhere.
+plain text that matches no conversation opens Search everywhere. When only the two
+search actions remain, everywhere is highlighted; ArrowUp selects scoped search.
 Clicking a command always runs it.
 
 Cmd/Ctrl+P matches plain text against titles in the browser as you type, with no
@@ -737,6 +742,11 @@ contains the value, ignoring case: a remote session's selected model, such as
 Conversations whose whole model equals the value come first. Typing `server:`
 or `model:` suggests the servers and models in use, and typing `agent:` also
 suggests remote sessions' agents.
+`space:"Blue garden"` matches a session's complete Birth Space name, ignoring case,
+not where its tab currently sits. It excludes sessions with no Birth Space;
+everywhere includes them. Typing `space:` suggests every existing space, even empty
+ones. Names use the same JSON quoting as other filters. Saved queries keep their
+name text after a space rename; edit the filter to use the new name.
 Suggestion keys take priority over results; Escape dismisses suggestions first,
 then closes the dialog. Both Cmd/Ctrl+P and the Search page accept exact,
 case-sensitive tag filters: `tag:customer`, or `tag:"Needs review"` for a name
@@ -759,7 +769,7 @@ search surface, overriding pinned-first and message-hit grouping; rows without
 activity come last, equal times order by conversation ID, and the last `sort:` wins.
 Typing `is:` suggests `pinned`, `forked`, `cron`, and `unread` (your unread sessions, closed tabs included); typing `sort:` suggests
 `newest` and `oldest`. While typing, a last word that is an unfinished filter
-(a bare `tag:`, `cron:`, `agent:`, `principal:`, `room:`, `server:`, or `model:`, a partial `is:` or `sort:` term
+(a bare `tag:`, `cron:`, `agent:`, `principal:`, `room:`, `server:`, `model:`, or `space:`, a partial `is:` or `sort:` term
 such as `is:pin`, or an unclosed quote) is not sent; Enter, opening a saved
 search, and following a link send the whole query. Unknown complete terms such
 as `is:foo` stay ordinary text. Filter pills show the server's reading of the

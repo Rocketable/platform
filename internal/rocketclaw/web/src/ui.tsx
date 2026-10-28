@@ -114,9 +114,9 @@ function slackRooms(sessions: { id: string; title?: string; kind?: ConversationK
 
 // The query's last word, and whether it is an unfinished operator: a bare key, a strict prefix of an is:/sort: keyword, or an unclosed quote.
 function typingWord(query: string) {
-  const word = /(?:^|\s)((?:tag|cron|agent|room|principal|server|model):"(?:[^"\\]|\\.)*\\?|\S*)$/i.exec(query)![1];
+  const word = /(?:^|\s)((?:tag|cron|agent|room|principal|server|model|space):"(?:[^"\\]|\\.)*\\?|\S*)$/i.exec(query)![1];
   const lower = word.toLowerCase();
-  return { word, unfinished: /^(?:tag|cron|agent|room|principal|server|model):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:pinned", "is:forked", "is:cron", "is:unread", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
+  return { word, unfinished: /^(?:tag|cron|agent|room|principal|server|model|space):(?:"(?:[^"\\]|\\.)*\\?)?$/.test(lower) || /^(?:is|sort):/.test(lower) && ["is:pinned", "is:forked", "is:cron", "is:unread", "sort:newest", "sort:oldest"].some((keyword) => keyword !== lower && keyword.startsWith(lower)) };
 }
 
 function termValue(value: string) {
@@ -1945,6 +1945,7 @@ function paletteRows(
   runStem: (stem: string) => void,
   actions: { key: string; label: string; detail?: string; keep?: boolean; disabled?: boolean; run: () => void }[],
   recent: string[],
+  origin: Space,
 ): { key: string; label?: string; detail?: string; session?: Session; keep?: boolean; disabled?: boolean; run: () => void }[] {
   const needle = typed.toLowerCase(), pages = searchPages(tabs), fresh = () => `/search/${crypto.getRandomValues(new Uint32Array(2)).join("-")}`;
   if (mode === "cron") {
@@ -1987,17 +1988,17 @@ function paletteRows(
   // space. An empty query lists sessions only, so Enter still opens the first session.
   const searches = pages.filter((tab) => needle && [searchTitle(tab.search), ...tab.search?.searches.map((item) => item.query) ?? []].some((text) => tier(text) < 3))
     .map((tab) => ({ key: `page-${tab.space} ${tab.path}`, label: `Search: ${searchTitle(tab.search)}`, detail: tabs.state.spaces.find((space) => space.id === tab.space)?.name, run: () => tabs.open(tab.path, "", tab.space) }));
-  // Each session is one row, as in the session list; message and field hits belong to a Search page, which typed text can
-  // open last: the one already searching for exactly that text, else a new one.
-  const searchEverywhere = () => {
-    const found = pages.find((tab) => tab.search?.searches.some((item) => item.query === typed));
-    tabs.open(found?.path ?? fresh(), `?${new URLSearchParams({ q: typed })}`, found?.space);
+  const search = (query: string) => {
+    const found = pages.find((tab) => tab.space === origin.id && tab.search?.searches.some((item) => item.query === query));
+    tabs.open(found?.path ?? fresh(), `?${new URLSearchParams({ q: query })}`, origin.id);
   };
   return mode === "commands" ? commands : [...commands, ...searches, ...rows.map((session) => ({ key: session.id, session, run: () => tabs.open(rowPath(session)) })),
-    ...typed ? [{ key: searchEverywhereKey, label: `Search everywhere for '${typed}'`, run: searchEverywhere }] : []];
+    ...typed ? [{ key: searchInSpaceKey, label: `Search in this space for '${typed}'`, run: () => search(`space:${termValue(origin.name)} ${typed}`) },
+      { key: searchEverywhereKey, label: `Search everywhere for '${typed}'`, run: () => search(typed) }] : []];
 }
 
 const searchEverywhereKey = "search-everywhere";
+const searchInSpaceKey = "search-in-space";
 
 // A person's own Search page whose location is shared in its space shows the Shared one there, so only that one lists.
 const searchPages = ({ state, shared }: ReturnType<typeof useTabs>) => [...state.tabs.filter((tab) => isSearch(tab.path) && !isShared(shared, tab.space!, tab.path)), ...shared.filter((tab) => isSearch(tab.path))];
@@ -2092,7 +2093,7 @@ function usePaletteSessions(query: string, sessions: boolean, entered: boolean) 
 }
 
 // The keys of filter terms; the server reads the same keys.
-const filterKeys = "tag|cron|agent|room|principal|server|model|is|sort";
+const filterKeys = "tag|cron|agent|room|principal|server|model|space|is|sort";
 
 const paletteCopy = { sessions: { title: "Go to session or command", desc: "Search and open a session, or run a command.", placeholder: "Search sessions and commands" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
   cron: { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" }, timeline: { title: "Cron timeline", desc: "Pick a cron to see all of its runs.", placeholder: "Search cron jobs" } };
@@ -2122,11 +2123,15 @@ function useRemoteCreation(query: string, close: () => void, restart: () => void
 }
 
 // Paging bounds initial/edit work; deep browsing or wrapping to the last row still mounts it all. Window rows if that becomes costly.
-function usePalettePage<T>(items: T[], selected: number, key: string) {
+function usePalettePage<T extends { key: string }>(items: T[], pick: string, key: string) {
   const [budget, setBudget] = useState({ key, rows: 50 });
   if (budget.key !== key) setBudget({ key, rows: 50 });
+  const handoffsOnly = items.every(({ key }) => key === searchEverywhereKey || key === searchInSpaceKey);
+  const chosen = items.findIndex((item) => item.key === pick);
+  const selected = handoffsOnly && items.length > 0 && chosen < 0 ? 1 : Math.max(0, chosen);
   const drawn = Math.max(budget.key === key ? budget.rows : 50, selected + 1);
   return {
+    selected, handoffsOnly,
     shown: items.slice(0, drawn),
     next: drawn < items.length ? <li aria-hidden ref={(node) => {
       const observer = new IntersectionObserver(([entry]) => {
@@ -2145,9 +2150,9 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
   // location it opened at, returning there when dismissed and before running a choice. Typing, or pressing a
   // command, returns there first, so commands render, and run, with that location's state.
   const at = () => location.pathname + location.search + location.hash;
-  const [origin] = useState(() => ({ path: location.pathname, href: at() }));
-  const id = pathSession(origin.path);
   const tabs = useContext(TabActions);
+  const [origin] = useState(() => ({ path: location.pathname, href: at(), space: tabs.state.spaces.find((space) => space.id === tabs.state.space)! }));
+  const id = pathSession(origin.path);
   const back = () => { if (at() !== origin.href) flushSync(() => navigate(origin.href, true)); };
   // Only a session that opens in this space is shown, so browsing never switches spaces.
   const peek = (session?: Session) => {
@@ -2172,10 +2177,8 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
     .map(([key, label, description]) => ({ key: `output-${key}`, label: `Output: ${label}`, detail: (key === "markdown") === markdown ? `Current · ${description}` : description, run: () => setPreference(OUTPUT_KEY, key) }));
   const [query, setQuery] = useState("");
   const [recent, setRecent] = useState<string[]>(() => JSON.parse(localStorage.getItem("command-history") ?? "[]"));
-  const [pick, setPick] = useState(0);
+  const [pick, setPick] = useState("");
   const [entered, setEntered] = useState(false);
-  // Whether the arrows moved the highlight since the last edit.
-  const moved = useRef(false);
   const input = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
     const viewport = window.visualViewport;
@@ -2213,19 +2216,18 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
     },
   });
   // The folder picker leaves session search, so typed folders are never sent as a search.
-  const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(0); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent);
+  const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(""); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent);
   const cronJobs = cronInSpace(jobs.data, useInSpace());
-  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, cronJobs, newChat, tabs, (cron) => { setQuery(""); setPick(0); setMode(cron); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...timeline, ...outputs], recent));
-  const selected = items.length === 0 ? 0 : pick % items.length;
+  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, cronJobs, newChat, tabs, (cron) => { setQuery(""); setPick(""); setMode(cron); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...timeline, ...outputs], recent, origin.space));
   // Draw more rows only as scrolling or the keyboard needs them; every choice stays reachable.
-  const { shown, next } = usePalettePage(items, selected, `${mode}:${query}`);
+  const { shown, next, selected, handoffsOnly } = usePalettePage(items, pick, `${mode}:${query}`);
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
     if ((mode === "sessions" || mode === "commands") && !item.session) {
       const next = [item.key, ...recent.filter((key) => key !== item.key)].slice(0, 50);
       localStorage.setItem("command-history", JSON.stringify(next));
       setRecent(next);
-      setPick(0);
+      setPick("");
     }
     if (!item.keep) setMode(undefined);
     back();
@@ -2237,25 +2239,24 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
     const next = paletteMove(event, selected, items.length, () => {
       const item = items[selected];
       // In session search, Enter runs a command containing the typed text or one picked with the arrows; a fuzzy one on top yields to the sessions, then to Search for plain text.
-      if (item && !item.session && (mode !== "sessions" || moved.current || item.key !== searchEverywhereKey && item.label!.toLowerCase().includes(query.trim().toLowerCase()))) return choose(item);
+      if (item && !item.session && (mode !== "sessions" || item.key === pick || item.key !== searchEverywhereKey && item.key !== searchInSpaceKey && item.label!.toLowerCase().includes(query.trim().toLowerCase()))) return choose(item);
       setEntered(true);
       search.enter(() => { const row = item?.session ? item : items.find(({ session }) => session) ?? items.find(({ key }) => !filtered && key === searchEverywhereKey); if (row) choose(row); }, (sessions) => { const session = sessions.find(matches); if (session) choose({ key: session.id, session, run: () => tabs.open(rowPath(session)) }); });
     });
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      moved.current = true;
+      setPick(items[next % items.length]?.key ?? "");
       peek(items[next % items.length]?.session);
     }
-    if (event.key !== "Enter") setPick(next);
   };
   return (
     <Dialog open={mode !== undefined} onOpenChange={(open) => { if (!open) { setMode(undefined); back(); } }}>
       <DialogContent initialFocus={input} showCloseButton={false} className="top-[20%] flex max-h-[75vh] translate-y-0 flex-col overflow-hidden sm:max-w-lg [@media(pointer:coarse)]:top-[var(--search-top,1rem)] [@media(pointer:coarse)]:max-h-[var(--search-height,75vh)]">
         <DialogTitle className="sr-only">{copy.title}</DialogTitle>
         <DialogDescription className="sr-only">{copy.desc}</DialogDescription>
-        {mode === "sessions" ? <SessionSearch rows={sidebar.rows} catalog={agents.data?.agents ?? []} query={query} setQuery={(update) => { setPick(0); setEntered(false); moved.current = false; setQuery(update); peek(); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
+        {mode === "sessions" ? <SessionSearch rows={sidebar.rows} catalog={agents.data?.agents ?? []} query={query} setQuery={(update) => { setPick(""); setEntered(false); setQuery(update); peek(); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
           ref={input}
           value={query}
-          onChange={(event) => { setPick(0); setQuery(event.target.value); }}
+          onChange={(event) => { setPick(""); setQuery(event.target.value); }}
           placeholder={copy.placeholder}
           variant="embedded"
           onKeyDown={onKeyDown}
@@ -2264,7 +2265,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
         {remote.alert}
         {mode === "sessions" ? <div className="px-3 text-sm empty:hidden"><SearchStatus search={search} /></div> : null}
         <ul key={`${mode}:${query}`} data-pending={search.pending} className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
-          {shown.every(({ key }) => key === searchEverywhereKey) ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading, remote.empty)}</li> : null}
+          {handoffsOnly ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, search, jobs.isLoading, remote.empty)}</li> : null}
           {shown.map((item, index) => (
             <li key={item.key}>
               <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", item.session ? "py-2" : "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11", item.session && search.pending && "opacity-50", index === selected && "bg-accent")} onMouseDown={(event) => { event.preventDefault(); if (!item.session) peek(); }} onClick={() => choose(item)}>
@@ -2809,15 +2810,17 @@ function SearchResults({ tab, rows, catalog, edit, input }: { tab: SavedSearch; 
 
 // Values offered for the operator word being typed; a completed value commits on space or Enter instead of offering itself again.
 // Remote OpenCode sessions add their servers, agents and models; RocketClaw agents bring their configured models.
-function searchChoices(word: string, rows: Session[], catalog: Agent[], principals: string[]) {
+function searchChoices(word: string, rows: Session[], catalog: Agent[], principals: string[], spaces: Space[]) {
   const typed = new RegExp(`^(${filterKeys}):"?(.*?)"?$`, "is").exec(word);
   const key = typed?.[1].toLowerCase() ?? "", needle = typed?.[2].toLowerCase() ?? "";
   const remote = (field: "server" | "agent" | "model") => [...new Set(rows.flatMap((row) => row.server && row[field] ? [row[field]!] : []))];
-  const names = key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "cron" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"]
+  const names = key === "space" ? spaces.map(({ name }) => name) : key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "cron" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"]
     : key === "server" ? remote("server") : key === "model" ? [...new Set([...catalog.flatMap(({ model }) => model ? [model] : []), ...remote("model")])] : ["pinned", "forked", "cron", "unread"];
   const agents = [...catalog.map(({ name, model, reasoning }) => ({ key: name, detail: [model, reasoning].filter(Boolean).join(" · ") })), ...remote("agent").filter((name) => !catalog.some((agent) => agent.name === name)).map((name) => ({ key: name, detail: "OpenCode" }))];
-  const offered = !key ? [] : (key === "agent" ? agents : names.map((name) => ({ key: name, detail: "" }))).filter((item) => item.key.toLowerCase().includes(needle));
-  return { key, choices: offered.some((item) => item.key.toLowerCase() === needle) ? [] : offered };
+  const quoted = word.includes(':"');
+  const spelling = (name: string) => quoted ? JSON.stringify(name).slice(1, -1) : name;
+  const offered = !key ? [] : (key === "agent" ? agents : names.map((name) => ({ key: name, detail: "" }))).filter((item) => spelling(item.key).toLowerCase().includes(needle));
+  return { key, choices: offered.some((item) => spelling(item.key).toLowerCase() === needle) ? [] : offered };
 }
 
 // Pills are the filter terms the server read in a query this one still starts with, each followed by whitespace; the input edits the rest.
@@ -2869,7 +2872,7 @@ function SessionSearch({ rows, catalog, query, setQuery, search, inputRef, place
   const sidebar = useContext(Sidebar);
   const stale = !sidebar.refreshing && rows.length > 0 && !searchIsAuthoritative(sidebar);
   const [overlayPick, setOverlayPick] = useState(0);
-  const { key, choices } = searchChoices(search.word, rows, catalog, search.result.response?.principals ?? []);
+  const { key, choices } = searchChoices(search.word, rows, catalog, search.result.response?.principals ?? [], useContext(TabActions).state.spaces);
   const { pills, input, change, head, select, edit, remove, pick: choose } = usePills(query, setQuery, search, inputRef);
   const pick = choices.length === 0 ? 0 : overlayPick % choices.length;
   const active = useRef<HTMLButtonElement>(null);

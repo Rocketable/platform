@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
@@ -49,9 +51,10 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackFrontendMock)
 	daily, weekly := strings.TrimPrefix(searchChatD, "web:"), strings.TrimPrefix(searchChatE, "web:")
 	for id, facts := range map[string]conversationFacts{
 		searchChatA: {kind: KindSlackThread, slackChannel: "C1", slackThread: "1.1"}, searchChatB: {kind: KindSlackThread, slackChannel: "C9", slackThread: "2.2"},
+		searchChatW: {kind: KindWebChat},
 		searchChatD: {kind: KindWebChat, cronRun: daily}, searchChatE: {kind: KindWebChat, cronRun: weekly}, "external_mcp:private": {kind: KindExternalMCPRun},
 	} {
-		require.NoError(t, s.recordConversation(ctx, protocol.Conversation{ID: id}, facts))
+		require.NoError(t, s.recordConversation(ctx, protocol.Conversation{ID: id, Space: map[string]string{searchChatA: "Blue garden", searchChatW: "Blue garden", searchChatB: "Amber"}[id]}, facts))
 	}
 
 	for id, run := range map[string]*protocol.CronRun{
@@ -229,6 +232,15 @@ func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 		ids   []string
 	}{
 		{"", nil, "", all},
+		{`space:"Blue garden"`, []string{"space=Blue garden"}, "", []string{searchChatA, searchChatW}},
+		{`SPACE:"bLuE GaRdEn" space:"Blue garden"`, []string{"space=bLuE GaRdEn", "space=Blue garden"}, "", []string{searchChatA, searchChatW}},
+		{`space:"Blue garden" agent:main room:C9 room:support`, []string{"space=Blue garden", "agent=main", "room=C9", "room=support"}, "", []string{searchChatA}},
+		{`space:"Blue garden" space:Amber`, []string{"space=Blue garden", "space=Amber"}, "", nil},
+		{"space:missing", []string{"space=missing"}, "", nil},
+		{"space:", nil, "space:", nil},
+		{`space:""`, nil, `space:""`, nil},
+		{`space:"bad\q"`, nil, `space:"bad\q"`, nil},
+		{`space:"Blue garden`, nil, `space:"Blue garden`, nil},
 		{"tag:customer", []string{"tag=customer"}, "", []string{searchChatA}},
 		{"tag:customer is:pinned tag:customer is:forked outage", []string{"tag=customer", "is=pinned", "tag=customer", "is=forked"}, "outage", []string{searchChatA}},
 		{`tag:"Needs review" tag:"say \"hello\""`, []string{"tag=Needs review", `tag=say "hello"`}, "", []string{searchChatA}},
@@ -347,7 +359,7 @@ func TestSearchSessionsFilters(t *testing.T) {
 	_, matches := searchTestSessions(t, s, slack, "tag:customer", SearchFilters)
 	require.Equal(t, []searchTestMatch{{searchChatA, "", ""}}, matches)
 
-	for _, query := range []string{"tag:customer", "agent:other", "is:cron"} {
+	for _, query := range []string{"tag:customer", "agent:other", "is:cron", `space:"Blue garden"`} {
 		_, bare := searchTestSessions(t, s, slack, query, SearchFilters)
 		require.NotEmpty(t, bare, query)
 
@@ -357,6 +369,45 @@ func TestSearchSessionsFilters(t *testing.T) {
 			require.Empty(t, search.Hits, query+text)
 		}
 	}
+}
+
+func TestSearchSessionsBirthSpace(t *testing.T) {
+	t.Parallel()
+	s, slack := newSessionSearchFixture(t)
+	ctx := t.Context()
+	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
+		cfg.OpenCode = map[string]config.OpenCodeConfig{"box": {}}
+		return nil
+	}))
+	spaces, err := s.Spaces(ctx)
+	require.NoError(t, err)
+
+	blue := spaces[slices.IndexFunc(spaces, func(space Space) bool { return space.Name == "Blue garden" })]
+	_, err = s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, title, directory, last_updated, running, synced_at, space_id)
+VALUES ('opencode:box:assigned', '', '', 'remote', FALSE, 'remote', 'box', 'assigned', 'remote needle', '/repo', now(), FALSE, now(), $1),
+    ('opencode:box:unassigned', '', '', 'remote', FALSE, 'remote', 'box', 'unassigned', 'remote needle', '/repo', now(), FALSE, now(), NULL)`, blue.ID)
+	require.NoError(t, err)
+	saved, err := s.SaveTabState(ctx, "alice", &TabState{Space: "main", Tabs: []Tab{
+		{Path: "/s/" + base64.RawURLEncoding.EncodeToString([]byte(searchChatW)), Space: "main"},
+		{Path: "/s/" + base64.RawURLEncoding.EncodeToString([]byte(searchChatB)), Space: blue.ID},
+	}}, 0)
+	require.NoError(t, err)
+	require.True(t, saved)
+
+	search, err := s.SearchSessions(ctx, "alice", `space:"Blue garden"`, SearchFields, slack)
+	require.NoError(t, err)
+	require.Len(t, search.Matches, 3, "birth space includes its remote session, not an unassigned one or a tab moved into it")
+	require.Equal(t, searchChatW, search.Matches[2].Chat.Session.Conversation.ID, "moving a tab out does not change its birth space")
+	_, matches := searchTestSessions(t, s, slack, "remote needle", SearchFields)
+	require.Len(t, matches, 2, "without a space filter both remote sessions match")
+	require.NoError(t, s.RenameSpace(ctx, blue.ID, `Blüe "garden"\`))
+	_, matches = searchTestSessions(t, s, slack, `space:"Blüe \"garden\"\\"`, SearchFields)
+	require.Len(t, matches, 3)
+	_, matches = searchTestSessions(t, s, slack, `space:"Blue garden"`, SearchFields)
+	require.Empty(t, matches)
+	require.NoError(t, s.DeleteSpace(ctx, blue.ID))
+	_, matches = searchTestSessions(t, s, slack, `space:"Blüe \"garden\"\\"`, SearchFields)
+	require.Empty(t, matches)
 }
 
 // Turn ends that mark sessions unread are written directly; alice's view of searchChatW clears its mark.
@@ -481,6 +532,8 @@ func TestSearchSessionsMessageHits(t *testing.T) {
 		want     []searchTestMatch
 	}{
 		{"billing", []string{hitB, "billing question"}, nil, []searchTestMatch{{searchChatB, "", ""}, {searchChatW, "", ""}}},
+		{`space:"Blue garden" billing`, []string{"billing question"}, nil, []searchTestMatch{{searchChatW, "", ""}}},
+		{`space:Amber billing`, []string{hitB}, nil, []searchTestMatch{{searchChatB, "", ""}}},
 		{`agent:other agent:"two words" billing`, []string{hitB, "billing question"}, nil, []searchTestMatch{{searchChatB, "", ""}, {searchChatW, "", ""}}},
 		{"support", []string{hitB}, nil, []searchTestMatch{{searchChatB, "", ""}, {searchChatA, fieldRoom, "support"}, {searchChatW, fieldName, "support"}}},
 		{"support sort:oldest", []string{hitB}, nil, []searchTestMatch{{searchChatW, fieldName, "support"}, {searchChatB, "", ""}, {searchChatA, fieldRoom, "support"}}},
@@ -557,6 +610,7 @@ func TestSearchSessionsTermOffsets(t *testing.T) {
 			{Key: keyIs, Text: "is:pinned", Value: "pinned", Start: 24, End: 33},
 		}},
 		{"a\u00a0TAG:x  b", "a  b", []SearchTerm{{Key: keyTag, Text: "TAG:x", Value: "x", Start: 2, End: 7}}},
+		{`😀 space:"Blue garden" x`, "😀 x", []SearchTerm{{Key: "space", Text: `space:"Blue garden"`, Value: "Blue garden", Start: 3, End: 22}}},
 		{`😀 room:"Blue garden" ROOM:amber x`, "😀 x", []SearchTerm{
 			{Key: keyRoom, Text: `room:"Blue garden"`, Value: "Blue garden", Start: 3, End: 21},
 			{Key: keyRoom, Text: "ROOM:amber", Value: "amber", Start: 22, End: 32},

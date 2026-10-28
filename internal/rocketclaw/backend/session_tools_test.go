@@ -981,6 +981,7 @@ func TestSessionToolsCriteria(t *testing.T) {
 		params sessionListParams
 		want   string
 	}{
+		{sessionListParams{Criteria: `space:"Blue garden"`, Since: epoch, Limit: 200}, header + rowA + rowW + "[criteria: terms=space:\"Blue garden\"; text=]\n"},
 		{sessionListParams{Criteria: "tag:billing", Since: epoch, Limit: 200}, header + rowH + rowB + rowW + "[criteria: terms=tag:billing; text=]\n"},
 		{sessionListParams{Criteria: " tag:billing ", Since: epoch, Limit: 2, IncludeMessagePreview: true}, strings.TrimSuffix(header, "\n") + "\tlast_user_message\tlast_assistant_message\n" +
 			"human\t1\t2026-01-06T00:00:00Z\t\tcron\t\tbilling\t\thuman\tcron daily report\n" +
