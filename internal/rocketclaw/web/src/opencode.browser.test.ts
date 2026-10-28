@@ -190,6 +190,17 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await view.locator('[data-pane-content="bottom"] [data-component="terminal"]').waitFor();
     expect(await view.locator('[data-pane-content="side"]').isVisible()).toBe(false);
     await until(() => terminals.open === 1);
+    // Reload keys must reach the browser unchanged, not toggle review or enter the terminal.
+    for (const target of [view.locator("[data-component=composer] [contenteditable=true]"), view.getByText("answer in ses_a", { exact: true }), view.locator('[data-component="terminal"]')]) {
+      await target.click();
+      expect(await target.evaluate((node: HTMLElement) => ["KeyR", "KeyO"].flatMap((code) => ["ctrlKey", "metaKey"].map((modifier) => {
+        const event = new KeyboardEvent("keydown", { key: "R", code, shiftKey: true, [modifier]: true, bubbles: true, cancelable: true });
+        node.dispatchEvent(event);
+        return event.defaultPrevented;
+      })))).toEqual([false, false, false, false]);
+      expect(await view.locator('[data-pane-content="side"]').isVisible()).toBe(false);
+    }
+    expect(terminals.input).toEqual([]);
     for (const modifier of ["Control", "Meta"]) {
       for (const mode of ["sessions", "commands"] as const) {
         await view.locator('[data-component="terminal"]').click();
