@@ -54,6 +54,21 @@ message Session {
   // The session waits on a person: a running turn's unanswered question, or a remote OpenCode
   // session's pending form or permission request, its own or a child session's.
   bool asking = 28;
+  // What the session's work waits on, its runs reporting to it included, and since when, RFC3339Nano.
+  WorkState work_state = 29;
+  string state_since = 30;
+  // The session is bound to External MCP, or a run reporting to it is.
+  bool external = 31;
+  // When its newest running or waiting turn was created, else its last update, RFC3339Nano.
+  string arrived_at = 32;
+}
+
+// The first of these a session has: asking, running work, queued turns.
+enum WorkState {
+  IDLE = 0;
+  NEEDS_YOU = 1;
+  RUNNING = 2;
+  QUEUED = 3;
 }
 
 // What a conversation is, as RocketClaw records it when it creates the conversation.
@@ -267,6 +282,23 @@ message SearchSessionsResponse {
   repeated string mention_ids = 6;
   reserved 7, 8;
   repeated string principals = 9;
+}
+
+// BoardRequest asks for the lanes of the Dashboards open in a space; each lane is a session search
+// query whose free text matches session fields only.
+message BoardRequest {
+  string space_id = 1;
+  repeated BoardDashboard dashboards = 2;
+}
+message BoardDashboard { repeated string lanes = 1; }
+// BoardResponse holds the requested Dashboards' lanes in request order. A session is in its
+// Dashboard's first lane it matches; a lane lists at most 200 of its sessions, newest arrival
+// first, as ListSessions would list them, and total counts them all.
+message BoardResponse { repeated BoardLanes dashboards = 1; }
+message BoardLanes { repeated BoardLane lanes = 1; }
+message BoardLane {
+  repeated Session sessions = 1;
+  int32 total = 2;
 }
 
 // SlackNamesRequest asks for display names of Slack IDs.
@@ -674,18 +706,22 @@ message Tab {
   SearchPage search = 6;
 }
 
-// SearchPage is a Search tab's name and its searches, active naming the shown one by id.
+// SearchPage is a Search tab's name and its searches, active naming the shown one by id. board is the style id of a
+// Dashboard, whose searches are its lanes; empty is an ordinary Search page.
 message SearchPage {
   string name = 1;
   repeated SavedSearch searches = 2;
   string active = 3;
+  string board = 4;
 }
 
-// SavedSearch is one search on a Search page: its id, the name the person gave it, and its query.
+// SavedSearch is one search on a Search page: its id, the name the person gave it, and its query. notify marks a
+// Dashboard lane whose newly entering sessions raise a desktop notification.
 message SavedSearch {
   string id = 1;
   string name = 2;
   string query = 3;
+  bool notify = 4;
 }
 
 message TabGroup {
@@ -811,6 +847,7 @@ service Web {
   rpc ClearRevert(ClearRevertRequest) returns (ClearRevertResponse);
   rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
   rpc SearchSessions(SearchSessionsRequest) returns (SearchSessionsResponse);
+  rpc Board(BoardRequest) returns (BoardResponse);
   rpc SlackNames(SlackNamesRequest) returns (SlackNamesResponse);
   rpc Handoff(HandoffRequest) returns (HandoffResponse);
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);

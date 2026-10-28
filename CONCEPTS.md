@@ -252,6 +252,12 @@ It holds its own searches, shown as tabs inside the page, and can be named; unna
 
 A session on a configured OpenCode coding server that RocketClaw keeps a synced copy of, so the Web lists, opens, creates, and forks it beside RocketClaw's own sessions; its agent runs on that server, not in the Harness.
 
+### Dashboard
+
+A Search Page shown as a board in one of several styles, whose searches are its lanes, tracking the work of the space its tab sits in.
+
+Each session in that space appears once, in the first lane it matches. A session without a Birth Space counts in its agent's space, or in every space when its agent has none. A new Dashboard starts in the space's Shared Group, and any Dashboard or Search Page can be duplicated. While a Dashboard is open in a person's current space, a session entering a lane marked for notification raises a desktop notification for that person.
+
 ### Birth Space
 
 The Space a session was born in.

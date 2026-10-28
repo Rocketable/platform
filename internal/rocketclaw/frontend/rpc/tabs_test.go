@@ -74,10 +74,11 @@ func TestTabs(t *testing.T) {
 		return out
 	}
 
-	// /search is the ops space's last tab, though closed. A Search page keeps its name and searches.
+	// /search is the ops space's last tab, though closed. A Search page keeps its name, board style, and searches with
+	// their notify marks.
 	saved := &TabState{
 		Tabs: []*Tab{{Path: "/", Space: "main"}, {Path: "/s/YQ", Group: "g", Space: "main"}, {Path: "/s/Yg", Preview: true, Space: "ops"},
-			{Path: "/search/a", Space: "ops", Search: &SearchPage{Name: "Triage", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}, {Id: "2", Name: "Mine", Query: "principal:alice"}}, Active: "2"}}},
+			{Path: "/search/a", Space: "ops", Search: &SearchPage{Name: "Triage", Board: "kanban", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}, {Id: "2", Name: "Mine", Query: "principal:alice", Notify: true}}, Active: "2"}}},
 		Groups: []*TabGroup{{Id: "g", Name: "Work", Color: "Blue", Collapsed: true}},
 		Space:  "main",
 		Last:   map[string]string{"main": "/s/YQ", "ops": "/search"},
@@ -200,8 +201,9 @@ func TestTabs(t *testing.T) {
 	assert.True(t, proto.Equal(&SharedTab{Space: space, Path: "/search/a", Search: triage}, response.Shared[2]))
 	assert.Nil(t, response.Shared[0].Search, "other Shared tabs have no page")
 
-	// An edit made from the page as saved replaces it; one made from a page that has since changed is refused as stale.
-	edited := &SearchPage{Name: "Triage", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}, {Id: "2", Query: "tag:bug"}}, Active: "1"}
+	// An edit made from the page as saved replaces it, its board style and notify marks included; one made from a page
+	// that has since changed is refused as stale.
+	edited := &SearchPage{Name: "Triage", Board: "kanban", Searches: []*SavedSearch{{Id: "1", Query: "is:unread", Notify: true}, {Id: "2", Query: "tag:bug"}}, Active: "1"}
 	response, err = call("192.0.2.2", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: edited, Search: edited}})
 	require.NoError(t, err)
 	assert.True(t, response.Stale)
@@ -222,9 +224,12 @@ func TestTabs(t *testing.T) {
 	assert.True(t, response.Stale)
 	assert.Equal(t, []string{space + " /search", space + " /cron"}, shared(response), "an edit after unsharing does not share again")
 
-	// A saved page with a field a later Web dropped still reads.
+	// A saved page with a field a later Web dropped still reads, and one saved before board styles is an ordinary page.
 	_, err = searchPage([]byte(`{"name":"x","gone":1}`))
 	require.NoError(t, err)
+	legacy, err := searchPage([]byte(`{"name":"x","searches":[{"id":"1","query":"q"}],"active":"1"}`))
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(&SearchPage{Name: "x", Searches: []*SavedSearch{{Id: "1", Query: "q"}}, Active: "1"}, legacy))
 
 	// Alice mutes a and snoozes c, and Bob mutes c: every reply carries only the caller's live mutes.
 	mutes := func(response *TabsResponse) []string {

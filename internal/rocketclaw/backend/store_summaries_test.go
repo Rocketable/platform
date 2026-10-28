@@ -238,13 +238,14 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 				rows = append(rows, row)
 			}
 
-			origin, kind := ChatOriginFacts{ConversationID: "history"}, KindWebChat
+			origin, kind, updated := ChatOriginFacts{ConversationID: "history"}, KindWebChat, time.Unix(2, 123456000).UTC()
 			if creation == "external MCP" {
 				origin.ExternalConversationID, origin.Binding = "public-history", ExternalMCPSessionState{Agent: "main", ManagedConversationID: "history"}
 			}
 
 			require.Equal(t, []SidebarSession{
-				{Conversation: protocol.Conversation{ID: "history", Agent: "main"}, Kind: kind, Summary: &protocol.SessionSummary{ConversationID: "history", LastMessage: "assistant", LastUpdated: time.Unix(2, 123456000).UTC()}, Tags: []string{}, Origin: origin},
+				{Conversation: protocol.Conversation{ID: "history", Agent: "main"}, Kind: kind, Summary: &protocol.SessionSummary{ConversationID: "history", LastMessage: "assistant", LastUpdated: updated}, Tags: []string{}, Origin: origin,
+					Work: WorkIdle, StateSince: updated, External: creation == "external MCP", ArrivedAt: updated},
 			}, rows)
 		})
 	}
@@ -490,8 +491,11 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 
 	want := make([]SidebarSession, 0, 5)
 
+	var started, newest int64
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT min(created_at_unix_ns), max(created_at_unix_ns) FROM turns WHERE conversation_id = 'a'`).Scan(&started, &newest))
+
 	for _, id := range []string{"Z", "a", "ä", "missing", "zero"} {
-		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main"}, Kind: KindWebChat, Running: id == "a", Origin: ChatOriginFacts{ConversationID: id}}
+		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main"}, Kind: KindWebChat, Running: id == "a", Origin: ChatOriginFacts{ConversationID: id}, Work: WorkIdle}
 
 		row.Tags = []string{"customer"}
 		if id == "zero" {
@@ -502,6 +506,11 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 			row.Summary = &protocol.SessionSummary{ConversationID: id}
 		} else if id != "missing" {
 			row.Summary = &protocol.SessionSummary{ConversationID: id, LastUpdated: stamp.Truncate(time.Microsecond), LastMessage: "assistant"}
+			row.StateSince, row.ArrivedAt = row.Summary.LastUpdated, row.Summary.LastUpdated
+		}
+
+		if id == "a" {
+			row.Work, row.StateSince, row.ArrivedAt = WorkRunning, time.Unix(0, started).UTC(), time.Unix(0, newest).UTC()
 		}
 
 		want = append(want, row)
@@ -620,6 +629,123 @@ func BenchmarkSidebarSessions(b *testing.B) {
 			require.Equal(b, previews[i], row.Summary.LastMessage)
 		}
 	}
+}
+
+// A chat's arrival is its newest turn's creation, its External MCP run's included, and a running
+// chat's state began when its turn started, whatever the turn writes or the chat queues since.
+func TestSidebarSessionsWorkTimes(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, service.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "main", PrivateConversationID: "private", ManagedConversationID: "mcp"}))
+	require.NoError(t, service.UpsertThread("busy", ThreadState{Agent: "main"}))
+
+	weekAgo := time.Now().Add(-7 * 24 * time.Hour).Truncate(time.Microsecond).UTC()
+	for _, id := range []string{"mcp", "busy"} {
+		_, err := service.AppendEntryID(ctx, id, testSessionEntryAt(weekAgo, "question"))
+		require.NoError(t, err)
+	}
+
+	_, err := service.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'mcp' WHERE conversation_id = 'private'`)
+	require.NoError(t, err)
+
+	row := func(id string) SidebarSession {
+		rows, err := service.sidebarRows(ctx, "", []string{id})
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+
+		return rows[0]
+	}
+
+	mcp := row("mcp")
+	require.True(t, mcp.External)
+	require.Equal(t, weekAgo, mcp.ArrivedAt, "a chat without running or waiting turns arrived at its last update")
+
+	seedActiveTurn(t, service, "private", "second-prompt", nil)
+
+	var created int64
+	require.NoError(t, service.db.QueryRowContext(ctx, `SELECT created_at_unix_ns FROM turns WHERE id = 'second-prompt'`).Scan(&created))
+	require.Equal(t, time.Unix(0, created).UTC(), row("mcp").ArrivedAt, "a second External MCP prompt arrives as new work")
+
+	seedActiveTurn(t, service, "busy", "long", nil)
+
+	started := time.Now().Add(-20 * time.Minute)
+	_, err = service.db.ExecContext(ctx, `UPDATE turns SET created_at_unix_ns = $1 WHERE id = 'long'`, started.UnixNano())
+	require.NoError(t, err)
+	_, err = service.AppendEntryID(ctx, "busy", testSessionEntry("progress", "still working"))
+	require.NoError(t, err)
+	require.NoError(t, service.PutThreadQueueItem("next", &protocol.ThreadQueueItem{ConversationID: "busy", Message: "next", StashAt: time.Now()}))
+
+	busy := row("busy")
+	require.Equal(t, WorkRunning, busy.Work, "running wins over queued")
+	require.Equal(t, time.Unix(0, started.UnixNano()).UTC(), busy.StateSince)
+}
+
+// The work facts read waiting turns through their partial index at 1,000 chats and 50,000 finished turns.
+func TestSidebarSessionsWorkFactsUseWaitingIndex(t *testing.T) {
+	t.Parallel()
+
+	service := sidebarWorkFixture(t)
+	ctx := t.Context()
+	scans := func() (waiting int64) {
+		_, err := service.db.ExecContext(ctx, `SELECT pg_stat_force_next_flush()`)
+		require.NoError(t, err)
+		require.NoError(t, service.db.QueryRowContext(ctx, `SELECT pg_stat_get_numscans('turns_waiting_input'::regclass)`).Scan(&waiting))
+
+		return waiting
+	}
+
+	before := scans()
+	rows, err := service.sidebarRows(ctx, "", nil)
+	require.NoError(t, err)
+	require.Len(t, rows, 1000)
+	require.Greater(t, scans(), before)
+}
+
+func BenchmarkSidebarSessionsWorkFacts(b *testing.B) {
+	service := sidebarWorkFixture(b)
+
+	for b.Loop() {
+		rows, err := service.sidebarRows(b.Context(), "", nil)
+		require.NoError(b, err)
+		require.Len(b, rows, 1000)
+	}
+}
+
+// sidebarWorkFixture holds 1,000 chats and 50,000 finished turns, whose steps went when they ended. 50
+// chats run a turn with a pending question among 10 steps, 100 hold a queued item, and 100 have a
+// hidden run with a queued item and a running turn.
+func sidebarWorkFixture(tb testing.TB) *SessionService {
+	tb.Helper()
+
+	service, err := NewSessionService(tb.TempDir())
+	require.NoError(tb, err)
+	tb.Cleanup(func() { require.NoError(tb, service.Stop()) })
+	// One connection, closing the others well before any query: each flushes its scan statistics
+	// when it closes, and the one left flushes them when asked.
+	service.db.SetMaxOpenConns(1)
+	// Seeding skips the change triggers, which only notify listeners.
+	_, err = service.db.ExecContext(tb.Context(), `SET session_replication_role = replica;
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, preview, has_entries, last_updated, running)
+SELECT 'chat-' || n, 'main', '', 'web_chat', TRUE, 'preview'::bytea, TRUE, now(), n < 50 FROM generate_series(0, 999) n;
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, reports_to)
+SELECT 'hidden-' || n, 'main', '', 'external_mcp_run', FALSE, 'chat-' || n FROM generate_series(0, 99) n;
+INSERT INTO turns (id, conversation_id, phase, created_at_unix_ns, terminal, updated_at_unix_ns)
+SELECT 'done-' || n, 'chat-' || n % 1000, 'done', n, 'stopped', n FROM generate_series(1, 50000) n
+UNION ALL SELECT 'run-' || n, 'chat-' || n, 'running', n, '', n FROM generate_series(0, 49) n
+UNION ALL SELECT 'hidden-run-' || n, 'hidden-' || n, 'running', n, '', n FROM generate_series(0, 99) n;
+INSERT INTO turns (conversation_id, input_id, phase, created_at_unix_ns, reason, updated_at_unix_ns, delivery)
+SELECT 'chat-' || n, 'queued-' || n, 'waiting', n, 'queued', n, 'enqueue' FROM generate_series(100, 199) n
+UNION ALL SELECT 'hidden-' || n, 'hidden-queued-' || n, 'waiting', n, 'queued', n, 'enqueue' FROM generate_series(0, 99) n;
+INSERT INTO steps (conversation_id, key, value)
+SELECT 'chat-' || n, format('run-%s/items/%s', n, lpad(i::text, 10, '0')), '{}'::json FROM generate_series(0, 49) n, generate_series(0, 9) i
+UNION ALL SELECT 'chat-' || n, 'run-' || n || '/call/q`+webQuestionStep+`', '{}' FROM generate_series(0, 49) n;
+RESET session_replication_role;
+ANALYZE conversations, turns, steps`)
+	require.NoError(tb, err)
+
+	return service
 }
 
 func TestSidebarSessionsCloseRowsOnEarlyStopAndCancellation(t *testing.T) {

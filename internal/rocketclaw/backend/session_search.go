@@ -99,7 +99,7 @@ type SessionSearch struct {
 }
 
 // parseSessionQuery reads query as Web's search regex
-// /(?:^|\s)(is:(?:pinned|forked|cron|unread)|sort:(?:newest|oldest)|(?:tag|cron|agent|room|principal|server|model|space):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi
+// /(?:^|\s)(is:(?:pinned|forked|cron|unread|running|queued|waiting|external)|sort:(?:newest|oldest)|(?:tag|cron|agent|room|principal|server|model|space):("(?:[^"\\]|\\.)*"|\S+))(?=\s|$)/gi
 // did, decoding quoted values as JSON; a value that is empty or does not decode
 // leaves its term as text. text is query without each term and the one
 // whitespace character before it, trimmed.
@@ -128,7 +128,7 @@ func parseSessionQuery(query string) (terms []SearchTerm, text string) {
 
 		switch term.Key {
 		case keyIs:
-			found = found && (term.Value == "pinned" || term.Value == "forked" || term.Value == "cron" || term.Value == "unread")
+			found = found && slices.Contains([]string{"pinned", "forked", "cron", "unread", "running", "queued", "waiting", "external"}, term.Value)
 		case keySort:
 			found = found && (term.Value == "newest" || term.Value == "oldest")
 		case keyTag, keyCron, keyAgent, keyRoom, keyPrincipal, keyServer, keyModel, keySpace:
@@ -325,8 +325,7 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals, sandboxed []string,
 			hasRoom, roomMatch = true, roomMatch || c.Room == term.Value
 			continue
 		case keyIs:
-			ok = term.Value == "pinned" && c.Session.Pinned || term.Value == "forked" && c.Session.ForkedFrom != "" || term.Value == "cron" && c.Cron ||
-				term.Value == "unread" && !c.Session.UnreadAt.IsZero()
+			ok = c.is(term.Value)
 		case keySort:
 			ok = true
 		}
@@ -337,6 +336,29 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals, sandboxed []string,
 	}
 
 	return (!hasRoom || roomMatch) && (!hasAgent || agentMatch)
+}
+
+func (c *SidebarChat) is(value string) bool {
+	return value == "pinned" && c.Session.Pinned || value == "forked" && c.Session.ForkedFrom != "" || value == "cron" && c.Cron ||
+		value == "unread" && !c.Session.UnreadAt.IsZero() || value == "running" && (c.Session.Running || c.Session.Background) ||
+		value == "queued" && c.Session.Queued || value == "waiting" && c.Session.Asking || value == "external" && c.Session.External
+}
+
+func (c *SidebarChat) holds(needle string) bool {
+	row := &c.Session
+
+	var preview string
+	if row.Summary != nil {
+		preview = row.Summary.LastMessage
+	}
+
+	if needle == "" || strings.Contains(strings.ToLower(row.Name+" "+c.Room+" "+preview+" "+row.Conversation.Agent+" "+row.Label()+" "+row.Server+" "+row.Directory), needle) {
+		return true
+	}
+
+	_, origin := DecideOrigin(&row.Origin)
+
+	return strings.Contains(origin, needle)
 }
 
 // Label is what Web calls the chat when it has no name or preview.
@@ -460,16 +482,16 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 				continue
 			}
 
+			if !withHits && !chat.holds(search.Needle) {
+				continue
+			}
+
 			label := row.Label()
 			_, origin := DecideOrigin(&row.Origin)
 
 			var preview string
 			if row.Summary != nil {
 				preview = row.Summary.LastMessage
-			}
-
-			if !withHits && search.Needle != "" && !strings.Contains(strings.ToLower(row.Name+" "+chat.Room+" "+preview+" "+row.Conversation.Agent+" "+label+" "+row.Server+" "+row.Directory), search.Needle) && !strings.Contains(origin, search.Needle) {
-				continue
 			}
 
 			match := SessionMatch{Chat: *chat}
@@ -512,6 +534,122 @@ func readChats(candidates []string, hits []MessageSearchHit) []string {
 	}
 
 	return candidates
+}
+
+// BoardLane is a Dashboard lane: up to 200 of its chats, newest arrival first, and how many chats
+// it holds.
+type BoardLane struct {
+	Chats []SidebarChat
+	Total int
+}
+
+// Board sorts the chats of space spaceID into the lanes of each Dashboard, given in lane order as
+// session search queries whose free text matches fields only. The space holds the chats born there,
+// those without a Birth Space whose agent's space has its name ignoring case, and those with neither;
+// an unknown space holds none. Each chat goes to its Dashboard's first lane it matches. Chats are
+// as SidebarChats yields them, with username's unread marks.
+func (s *SessionService) Board(ctx context.Context, username, spaceID string, dashboards [][]string, slack slackLookup) ([][]BoardLane, error) {
+	type lane struct {
+		terms  []SearchTerm
+		needle string
+	}
+
+	var every []SearchTerm
+
+	lanes, board := make([][]lane, len(dashboards)), make([][]BoardLane, len(dashboards))
+	for i, queries := range dashboards {
+		board[i] = make([]BoardLane, len(queries))
+
+		for _, query := range queries {
+			terms, text := parseSessionQuery(query)
+			lanes[i] = append(lanes[i], lane{terms, strings.ToLower(text)})
+			every = append(every, terms...)
+		}
+	}
+
+	var (
+		spaces     []Space
+		rows       []SidebarSession
+		agents     harness.Agents
+		principals map[string][]string
+		sandboxed  = make(map[string][]string)
+	)
+
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() (err error) {
+		spaces, err = s.Spaces(groupCtx)
+		return err
+	})
+	group.Go(func() (err error) {
+		rows, err = s.sidebarRows(groupCtx, username, nil)
+		return err
+	})
+	group.Go(func() (err error) {
+		agents, _, err = LoadRuntimeDefinitions(s.definitions, s.definitions.Clone().RuntimeDirName())
+		return err
+	})
+	group.Go(func() error { return s.sandboxedAgents(groupCtx, every, sandboxed) })
+
+	if slices.ContainsFunc(every, func(term SearchTerm) bool { return term.Key == keyPrincipal }) {
+		group.Go(func() (err error) {
+			principals, _, err = s.messagePrincipals(groupCtx)
+			return err
+		})
+	}
+
+	if err := group.Wait(); err != nil {
+		return nil, fmt.Errorf("sort board: %w", err)
+	}
+
+	space := slices.IndexFunc(spaces, func(space Space) bool { return space.ID == spaceID })
+	if space < 0 {
+		return board, nil
+	}
+
+	rows = slices.DeleteFunc(rows, func(row SidebarSession) bool {
+		agent := agents.Items[row.Conversation.Agent]
+		return row.SpaceID != spaceID && (row.SpaceID != "" || agent.Space != "" && !strings.EqualFold(agent.Space, spaces[space].Name))
+	})
+	slices.SortFunc(rows, func(a, b SidebarSession) int {
+		return cmp.Or(b.ArrivedAt.Compare(a.ArrivedAt), strings.Compare(a.Conversation.ID, b.Conversation.ID))
+	})
+
+	rooms := make(map[string]SidebarChat)
+
+	for n := range rows {
+		row := &rows[n]
+
+		chat, err := sidebarChat(ctx, slack, rooms, row)
+		if err != nil {
+			return nil, err
+		}
+
+		// A model: term matches a RocketClaw chat's agent model; its card keeps the stored one.
+		matched := chat
+		if row.Server == "" {
+			matched.Session.Model = agents.Items[row.Conversation.Agent].Model
+		}
+
+		id := row.Conversation.ID
+
+		for i := range lanes {
+			first := slices.IndexFunc(lanes[i], func(lane lane) bool {
+				return matched.passes(lane.terms, principals[id], sandboxed[id], spaces) && matched.holds(lane.needle)
+			})
+			if first < 0 {
+				continue
+			}
+
+			found := &board[i][first]
+
+			found.Total++
+			if found.Total <= 200 {
+				found.Chats = append(found.Chats, chat)
+			}
+		}
+	}
+
+	return board, nil
 }
 
 func (s *SessionService) sidebarRows(ctx context.Context, username string, chats []string) ([]SidebarSession, error) {

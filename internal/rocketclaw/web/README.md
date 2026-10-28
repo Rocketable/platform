@@ -549,10 +549,10 @@ active tab.
   at once, and both rows light up while it is open. Opening a Shared tab adds no
   tab of your own and keeps you in the current space. Shared tabs show a people
   icon instead of a close button, and their menu offers only **Remove from
-  Shared** and the notification items; middle-click and selection never act on
-  them. Drag a Shared row onto another to reorder Shared; your own tabs and
-  Shared rows never drop on each other. Otherwise the keyboard treats them as
-  tabs: Cmd/Ctrl+[ and ] step through the Shared rows and then your own tabs,
+  Shared**, the notification items, and, for a Search page, **Rename search** and
+  **Duplicate**; middle-click and selection never act on them. Drag a Shared row
+  onto another to reorder Shared; your own tabs and Shared rows never drop on
+  each other. Otherwise the keyboard treats them as tabs: Cmd/Ctrl+[ and ] step through the Shared rows and then your own tabs,
   each tab once; arrows, Home, and End cross between the two lists; and
   Shift+Arrow on a Shared row moves it among the Shared rows. Your Shared order
   follows you across devices. Collapsing Shared is your own choice, for every
@@ -699,6 +699,28 @@ plain text that matches no conversation opens Search everywhere. When only the t
 search actions remain, everywhere is highlighted; ArrowUp selects scoped search.
 Clicking a command always runs it.
 
+A Search page becomes a Dashboard when its **Board style** menu picks a style:
+Strip Bay, Dispatch Console, Triage Census, Kanban, or Radar Scope; **List**
+shows its results again. A Dashboard's searches are its lanes. The server sorts the sessions
+of the space its tab sits in into them, each session once, in the first lane it
+matches; a session without a Birth Space counts in its agent's space, or in every
+space when its agent has none. The board follows the session list without a reload.
+**Notify** marks the shown lane for notification: while a Dashboard is open in the
+current space, as your tab or in that space's Shared group, a session entering a
+marked lane raises a desktop notification titled "<Dashboard>: <lane>" with the
+session's title, even with the Dashboard in view, and clicking it opens the session.
+Opening or reloading a Dashboard, editing a lane's query, or turning on its mark
+notifies nothing for sessions already in the lane; a session that leaves a lane and
+enters it again notifies again. **New dashboard** in the command
+palette opens a new Strip Bay Dashboard, added to the current space's Shared group,
+with the lanes Needs you (`is:waiting`), Running (`is:running`), Queued
+(`is:queued`), and External (`is:external`), in that order; all but Running are
+marked for notification. **Duplicate**, in a Search page's or Dashboard's tab menu
+or Shared row menu and in the palette as **Tabs: Duplicate**, opens a copy at a new
+address with the same style, lanes, and marks, named "<name> copy" (an unnamed page
+after its shown query, as "<query> copy"). A copy of a page in the current space's
+Shared group is added to it; any other copy is your own tab.
+
 Cmd/Ctrl+P matches plain text against titles in the browser as you type, with no
 request. A query with a filter, even a bare key such as `principal:`, goes to the
 server, which applies only the filters; the palette matches the rest against the
@@ -761,7 +783,16 @@ once, pinned first, retaining recent-first order within each group.
 `sort:newest` or `sort:oldest` instead orders results by last activity on every
 search surface, overriding pinned-first and message-hit grouping; rows without
 activity come last, equal times order by conversation ID, and the last `sort:` wins.
-Typing `is:` suggests `pinned`, `forked`, `cron`, and `unread` (your unread sessions, closed tabs included); typing `sort:` suggests
+Typing `is:` suggests `pinned`, `forked`, `cron`, and `unread` (your unread sessions, closed tabs included),
+then the work terms: `running` (a running turn or background work), `queued` (waiting turns other
+than scheduled reminders), `waiting` (a session marked Needs you: a running turn's unanswered
+question, or a remote OpenCode session's pending form or permission request), and `external` (a
+chat bound to External MCP). `running`, `queued`, and `external` count the hidden runs reporting to
+a chat, such as its External MCP run, as the chat's own work, and agents' `rocketclaw_sessions_list`
+reads every work term too. Each listed
+session also carries its work state (the first of needs you, running, and queued, else idle), when
+that state began, and when its newest running or waiting turn arrived, or its last update when it
+has none; these come from the server and read the same for everyone. Typing `sort:` suggests
 `newest` and `oldest`. While typing, a last word that is an unfinished filter
 (a bare `tag:`, `cron:`, `agent:`, `principal:`, `room:`, `server:`, `model:`, or `space:`, a partial `is:` or `sort:` term
 such as `is:pin`, or an unclosed quote) is not sent; Enter, opening a saved
@@ -780,7 +811,7 @@ may be incomplete; the Search page says so instead of reporting “No matches”
 hit from a stopped or failed turn opens its chat without jumping to a message. A
 failed search shows an error with Retry, and the next keystroke also retries.
 Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
-**Sessions: New**, **Sessions: Search**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
+**Sessions: New**, **Sessions: Search**, **New dashboard**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
 **List Agents**, **List Skills**, **Settings**, **Tabs: Previous**, **Tabs: Next**,
 and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
 works (the desktop sidebar, not the narrow-screen drawer). In both palettes a command bound to a

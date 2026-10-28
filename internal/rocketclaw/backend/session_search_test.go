@@ -448,6 +448,73 @@ func TestSearchSessionsUnread(t *testing.T) {
 	require.Empty(t, criteria, "the agent tool searches for no person")
 }
 
+// Work terms count a chat's hidden runs as its own: W asks a question, B's question is answered, the
+// External MCP run reporting to X runs, A and W hold queued items, and H, named "external mcp notes",
+// only a reminder.
+func TestSearchSessionsWorkTerms(t *testing.T) {
+	t.Parallel()
+
+	s, slack := newSessionSearchFixture(t)
+	ctx := t.Context()
+	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET reports_to = $1 WHERE conversation_id = 'external_mcp:private'`, searchChatX)
+	require.NoError(t, err)
+	_, err = s.UpdateConversationDetails(ctx, searchChatH, nil, new("external mcp notes"))
+	require.NoError(t, err)
+
+	for id, turn := range map[string]string{searchChatW: "turn-w", searchChatB: "turn-b", "external_mcp:private": "turn-x"} {
+		seedActiveTurn(t, s, id, turn, nil)
+	}
+
+	for id, key := range map[string]string{searchChatW: "turn-w/call/q" + webQuestionStep, searchChatB: "turn-b/call/q" + webQuestionStep, "external_mcp:private": "turn-x/call/q" + webQuestionStep} {
+		require.NoError(t, s.SaveTurnStep(ctx, id, key, json.RawMessage(`{}`)))
+	}
+
+	require.NoError(t, s.SaveTurnStep(ctx, searchChatB, "turn-b/call/q/answer", json.RawMessage(`{}`)))
+
+	for id, chat := range map[string]string{"queued-a": searchChatA, "queued-w": searchChatW} {
+		require.NoError(t, s.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ConversationID: chat, Message: "later", StashAt: time.Now()}))
+	}
+
+	require.NoError(t, s.PutScheduledMessage("reminder", &protocol.ScheduledMessageState{ConversationID: searchChatH, Agent: "cron", Message: "remind", DueAt: time.Now().Add(time.Hour)}))
+
+	for query, want := range map[string][]string{
+		"is:waiting":           {searchChatW},
+		"is:queued":            {searchChatA, searchChatW},
+		"is:queued agent:main": {searchChatA},
+		"is:running":           {searchChatX, searchChatB, searchChatW},
+		"is:external":          {searchChatX},
+	} {
+		_, matches := searchTestSessions(t, s, slack, query, SearchFields)
+
+		ids := make([]string, 0, len(matches))
+		for _, match := range matches {
+			ids = append(ids, match.ID)
+		}
+
+		require.Equal(t, want, ids, query)
+	}
+
+	_, criteria, err := s.searchSessionsWithin(ctx, "is:waiting", &sessionListParams{}, slack)
+	require.NoError(t, err)
+	require.Len(t, criteria, 1, "the agent tool reads the same terms")
+	require.Equal(t, searchChatW, criteria[0].Chat.Session.Conversation.ID)
+
+	// The fixture's chats were last updated in January; work arriving now makes A, W and X recent,
+	// while idle D and E stay out.
+	since := strings.TrimSuffix(time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339Nano), "Z")
+	for query, want := range map[string][]string{"is:queued": {searchChatA, searchChatW}, "agent:main": {searchChatX, searchChatA}} {
+		_, criteria, err := s.searchSessionsWithin(ctx, query, &sessionListParams{Since: since}, slack)
+		require.NoError(t, err)
+
+		ids := make([]string, 0, len(criteria))
+		for i := range criteria {
+			ids = append(ids, criteria[i].Chat.Session.Conversation.ID)
+		}
+
+		require.Equal(t, want, ids, "%s since 24h ago", query)
+	}
+}
+
 // An ASCII needle reads only the chats whose words may hold it, so each word a match can come from
 // must keep its chat: a cron run's time and kind, a pair spanning its "=", and names whose İ
 // and K (Kelvin sign) lowercase into ASCII.
@@ -593,6 +660,111 @@ func TestSearchSessionsSortOrder(t *testing.T) {
 
 		require.Equal(t, want, ids, query)
 		require.Contains(t, matches, searchTestMatch{"c", fieldPreview, "c"}, "an empty preview shows the session label")
+	}
+}
+
+// A board shows a space's chats: those born there, those without a Birth Space whose agent's space has
+// its name ignoring case, and those with neither, each once per Dashboard in its first matching lane,
+// newest arrival first. Lane text matches fields, not message bodies.
+func TestSessionBoard(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	writeAgent(t, s.definitions.Clone().Workspace, "ops", "---\nmodel: gpt-6.1-sol\nspace: OPS\n---\nHelp.")
+
+	for _, name := range []string{"Ops", "Bulk"} {
+		require.NoError(t, s.CreateSpace(ctx, name))
+	}
+
+	spaces, err := s.Spaces(ctx)
+	require.NoError(t, err)
+
+	ids := make(map[string]string)
+	for _, space := range spaces {
+		ids[space.Name] = space.ID
+	}
+
+	require.NoError(t, s.RegisterExternalMCPConversation("ticket", "ops", &ExternalMCPSessionState{Agent: "ops", PrivateConversationID: "mcp-run", ManagedConversationID: "mcp"}))
+
+	for day, chat := range []struct{ id, agent, space string }{{"loose", "main", ""}, {"mcp", "ops", ""}, {"web-ops", "main", ids["Ops"]}, {"web-main", "main", ids["Main"]}} {
+		require.NoError(t, s.UpsertThread(chat.id, ThreadState{Agent: chat.agent}))
+		_, err := s.AppendEntryID(ctx, chat.id, testSessionEntryAt(time.Date(2026, 1, day+1, 0, 0, 0, 0, time.UTC), "secret body words"))
+		require.NoError(t, err)
+		_, err = s.db.ExecContext(ctx, `UPDATE conversations SET space_id = NULLIF($2, '') WHERE conversation_id = $1`, chat.id, chat.space)
+		require.NoError(t, err)
+	}
+
+	_, err = s.UpdateConversationDetails(ctx, "web-ops", nil, new("Invoice run"))
+	require.NoError(t, err)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, preview, has_entries, last_updated, space_id)
+SELECT 'bulk-' || lpad(n::text, 3, '0'), 'main', '', 'web_chat', TRUE, 'preview'::bytea, TRUE, now() - n * interval '1 second', $1 FROM generate_series(0, 249) n`, ids["Bulk"])
+	require.NoError(t, err)
+
+	bulk := make([]string, 200)
+	for i := range bulk {
+		bulk[i] = fmt.Sprintf("bulk-%03d", i)
+	}
+
+	// A card is the chat as the session list has it, even when a model: lane matched its agent's model.
+	listed := make(map[string]SidebarChat)
+
+	for chat, err := range s.SidebarChats(ctx, "", noSlackLookups{}, nil) {
+		require.NoError(t, err)
+
+		listed[chat.Session.Conversation.ID] = chat
+	}
+
+	type lane struct {
+		IDs   []string
+		Total int
+	}
+
+	for _, tc := range []struct {
+		space      string
+		dashboards [][]string
+		want       [][]lane
+	}{
+		{ids["Ops"], [][]string{{"is:external", "INVOICE", ""}, {"", "is:external"}, {"secret"}, {"model:sol"}}, [][]lane{
+			{{IDs: []string{"mcp"}, Total: 1}, {IDs: []string{"web-ops"}, Total: 1}, {IDs: []string{"loose"}, Total: 1}},
+			{{IDs: []string{"web-ops", "mcp", "loose"}, Total: 3}, {}},
+			{{}},
+			{{IDs: []string{"mcp"}, Total: 1}},
+		}},
+		{ids["Main"], [][]string{{""}}, [][]lane{{{IDs: []string{"web-main", "loose"}, Total: 2}}}},
+		{ids["Bulk"], [][]string{{"bulk"}}, [][]lane{{{IDs: bulk, Total: 250}}}},
+		{"no-such-space", [][]string{{"", "is:external"}}, [][]lane{{{}, {}}}},
+	} {
+		board, err := s.Board(ctx, "", tc.space, tc.dashboards, noSlackLookups{})
+		require.NoError(t, err)
+
+		got := make([][]lane, len(board))
+		for i, lanes := range board {
+			got[i] = make([]lane, len(lanes))
+			for j, found := range lanes {
+				got[i][j].Total = found.Total
+				for _, chat := range found.Chats {
+					got[i][j].IDs = append(got[i][j].IDs, chat.Session.Conversation.ID)
+					require.Equal(t, listed[chat.Session.Conversation.ID], chat)
+				}
+			}
+		}
+
+		require.Equal(t, tc.want, got, "%s %q", tc.space, tc.dashboards)
+	}
+}
+
+// BenchmarkSessionBoard sorts 1,000 chats into the default lanes of a new Dashboard.
+func BenchmarkSessionBoard(b *testing.B) {
+	service := sidebarWorkFixture(b)
+	require.NoError(b, os.MkdirAll(filepath.Join(service.definitions.Clone().Workspace, ".rocketclaw", "agents"), 0o755))
+
+	dashboards := [][]string{{"is:waiting", "is:running", "is:queued", "is:external"}}
+
+	for b.Loop() {
+		board, err := service.Board(b.Context(), "", "main", dashboards, noSlackLookups{})
+		require.NoError(b, err)
+		require.Equal(b, 50, board[0][0].Total)
 	}
 }
 

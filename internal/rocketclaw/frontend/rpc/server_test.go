@@ -42,6 +42,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"tailscale.com/client/local"
 	"tailscale.com/client/tailscale/apitype"
@@ -208,6 +209,12 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 			sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+			require.NoError(t, os.MkdirAll(filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents"), 0o755))
+			require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+			_, err = sessions.AppendEntryID(t.Context(), "chat", &harness.SessionEntry{Timestamp: time.Unix(1, 0).UTC()})
+			require.NoError(t, err)
+			_, err = sessions.UpdateConversationDetails(t.Context(), "chat", nil, new("Chat"))
+			require.NoError(t, err)
 
 			listener, err := net.Listen("unix", testSocketPath(t))
 			require.NoError(t, err)
@@ -223,7 +230,7 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-			calls := map[string]string{"Identity": `{}`, "Protocol": `{}`}
+			calls := map[string]string{"Identity": `{}`, "Protocol": `{}`, "Board": `{"spaceId":"main","dashboards":[{"lanes":["",""]}]}`}
 			if tt.code == http.StatusUnauthorized {
 				maps.Copy(calls, map[string]string{"SearchSessions": `{"query":"x"}`, "ListSessionEntries": `{"id":"chat"}`, "LoadSessionEntries": `{"id":"chat"}`, "DeleteSessionEntries": `{"id":"chat"}`, "UpdateSession": `{"id":"chat"}`, "ListConfig": `{}`, "ListSkills": `{}`})
 			}
@@ -252,6 +259,19 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 
 				if method == "Identity" && code == http.StatusOK {
 					require.JSONEq(t, `{"username":"owner","principal":"owner","justBashError":""}`, response.Body.String())
+				}
+
+				// A Board card is the session as ListSessions lists it.
+				if method == "Board" && code == http.StatusOK {
+					var board BoardResponse
+					require.NoError(t, protojson.Unmarshal(response.Body.Bytes(), &board))
+
+					listed, err := invoke[ListSessionsResponse](metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1")), connection, "ListSessions", &ListSessionsRequest{})
+					require.NoError(t, err)
+					require.Len(t, listed.Sessions, 1)
+					require.Equal(t, []string{"Chat", "main", "IDLE"}, []string{listed.Sessions[0].Name, listed.Sessions[0].Agent, listed.Sessions[0].WorkState.String()})
+					require.NotEmpty(t, listed.Sessions[0].ArrivedAt)
+					require.True(t, proto.Equal(&BoardResponse{Dashboards: []*BoardLanes{{Lanes: []*BoardLane{{Sessions: listed.Sessions, Total: 1}, {}}}}}, &board), response.Body.String())
 				}
 			}
 		})
