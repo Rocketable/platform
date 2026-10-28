@@ -29,7 +29,8 @@ const paneTabs = (tabs: SessionTabs, pane: SessionPane) => tabs.all.filter((tab)
  */
 export function placeSessionTabs(previous: SessionTabs, next: SessionTabs, target?: SessionPane): SessionTabs {
   const kept = new Set(previous.all)
-  const placement = next.panes ? next : previous
+  // rocketclaw: an explicit empty placement from moveSessionTab must clear the old pane (upstream packages/app/src/shell/state/session-tabs.ts)
+  const placement = "panes" in next ? next : previous
 
   const placed = (tab: string, index: number): SessionPane => {
     if (kept.has(tab)) return sessionTabPane(placement, tab)

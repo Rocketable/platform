@@ -89,6 +89,7 @@ async function until(check: () => boolean | Promise<boolean>) {
 test("a remote session mounts OpenCode's view in the page, with RocketClaw's keys, commands, and tabs around it", async () => {
   const { chromium: engine } = await import(playwright!);
   const { web, calls, release, terminals, base } = start();
+  fake.extraText = '<script>window.__ocUnsafe=1</script><img src=x onerror="window.__ocUnsafe=1"><a href="javascript:alert(1)">unsafe link</a>\n\n```mermaid\nflowchart LR\nA["<img src=x onerror=alert(1)>"]\nclick A "javascript:alert(1)"\n```';
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, permissions: ["clipboard-read", "clipboard-write"] });
@@ -128,6 +129,21 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await page.getByRole("status").filter({ hasText: "Loading…" }).waitFor();
     release();
     await view.getByText("answer in ses_a").waitFor();
+    // Markdown is sanitized and approved Pele keeps diagram labels as text, not executable HTML.
+    await view.locator('[data-component="markdown-mermaid"] svg').waitFor();
+    expect(await view.locator('script, [onerror], a[href^="javascript:"]').count()).toBe(0);
+    expect(await view.locator('[data-component="markdown-mermaid"] img, [data-component="markdown-mermaid"] image').count()).toBe(0);
+    expect(await page.evaluate(() => (window as Window & { __ocUnsafe?: number }).__ocUnsafe)).toBeUndefined();
+    // Extensions keep their empty states and configuration links, but no unsupported draft-prompt setup buttons.
+    await view.getByRole("button", { name: "Session details", exact: true }).click();
+    const details = page.locator('[data-oc-portal] [data-component="session-summary-panel"]');
+    for (const [service, empty] of [["mcp", "No MCP servers configured"], ["plugins", "No plugins configured"], ["skills", "No skills configured"], ["lsp", "No LSP servers configured"]]) {
+      const pane = details.locator(`[data-service="${service}"]`);
+      await pane.getByText(empty, { exact: true }).waitFor({ state: "attached" });
+      expect(await pane.getByRole("button", { name: "Configuration file", exact: true, includeHidden: true }).count()).toBe(1);
+    }
+    expect(await details.getByRole("button", { name: /with OpenCode/, includeHidden: true }).count()).toBe(0);
+    await page.keyboard.press("Escape");
     expect(await page.getByRole("status").filter({ hasText: "Loading…" }).count()).toBe(0);
     expect(await page.locator("iframe").count()).toBe(0);
     expect(fake.requests.some((request) => request.startsWith("GET /oc/box/api/session/ses_a"))).toBe(true);
@@ -171,6 +187,8 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await view.locator("[data-component=composer] [contenteditable=true]").click();
     await page.keyboard.press("Control+Backquote");
     await view.locator('[data-component="terminal"]').waitFor();
+    await view.locator('[data-pane-content="bottom"] [data-component="terminal"]').waitFor();
+    expect(await view.locator('[data-pane-content="side"]').isVisible()).toBe(false);
     await until(() => terminals.open === 1);
     for (const modifier of ["Control", "Meta"]) {
       for (const mode of ["sessions", "commands"] as const) {
@@ -197,13 +215,39 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     expect(await rocketPalette("sessions").count()).toBe(0);
     expect(terminals.input.join("")).toBe("x");
 
+    // Native append carries the stored panes property when the last terminal is reopened.
+    await view.locator('[data-pane-tab^="terminal:"]').getByRole("button", { name: "Close tab", exact: true }).click();
+    await until(() => terminals.open === 0);
+    await view.locator("[data-component=composer] [contenteditable=true]").click();
+    await page.keyboard.press("Control+Backquote");
+    await view.locator('[data-pane-content="bottom"] [data-component="terminal"]').waitFor();
+    await until(() => terminals.open === 1);
+
+    // Moving the terminal uses OpenCode's real drag state; the host must keep that choice after remounting.
+    await view.locator('[data-slot="session-review-toggle"]').click();
+    await view.locator('[data-pane-tab^="terminal:"]').dragTo(view.locator('[data-pane-content="side"]'), {
+      targetPosition: { x: 40, y: 40 },
+      steps: 10,
+    });
+    await view.locator('[data-pane-content="side"] [data-component="terminal"]').waitFor();
+
     // Leaving the session closes the terminal's socket with the rest of the view.
     await page.goBack();
     await until(async () => await view.count() === 0 && terminals.open === 0 && fake.streams === 0);
     await page.goForward();
     await view.getByText("answer in ses_a").waitFor();
+    await view.locator('[data-pane-content="side"] [data-component="terminal"]').waitFor();
     // The restored terminal must not take focus during the remaining keyboard checks.
-    await view.getByRole("button", { name: "Close terminal", exact: true }).click();
+    await view.locator('[data-pane-tab^="terminal:"]').getByRole("button", { name: "Close tab", exact: true }).click();
+    await until(() => terminals.open === 0);
+
+    // The Side pane's own launcher is an explicit destination, not a request for the bottom default.
+    await view.locator('[data-slot="session-review-toggle"]').click();
+    const side = view.locator('[data-pane-content="side"]');
+    await side.getByRole("button", { name: "Add tab", exact: true }).click();
+    await side.getByRole("button", { name: /^Terminal/ }).click();
+    await side.locator('[data-component="terminal"]').waitFor();
+    await side.locator('[data-pane-tab^="terminal:"]').getByRole("button", { name: "Close tab", exact: true }).click();
     await until(() => terminals.open === 0);
 
     // The server link names the shown session on its own server, with no password.
@@ -345,9 +389,13 @@ test("remote sessions list, tag, go offline, start, and keep the theme toggle cl
     let finish = () => {};
     creates.hold = new Promise<void>((resolve) => { finish = resolve; });
     const before = created();
-    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await page.keyboard.press("ControlOrMeta+k");
+    await palette.locator("input").fill("New session");
+    await palette.locator(".command-palette-row", { hasText: "New session" }).first().click();
     await until(() => created() === before + 1);
-    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await page.keyboard.press("ControlOrMeta+k");
+    await palette.locator("input").fill("New session");
+    await palette.locator(".command-palette-row", { hasText: "New session" }).first().click();
     await Bun.sleep(300);
     finish();
     await page.waitForURL(`${base}${route("opencode:box:ses_child")}`);
@@ -358,7 +406,7 @@ test("remote sessions list, tag, go offline, start, and keep the theme toggle cl
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     await view.locator(`button[data-session-id="${linked}"]`).click();
     await page.waitForURL(`${base}${route(`opencode:box:${linked}`)}`);
-    await view.getByText(`answer in ${linked}`).waitFor();
+    await view.getByText(`answer in Session ${linked}`).waitFor();
     expect(errors).toEqual([]);
 
     // When the view's code fails to load, Retry loads it again without reloading the page.

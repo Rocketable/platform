@@ -452,9 +452,9 @@ export function SessionAncestorTrail(props: {
 // Opens a related session in the tab showing `from`, and records its parent so the tab's route stays consistent.
 // `reveal` names a tool call or shell the opened timeline scrolls to and expands.
 export function useOpenSessionRoute() {
-  const navigate = useNavigate()
   const server = useServer()
   const tabs = useTabs()
+  const navigate = useNavigate()
 
   return (from: string, id: string, reveal?: string) => {
     const tab = tabs.store.find(
