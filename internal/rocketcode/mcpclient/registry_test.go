@@ -150,6 +150,7 @@ func TestSessionErrors(t *testing.T) {
 		{name: "unknown server", server: "nope", want: `unknown mcp server "nope"`},
 		{name: "missing transport", server: "demo", want: `mcp server "demo": no transport configured`},
 		{name: "invalid URL", server: "demo", config: ServerConfig{URL: "http://[::1", Headers: map[string]string{"Authorization": "Bearer test"}}, want: `connect mcp server "demo":`},
+		{name: "unsupported HTTP scheme", server: "demo", config: ServerConfig{URL: "ftp://example.com", Headers: map[string]string{"Authorization": "Bearer test"}}, want: `mcp http: unsupported protocol scheme "ftp"`},
 		{name: "escaping cwd", server: "demo", config: ServerConfig{Command: "echo", Cwd: ".."}, want: `cwd ".." escapes workspace`},
 		{name: "missing command", server: "demo", config: ServerConfig{Command: "./missing-mcp-command"}, want: `connect mcp server "demo":`},
 	} {
@@ -423,6 +424,46 @@ func TestResolveCwdRejectsEscape(t *testing.T) {
 
 	_, err = resolveCwd(ws, filepath.Join(string(filepath.Separator), "tmp", "outside"))
 	require.Error(t, err)
+}
+
+func TestSameHostRedirects(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		url  string
+		via  int
+		want string
+	}{
+		{name: "same host new path", url: "https://example.com/next", via: 1},
+		{name: "ninth redirect", url: "https://example.com/next", via: 9},
+		{name: "tenth redirect", url: "https://example.com/next", via: 10, want: "stopped after 10 redirects"},
+		{name: "different host", url: "https://other.example/next", via: 1, want: "refusing cross-host redirect to other.example"},
+		{name: "different port", url: "https://example.com:8443/next", via: 1, want: "refusing cross-host redirect to example.com:8443"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			original, err := http.NewRequest(http.MethodPost, "https://example.com/mcp", http.NoBody)
+			require.NoError(t, err)
+			redirect, err := http.NewRequest(http.MethodPost, tt.url, http.NoBody)
+			require.NoError(t, err)
+
+			via := make([]*http.Request, tt.via)
+			for i := range via {
+				via[i] = original
+			}
+
+			err = sameHostRedirects(redirect, via)
+			if tt.want != "" {
+				require.EqualError(t, err, tt.want)
+
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestSessionConnectConcurrent(t *testing.T) {
