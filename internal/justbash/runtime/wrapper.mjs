@@ -13209,7 +13209,7 @@ var require_src2 = __commonJS(function(exports) {
 
 // node_modules/@grpc/grpc-js/build/src/channelz.js
 var require_channelz = __commonJS(function(exports) {
-  var __dirname = "/Users/ucirello/Projects/platform/.tmp/workspaces/20261026-just-bash-semport/internal/justbash/wrapper/node_modules/@grpc/grpc-js/build/src";
+  var __dirname = "./node_modules/@grpc/grpc-js/build/src";
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.registerChannelzSocket = exports.registerChannelzServer = exports.registerChannelzSubchannel = exports.registerChannelzChannel = exports.ChannelzCallTrackerStub = exports.ChannelzCallTracker = exports.ChannelzChildrenTrackerStub = exports.ChannelzChildrenTracker = exports.ChannelzTrace = exports.ChannelzTraceStub = undefined;
   exports.unregisterChannelzRef = unregisterChannelzRef;
@@ -18860,7 +18860,7 @@ var require_duration = __commonJS(function(exports) {
 
 // node_modules/@grpc/grpc-js/build/src/orca.js
 var require_orca = __commonJS(function(exports) {
-  var __dirname = "/Users/ucirello/Projects/platform/.tmp/workspaces/20261026-just-bash-semport/internal/justbash/wrapper/node_modules/@grpc/grpc-js/build/src";
+  var __dirname = "./node_modules/@grpc/grpc-js/build/src";
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.OrcaOobMetricsSubchannelWrapper = exports.GRPC_METRICS_HEADER = exports.ServerMetricRecorder = exports.PerRequestMetricRecorder = undefined;
   exports.createOrcaClient = createOrcaClient;

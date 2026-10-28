@@ -1,12 +1,17 @@
 // prune removes what the embedded runtime never loads from a production install of just-bash.
 // Usage: bun scripts/prune.ts <stage dir>
-import { readdirSync, rmSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const stage = process.argv[2];
 if (!stage) {
   throw new Error("usage: bun scripts/prune.ts <stage dir>");
 }
+
+// Bun writes the build directory into wrapper.mjs as bundled CommonJS modules' __dirname, so the tree
+// would differ per machine. Only gRPC's unused channelz and ORCA proto loading read those values.
+const wrapper = join(stage, "wrapper.mjs");
+writeFileSync(wrapper, readFileSync(wrapper, "utf8").replaceAll(process.cwd(), "."));
 
 const modules = join(stage, "node_modules");
 
