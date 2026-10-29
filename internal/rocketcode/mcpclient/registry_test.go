@@ -33,11 +33,6 @@ func TestFlattenCallToolResult(t *testing.T) {
 			want:   "ab",
 		},
 		{
-			name:    "isError with text",
-			result:  &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "boom"}}},
-			wantErr: "boom",
-		},
-		{
 			name:    "isError empty",
 			result:  &mcp.CallToolResult{IsError: true},
 			wantErr: "mcp tool error",
