@@ -353,6 +353,8 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 		}
 	}
 
+	var body []byte
+
 	for {
 		if errors.Is(err, io.EOF) {
 			_, _ = io.WriteString(out, "event: complete\ndata: {}\n\n")
@@ -369,18 +371,26 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 			return
 		}
 
-		body, errMarshal := (protojson.MarshalOptions{EmitDefaultValues: true}).MarshalAppend([]byte("data: "), response)
+		var errMarshal error
+
+		body, errMarshal = (protojson.MarshalOptions{EmitDefaultValues: true}).MarshalAppend(append(body[:0], "data: "...), response)
 		if errMarshal != nil {
 			err = errMarshal
 			continue
 		}
 
-		if _, err := out.Write(append(body, '\n', '\n')); err != nil {
+		body = append(body, '\n', '\n')
+		if _, err := out.Write(body); err != nil {
 			return
 		}
 
 		if err := flush(); err != nil {
 			return
+		}
+
+		// A listing ends after its inventory; long-lived streams must not retain a large frame while idle.
+		if r.URL.Path != "/api/ListSessions" {
+			body = nil
 		}
 
 		err = stream.RecvMsg(response)

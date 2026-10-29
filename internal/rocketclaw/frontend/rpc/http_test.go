@@ -26,17 +26,27 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestHTTPEventFramingAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkHTTPEventFraming)
 	require.Positive(t, result.N)
-	// Allow race instrumentation, but not the extra frame buffer under -race.
-	require.Less(t, result.AllocedBytesPerOp(), int64(900<<10))
+	// Allow transport and race instrumentation, but not a fresh JSON buffer for every row.
+	require.Less(t, result.AllocedBytesPerOp(), int64(9<<20))
 }
 
 func BenchmarkHTTPEventFraming(b *testing.B) {
-	transport := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, _ grpc.ServerStream) error { return nil }))
+	message := &ListSessionsResponse{Sessions: []*Session{{Title: strings.Repeat("example", 32768), Tags: []string{"quote\" 日本語\n"}}}}
+	transport := grpc.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
+		for range 7 {
+			if err := stream.SendMsg(message); err != nil {
+				return fmt.Errorf("send session frame: %w", err)
+			}
+		}
+
+		return nil
+	}))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(b, err)
 
@@ -48,24 +58,26 @@ func BenchmarkHTTPEventFraming(b *testing.B) {
 	require.NoError(b, err)
 	b.Cleanup(func() { require.NoError(b, connection.Close()) })
 
-	message := &ListSessionsResponse{Sessions: []*Session{{Title: strings.Repeat("example", 32768), Tags: []string{"quote\" 日本語\n"}}}}
-	request := httptest.NewRequest(http.MethodGet, "/stream", http.NoBody)
+	request := httptest.NewRequest(http.MethodGet, "/api/ListSessions", http.NoBody)
 	body, err := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(message)
 	require.NoError(b, err)
 
-	want := []byte("data: " + string(body) + "\n\nevent: complete\ndata: {}\n\n")
+	want := []byte(strings.Repeat("data: "+string(body)+"\n\n", 8) + "event: complete\ndata: {}\n\n")
 	b.SetBytes(int64(len(want)))
 	b.ReportAllocs()
 
 	var writers sync.Pool
+
+	response := httptest.NewRecorder()
+	response.Body.Grow(len(want))
 
 	for b.Loop() {
 		stream, err := connection.NewStream(b.Context(), &grpc.StreamDesc{ServerStreams: true}, "/example/Events")
 		require.NoError(b, err)
 		require.NoError(b, stream.CloseSend())
 
-		response := httptest.NewRecorder()
-		httpEvents(response, request, stream, message, nil, &writers)
+		response.Body.Reset()
+		httpEvents(response, request, stream, proto.Clone(message), nil, &writers)
 
 		if !bytes.Equal(want, response.Body.Bytes()) {
 			b.Fatal("stream event framing changed")
