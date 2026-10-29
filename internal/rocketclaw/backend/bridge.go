@@ -36,12 +36,12 @@ import (
 	instrumentation "github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/justbash"
+	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
-	"github.com/Rocketable/platform/internal/rocketcode"
-	"github.com/Rocketable/platform/internal/rocketcode/mcpclient"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"go.opentelemetry.io/otel"
@@ -129,7 +129,7 @@ type Bridge struct {
 	mu                    sync.Mutex
 	handling, stopped     bool
 	activeReply           *protocol.InboundMessage
-	activeAttribution     rocketcode.ReplayAttribution
+	activeAttribution     harness.ReplayAttribution
 	activeTurnInterrupts  chan os.Signal
 	activeTurnCancel      context.CancelFunc
 	activeTurnInterrupted bool
@@ -151,7 +151,7 @@ type Bridge struct {
 	notesOpen    bool
 	notesOffered []string
 	// movedNotes tell the running turn, at its next step, which of its calls the user moved.
-	movedNotes      []rocketcode.PromptInput
+	movedNotes      []harness.PromptInput
 	shadowInputWake chan struct{}
 }
 
@@ -236,7 +236,7 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $5 AND reason = $6 RETU
 type runResult struct {
 	turnID, text     string
 	responseID       string
-	attribution      rocketcode.ReplayAttribution
+	attribution      harness.ReplayAttribution
 	attachments      []protocol.OutboundAttachment
 	goalCompleted    bool
 	workflowTerminal protocol.Terminal
@@ -269,7 +269,7 @@ func NewConversation(cfg *config.LockedConfig, publisher protocol.OutboundPublis
 // AppendChildEntry saves a guardrail or permission review turn under b's conversation ID plus key,
 // a hidden review history of its parent. It is no record: under a Slack thread, cron run, or
 // External MCP run it expires as a private history does, and otherwise only with its family.
-func (b *Bridge) AppendChildEntry(ctx context.Context, key rocketcode.ChildKey, entry *rocketcode.SessionEntry) error {
+func (b *Bridge) AppendChildEntry(ctx context.Context, key harness.ChildKey, entry *harness.SessionEntry) error {
 	tx, err := b.config.SessionService.beginStateTx(ctx, "review history append")
 	if err != nil {
 		return err
@@ -302,7 +302,7 @@ ON CONFLICT (conversation_id) DO NOTHING`, b.config.ConversationID+key.Path, b.c
 // WriteSubagent delivers write into the subagent session at b's conversation ID plus write.Key, as
 // rocketclaw_sessions_write delivers into a session, after starting the session when new and switching
 // it to write.Agent. A replayed write delivers nothing again.
-func (b *Bridge) WriteSubagent(ctx context.Context, write *rocketcode.SubagentWrite) (bool, error) {
+func (b *Bridge) WriteSubagent(ctx context.Context, write *harness.SubagentWrite) (bool, error) {
 	target := b.config.ConversationID + write.Key.Path
 
 	if err := b.config.SessionService.startSubagent(ctx, b.config.ConversationID, write.Key, write.Agent, write.Mode == ""); err != nil {
@@ -317,7 +317,7 @@ func (b *Bridge) WriteSubagent(ctx context.Context, write *rocketcode.SubagentWr
 	inbound.PreserveWhitespace = true
 	inbound.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text", protocol.InboundSenderSessionMetadataKey: b.config.ConversationID, protocol.InboundSenderAgentMetadataKey: write.Delegator, inboundAgentMetadataKey: write.Agent}
 
-	outcome, _, err := b.threads.writeSession(ctx, target, b.config.ConversationID+"/"+write.CallKey, sessionWriteMode(cmp.Or(write.Mode, rocketcode.ContinueEnqueue)), inbound, nil)
+	outcome, _, err := b.threads.writeSession(ctx, target, b.config.ConversationID+"/"+write.CallKey, sessionWriteMode(cmp.Or(write.Mode, harness.ContinueEnqueue)), inbound, nil)
 	if errors.Is(err, errWriteDelivered) {
 		return false, nil
 	}
@@ -327,7 +327,7 @@ func (b *Bridge) WriteSubagent(ctx context.Context, write *rocketcode.SubagentWr
 
 // AwaitSubagent waits for the turn of the subagent session at b's conversation ID plus key that runs
 // the write of the task call callKey.
-func (b *Bridge) AwaitSubagent(ctx context.Context, key, callKey string) (string, rocketcode.ReplayAttribution, error) {
+func (b *Bridge) AwaitSubagent(ctx context.Context, key, callKey string) (string, harness.ReplayAttribution, error) {
 	return b.background.awaitSubagent(ctx, b.config.ConversationID+key, b.config.ConversationID+"/"+callKey)
 }
 
@@ -700,14 +700,14 @@ func (b *Bridge) enqueue(ctx context.Context, request *bridgeRequest, operation 
 }
 
 // journaledSteer is one steer accepted for a turn. Its ID becomes the steer's
-// RocketCode input ID, so a resumed turn that re-offers it injects it once.
+// harness input ID, so a resumed turn that re-offers it injects it once.
 type journaledSteer struct {
 	ID      string                   `json:"id"`
 	Inbound *protocol.InboundMessage `json:"inbound"`
 }
 
 // saveSteersLocked records every steer accepted for the active turn, drained or
-// not; RocketCode skips the ones its journaled turn already holds. Callers hold b.mu.
+// not; the harness skips the ones its journaled turn already holds. Callers hold b.mu.
 func (b *Bridge) saveSteersLocked(ctx context.Context) {
 	steers := make([]journaledSteer, 0, len(b.steers))
 	for i := range b.steers {
@@ -1917,7 +1917,7 @@ func (b *Bridge) prepareWorkflow(request *bridgeRequest) error {
 		return fmt.Errorf("workflow %q is not configured", msg.Workflow.Name)
 	}
 
-	runner, err := newWorkflowAgentRunner(b.runtime, cmp.Or(snapshot.Agent, b.agentSnapshot()), rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID))...)
+	runner, err := newWorkflowAgentRunner(b.runtime, cmp.Or(snapshot.Agent, b.agentSnapshot()), harness.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID))...)
 	if err != nil {
 		return fmt.Errorf("prepare workflow agent runner: %w", err)
 	}
@@ -1942,7 +1942,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 	defer func() { err = errors.Join(err, incoming.closeWorkflow()) }()
 
 	// Workflow steps run with the environment of an ordinary turn of this conversation.
-	shellEnv, _, err := b.turnShellEnv(ctx, b.config.ConversationID, msg, new([]rocketcode.SessionEntry))
+	shellEnv, _, err := b.turnShellEnv(ctx, b.config.ConversationID, msg, new([]harness.SessionEntry))
 	if err != nil {
 		return result, err
 	}
@@ -2035,7 +2035,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 		replay = slices.Concat(userReplay, assistantReplay, summaryReplay)
 	}
 
-	finish.entries = append(finish.entries, rocketcode.SessionEntry{Version: 1, Type: workflowRunEntryType, TurnID: turnID, Timestamp: time.Now().UTC(), ReplayInput: replay})
+	finish.entries = append(finish.entries, harness.SessionEntry{Version: 1, Type: workflowRunEntryType, TurnID: turnID, Timestamp: time.Now().UTC(), ReplayInput: replay})
 
 	result = runResult{turnID: turnID, workflowTerminal: terminal}
 	if terminal == protocol.TerminalComplete {
@@ -2081,8 +2081,8 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, request *bridgeRequest) err
 	return nil
 }
 
-func appendSessionEntry(entries iter.Seq2[rocketcode.SessionEntry, error], added *rocketcode.SessionEntry) iter.Seq2[rocketcode.SessionEntry, error] {
-	return func(yield func(rocketcode.SessionEntry, error) bool) {
+func appendSessionEntry(entries iter.Seq2[harness.SessionEntry, error], added *harness.SessionEntry) iter.Seq2[harness.SessionEntry, error] {
+	return func(yield func(harness.SessionEntry, error) bool) {
 		for entry, err := range entries {
 			if !yield(entry, err) {
 				return
@@ -2205,7 +2205,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	var (
 		shellEnv     map[string]string
-		childContext []rocketcode.SessionEntry
+		childContext []harness.SessionEntry
 	)
 
 	if captured {
@@ -2223,7 +2223,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			if note := strings.TrimSpace(goal.Note); note != "" {
 				replayInput := replayInputForMessage("developer", "RocketClaw goal state:\nStatus: progress\nLast reported note:\n"+note)
 
-				entry := rocketcode.SessionEntry{Version: 1, Type: "goal_state", ReplayInput: replayInput}
+				entry := harness.SessionEntry{Version: 1, Type: "goal_state", ReplayInput: replayInput}
 				snapshot.ContextEntries = append(snapshot.ContextEntries, entry)
 			}
 		}
@@ -2249,7 +2249,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			replayItemCount++
 
 			historyBytes += len(raw)
-			if rocketcode.ReplayInputRawKind(raw) == "compaction" {
+			if harness.ReplayInputRawKind(raw) == "compaction" {
 				compactionCount++
 			}
 		}
@@ -2260,7 +2260,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	// Restore common thread metadata from capture on both sides, rather than
 	// seeded or reloaded metadata. Transient entries follow below.
 	restored := captured && len(childContext) > 0
-	sessionIn := func(yield func(rocketcode.SessionEntry, error) bool) {
+	sessionIn := func(yield func(harness.SessionEntry, error) bool) {
 		for i := range observed {
 			if (!restored || observed[i].Entry.Type != externalMCPMetadataEntryType) && !yield(observed[i].Entry, nil) {
 				return
@@ -2302,9 +2302,9 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	for i := range customTools {
 		if tool := customTools[i]; tool.TurnBound && b.parent != "" {
-			customTools[i].Call = func(ctx context.Context, raw json.RawMessage, output chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+			customTools[i].Call = func(ctx context.Context, raw json.RawMessage, output chan<- harness.ChatResponse) (harness.ToolResult, error) {
 				if slices.ContainsFunc(jobs, b.background.detached) {
-					return rocketcode.TextToolResult(fmt.Sprintf(rocketcode.TurnBoundRefused, tool.Name)), nil
+					return harness.TextToolResult(fmt.Sprintf(harness.TurnBoundRefused, tool.Name)), nil
 				}
 
 				return tool.Call(ctx, raw, output)
@@ -2330,16 +2330,16 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: b.background, root: shared, conversationID: b.config.ConversationID, origin: msg}
 	}
 
-	looper, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
+	looper, err := harness.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
 	if err != nil {
 		return runResult{}, fmt.Errorf("prepare rocketcode turn: %w", err)
 	}
 
 	looper.SteerDrain = b
-	result = runResult{turnID: turnID, attribution: rocketcode.ReplayAttribution{Agent: agentName, Model: looper.DisplayModel, ReasoningEffort: new(string(looper.ReasoningEffort))}}
+	result = runResult{turnID: turnID, attribution: harness.ReplayAttribution{Agent: agentName, Model: looper.DisplayModel, ReasoningEffort: new(string(looper.ReasoningEffort))}}
 
-	input := make(chan rocketcode.PromptInput, 1)
-	output := make(chan rocketcode.ChatResponse, 128)
+	input := make(chan harness.PromptInput, 1)
+	output := make(chan harness.ChatResponse, 128)
 	interrupts := make(chan os.Signal, 1)
 
 	activeReply := new(protocol.InboundMessage)
@@ -2369,7 +2369,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	defer func() {
 		b.mu.Lock()
 		b.activeReply = nil
-		b.activeAttribution = rocketcode.ReplayAttribution{}
+		b.activeAttribution = harness.ReplayAttribution{}
 		b.activeTurnInterrupts = nil
 		b.activeTurnCancel = nil
 		b.activeTurnInterrupted = false
@@ -2389,7 +2389,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 	}
 
-	var prepared rocketcode.PromptInput
+	var prepared harness.PromptInput
 
 	if captured && len(snapshot.Inputs) == 0 {
 		b.log.Error("turn has captured input but no prompt", "conversation_id", b.config.ConversationID, "turn_id", turnID, "shadow", b.shadow,
@@ -2408,9 +2408,9 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 
 		header, _, _ = strings.Cut(prompt, "\n\n")
-		prepared = rocketcode.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey], turnID+"/initial"), TurnID: journalKey, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: inboundDirectSkill(msg)}
+		prepared = harness.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey], turnID+"/initial"), TurnID: journalKey, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: inboundDirectSkill(msg)}
 		prepared.ExpandShellCommands = msg.Cronjob != nil && msg.Metadata[backgroundNotesMetadataKey] == ""
-		snapshot.Inputs, snapshot.Environment, snapshot.ChildContext = []rocketcode.PromptInput{prepared}, shellEnv, childContext
+		snapshot.Inputs, snapshot.Environment, snapshot.ChildContext = []harness.PromptInput{prepared}, shellEnv, childContext
 
 		snapshot.GoalTurn = msg.GoalTurn
 		if err := b.config.SessionService.captureTurnInputs(ctx, b.config.ConversationID, turnID, &snapshot); err != nil {
@@ -2470,7 +2470,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			b.log.Info("received first rocketcode response item", "event", "first_response_item", "conversation_id", b.config.ConversationID, "turn_id", turnID, "kind", item.Kind, "duration_ms", time.Since(looperStarted).Milliseconds())
 		}
 
-		if item.Kind == rocketcode.ChatResponseAssistantMessage {
+		if item.Kind == harness.ChatResponseAssistantMessage {
 			if !firstText && item.Text != "" {
 				firstText = true
 
@@ -2616,10 +2616,10 @@ func rocketcodeShellTempRel(runtimeDir, conversationID string) string {
 // turn's inbound origin: the External MCP metadata and the person who asked. A subagent reads them from
 // its top-level session and turn, as its shell had when it ran inside that turn. It returns the metadata
 // messages child runs see, and appends the turn's additional metadata to contextEntries.
-func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol.InboundMessage, contextEntries *[]rocketcode.SessionEntry) (map[string]string, []rocketcode.SessionEntry, error) {
+func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol.InboundMessage, contextEntries *[]harness.SessionEntry) (map[string]string, []harness.SessionEntry, error) {
 	var (
 		shellEnv     map[string]string
-		childContext []rocketcode.SessionEntry
+		childContext []harness.SessionEntry
 	)
 
 	metadataEntry, foundMetadata, err := b.config.SessionService.externalMCPMetadataEntry(ctx, self)
@@ -2651,11 +2651,11 @@ func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol
 
 		replayInput := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", metadataEnv))
 
-		childContext = append(childContext, rocketcode.SessionEntry{Version: 1, ReplayInput: replayInput})
+		childContext = append(childContext, harness.SessionEntry{Version: 1, ReplayInput: replayInput})
 		shellEnv = metadataEnv
 
 		if !ok {
-			if _, err := b.config.SessionService.AppendEntryID(context.Background(), b.config.ConversationID, &rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}); err != nil {
+			if _, err := b.config.SessionService.AppendEntryID(context.Background(), b.config.ConversationID, &harness.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}); err != nil {
 				return nil, nil, fmt.Errorf("append external MCP metadata: %w", err)
 			}
 		} else {
@@ -2672,9 +2672,9 @@ func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol
 
 				replayInput := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP turn has additional metadata:", transientEnv))
 
-				childContext = append(childContext, rocketcode.SessionEntry{Version: 1, ReplayInput: replayInput})
+				childContext = append(childContext, harness.SessionEntry{Version: 1, ReplayInput: replayInput})
 
-				entry := rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: replayInput}
+				entry := harness.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: replayInput}
 				*contextEntries = append(*contextEntries, entry)
 			}
 		}
@@ -2711,9 +2711,9 @@ func (b *Bridge) shellEnvFor(turnEnv map[string]string) map[string]string {
 	return env
 }
 
-func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {
+func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]string, customTools ...harness.Tool) harness.Config {
 	runtimeCfg := b.runtime.Clone()
-	tools := make([]rocketcode.Tool, 0, 6+len(customTools))
+	tools := make([]harness.Tool, 0, 6+len(customTools))
 	shellEnv = b.shellEnvFor(shellEnv)
 
 	tools = append(tools, reloadTool(b.config.RequestReload), listSessionsTool(b.config.SessionService, b.threads), getSessionTool(b.config.SessionService), sessionsGetURLTool(b.threads), stopBackgroundJobTool(b.background, b.config.ConversationID))
@@ -2728,12 +2728,12 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 	tools = append(tools, customTools...)
 
 	if b.shadow || b.underShadow {
-		tools = slices.DeleteFunc(tools, func(tool rocketcode.Tool) bool {
+		tools = slices.DeleteFunc(tools, func(tool harness.Tool) bool {
 			return slices.Contains([]string{askUserQuestionToolName, sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName, reloadToolName, restartToolName}, tool.Name)
 		})
 	}
 
-	return rocketcode.Config{Model: "", AutoApproverModel: runtimeCfg.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: runtimeCfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}}, ChildSessions: b, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: rocketcode.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand{}, MCPServers: toMCPClientServers(runtimeCfg.MCPServers), MCPWorkspace: runtimeCfg.Workspace}
+	return harness.Config{Model: "", AutoApproverModel: runtimeCfg.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: harness.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: harness.ObservabilityConfig{Enabled: runtimeCfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}}, ChildSessions: b, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: harness.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: harness.DefaultShellCommand{}, MCPServers: toMCPClientServers(runtimeCfg.MCPServers), MCPWorkspace: runtimeCfg.Workspace}
 }
 
 // toMCPClientServers consumes the bridge's independent runtime snapshot.
@@ -2751,7 +2751,7 @@ func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mc
 	return out
 }
 
-func appendOverlayPromptToAgent(agents rocketcode.Agents, agentName string, cfg *config.Config) {
+func appendOverlayPromptToAgent(agents harness.Agents, agentName string, cfg *config.Config) {
 	section := overlayPromptSection(cfg, skel.OverlayInfos(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays))
 	if section == "" {
 		return
@@ -2802,7 +2802,7 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 	return strings.Join(lines, "\n")
 }
 
-func loadRocketCodeDefinitionsIn(root *os.Root, locked *config.LockedConfig, runtimeDir string, mode toolMode) (agents rocketcode.Agents, skills rocketcode.Skills, err error) {
+func loadRocketCodeDefinitionsIn(root *os.Root, locked *config.LockedConfig, runtimeDir string, mode toolMode) (agents harness.Agents, skills harness.Skills, err error) {
 	err = locked.Do(func(cfg *config.Config) error {
 		agents, skills, err = readRocketCodeDefinitionsIn(root, cfg, runtimeDir, mode)
 		return err
@@ -2811,26 +2811,26 @@ func loadRocketCodeDefinitionsIn(root *os.Root, locked *config.LockedConfig, run
 	return agents, skills, err
 }
 
-func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {
+func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir string, mode toolMode) (harness.Agents, harness.Skills, error) {
 	rootFS := root.FS()
 
 	agentsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(runtimeDir, "agents")))
 	if err != nil {
-		return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("open agents dir: %w", err)
+		return harness.Agents{}, harness.Skills{}, fmt.Errorf("open agents dir: %w", err)
 	}
 
 	skillsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(runtimeDir, "skills")))
 	if err != nil {
-		return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("open skills dir: %w", err)
+		return harness.Agents{}, harness.Skills{}, fmt.Errorf("open skills dir: %w", err)
 	}
 
 	agents, err := loadAgentDefinitions(agentsFS, cfg)
 	if err != nil {
-		return rocketcode.Agents{}, rocketcode.Skills{}, err
+		return harness.Agents{}, harness.Skills{}, err
 	}
 
 	skillsRoot := filepath.Join(cfg.Workspace, runtimeDir, "skills")
-	skillResult := rocketcode.LoadSkills(skillsFS, skillsRoot)
+	skillResult := harness.LoadSkills(skillsFS, skillsRoot)
 
 	var tools []string
 	if mode != toolModeWorkflow {
@@ -2859,35 +2859,35 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 				continue
 			}
 
-			return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("%s: %w", agent.Location, err)
+			return harness.Agents{}, harness.Skills{}, fmt.Errorf("%s: %w", agent.Location, err)
 		}
 
-		agent.Permission.Buckets = slices.DeleteFunc(agent.Permission.Buckets, func(bucket rocketcode.PermissionBucket) bool {
+		agent.Permission.Buckets = slices.DeleteFunc(agent.Permission.Buckets, func(bucket harness.PermissionBucket) bool {
 			return bucket.Name == "rocketclaw_tags"
 		})
 		for i, bucket := range agent.Permission.Buckets {
 			if bucket.Name == "rocketclaw" {
-				agent.Permission.Buckets[i].Rules = slices.DeleteFunc(bucket.Rules, func(rule rocketcode.PermissionRule) bool {
+				agent.Permission.Buckets[i].Rules = slices.DeleteFunc(bucket.Rules, func(rule harness.PermissionRule) bool {
 					return slices.Contains([]string{setTagToolName, getTagsToolName}, rule.Pattern)
 				})
 			}
 		}
 
-		action := rocketcode.PermissionDeny
+		action := harness.PermissionDeny
 		if len(groups) > 0 && agent.Permission.Sudo {
-			action = rocketcode.PermissionAuto
+			action = harness.PermissionAuto
 		} else if len(groups) > 0 {
-			action = rocketcode.PermissionAllow
+			action = harness.PermissionAllow
 		}
 
-		agent.Permission.Buckets = append(agent.Permission.Buckets, rocketcode.PermissionBucket{Name: "rocketclaw_tags", Rules: []rocketcode.PermissionRule{{Pattern: setTagToolName, Action: action}, {Pattern: getTagsToolName, Action: action}}})
+		agent.Permission.Buckets = append(agent.Permission.Buckets, harness.PermissionBucket{Name: "rocketclaw_tags", Rules: []harness.PermissionRule{{Pattern: setTagToolName, Action: action}, {Pattern: getTagsToolName, Action: action}}})
 		if mode != toolModeWorkflow {
 			appendSessionTagPrompt(&agent, groups)
 		}
 
 		for _, tool := range tools {
 			action, matched := agent.Permission.Evaluate("rocketclaw", tool)
-			if matched && action == rocketcode.PermissionDeny {
+			if matched && action == harness.PermissionDeny {
 				continue
 			}
 
@@ -2901,8 +2901,8 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 }
 
 // loadAgentDefinitions keeps comparison failures separate from ordinary definitions.
-func loadAgentDefinitions(fsys fs.FS, cfg *config.Config) (rocketcode.Agents, error) {
-	result := rocketcode.LoadAgents(fsys, cfg)
+func loadAgentDefinitions(fsys fs.FS, cfg *config.Config) (harness.Agents, error) {
+	result := harness.LoadAgents(fsys, cfg)
 
 	var errLoads []error
 
@@ -2919,11 +2919,11 @@ func loadAgentDefinitions(fsys fs.FS, cfg *config.Config) (rocketcode.Agents, er
 	return result.Agents, errors.Join(errLoads...)
 }
 
-// LoadRuntimeDefinitions loads RocketCode definitions from runtimeDir without starting a run.
-func LoadRuntimeDefinitions(cfg *config.LockedConfig, runtimeDir string) (rocketcode.Agents, rocketcode.Skills, error) {
+// LoadRuntimeDefinitions loads harness definitions from runtimeDir without starting a run.
+func LoadRuntimeDefinitions(cfg *config.LockedConfig, runtimeDir string) (harness.Agents, harness.Skills, error) {
 	root, err := os.OpenRoot(cfg.Clone().Workspace)
 	if err != nil {
-		return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("open workspace root: %w", err)
+		return harness.Agents{}, harness.Skills{}, fmt.Errorf("open workspace root: %w", err)
 	}
 
 	defer func() { _ = root.Close() }()
@@ -2957,40 +2957,40 @@ func parseReasonArg(raw json.RawMessage, op string) (string, error) {
 	return reason, nil
 }
 
-func restartTool(requestRestart runtimeRestarter) rocketcode.Tool {
-	return rocketcode.Tool{Name: restartToolName, TurnBound: true, Description: "Restart rocketclaw only after completing an explicitly requested runtime configuration change that requires restart, such as changes to rocketclaw.json, femtoclaw.json, or configured overlay entries. Use rocketclaw_reload instead for agents/, skills/, cron/, scripts/, or already-configured overlay repository content changes. The reason field must explain why rocketclaw needs to restart. Do not call this after memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.", Permission: "rocketclaw", VisibilitySubjects: []string{restartToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{restartToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+func restartTool(requestRestart runtimeRestarter) harness.Tool {
+	return harness.Tool{Name: restartToolName, TurnBound: true, Description: "Restart rocketclaw only after completing an explicitly requested runtime configuration change that requires restart, such as changes to rocketclaw.json, femtoclaw.json, or configured overlay entries. Use rocketclaw_reload instead for agents/, skills/, cron/, scripts/, or already-configured overlay repository content changes. The reason field must explain why rocketclaw needs to restart. Do not call this after memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.", Permission: "rocketclaw", VisibilitySubjects: []string{restartToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{restartToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		reason, err := parseReasonArg(raw, "restart")
 		if err != nil {
-			return rocketcode.ToolResult{}, err
+			return harness.ToolResult{}, err
 		}
 
 		output, err := requestRestart.restart(reason)
 		if err != nil {
-			return rocketcode.ToolResult{}, err
+			return harness.ToolResult{}, err
 		}
 
-		return rocketcode.TextToolResult(output), nil
+		return harness.TextToolResult(output), nil
 	}}
 }
 
-func reloadTool(requestReload runtimeReloader) rocketcode.Tool {
-	return rocketcode.Tool{Name: reloadToolName, Description: "Reload rocketclaw runtime assets after changing agents/, skills/, cron/, scripts/, or already-configured overlay repository content. The reason field must explain what runtime assets changed. This validates staged runtime assets before changing the live runtime. It does not reread rocketclaw.json or femtoclaw.json; adding, removing, or changing configured overlay entries requires rocketclaw_restart.", Permission: "rocketclaw", VisibilitySubjects: []string{reloadToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{reloadToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+func reloadTool(requestReload runtimeReloader) harness.Tool {
+	return harness.Tool{Name: reloadToolName, Description: "Reload rocketclaw runtime assets after changing agents/, skills/, cron/, scripts/, or already-configured overlay repository content. The reason field must explain what runtime assets changed. This validates staged runtime assets before changing the live runtime. It does not reread rocketclaw.json or femtoclaw.json; adding, removing, or changing configured overlay entries requires rocketclaw_restart.", Permission: "rocketclaw", VisibilitySubjects: []string{reloadToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{reloadToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		reason, err := parseReasonArg(raw, "reload")
 		if err != nil {
-			return rocketcode.ToolResult{}, err
+			return harness.ToolResult{}, err
 		}
 
 		output, err := requestReload.Reload(reason)
 		if err != nil {
-			return rocketcode.TextToolResult("rocketclaw_reload failed:\n\n" + err.Error()), nil
+			return harness.TextToolResult("rocketclaw_reload failed:\n\n" + err.Error()), nil
 		}
 
-		return rocketcode.TextToolResult(output), nil
+		return harness.TextToolResult(output), nil
 	}}
 }
 
-func (b *Bridge) scheduleMessageTool(origin *protocol.InboundMessage) rocketcode.Tool {
-	return rocketcode.Tool{Name: scheduleMessageToolName, Description: "Schedule a message to the current rocketclaw conversation after a positive delay up to " + stateRetention.String() + ", such as 12h or 168h. Set recurring to false for one-shot schedules or true to repeat at intervals of at least 1m until scheduled messages are reset.", Permission: "rocketclaw", VisibilitySubjects: []string{scheduleMessageToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{scheduleMessageToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"message": map[string]any{"type": "string"}, "send_this_in": map[string]any{"type": "string"}, "recurring": map[string]any{"type": "boolean"}}, "required": []string{"message", "send_this_in", "recurring"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+func (b *Bridge) scheduleMessageTool(origin *protocol.InboundMessage) harness.Tool {
+	return harness.Tool{Name: scheduleMessageToolName, Description: "Schedule a message to the current rocketclaw conversation after a positive delay up to " + stateRetention.String() + ", such as 12h or 168h. Set recurring to false for one-shot schedules or true to repeat at intervals of at least 1m until scheduled messages are reset.", Permission: "rocketclaw", VisibilitySubjects: []string{scheduleMessageToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{scheduleMessageToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"message": map[string]any{"type": "string"}, "send_this_in": map[string]any{"type": "string"}, "recurring": map[string]any{"type": "boolean"}}, "required": []string{"message", "send_this_in", "recurring"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		b.log.Info("rocketclaw schedule message tool called")
 
 		var input struct {
@@ -2999,38 +2999,38 @@ func (b *Bridge) scheduleMessageTool(origin *protocol.InboundMessage) rocketcode
 			Recurring  bool   `json:"recurring"`
 		}
 		if err := json.Unmarshal(raw, &input); err != nil {
-			return rocketcode.ToolResult{}, fmt.Errorf("parse scheduled message: %w", err)
+			return harness.ToolResult{}, fmt.Errorf("parse scheduled message: %w", err)
 		}
 
 		message := input.Message
 		delay, err := time.ParseDuration(input.SendThisIn)
 
 		if strings.TrimSpace(message) == "" {
-			return rocketcode.ToolResult{}, errors.New("message is required")
+			return harness.ToolResult{}, errors.New("message is required")
 		}
 
 		if err != nil {
-			return rocketcode.ToolResult{}, fmt.Errorf("parse send_this_in: %w", err)
+			return harness.ToolResult{}, fmt.Errorf("parse send_this_in: %w", err)
 		}
 
 		if delay <= 0 || delay > stateRetention {
-			return rocketcode.ToolResult{}, fmt.Errorf("send_this_in must be greater than 0 and at most %s", stateRetention)
+			return harness.ToolResult{}, fmt.Errorf("send_this_in must be greater than 0 and at most %s", stateRetention)
 		}
 
 		if input.Recurring && delay < time.Minute {
-			return rocketcode.ToolResult{}, errors.New("recurring send_this_in must be at least 1m")
+			return harness.ToolResult{}, errors.New("recurring send_this_in must be at least 1m")
 		}
 
 		if err := b.ScheduleMessage(origin, delay, message, input.Recurring); err != nil {
 			b.log.Error("rocketclaw schedule message tool failed", "delay", delay, "delay_ms", delay.Milliseconds(), "recurring", input.Recurring, "message_len", len([]rune(message)), "error", err)
-			return rocketcode.ToolResult{}, err
+			return harness.ToolResult{}, err
 		}
 
 		if input.Recurring {
-			return rocketcode.TextToolResult("scheduled recurring message every " + delay.String()), nil
+			return harness.TextToolResult("scheduled recurring message every " + delay.String()), nil
 		}
 
-		return rocketcode.TextToolResult("scheduled message in " + delay.String()), nil
+		return harness.TextToolResult("scheduled message in " + delay.String()), nil
 	}}
 }
 
@@ -3048,7 +3048,7 @@ type attachFilesInput struct {
 
 // attachFilesTool queues files, saved as conversationID's, for the reply of turnID, which sends the
 // files saved for it, a resumed turn's included.
-func attachFilesTool(root *os.Root, sessions *SessionService, conversationID, turnID string) rocketcode.Tool {
+func attachFilesTool(root *os.Root, sessions *SessionService, conversationID, turnID string) harness.Tool {
 	parameters := map[string]any{
 		"properties": map[string]any{
 			"attachments": map[string]any{
@@ -3070,28 +3070,28 @@ func attachFilesTool(root *os.Root, sessions *SessionService, conversationID, tu
 		"required": []string{"attachments"},
 	}
 
-	return rocketcode.Tool{Name: attachFilesToolName, TurnBound: true, Description: "Queue files to attach to the final human-visible response. Call before the final response finishes.", Permission: "rocketclaw", VisibilitySubjects: []string{attachFilesToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{attachFilesToolName}, nil }, Parameters: parameters, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return harness.Tool{Name: attachFilesToolName, TurnBound: true, Description: "Queue files to attach to the final human-visible response. Call before the final response finishes.", Permission: "rocketclaw", VisibilitySubjects: []string{attachFilesToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{attachFilesToolName}, nil }, Parameters: parameters, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		var input attachFilesInput
 		if err := json.Unmarshal(raw, &input); err != nil {
-			return rocketcode.ToolResult{}, fmt.Errorf("parse response attachments: %w", err)
+			return harness.ToolResult{}, fmt.Errorf("parse response attachments: %w", err)
 		}
 
 		ids := make([]string, 0, len(input.Attachments))
 		for i := range input.Attachments {
 			attachment, err := outboundAttachment(root, &input.Attachments[i])
 			if err != nil {
-				return rocketcode.ToolResult{}, err
+				return harness.ToolResult{}, err
 			}
 
 			attachment.ID = rand.Text()
 			if err := sessions.SaveAttachment(ctx, conversationID, turnID, &attachment, false); err != nil {
-				return rocketcode.ToolResult{}, err
+				return harness.ToolResult{}, err
 			}
 
 			ids = append(ids, attachment.ID)
 		}
 
-		return rocketcode.TextToolResult("queued attachments for final response: " + strings.Join(ids, " ")), nil
+		return harness.TextToolResult("queued attachments for final response: " + strings.Join(ids, " ")), nil
 	}}
 }
 
@@ -3131,21 +3131,21 @@ func outboundAttachment(root *os.Root, input *outboundAttachmentInput) (protocol
 	return protocol.OutboundAttachment{Name: name, MIMEType: protocol.NormalizeMIMEType(mimeType), Data: bytes.Clone(data)}, nil
 }
 
-func (b *Bridge) resetScheduledMessagesTool(origin *protocol.InboundMessage) rocketcode.Tool {
-	return rocketcode.Tool{Name: resetScheduledMessagesToolName, Description: "Delete pending scheduled messages for the current rocketclaw conversation.", Permission: "rocketclaw", VisibilitySubjects: []string{scheduleMessageToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{scheduleMessageToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{}}, Call: func(context.Context, json.RawMessage, chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+func (b *Bridge) resetScheduledMessagesTool(origin *protocol.InboundMessage) harness.Tool {
+	return harness.Tool{Name: resetScheduledMessagesToolName, Description: "Delete pending scheduled messages for the current rocketclaw conversation.", Permission: "rocketclaw", VisibilitySubjects: []string{scheduleMessageToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{scheduleMessageToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{}}, Call: func(context.Context, json.RawMessage, chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		if err := b.ResetScheduledMessages(origin); err != nil {
-			return rocketcode.ToolResult{}, err
+			return harness.ToolResult{}, err
 		}
 
-		return rocketcode.TextToolResult("scheduled messages reset"), nil
+		return harness.TextToolResult("scheduled messages reset"), nil
 	}}
 }
 
-func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.InboundMessage) rocketcode.Tool {
-	return rocketcode.Tool{Name: askUserQuestionToolName, Resumable: true, TurnBound: true, Description: "Ask the human partner a question where they started this turn and wait for their answer. The options array is only for concrete predefined choices to show as buttons/selects; do not include catch-all choices like Custom, Other, or Free text.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.InboundMessage) harness.Tool {
+	return harness.Tool{Name: askUserQuestionToolName, Resumable: true, TurnBound: true, Description: "Ask the human partner a question where they started this turn and wait for their answer. The options array is only for concrete predefined choices to show as buttons/selects; do not include catch-all choices like Custom, Other, or Free text.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		var req protocol.AskUserQuestionRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
-			return rocketcode.ToolResult{}, fmt.Errorf("parse human question: %w", err)
+			return harness.ToolResult{}, fmt.Errorf("parse human question: %w", err)
 		}
 
 		replacer := strings.NewReplacer("_", " ", "-", " ")
@@ -3156,7 +3156,7 @@ func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.Inbound
 			return label == "custom" || label == "custom answer" || label == "custom response" || label == "free text" || label == "other" || value == "custom" || value == "custom answer" || value == "custom response" || value == "free text" || value == "other"
 		})
 
-		req.ID, req.ConversationID = rocketcode.ToolCallKey(ctx), msg.ConversationID
+		req.ID, req.ConversationID = harness.ToolCallKey(ctx), msg.ConversationID
 
 		// Moving the script withdraws its question through the asker's cancellation cleanup.
 		if moved, ok := ctx.Value(backgroundMovedKey{}).(context.Context); ok {
@@ -3170,38 +3170,38 @@ func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.Inbound
 		answer, err := asker.AskUserQuestion(ctx, &req)
 		if err != nil {
 			if errors.Is(context.Cause(ctx), errMovedToBackground) {
-				return rocketcode.TextToolResult(questionWithdrawn), nil
+				return harness.TextToolResult(questionWithdrawn), nil
 			}
 
-			return rocketcode.ToolResult{}, fmt.Errorf("ask user question: %w", err)
+			return harness.ToolResult{}, fmt.Errorf("ask user question: %w", err)
 		}
 
 		data, _ := json.Marshal(answer)
 
-		return rocketcode.TextToolResult(string(data)), nil
+		return harness.TextToolResult(string(data)), nil
 	}}
 }
 
-func updateGoalTool(store *SessionService, conversationID string) rocketcode.Tool {
-	return rocketcode.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use progress when reporting continuing progress, complete when the goal is achieved, or blocked when progress cannot continue.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusProgress, GoalStatusComplete, GoalStatusBlocked}}, "note": map[string]any{"type": "string", "description": "Status note for the goal update. Use this to explain what is going on, what changed, what you are thinking, where the goal is heading next, what was completed, or what is blocking progress. It should mirror the substance of the visible Progress summary."}}, "required": []string{"status"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+func updateGoalTool(store *SessionService, conversationID string) harness.Tool {
+	return harness.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use progress when reporting continuing progress, complete when the goal is achieved, or blocked when progress cannot continue.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusProgress, GoalStatusComplete, GoalStatusBlocked}}, "note": map[string]any{"type": "string", "description": "Status note for the goal update. Use this to explain what is going on, what changed, what you are thinking, where the goal is heading next, what was completed, or what is blocking progress. It should mirror the substance of the visible Progress summary."}}, "required": []string{"status"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 		var input struct {
 			Status string `json:"status"`
 			Note   string `json:"note"`
 		}
 		if err := json.Unmarshal(raw, &input); err != nil {
-			return rocketcode.ToolResult{}, fmt.Errorf("parse goal update: %w", err)
+			return harness.ToolResult{}, fmt.Errorf("parse goal update: %w", err)
 		}
 
 		goal, err := store.UpdateGoalStatus(conversationID, input.Status, input.Note)
 		if err != nil {
-			return rocketcode.ToolResult{}, err
+			return harness.ToolResult{}, err
 		}
 
 		if strings.TrimSpace(input.Status) == GoalStatusProgress {
-			return rocketcode.TextToolResult("goal progress recorded"), nil
+			return harness.TextToolResult("goal progress recorded"), nil
 		}
 
-		return rocketcode.TextToolResult("goal marked " + strings.TrimSpace(goal.Status)), nil
+		return harness.TextToolResult("goal marked " + strings.TrimSpace(goal.Status)), nil
 	}}
 }
 
@@ -3265,13 +3265,13 @@ type replayInputMessage struct{ role, text string }
 func replayInputForMessage(role, text string) []json.RawMessage {
 	message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}, Type: "message"}
 
-	raw, _ := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &message}}) // One message/string union cannot fail serialization.
+	raw, _ := harness.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &message}}) // One message/string union cannot fail serialization.
 
 	return raw
 }
 
 func replayInputMessages(raw []json.RawMessage) ([]replayInputMessage, error) {
-	items, err := rocketcode.ReplayInputToParams(raw)
+	items, err := harness.ReplayInputToParams(raw)
 	if err != nil {
 		return nil, fmt.Errorf("decode replay input messages: %w", err)
 	}
@@ -3420,7 +3420,7 @@ func buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any, 
 	return provenanceHeader(&provenance) + "\n\n" + body
 }
 
-func inboundDirectSkill(msg *protocol.InboundMessage) *rocketcode.PromptInputDirectSkill {
+func inboundDirectSkill(msg *protocol.InboundMessage) *harness.PromptInputDirectSkill {
 	if !msg.Human || msg.Source != protocol.SourceWeb || msg.Metadata[protocol.InboundMediaMetadataKey] == "Voice" ||
 		(msg.Kind != protocol.InboundKindPrompt && msg.Kind != protocol.InboundKindSteer && msg.Kind != protocol.InboundKindEnqueue) {
 		return nil
@@ -3469,7 +3469,7 @@ func splitFirstWord(text string) (word, rest string) {
 	return text, ""
 }
 
-func parseDirectSkillTrigger(text string) *rocketcode.PromptInputDirectSkill {
+func parseDirectSkillTrigger(text string) *harness.PromptInputDirectSkill {
 	text = strings.TrimLeftFunc(text, unicode.IsSpace)
 
 	rest, ok := strings.CutPrefix(text, "$")
@@ -3488,7 +3488,7 @@ func parseDirectSkillTrigger(text string) *rocketcode.PromptInputDirectSkill {
 		arguments = strings.TrimLeftFunc(arguments, unicode.IsSpace)
 	}
 
-	return &rocketcode.PromptInputDirectSkill{Name: name, Arguments: arguments}
+	return &harness.PromptInputDirectSkill{Name: name, Arguments: arguments}
 }
 
 type promptProvenance struct {
@@ -3911,11 +3911,11 @@ func inboundAttachmentReductionFailureReason(err error, targetLimit int) string 
 	return "it still exceeded the per-file size limit after reduction"
 }
 
-func attachmentsFromInbound(inbound []protocol.InboundAttachment) []rocketcode.Attachment {
-	attachments := make([]rocketcode.Attachment, 0, len(inbound))
+func attachmentsFromInbound(inbound []protocol.InboundAttachment) []harness.Attachment {
+	attachments := make([]harness.Attachment, 0, len(inbound))
 	for i := range inbound {
 		mimeType := protocol.NormalizeMIMEType(inbound[i].MIMEType)
-		attachments = append(attachments, rocketcode.Attachment{MIME: mimeType, Filename: inbound[i].Name, URL: "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(inbound[i].Data)})
+		attachments = append(attachments, harness.Attachment{MIME: mimeType, Filename: inbound[i].Name, URL: "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(inbound[i].Data)})
 	}
 
 	return attachments

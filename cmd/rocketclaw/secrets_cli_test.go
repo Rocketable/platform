@@ -96,9 +96,9 @@ func TestOAILoginWriteKeepsAWSObject(t *testing.T) {
 	patched := []byte(`{
   "workspace": "../runtime",
   "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
-  "openai": {"rocketcode_auth":"api_key","api_key":"openai-key"},
+  "openai": {"auth":"api_key","api_key":"openai-key"},
   "providers": {
-    "work": {"rocketcode_auth":"api_key","api_key":"work-key"}
+    "work": {"auth":"api_key","api_key":"work-key"}
   },
   "slack": {
     "bot_token": {"aws":{"arn":"` + testSecretsARN + `","key":"token"}},

@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -34,7 +34,7 @@ func TestShadowReviewClearProducerHistory(t *testing.T) {
 		admitted, err := bridge.activateInbound(t.Context(), &request)
 		require.NoError(t, err)
 		require.True(t, admitted)
-		require.NoError(t, store.captureTurnInputs(t.Context(), id, request.turnID, &turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "input", Texts: []string{"prepared"}}}, Closed: true}))
+		require.NoError(t, store.captureTurnInputs(t.Context(), id, request.turnID, &turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "input", Texts: []string{"prepared"}}}, Closed: true}))
 		endTestTurn(t, store, id, request.turnID, "")
 		children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent = $1`, "producer children", id)
 		require.NoError(t, err)
@@ -47,7 +47,7 @@ func TestShadowReviewClearProducerHistory(t *testing.T) {
 			entry := testSessionEntry("prepared", "child answer")
 			entry.TurnID = turn.id
 
-			_, err = store.finishTurn(t.Context(), turn.id, &turnFinish{store: newSessionStore(child, store), entries: []rocketcode.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(child, "answer")})
+			_, err = store.finishTurn(t.Context(), turn.id, &turnFinish{store: newSessionStore(child, store), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(child, "answer")})
 			require.NoError(t, err)
 			require.NoError(t, store.closeTurn(t.Context(), turn.id))
 			require.NoError(t, store.SaveAttachment(t.Context(), child, "", &protocol.OutboundAttachment{ID: child, Name: "result", Data: []byte("bytes")}, false))
@@ -134,7 +134,7 @@ func TestShadowReviewPayloadRelease(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, admitted)
 
-			snapshot := turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "image-input", Texts: []string{"prepared bytes"}, Attachments: []rocketcode.Attachment{{MIME: "image/png", URL: "data:image/png;base64,aW1hZ2U="}}}}, Environment: map[string]string{"source": "captured bytes"}}
+			snapshot := turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "image-input", Texts: []string{"prepared bytes"}, Attachments: []harness.Attachment{{MIME: "image/png", URL: "data:image/png;base64,aW1hZ2U="}}}}, Environment: map[string]string{"source": "captured bytes"}}
 			require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &snapshot))
 
 			var child string
@@ -173,7 +173,7 @@ func TestShadowReviewPayloadRelease(t *testing.T) {
 				terminal = protocol.TerminalStopped
 			}
 
-			finish := &turnFinish{store: newSessionStore(child, store), entries: []rocketcode.SessionEntry{*entry}, terminal: terminal, outbound: protocol.NewOutboundMessage(child, "answer")}
+			finish := &turnFinish{store: newSessionStore(child, store), entries: []harness.SessionEntry{*entry}, terminal: terminal, outbound: protocol.NewOutboundMessage(child, "answer")}
 
 			if order == "concurrent" {
 				var group errgroup.Group

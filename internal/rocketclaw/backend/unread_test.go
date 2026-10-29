@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -90,7 +90,7 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 			conversationID, turnID := "web:"+name, "turn:"+name
 			require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 			require.NoError(t, startTurnDB(ctx, service.db, turnID, conversationID, tc.inbound))
-			require.NoError(t, saveTestTurn(ctx, service, conversationID, turnID, tc.applied, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: turnID}))
+			require.NoError(t, saveTestTurn(ctx, service, conversationID, turnID, tc.applied, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: turnID}))
 
 			if tc.steers != nil {
 				data, err := json.Marshal(tc.steers)
@@ -135,7 +135,7 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 	require.NoError(t, service.UpsertThread("web:shared", ThreadState{Agent: "main"}))
 	require.NoError(t, service.ShareTab(ctx, "main", "/s/"+base64.RawURLEncoding.EncodeToString([]byte("web:shared")), nil))
 	require.NoError(t, startTurnDB(ctx, service.db, "turn:shared", "web:shared", slack))
-	require.NoError(t, saveTestTurn(ctx, service, "web:shared", "turn:shared", nil, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "turn:shared"}))
+	require.NoError(t, saveTestTurn(ctx, service, "web:shared", "turn:shared", nil, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "turn:shared"}))
 	require.NoError(t, service.ViewSession(ctx, alice, "web:elsewhere"))
 	viewedAgo(t, service, bob, "web:shared", 3*time.Second)
 	finish("web:shared", "turn:shared", protocol.TerminalComplete)

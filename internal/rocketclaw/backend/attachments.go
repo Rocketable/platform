@@ -12,8 +12,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 // SaveAttachment stores immutable original bytes before publishing a reference.
@@ -151,7 +151,7 @@ WHERE a.id = $1 AND a.upload AND (a.conversation_id = $2 OR EXISTS (SELECT 1 FRO
 				for i := range entries {
 					entry := &entries[i]
 
-					items, err := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput)
+					items, err := harness.ReplayInputToParams(entry.Entry.ReplayInput)
 					if err != nil {
 						return "", nil, fmt.Errorf("decode consumed input attachments: %w", err)
 					}
@@ -212,7 +212,7 @@ func (s *SessionService) RevertAttachmentMetadata(ctx context.Context, conversat
 		return protocol.OutboundAttachment{}, err
 	}
 
-	items, err := rocketcode.ReplayInputToParams([]json.RawMessage{raw})
+	items, err := harness.ReplayInputToParams([]json.RawMessage{raw})
 	if err != nil {
 		return protocol.OutboundAttachment{}, fmt.Errorf("decode reverted attachment owner: %w", err)
 	}

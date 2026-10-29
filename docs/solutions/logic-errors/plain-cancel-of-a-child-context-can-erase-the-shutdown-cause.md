@@ -13,7 +13,7 @@ root_cause: concurrency
 resolution_type: code_fix
 severity: medium
 related_components:
-  - internal/rocketcode
+  - internal/rocketclaw/harness
 tags:
   - shutdown
   - context-cause
@@ -26,12 +26,12 @@ tags:
 
 ## Problem
 
-Shutdown is supposed to let a running foreground bash call finish. RocketCode
+Shutdown is supposed to let a running foreground bash call finish. The harness
 knows it is a shutdown, rather than an interrupt, only from the cancellation
-cause: `callContext` in `internal/rocketcode/looper.go` keeps a non-resumable
-call running when the cause is `rocketcode.ErrShutdown`, and cancels it for any
+cause: `callContext` in `internal/rocketclaw/harness/looper.go` keeps a non-resumable
+call running when the cause is `harness.ErrShutdown`, and cancels it for any
 other cause. Shutdown cancels the run's work context with `errShutdown`
-(`internal/rocketclaw/backend/app.go`), which wraps `rocketcode.ErrShutdown`.
+(`internal/rocketclaw/backend/app.go`), which wraps `harness.ErrShutdown`.
 
 Under load, the turn sometimes saw `context.Canceled` instead, and its bash
 command was killed.

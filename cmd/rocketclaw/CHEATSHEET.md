@@ -201,7 +201,7 @@ Hand-offs enter the conversation in arrival order without waiting for the turn. 
 
 ## RocketClaw Tools
 
-RocketClaw injects these tools into RocketCode turns as **Code Mode builtins inside `execute` only**; none is a top-level tool. Call them from Starlark by name, e.g. `ask_user_question(question="…")` or `rocketclaw_update_goal(status="progress", note="…")`. Most are auto-allowed by RocketClaw unless a per-agent permission rule explicitly denies them. `rocketclaw_restart` is default-deny and requires an explicit per-agent `allow`. The session read tools and `rocketclaw_sessions_write` are default-deny and need an explicit `rocketclaw_sessions` rule (see Agent Frontmatter And Permissions). `rocketclaw_dynamic_workflow` is not RocketClaw auto-allowed; it is gated by `permission.workflow.<stem>`, not by `task`. Workflow workers still do not receive these platform tools.
+RocketClaw injects these tools into agent turns as **Code Mode builtins inside `execute` only**; none is a top-level tool. Call them from Starlark by name, e.g. `ask_user_question(question="…")` or `rocketclaw_update_goal(status="progress", note="…")`. Most are auto-allowed by RocketClaw unless a per-agent permission rule explicitly denies them. `rocketclaw_restart` is default-deny and requires an explicit per-agent `allow`. The session read tools and `rocketclaw_sessions_write` are default-deny and need an explicit `rocketclaw_sessions` rule (see Agent Frontmatter And Permissions). `rocketclaw_dynamic_workflow` is not RocketClaw auto-allowed; it is gated by `permission.workflow.<stem>`, not by `task`. Workflow workers still do not receive these platform tools.
 
 | Tool | Available In | Permission Default | What It Does |
 | --- | --- | --- | --- |
@@ -224,7 +224,7 @@ RocketClaw injects these tools into RocketCode turns as **Code Mode builtins ins
 | `execute` | Shown when the agent has MCP grants, code-mode host grants (`read`/`edit`/`bash`/…), and/or RocketClaw platform-tool grants. The only model entry for FS/shell/fetch/patch/MCP and every RocketClaw platform tool. Each call made inside a script is saved as a small record of its own, written when the call starts and when it finishes (its arguments clipped to 4 KiB, a one-line output summary, its status, and the approver's reason when it ran; never its output), and shown under the script's row. | `permission.rocketclaw.code_mode_approve` checks the full script before execution; omitted means `allow`. Nested calls re-check real buckets (read/edit/bash/mcp/rocketclaw/…). | Code Mode: runs a short Starlark script with required `code`. Define `def main()`; call host tools as `read(filePath="…")` / `bash(command=r'''…''')`, platform tools as `ask_user_question(question="…")` / `rocketclaw_reload(reason="…")`, MCP as `server_toolname(**kwargs)`, concurrency via `gather`/`map`/`race`/`race_first` (default concurrency 16, max 64), and `search(query="", namespace="", offset=0, limit=10)` to discover tools and concurrency builtins. `bash(command=...)` takes `r'''...'''` only inside the JSON `code` string. Example: `{"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}`. Parsed before host tools; failed wrappers are not evidence. Example: `def main():\n  return gather([lambda: read(filePath="a"), lambda: read(filePath="b")])`. Connects MCP per call, then closes. |
 
 
-For general `permission` syntax, action values, guardrails, and approval reviewers, see Agent Frontmatter And Permissions below. RocketCode is deny-by-default and later matching rules win. RocketClaw's default tool allows are injected after agent permissions unless an explicit deny already matched, so use `deny` rather than `auto` when the intent is to block or force review of a RocketClaw auto-allowed tool. For the default-deny `rocketclaw_restart`, `auto` is not enough; use explicit `allow`. Outbound MCP tools are never RocketClaw auto-allowed; grant `permission.mcp` explicitly.
+For general `permission` syntax, action values, guardrails, and approval reviewers, see Agent Frontmatter And Permissions below. Tools are deny-by-default and later matching rules win. RocketClaw's default tool allows are injected after agent permissions unless an explicit deny already matched, so use `deny` rather than `auto` when the intent is to block or force review of a RocketClaw auto-allowed tool. For the default-deny `rocketclaw_restart`, `auto` is not enough; use explicit `allow`. Outbound MCP tools are never RocketClaw auto-allowed; grant `permission.mcp` explicitly.
 
 ## Slack Reactions And Markers
 
@@ -299,10 +299,10 @@ Known frontmatter fields:
 | `guardrail` | Optional loaded agent name that gates task delegations to this agent before the child runs and after its response. The guardrail must approve or reject with strict JSON containing `approved` and `reason`; it does not transform the delegated prompt or child response. |
 | `additionalInstructions` | Optional RocketClaw normal-reply prompt-header override for this selected agent. Use it for response-format guidance, such as telling an agent to avoid Markdown for Slack, prefer Markdown for technical answers, keep answers terse, or follow another surface-specific style. When omitted, RocketClaw uses `Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.` It does not affect internal notes or raw cron runs. |
 | `schema.output` | Optional JSON Schema mapping. When set, that agent's own turns (including `task` children) use OpenAI structured output. Guardrail and permission-review child runs keep their fixed decision schemas. Workflow `agent(..., schema=...)` still overrides for that call. Object schemas are sent with `additionalProperties: false`; list every property in `required`. |
-| `permission` | Optional singular permission map. Omit it when the agent needs no tools. Do not use plural `permissions`; RocketCode ignores it and `rocketclaw lint` reports it. |
+| `permission` | Optional singular permission map. Omit it when the agent needs no tools. Do not use plural `permissions`; RocketClaw ignores it and `rocketclaw lint` reports it. |
 | `sudo` | Optional `true`/`1`/`on`/`yes` or `false`/`0`/`off`/`no`, any case; other values stop the agent from loading. When on, it replaces `permission`: every tool and feature is offered, and every call requires automatic approval by `guardian`, including the whole `execute` script, except `skill`, `find_skills`, `task` and the default-on RocketClaw tools (`rocketclaw_reload`, scheduled messages, `rocketclaw_attach_files_to_response`, `rocketclaw_update_goal`, `ask_user_question`), which run without review. Only `permission.rocketclaw.rocketclaw_set_tag` tag groups and `permission.rocketclaw.rocketclaw_sessions_recipient` may stay next to it; `rocketclaw lint` reports anything else (`RC011`). Hard limits such as `.env` blocking and `maxRecursion` still apply. |
 
-When an agent sets `shell` to a program path, RocketCode runs each shell command made on that agent's behalf as `<shell> <command>`: its `bash` tool calls, the ``!`…` `` lines in its prompt and in the skills it loads, and, for the root agent, input-prompt expansion. RocketCode does not check at load time that the program exists. If it cannot start, the `bash` tool reports the error to the agent and does not fall back to bash. A wrapper program must follow this contract:
+When an agent sets `shell` to a program path, RocketClaw runs each shell command made on that agent's behalf as `<shell> <command>`: its `bash` tool calls, the ``!`…` `` lines in its prompt and in the skills it loads, and, for the root agent, input-prompt expansion. RocketClaw does not check at load time that the program exists. If it cannot start, the `bash` tool reports the error to the agent and does not fall back to bash. A wrapper program must follow this contract:
 
 - It receives the whole command string as its only argument. There is no `-c`. The command can start with `-`, so treat `$1` as data: pass it as the `-c` argument or after `--`, never where the wrapper or a sandbox tool parses options.
 - It should run that string with bash, for example `bash --noprofile --norc -p -c "$1"`. The permission check still parses every command as bash, so running it with anything else makes the check describe a different command than the one that runs.
@@ -311,8 +311,8 @@ When an agent sets `shell` to a program path, RocketCode runs each shell command
 - The environment is the full RocketClaw process environment, which can include provider credentials. Forward only the variables commands need.
 - Workflow workers get the RocketClaw env, such as `ROCKETCLAW_CONVERSATION_ID`, of the turn that runs them.
 - Keep the wrapper, and any file it reads to configure the sandbox, outside the workspace and outside every path the agent can write. An agent that can modify its wrapper can turn it into plain host bash.
-- Do not let agents edit a sandboxed agent's file. Editing it can remove `shell`. `rocketclaw lint` reports `edit` permissions that cover a sandboxed agent's file or a wrapper inside the workspace.
-- The wrapper gets the same timeout and termination signals bash would. At the timeout RocketCode stops the wrapper's process group, and a few seconds later the `bash` call ends even if a program outside that group still holds its output open. Stopping work inside the sandbox is the wrapper's job.
+- Do not let agents edit a sandboxed agent's file. Editing it can remove `customShell`, and goal checks reread the file each time they run. `rocketclaw lint` reports `edit` permissions that cover a sandboxed agent's file or a wrapper inside the workspace.
+- The wrapper gets the same timeout and termination signals bash would. At the timeout RocketClaw stops the wrapper's process group, and a few seconds later the `bash` call ends even if a program outside that group still holds its output open. Stopping work inside the sandbox is the wrapper's job.
 - ``!`…` `` expansion has no timeout and ignores errors. A missing wrapper produces empty text, and a hung wrapper blocks the turn.
 - The field applies only to the agent that declares it. A subagent, guardrail, or permission reviewer without its own `shell` runs default bash. Workflow workers use the root agent's `shell`.
 - File tools and MCP servers still run on the host. `shell` covers shell commands only.
@@ -331,7 +331,7 @@ model: '{{ model "coding-high" }}'
 
 Changing `models` requires restart. Agent changes using an existing mapping can use reload.
 
-RocketCode denies tools by default. `permission` grants are grouped by bucket, and each bucket maps subjects to actions. Later matching rules override earlier matching rules, so put broad allows before narrower denies when subtracting access.
+RocketClaw denies tools by default. `permission` grants are grouped by bucket, and each bucket maps subjects to actions. Later matching rules override earlier matching rules, so put broad allows before narrower denies when subtracting access.
 
 Permission actions:
 
@@ -339,7 +339,7 @@ Permission actions:
 | --- | --- |
 | `allow` | Run matching tool calls without automatic review. |
 | `deny` | Block matching tool calls. Use it after a broader allow to subtract specific subjects. |
-| `auto` | Ask RocketCode's embedded `guardian` automatic reviewer. RocketClaw enables automatic review. Review failure, invalid JSON, or denial blocks the call. |
+| `auto` | Ask the embedded `guardian` automatic reviewer. RocketClaw enables automatic review. Review failure, invalid JSON, or denial blocks the call. |
 | `auto(agent-name)` | Ask the named loaded custom reviewer agent. Do not create an agent named `guardian`; that name is reserved. Custom reviewer agents should normally use a `#low` model suffix because each automatic permission review has 90 seconds to return a valid decision. |
 
 Guardrails and approval reviewers are separate mechanisms. `guardrail` reviews inter-agent delegation and child responses; `auto` and `auto(agent-name)` review tool execution permission. Finished guardrail checks, automatic reviews, and Task subagents are saved, and the web chat opens them from the tool row that started them.
@@ -397,8 +397,8 @@ Running `rocketclaw` without a subcommand starts the server when `femtoclaw.json
 | Command | Purpose |
 | --- | --- |
 | `rocketclaw run` | Starts the RocketClaw server/runtime and fails if the selected configuration is missing or invalid. |
-| `rocketclaw lint [next|current]` | Checks effective RocketCode agent-system safety. Defaults to `next`. |
-| `rocketclaw agent-graph [next|current]` | Prints the effective RocketCode task delegation and guardrail graph as Graphviz/DOT. Defaults to `next`. |
+| `rocketclaw lint [next|current]` | Checks effective agent-system safety. Defaults to `next`. |
+| `rocketclaw agent-graph [next|current]` | Prints the effective task delegation and guardrail graph as Graphviz/DOT. Defaults to `next`. |
 | `rocketclaw oai login [provider] [--headless]` | Authenticates the selected provider and writes its credential to the selected runtime `auth.json`; omission selects `openai`. |
 | `rocketclaw oai list` | Lists configured provider auth modes and local credential presence without displaying credentials. |
 | `rocketclaw oai logout [provider]` | Removes only the selected provider's local credential; omission selects `openai`. |

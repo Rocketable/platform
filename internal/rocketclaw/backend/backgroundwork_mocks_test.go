@@ -8,18 +8,18 @@ import (
 	"context"
 	"sync"
 
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 )
 
-// Ensure that backgroundWorkMock does implement rocketcode.BackgroundWork.
+// Ensure that backgroundWorkMock does implement harness.BackgroundWork.
 // If this is not the case, regenerate this file with mockery.
-var _ rocketcode.BackgroundWork = &backgroundWorkMock{}
+var _ harness.BackgroundWork = &backgroundWorkMock{}
 
-// backgroundWorkMock is a mock implementation of rocketcode.BackgroundWork.
+// backgroundWorkMock is a mock implementation of harness.BackgroundWork.
 //
 //	func TestSomethingThatUsesBackgroundWork(t *testing.T) {
 //
-//		// make and configure a mocked rocketcode.BackgroundWork
+//		// make and configure a mocked harness.BackgroundWork
 //		mockedBackgroundWork := &backgroundWorkMock{
 //			DetachFunc: func() bool {
 //				panic("mock out the Detach method")
@@ -29,7 +29,7 @@ var _ rocketcode.BackgroundWork = &backgroundWorkMock{}
 //			},
 //		}
 //
-//		// use mockedBackgroundWork in code that requires rocketcode.BackgroundWork
+//		// use mockedBackgroundWork in code that requires harness.BackgroundWork
 //		// and then make assertions.
 //
 //	}

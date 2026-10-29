@@ -208,11 +208,13 @@ type SlackChannelConfig struct {
 	AllowedUserIDs []string `json:"allowed_user_ids,omitempty"`
 }
 
-// OpenAIConfig configures the OpenAI client used by RocketCode.
+// OpenAIConfig configures the OpenAI client used by the agent harness.
 type OpenAIConfig struct {
-	APIKey                  string `json:"api_key"`
-	APIBaseURL              string `json:"api_base_url"`
-	RocketCodeAuth          string `json:"rocketcode_auth"`
+	APIKey     string `json:"api_key"`
+	APIBaseURL string `json:"api_base_url"`
+	Auth       string `json:"auth"`
+	// LegacyAuth is the old name of Auth, read when Auth is unset.
+	LegacyAuth              string `json:"rocketcode_auth,omitempty"`
 	AutocompactionThreshold int64  `json:"autocompaction_threshold,omitempty"`
 	// PromptCacheMarkersRelativePosition, when set, marks the text piece at this
 	// negative index of the last request message with an Anthropic cache_control.
@@ -501,17 +503,19 @@ func normalizeOpenAIModel(field, model string) (string, error) {
 }
 
 func normalizeOpenAIConfig(field string, cfg *OpenAIConfig) error {
-	switch strings.TrimSpace(cfg.RocketCodeAuth) {
+	switch strings.TrimSpace(cmp.Or(cfg.Auth, cfg.LegacyAuth)) {
 	case "", "api_key":
-		cfg.RocketCodeAuth = "api_key"
+		cfg.Auth = "api_key"
 	case "chatgpt":
-		cfg.RocketCodeAuth = "chatgpt"
+		cfg.Auth = "chatgpt"
 	default:
-		return fmt.Errorf("%s.rocketcode_auth must be api_key or chatgpt", field)
+		return fmt.Errorf("%s.auth must be api_key or chatgpt", field)
 	}
 
-	if cfg.RocketCodeAuth == "api_key" && strings.TrimSpace(cfg.APIKey) == "" {
-		return fmt.Errorf("%s.api_key is required when %s.rocketcode_auth is api_key", field, field)
+	cfg.LegacyAuth = ""
+
+	if cfg.Auth == "api_key" && strings.TrimSpace(cfg.APIKey) == "" {
+		return fmt.Errorf("%s.api_key is required when %s.auth is api_key", field, field)
 	}
 
 	if cfg.AutocompactionThreshold < 0 {

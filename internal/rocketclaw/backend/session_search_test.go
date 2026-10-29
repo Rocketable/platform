@@ -18,8 +18,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 )
 

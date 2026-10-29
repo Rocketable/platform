@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	harness "github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/jackc/pgx/v5"
 )
 

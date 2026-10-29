@@ -24,13 +24,13 @@ func TestVoiceDialectURLs(t *testing.T) {
 		provider config.OpenAIConfig
 		want     *publicVoice
 	}{
-		{config.OpenAIConfig{RocketCodeAuth: "api_key"}, public("https://api.openai.com/v1/live/sessions", "wss://api.openai.com/v1/live/sessions/%s/attach", "https://api.openai.com/v1/live/sessions/%s/hangup")},
-		{config.OpenAIConfig{RocketCodeAuth: "api_key", APIBaseURL: "ws://localhost:8080/v1/"}, public("http://localhost:8080/v1/live/sessions", "ws://localhost:8080/v1/live/sessions/%s/attach", "http://localhost:8080/v1/live/sessions/%s/hangup")},
-		{config.OpenAIConfig{RocketCodeAuth: "api_key", APIBaseURL: "http://127.0.0.1:8080"}, public("http://127.0.0.1:8080/live/sessions", "ws://127.0.0.1:8080/live/sessions/%s/attach", "http://127.0.0.1:8080/live/sessions/%s/hangup")},
-		{config.OpenAIConfig{RocketCodeAuth: "api_key", APIBaseURL: "http://[::1]:8080/v1"}, public("http://[::1]:8080/v1/live/sessions", "ws://[::1]:8080/v1/live/sessions/%s/attach", "http://[::1]:8080/v1/live/sessions/%s/hangup")},
-		{config.OpenAIConfig{RocketCodeAuth: "api_key", APIBaseURL: "https://proxy.test/v1"}, public("https://proxy.test/v1/live/sessions", "wss://proxy.test/v1/live/sessions/%s/attach", "https://proxy.test/v1/live/sessions/%s/hangup")},
+		{config.OpenAIConfig{Auth: "api_key"}, public("https://api.openai.com/v1/live/sessions", "wss://api.openai.com/v1/live/sessions/%s/attach", "https://api.openai.com/v1/live/sessions/%s/hangup")},
+		{config.OpenAIConfig{Auth: "api_key", APIBaseURL: "ws://localhost:8080/v1/"}, public("http://localhost:8080/v1/live/sessions", "ws://localhost:8080/v1/live/sessions/%s/attach", "http://localhost:8080/v1/live/sessions/%s/hangup")},
+		{config.OpenAIConfig{Auth: "api_key", APIBaseURL: "http://127.0.0.1:8080"}, public("http://127.0.0.1:8080/live/sessions", "ws://127.0.0.1:8080/live/sessions/%s/attach", "http://127.0.0.1:8080/live/sessions/%s/hangup")},
+		{config.OpenAIConfig{Auth: "api_key", APIBaseURL: "http://[::1]:8080/v1"}, public("http://[::1]:8080/v1/live/sessions", "ws://[::1]:8080/v1/live/sessions/%s/attach", "http://[::1]:8080/v1/live/sessions/%s/hangup")},
+		{config.OpenAIConfig{Auth: "api_key", APIBaseURL: "https://proxy.test/v1"}, public("https://proxy.test/v1/live/sessions", "wss://proxy.test/v1/live/sessions/%s/attach", "https://proxy.test/v1/live/sessions/%s/hangup")},
 	} {
-		d, err := newPublicVoice(tc.provider)
+		d, err := newPublicVoice(&tc.provider)
 		require.NoError(t, err)
 		assert.Equal(t, tc.want, d)
 	}
@@ -39,7 +39,7 @@ func TestVoiceDialectURLs(t *testing.T) {
 
 	// The API key never travels in plain text to a non-local host.
 	for _, base := range []string{"http://example.com/v1", "ws://example.com", "http://localhost.example.com", "http://127.0.0.1.nip.io:8080", "http://127.0.0.1@example.com", "http://[::ffff:8.8.8.8]"} {
-		_, err := newPublicVoice(config.OpenAIConfig{RocketCodeAuth: "api_key", APIBaseURL: base})
+		_, err := newPublicVoice(&config.OpenAIConfig{Auth: "api_key", APIBaseURL: base})
 		require.ErrorIs(t, err, errVoicePlainHTTP, base)
 	}
 }
@@ -281,7 +281,7 @@ func TestVoiceSeed(t *testing.T) {
 func testVoiceDialects(t *testing.T, serverURL string) map[string]voiceDialect {
 	t.Helper()
 
-	public, err := newPublicVoice(config.OpenAIConfig{RocketCodeAuth: "api_key", APIBaseURL: serverURL + "/v1"})
+	public, err := newPublicVoice(&config.OpenAIConfig{Auth: "api_key", APIBaseURL: serverURL + "/v1"})
 	require.NoError(t, err)
 
 	codex := newCodexVoice()

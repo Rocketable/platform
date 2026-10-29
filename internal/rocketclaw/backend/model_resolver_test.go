@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/assert"
@@ -27,13 +27,13 @@ func TestModelResolverSelectsUnqualifiedExplicitAndNamedProviders(t *testing.T) 
 
 	tests := []struct {
 		selector string
-		origin   rocketcode.ProviderOrigin
+		origin   harness.ProviderOrigin
 		server   string
 	}{
-		{selector: "gpt-6.1-sol", origin: rocketcode.ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, server: "openai"},
-		{selector: "openai/gpt-6.1-sol", origin: rocketcode.ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, server: "openai"},
-		{selector: "work/gpt-6.1-sol", origin: rocketcode.ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, server: "work"},
-		{selector: "anthropic/api/claude-sonnet-5-5", origin: rocketcode.ProviderOrigin{Provider: "anthropic", Model: "api/claude-sonnet-5-5"}, server: "work"},
+		{selector: "gpt-6.1-sol", origin: harness.ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, server: "openai"},
+		{selector: "openai/gpt-6.1-sol", origin: harness.ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, server: "openai"},
+		{selector: "work/gpt-6.1-sol", origin: harness.ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, server: "work"},
+		{selector: "anthropic/api/claude-sonnet-5-5", origin: harness.ProviderOrigin{Provider: "anthropic", Model: "api/claude-sonnet-5-5"}, server: "work"},
 	}
 
 	requests := make(chan string, len(tests))
@@ -54,10 +54,10 @@ func TestModelResolverSelectsUnqualifiedExplicitAndNamedProviders(t *testing.T) 
 
 	resolver := newModelResolver(&config.Config{
 		Workspace: t.TempDir(),
-		OpenAI:    config.OpenAIConfig{APIKey: "openai-key", APIBaseURL: openAI.URL, RocketCodeAuth: "api_key"},
+		OpenAI:    config.OpenAIConfig{APIKey: "openai-key", APIBaseURL: openAI.URL, Auth: "api_key"},
 		Providers: map[string]config.OpenAIConfig{
-			"work":      {APIKey: "work-key", APIBaseURL: work.URL, RocketCodeAuth: "api_key"},
-			"anthropic": {APIKey: "work-key", APIBaseURL: work.URL, RocketCodeAuth: "api_key"},
+			"work":      {APIKey: "work-key", APIBaseURL: work.URL, Auth: "api_key"},
+			"anthropic": {APIKey: "work-key", APIBaseURL: work.URL, Auth: "api_key"},
 		},
 	}, slog.New(slog.DiscardHandler))
 
@@ -160,8 +160,8 @@ func TestModelResolverConstructsProviderSpecificAPIKeyAndChatGPTClients(t *testi
 	resolver := newModelResolver(&config.Config{
 		Workspace: workspace,
 		Providers: map[string]config.OpenAIConfig{
-			"keyed": {APIKey: "provider-key", APIBaseURL: server.URL, RocketCodeAuth: "api_key"},
-			"chat":  {APIKey: "must-not-be-used", APIBaseURL: server.URL, RocketCodeAuth: "chatgpt"},
+			"keyed": {APIKey: "provider-key", APIBaseURL: server.URL, Auth: "api_key"},
+			"chat":  {APIKey: "must-not-be-used", APIBaseURL: server.URL, Auth: "chatgpt"},
 		},
 	}, slog.New(slog.NewJSONHandler(&logs, nil)).With("process_start", "test-start", "conversation_id", "conversation", "turn_id", "turn"))
 
@@ -174,7 +174,7 @@ func TestModelResolverConstructsProviderSpecificAPIKeyAndChatGPTClients(t *testi
 	client, origin, err = resolver.Resolve("chat/chat-model")
 	require.NoError(t, err)
 	assert.NotNil(t, client)
-	assert.Equal(t, rocketcode.ProviderOrigin{Provider: "chat", Model: "chat-model"}, origin)
+	assert.Equal(t, harness.ProviderOrigin{Provider: "chat", Model: "chat-model"}, origin)
 	_, err = client.Responses.New(t.Context(), responses.ResponseNewParams{Model: origin.Model}, option.WithBaseURL(server.URL), option.WithUnsafeAllowHTTP())
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer chat-access-secret", <-apiKey)

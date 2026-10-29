@@ -15,8 +15,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -80,7 +80,7 @@ func sidebarChoicesFixture(tb testing.TB, count int) (*Server, context.Context) 
 	for i := range count {
 		id := fmt.Sprintf("chat-%02d", i)
 		require.NoError(tb, sessions.UpsertThread(id, backend.ThreadState{Agent: "choice-00"}))
-		_, err := sessions.AppendEntryID(tb.Context(), id, &rocketcode.SessionEntry{})
+		_, err := sessions.AppendEntryID(tb.Context(), id, &harness.SessionEntry{})
 		require.NoError(tb, err)
 	}
 
@@ -158,7 +158,7 @@ func TestSidebarSendFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.name == "session row" {
 				require.NoError(t, sessions.UpsertThread("web", backend.ThreadState{Agent: "main"}))
-				_, err := sessions.AppendEntryID(ctx, "web", &rocketcode.SessionEntry{})
+				_, err := sessions.AppendEntryID(ctx, "web", &harness.SessionEntry{})
 				require.NoError(t, err)
 			}
 
@@ -195,7 +195,7 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 
 	for i, id := range []string{"slack-thread:C1:1.1", "slack-thread:C2:2.2"} {
 		openTestTurns(t, dsn).RecordSlackThread(t, sessions, id, backend.ThreadState{Agent: "main"})
-		_, err := sessions.AppendEntryID(t.Context(), id, &rocketcode.SessionEntry{Timestamp: time.Unix(int64(2-i), 123456789).UTC()})
+		_, err := sessions.AppendEntryID(t.Context(), id, &harness.SessionEntry{Timestamp: time.Unix(int64(2-i), 123456789).UTC()})
 		require.NoError(t, err)
 	}
 

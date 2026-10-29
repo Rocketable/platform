@@ -12,9 +12,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
-	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 // CreateConversation records an explicit ID, a Web chat or a cron run, without changing existing selection.
@@ -607,7 +607,7 @@ func listedBackgroundJobs(jobs []backgroundJob, conversationID string) []protoco
 
 // Drain commits the offered input before advancing any consumed state. A bound
 // child instead reads its parent's stream and waits at the final-answer boundary.
-func (b *Bridge) Drain(ctx context.Context, responseID string, phase rocketcode.TurnPhase, applied []string) ([]rocketcode.PromptInput, error) {
+func (b *Bridge) Drain(ctx context.Context, responseID string, phase harness.TurnPhase, applied []string) ([]harness.PromptInput, error) {
 	if b.shadow {
 		return b.drainShadowInputs(ctx, responseID, phase, applied)
 	}
@@ -642,7 +642,7 @@ func (b *Bridge) Drain(ctx context.Context, responseID string, phase rocketcode.
 		b.inputOpen, b.notesOpen = false, false
 		b.mu.Unlock()
 
-		return slices.DeleteFunc(snapshot.Inputs, func(input rocketcode.PromptInput) bool { return slices.Contains(applied, input.ID) }), nil
+		return slices.DeleteFunc(snapshot.Inputs, func(input harness.PromptInput) bool { return slices.Contains(applied, input.ID) }), nil
 	}
 
 	inputs := slices.Clone(snapshot.Inputs)
@@ -671,7 +671,7 @@ func (b *Bridge) Drain(ctx context.Context, responseID string, phase rocketcode.
 		prompt := buildPrompt(request.inbound, nil, true)
 		header, _, _ := strings.Cut(prompt, "\n\n")
 		directSkill := inboundDirectSkill(request.inbound)
-		inputs = append(inputs, rocketcode.PromptInput{ID: request.queueItemID, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill, Agent: request.inbound.Metadata[inboundAgentMetadataKey]})
+		inputs = append(inputs, harness.PromptInput{ID: request.queueItemID, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill, Agent: request.inbound.Metadata[inboundAgentMetadataKey]})
 
 		if request.inbound.Human && !slices.Contains(snapshot.Resets, request.queueItemID) {
 			snapshot.Resets = append(snapshot.Resets, request.queueItemID)
@@ -681,13 +681,13 @@ func (b *Bridge) Drain(ctx context.Context, responseID string, phase rocketcode.
 	}
 	// A restart reoffers accepted steers and held notes, while the canonical
 	// stream already owns their earlier payload and ordering.
-	snapshot.Inputs = []rocketcode.PromptInput{}
+	snapshot.Inputs = []harness.PromptInput{}
 
-	var offered []rocketcode.PromptInput
+	var offered []harness.PromptInput
 
 	for i := range inputs {
 		input := &inputs[i]
-		if !slices.ContainsFunc(snapshot.Inputs, func(saved rocketcode.PromptInput) bool { return saved.ID == input.ID }) {
+		if !slices.ContainsFunc(snapshot.Inputs, func(saved harness.PromptInput) bool { return saved.ID == input.ID }) {
 			snapshot.Inputs = append(snapshot.Inputs, *input)
 			if !slices.Contains(applied, input.ID) {
 				offered = append(offered, *input)
@@ -695,7 +695,7 @@ func (b *Bridge) Drain(ctx context.Context, responseID string, phase rocketcode.
 		}
 	}
 
-	if len(offered) == 0 && phase == rocketcode.TurnPhaseFinalAnswer {
+	if len(offered) == 0 && phase == harness.TurnPhaseFinalAnswer {
 		snapshot.Closed = true
 	}
 

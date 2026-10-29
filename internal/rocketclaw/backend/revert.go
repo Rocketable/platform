@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 var errRevertConversation = errors.New("revert requires a Web chat, Slack thread, or shadow")
@@ -89,7 +89,7 @@ const sessionHistorySQL = `RECURSIVE starts AS (
 
 // clipRevertEntry retains a partial turn without its abandoned output or usage.
 // OpenCode V2: packages/core/src/session/projector.ts:717-773.
-func clipRevertEntry(entry *rocketcode.SessionEntry, index int) {
+func clipRevertEntry(entry *harness.SessionEntry, index int) {
 	if index < 0 {
 		return
 	}
@@ -97,7 +97,7 @@ func clipRevertEntry(entry *rocketcode.SessionEntry, index int) {
 	entry.ReplayInput = entry.ReplayInput[:index]
 	entry.ResponseID, entry.OutputTrace, entry.TokenUsage = "", nil, nil
 
-	entry.ReplayAttribution = slices.DeleteFunc(entry.ReplayAttribution, func(a rocketcode.ReplayAttribution) bool { return a.Start >= index })
+	entry.ReplayAttribution = slices.DeleteFunc(entry.ReplayAttribution, func(a harness.ReplayAttribution) bool { return a.Start >= index })
 	for i := range entry.ReplayAttribution {
 		entry.ReplayAttribution[i].End = min(entry.ReplayAttribution[i].End, index)
 	}
@@ -140,7 +140,7 @@ SELECT entry_json, synced FROM physical_entries WHERE id = $2`, conversationID, 
 		return entry, 0, ErrRevertMessageGone
 	}
 
-	items, err := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput[index : index+1])
+	items, err := harness.ReplayInputToParams(entry.Entry.ReplayInput[index : index+1])
 	if err != nil {
 		return entry, 0, fmt.Errorf("decode revert boundary: %w", err)
 	}
@@ -244,7 +244,7 @@ func stageRevertDB(ctx context.Context, db stateStoreDB, conversationID, before 
 	}
 
 	// revertBoundary already decoded and projected this same, unchanged user item.
-	items, _ := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput[index : index+1])
+	items, _ := harness.ReplayInputToParams(entry.Entry.ReplayInput[index : index+1])
 	_, text, _, err := ReplayInputMessageRoleText(&items[0], entry.Entry.ReplayInput[index])
 	// Goal replay includes generated steering instructions. Its existing durable
 	// owner keeps the editable command and the exact admission identity.
@@ -427,7 +427,7 @@ func revertTargetDB(ctx context.Context, db stateStoreDB, conversationID, target
 	}
 
 	if messageID == "" {
-		return ObservedSessionEntry{ID: math.MaxInt64, Entry: rocketcode.SessionEntry{TurnID: turnID}}, nil
+		return ObservedSessionEntry{ID: math.MaxInt64, Entry: harness.SessionEntry{TurnID: turnID}}, nil
 	}
 
 	boundary, _, err := revertBoundary(ctx, db, conversationID, messageID)
@@ -970,7 +970,7 @@ WHERE conversation_id = $1 AND takes_lane AND (input_id = $2 OR inbound_json->'M
 		return false, fmt.Errorf("read saved Web input: %w", err)
 	}
 
-	items, err := rocketcode.ReplayInputToParams([]json.RawMessage{raw})
+	items, err := harness.ReplayInputToParams([]json.RawMessage{raw})
 	if err != nil {
 		return false, fmt.Errorf("decode saved Web replay: %w", err)
 	}
@@ -1001,13 +1001,13 @@ WHERE conversation_id = $1 AND takes_lane AND (input_id = $2 OR inbound_json->'M
 		}
 	}
 
-	var attachments []rocketcode.Attachment
+	var attachments []harness.Attachment
 
 	for _, part := range parts {
 		if part.Type == "input_image" || part.Type == "input_file" {
 			url := cmp.Or(part.ImageURL, part.FileData, part.FileURL)
 			mime, _, _ := strings.Cut(strings.TrimPrefix(url, "data:"), ";")
-			attachments = append(attachments, rocketcode.Attachment{MIME: mime, Filename: part.Filename, URL: url})
+			attachments = append(attachments, harness.Attachment{MIME: mime, Filename: part.Filename, URL: url})
 		}
 	}
 

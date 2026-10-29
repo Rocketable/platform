@@ -12,8 +12,8 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
-	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 const (
@@ -41,12 +41,12 @@ func parseDynamicWorkflowParams(raw json.RawMessage) (dynamicWorkflowParams, err
 }
 
 // dynamicWorkflowTool runs a workflow's steps with shellEnv, the environment of the turn that calls it.
-func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agentName, tagConversationID string, definitions map[string]*workflow.Definition, shellEnv map[string]string) (rocketcode.Tool, bool) {
+func (b *Bridge) dynamicWorkflowTool(permissions harness.PermissionSet, agentName, tagConversationID string, definitions map[string]*workflow.Definition, shellEnv map[string]string) (harness.Tool, bool) {
 	allowed := slices.DeleteFunc(workflow.Descriptions(definitions), func(description protocol.WorkflowDescription) bool {
 		return !permissions.Enabled("workflow", description.Name)
 	})
 	if len(allowed) == 0 {
-		return rocketcode.Tool{}, false
+		return harness.Tool{}, false
 	}
 
 	visibility := make([]string, len(allowed))
@@ -66,7 +66,7 @@ func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agent
 		lines = append(lines, fmt.Sprintf("- %s: %s", description.Name, text))
 	}
 
-	return rocketcode.Tool{
+	return harness.Tool{
 		Name:               dynamicWorkflowToolName,
 		Resumable:          true,
 		Description:        strings.Join(lines, "\n"),
@@ -87,37 +87,37 @@ func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agent
 			},
 			"required": []string{"name", "args"},
 		},
-		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 			params, err := parseDynamicWorkflowParams(raw)
 			if err != nil {
-				return rocketcode.ToolResult{}, err
+				return harness.ToolResult{}, err
 			}
 
 			result, err := b.runNestedWorkflow(ctx, agentName, tagConversationID, params.Name, definitions[params.Name], params.Args, shellEnv)
 			if err != nil {
-				return rocketcode.ToolResult{}, err
+				return harness.ToolResult{}, err
 			}
 
-			return rocketcode.TextToolResult(result), nil
+			return harness.TextToolResult(result), nil
 		},
 	}, true
 }
 
-func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent, agentName, tagConversationID string, shellEnv map[string]string) (rocketcode.Tool, bool) {
+func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *harness.Agent, agentName, tagConversationID string, shellEnv map[string]string) (harness.Tool, bool) {
 	runtimeCfg := b.runtime.Clone()
 
-	if !agent.Permission.Sudo && !slices.ContainsFunc(agent.Permission.Buckets, func(bucket rocketcode.PermissionBucket) bool {
-		return bucket.Name == "workflow" && slices.ContainsFunc(bucket.Rules, func(rule rocketcode.PermissionRule) bool {
-			return rule.Action == rocketcode.PermissionAllow
+	if !agent.Permission.Sudo && !slices.ContainsFunc(agent.Permission.Buckets, func(bucket harness.PermissionBucket) bool {
+		return bucket.Name == "workflow" && slices.ContainsFunc(bucket.Rules, func(rule harness.PermissionRule) bool {
+			return rule.Action == harness.PermissionAllow
 		})
 	}) {
-		return rocketcode.Tool{}, false
+		return harness.Tool{}, false
 	}
 
 	definitions, err := workflow.Load(root, runtimeCfg.RuntimeDirName())
 	if err != nil {
 		b.log.Warn("skip rocketclaw_dynamic_workflow tool: load workflows", "error", err)
-		return rocketcode.Tool{}, false
+		return harness.Tool{}, false
 	}
 
 	return b.dynamicWorkflowTool(agent.Permission, agentName, tagConversationID, definitions, shellEnv)
@@ -128,7 +128,7 @@ func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversati
 		return "", fmt.Errorf("workflow %q is not configured", name)
 	}
 
-	agentRun, err := newWorkflowAgentRunner(b.runtime, agentName, rocketcode.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, tagConversationID)...)
+	agentRun, err := newWorkflowAgentRunner(b.runtime, agentName, harness.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, tagConversationID)...)
 	if err != nil {
 		return "", fmt.Errorf("prepare nested workflow agent runner: %w", err)
 	}
@@ -137,7 +137,7 @@ func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversati
 	agentRun.shellEnv = shellEnv
 
 	result, errRun := workflow.Run(ctx, definition, workflow.RunRequest{
-		RunID: rocketcode.ToolCallKey(ctx), Args: args,
+		RunID: harness.ToolCallKey(ctx), Args: args,
 	}, agentRun)
 	if errRun != nil {
 		return "", fmt.Errorf("run nested workflow %q: %w", name, errRun)

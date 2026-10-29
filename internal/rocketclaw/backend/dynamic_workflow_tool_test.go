@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,7 +43,7 @@ func openWorkspaceRoot(t *testing.T, workspace string) *os.Root {
 func TestDynamicWorkflowToolSchemaAndCall(t *testing.T) {
 	t.Parallel()
 
-	var permissions rocketcode.PermissionSet
+	var permissions harness.PermissionSet
 	require.NoError(t, permissions.Allow("workflow", "audit"))
 
 	workspace := t.TempDir()
@@ -61,7 +61,7 @@ def main(args): return None
 
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}), log: slog.New(slog.DiscardHandler)}
 
-	output := make(chan rocketcode.ChatResponse, 4)
+	output := make(chan harness.ChatResponse, 4)
 	tool, ok := bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil)
 	require.True(t, ok)
 	assert.Equal(t, "workflow", tool.Permission)
@@ -80,13 +80,13 @@ def main(args): return None
 
 	result, err := tool.Call(t.Context(), json.RawMessage(`{"name":"audit","args":"path/to"}`), output)
 	require.NoError(t, err)
-	assert.Equal(t, rocketcode.TextToolResult("audit:path/to"), result)
+	assert.Equal(t, harness.TextToolResult("audit:path/to"), result)
 	require.Empty(t, output)
 
-	_, ok = bridge.dynamicWorkflowTool(rocketcode.PermissionSet{}, "main", "main", definitions, nil)
+	_, ok = bridge.dynamicWorkflowTool(harness.PermissionSet{}, "main", "main", definitions, nil)
 	assert.False(t, ok)
 
-	sudo, ok := bridge.dynamicWorkflowTool(rocketcode.PermissionSet{Sudo: true}, "main", "main", definitions, nil)
+	sudo, ok := bridge.dynamicWorkflowTool(harness.PermissionSet{Sudo: true}, "main", "main", definitions, nil)
 	require.True(t, ok)
 	assert.Equal(t, []string{"audit", "secret"}, sudo.VisibilitySubjects)
 
@@ -156,21 +156,21 @@ def main(args):
 	assert.Equal(t, nestedWorkflowSilentCompleteText, text)
 
 	// maybeDynamicWorkflowTool: workflow allow → tool; task-only → omit; Call works.
-	var workflowAllow rocketcode.PermissionSet
+	var workflowAllow harness.PermissionSet
 	require.NoError(t, workflowAllow.Allow("workflow", "audit-routes"))
-	tool, ok := bridge.maybeDynamicWorkflowTool(root, &rocketcode.Agent{Permission: workflowAllow}, "main", "main", nil)
+	tool, ok := bridge.maybeDynamicWorkflowTool(root, &harness.Agent{Permission: workflowAllow}, "main", "main", nil)
 	require.True(t, ok)
 	assert.Equal(t, []string{"audit-routes"}, tool.VisibilitySubjects)
 
-	output := make(chan rocketcode.ChatResponse, 16)
+	output := make(chan harness.ChatResponse, 16)
 	result, err := tool.Call(t.Context(), json.RawMessage(`{"name":"audit-routes","args":"src"}`), output)
 	require.NoError(t, err)
-	assert.Equal(t, rocketcode.TextToolResult("src"), result)
+	assert.Equal(t, harness.TextToolResult("src"), result)
 	require.Empty(t, output)
 
-	var taskOnly rocketcode.PermissionSet
+	var taskOnly harness.PermissionSet
 	require.NoError(t, taskOnly.Allow("task", "*"))
-	_, ok = bridge.maybeDynamicWorkflowTool(root, &rocketcode.Agent{Permission: taskOnly}, "main", "main", nil)
+	_, ok = bridge.maybeDynamicWorkflowTool(root, &harness.Agent{Permission: taskOnly}, "main", "main", nil)
 	assert.False(t, ok)
 
 	// Load failure omits tool.
@@ -179,19 +179,19 @@ def main(args):
 	require.NoError(t, os.WriteFile(filepath.Join(bad, ".rocketclaw", "workflows", "Bad_Name.star"), []byte("meta={}\n"), 0o600))
 	badRoot := openWorkspaceRoot(t, bad)
 
-	var star rocketcode.PermissionSet
+	var star harness.PermissionSet
 	require.NoError(t, star.Allow("workflow", "*"))
 
 	var logs strings.Builder
 
 	badBridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: bad}), log: slog.New(slog.NewTextHandler(&logs, nil))}
-	_, ok = badBridge.maybeDynamicWorkflowTool(badRoot, &rocketcode.Agent{Permission: star}, "main", "main", nil)
+	_, ok = badBridge.maybeDynamicWorkflowTool(badRoot, &harness.Agent{Permission: star}, "main", "main", nil)
 	assert.False(t, ok)
 	assert.Contains(t, logs.String(), "load workflows")
 
 	logs.Reset()
 	require.NoError(t, star.Deny("workflow", "*"))
-	_, ok = badBridge.maybeDynamicWorkflowTool(badRoot, &rocketcode.Agent{Permission: star}, "main", "main", nil)
+	_, ok = badBridge.maybeDynamicWorkflowTool(badRoot, &harness.Agent{Permission: star}, "main", "main", nil)
 	assert.False(t, ok)
 	assert.Contains(t, logs.String(), "load workflows", "an overridden allow rule still triggers workflow loading")
 }
@@ -310,7 +310,7 @@ func TestDynamicWorkflowToolNotInRocketClawAutoAllowList(t *testing.T) {
 
 	action, matched := agents.Items["main"].Permission.Evaluate("rocketclaw", dynamicWorkflowToolName)
 	assert.False(t, matched)
-	assert.Equal(t, rocketcode.PermissionDeny, action)
+	assert.Equal(t, harness.PermissionDeny, action)
 }
 
 func TestWorkflowRunnerRuntimeOmitsDynamicWorkflowTool(t *testing.T) {
@@ -332,12 +332,12 @@ def main(args):
 	shellRel := filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode", "wf-test"))
 	require.NoError(t, root.Mkdir(shellRel, 0o700))
 
-	runtime, err := rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{
+	runtime, err := harness.NewWithModelResolver(resolver, &harness.Config{
 		ShellTempDir:      filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
 		RetainedResultDir: "retained",
-		ChildSessions:     rocketcode.InertChildSessions{},
-		Journal:           rocketcode.InertJournal{},
-		ShellCommand:      rocketcode.DefaultShellCommand{},
+		ChildSessions:     harness.InertChildSessions{},
+		Journal:           harness.InertJournal{},
+		ShellCommand:      harness.DefaultShellCommand{},
 	}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 

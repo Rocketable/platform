@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 var errHistoryBusy = errors.New("conversation history is busy")
@@ -397,18 +397,18 @@ DELETE FROM shadow_turns t USING affected a WHERE t.id = a.id`, parent, entry.ID
 }
 
 // turnInputSnapshot is the consumed stream, not an admission queue or a cursor.
-// Applied identities advance only in RocketCode's own journal checkpoint.
+// Applied identities advance only in the harness's own journal checkpoint.
 // Resets lists the consumed inputs a person sent into the running turn: each
 // starts a fresh shadow step count, as the turn's first input does.
 type turnInputSnapshot struct {
-	Agent          string                    `json:"agent"`
-	Inputs         []rocketcode.PromptInput  `json:"inputs"`
-	ContextEntries []rocketcode.SessionEntry `json:"context_entries"`
-	ChildContext   []rocketcode.SessionEntry `json:"child_context"`
-	Environment    map[string]string         `json:"environment"`
-	Closed         bool                      `json:"closed"`
-	GoalTurn       bool                      `json:"goal_turn"`
-	Resets         []string                  `json:"resets"`
+	Agent          string                 `json:"agent"`
+	Inputs         []harness.PromptInput  `json:"inputs"`
+	ContextEntries []harness.SessionEntry `json:"context_entries"`
+	ChildContext   []harness.SessionEntry `json:"child_context"`
+	Environment    map[string]string      `json:"environment"`
+	Closed         bool                   `json:"closed"`
+	GoalTurn       bool                   `json:"goal_turn"`
+	Resets         []string               `json:"resets"`
 }
 
 // emptyTurnInputsError reports a turn whose saved input holds no prompt to run.
@@ -541,7 +541,7 @@ func shadowStepSegment(applied, resets []string) int {
 // drainShadowInputs holds a shadow to floor(1.5 x) its parent's steps since the
 // last message a person sent: ahead of its parent it waits for the parent's next
 // step, and after the parent's turn it ends once out of steps.
-func (b *Bridge) drainShadowInputs(ctx context.Context, responseID string, phase rocketcode.TurnPhase, applied []string) ([]rocketcode.PromptInput, error) {
+func (b *Bridge) drainShadowInputs(ctx context.Context, responseID string, phase harness.TurnPhase, applied []string) ([]harness.PromptInput, error) {
 	// Register before rereading durable state, so a commit between registration
 	// and the query cannot strand a final-answer wait. No lock crosses the wait.
 	b.mu.Lock()
@@ -579,15 +579,15 @@ WHERE t.child_conversation_id = $1 AND t.child_turn_id = $2 AND s.segment = $3`,
 		}
 
 		capped := steps >= parentSteps*3/2
-		inputs := slices.DeleteFunc(snapshot.Inputs, func(input rocketcode.PromptInput) bool { return slices.Contains(applied, input.ID) })
+		inputs := slices.DeleteFunc(snapshot.Inputs, func(input harness.PromptInput) bool { return slices.Contains(applied, input.ID) })
 
 		switch {
-		case !capped && (len(inputs) > 0 || snapshot.Closed || phase != rocketcode.TurnPhaseFinalAnswer):
+		case !capped && (len(inputs) > 0 || snapshot.Closed || phase != harness.TurnPhaseFinalAnswer):
 			return inputs, nil
-		case slices.ContainsFunc(inputs, func(input rocketcode.PromptInput) bool { return slices.Contains(snapshot.Resets, input.ID) }):
+		case slices.ContainsFunc(inputs, func(input harness.PromptInput) bool { return slices.Contains(snapshot.Resets, input.ID) }):
 			// A person's next message starts a fresh count, so it always gets through.
 			return inputs, nil
-		case snapshot.Closed && phase == rocketcode.TurnPhaseFinalAnswer:
+		case snapshot.Closed && phase == harness.TurnPhaseFinalAnswer:
 			// Out of steps after the parent's turn, an answer stands.
 			return nil, nil
 		case snapshot.Closed:
@@ -763,7 +763,7 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 			return nil, err
 		}
 
-		var entries []rocketcode.SessionEntry
+		var entries []harness.SessionEntry
 
 		producers := []string{parent}
 
@@ -800,7 +800,7 @@ func (b *Bridge) admitShadowInputs(ctx context.Context, db stateStoreDB, request
 	}
 	// Prepared workflows fix their agent before activation. Other requests fix it
 	// here, atomically with the roster, for execution and restart.
-	return saveTurnInputs(ctx, db, b.config.ConversationID, turn, &turnInputSnapshot{Agent: agent, Inputs: []rocketcode.PromptInput{}})
+	return saveTurnInputs(ctx, db, b.config.ConversationID, turn, &turnInputSnapshot{Agent: agent, Inputs: []harness.PromptInput{}})
 }
 
 // startShadowManifests fixes the roster in the same transaction as parent admission.

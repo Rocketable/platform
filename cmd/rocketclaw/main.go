@@ -1,7 +1,7 @@
-// Command rocketclaw bridges Slack and external MCP inputs to RocketCode.
+// Command rocketclaw bridges Slack and external MCP inputs to the agent harness.
 package main
 
-//go:generate find ../../cmd/rocketclaw ../../internal/rocketclaw ../../internal/rocketcode ( -name mocks_test.go -o -name *_mocks_test.go ) -delete
+//go:generate find ../../cmd/rocketclaw ../../internal/rocketclaw ( -name mocks_test.go -o -name *_mocks_test.go ) -delete
 //go:generate go run -C ../.. -mod=mod -modfile=tools/go.mod github.com/vektra/mockery/v3
 
 import (
@@ -26,7 +26,7 @@ type runtimeConfigFile struct {
 	Found         bool
 }
 
-const helpText = "rocketclaw\n\nUsage:\n  rocketclaw run [--pprof=false]\n  rocketclaw lint [next|current]\n  rocketclaw agent-graph [next|current]\n  rocketclaw oai login [provider] [--headless]\n  rocketclaw oai list\n  rocketclaw oai logout [provider]\n  rocketclaw ts login\n  rocketclaw help\n\nCommands:\n  run          Start rocketclaw and fail if the configuration file is missing or invalid.\n  lint         Check effective RocketCode agent-system safety.\n  agent-graph  Print the effective RocketCode task delegation graph as DOT.\n  oai          Manage provider-specific ChatGPT credentials for RocketCode model requests.\n  ts           Log the Web's Tailscale node (web.tsnet) in to the tailnet.\n  help         Show this help screen.\n\nRun options:\n  --pprof      Serve private Go profiles at 127.0.0.1:6060; enabled by default, disable with --pprof=false, not saved in config.\n\nRunning `rocketclaw` without a subcommand starts the server when femtoclaw.json or rocketclaw.json is present.\nIf both files are missing, this help screen is shown instead.\n"
+const helpText = "rocketclaw\n\nUsage:\n  rocketclaw run [--pprof=false]\n  rocketclaw lint [next|current]\n  rocketclaw agent-graph [next|current]\n  rocketclaw oai login [provider] [--headless]\n  rocketclaw oai list\n  rocketclaw oai logout [provider]\n  rocketclaw ts login\n  rocketclaw help\n\nCommands:\n  run          Start rocketclaw and fail if the configuration file is missing or invalid.\n  lint         Check effective agent-system safety.\n  agent-graph  Print the effective task delegation graph as DOT.\n  oai          Manage provider-specific ChatGPT credentials for model requests.\n  ts           Log the Web's Tailscale node (web.tsnet) in to the tailnet.\n  help         Show this help screen.\n\nRun options:\n  --pprof      Serve private Go profiles at 127.0.0.1:6060; enabled by default, disable with --pprof=false, not saved in config.\n\nRunning `rocketclaw` without a subcommand starts the server when femtoclaw.json or rocketclaw.json is present.\nIf both files are missing, this help screen is shown instead.\n"
 
 type exitCoder interface {
 	Error() string

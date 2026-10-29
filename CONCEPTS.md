@@ -90,11 +90,14 @@ The token count at which a turn asks its Provider to compact conversation histor
 
 Each Provider can set its own Autocompaction Threshold. Unset means the runtime default. A child turn uses a different threshold only when it resolves a different Provider.
 
-## RocketCode
+## Harness
+
+RocketClaw's agent engine: it runs the model loop, tools, and permissions for every turn.
+*Avoid:* RocketCode, its former name from when it was a separate component; older plans and specs still use it.
 
 ### Code Mode
 
-The RocketCode agent style that asks the model to write a short script and run it through Execute instead of calling Host Tools as top-level model tools.
+The harness agent style that asks the model to write a short script and run it through Execute instead of calling Host Tools as top-level model tools.
 
 ### Execute
 
@@ -117,19 +120,19 @@ Each command runs in a fresh emulator process. Only the agent's declared working
 
 A small record of one Host Tool or MCP call a Code Mode script made, which Web lists under the script's Execute call.
 
-It holds the call's name, its clipped arguments, a status, a one-line summary of the output, and the outcome and reason of the call's Permission Review when it had one; it never holds the output. While its RocketCode Turn runs, each record is saved on its own when the call starts and when it finishes, so the turn's other saves never rewrite it; the finished turn keeps its records. An Execute call keeps a bounded number of records, and none are added after the turn ends.
+It holds the call's name, its clipped arguments, a status, a one-line summary of the output, and the outcome and reason of the call's Permission Review when it had one; it never holds the output. While its Harness Turn runs, each record is saved on its own when the call starts and when it finishes, so the turn's other saves never rewrite it; the finished turn keeps its records. An Execute call keeps a bounded number of records, and none are added after the turn ends.
 
 ### Spill
 
 A turn-scoped file that holds the full Execute result when that result is too large to send to the model.
 
-A Spill has an opaque result ID registered only with its owning RocketCode Turn. The model retrieves bounded pages through a dedicated top-level tool, without gaining filesystem read access. The ID expires and the file is deleted when the turn ends.
+A Spill has an opaque result ID registered only with its owning Harness Turn. The model retrieves bounded pages through a dedicated top-level tool, without gaining filesystem read access. The ID expires and the file is deleted when the turn ends.
 
-### RocketCode Turn
+### Harness Turn
 
-One model loop in RocketCode. It owns that loop's Spills.
+One model loop in the harness. It owns that loop's Spills.
 
-A RocketCode Turn is not the active-turn slot on a Managed Slack Thread. Slack occupancy often drives one RocketCode Turn, but the two lifetimes are not the same object.
+A Harness Turn is not the active-turn slot on a Managed Slack Thread. Slack occupancy often drives one Harness Turn, but the two lifetimes are not the same object.
 
 ### Delegation History
 
@@ -211,7 +214,7 @@ Two people never share Voice Settings, even in one browser. Retention cleanup ne
 
 A task the voice model passes to the conversation's agent during a Voice Session.
 
-Each one becomes a Web user message marked as voice, holding the request and what the person and the voice model said since the previous hand-off, taken the moment the hand-off arrives. Hand-offs are admitted in arrival order without waiting for the agent. Nothing about the agent's work reaches the voice model while it runs; the final reply of a turn the session handed off is spoken once, as written, unless it is too long to speak or a message typed later in the call supersedes it. A pending question is announced once and answered in the app, never by a hand-off. Not to be confused with a Delegation History, which is work a tool call delegated inside RocketCode.
+Each one becomes a Web user message marked as voice, holding the request and what the person and the voice model said since the previous hand-off, taken the moment the hand-off arrives. Hand-offs are admitted in arrival order without waiting for the agent. Nothing about the agent's work reaches the voice model while it runs; the final reply of a turn the session handed off is spoken once, as written, unless it is too long to speak or a message typed later in the call supersedes it. A pending question is announced once and answered in the app, never by a hand-off. Not to be confused with a Delegation History, which is work a tool call delegated inside the harness.
 
 ## Web Spaces
 
@@ -298,11 +301,11 @@ A running turn saves each item of its record once, as a step of its own, instead
 - Reload replaces Overlay Clones.
 - Frontends and the Backend share Protocol.
 - A turn uses the Autocompaction Threshold of the Provider that serves its model.
-- Code Mode exposes Execute and Host Tools; an oversized Execute result becomes a Spill owned by that RocketCode Turn.
+- Code Mode exposes Execute and Host Tools; an oversized Execute result becomes a Spill owned by that Harness Turn.
 
 ## Flagged ambiguities
 
-- "'turn' had been used for both a Slack conversation occupancy slot and a RocketCode model loop — these are distinct."
+- "'turn' had been used for both a Slack conversation occupancy slot and a harness model loop — these are distinct."
 
 ## Retired
 

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
@@ -937,7 +937,7 @@ func upsertTestTurn(ctx context.Context, s *SessionService, c *testCheckpoint) e
 	return conversationJournal{store: s, conversationID: c.ConversationKey, log: slog.New(slog.DiscardHandler)}.SaveTrace(ctx, c.TurnID, c.OutputTrace)
 }
 
-// saveTestTurn journals a turn's record as RocketCode saves it: its step, and its replay input as the turn's list.
+// saveTestTurn journals a turn's record as the harness saves it: its step, and its replay input as the turn's list.
 func saveTestTurn(ctx context.Context, s *SessionService, conversationID, turnID string, applied []string, record *harness.SessionEntry) error {
 	header := *record
 	header.ReplayInput = nil

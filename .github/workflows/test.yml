@@ -61,7 +61,6 @@ jobs:
       - run: make -C internal/rocketclaw/oc lint test
       - run: make check-cloc-budget
       - run: make -C internal/rocketclaw -o web-assets -o vendor lint
-      - run: make -C internal/rocketcode lint
       - run: make -C internal/funneld lint
       - if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
@@ -72,7 +71,7 @@ jobs:
             ~/.cache/golangci-lint
           key: go-${{ github.job }}-${{ github.sha }}
 
-  rocketcode:
+  funneld:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -84,14 +83,6 @@ jobs:
           path: ~/.cache/go-build
           key: go-${{ github.job }}-${{ github.sha }}
           restore-keys: go-${{ github.job }}-
-      # The same ripgrep 14.1.0 as Ubuntu 24.04's package, without its package mirror.
-      - name: Install ripgrep
-        run: |
-          curl -fsSLo "$RUNNER_TEMP/rg.tar.gz" https://github.com/BurntSushi/ripgrep/releases/download/14.1.0/ripgrep-14.1.0-x86_64-unknown-linux-musl.tar.gz
-          echo "f84757b07f425fe5cf11d87df6644691c644a5cd2348a2c670894272999d3ba7  $RUNNER_TEMP/rg.tar.gz" | sha256sum -c -
-          sudo tar -xzf "$RUNNER_TEMP/rg.tar.gz" -C /usr/local/bin --strip-components 1 ripgrep-14.1.0-x86_64-unknown-linux-musl/rg
-      - run: go test -race -count 1 ./...
-        working-directory: internal/rocketcode
       - run: go test ../../cmd/funneld ./...
         working-directory: internal/funneld
       # Matrix shards compile the same packages, so only the first saves.
@@ -118,6 +109,12 @@ jobs:
       - uses: actions/checkout@v7
       - *setup-go
       - *restore-go-build
+      # The same ripgrep 14.1.0 as Ubuntu 24.04's package, without its package mirror.
+      - name: Install ripgrep
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/rg.tar.gz" https://github.com/BurntSushi/ripgrep/releases/download/14.1.0/ripgrep-14.1.0-x86_64-unknown-linux-musl.tar.gz
+          echo "f84757b07f425fe5cf11d87df6644691c644a5cd2348a2c670894272999d3ba7  $RUNNER_TEMP/rg.tar.gz" | sha256sum -c -
+          sudo tar -xzf "$RUNNER_TEMP/rg.tar.gz" -C /usr/local/bin --strip-components 1 ripgrep-14.1.0-x86_64-unknown-linux-musl/rg
       - *setup-bun
       # just-bash's wrapper is TypeScript that Node runs directly, which needs Node 22.18 or later.
       - uses: actions/setup-node@v7
@@ -211,7 +208,7 @@ jobs:
   core:
     name: test (core)
     if: always()
-    needs: [checks, rocketcode, rocketclaw, coverage]
+    needs: [checks, funneld, rocketclaw, coverage]
     runs-on: ubuntu-latest
     steps:
       - &all-passed

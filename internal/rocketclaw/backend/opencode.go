@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -603,7 +603,7 @@ type openCodeTitle struct {
 }
 
 // AgentTags lists, per agent with tag groups, the tags people may set on its sessions.
-func AgentTags(agents rocketcode.Agents) map[string][]string {
+func AgentTags(agents harness.Agents) map[string][]string {
 	tags := make(map[string][]string, len(agents.Items))
 
 	for name := range agents.Items {
@@ -618,7 +618,7 @@ func AgentTags(agents rocketcode.Agents) map[string][]string {
 
 // ToggleManualTag toggles a tag a person chose. A remote OpenCode session takes any tag; a
 // RocketClaw session takes only a tag its agent allows, which clears the rest of its group.
-func (s *SessionService) ToggleManualTag(ctx context.Context, agents rocketcode.Agents, id, tag string) error {
+func (s *SessionService) ToggleManualTag(ctx context.Context, agents harness.Agents, id, tag string) error {
 	kind, _, err := s.ConversationKind(ctx, id)
 	if err != nil {
 		return err
@@ -712,11 +712,11 @@ const openCodeAPIToolName = "opencode_api"
 
 // openCodeAPITool calls a configured OpenCode server's API as `opencode api` does. The opencode
 // permission, keyed by server name, decides which servers an agent may call and how.
-func openCodeAPITool(servers map[string]config.OpenCodeConfig) rocketcode.Tool {
+func openCodeAPITool(servers map[string]config.OpenCodeConfig) harness.Tool {
 	names := slices.Sorted(maps.Keys(servers))
 	text := map[string]any{"type": "string"}
 
-	return rocketcode.Tool{Name: openCodeAPIToolName, Permission: "opencode", VisibilitySubjects: names,
+	return harness.Tool{Name: openCodeAPIToolName, Permission: "opencode", VisibilitySubjects: names,
 		Description: "Call a remote OpenCode server's HTTP API, as `opencode api` does. operation is an OpenAPI operation ID such as session.list, or a method and path such as GET /api/session; GET /openapi.json lists the operations. " +
 			"Each param fills the {name} path placeholder it names, otherwise it joins the query string, as location[directory] does to pick a project. body is the JSON request body, empty for none. " +
 			"Returns the response body, or the status when it is empty. Event streams are refused.",
@@ -732,7 +732,7 @@ func openCodeAPITool(servers map[string]config.OpenCodeConfig) rocketcode.Tool {
 
 			return []string{input.Server}, nil
 		},
-		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 			var input struct {
 				Server    string `json:"server"`
 				Operation string `json:"operation"`
@@ -743,12 +743,12 @@ func openCodeAPITool(servers map[string]config.OpenCodeConfig) rocketcode.Tool {
 				Body string `json:"body"`
 			}
 			if err := json.Unmarshal(raw, &input); err != nil {
-				return rocketcode.ToolResult{}, fmt.Errorf("parse %s: %w", openCodeAPIToolName, err)
+				return harness.ToolResult{}, fmt.Errorf("parse %s: %w", openCodeAPIToolName, err)
 			}
 
 			server, ok := servers[input.Server]
 			if !ok {
-				return rocketcode.ToolResult{}, fmt.Errorf("opencode server %q is not configured", input.Server)
+				return harness.ToolResult{}, fmt.Errorf("opencode server %q is not configured", input.Server)
 			}
 
 			method, path, ok := strings.Cut(strings.TrimSpace(input.Operation), " ")
@@ -758,7 +758,7 @@ func openCodeAPITool(servers map[string]config.OpenCodeConfig) rocketcode.Tool {
 					Paths map[string]map[string]any `json:"paths"`
 				}
 				if err := openCodeCall(ctx, input.Server, server, http.MethodGet, "/openapi.json", nil, &spec); err != nil {
-					return rocketcode.ToolResult{}, err
+					return harness.ToolResult{}, err
 				}
 
 				for template, operations := range spec.Paths {
@@ -770,20 +770,20 @@ func openCodeAPITool(servers map[string]config.OpenCodeConfig) rocketcode.Tool {
 				}
 
 				if path == "" {
-					return rocketcode.ToolResult{}, fmt.Errorf("opencode server %q has no operation %q", input.Server, input.Operation)
+					return harness.ToolResult{}, fmt.Errorf("opencode server %q has no operation %q", input.Server, input.Operation)
 				}
 			}
 
 			// A path not starting with / would join the server's host and send its password elsewhere.
 			if !strings.HasPrefix(path, "/") {
-				return rocketcode.ToolResult{}, fmt.Errorf("path %q must start with /", path)
+				return harness.ToolResult{}, fmt.Errorf("path %q must start with /", path)
 			}
 
 			path, rawQuery, _ := strings.Cut(path, "?")
 
 			query, err := url.ParseQuery(rawQuery)
 			if err != nil {
-				return rocketcode.ToolResult{}, fmt.Errorf("parse opencode query: %w", err)
+				return harness.ToolResult{}, fmt.Errorf("parse opencode query: %w", err)
 			}
 
 			for _, param := range input.Params {
@@ -796,7 +796,7 @@ func openCodeAPITool(servers map[string]config.OpenCodeConfig) rocketcode.Tool {
 
 			request, err := http.NewRequestWithContext(ctx, strings.ToUpper(method), strings.TrimSuffix(server.URL, "/")+path+"?"+query.Encode(), strings.NewReader(input.Body))
 			if err != nil {
-				return rocketcode.ToolResult{}, fmt.Errorf("build opencode request: %w", err)
+				return harness.ToolResult{}, fmt.Errorf("build opencode request: %w", err)
 			}
 
 			request.SetBasicAuth("opencode", server.Password)
@@ -804,24 +804,24 @@ func openCodeAPITool(servers map[string]config.OpenCodeConfig) rocketcode.Tool {
 
 			response, err := http.DefaultClient.Do(request)
 			if err != nil {
-				return rocketcode.ToolResult{}, fmt.Errorf("call opencode %s: %w", input.Server, err)
+				return harness.ToolResult{}, fmt.Errorf("call opencode %s: %w", input.Server, err)
 			}
 			defer func() { _ = response.Body.Close() }()
 
 			// An event stream never ends, so reading it would hold the call forever.
 			if strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
-				return rocketcode.ToolResult{}, fmt.Errorf("opencode %s %s is an event stream, which %s cannot read", input.Server, path, openCodeAPIToolName)
+				return harness.ToolResult{}, fmt.Errorf("opencode %s %s is an event stream, which %s cannot read", input.Server, path, openCodeAPIToolName)
 			}
 
 			data, err := io.ReadAll(response.Body)
 			if err != nil {
-				return rocketcode.ToolResult{}, fmt.Errorf("read opencode %s response: %w", input.Server, err)
+				return harness.ToolResult{}, fmt.Errorf("read opencode %s response: %w", input.Server, err)
 			}
 
 			if response.StatusCode/100 != 2 {
-				return rocketcode.ToolResult{}, fmt.Errorf("%w: %s", &openCodeError{Server: input.Server, Path: path, Status: response.StatusCode}, data)
+				return harness.ToolResult{}, fmt.Errorf("%w: %s", &openCodeError{Server: input.Server, Path: path, Status: response.StatusCode}, data)
 			}
 
-			return rocketcode.TextToolResult(cmp.Or(string(data), response.Status)), nil
+			return harness.TextToolResult(cmp.Or(string(data), response.Status)), nil
 		}}
 }

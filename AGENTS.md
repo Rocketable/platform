@@ -30,7 +30,7 @@ On start, you must always read:
 - Read the relevant source code before asking clarifying questions or proposing edits.
 - **NON-NEGOTIABLE TEMPORARY-DIRECTORY POLICY:** The only acceptable location for temporary files, scratch data, throwaway artifacts, clones, Git worktrees, and Jujutsu workspaces is `<repo-root>/.tmp/`. Never use `/tmp`, `$TMPDIR`, system temporary directories, or temporary directories anywhere else. Create `<repo-root>/.tmp/` when needed. Every repository skill must include and enforce this policy; if any skill conflicts with it, this policy wins.
 - Whenever you create a Markdown file that is either a spec or a plan, and detect that you are running inside cmux, immediately open it in a preview tab with `cmux markdown open <path>`.
-- Place documents produced by Superpowers, Compound Engineering, or similar workflows under the repository's top-level `docs/` directory, in its purpose-based subdirectories (`plans/`, `specs/`, `solutions/`, `investigations/`, `verification/`, `explainers/`). Do not create `docs` directories inside components such as `internal/rocketclaw` or `internal/rocketcode`. Use purpose-based paths that contain no workflow or tool branding, including `superpower`, `superpowers`, `compound-engineering`, `ce`, or variants.
+- Place documents produced by Superpowers, Compound Engineering, or similar workflows under the repository's top-level `docs/` directory, in its purpose-based subdirectories (`plans/`, `specs/`, `solutions/`, `investigations/`, `verification/`, `explainers/`). Do not create `docs` directories inside components such as `internal/rocketclaw` or `internal/rocketclaw/harness`. Use purpose-based paths that contain no workflow or tool branding, including `superpower`, `superpowers`, `compound-engineering`, `ce`, or variants.
 - `docs/solutions/` contains documented solutions to past problems and practices, organized by category with searchable YAML frontmatter (`module`, `tags`, `problem_type`); it is relevant when implementing or debugging in documented areas.
 - `CONCEPTS.md` contains shared project vocabulary for entities, named processes, and status concepts; use it when orienting to the codebase or discussing domain concepts.
 - Never use `git`. Use `jj` for repository inspection and history, and always use `jj diff --git` for diffs.
@@ -165,7 +165,7 @@ JOIN shadow_parents p USING (conversation_id);
 
 - The Web interface is RocketClaw's primary interface. Slack is a convenience surface with one job: answering @mentions from allowlisted users. Only mention threads post to Slack; cron reports and External MCP sessions are Web chats, and nothing else in Slack drives an agent.
 
-## RocketCode-Specific Requirements
+## Harness-Specific Requirements
 
 - When asked to "match OpenCode", first determine whether parity is required for user-visible behavior/output, API shape/signature, or underlying implementation.
 - Default to matching behavior and output first unless the user explicitly asks for API or implementation parity too.
@@ -179,7 +179,7 @@ JOIN shadow_parents p USING (conversation_id);
 - If code shells out to external tools like `rg`, validate the requested path through `*os.Root` first.
 - Run external commands inside the resolved sandbox directory. Do not let host-level commands bypass the sandbox contract.
 - Tests for sandboxed command behavior should still create fixtures through `*os.Root`.
-- Before finalizing a filesystem-related RocketCode change, verify production code accesses files through the intended abstraction, tests build fixtures through the same abstraction, and assertions cover the contract rather than only non-empty output.
+- Before finalizing a filesystem-related harness change, verify production code accesses files through the intended abstraction, tests build fixtures through the same abstraction, and assertions cover the contract rather than only non-empty output.
 
 ## CLOC And Metrics
 

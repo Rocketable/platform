@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -234,7 +234,7 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT outbound_json::text FROM turns WHERE id = 'turn-finished'`).Scan(&persisted))
 	assert.NotContains(t, persisted, base64.StdEncoding.EncodeToString(outbound.Attachments[0].Data), "a finished turn keeps only attachment IDs, so large files fit")
 
-	late := []rocketcode.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), TurnID: "turn-finished"}}
+	late := []harness.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), TurnID: "turn-finished"}}
 	stored, err := service.finishTurn(t.Context(), "turn-finished", &turnFinish{store: newSessionStore(conversationID, service), accountGoal: true, entries: late, outbound: crashed.newOutboundMessage(msg, "turn-finished", "late answer", true)})
 	require.NoError(t, err)
 	assert.Equal(t, "finished answer", stored.Text, "a second finish returns the stored outbound")
@@ -271,7 +271,7 @@ func TestLateRunnerLeavesStoppedTurn(t *testing.T) {
 	require.NoError(t, startTurnDB(ctx, service.db, "turn-1", "chat", inbound))
 
 	save := func(items ...string) {
-		record := rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1"}
+		record := harness.SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1"}
 		for _, text := range items {
 			record.ReplayInput = append(record.ReplayInput, json.RawMessage(`{"type":"message","role":"assistant","content":"`+text+`"}`))
 		}
@@ -628,7 +628,7 @@ func TestSilentCronRunOpensNoReportChat(t *testing.T) {
 	writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nRun the job.\n")
 
 	crashed := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:quiet", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
-	_, err := service.finishTurn(t.Context(), "turn-quiet", &turnFinish{store: newSessionStore("cron:quiet", service), entries: []rocketcode.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replayInputForMessage("user", "job prompt")}}, outbound: crashed.newOutboundMessage(msg, "turn-quiet", "", true)})
+	_, err := service.finishTurn(t.Context(), "turn-quiet", &turnFinish{store: newSessionStore("cron:quiet", service), entries: []harness.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replayInputForMessage("user", "job prompt")}}, outbound: crashed.newOutboundMessage(msg, "turn-quiet", "", true)})
 	require.NoError(t, err)
 
 	require.NoError(t, manager.StartActiveTurns(t.Context()))
@@ -656,7 +656,7 @@ func TestResumedCronRowOpensReportChat(t *testing.T) {
 
 	crashed := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
 	replay := replayInputForMessage("user", "job prompt")
-	_, err := service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", service), entries: []rocketcode.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay}}, outbound: crashed.newOutboundMessage(msg, "turn-cron", "exact report", true)})
+	_, err := service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", service), entries: []harness.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay}}, outbound: crashed.newOutboundMessage(msg, "turn-cron", "exact report", true)})
 	require.NoError(t, err)
 
 	require.NoError(t, manager.StartActiveTurns(t.Context()))
@@ -945,7 +945,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 
 			seedProducerEffects(t, store, "cron:pending", "pending", effects...)
 
-			delivery, err := store.finishTurn(t.Context(), "pending", &turnFinish{store: newSessionStore("cron:pending", store), entries: []rocketcode.SessionEntry{*testSessionEntry("original job", "private answer")}, outbound: protocol.NewOutboundMessage("cron:pending", "")})
+			delivery, err := store.finishTurn(t.Context(), "pending", &turnFinish{store: newSessionStore("cron:pending", store), entries: []harness.SessionEntry{*testSessionEntry("original job", "private answer")}, outbound: protocol.NewOutboundMessage("cron:pending", "")})
 			require.NoError(t, err)
 
 			if !strings.HasPrefix(state, "live ") {
@@ -1199,7 +1199,7 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 					return
 				}
 
-				_, err := service.finishTurn(t.Context(), "turn-private", &turnFinish{store: newSessionStore(privateID, service), entries: []rocketcode.SessionEntry{*testSessionEntry("support ticket", "original answer")}, outbound: protocol.NewOutboundMessage(privateID, "original answer")})
+				_, err := service.finishTurn(t.Context(), "turn-private", &turnFinish{store: newSessionStore(privateID, service), entries: []harness.SessionEntry{*testSessionEntry("support ticket", "original answer")}, outbound: protocol.NewOutboundMessage(privateID, "original answer")})
 				require.NoError(t, err)
 				require.NoError(t, service.closeTurn(t.Context(), "turn-private"))
 				require.Empty(t, runningTestTurns(t, service), "startup must recover without an unfinished producer row")
@@ -1900,7 +1900,7 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 
 	outbound := protocol.NewOutboundMessage("cron:nightly", "Report started")
 	outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
-	_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:nightly", nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
+	_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:nightly", nt.service), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
 	require.NoError(t, err)
 	require.NoError(t, first.StartActiveTurns(t.Context()))
 	assert.Equal(t, "Report started", readFinalFor(t, nt.finals, "cron:nightly").Text)
@@ -2043,7 +2043,7 @@ func TestTaskRunsSubagentAsSession(t *testing.T) {
 	_, err = nt.service.db.ExecContext(t.Context(), `UPDATE conversations SET producer_inbound_json = NULL, reports_to = NULL WHERE conversation_id = $1`, nt.conversationID)
 	require.NoError(t, err)
 
-	write := &rocketcode.SubagentWrite{Key: rocketcode.ChildKey{Path: key}, Agent: "researcher", Delegator: "main", Prompt: "research the flaky test"}
+	write := &harness.SubagentWrite{Key: harness.ChildKey{Path: key}, Agent: "researcher", Delegator: "main", Prompt: "research the flaky test"}
 	inputs, err := queryStrings(t.Context(), nt.service.db, `WITH items AS (SELECT jsonb_array_elements(entry_json::jsonb->'replay_input') AS item FROM entries WHERE conversation_id = $1)
 SELECT item->>'input_id' FROM items WHERE item->>'input_id' <> ''`, "subagent inputs", subagent)
 	require.NoError(t, err)
@@ -2060,12 +2060,12 @@ SELECT item->>'input_id' FROM items WHERE item->>'input_id' <> ''`, "subagent in
 	assert.Empty(t, nt.requests, "a replayed call delivers nothing and answers from the saved turn")
 
 	// A continue's prompt runs as the subagent's next turn; a steer joins it while it runs.
-	_, err = parent.WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: rocketcode.ChildKey{Path: key}, CallKey: "turn-2/call/c", Agent: "researcher", Delegator: "main", Prompt: "check again", Mode: rocketcode.ContinueEnqueue})
+	_, err = parent.WriteSubagent(t.Context(), &harness.SubagentWrite{Key: harness.ChildKey{Path: key}, CallKey: "turn-2/call/c", Agent: "researcher", Delegator: "main", Prompt: "check again", Mode: harness.ContinueEnqueue})
 	require.NoError(t, err)
 	nt.request(t)
 	<-held
 
-	steered, err = parent.WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: rocketcode.ChildKey{Path: key}, CallKey: "turn-2/call/s", Agent: "researcher", Delegator: "main", Prompt: "also the logs", Mode: rocketcode.ContinueSteer})
+	steered, err = parent.WriteSubagent(t.Context(), &harness.SubagentWrite{Key: harness.ChildKey{Path: key}, CallKey: "turn-2/call/s", Agent: "researcher", Delegator: "main", Prompt: "also the logs", Mode: harness.ContinueSteer})
 	require.NoError(t, err)
 	assert.True(t, steered, "the steer joins the running turn")
 	close(release)
@@ -2102,7 +2102,7 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 
 	manager, shutdown := nt.run(t, ignoreOutbound)
 	parent, subagent := nt.bridge(t, manager, nt.conversationID), nt.conversationID+"/a"
-	_, err := parent.WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: rocketcode.ChildKey{Path: "/a", Turn: "turn-0", Call: "busy"}, CallKey: "turn-0/call/busy", Agent: "researcher", Delegator: "main", Prompt: "busy work"})
+	_, err := parent.WriteSubagent(t.Context(), &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "busy"}, CallKey: "turn-0/call/busy", Agent: "researcher", Delegator: "main", Prompt: "busy work"})
 	require.NoError(t, err)
 	assert.Contains(t, nt.request(t), "busy work")
 
@@ -2111,13 +2111,13 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 	require.Eventually(t, func() bool {
 		entries, err := nt.service.ObserveTranscript(context.Background(), nt.conversationID, 0, 0, nil)
 
-		return err == nil && len(entries) == 1 && slices.ContainsFunc(rocketcode.PublicProgressFromTrace(entries[0].Entry.OutputTrace), func(progress rocketcode.PublicProgress) bool {
-			return progress.Kind == rocketcode.PublicProgressDelegation && progress.State == rocketcode.PublicProgressWorking
+		return err == nil && len(entries) == 1 && slices.ContainsFunc(harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace), func(progress harness.PublicProgress) bool {
+			return progress.Kind == harness.PublicProgressDelegation && progress.State == harness.PublicProgressWorking
 		})
 	}, 10*time.Second, 10*time.Millisecond, "the parent's task call waits")
 	require.Len(t, queueIDs(t, nt.service, subagent), 1, "the parent's prompt waits behind the running turn")
 
-	_, err = parent.WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: rocketcode.ChildKey{Path: "/a"}, CallKey: "turn-0/call/job", Agent: "researcher", Delegator: "main", Prompt: "job work", Mode: rocketcode.ContinueEnqueue})
+	_, err = parent.WriteSubagent(t.Context(), &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a"}, CallKey: "turn-0/call/job", Agent: "researcher", Delegator: "main", Prompt: "job work", Mode: harness.ContinueEnqueue})
 	require.NoError(t, err)
 
 	manager.InterruptConversation(nt.conversationID)
@@ -2231,8 +2231,8 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 				writeAgent(t, nt.cfg.Workspace, "guard", "---\ndescription: Guard\nmode: subagent\nmodel: gpt-6.1-sol\npermission: {}\n---\nGuard\n")
 			}
 
-			require.NoError(t, nt.service.startSubagent(t.Context(), nt.conversationID, rocketcode.ChildKey{Path: "/a", Turn: "turn-0", Call: "a"}, "researcher", true))
-			require.NoError(t, nt.service.startSubagent(t.Context(), nt.conversationID+"/a", rocketcode.ChildKey{Path: "/b", Turn: "turn-0", Call: "b"}, "researcher", true))
+			require.NoError(t, nt.service.startSubagent(t.Context(), nt.conversationID, harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "a"}, "researcher", true))
+			require.NoError(t, nt.service.startSubagent(t.Context(), nt.conversationID+"/a", harness.ChildKey{Path: "/b", Turn: "turn-0", Call: "b"}, "researcher", true))
 			helper := nt.conversationID + tc.woken
 
 			var manager *threadBridgeManager
@@ -2241,7 +2241,7 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 				inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 				inbound.Metadata = map[string]string{backgroundNotesMetadataKey: "turn-0/call/x"}
 				require.NoError(t, startTurnDB(t.Context(), nt.service.db, "turn-1", helper, inbound))
-				_, err := nt.service.finishTurn(t.Context(), "turn-1", &turnFinish{store: newSessionStore(helper, nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("notes", "found it")}, outbound: protocol.NewOutboundMessage(helper, "found it"), report: "<task_result>\nfound it\n</task_result>"})
+				_, err := nt.service.finishTurn(t.Context(), "turn-1", &turnFinish{store: newSessionStore(helper, nt.service), entries: []harness.SessionEntry{*testSessionEntry("notes", "found it")}, outbound: protocol.NewOutboundMessage(helper, "found it"), report: "<task_result>\nfound it\n</task_result>"})
 				require.NoError(t, err)
 				require.NoError(t, nt.service.closeTurn(t.Context(), "turn-1"))
 
@@ -2259,7 +2259,7 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 
 			if tc.steer {
 				require.Eventually(t, func() bool { return len(hold) == 0 }, 10*time.Second, 10*time.Millisecond, "the helper's wake turn runs")
-				steered, err := nt.bridge(t, manager, nt.conversationID).WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: rocketcode.ChildKey{Path: "/a"}, CallKey: "turn-2/call/s", Agent: "researcher", Delegator: "main", Prompt: "also the logs", Mode: rocketcode.ContinueSteer})
+				steered, err := nt.bridge(t, manager, nt.conversationID).WriteSubagent(t.Context(), &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a"}, CallKey: "turn-2/call/s", Agent: "researcher", Delegator: "main", Prompt: "also the logs", Mode: harness.ContinueSteer})
 				require.NoError(t, err)
 				require.True(t, steered, "the steer joins the helper's wake turn")
 				close(release)

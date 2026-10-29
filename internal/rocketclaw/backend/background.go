@@ -15,15 +15,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"golang.org/x/sync/errgroup"
 )
 
 // errBackgroundAbandoned kills detached jobs at shutdown and before their conversation is
-// deleted. Unlike rocketcode.ErrShutdown it also stops bash, and the job records nothing:
+// deleted. Unlike harness.ErrShutdown it also stops bash, and the job records nothing:
 // shutdown leaves its row running for the next start, and deletion removes the row.
-var errBackgroundAbandoned = fmt.Errorf("background job abandoned: %w", rocketcode.ErrBackgroundKilled)
+var errBackgroundAbandoned = fmt.Errorf("background job abandoned: %w", harness.ErrBackgroundKilled)
 
 // backgroundStopError is why a job was stopped; it becomes the stopped job's result.
 type backgroundStopError string
@@ -38,7 +38,7 @@ const (
 func (e backgroundStopError) Error() string { return string(e) }
 
 // Unwrap lets a stop kill the job's running bash.
-func (backgroundStopError) Unwrap() error { return rocketcode.ErrBackgroundKilled }
+func (backgroundStopError) Unwrap() error { return harness.ErrBackgroundKilled }
 
 // errMovedToBackground ends a moved job's turn-bound waits, such as a script's pending question.
 var errMovedToBackground = errors.New("the user moved the work to the background")
@@ -127,9 +127,9 @@ func backgroundNotesText(notes []backgroundJob) string {
 
 // systemPromptInput is text entering a turn with a system origin, never a human one. Each
 // Completion Note uses its job ID as input ID, so a resumed turn offered it again injects it once.
-func systemPromptInput(id, text string) rocketcode.PromptInput {
+func systemPromptInput(id, text string) harness.PromptInput {
 	header := provenanceHeader(&promptProvenance{origin: "System"})
-	return rocketcode.PromptInput{ID: id, Texts: []string{header + "\n\n" + text}, Header: header}
+	return harness.PromptInput{ID: id, Texts: []string{header + "\n\n" + text}, Header: header}
 }
 
 // conversationJobs kills a conversation's running jobs before its rows are deleted, and wakes the task
@@ -211,7 +211,7 @@ func (r *turnRoot) release() {
 	}
 }
 
-// backgroundTurn is the registry as one conversation turn's rocketcode.BackgroundJobs.
+// backgroundTurn is the registry as one conversation turn's harness.BackgroundJobs.
 type backgroundTurn struct {
 	registry       *backgroundRegistry
 	root           *turnRoot
@@ -224,24 +224,24 @@ func (backgroundTurn) Enabled() bool { return true }
 
 // Run runs work on a context detached from ctx. Until the job moves, ctx's cancellation
 // reaches the work with its cause, and Run waits for the work to finish.
-func (t backgroundTurn) Run(ctx context.Context, job *rocketcode.BackgroundJob, work rocketcode.BackgroundWork) (rocketcode.BackgroundResult, error) {
+func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, work harness.BackgroundWork) (harness.BackgroundResult, error) {
 	r, key := t.registry, backgroundKey{t.conversationID, job.ID}
 
 	rows, err := r.store.notedBackgroundJobs(ctx, key.conversationID, []string{key.jobID})
 	if err != nil {
-		return rocketcode.BackgroundResult{}, err
+		return harness.BackgroundResult{}, err
 	}
 
 	if len(rows) > 0 { // A resumed turn's call whose job already left it.
 		work.Detach()
 
-		return rocketcode.BackgroundResult{Moved: true}, nil
+		return harness.BackgroundResult{Moved: true}, nil
 	}
 
 	workCtx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
 
 	kind := turnNote
-	if job.Kind == rocketcode.BackgroundKindExecute {
+	if job.Kind == harness.BackgroundKindExecute {
 		kind = turnScript
 	}
 
@@ -271,7 +271,7 @@ func (t backgroundTurn) Run(ctx context.Context, job *rocketcode.BackgroundJob, 
 			delete(r.runs, key)
 			r.mu.Unlock()
 
-			return rocketcode.BackgroundResult{}, err
+			return harness.BackgroundResult{}, err
 		}
 
 		close(run.recorded)
@@ -288,7 +288,7 @@ func (t backgroundTurn) Run(ctx context.Context, job *rocketcode.BackgroundJob, 
 	})
 
 	if job.Detached {
-		return rocketcode.BackgroundResult{Moved: true}, nil
+		return harness.BackgroundResult{Moved: true}, nil
 	}
 
 	select {
@@ -302,10 +302,10 @@ func (t backgroundTurn) Run(ctx context.Context, job *rocketcode.BackgroundJob, 
 				run.cancel(errBackgroundAbandoned)
 				<-run.done
 
-				return rocketcode.BackgroundResult{}, err
+				return harness.BackgroundResult{}, err
 			}
 
-			return rocketcode.BackgroundResult{Moved: true}, nil
+			return harness.BackgroundResult{Moved: true}, nil
 		}
 
 		// The work stored its result for the turn just before the move, so the call keeps it.
@@ -314,19 +314,19 @@ func (t backgroundTurn) Run(ctx context.Context, job *rocketcode.BackgroundJob, 
 	}
 
 	if stop, ok := errors.AsType[backgroundStopError](context.Cause(workCtx)); ok && run.err != nil {
-		return rocketcode.BackgroundResult{}, stop
+		return harness.BackgroundResult{}, stop
 	}
 
 	if run.err != nil {
-		return rocketcode.BackgroundResult{}, fmt.Errorf("run background work: %w", run.err)
+		return harness.BackgroundResult{}, fmt.Errorf("run background work: %w", run.err)
 	}
 
-	return rocketcode.BackgroundResult{Output: run.output}, nil
+	return harness.BackgroundResult{Output: run.output}, nil
 }
 
 // work runs one job. A job that ended detached records its final state with a pending, wakeable
 // Completion Note for its owner, unless it was abandoned.
-func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *backgroundRun, work rocketcode.BackgroundWork) {
+func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *backgroundRun, work harness.BackgroundWork) {
 	defer close(run.done)
 
 	output, errWork := work.RunBackground(ctx)
@@ -494,7 +494,7 @@ SELECT s.entry_json, t.terminal, t.text, q.rows, r.parent, r.input FROM queued q
 // stopped job's, also stops the turn running ahead of its input, unless a background job waits for that
 // turn (OpenCode packages/core/src/tool/plugin/subagent.ts). Its input is not withdrawn but held, and it
 // leaves no note.
-func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, inputID string) (string, rocketcode.ReplayAttribution, error) {
+func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, inputID string) (string, harness.ReplayAttribution, error) {
 	for {
 		r.mu.Lock()
 		finished := r.finished
@@ -505,26 +505,26 @@ func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, 
 			queued                                 int
 		)
 		if err := r.store.db.QueryRowContext(context.WithoutCancel(ctx), subagentTurnSQL, conversationID, inputID, turnRunning).Scan(&saved, &terminal, &text, &queued, &parent, &running); err != nil {
-			return "", rocketcode.ReplayAttribution{}, fmt.Errorf("read subagent turn: %w", err)
+			return "", harness.ReplayAttribution{}, fmt.Errorf("read subagent turn: %w", err)
 		}
 
 		switch {
 		case saved.Valid:
-			var entry rocketcode.SessionEntry
+			var entry harness.SessionEntry
 			if err := json.Unmarshal([]byte(saved.String), &entry); err != nil {
-				return "", rocketcode.ReplayAttribution{}, fmt.Errorf("decode subagent turn: %w", err)
+				return "", harness.ReplayAttribution{}, fmt.Errorf("decode subagent turn: %w", err)
 			}
 
 			answer, err := turnAnswer(&entry)
 			if err != nil {
-				return "", rocketcode.ReplayAttribution{}, err
+				return "", harness.ReplayAttribution{}, err
 			}
 
-			return answer, rocketcode.ReplayAttribution{Agent: entry.Agent, Model: entry.Model, ReasoningEffort: entry.ReasoningEffort}, nil
+			return answer, harness.ReplayAttribution{Agent: entry.Agent, Model: entry.Model, ReasoningEffort: entry.ReasoningEffort}, nil
 		case terminal.String != "":
-			return "", rocketcode.ReplayAttribution{}, fmt.Errorf("subagent turn %s: %s", terminal.String, text.String)
+			return "", harness.ReplayAttribution{}, fmt.Errorf("subagent turn %s: %s", terminal.String, text.String)
 		case !terminal.Valid && queued == 0:
-			return "", rocketcode.ReplayAttribution{}, fmt.Errorf("the prompt to subagent %q was removed before it ran", conversationID)
+			return "", harness.ReplayAttribution{}, fmt.Errorf("the prompt to subagent %q was removed before it ran", conversationID)
 		}
 
 		select {
@@ -532,17 +532,17 @@ func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, 
 		case <-ctx.Done():
 			cause := context.Cause(ctx)
 			_, jobStopped := errors.AsType[backgroundStopError](cause)
-			stopped := !errors.Is(cause, rocketcode.ErrShutdown) && !errors.Is(cause, errBackgroundAbandoned)
+			stopped := !errors.Is(cause, harness.ErrShutdown) && !errors.Is(cause, errBackgroundAbandoned)
 
 			// A stopped parent's queued input is held, before its turn ahead stops, until the next write
 			// releases it (releaseHeldInputs). Unlike a stash's, its inbound stays an enqueue.
 			if stopped && !jobStopped {
 				if _, err := execState(context.WithoutCancel(ctx), r.store.db, "hold subagent input", `UPDATE turns SET reason = $3, delivery = $4 WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting' AND delivery = $5`, conversationID, inputID, waitHeld, protocol.InboundKindHeld, protocol.InboundKindEnqueue); err != nil {
-					return "", rocketcode.ReplayAttribution{}, err
+					return "", harness.ReplayAttribution{}, err
 				}
 
 				if err := stopReplies(context.WithoutCancel(ctx), r.store.db, conversationID); err != nil {
-					return "", rocketcode.ReplayAttribution{}, err
+					return "", harness.ReplayAttribution{}, err
 				}
 			}
 
@@ -551,7 +551,7 @@ func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, 
 				r.notes.InterruptConversation(conversationID)
 			}
 
-			return "", rocketcode.ReplayAttribution{}, fmt.Errorf("wait for subagent %q: %w", conversationID, cause)
+			return "", harness.ReplayAttribution{}, fmt.Errorf("wait for subagent %q: %w", conversationID, cause)
 		}
 	}
 }
@@ -572,8 +572,8 @@ FROM sessions s WHERE r.conversation_id = s.id AND r.kind = 'reply' AND r.phase 
 
 // turnAnswer is a saved turn's final answer, as a top-level turn's (runTurn): its assistant text
 // without commentary.
-func turnAnswer(entry *rocketcode.SessionEntry) (string, error) {
-	items, err := rocketcode.ReplayInputToParams(entry.ReplayInput)
+func turnAnswer(entry *harness.SessionEntry) (string, error) {
+	items, err := harness.ReplayInputToParams(entry.ReplayInput)
 	if err != nil {
 		return "", fmt.Errorf("decode turn answer: %w", err)
 	}

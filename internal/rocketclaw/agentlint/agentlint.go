@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"gopkg.in/yaml.v3"
 )
 
@@ -37,7 +37,7 @@ type Result struct {
 }
 
 type agentInfo struct {
-	agent        rocketcode.Agent
+	agent        harness.Agent
 	filePath     string
 	suppressions map[string][]string
 }
@@ -53,7 +53,7 @@ type capability struct {
 func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 	skillsRoot := filepath.Join(runtimeRoot, "skills")
 	if _, err := os.Stat(skillsRoot); err == nil {
-		skillLoad := rocketcode.LoadSkills(os.DirFS(skillsRoot), skillsRoot)
+		skillLoad := harness.LoadSkills(os.DirFS(skillsRoot), skillsRoot)
 		if len(skillLoad.Errors) > 0 {
 			return Result{}, fmt.Errorf("load skills: %w", skillLoad.Errors[0])
 		}
@@ -100,9 +100,9 @@ func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 		}
 
 		permission := infos[write.agent].agent.Permission
-		if !slices.ContainsFunc(permission.Buckets, func(bucket rocketcode.PermissionBucket) bool {
-			return (bucket.Name == "websearch" || bucket.Name == "webfetch") && slices.ContainsFunc(bucket.Rules, func(rule rocketcode.PermissionRule) bool {
-				return rule.Action == rocketcode.PermissionAllow
+		if !slices.ContainsFunc(permission.Buckets, func(bucket harness.PermissionBucket) bool {
+			return (bucket.Name == "websearch" || bucket.Name == "webfetch") && slices.ContainsFunc(bucket.Rules, func(rule harness.PermissionRule) bool {
+				return rule.Action == harness.PermissionAllow
 			})
 		}) {
 			continue
@@ -193,7 +193,7 @@ func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
 func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*agentInfo, []Finding, error) {
 	agentsRoot := filepath.Join(runtimeRoot, "agents")
 
-	agentLoad := rocketcode.LoadAgents(os.DirFS(agentsRoot), cfg)
+	agentLoad := harness.LoadAgents(os.DirFS(agentsRoot), cfg)
 	if len(agentLoad.Errors) > 0 {
 		return nil, nil, fmt.Errorf("load agents: %w", agentLoad.Errors[0])
 	}
@@ -323,7 +323,7 @@ func capabilities(infos map[string]*agentInfo, bucket string) []capability {
 			}
 
 			for _, rule := range permissionBucket.Rules {
-				if rule.Action == rocketcode.PermissionAllow {
+				if rule.Action == harness.PermissionAllow {
 					caps = append(caps, capability{agent: name, file: info.filePath, bucket: bucket, pattern: rule.Pattern})
 				}
 			}
@@ -340,7 +340,7 @@ func taskEdges(infos map[string]*agentInfo) map[string][]string {
 	for _, from := range names {
 		info := infos[from]
 		for _, to := range names {
-			if action, _ := info.agent.Permission.Evaluate("task", to); action == rocketcode.PermissionAllow {
+			if action, _ := info.agent.Permission.Evaluate("task", to); action == harness.PermissionAllow {
 				edges[from] = append(edges[from], to)
 			}
 		}

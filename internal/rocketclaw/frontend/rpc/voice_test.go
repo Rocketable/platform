@@ -174,7 +174,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	cfg := &config.Config{
 		DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"},
 		OpenAI:    config.OpenAIConfig{APIKey: voiceSecret, APIBaseURL: openai.URL + "/v1"},
-		Providers: map[string]config.OpenAIConfig{"nokey": {APIBaseURL: openai.URL + "/v1"}, "chat": {RocketCodeAuth: "chatgpt"}, "stale": {RocketCodeAuth: "chatgpt"}, "worker": {APIKey: "worker-key", APIBaseURL: openai.URL + "/worker"}},
+		Providers: map[string]config.OpenAIConfig{"nokey": {APIBaseURL: openai.URL + "/v1"}, "chat": {Auth: "chatgpt"}, "stale": {Auth: "chatgpt"}, "worker": {APIKey: "worker-key", APIBaseURL: openai.URL + "/worker"}},
 	}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
@@ -411,7 +411,7 @@ func TestVoice(t *testing.T) {
 		t.Cleanup(func() { h.server.cfg.Store(cfg) })
 
 		next := *cfg
-		next.OpenAI.RocketCodeAuth = "chatgpt"
+		next.OpenAI.Auth = "chatgpt"
 		h.server.cfg.Store(&next)
 
 		ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
@@ -468,7 +468,7 @@ func TestVoice(t *testing.T) {
 				case "no api key":
 					next.OpenAI.APIKey = ""
 				case "no ChatGPT login", "ChatGPT refresh failure":
-					next.OpenAI.RocketCodeAuth = "chatgpt"
+					next.OpenAI.Auth = "chatgpt"
 
 					if tc.name == "ChatGPT refresh failure" {
 						require.NoError(t, oai.SaveTokenIn(cfg.Workspace, cfg.RuntimeDirName(), "openai", oai.Token{Refresh: "stale-refresh"}))

@@ -1,0 +1,453 @@
+package harness
+
+import (
+	"fmt"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
+)
+
+func TestPermissionHomeExpansion(t *testing.T) {
+	for _, home := range []string{"/home/person", ""} {
+		t.Run(home, func(t *testing.T) {
+			t.Setenv("HOME", home)
+
+			for _, tc := range []struct {
+				permission, pattern, want string
+			}{
+				{"read", "~", home},
+				{"read", "~/file", home + "/file"},
+				{"read", "$HOME", home},
+				{"read", "$HOME/file", home + "/file"},
+				{"read", "file", "file"},
+				{"bash", "~/file", "~/file"},
+				{"bash", "$HOME/file", "$HOME/file"},
+			} {
+				var permissions PermissionSet
+				require.NoError(t, permissions.Set(tc.permission, tc.pattern, PermissionAllow))
+				require.Equal(t, tc.want, permissions.Buckets[0].Rules[0].Pattern, tc.permission+" "+tc.pattern)
+			}
+		})
+	}
+}
+
+func TestInterpolatePermissions(t *testing.T) {
+	for _, tc := range []struct {
+		name, pattern, value, allowed, denied string
+	}{
+		{"path", ".tmp/${ROCKETCLAW_METADATA_FRUIT}/*", "banana", ".tmp/banana/note.txt", ".tmp/apple/note.txt"},
+		{"literal wildcards", "${ROCKETCLAW_METADATA_FRUIT}/*", "*?", "*?/note.txt", "banana/note.txt"},
+		{"literal suffix", "echo ${ROCKETCLAW_METADATA_FRUIT}", "*", "echo *", "echo"},
+		{"authored suffix", "echo ${ROCKETCLAW_METADATA_FRUIT} *", "banana", "echo banana", "echo apple"},
+		{"literal space", "${ROCKETCLAW_METADATA_FRUIT}*", "echo ", "echo banana", "echo"},
+		{"no recursive expansion", "${ROCKETCLAW_METADATA_FRUIT}", "${ROCKETCLAW_OTHER}", "${ROCKETCLAW_OTHER}", "banana"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, bucket := range []string{"edit", "bash", "skill", "mcp", "custom"} {
+				agent := Agent{Name: "main", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: bucket, Rules: []PermissionRule{{Pattern: tc.pattern, Action: PermissionAllow}}}}}}
+				original := agent.Permission
+				InterpolatePermissions(&agent, []string{"ROCKETCLAW_METADATA_FRUIT=" + tc.value})
+				require.Equal(t, tc.pattern, original.Buckets[0].Rules[0].Pattern)
+				require.Equal(t, PermissionAllow, agent.Permission.evaluate(bucket, tc.allowed).Action)
+				require.Equal(t, PermissionDeny, agent.Permission.evaluate(bucket, tc.denied).Action)
+
+				if bucket == "bash" {
+					require.Equal(t, PermissionDeny, agent.Permission.evaluate(bucket, tc.denied, tc.denied).Action)
+				}
+			}
+		})
+	}
+
+	for _, env := range [][]string{nil, {}, {"OTHER=banana"}, {"ROCKETCLAW_METADATA_FRUIT="}} {
+		agent := Agent{Name: "main", Permission: parsePermissionYAML(t, `edit: {"${ROCKETCLAW_METADATA_FRUIT}": allow}`)}
+		InterpolatePermissions(&agent, env)
+		require.Empty(t, agent.Permission.Buckets[0].Rules)
+
+		denied := Agent{Name: "main", Permission: parsePermissionYAML(t, `bash: {"*": allow, "intercom-write --conversation ${ROCKETCLAW_METADATA_FRUIT} *": deny}`)}
+		InterpolatePermissions(&denied, env)
+		require.Equal(t, PermissionDeny, denied.Permission.evaluate("bash", "intercom-write --conversation apple note").Action, "a deny rule without its variable denies as if it were *")
+	}
+
+	unchanged := Agent{Permission: parsePermissionYAML(t, `edit: {"$ROCKETCLAW_X/${OTHER}/${ROCKETCLAW_X:-fallback}": allow}`)}
+	before := unchanged
+	InterpolatePermissions(&unchanged, nil)
+	require.Equal(t, before, unchanged)
+
+	folded := Agent{Permission: parsePermissionYAML(t, "read: {'*': allow, '${ROCKETCLAW_VALUE}\u0301/*': deny}")}
+	InterpolatePermissions(&folded, []string{"ROCKETCLAW_VALUE=e"})
+	require.Equal(t, PermissionDeny, folded.Permission.evaluateRules("read", "É/note.txt", true).Action)
+
+	agent := Agent{Permission: parsePermissionYAML(t, `bash: {"printf '${ROCKETCLAW_VALUE}' > out": allow}`)}
+	InterpolatePermissions(&agent, []string{"ROCKETCLAW_VALUE=*?"})
+
+	for _, tc := range []struct {
+		script string
+		want   PermissionAction
+	}{
+		{"printf '*?' > out", PermissionAllow},
+		{"printf 'banana' > out", PermissionDeny},
+		{"printf '*?' > out; echo injected", PermissionDeny},
+	} {
+		for _, subject := range BashPermissionSubjects(tc.script) {
+			require.Equal(t, tc.want, agent.Permission.evaluate("bash", subject, tc.script).Action)
+		}
+	}
+}
+
+func TestPermissionWildcardMatchOpenCodeSemantics(t *testing.T) {
+	for _, tt := range []struct {
+		input, pattern string
+		want           bool
+	}{
+		{"./cli", "./cli", true}, {"./cli foo", "./cli", false}, {"./client", "./cli", false},
+		{"./cli", "./cli*", true}, {"./cli foo", "./cli*", true}, {"./client", "./cli*", true},
+		{"./cli", "./cli *", true}, {"./cli foo", "./cli *", true}, {"./client", "./cli *", false},
+		{"prefix\nnext\x00", "prefix*", true}, {"é/note.txt", "*.txt", true},
+		{"prefix.txt", "prefix*.txt", true}, {"prefix.txt", "prefix.txt*.txt", false},
+		{"é", "é*é", false}, {"éé", "é*é", true},
+		{"", " *", true}, {"echo ", "echo  *", true}, {"echo", "echo  *", false},
+		{"foo", "foo* *", true}, {"foo ", "foo* *", true}, {"foobar.txt", "foo?*.txt", true},
+		{"prefix\xff", "prefix*", true}, {"\xff.txt", "*.txt", true}, {"\xff", "\xff*", false},
+		{"README.md", "readme.md", false},
+		{`dir\file.txt`, "dir/file.txt", false},
+		{"", "*", true}, {"line\nnext\x00", "*", true}, {"é\xff", "*", true},
+		{"", "", true}, {"note.txt", "", false},
+		{"é\n\x00", "é\n\x00", true}, {"é", "e\u0301", false},
+		{`.+^${}()|[]\`, `.+^${}()|[]\`, true},
+		{"é", "?", true}, {"ab", "?", false},
+		{"\xff", "\ufffd", true}, {"\ufffd", "\xff", false}, {"\xff", "\xff", false},
+	} {
+		require.Equal(t, tt.want, permissionWildcardMatch(tt.input, tt.pattern))
+	}
+
+	for _, segments := range [][]ruleSegment{nil, {{Text: "*"}}} {
+		allocs := testing.AllocsPerRun(100, func() {
+			if !permissionWildcardMatch("note.txt", "*", segments...) {
+				t.Fatal("authored wildcard must match")
+			}
+		})
+		require.Zero(t, allocs)
+	}
+
+	for _, pattern := range []string{"note.txt", "note*", "*.txt", "note*.txt", "note.txt *"} {
+		for _, input := range []string{"note.txt", "other.txt", "é\n\x00", ""} {
+			allocs := testing.AllocsPerRun(100, func() {
+				if got := permissionWildcardMatch(input, pattern); got != (input == "note.txt" || pattern == "*.txt" && input == "other.txt") {
+					t.Fatalf("match %q against %q: got %t", input, pattern, got)
+				}
+			})
+			require.Zero(t, allocs, "%s %q", pattern, input)
+		}
+	}
+
+	require.True(t, permissionWildcardMatch("*", "*", ruleSegment{Text: "*", Literal: true}))
+	require.False(t, permissionWildcardMatch("note.txt", "*", ruleSegment{Text: "*", Literal: true}))
+	require.False(t, permissionWildcardMatch("note.txt", "*suffix", ruleSegment{Text: "*"}, ruleSegment{Text: "suffix", Literal: true}))
+	require.True(t, permissionWildcardMatch("note.txt", "other.txt", ruleSegment{Text: "note.txt", Literal: true}))
+}
+
+func BenchmarkPermissionWildcardMatch(b *testing.B) {
+	for name, tc := range map[string]struct {
+		input, pattern string
+		segments       []ruleSegment
+	}{
+		"pattern":        {"note.txt", "*", nil},
+		"authored":       {"note.txt", "*", []ruleSegment{{Text: "*"}}},
+		"literal":        {"note.txt", "*", []ruleSegment{{Text: "*", Literal: true}}},
+		"exact":          {"note.txt", "note.txt", nil},
+		"exact-mismatch": {"other.txt", "note.txt", nil},
+		"wildcard":       {"note.txt", "*.txt", nil},
+		"prefix":         {"note.txt", "note*", nil},
+		"middle":         {"note.txt", "note*.txt", nil},
+		"optional-space": {"note.txt", "note.txt *", nil},
+	} {
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+
+			for b.Loop() {
+				permissionWildcardMatch(tc.input, tc.pattern, tc.segments...)
+			}
+		})
+	}
+}
+
+func TestParsePermissionNode(t *testing.T) {
+	t.Run("normalizes scalar permission", func(t *testing.T) {
+		require.Equal(t, PermissionSet{Buckets: nil}, parsePermissionYAML(t, `allow`))
+	})
+
+	t.Run("normalizes nested permissions and edit aliases", func(t *testing.T) {
+		require.Equal(t, PermissionSet{Buckets: []PermissionBucket{
+			{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
+			{Name: "edit", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}, {Pattern: "docs/*.md", Action: permissionAllow}}},
+			{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}, {Pattern: "git status *", Action: permissionAllow}}},
+			{Name: "webfetch", Rules: []PermissionRule{{Pattern: "https://docs.example/*", Action: permissionAllow}}},
+			{Name: "websearch", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
+		}}, parsePermissionYAML(t, `
+read: allow
+apply_patch:
+  "*": deny
+  "docs/*.md": allow
+bash:
+  "*": deny
+  "git status *": allow
+webfetch:
+  "https://docs.example/*": allow
+websearch: allow
+`))
+	})
+
+	for input, want := range map[string]string{
+		"[]":                             "permission must be a scalar or mapping",
+		"read: []":                       `permission "read": permission rule must be a scalar or mapping`,
+		"read: &rule allow\nedit: *rule": `permission "edit": permission rule must be a scalar or mapping`,
+		"websearch: {openai.com: allow}": `permission "websearch" only supports coarse allow or deny`,
+		"read: ask":                      `permission action "ask" is not supported`,
+		"doom_loop: deny":                `permission "doom_loop" is not supported`,
+		"external_directory: deny":       `permission "external_directory" is not supported`,
+		"rocketclaw: {session: {spawn_mode: all}}":          "session.spawn_mode is removed; use rocketclaw_sessions",
+		"rocketclaw: allow":                                 `permission "rocketclaw": name each rocketclaw tool`,
+		"rocketclaw: {'*': allow}":                          `permission "rocketclaw": name each rocketclaw tool`,
+		"rocketclaw: {rocketclaw_sessions_*: allow}":        `permission "rocketclaw": name each rocketclaw tool`,
+		"rocketclaw: {rocketclaw_sessions: all}":            `unknown permission action "all"`,
+		"rocketclaw: {rocketclaw_sessions_write: children}": `unknown permission action "children"`,
+	} {
+		_, err := parsePermissionNode(parseYAMLNode(t, input))
+		require.ErrorContains(t, err, want)
+	}
+
+	for _, value := range []string{`allow`, `deny`, `auto`, `"true"`, `null`, `1`, `[]`, `{}`} {
+		_, err := parsePermissionNode(parseYAMLNode(t, `rocketclaw: {load_agents_md: `+value+`}`))
+		require.ErrorContains(t, err, "load_agents_md must be a boolean")
+	}
+
+	for _, value := range []string{`auto`, `auto(reviewer)`, `true`, `[]`} {
+		_, err := parsePermissionNode(parseYAMLNode(t, `rocketclaw: {allow_background: `+value+`}`))
+		require.ErrorContains(t, err, "allow_background must be allow or deny")
+	}
+}
+
+func TestParsePermissionAuto(t *testing.T) {
+	require.Equal(t, PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{
+		{Pattern: "deploy *", Action: permissionAuto},
+		{Pattern: "release *", Action: permissionAuto, Reviewer: "release-guardian"},
+	}}}}, parsePermissionYAML(t, `bash: {"deploy *": auto, "release *": auto(release-guardian)}`))
+
+	for _, input := range []string{
+		`bash: {"*": auto()}`,
+		`bash: {"*": auto(foo}`,
+		`bash: {"*": auto(foo))}`,
+	} {
+		_, err := parsePermissionNode(parseYAMLNode(t, input))
+		require.ErrorContains(t, err, "malformed permission action")
+	}
+}
+
+func TestPermissionSetHelpers(t *testing.T) {
+	var permissions PermissionSet
+	require.NoError(t, permissions.Allow("read", "docs/*.md"))
+	require.NoError(t, permissions.Deny("read", "docs/private/*"))
+	require.Equal(t, PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "docs/*.md", Action: PermissionAllow}, {Pattern: "docs/private/*", Action: PermissionDeny}}}}}, permissions)
+
+	permissions = PermissionSet{Buckets: nil}
+	require.NoError(t, permissions.Deny("tools", "current_time"))
+	require.NoError(t, permissions.Allow("tools", "current_time"))
+	require.Equal(t, PermissionAllow, permissions.evaluate("tools", "current_time").Action)
+	require.NoError(t, permissions.Allow("rocketclaw", "rocketclaw_*"))
+	require.Equal(t, PermissionDeny, permissions.evaluate("rocketclaw", "rocketclaw_restart").Action)
+
+	permissions = PermissionSet{Buckets: nil}
+	require.NoError(t, permissions.Allow("apply_patch", "*.go"))
+	require.Equal(t, "edit", permissions.Buckets[0].Name)
+	require.EqualError(t, permissions.Allow("external_directory", "*"), `permission "external_directory" is not supported`)
+	require.EqualError(t, permissions.Set("read", "*", PermissionAction("ask")), `permission action "ask" is not supported`)
+}
+
+func TestPermissionSetEvaluate(t *testing.T) {
+	tests := []struct {
+		name, yaml, permission, subject string
+		action                          PermissionAction
+		matched                         bool
+	}{
+		{name: "default deny", yaml: `tools: {current_time: allow}`, permission: "tools", subject: "restart", action: PermissionDeny, matched: false},
+		{name: "root instructions default on", yaml: `{}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: false},
+		{name: "root instructions enabled", yaml: `rocketclaw: {load_agents_md: true}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: true},
+		{name: "root instructions disabled", yaml: `rocketclaw: {load_agents_md: false}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionDeny, matched: true},
+		{name: "root instructions last exact rule wins", yaml: `rocketclaw: {load_agents_md: false, load_agents_md: true}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: true},
+		{name: "background default off", yaml: `{}`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: false},
+		{name: "background enabled", yaml: `rocketclaw: {allow_background: allow}`, permission: "rocketclaw", subject: "allow_background", action: PermissionAllow, matched: true},
+		{name: "background disabled", yaml: `rocketclaw: {allow_background: deny}`, permission: "rocketclaw", subject: "allow_background", action: PermissionDeny, matched: true},
+		{name: "tag groups are not action rules", yaml: `rocketclaw: {rocketclaw_set_tag: [[red, yellow, green]]}`, permission: "rocketclaw", subject: "rocketclaw_set_tag", action: PermissionDeny, matched: false},
+		{name: "tag groups preserve other rules", yaml: `rocketclaw: {rocketclaw_set_tag: [[red, yellow, green]], rocketclaw_sessions: allow}`, permission: "rocketclaw", subject: "rocketclaw_sessions", action: PermissionAllow, matched: true},
+		{name: "scalar tag rule stays scalar", yaml: `rocketclaw: {rocketclaw_set_tag: auto}`, permission: "rocketclaw", subject: "rocketclaw_set_tag", action: PermissionAuto, matched: true},
+		{name: "recipient true is not an action rule", yaml: `rocketclaw: {rocketclaw_sessions_recipient: true}`, permission: "rocketclaw", subject: "rocketclaw_sessions_recipient", action: PermissionDeny, matched: false},
+		{name: "recipient false is not an action rule", yaml: `rocketclaw: {rocketclaw_sessions_recipient: false}`, permission: "rocketclaw", subject: "rocketclaw_sessions_recipient", action: PermissionDeny, matched: false},
+		{name: "recipient list is not an action rule", yaml: `rocketclaw: {rocketclaw_sessions_recipient: [main]}`, permission: "rocketclaw", subject: "rocketclaw_sessions_recipient", action: PermissionDeny, matched: false},
+		{name: "recipient list preserves other rules", yaml: `rocketclaw: {rocketclaw_sessions_recipient: [main], rocketclaw_sessions: allow}`, permission: "rocketclaw", subject: "rocketclaw_sessions", action: PermissionAllow, matched: true},
+		{name: "explicit deny", yaml: `tools: {restart: deny}`, permission: "tools", subject: "restart", action: PermissionDeny, matched: true},
+		{name: "slash allow does not match backslash", yaml: `read: {'dir/file': allow}`, permission: "read", subject: `dir\file`, action: PermissionDeny, matched: false},
+		{name: "backslash allow does not match slash", yaml: `read: {'dir\file': allow}`, permission: "read", subject: "dir/file", action: PermissionDeny, matched: false},
+		{name: "literal backslash matches", yaml: `read: {'dir\file': allow}`, permission: "read", subject: `dir\file`, action: PermissionAllow, matched: true},
+		{name: "slash deny does not match backslash", yaml: `read: {'*': allow, 'dir/file': deny}`, permission: "read", subject: `dir\file`, action: PermissionAllow, matched: true},
+		{name: "literal backslash deny matches", yaml: `read: {'*': allow, 'dir\file': deny}`, permission: "read", subject: `dir\file`, action: PermissionDeny, matched: true},
+		{name: "wildcard match", yaml: `tools: {restart_*: allow}`, permission: "tools", subject: "restart_tool", action: PermissionAllow, matched: true},
+		{name: "last match wins", yaml: `tools: {"*": allow, restart: deny}`, permission: "tools", subject: "restart", action: PermissionDeny, matched: true},
+		{name: "read inherits edit allow", yaml: `edit: {docs/*.md: allow}`, permission: "read", subject: "docs/guide.md", action: PermissionAllow, matched: true},
+		{name: "global bucket is ignored", yaml: `"*": {"*": allow}`, permission: "bash", subject: "git status", action: PermissionDeny, matched: false},
+		{name: "scalar allow is ignored", yaml: `allow`, permission: "bash", subject: "git status", action: PermissionDeny, matched: false},
+		{name: "explicit bash allow remains effective", yaml: `bash: {"*": allow}`, permission: "bash", subject: "git status", action: PermissionAllow, matched: true},
+		{name: "explicit auto remains effective", yaml: `bash: {"*": allow, "deploy *": auto}`, permission: "bash", subject: "deploy prod", action: PermissionAuto, matched: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			action, matched := parsePermissionYAML(t, tt.yaml).Evaluate(tt.permission, tt.subject)
+			require.Equal(t, tt.action, action)
+			require.Equal(t, tt.matched, matched)
+		})
+	}
+
+	t.Run("sudo", func(t *testing.T) {
+		sudo := PermissionSet{Sudo: true}
+		require.NoError(t, sudo.Allow("rocketclaw", "rocketclaw_reload"))
+
+		for _, tc := range []struct {
+			permission, subject string
+			action              PermissionAction
+		}{
+			{"bash", "rm -rf build", PermissionAuto},
+			{"read", "notes.md", PermissionAuto},
+			{"mcp", "context7.query", PermissionAuto},
+			{"rocketclaw", "rocketclaw_restart", PermissionAuto},
+			{"rocketclaw", "allow_background", PermissionAuto},
+			{"rocketclaw", "code_mode_approve", PermissionAuto},
+			{"rocketclaw", "load_agents_md", PermissionAllow},
+			{"rocketclaw", "rocketclaw_reload", PermissionAllow},
+		} {
+			action, _ := sudo.Evaluate(tc.permission, tc.subject)
+			require.Equal(t, tc.action, action, tc.subject)
+			require.True(t, sudo.Enabled(tc.permission, tc.subject), tc.subject)
+		}
+
+		require.True(t, sudo.hasRuleForPermission("websearch", permissionAllow, permissionAuto))
+		require.False(t, sudo.hasRuleForPermission("bash", permissionAllow))
+		require.False(t, PermissionSet{}.Enabled("rocketclaw", "rocketclaw_restart"))
+		require.False(t, parsePermissionYAML(t, `rocketclaw: {rocketclaw_restart: auto}`).Enabled("rocketclaw", "rocketclaw_restart"))
+	})
+}
+
+func TestSkillReadPermissionsUseFoldedPaths(t *testing.T) {
+	permissions := parsePermissionYAML(t, `read:
+  "skills/parent/private*": deny
+  "skills/parent/review*": auto
+  "skills/parent/café.txt": deny`)
+	permissions.skillRead = map[string]skillReadAccess{
+		"skills/parent":       {allowed: true, folded: true},
+		"skills/parent/child": {allowed: false, folded: true},
+	}
+
+	for _, tt := range []struct {
+		path   string
+		action PermissionAction
+	}{
+		{path: "skills/parent/ASSET.TXT", action: permissionAllow},
+		{path: "skills/parent/CHILD/asset.txt", action: permissionDeny},
+		{path: "skills/parent/PRIVATE.TXT", action: permissionDeny},
+		{path: "skills/parent/REVIEW.TXT", action: permissionAuto},
+		{path: "skills/parent/cafe\u0301.txt", action: permissionDeny},
+	} {
+		action, _ := permissions.Evaluate("read", tt.path)
+		require.Equal(t, tt.action, action, tt.path)
+	}
+}
+
+func TestReadPermissionInheritsEditAllow(t *testing.T) {
+	tests := []struct {
+		name, yaml, subject, bucket, reviewer string
+		action                                PermissionAction
+		matched                               bool
+	}{
+		{name: "inherits exact edit allow", yaml: `edit: {"HALLY_GOOGLE_WORKSPACE.md": allow}`, subject: "HALLY_GOOGLE_WORKSPACE.md", action: permissionAllow, matched: true, bucket: "edit"},
+		{name: "inherits glob edit allow", yaml: `edit: {"memories/*.md": allow}`, subject: "memories/today.md", action: permissionAllow, matched: true, bucket: "edit"},
+		{name: "inherits edit auto", yaml: `edit: {"memories/*.md": auto}`, subject: "memories/today.md", action: permissionAuto, matched: true, bucket: "edit"},
+		{name: "inherits edit auto reviewer", yaml: `edit: {"memories/*.md": auto(file-reviewer)}`, subject: "memories/today.md", action: permissionAuto, matched: true, bucket: "edit", reviewer: "file-reviewer"},
+		{name: "unmatched path remains denied", yaml: `edit: {"HALLY_GOOGLE_WORKSPACE.md": allow}`, subject: "other.md", action: permissionDeny, matched: false, bucket: ""},
+		{name: "explicit read deny overrides edit allow", yaml: `edit: {"HALLY_GOOGLE_WORKSPACE.md": allow}
+read: {"HALLY_GOOGLE_WORKSPACE.md": deny}`, subject: "HALLY_GOOGLE_WORKSPACE.md", action: permissionDeny, matched: true, bucket: "read"},
+		{name: "explicit read allow overrides edit deny", yaml: `edit: {"HALLY_GOOGLE_WORKSPACE.md": deny}
+read: {"HALLY_GOOGLE_WORKSPACE.md": allow}`, subject: "HALLY_GOOGLE_WORKSPACE.md", action: permissionAllow, matched: true, bucket: "read"},
+		{name: "final edit deny does not inherit", yaml: `edit: {"*": allow, "secret.md": deny}`, subject: "secret.md", action: permissionDeny, matched: false, bucket: ""},
+		{name: "non matching read rule still allows edit inheritance", yaml: `read: {"private.md": deny}
+edit: {"public.md": allow}`, subject: "public.md", action: permissionAllow, matched: true, bucket: "edit"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision := parsePermissionYAML(t, tt.yaml).evaluate("read", tt.subject)
+			require.Equal(t, tt.action, decision.Action)
+			require.Equal(t, tt.matched, decision.Matched)
+			require.Equal(t, tt.bucket, decision.Bucket)
+			require.Equal(t, tt.reviewer, decision.Rule.Reviewer)
+			require.Equal(t, "read", decision.Permission)
+		})
+	}
+}
+
+func TestBashPermissionSubjects(t *testing.T) {
+	conditional := "if first; then second; elif third; then if fourth; then fifth; fi; else sixth; fi"
+	require.Equal(t, []string{
+		conditional, "first", "second", "third", "if fourth; then fifth; fi", "fourth", "fifth", "sixth",
+	}, BashPermissionSubjects(conditional))
+	require.Equal(t, []string{"git status", "git diff --stat"}, BashPermissionSubjects("git status && git diff --stat"))
+	require.Equal(t, []string{`echo 'literal $(date)'`}, BashPermissionSubjects(`echo 'literal $(date)'`))
+	require.Equal(t, []string{"echo $(date)", "$(date)", "date"}, BashPermissionSubjects("echo $(date)"))
+	require.Equal(t, []string{"export FOO=$(date)", "$(date)", "date", "scripts/cmd arg"}, BashPermissionSubjects("export FOO=$(date); scripts/cmd arg"))
+	require.Equal(t, []string{"\u00a0scripts/cmd arg"}, BashPermissionSubjects("\u00a0scripts/cmd arg"))
+
+	for _, prefix := range []string{"export FOO=bar", "declare -x FOO=bar", "readonly FOO=bar", "local FOO=bar", "typeset -x FOO=bar", "nameref FOO=bar", "FOO=bar"} {
+		t.Run(prefix, func(t *testing.T) {
+			require.Equal(t, []string{prefix, "scripts/cmd arg"}, BashPermissionSubjects(prefix+"; scripts/cmd arg"))
+		})
+	}
+}
+
+func parsePermissionYAML(t *testing.T, text string) PermissionSet {
+	t.Helper()
+
+	permissions, err := parsePermissionNode(parseYAMLNode(t, text))
+	require.NoError(t, err)
+
+	return permissions
+}
+
+func parseYAMLNode(t *testing.T, text string) *yaml.Node {
+	t.Helper()
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte(text), &node))
+	require.NotEmpty(t, node.Content)
+
+	return node.Content[0]
+}
+
+func TestBashExecutablePatternMatchConcurrent(t *testing.T) {
+	// Code Mode checks parallel bash calls at once; the match must not share expansion state.
+	subject, pattern := `./"scripts"/build.sh --fast`, `./"scripts"/*.sh *`
+	want := bashExecutablePatternMatch(subject, pattern)
+
+	var group errgroup.Group
+	for range 16 {
+		group.Go(func() error {
+			if got := bashExecutablePatternMatch(subject, pattern); got != want {
+				return fmt.Errorf("concurrent match = %v, want %v", got, want)
+			}
+
+			return nil
+		})
+	}
+
+	require.NoError(t, group.Wait())
+}

@@ -13,7 +13,7 @@ applies_when:
   - Upgrading the pinned just-bash version or the Node version CI installs
 related_components:
   - internal/rocketclaw/backend
-  - internal/rocketcode
+  - internal/rocketclaw/harness
   - .github/workflows/test.yml
 tags:
   - just-bash
@@ -50,12 +50,12 @@ What was tried and why it was dropped:
 | `npx -y -p just-bash@3.6.0 node wrapper.ts` | `Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'just-bash' imported from …/wrapper.ts` | `npx` installs into its own hashed cache (`~/.npm/_npx/<hash>/node_modules`) and only puts the package's commands on `PATH`. Node resolves `import` from `node_modules` next to the importing file and ignores `NODE_PATH` for ESM. Importing from the npx cache path would depend on npm's private layout. |
 | Wrapper packaged as its own npm package (depends on just-bash), run with `npx -y <tarball>` | With `wrapper.ts`: `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`. With the wrapper renamed to `wrapper.mjs` it worked, about 0.55 s per call once cached. | Node will not strip TypeScript types from files under `node_modules`, and npx installs the wrapper package there. The working version needs plain JavaScript. Offered as an option, the user chose `npm install` with `wrapper.ts` instead (route below). |
 | `bun build` of the wrapper plus just-bash into one bundle (an early attempt, later dropped) | It needed `--external @mongodb-js/zstd --external node-liblzma` to build. Then `python3` hung until the 30 s limit with `Cannot find module '<path>'`, and `sqlite3` failed with `sqlite3 worker not found. Run 'pnpm build' to compile the worker.` | just-bash finds its worker files relative to its own module, for example `new URL("./worker.js", import.meta.url)` (just-bash 3.6.0, `packages/just-bash/src/commands/python3/python3.ts:197`). A bundle moves `import.meta.url`, so the workers are not found. The same probe run from a plain `node_modules` install passed all four tools. |
-| **Chosen:** server runs `npm install` into `<runtime dir>/justbash/`; each call runs `<runtime dir>/justbash/wrapper.ts` directly, and its `#!/usr/bin/env node` first line hands it to Node | Works under Node 22.18+ (CI uses Node 24, `.github/workflows/test.yml:122-125`). | The wrapper sits beside `node_modules`, not inside it, so Node runs the `.ts` file with no build step and resolves `just-bash` normally. Only the server installs, so two installs never race, and the server holds the result for the Web alert ("just-bash install failed: …"). A reload keeps the folder (`internal/rocketclaw/skel/skel.go:599`). |
+| **Chosen:** server runs `npm install` into `<runtime dir>/justbash/`; each call runs `<runtime dir>/justbash/wrapper.ts` directly, and its `#!/usr/bin/env node` first line hands it to Node | Works under Node 22.18+ (CI uses Node 24, `.github/workflows/test.yml:119-122`). | The wrapper sits beside `node_modules`, not inside it, so Node runs the `.ts` file with no build step and resolves `just-bash` normally. Only the server installs, so two installs never race, and the server holds the result for the Web alert ("just-bash install failed: …"). A reload keeps the folder (`internal/rocketclaw/skel/skel.go:599`). |
 
 Two related limits are already written down in the tree. Leave them alone unless you are fixing them on purpose:
 
 - **Binary written straight to stdout comes back garbled.** just-bash's `exec()` turns stdout into text, so after that `café` and raw bytes look alike. Binary that goes to files or through pipes keeps its exact bytes, because the wrapper hands host-command output to just-bash as bytes (`bytesOutput`). The session tried four workarounds, and none of them worked or kept text correct: a group redirect, `exec >file`, `ctx.exec()`, and guessing the encoding. Exact stdout bytes need an upstream change (`wrapper.ts:105-106`, README "Emulated shell").
-- **`Emulated` fails closed.** An empty `CustomShell` means host bash. So `shell: emulated` sets `Emulated: true`, and a code path that never received the wrapper fails ("shell command path is required", `internal/rocketcode/shell.go:167`) rather than quietly running on the host (`internal/rocketcode/rocketcode.go:37-50`).
+- **`Emulated` fails closed.** An empty `CustomShell` means host bash. So `shell: emulated` sets `Emulated: true`, and a code path that never received the wrapper fails ("shell command path is required", `internal/rocketclaw/harness/shell.go:167`) rather than quietly running on the host (`internal/rocketclaw/harness/rocketcode.go:37-50`).
 
 ## Why This Matters
 

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +28,7 @@ func TestForkConversation(t *testing.T) {
 	attachment := protocol.OutboundAttachment{ID: "original-file", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}
 	require.NoError(t, sessions.SaveAttachment(t.Context(), "source", "", &attachment, true))
 
-	entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ResponseID: "response", ReplayInput: []json.RawMessage{
+	entry := harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ResponseID: "response", ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Slack]","content":"[Slack]\n\nfirst"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"answer"}`),
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web]","content":"[Web]\n\nsecond attachment:original-file"}`),
@@ -56,15 +56,15 @@ func TestForkConversation(t *testing.T) {
 	require.NoError(t, spill.MkdirAll(filepath.Dir(retained), 0o700))
 	require.NoError(t, spill.WriteFile(retained, []byte("full output"), 0o600))
 	require.NoError(t, spill.Chtimes(retained, modified, modified))
-	_, err = sessions.AppendEntryID(t.Context(), "source", &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+	_, err = sessions.AppendEntryID(t.Context(), "source", &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[System]","input_id":"turn-1/call/a turn-1/call/b turn-1/call/c","content":"[System]\n\nnote"}`),
 	}})
 	require.NoError(t, err)
 
 	note := []protocol.BackgroundJob{{ID: "turn-1/call/a", Kind: "execute", State: "completed", Label: "tests", ToolCallID: "call", Note: backgroundNote(&backgroundJob{jobID: "turn-1/call/a", kind: turnScript, status: backgroundCompleted, label: "tests", result: "completed"})}}
 
-	require.NoError(t, sessions.startSubagent(t.Context(), "source", rocketcode.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "helper", true))
-	require.NoError(t, sessions.startSubagent(t.Context(), "source/call-1", rocketcode.ChildKey{Path: "/call-2", Turn: "turn-2", Call: "call-2"}, "helper", true))
+	require.NoError(t, sessions.startSubagent(t.Context(), "source", harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "helper", true))
+	require.NoError(t, sessions.startSubagent(t.Context(), "source/call-1", harness.ChildKey{Path: "/call-2", Turn: "turn-2", Call: "call-2"}, "helper", true))
 
 	for _, delegation := range []string{"source/call-1", "source/call-1/call-2"} {
 		_, err = sessions.AppendEntryID(t.Context(), delegation, testSessionEntry(delegation, "child"))
@@ -220,7 +220,7 @@ func TestForkConversationRollsBackFailedCopies(t *testing.T) {
 			attachment := protocol.OutboundAttachment{ID: "original", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}
 			require.NoError(t, sessions.SaveAttachment(t.Context(), "source", "", &attachment, true))
 
-			entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"attachment:original"}`)}}
+			entry := harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"attachment:original"}`)}}
 			_, err = sessions.AppendEntryID(t.Context(), "source", &entry)
 			require.NoError(t, err)
 

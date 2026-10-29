@@ -140,7 +140,7 @@ func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 	provider := cfg.OpenAI
 
 	credentials := voiceCredentials{bearer: provider.APIKey}
-	if provider.RocketCodeAuth == "chatgpt" {
+	if provider.Auth == "chatgpt" {
 		// A missing login leaves no bearer; a failed refresh names its login command.
 		token, err := oai.FreshTokenIn(ctx, cfg.Workspace, cfg.RuntimeDirName(), name, oai.Token{})
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -157,8 +157,8 @@ func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 
 	var dialect voiceDialect = newCodexVoice()
 
-	if provider.RocketCodeAuth != "chatgpt" {
-		public, err := newPublicVoice(provider)
+	if provider.Auth != "chatgpt" {
+		public, err := newPublicVoice(&provider)
 		if err != nil {
 			return fmt.Errorf("web voice: %w", status.Error(codes.FailedPrecondition, err.Error()))
 		}

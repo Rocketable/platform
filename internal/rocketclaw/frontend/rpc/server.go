@@ -29,8 +29,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend"
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/openai/openai-go/v3/responses"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
@@ -184,10 +184,10 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	}
 
 	// One definitions load serves the remote tags, with errors checked before sending rows.
-	agents := sync.OnceValues(func() (rocketcode.Agents, error) {
+	agents := sync.OnceValues(func() (harness.Agents, error) {
 		definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
 		if err != nil {
-			return rocketcode.Agents{}, fmt.Errorf("load web agents: %w", err)
+			return harness.Agents{}, fmt.Errorf("load web agents: %w", err)
 		}
 
 		return definitions, nil
@@ -455,13 +455,13 @@ func (s *Server) reviewRationales(ctx context.Context, response *HistoryResponse
 
 // transcriptEntry projects entry as conversationID's History shows it; cronTrace marks a cron run's own trace.
 func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *backend.ObservedSessionEntry, conversationID string, cronTrace bool, calls map[string]string) ([]*TranscriptEvent, error) {
-	items, err := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput)
+	items, err := harness.ReplayInputToParams(entry.Entry.ReplayInput)
 	if err != nil {
 		return nil, fmt.Errorf("decode web history: %w", err)
 	}
 
 	producer := cmp.Or(entry.SourceConversationID, conversationID)
-	progress := rocketcode.PublicProgressFromTrace(entry.Entry.OutputTrace)
+	progress := harness.PublicProgressFromTrace(entry.Entry.OutputTrace)
 	replayText := make(map[string]bool)
 	replayResults := make(map[string]bool)
 	replayCalls := make(map[string]bool)
@@ -493,11 +493,11 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 			replayCalls[identity.CallID] = true
 		}
 
-		callProgress := slices.IndexFunc(progress, func(item rocketcode.PublicProgress) bool {
-			return item.Kind != rocketcode.PublicProgressText && item.ID == identity.CallID
+		callProgress := slices.IndexFunc(progress, func(item harness.PublicProgress) bool {
+			return item.Kind != harness.PublicProgressText && item.ID == identity.CallID
 		})
-		if identity.Type == "function_call_output" && callProgress >= 0 && (progress[callProgress].State == rocketcode.PublicProgressBlocked ||
-			progress[callProgress].Kind == rocketcode.PublicProgressDelegation && slices.Contains([]rocketcode.PublicProgressState{rocketcode.PublicProgressFailed, rocketcode.PublicProgressStopped}, progress[callProgress].State)) {
+		if identity.Type == "function_call_output" && callProgress >= 0 && (progress[callProgress].State == harness.PublicProgressBlocked ||
+			progress[callProgress].Kind == harness.PublicProgressDelegation && slices.Contains([]harness.PublicProgressState{harness.PublicProgressFailed, harness.PublicProgressStopped}, progress[callProgress].State)) {
 			continue // Unapproved delegation/reviewer replay stays stored, never projected (including attachments).
 		}
 
@@ -582,15 +582,15 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 }
 
 // publicText reconciles native content parts and locally flattened provider text.
-func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus string, progress []rocketcode.PublicProgress, entry *backend.ObservedSessionEntry, producer string) ([]*TranscriptEvent, error) {
+func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus string, progress []harness.PublicProgress, entry *backend.ObservedSessionEntry, producer string) ([]*TranscriptEvent, error) {
 	if e.Role != "assistant" || id == "" || len(content) == 0 {
 		return []*TranscriptEvent{e}, nil
 	}
 
 	if content[0] == '"' {
-		if overlap := slices.IndexFunc(progress, func(item rocketcode.PublicProgress) bool {
+		if overlap := slices.IndexFunc(progress, func(item harness.PublicProgress) bool {
 			index := strings.LastIndexByte(item.ID, '/')
-			return item.Kind == rocketcode.PublicProgressText && index >= 0 && item.ID[:index] == id
+			return item.Kind == harness.PublicProgressText && index >= 0 && item.ID[:index] == id
 		}); overlap >= 0 {
 			e.publicProgress(&progress[overlap], entry, producer)
 		}
@@ -619,8 +619,8 @@ func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus 
 		itemID := fmt.Sprintf("%s/%d", id, index)
 
 		text.ItemId = entry.Key + ":" + itemID
-		if overlap := slices.IndexFunc(progress, func(item rocketcode.PublicProgress) bool {
-			return item.Kind == rocketcode.PublicProgressText && item.ID == itemID
+		if overlap := slices.IndexFunc(progress, func(item harness.PublicProgress) bool {
+			return item.Kind == harness.PublicProgressText && item.ID == itemID
 		}); overlap >= 0 {
 			text.publicProgress(&progress[overlap], entry, producer)
 
@@ -637,14 +637,14 @@ func (e *TranscriptEvent) publicText(content json.RawMessage, id, messageStatus 
 
 // fallbackProgress merges missing observations before their next surviving public identity,
 // then attaches each script's recorded calls.
-func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode.PublicProgress, replayText, replayResults, replayCalls map[string]bool, conversationID string, cronTrace bool, messages []*TranscriptEvent) []*TranscriptEvent {
+func fallbackProgress(entry *backend.ObservedSessionEntry, progress []harness.PublicProgress, replayText, replayResults, replayCalls map[string]bool, conversationID string, cronTrace bool, messages []*TranscriptEvent) []*TranscriptEvent {
 	producer := cmp.Or(entry.SourceConversationID, conversationID)
 
 	for i := range progress {
 		item := &progress[i]
 
 		switch {
-		case item.Kind == rocketcode.PublicProgressText:
+		case item.Kind == harness.PublicProgressText:
 			id := item.ID
 			if index := strings.LastIndexByte(id, '/'); index >= 0 {
 				id = id[:index]
@@ -653,25 +653,25 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode
 			if replayText[id] || strings.TrimSpace(item.Text) == "" {
 				continue
 			}
-		case replayResults[item.ID] && item.State != rocketcode.PublicProgressBlocked &&
-			(item.Kind != rocketcode.PublicProgressDelegation || !slices.Contains([]rocketcode.PublicProgressState{rocketcode.PublicProgressFailed, rocketcode.PublicProgressStopped}, item.State)):
+		case replayResults[item.ID] && item.State != harness.PublicProgressBlocked &&
+			(item.Kind != harness.PublicProgressDelegation || !slices.Contains([]harness.PublicProgressState{harness.PublicProgressFailed, harness.PublicProgressStopped}, item.State)):
 			continue
-		case replayCalls[item.ID] && (item.State == rocketcode.PublicProgressWorking || item.State == rocketcode.PublicProgressReview):
+		case replayCalls[item.ID] && (item.State == harness.PublicProgressWorking || item.State == harness.PublicProgressReview):
 			continue // The existing call disclosure already carries this pending state.
 		}
 
 		event := &TranscriptEvent{Role: "tool", Text: string(item.State), EntryKey: entry.Key, TurnId: entry.Entry.TurnID}
-		if item.Kind == rocketcode.PublicProgressText {
+		if item.Kind == harness.PublicProgressText {
 			event.Role, event.Text = "assistant", item.Text
-		} else if item.Kind == rocketcode.PublicProgressTool && item.Text != "" {
+		} else if item.Kind == harness.PublicProgressTool && item.Text != "" {
 			event.Text = item.Text
 		}
 
 		event.attribute(entry.Entry.AttributionAt(len(entry.Entry.ReplayInput)), producer, conversationID, cronTrace)
 		event.publicProgress(item, entry, producer)
 
-		if item.Kind != rocketcode.PublicProgressText {
-			if item.Kind == rocketcode.PublicProgressDelegation || item.Text == "" {
+		if item.Kind != harness.PublicProgressText {
+			if item.Kind == harness.PublicProgressDelegation || item.Text == "" {
 				event.Text = event.State
 			}
 
@@ -695,10 +695,10 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode
 
 	// A script's calls ride on its Execute call's first event, which a running turn may project
 	// from progress before the call reaches replay.
-	calls := rocketcode.CodeModeCallsFromTrace(entry.Entry.OutputTrace)
+	calls := harness.CodeModeCallsFromTrace(entry.Entry.OutputTrace)
 	for i := range calls {
 		if index := slices.IndexFunc(messages, func(message *TranscriptEvent) bool { return message.ToolCallId == calls[i].ParentCallID }); index >= 0 {
-			messages[index].codeModeCall(&calls[i], rocketcode.ReviewTurn(calls[i].Key))
+			messages[index].codeModeCall(&calls[i], harness.ReviewTurn(calls[i].Key))
 		}
 	}
 
@@ -708,12 +708,12 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []rocketcode
 // publicProgress supplies display identity and safe attribution, never command identity. A task
 // call's subagent and a call's permission review are direct children of producer, the history
 // that holds the call.
-func (e *TranscriptEvent) publicProgress(item *rocketcode.PublicProgress, entry *backend.ObservedSessionEntry, producer string) {
+func (e *TranscriptEvent) publicProgress(item *harness.PublicProgress, entry *backend.ObservedSessionEntry, producer string) {
 	e.ParentId = entry.Key + ":" + item.ParentID
 	e.ItemId = e.ParentId + "/" + item.ID
 
 	e.State = string(item.State)
-	if entry.Terminal != "" && (item.State == rocketcode.PublicProgressWorking || item.State == rocketcode.PublicProgressReview) {
+	if entry.Terminal != "" && (item.State == harness.PublicProgressWorking || item.State == harness.PublicProgressReview) {
 		e.State = string(entry.Terminal)
 	}
 
@@ -722,7 +722,7 @@ func (e *TranscriptEvent) publicProgress(item *rocketcode.PublicProgress, entry 
 	}
 
 	e.Complete = e.State != "working" && e.State != "review"
-	if item.Kind == rocketcode.PublicProgressText {
+	if item.Kind == harness.PublicProgressText {
 		e.Complete = e.State == "completed"
 	} else {
 		e.ToolCallId = item.ID
@@ -741,8 +741,8 @@ func (e *TranscriptEvent) publicProgress(item *rocketcode.PublicProgress, entry 
 // its row was sent.
 func (e *TranscriptEvent) linkReview(producer string) {
 	if e.ToolName != "" {
-		e.Review = producer + "/" + rocketcode.ReviewKey(e.TurnId, e.ToolCallId)
-		e.ReviewTurn = rocketcode.ReviewTurn(rocketcode.CallKey(e.TurnId, e.ToolCallId))
+		e.Review = producer + "/" + harness.ReviewKey(e.TurnId, e.ToolCallId)
+		e.ReviewTurn = harness.ReviewTurn(harness.CallKey(e.TurnId, e.ToolCallId))
 	}
 }
 
@@ -788,10 +788,10 @@ func linkCalls(messages []*TranscriptEvent, children map[string]backend.Delegati
 	}
 }
 
-// codeModeCall adds, up to rocketcode.MaxCodeModeCalls, a call an Execute call's script made, and
+// codeModeCall adds, up to harness.MaxCodeModeCalls, a call an Execute call's script made, and
 // the turn under which its review saved the approver's answer on it. An unnamed call carries the
 // whole-script review.
-func (e *TranscriptEvent) codeModeCall(call *rocketcode.CodeModeCall, reviewTurn string) {
+func (e *TranscriptEvent) codeModeCall(call *harness.CodeModeCall, reviewTurn string) {
 	if call.Outcome == "" {
 		reviewTurn = ""
 	}
@@ -799,12 +799,12 @@ func (e *TranscriptEvent) codeModeCall(call *rocketcode.CodeModeCall, reviewTurn
 	switch {
 	case call.Name == "":
 		e.ScriptReason, e.ScriptOutcome, e.ReviewTurn = call.Reason, string(call.Outcome), reviewTurn
-	case len(e.CodeModeCalls) < rocketcode.MaxCodeModeCalls:
+	case len(e.CodeModeCalls) < harness.MaxCodeModeCalls:
 		e.CodeModeCalls = append(e.CodeModeCalls, &CodeModeCall{Name: call.Name, Arguments: call.Arguments, Status: string(call.Status), Outcome: string(call.Outcome), Reason: call.Reason, ReviewTurn: reviewTurn})
 	}
 }
 
-func (e *TranscriptEvent) attribute(snapshot rocketcode.ReplayAttribution, source, destination string, cronTrace bool) {
+func (e *TranscriptEvent) attribute(snapshot harness.ReplayAttribution, source, destination string, cronTrace bool) {
 	e.Agent, e.Model, e.ReasoningEffort = snapshot.Agent, snapshot.Model, snapshot.ReasoningEffort
 	e.Origin = "canonical"
 
@@ -1165,7 +1165,7 @@ func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*L
 
 	response := &ListSkillsResponse{}
 
-	var items []rocketcode.Skill
+	var items []harness.Skill
 
 	if request.Agent != "" {
 		agent, ok := agents.Items[request.Agent]
@@ -1175,7 +1175,7 @@ func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*L
 
 		items = definitions.Available(&agent)
 	} else {
-		items = slices.SortedFunc(maps.Values(definitions.Items), func(a, b rocketcode.Skill) int {
+		items = slices.SortedFunc(maps.Values(definitions.Items), func(a, b harness.Skill) int {
 			return strings.Compare(a.Name, b.Name)
 		})
 	}
@@ -1237,9 +1237,9 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 
 		var voices []string
 
-		if cfg.OpenAI.RocketCodeAuth == "chatgpt" {
+		if cfg.OpenAI.Auth == "chatgpt" {
 			voices = newCodexVoice().voices()
-		} else if public, err := newPublicVoice(cfg.OpenAI); err == nil {
+		} else if public, err := newPublicVoice(&cfg.OpenAI); err == nil {
 			voices = public.voices()
 		}
 
@@ -1276,7 +1276,7 @@ func (s *Server) sessionAgentChoices(ctx context.Context, id string) ([]string, 
 
 // sameSpace keeps the allowed agents in current's space, ignoring case, when current has one.
 // When that leaves none, every allowed agent stays.
-func sameSpace(agents rocketcode.Agents, current string, allowed []string) []string {
+func sameSpace(agents harness.Agents, current string, allowed []string) []string {
 	space := agents.Items[current].Space
 
 	same := slices.DeleteFunc(slices.Clone(allowed), func(name string) bool { return !strings.EqualFold(agents.Items[name].Space, space) })

@@ -189,7 +189,7 @@ type AskUserQuestionRequest struct {
 	Multiple              bool
 }
 
-// AskUserQuestionAnswer is returned to RocketCode after a human answers.
+// AskUserQuestionAnswer is returned to the harness after a human answers.
 type AskUserQuestionAnswer struct {
 	Selected []string `json:"selected"`
 	Custom   string   `json:"custom"`

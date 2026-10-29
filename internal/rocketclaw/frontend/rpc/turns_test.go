@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,9 +21,9 @@ type testCheckpoint struct {
 	TurnID, ConversationKey, Agent, Model, DisplayModel string
 	ReasoningEffort                                     *string
 	ReplayInput                                         []json.RawMessage
-	ReplayAttribution                                   []rocketcode.ReplayAttribution
+	ReplayAttribution                                   []harness.ReplayAttribution
 	OutputTrace                                         []json.RawMessage
-	TokenUsage                                          *rocketcode.TokenUsage
+	TokenUsage                                          *harness.TokenUsage
 	ResponseID                                          string
 }
 
@@ -55,7 +55,7 @@ func (s testTurns) RecordSlackThread(t *testing.T, sessions *backend.SessionServ
 func (s testTurns) RecordReview(tb testing.TB, parent, turnID, callID string) string {
 	tb.Helper()
 
-	id := parent + "/" + rocketcode.ReviewKey(turnID, callID)
+	id := parent + "/" + harness.ReviewKey(turnID, callID)
 	_, err := s.db.ExecContext(tb.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, retention, call_turn, call_id)
 VALUES ($1, '', '', $2, 'review', FALSE, 'nested', $3, $4)`, id, parent, turnID, callID)
 	require.NoError(tb, err)
@@ -80,8 +80,8 @@ func (s testTurns) UpsertActiveTurn(ctx context.Context, c *testCheckpoint) erro
 	}
 
 	record, err := json.Marshal(struct {
-		Record rocketcode.SessionEntry `json:"record"`
-	}{rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: c.TurnID, Agent: c.Agent, Model: c.DisplayModel, ReasoningEffort: c.ReasoningEffort, ReplayAttribution: c.ReplayAttribution, TokenUsage: c.TokenUsage, ResponseID: c.ResponseID}})
+		Record harness.SessionEntry `json:"record"`
+	}{harness.SessionEntry{Version: 1, Type: "turn", TurnID: c.TurnID, Agent: c.Agent, Model: c.DisplayModel, ReasoningEffort: c.ReasoningEffort, ReplayAttribution: c.ReplayAttribution, TokenUsage: c.TokenUsage, ResponseID: c.ResponseID}})
 	if err != nil {
 		return fmt.Errorf("seed test turn: %w", err)
 	}

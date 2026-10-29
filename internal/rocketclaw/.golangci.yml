@@ -63,6 +63,8 @@ linters:
           deny:
             - pkg: "reflect$"
               desc: avoid reflection in project code
+            - pkg: "sync/atomic$"
+              desc: use higher-level synchronization primitives instead of sync/atomic
             - pkg: "unsafe$"
               desc: avoid unsafe in project code
     gocritic:
@@ -74,6 +76,7 @@ linters:
         - empty
         - stdlib
         - github.com/Rocketable/platform/internal/rocketclaw/backend.directBridge
+        - go.starlark.net/starlark.Value
     godox:
       keywords:
         - TODO

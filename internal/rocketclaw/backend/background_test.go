@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -112,11 +112,11 @@ func TestBackgroundJobRunsDetachedOnce(t *testing.T) {
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{Source: protocol.SourceSystem, RequireOutputDecision: true}}
 	started, release := make(chan struct{}, 1), make(chan struct{})
 	work := blockedWork(started, release)
-	job := &rocketcode.BackgroundJob{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindExecute, Label: "tests", Agent: "main", CallID: "a", Detached: true}
+	job := &harness.BackgroundJob{ID: "turn-1/call/a", Kind: harness.BackgroundKindExecute, Label: "tests", Agent: "main", CallID: "a", Detached: true}
 
 	result, err := turn.Run(t.Context(), job, work)
 	require.NoError(t, err)
-	require.Equal(t, rocketcode.BackgroundResult{Moved: true}, result)
+	require.Equal(t, harness.BackgroundResult{Moved: true}, result)
 	require.Len(t, work.DetachCalls(), 1)
 	<-started
 
@@ -129,9 +129,9 @@ func TestBackgroundJobRunsDetachedOnce(t *testing.T) {
 
 	for _, detached := range []bool{true, false} {
 		resumed := &backgroundWorkMock{DetachFunc: func() bool { return true }}
-		result, err = turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: job.ID, Kind: job.Kind, Detached: detached}, resumed)
+		result, err = turn.Run(t.Context(), &harness.BackgroundJob{ID: job.ID, Kind: job.Kind, Detached: detached}, resumed)
 		require.NoError(t, err)
-		require.Equal(t, rocketcode.BackgroundResult{Moved: true}, result, "a resumed call reports the job without running it again")
+		require.Equal(t, harness.BackgroundResult{Moved: true}, result, "a resumed call reports the job without running it again")
 		require.Len(t, resumed.DetachCalls(), 1)
 	}
 
@@ -158,7 +158,7 @@ CREATE FUNCTION fail_first_finish() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
 CREATE TRIGGER fail_first_finish BEFORE UPDATE OF phase ON turns FOR EACH ROW EXECUTE FUNCTION fail_first_finish()`)
 	require.NoError(t, err)
 
-	_, err = turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindExecute, Detached: true}, blockedWork(started, release))
+	_, err = turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/a", Kind: harness.BackgroundKindExecute, Detached: true}, blockedWork(started, release))
 	require.NoError(t, err)
 	<-started
 	close(release)
@@ -183,7 +183,7 @@ func TestBackgroundJobStop(t *testing.T) {
 
 	for conversationID, destination := range map[string]string{"main": "", "cron:daily": "main"} {
 		turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: conversationID, origin: &protocol.InboundMessage{SyncDestination: destination}}
-		_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/" + conversationID, Kind: rocketcode.BackgroundKindTask, SubagentKey: "/a", Detached: true}, blockedWork(started, release))
+		_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/" + conversationID, Kind: harness.BackgroundKindTask, SubagentKey: "/a", Detached: true}, blockedWork(started, release))
 		require.NoError(t, err)
 		<-started
 	}
@@ -231,7 +231,7 @@ func TestStoppedSubagentStaysStopped(t *testing.T) {
 	}}, testLogger())
 	started := make(chan struct{}, 2)
 
-	_, err := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main/a", origin: &protocol.InboundMessage{}}.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-2/call/x", Kind: rocketcode.BackgroundKindExecute, Detached: true}, blockedWork(started, make(chan struct{})))
+	_, err := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main/a", origin: &protocol.InboundMessage{}}.Run(t.Context(), &harness.BackgroundJob{ID: "turn-2/call/x", Kind: harness.BackgroundKindExecute, Detached: true}, blockedWork(started, make(chan struct{})))
 	require.NoError(t, err)
 	<-started
 
@@ -246,7 +246,7 @@ func TestStoppedSubagentStaysStopped(t *testing.T) {
 
 		return "", err
 	}, DetachFunc: func() bool { return true }}
-	_, err = backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindTask, SubagentKey: "/a", Detached: true}, waiting)
+	_, err = backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/a", Kind: harness.BackgroundKindTask, SubagentKey: "/a", Detached: true}, waiting)
 	require.NoError(t, err)
 	<-started
 
@@ -272,7 +272,7 @@ func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
 	for _, tc := range []struct {
 		cause                 error
 		detached, stops, held bool
-	}{{context.Canceled, false, true, true}, {context.Canceled, true, false, true}, {rocketcode.ErrShutdown, false, false, false}, {errStoppedByUser, false, false, false}} {
+	}{{context.Canceled, false, true, true}, {context.Canceled, true, false, true}, {harness.ErrShutdown, false, false, false}, {errStoppedByUser, false, false, false}} {
 		t.Run(fmt.Sprintf("%v/detached=%t", tc.cause, tc.detached), func(t *testing.T) {
 			t.Parallel()
 
@@ -283,8 +283,8 @@ func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
 			t.Cleanup(registry.shutdown)
 
 			recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
-			require.NoError(t, store.startSubagent(t.Context(), "main", rocketcode.ChildKey{Path: "/a", Turn: "turn-0", Call: "busy"}, "researcher", true))
-			require.NoError(t, store.startSubagent(t.Context(), "main/a", rocketcode.ChildKey{Path: "/b", Turn: "turn-0", Call: "deep"}, "researcher", true))
+			require.NoError(t, store.startSubagent(t.Context(), "main", harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "busy"}, "researcher", true))
+			require.NoError(t, store.startSubagent(t.Context(), "main/a", harness.ChildKey{Path: "/b", Turn: "turn-0", Call: "deep"}, "researcher", true))
 
 			// The subagent and the one under it each wait for a session write's reply.
 			replies := []*backgroundJob{testReply("main/a", "turn-0/call/w", "web:ops"), testReply("main/a/b", "turn-0/call/w", "web:ops")}
@@ -301,7 +301,7 @@ func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
 
 			if tc.detached {
 				started := make(chan struct{}, 1)
-				_, err = backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-0/call/busy", Kind: rocketcode.BackgroundKindExecute, Detached: true}, blockedWork(started, make(chan struct{})))
+				_, err = backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}.Run(t.Context(), &harness.BackgroundJob{ID: "turn-0/call/busy", Kind: harness.BackgroundKindExecute, Detached: true}, blockedWork(started, make(chan struct{})))
 				require.NoError(t, err)
 				<-started
 			}
@@ -325,7 +325,7 @@ func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "summarize billing", false)
 			inbound.Metadata = map[string]string{"web_message_id": replies[0].jobID}
 			require.NoError(t, startTurnDB(t.Context(), store.db, "turn-ops", "web:ops", inbound))
-			_, err = store.finishTurn(t.Context(), "turn-ops", &turnFinish{store: newSessionStore("web:ops", store), entries: []rocketcode.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage("web:ops", "billing is fine")})
+			_, err = store.finishTurn(t.Context(), "turn-ops", &turnFinish{store: newSessionStore("web:ops", store), entries: []harness.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage("web:ops", "billing is fine")})
 			require.NoError(t, err)
 			require.Len(t, notes.noteReadyCalls(), map[bool]int{false: 1, true: 0}[tc.held])
 		})
@@ -338,8 +338,8 @@ func TestBackgroundJobAttachedCall(t *testing.T) {
 	store := newTestSessionService(t)
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
-	task := func(name string) *rocketcode.BackgroundJob {
-		return &rocketcode.BackgroundJob{ID: "turn-1/call/" + name, Kind: rocketcode.BackgroundKindTask, SubagentKey: "/" + name}
+	task := func(name string) *harness.BackgroundJob {
+		return &harness.BackgroundJob{ID: "turn-1/call/" + name, Kind: harness.BackgroundKindTask, SubagentKey: "/" + name}
 	}
 
 	t.Run("finished", func(t *testing.T) {
@@ -349,7 +349,7 @@ func TestBackgroundJobAttachedCall(t *testing.T) {
 		work := blockedWork(started, release)
 		result, err := turn.Run(t.Context(), task("a"), work)
 		require.NoError(t, err)
-		require.Equal(t, rocketcode.BackgroundResult{Output: "done"}, result)
+		require.Equal(t, harness.BackgroundResult{Output: "done"}, result)
 		require.Empty(t, work.DetachCalls())
 		require.False(t, registry.movable("main"))
 	})
@@ -364,8 +364,8 @@ func TestBackgroundJobAttachedCall(t *testing.T) {
 			return err
 		})
 		<-started
-		cancel(rocketcode.ErrShutdown)
-		require.ErrorIs(t, call.Wait(), rocketcode.ErrShutdown, "foreground bash must see the shutdown cause")
+		cancel(harness.ErrShutdown)
+		require.ErrorIs(t, call.Wait(), harness.ErrShutdown, "foreground bash must see the shutdown cause")
 	})
 
 	// A move whose row cannot be written ends the work instead of leaving it running unrecorded.
@@ -380,7 +380,7 @@ CREATE TRIGGER refuse_row BEFORE INSERT ON turns FOR EACH ROW EXECUTE FUNCTION r
 		work := blockedWork(started, make(chan struct{}))
 
 		call.Go(func() error {
-			_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/z", Kind: rocketcode.BackgroundKindExecute}, work)
+			_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/z", Kind: harness.BackgroundKindExecute}, work)
 			return err
 		})
 		<-started
@@ -404,18 +404,18 @@ CREATE TRIGGER refuse_row BEFORE INSERT ON turns FOR EACH ROW EXECUTE FUNCTION r
 
 		var (
 			call   errgroup.Group
-			result rocketcode.BackgroundResult
+			result harness.BackgroundResult
 		)
 
 		call.Go(func() (err error) {
-			result, err = turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/s", Kind: rocketcode.BackgroundKindExecute}, work)
+			result, err = turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/s", Kind: harness.BackgroundKindExecute}, work)
 			return err
 		})
 		<-started
 		require.Len(t, registry.move("main"), 1)
 		close(release)
 		require.NoError(t, call.Wait())
-		require.Equal(t, rocketcode.BackgroundResult{Output: "done"}, result)
+		require.Equal(t, harness.BackgroundResult{Output: "done"}, result)
 		require.NotContains(t, backgroundJobIDs(t, store, "main"), "turn-1/call/s", "the job leaves no row and no note")
 	})
 
@@ -427,7 +427,7 @@ CREATE TRIGGER refuse_row BEFORE INSERT ON turns FOR EACH ROW EXECUTE FUNCTION r
 
 		var (
 			call    errgroup.Group
-			result  rocketcode.BackgroundResult
+			result  harness.BackgroundResult
 			workCtx context.Context
 		)
 
@@ -453,7 +453,7 @@ CREATE TRIGGER refuse_row BEFORE INSERT ON turns FOR EACH ROW EXECUTE FUNCTION r
 		require.False(t, registry.movable("other"))
 		require.Len(t, registry.move("main"), 1)
 		require.NoError(t, call.Wait())
-		require.Equal(t, rocketcode.BackgroundResult{Moved: true}, result)
+		require.Equal(t, harness.BackgroundResult{Moved: true}, result)
 		require.Len(t, work.DetachCalls(), 1)
 		require.False(t, registry.movable("main"))
 		require.Equal(t, backgroundRunning, testBackgroundRow(t, store, "main", job.ID).status)
@@ -481,7 +481,7 @@ func TestBackgroundJobsRunWithoutLimit(t *testing.T) {
 	started, release := make(chan struct{}, jobs), make(chan struct{})
 
 	for i := range jobs {
-		_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: fmt.Sprintf("turn-1/call/%d", i), Kind: rocketcode.BackgroundKindExecute, Detached: true}, blockedWork(started, release))
+		_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: fmt.Sprintf("turn-1/call/%d", i), Kind: harness.BackgroundKindExecute, Detached: true}, blockedWork(started, release))
 		require.NoError(t, err)
 	}
 
@@ -506,7 +506,7 @@ func TestBackgroundJobsAbandoned(t *testing.T) {
 
 	for _, conversationID := range []string{"main", "other"} {
 		turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: conversationID, origin: &protocol.InboundMessage{}}
-		_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindExecute, Detached: true}, blockedWork(started, make(chan struct{})))
+		_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/a", Kind: harness.BackgroundKindExecute, Detached: true}, blockedWork(started, make(chan struct{})))
 		require.NoError(t, err)
 		<-started
 	}
@@ -573,9 +573,9 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 
 	for _, detached := range []bool{false, true} {
 		attach := &backgroundWorkMock{DetachFunc: func() bool { return true }}
-		result, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: task.jobID, Kind: rocketcode.BackgroundKindTask, SubagentKey: "/a", Detached: detached}, attach)
+		result, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: task.jobID, Kind: harness.BackgroundKindTask, SubagentKey: "/a", Detached: detached}, attach)
 		require.NoError(t, err)
-		require.Equal(t, rocketcode.BackgroundResult{Moved: true}, result, "a re-attached call does not wait again")
+		require.Equal(t, harness.BackgroundResult{Moved: true}, result, "a re-attached call does not wait again")
 		require.Len(t, attach.DetachCalls(), 1)
 	}
 

@@ -23,8 +23,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 )
 
@@ -223,7 +223,7 @@ func (c *equivCapture) entry(ctx context.Context, conversationID string, observe
 			return entry, err
 		}
 
-		item := equivItem{Kind: rocketcode.ReplayInputRawKind(raw), Raw: hash}
+		item := equivItem{Kind: harness.ReplayInputRawKind(raw), Raw: hash}
 		if observed.ID != 0 {
 			item.ID = fmt.Sprintf("%d:%d", observed.ID, i)
 		}
@@ -236,7 +236,7 @@ func (c *equivCapture) entry(ctx context.Context, conversationID string, observe
 			item.Name, item.Call = call.Name, call.CallID
 		}
 
-		params, err := rocketcode.ReplayInputToParams([]json.RawMessage{raw})
+		params, err := harness.ReplayInputToParams([]json.RawMessage{raw})
 		if err != nil {
 			item.Kind += "!undecodable"
 			entry.Items = append(entry.Items, item)
@@ -394,7 +394,7 @@ func (c *equivCapture) tool(output string) []string {
 }
 
 // callTool returns a session tool's normalized output, or its error, which is part of what it shows.
-func (c *equivCapture) callTool(ctx context.Context, tool *rocketcode.Tool, args any) []string {
+func (c *equivCapture) callTool(ctx context.Context, tool *harness.Tool, args any) []string {
 	raw, err := json.Marshal(args)
 	require.NoError(c.t, err)
 

@@ -10,9 +10,9 @@ import (
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
-	"github.com/Rocketable/platform/internal/rocketcode/mcpclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,11 +30,11 @@ func TestMCPToolsNotInRocketClawAutoAllowList(t *testing.T) {
 
 	action, matched := agents.Items["main"].Permission.Evaluate("rocketclaw", "execute")
 	assert.False(t, matched)
-	assert.Equal(t, rocketcode.PermissionDeny, action)
+	assert.Equal(t, harness.PermissionDeny, action)
 
 	action, matched = agents.Items["main"].Permission.Evaluate("mcp", "execute")
 	assert.False(t, matched)
-	assert.Equal(t, rocketcode.PermissionDeny, action)
+	assert.Equal(t, harness.PermissionDeny, action)
 }
 
 func TestRocketcodeConfigIncludesMCPServers(t *testing.T) {
@@ -95,18 +95,18 @@ func TestWorkflowPrepareOmitsMCPTools(t *testing.T) {
 
 	// Workflow path does not pass MCPServers; host grants still register execute.
 	// RestrictTools keeps execute and strips task / direct host tools.
-	runtime, err := rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{
+	runtime, err := harness.NewWithModelResolver(resolver, &harness.Config{
 		ShellTempDir:      filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
 		RetainedResultDir: "retained",
 		Diagnostics:       true,
-		ChildSessions:     rocketcode.InertChildSessions{},
-		Journal:           rocketcode.InertJournal{},
-		ShellCommand:      rocketcode.DefaultShellCommand{},
+		ChildSessions:     harness.InertChildSessions{},
+		Journal:           harness.InertJournal{},
+		ShellCommand:      harness.DefaultShellCommand{},
 	}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 
 	tools := slices.DeleteFunc(slices.Collect(maps.Keys(runtime.Tools)), func(name string) bool {
-		return name == "task" || rocketcode.CodeModeOnlyHostTool(name)
+		return name == "task" || harness.CodeModeOnlyHostTool(name)
 	})
 	require.NoError(t, runtime.RestrictTools(tools))
 

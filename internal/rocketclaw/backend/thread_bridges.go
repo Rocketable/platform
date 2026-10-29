@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -726,7 +726,7 @@ func (m *threadBridgeManager) continueSubagent(ctx context.Context, job *backgro
 
 	rocketcodeConfig := bridge.rocketcodeConfig(filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), nil)
 
-	runtime, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
+	runtime, err := harness.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
 	if err != nil {
 		return "", fmt.Errorf("prepare task resume: %w", err)
 	}

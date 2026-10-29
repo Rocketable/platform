@@ -21,7 +21,7 @@ type publicVoice struct {
 
 // newPublicVoice follows the provider's API base, sending the API key over plain HTTP only
 // to localhost or a loopback IP.
-func newPublicVoice(provider config.OpenAIConfig) (*publicVoice, error) {
+func newPublicVoice(provider *config.OpenAIConfig) (*publicVoice, error) {
 	scheme, rest, _ := strings.Cut(strings.TrimSuffix(cmp.Or(provider.APIBaseURL, "https://api.openai.com/v1"), "/"), "://")
 	secure := strings.TrimPrefix(strings.TrimPrefix(scheme, "http"), "ws")
 

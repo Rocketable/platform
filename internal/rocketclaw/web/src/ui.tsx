@@ -433,7 +433,7 @@ function useRoute() {
   const timeline = pathname.startsWith("/cron/") ? decodeSessionId(pathname.slice("/cron/".length)) : "";
   const agents = pathname === "/agents";
   const skills = pathname === "/skills";
-  // Skill names are lowercase letters, digits and hyphens (internal/rocketcode skills.go), so paths hold them as-is.
+  // Skill names are lowercase letters, digits and hyphens (internal/rocketclaw/harness skills.go), so paths hold them as-is.
   const skill = pathname.startsWith("/skills/") ? pathname.slice("/skills/".length) : "";
   const config = pathname === "/config";
   const search = isSearch(pathname);

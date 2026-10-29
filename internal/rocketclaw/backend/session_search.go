@@ -13,7 +13,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/sync/errgroup"
 )
@@ -529,7 +529,7 @@ func (s *SessionService) sidebarRows(ctx context.Context, username string, chats
 }
 
 // searchDefinitions loads only the definitions the query's model: and space: terms need.
-func (s *SessionService) searchDefinitions(ctx context.Context, terms []SearchTerm) (agents rocketcode.Agents, spaces []Space, err error) {
+func (s *SessionService) searchDefinitions(ctx context.Context, terms []SearchTerm) (agents harness.Agents, spaces []Space, err error) {
 	if slices.ContainsFunc(terms, func(term SearchTerm) bool { return term.Key == keySpace }) {
 		spaces, err = s.Spaces(ctx)
 		if err != nil {
