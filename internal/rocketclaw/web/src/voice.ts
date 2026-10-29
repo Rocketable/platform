@@ -8,8 +8,7 @@ export type VoiceState = "idle" | "connecting" | "reconnecting" | "live" | "endi
 export type VoiceCaption = { id: number; role: "user" | "assistant"; text: string; written?: boolean };
 // Captions live only in memory; startedAt is set when the call goes live.
 // A notice is a note during the call, such as a refused hand-off; the newest replaces it.
-// Sticky, kept only in memory, makes the tab's call reconnect after network losses; it turns off when a call ends.
-export type VoiceView = { state: VoiceState; conversationId: string; error: string; notice: string; captions: VoiceCaption[]; startedAt?: number; sticky: boolean };
+export type VoiceView = { state: VoiceState; conversationId: string; error: string; notice: string; captions: VoiceCaption[]; startedAt?: number };
 
 // Data-channel events that carry caption text, per wire dialect (docs/investigations/2026-10-10-gpt-live-wire-probe.md).
 const captionEvents: Record<VoiceRoute, Record<string, VoiceCaption["role"]>> = {
@@ -31,7 +30,7 @@ const audioLost = "Voice call failed: audio connection lost.", timedOut = "Voice
 const networkLosses = [lost, endings.lost, audioLost, timedOut];
 class VoiceFailure extends Error {}
 
-let view: VoiceView = { state: "idle", conversationId: "", error: "", notice: "", captions: [], sticky: false };
+let view: VoiceView = { state: "idle", conversationId: "", error: "", notice: "", captions: [] };
 let current: { stop(): void } | undefined;
 let speech: AnalyserNode | undefined;
 const samples = new Float32Array(512);
@@ -69,11 +68,6 @@ export function voiceChoice(agent?: Agent, voice = "") {
 export function stopVoice() {
   if (current) current.stop();
   else publish({ state: "idle", error: "" });
-}
-
-// setVoiceSticky turns sticky on or off for this tab's call, or for its next one.
-export function setVoiceSticky(sticky: boolean) {
-  publish({ sticky });
 }
 
 // tone plays notes, in Hz, one after another for 150 ms each.
@@ -132,8 +126,9 @@ export async function startVoice(conversationId: string, voice = "") {
     mic = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => { throw new VoiceFailure("Microphone access was denied."); });
     // Stop during the permission prompt: finally releases the microphone.
     if (abort.signal.aborted) return;
-    // As Codex does, a data channel still closed 20 s after the answer restarts the call once on the same microphone.
-    let retried = false, wait = 1_000;
+    // A network loss, or a data channel still closed 20 s after the answer, restarts the call
+    // on the same microphone after a wait that doubles up to 10 s, until it is hung up.
+    let wait = 1_000;
     for (;;) {
       const attempt = new AbortController(), signal = AbortSignal.any([abort.signal, attempt.signal]);
       const fail = (message: string) => attempt.abort(new VoiceFailure(message));
@@ -214,13 +209,7 @@ export async function startVoice(conversationId: string, voice = "") {
       }
       pc.close();
       clearTimeout(opening);
-      if (abort.signal.aborted) return;
-      if (error === timedOut && !retried && !view.sticky) {
-        retried = true;
-        set({ notice: "Voice connection timed out. Retrying once." });
-        continue;
-      }
-      if (!view.sticky || !networkLosses.includes(error)) return;
+      if (abort.signal.aborted || !networkLosses.includes(error)) return;
       if (!ticking) {
         tone(sound, 660, 440);
         ticking = setInterval(() => tone(sound, 880), 5_000);
@@ -230,7 +219,7 @@ export async function startVoice(conversationId: string, voice = "") {
         setTimeout(resolve, wait);
         abort.signal.addEventListener("abort", resolve, { once: true });
       });
-      if (abort.signal.aborted || !view.sticky) return;
+      if (abort.signal.aborted) return;
       wait = Math.min(wait * 2, 10_000);
     }
   } catch (failure) {
@@ -247,7 +236,7 @@ export async function startVoice(conversationId: string, voice = "") {
     clearInterval(ticking);
     removeEventListener("pagehide", call.stop);
     document.removeEventListener("visibilitychange", onVisibility);
-    set(error ? { state: "error", error, notice: "", sticky: false } : { state: "idle", notice: "", sticky: false });
+    set(error ? { state: "error", error, notice: "" } : { state: "idle", notice: "" });
     if (current === call) current = undefined;
   }
 }

@@ -162,7 +162,7 @@ keeps running there. A call already live on another device keeps its conversatio
 until it ends. A voice picker next to the agent picker lists the voices the
 default `openai` provider offers (ChatGPT-login and API-key providers offer different ones).
 Each person has one voice: a call uses it when the default `openai` provider offers it, and
-that provider's default otherwise, and the composer's voice button follows it too. **Sticky** (below) sits after the pickers. Icon buttons on the right show the transcript, open the
+that provider's default otherwise, and the composer's voice button follows it too. Icon buttons on the right show the transcript, open the
 conversation, and reset. The row stays on one line: on phones the agent picker drops
 its robot icon, and a long agent name is shortened. The page shows the call state, elapsed time and notices
 under the orb. **Show transcript** swaps the big orb for live captions (not saved)
@@ -179,31 +179,22 @@ does, then calls on it. Leaving the session ends its call.
 A tab runs one call at a time, and each person has one live call: starting voice
 anywhere else, on any conversation, ends their older call with "Voice moved to another
 device or tab." Other people's calls, even on the same conversation, keep running.
-A call also ends when the page closes, stays hidden for 30 seconds, or loses its
-connection to RocketClaw, and stops with "Voice call failed: audio connection
-lost." when the browser's audio connection fails. There are no idle or no-speech
-timers. If the audio connection is not up 20 seconds after OpenAI answers, the
-call restarts once on the same microphone with "Voice connection timed out.
-Retrying once."; a second timeout stops it. Other failures show a message and are
-not retried. A hand-off the agent could not accept shows a notice, and the call
-continues.
+A call also ends when the page closes or stays hidden for 30 seconds. There are no
+idle or no-speech timers. A hand-off the agent could not accept shows a notice, and
+the call continues.
 
-**Sticky**, the magnet button next to the agent and voice pickers at the top of the
-Voice page, keeps a call going through dead zones. It
-is off by default, lives only in the tab's memory, and can be turned on before or
-during a call. While it is on, a call that loses its connection (the audio
-connection fails, the page loses RocketClaw, RocketClaw loses OpenAI, or the audio
-is not up 20 seconds after OpenAI answers) starts a new call on the same
+Every call keeps going through dead zones. A call that loses its connection (the
+audio connection fails, the page loses RocketClaw, RocketClaw loses OpenAI, or the
+audio is not up 20 seconds after OpenAI answers) starts a new call on the same
 conversation and microphone instead of ending. The first try comes 1 second
-later, and each failed try doubles the wait, up to 10 seconds; the status under
-the orb reads "Reconnecting…" meanwhile. A falling two-note tone marks the loss, a short
-tick plays every 5 seconds while reconnecting, and a rising two-note tone marks the
-call coming back. Each new call is a fresh OpenAI call that starts from the
-conversation's recent messages, so talk never handed off to the agent is not
-carried over. Every other ending turns Sticky off: hanging up, the page closing or
-staying hidden for 30 seconds, another device taking the call, OpenAI ending it,
-and errors a retry cannot fix. Leaving the Voice page turns it off too, and turning
-it off while reconnecting stops further tries.
+later, and each failed try doubles the wait, up to 10 seconds, until it comes
+back or is hung up; the status reads "Reconnecting…" meanwhile. A falling two-note
+tone marks the loss, a short tick plays every 5 seconds while reconnecting, and a
+rising two-note tone marks the call coming back. Each new call is a fresh OpenAI
+call that starts from the conversation's recent messages, so talk never handed off
+to the agent is not carried over. Other failures, such as another device taking
+the call, OpenAI ending it, or a refused credential, end the call with a message
+and are not retried.
 
 The agent's final reply to a hand-off is spoken once, as written. A reply over
 about 990 tokens is not spoken: the voice says it is on the screen, and the Voice

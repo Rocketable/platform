@@ -354,26 +354,23 @@ test("Voice page keeps each person's conversation and settings on the server, an
     await page.getByLabel("Transcript", { exact: true }).waitFor(); // tester turned the transcript on earlier.
     expect(settings("guest")).toEqual({ conversationId: "", agent: "", voice: "", transcript: false });
 
-    const sticky = page.getByRole("button", { name: "Sticky", exact: true });
-    await sticky.click();
-    expect(await sticky.getAttribute("aria-pressed")).toBe("true");
+    // Every call reconnects after a lost connection, on the same microphone, until it is hung up.
     const start = { calls: calls.length, mics: (await probe()).mics };
     await page.getByRole("button", { name: "Start voice call", exact: true }).click();
     await live();
     voiceStream!.close();
     await status.getByText("Reconnecting…", { exact: true }).waitFor();
     await live();
-    expect({ calls: calls.length - start.calls, mics: (await probe()).mics - start.mics, sticky: await sticky.getAttribute("aria-pressed") }).toEqual({ calls: 2, mics: 1, sticky: "true" });
+    expect({ calls: calls.length - start.calls, mics: (await probe()).mics - start.mics }).toEqual({ calls: 2, mics: 1 });
     await page.route(/\/api\/(Identity|Voice)$/, (route: { abort(): Promise<void> }) => route.abort());
     voiceStream!.close();
     await status.getByText("Reconnecting…", { exact: true }).waitFor();
     await page.waitForEvent("requestfailed", (request: { url(): string }) => request.url().endsWith("/api/Identity"));
     await page.unroute(/\/api\/(Identity|Voice)$/);
     await live();
-    expect({ mics: (await probe()).mics - start.mics, sticky: await sticky.getAttribute("aria-pressed") }).toEqual({ mics: 1, sticky: "true" });
+    expect((await probe()).mics - start.mics).toBe(1);
     await page.getByRole("button", { name: "End voice call", exact: true }).click({ force: true });
     await status.getByText("Tap to talk", { exact: true }).waitFor();
-    expect(await sticky.getAttribute("aria-pressed")).toBe("false");
 
     await page.route("**/api/VoiceSettings", async (route: any) => {
       if (route.request().postDataJSON().action !== "START") return route.continue();
