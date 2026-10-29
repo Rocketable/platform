@@ -2694,7 +2694,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 
 	tools = append(tools, reloadTool(b.config.RequestReload), listSessionsTool(b.config.SessionService, b.threads), getSessionTool(b.config.SessionService), sessionsGetURLTool(b.threads), stopBackgroundJobTool(b.background, b.config.ConversationID))
 	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
-		tools = append(tools, updateGoalTool(b, shellEnv))
+		tools = append(tools, updateGoalTool(b.config.SessionService, b.config.ConversationID))
 	}
 
 	if len(runtimeCfg.OpenCode) > 0 {
@@ -3146,32 +3146,14 @@ func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.Inbound
 	}}
 }
 
-// updateGoalTool runs the goal's check script with shellEnv, the environment of the turn that calls it.
-func updateGoalTool(b *Bridge, shellEnv map[string]string) rocketcode.Tool {
-	store := b.config.SessionService
-	conversationID := b.config.ConversationID
-
-	return rocketcode.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use progress when reporting continuing progress, complete when the goal is achieved, or blocked when progress cannot continue.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusProgress, GoalStatusComplete, GoalStatusBlocked}}, "note": map[string]any{"type": "string", "description": "Status note for the goal update. Use this to explain what is going on, what changed, what you are thinking, where the goal is heading next, what was completed, or what is blocking progress. It should mirror the substance of the visible Progress summary."}}, "required": []string{"status"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+func updateGoalTool(store *SessionService, conversationID string) rocketcode.Tool {
+	return rocketcode.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use progress when reporting continuing progress, complete when the goal is achieved, or blocked when progress cannot continue.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusProgress, GoalStatusComplete, GoalStatusBlocked}}, "note": map[string]any{"type": "string", "description": "Status note for the goal update. Use this to explain what is going on, what changed, what you are thinking, where the goal is heading next, what was completed, or what is blocking progress. It should mirror the substance of the visible Progress summary."}}, "required": []string{"status"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var input struct {
 			Status string `json:"status"`
 			Note   string `json:"note"`
 		}
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return rocketcode.ToolResult{}, fmt.Errorf("parse goal update: %w", err)
-		}
-
-		if input.Status == GoalStatusComplete {
-			current, ok, err := store.Goal(conversationID)
-			if err != nil {
-				return rocketcode.ToolResult{}, err
-			}
-
-			if ok && strings.TrimSpace(current.CheckScript) != "" {
-				output, passed := b.runGoalCheck(ctx, current.CheckScript, shellEnv)
-				if !passed {
-					return rocketcode.TextToolResult(output), nil
-				}
-			}
 		}
 
 		goal, err := store.UpdateGoalStatus(conversationID, input.Status, input.Note)
@@ -3185,58 +3167,6 @@ func updateGoalTool(b *Bridge, shellEnv map[string]string) rocketcode.Tool {
 
 		return rocketcode.TextToolResult("goal marked " + strings.TrimSpace(goal.Status)), nil
 	}}
-}
-
-func (b *Bridge) runGoalCheck(ctx context.Context, script string, shellEnv map[string]string) (string, bool) {
-	runtimeCfg := b.runtime.Clone()
-
-	root, err := os.OpenRoot(runtimeCfg.Workspace)
-	if err != nil {
-		return "goal check failed before execution: " + err.Error(), false
-	}
-
-	defer func() { _ = root.Close() }()
-
-	agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime, runtimeCfg.RuntimeDirName(), toolModePersistent)
-	if err != nil {
-		return "goal check failed before execution: " + err.Error(), false
-	}
-
-	agentName := b.agentSnapshot()
-
-	agent, ok := agents.Items[agentName]
-	if !ok {
-		return "goal check failed before execution: active agent " + agentName + " is not configured", false
-	}
-
-	// The check's permission rules see the variables of the turn that runs it.
-	env := make([]string, 0, len(shellEnv))
-	for key, value := range shellEnv {
-		env = append(env, key+"="+value)
-	}
-
-	rocketcode.InterpolatePermissions(&agent, env)
-
-	command, err := validateGoalCheckScript(root, runtimeCfg.Workspace, script, agent.Permission)
-	if err != nil {
-		return "goal check failed before execution: " + err.Error(), false
-	}
-
-	shellTempRel := rocketcodeShellTempRel(runtimeCfg.RuntimeDirName(), b.config.ConversationID)
-	if err := root.MkdirAll(shellTempRel, 0o700); err != nil {
-		return "goal check failed before execution: " + err.Error(), false
-	}
-
-	result, err := rocketcode.RunBash(ctx, root, filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), shellEnv, agent.CustomShell, rocketcode.BashCommand{Command: command, TimeoutMillisecond: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
-	if err != nil {
-		return "goal check failed before execution: " + err.Error(), false
-	}
-
-	if result.Success {
-		return result.String(), true
-	}
-
-	return "goal check did not pass. Continue working from this output:\n\n" + result.String(), false
 }
 
 func (b *Bridge) armScheduledMessage(id string, message *protocol.ScheduledMessageState) {
@@ -3604,12 +3534,7 @@ func goalSteeringPrompt(goal *GoalState) string {
 		turnBudget = fmt.Sprintf("%d of %d turns used", goal.TurnsUsed, goal.MaxTurns)
 	}
 
-	prompt := "Active goal loop:\nObjective:\n" + strings.TrimSpace(goal.Objective) + "\n\nTurn budget: " + turnBudget
-	if checkScript := strings.TrimSpace(goal.CheckScript); checkScript != "" {
-		prompt += "\n\nCompletion check command:\n" + checkScript + "\n\nCalling rocketclaw_update_goal with status complete runs the check command. If the check fails, use the returned failure output to continue working instead of declaring done."
-	}
-
-	return prompt + "\n\nContinue making concrete progress toward the objective. At the end of every visible goal response, include a Progress summary: section. For status progress, summarize what changed this turn, the current state, and the next concrete step. For status complete, summarize what was achieved and any validation or check result. For status blocked, summarize what happened, the concrete blocker, and what human input, access, or decision is needed. Call rocketclaw_update_goal with status progress, complete, or blocked, and put the same substance from the visible Progress summary in note."
+	return "Active goal loop:\nObjective:\n" + strings.TrimSpace(goal.Objective) + "\n\nTurn budget: " + turnBudget + "\n\nContinue making concrete progress toward the objective. At the end of every visible goal response, include a Progress summary: section. For status progress, summarize what changed this turn, the current state, and the next concrete step. For status complete, summarize what was achieved and any validation or check result. For status blocked, summarize what happened, the concrete blocker, and what human input, access, or decision is needed. Call rocketclaw_update_goal with status progress, complete, or blocked, and put the same substance from the visible Progress summary in note."
 }
 
 func externalMCPMetadataEnv(conversationID string, metadata map[string]string) map[string]string {

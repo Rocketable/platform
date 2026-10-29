@@ -79,14 +79,13 @@ type CronScheduleState struct {
 
 // GoalState records one active or terminal managed-thread goal loop.
 type GoalState struct {
-	Objective   string    `json:"objective,omitempty"`
-	CheckScript string    `json:"check_script,omitempty"`
-	MaxTurns    int       `json:"max_turns,omitempty"`
-	TurnsUsed   int       `json:"turns_used,omitempty"`
-	Status      string    `json:"status,omitempty"`
-	Note        string    `json:"note,omitempty"`
-	CreatedAt   time.Time `json:"created_at,omitzero"`
-	UpdatedAt   time.Time `json:"updated_at,omitzero"`
+	Objective string    `json:"objective,omitempty"`
+	MaxTurns  int       `json:"max_turns,omitempty"`
+	TurnsUsed int       `json:"turns_used,omitempty"`
+	Status    string    `json:"status,omitempty"`
+	Note      string    `json:"note,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitzero"`
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
 	// PrincipalName and PrincipalEmail name the person who set the goal.
 	PrincipalName  string `json:"principal_name,omitempty"`
 	PrincipalEmail string `json:"principal_email,omitempty"`
@@ -253,7 +252,6 @@ func (s *SessionService) UpsertThread(conversationID string, thread ThreadState)
 func (s *SessionService) BeginGoal(conversationID string, goal *GoalState) error {
 	conversationID = strings.TrimSpace(conversationID)
 	goal.Objective = strings.TrimSpace(goal.Objective)
-	goal.CheckScript = strings.TrimSpace(goal.CheckScript)
 
 	if conversationID == "" {
 		return errors.New("goal conversation ID is required")
@@ -271,7 +269,7 @@ func (s *SessionService) BeginGoal(conversationID string, goal *GoalState) error
 func beginGoalDB(ctx context.Context, db stateStoreDB, conversationID string, goal *GoalState) error {
 	now := time.Now().UTC()
 
-	rows, err := execRows(ctx, db, "begin goal", "count goal start", `UPDATE conversations SET goal_objective = $2, goal_check_script = $3, goal_max_turns = $4, goal_turns_used = 0, goal_status = $5, goal_note = '', goal_created_at_unix_ns = $6, goal_updated_at_unix_ns = $6, goal_principal_name = $7, goal_principal_email = $8 WHERE conversation_id = $1 AND COALESCE(goal_status NOT IN ('', $5), TRUE)`, conversationID, goal.Objective, goal.CheckScript, goal.MaxTurns, GoalStatusActive, timeUnixNano(now), goal.PrincipalName, goal.PrincipalEmail)
+	rows, err := execRows(ctx, db, "begin goal", "count goal start", `UPDATE conversations SET goal_objective = $2, goal_max_turns = $3, goal_turns_used = 0, goal_status = $4, goal_note = '', goal_created_at_unix_ns = $5, goal_updated_at_unix_ns = $5, goal_principal_name = $6, goal_principal_email = $7 WHERE conversation_id = $1 AND COALESCE(goal_status NOT IN ('', $4), TRUE)`, conversationID, goal.Objective, goal.MaxTurns, GoalStatusActive, timeUnixNano(now), goal.PrincipalName, goal.PrincipalEmail)
 	if err != nil {
 		return err
 	}
@@ -1424,7 +1422,7 @@ func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, c
 			return 0, false, err
 		}
 
-		if _, err := tx.ExecContext(ctx, `UPDATE conversations SET goal_objective = NULL, goal_check_script = NULL, goal_max_turns = NULL, goal_turns_used = NULL,
+		if _, err := tx.ExecContext(ctx, `UPDATE conversations SET goal_objective = NULL, goal_max_turns = NULL, goal_turns_used = NULL,
     goal_status = NULL, goal_note = NULL, goal_created_at_unix_ns = NULL, goal_updated_at_unix_ns = NULL,
     goal_principal_name = NULL, goal_principal_email = NULL WHERE conversation_id = $1`, c.id); err != nil {
 			return 0, false, fmt.Errorf("delete stale goal: %w", err)

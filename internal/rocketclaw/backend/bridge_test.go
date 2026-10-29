@@ -334,126 +334,25 @@ func TestReloadToolReturnsModelVisibleFailure(t *testing.T) {
 	require.ErrorContains(t, err, "reason is required")
 }
 
-func TestUpdateGoalToolRunsSuccessfulCheckBeforeComplete(t *testing.T) {
-	t.Parallel()
-
-	bridge := newGoalCheckTestBridge(t, `---
-description: Main
-model: gpt-5.4
-permission:
-  bash:
-    "./scripts/check.sh": allow
----
-Prompt
-`, "#!/bin/sh\ntest \"$ROCKETCLAW_METADATA_TICKET\" = T-1 && printf passed\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
-
-	// The check runs with the environment of the turn that calls the tool.
-	result, err := updateGoalTool(bridge, map[string]string{"ROCKETCLAW_METADATA_TICKET": "T-1"}).Call(t.Context(), []byte(`{"status":"complete","note":"finished lint"}`), nil)
-	require.NoError(t, err)
-	assert.Equal(t, "goal marked complete", result.Output)
-
-	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, GoalStatusComplete, goal.Status)
-	assert.Equal(t, "finished lint", goal.Note)
-}
-
-func TestUpdateGoalToolRunsCheckThroughActiveAgentCustomShell(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		wrapperRun string
-		wantOutput string
-		wantStatus string
-	}{
-		{name: "wrapper exits nonzero", wrapperRun: "/bin/bash -c \"$1\"\nexit 9\n", wantOutput: "goal check did not pass. Continue working from this output:\n\npassed", wantStatus: GoalStatusActive},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// A customShell lives outside the agent workspace, so the wrapper is written with host filesystem APIs.
-			shellDir := t.TempDir()
-			shell := filepath.Join(shellDir, "enter.sh")
-			require.NoError(t, os.WriteFile(shell, []byte("#!/bin/sh\nprintf '%s:%s' \"$#\" \"$1\" > '"+filepath.Join(shellDir, "args")+"'\n"+tt.wrapperRun), 0o755))
-
-			bridge := newGoalCheckTestBridge(t, `---
-description: Main
-model: gpt-5.4
-customShell: `+shell+`
-permission:
-  bash:
-    "./scripts/check.sh": allow
----
-Prompt
-`, "#!/bin/sh\nprintf passed\n")
-			require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
-
-			result, err := updateGoalTool(bridge, nil).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantOutput, result.Output)
-
-			args, err := os.ReadFile(filepath.Join(shellDir, "args"))
-			require.NoError(t, err)
-			assert.Equal(t, "1:./scripts/check.sh", string(args))
-
-			goal, ok, err := bridge.config.SessionService.Goal("thread-1")
-			require.NoError(t, err)
-			require.True(t, ok)
-			assert.Equal(t, tt.wantStatus, goal.Status)
-		})
-	}
-}
-
 func TestUpdateGoalToolRecordsProgressNoteWithoutEndingGoal(t *testing.T) {
 	t.Parallel()
 
-	bridge := newGoalCheckTestBridge(t, `---
-description: Main
-model: gpt-5.4
-permission: {}
----
-Prompt
-`, "#!/bin/sh\nexit 7\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh", MaxTurns: 3}))
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
+	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "fix lint", MaxTurns: 3}))
 
-	tool := updateGoalTool(bridge, nil)
+	tool := updateGoalTool(store, "thread-1")
 	assert.Contains(t, fmt.Sprint(tool.Parameters), "what you are thinking")
 
 	result, err := tool.Call(t.Context(), []byte(`{"status":"progress","note":"patched parser; tests next"}`), nil)
 	require.NoError(t, err)
 	assert.Equal(t, "goal progress recorded", result.Output)
 
-	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
+	goal, ok, err := store.Goal("thread-1")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, GoalStatusActive, goal.Status)
 	assert.Equal(t, "patched parser; tests next", goal.Note)
-}
-
-func TestUpdateGoalToolKeepsGoalActiveWhenCheckPermissionDenied(t *testing.T) {
-	t.Parallel()
-
-	bridge := newGoalCheckTestBridge(t, `---
-description: Main
-model: gpt-5.4
-permission:
-  bash:
-    "./scripts/check.sh --safe": allow
----
-Prompt
-`, "#!/bin/sh\nexit 0\n")
-	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", &GoalState{Objective: "fix lint", CheckScript: "./scripts/check.sh --dangerous", MaxTurns: 3}))
-
-	result, err := updateGoalTool(bridge, nil).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
-	require.NoError(t, err)
-	assert.Contains(t, result.Output, "not allowed by agent bash permission")
-
-	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, GoalStatusActive, goal.Status)
 }
 
 func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
@@ -880,30 +779,6 @@ func newGoalAccountingTestBridge(t *testing.T) *Bridge {
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
 
 	return &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "thread-1", SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
-}
-
-func newGoalCheckTestBridge(t *testing.T, agent, script string) *Bridge {
-	t.Helper()
-
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", agent)
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	require.NoError(t, root.MkdirAll("scripts", 0o755))
-	require.NoError(t, root.WriteFile("scripts/check.sh", []byte(script), 0o755))
-	require.NoError(t, root.Chmod("scripts/check.sh", 0o755))
-	require.NoError(t, root.Close())
-
-	store := newTestSessionServiceAt(t, workspace)
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
-
-	return &Bridge{
-		log:     slog.New(slog.DiscardHandler),
-		runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}),
-		config:  Config{ConversationID: "thread-1", Agent: "main", SessionService: store},
-	}
 }
 
 func TestRestartToolAcceptsEmptyOutputAndPropagatesErrors(t *testing.T) {

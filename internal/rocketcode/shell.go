@@ -34,14 +34,6 @@ type bashParams struct {
 	Description        string `json:"description"`
 }
 
-// BashCommand is the public shape of the workspace bash tool input.
-type BashCommand struct {
-	Command            string
-	TimeoutMillisecond int
-	Workdir            string
-	Description        string
-}
-
 // BashResult is the result of running a workspace bash command.
 type BashResult struct {
 	Output    string
@@ -70,28 +62,6 @@ func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []st
 		env:          slices.Clone(env),
 		shellCommand: shellCommand,
 	}
-}
-
-// RunBash runs command through the same implementation used by RocketCode's bash tool.
-// A non-empty customShell runs the command as <customShell> <command>.
-func RunBash(ctx context.Context, root *os.Root, shellTempDir string, shellEnv map[string]string, customShell string, command BashCommand) (BashResult, error) {
-	if root == nil {
-		return BashResult{}, errors.New("root is required")
-	}
-
-	shellTemp, err := newShellTempConfig(root, shellTempDir)
-	if err != nil {
-		return BashResult{}, err
-	}
-
-	env, err := shellEnvList(shellEnv)
-	if err != nil {
-		return BashResult{}, err
-	}
-
-	sss := newSandboxedShellSystem(root, &shellTemp, env, DefaultShellCommand{})
-
-	return sss.Bash(ctx, customShell, bashParams(command)), nil
 }
 
 func shellEnvList(shellEnv map[string]string) ([]string, error) {

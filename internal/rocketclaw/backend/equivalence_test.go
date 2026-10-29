@@ -844,7 +844,7 @@ func (c *equivCapture) capture() {
 			}
 
 			if found {
-				c.put("goals", id, map[string]any{"objective": equivHash(goal.Objective), "check_script": equivHash(goal.CheckScript), "max_turns": goal.MaxTurns, "turns_used": goal.TurnsUsed, "status": goal.Status,
+				c.put("goals", id, map[string]any{"objective": equivHash(goal.Objective), "max_turns": goal.MaxTurns, "turns_used": goal.TurnsUsed, "status": goal.Status,
 					"note": equivHash(goal.Note), "created_at": equivTime(goal.CreatedAt), "updated_at": equivTime(goal.UpdatedAt), "principal_name": equivHash(goal.PrincipalName), "principal_email": equivHash(goal.PrincipalEmail)})
 			}
 		}
