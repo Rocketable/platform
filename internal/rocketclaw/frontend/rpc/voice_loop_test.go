@@ -125,7 +125,7 @@ func TestVoiceLoopEnds(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				peer, peers, cancel, wait := startVoiceLoop(t, tc.auth, &mockBackend{}, &mockServerStream{}, nil, nil)
+				peer, peers, cancel, wait := startVoiceLoop(t, tc.auth, &mockBackend{JustBashInstallErrorFunc: noJustBashError}, &mockServerStream{}, nil, nil)
 				// Malformed, ignored and rejected-append events are skipped without ending the call.
 				for _, event := range []string{`{`, `{"type":"session.output_audio.delta","delta":"AAAA"}`, `{"type":"error","error":{"message":"unknown delegation"}}`} {
 					require.NoError(t, peer.WriteMessage(websocket.TextMessage, []byte(event)))
@@ -233,7 +233,7 @@ func TestVoiceLoopHandOffs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				engine := &mockBackend{StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
+				engine := &mockBackend{JustBashInstallErrorFunc: noJustBashError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
 				peer, _, cancel, wait := startVoiceLoop(t, tc.auth, engine, &mockServerStream{}, nil, nil)
 
 				for _, event := range tc.events {
@@ -269,7 +269,7 @@ func TestVoiceLoopHandOffs(t *testing.T) {
 func TestVoiceLoopReplies(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		snapshots := make(chan voiceSnapshot)
-		engine := &mockBackend{StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
+		engine := &mockBackend{JustBashInstallErrorFunc: noJustBashError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
 		stream := &mockServerStream{SendMsgFunc: func(any) error { return nil }}
 		peer, _, cancel, wait := startVoiceLoop(t, "api_key", engine, stream, snapshots, nil)
 		dialect := &publicVoice{}
@@ -363,7 +363,7 @@ func TestVoiceLoopAdmission(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				engine := &mockBackend{StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return tc.refusal }}
+				engine := &mockBackend{JustBashInstallErrorFunc: noJustBashError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return tc.refusal }}
 				stream := &mockServerStream{SendMsgFunc: func(any) error { return nil }}
 				peer, _, cancel, wait := startVoiceLoop(t, "api_key", engine, stream, nil, nil)
 
@@ -398,7 +398,7 @@ func TestVoiceLoopAdmission(t *testing.T) {
 func TestVoiceLoopResendsAfterDrop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		snapshots := make(chan voiceSnapshot)
-		engine := &mockBackend{StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
+		engine := &mockBackend{JustBashInstallErrorFunc: noJustBashError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
 		peer, peers, cancel, wait := startVoiceLoop(t, "chatgpt", engine, &mockServerStream{SendMsgFunc: func(any) error { return nil }}, snapshots, nil)
 		dialect := newCodexVoice()
 
@@ -473,7 +473,7 @@ func TestVoiceLoopReconnect(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				refusals, stream := make(chan int, len(tc.refusals)), &mockServerStream{SendMsgFunc: func(any) error { return nil }}
-				peer, peers, cancel, wait := startVoiceLoop(t, "chatgpt", &mockBackend{}, stream, nil, refusals)
+				peer, peers, cancel, wait := startVoiceLoop(t, "chatgpt", &mockBackend{JustBashInstallErrorFunc: noJustBashError}, stream, nil, refusals)
 
 				for _, code := range tc.refusals {
 					refusals <- code
@@ -539,7 +539,7 @@ func TestVoiceLoopReconnect(t *testing.T) {
 
 func TestVoiceLoopBackoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		peer, peers, cancel, wait := startVoiceLoop(t, "chatgpt", &mockBackend{}, &mockServerStream{SendMsgFunc: func(any) error { return nil }}, nil, nil)
+		peer, peers, cancel, wait := startVoiceLoop(t, "chatgpt", &mockBackend{JustBashInstallErrorFunc: noJustBashError}, &mockServerStream{SendMsgFunc: func(any) error { return nil }}, nil, nil)
 
 		drop := func(want time.Duration) {
 			dropped := time.Now()
@@ -571,7 +571,7 @@ func TestVoiceLoopBackoff(t *testing.T) {
 func TestVoiceLoopStopDuringAdmission(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		admitting, release := make(chan struct{}), make(chan struct{})
-		engine := &mockBackend{StashQueueItemFunc: func(ctx context.Context, _ string, _ *protocol.ThreadQueueItem) error {
+		engine := &mockBackend{JustBashInstallErrorFunc: noJustBashError, StashQueueItemFunc: func(ctx context.Context, _ string, _ *protocol.ThreadQueueItem) error {
 			close(admitting)
 			<-release
 

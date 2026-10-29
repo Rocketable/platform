@@ -370,7 +370,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
         (9007199254741001, 'chat', '{"type":"turn","replay_input":[{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\n  $skill exact\n"},{"type":"message","role":"assistant","content":"answer"}]}', '')`)
 	require.NoError(t, err)
 
-	engine := &mockBackend{}
+	engine := &mockBackend{JustBashInstallErrorFunc: noJustBashError}
 	server := &Server{sessions: sessions, cfg: config.NewLockedConfig(cfg), backend: engine, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	initial, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1})

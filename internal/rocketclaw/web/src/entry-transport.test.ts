@@ -16,7 +16,7 @@ test("transcript and entry HTTP proxy reach Go", async () => {
   };
   const hash = new Bun.CryptoHasher("sha256").update(await Bun.file(new URL("../proto/web.proto", import.meta.url)).arrayBuffer()).digest("hex");
   expect(await call("Protocol")).toEqual({ protoSha256: hash });
-  expect(await call("Identity")).toEqual({ username: "alice", principal: "alice" });
+  expect(await call("Identity")).toEqual({ username: "alice", principal: "alice", justBashError: "" });
   const batches = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`));
   expect(batches.flatMap((batch) => batch.sessions.map((session) => session.id))).toEqual(["empty-web", id]);
   expect(batches.at(-1)).toEqual({ sessions: [], owner: "alice", upstreamSuccess: true, opencodeServers: {}, agentTags: {}, version: expect.any(String), order: ["empty-web", id] });

@@ -251,6 +251,8 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		questions: questions,
 	}
 
+	rt.installJustBash()
+
 	resumeJobs, err := background.recoverJobs(runCtx)
 	if err != nil {
 		return err

@@ -447,7 +447,7 @@ func TestLoadRocketCodeDefinitionsReportsInvalidTypedFrontmatter(t *testing.T) {
 		want string
 	}{
 		{name: "max recursion", line: "maxRecursion: nope", want: "main.md: parse maxRecursion:"},
-		{name: "custom shell", line: "customShell: sandbox/enter", want: "main.md: customShell: must be an absolute path"},
+		{name: "shell", line: "shell: sandbox/enter", want: "main.md: shell: must be an absolute path or emulated"},
 	}
 
 	for _, tt := range tests {

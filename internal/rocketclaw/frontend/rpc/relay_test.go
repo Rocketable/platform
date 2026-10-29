@@ -73,7 +73,7 @@ func startProxyTestRPC(t *testing.T, upstream string) http.Handler {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{}, nil, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{JustBashInstallErrorFunc: noJustBashError}, nil, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error {

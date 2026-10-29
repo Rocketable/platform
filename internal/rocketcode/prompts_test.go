@@ -79,7 +79,7 @@ func TestExpandAgentPrompt(t *testing.T) {
 
 	t.Run("expands through the agent custom shell", func(t *testing.T) {
 		env := testPromptExpansionEnvironment(t)
-		got := Agent{Name: "review", Prompt: "review !`echo hi`", CustomShell: writeCustomShell(t, env.root)}
+		got := Agent{Name: "review", Prompt: "review !`echo hi`", CustomShell: CustomShell{Path: writeCustomShell(t, env.root)}}
 
 		expandAgentPrompt(context.Background(), &got, true, &env)
 
@@ -88,7 +88,16 @@ func TestExpandAgentPrompt(t *testing.T) {
 
 	t.Run("missing custom shell expands to empty text", func(t *testing.T) {
 		env := testPromptExpansionEnvironment(t)
-		got := Agent{Name: "review", Prompt: "review !`echo hi` done", CustomShell: filepath.Join(env.root.Name(), "missing")}
+		got := Agent{Name: "review", Prompt: "review !`echo hi` done", CustomShell: CustomShell{Path: filepath.Join(env.root.Name(), "missing")}}
+
+		expandAgentPrompt(context.Background(), &got, true, &env)
+
+		require.Equal(t, "review  done", got.Prompt)
+	})
+
+	t.Run("emulated shell without a program expands to empty text", func(t *testing.T) {
+		env := testPromptExpansionEnvironment(t)
+		got := Agent{Name: "review", Prompt: "review !`echo hi` done", CustomShell: CustomShell{Emulated: true}}
 
 		expandAgentPrompt(context.Background(), &got, true, &env)
 

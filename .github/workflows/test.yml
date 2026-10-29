@@ -119,6 +119,10 @@ jobs:
       - *setup-go
       - *restore-go-build
       - *setup-bun
+      # just-bash's wrapper is TypeScript that Node runs directly, which needs Node 22.18 or later.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
       - *node-modules
       - run: bun install --frozen-lockfile
         working-directory: internal/rocketclaw/web

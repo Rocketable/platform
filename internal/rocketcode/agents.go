@@ -27,7 +27,7 @@ type Agent struct {
 	Verbosity       string
 	MaxRecursion    *int
 	Guardrail       string
-	CustomShell     string
+	CustomShell     CustomShell
 	Space           string
 	Prompt          string
 	Location        string
@@ -246,14 +246,9 @@ func loadAgent(fsys fs.FS, filePath string, models agentModelRenderer) (Agent, e
 		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
 	}
 
-	var customShell string
-
-	if field := frontmatterField(frontmatterNode, "customShell"); field != nil {
-		if field.Kind != yaml.ScalarNode || field.ShortTag() != "!!str" || !filepath.IsAbs(field.Value) {
-			return Agent{}, fmt.Errorf("%s: customShell: must be an absolute path", filePath)
-		}
-
-		customShell = field.Value
+	customShell, err := parseAgentShell(frontmatterField(frontmatterNode, "shell"))
+	if err != nil {
+		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
 
 	var space string
@@ -363,6 +358,26 @@ func sanitizeAgentFrontmatter(frontmatterText string) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// parseAgentShell reads the shell frontmatter field: an absolute program path, or emulated for the
+// embedding application's emulated shell.
+func parseAgentShell(field *yaml.Node) (CustomShell, error) {
+	if field == nil {
+		return CustomShell{}, nil
+	}
+
+	if field.Kind == yaml.ScalarNode && field.ShortTag() == "!!str" {
+		if field.Value == "emulated" {
+			return CustomShell{Emulated: true}, nil
+		}
+
+		if filepath.IsAbs(field.Value) {
+			return CustomShell{Path: field.Value}, nil
+		}
+	}
+
+	return CustomShell{}, errors.New("shell: must be an absolute path or emulated")
 }
 
 func parseAgentOutputSchema(schema *yaml.Node) (map[string]any, error) {

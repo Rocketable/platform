@@ -183,28 +183,29 @@ expensive
 	}, result.Findings)
 }
 
-func TestLintCustomShell(t *testing.T) {
+func TestLintShell(t *testing.T) {
 	runtimeRoot, workspace := t.TempDir(), t.TempDir()
-	writeAgent(t, runtimeRoot, "boxed.md", "---\ndescription: boxed\ncustomShell: "+filepath.Join(workspace, "bin", "enter.sh")+"\n---\nboxed\n")
-	writeAgent(t, runtimeRoot, "outside.md", "---\ndescription: outside\ncustomShell: /usr/local/bin/agent-sandbox\n---\noutside\n")
+	writeAgent(t, runtimeRoot, "boxed.md", "---\ndescription: boxed\nshell: "+filepath.Join(workspace, "bin", "enter.sh")+"\n---\nboxed\n")
+	writeAgent(t, runtimeRoot, "outside.md", "---\ndescription: outside\nshell: /usr/local/bin/agent-sandbox\n---\noutside\n")
 	writeAgent(t, runtimeRoot, "editor.md", `---
 description: editor
 permission:
   edit:
     "bin/*": allow
     "agents/boxed.md": allow
+    "agents/emulated.md": allow
 ---
 editor
 `)
-	writeAgent(t, runtimeRoot, "typo.md", "---\ndescription: typo\ncustom_shell: /usr/local/bin/agent-sandbox\n---\ntypo\n")
+	writeAgent(t, runtimeRoot, "emulated.md", "---\ndescription: emulated\nshell: emulated\n---\nemulated\n")
 
 	result, err := Lint(runtimeRoot, &config.Config{Workspace: workspace})
 	require.NoError(t, err)
 
 	assert.Equal(t, []Finding{
-		{Code: rc009, Severity: "error", Path: "agents/typo.md", Message: "custom_shell is ignored; the field is customShell", keys: []string{"custom_shell"}},
-		{Code: rc010, Severity: "error", Path: "agents/editor.md", Message: "editor can edit agents/boxed.md, which defines boxed and its customShell", keys: []string{"edit", "agents/boxed.md"}},
-		{Code: rc010, Severity: "error", Path: "agents/editor.md", Message: "editor can edit bin/enter.sh, the customShell of boxed", keys: []string{"edit", "bin/*"}},
+		{Code: rc010, Severity: "error", Path: "agents/editor.md", Message: "editor can edit agents/boxed.md, which defines boxed and its shell", keys: []string{"edit", "agents/boxed.md"}},
+		{Code: rc010, Severity: "error", Path: "agents/editor.md", Message: "editor can edit agents/emulated.md, which defines emulated and its shell", keys: []string{"edit", "agents/emulated.md"}},
+		{Code: rc010, Severity: "error", Path: "agents/editor.md", Message: "editor can edit bin/enter.sh, the shell of boxed", keys: []string{"edit", "bin/*"}},
 	}, result.Findings)
 }
 
@@ -315,6 +316,7 @@ func TestAgentGraphDOTExpandsWildcardAndMarksCycles(t *testing.T) {
 	writeAgent(t, runtimeRoot, "alpha.md", `---
 description: alpha
 maxRecursion: 0
+shell: emulated
 permission:
   task:
     "hub": allow
@@ -325,7 +327,7 @@ alpha
 description: beta
 maxRecursion: 2
 guardrail: hub
-customShell: /usr/local/bin/agent-sandbox
+shell: /usr/local/bin/agent-sandbox
 permission:
   task:
     "alpha": allow
@@ -345,8 +347,8 @@ hub
 	dot, err := AgentGraphDOT(runtimeRoot, new(config.Config))
 	require.NoError(t, err)
 	assert.Equal(t, `digraph agent_graph {
-  "alpha" [label="alpha\nmaxRecursion=0"];
-  "beta" [label="beta\nmaxRecursion=2\ncustomShell=/usr/local/bin/agent-sandbox"];
+  "alpha" [label="alpha\nmaxRecursion=0\nshell=emulated"];
+  "beta" [label="beta\nmaxRecursion=2\nshell=/usr/local/bin/agent-sandbox"];
   "hub" [label="hub\nmaxRecursion=unbounded"];
   "alpha" -> "hub" [color="red", label="cycle"];
   "beta" -> "alpha";

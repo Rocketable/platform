@@ -214,7 +214,7 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 			require.NoError(t, err)
 
 			transport := grpc.NewServer()
-			New(&mockBackend{}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+			New(&mockBackend{JustBashInstallErrorFunc: noJustBashError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 			var serving errgroup.Group
 			serving.Go(func() error { return transport.Serve(listener) })
@@ -252,7 +252,7 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 				require.Equal(t, code, response.Code, "%s: %s", method, response.Body.String())
 
 				if method == "Identity" && code == http.StatusOK {
-					require.JSONEq(t, `{"username":"owner","principal":"owner"}`, response.Body.String())
+					require.JSONEq(t, `{"username":"owner","principal":"owner","justBashError":""}`, response.Body.String())
 				}
 			}
 		})
@@ -284,7 +284,7 @@ func TestTailnetIdentity(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{}, nil, config.NewLockedConfig(&config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("100.64.0.7"): "someone-else"}}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{JustBashInstallErrorFunc: noJustBashError}, nil, config.NewLockedConfig(&config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("100.64.0.7"): "someone-else"}}), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -300,8 +300,8 @@ func TestTailnetIdentity(t *testing.T) {
 		err      error
 		identity string
 	}{
-		{"user", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoë@example.com", DisplayName: "Zoë Ørsted 日本"}}, nil, `{"username":"zoë@example.com","principal":"Zoë Ørsted 日本"}`},
-		{"blank display", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoë@example.com", DisplayName: " "}}, nil, `{"username":"zoë@example.com","principal":"zoë@example.com"}`},
+		{"user", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoë@example.com", DisplayName: "Zoë Ørsted 日本"}}, nil, `{"username":"zoë@example.com","principal":"Zoë Ørsted 日本","justBashError":""}`},
+		{"blank display", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "zoë@example.com", DisplayName: " "}}, nil, `{"username":"zoë@example.com","principal":"zoë@example.com","justBashError":""}`},
 		{"tagged", &apitype.WhoIsResponse{Node: &tailcfg.Node{Tags: []string{"tag:server"}}, UserProfile: &tailcfg.UserProfile{LoginName: "tagged-devices"}}, nil, ""},
 		{"empty login", &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{DisplayName: "Nobody"}}, nil, ""},
 		{"unknown", nil, local.ErrPeerNotFound, ""},
@@ -892,12 +892,13 @@ func TestSessionEntries(t *testing.T) {
 	)
 
 	core := &mockBackend{
-		BackgroundJobsFunc:     withoutBackgroundJobs().BackgroundJobsFunc,
-		PendingQuestionsFunc:   withoutBackgroundJobs().PendingQuestionsFunc,
-		SubscribeFunc:          rt.Subscribe,
-		CreateConversationFunc: rt.CreateConversation,
-		ContinueRunFunc:        rt.ContinueRun,
-		ListConversationsFunc:  rt.ListConversations,
+		JustBashInstallErrorFunc: noJustBashError,
+		BackgroundJobsFunc:       withoutBackgroundJobs().BackgroundJobsFunc,
+		PendingQuestionsFunc:     withoutBackgroundJobs().PendingQuestionsFunc,
+		SubscribeFunc:            rt.Subscribe,
+		CreateConversationFunc:   rt.CreateConversation,
+		ContinueRunFunc:          rt.ContinueRun,
+		ListConversationsFunc:    rt.ListConversations,
 		RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
 			turns = append(turns, inbound)
 			if inbound.Kind == protocol.InboundKindCancel {
@@ -1965,8 +1966,8 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 		require.True(t, proto.Equal(want, skills.Skills[i]), "unexpected skill: %v", skills.Skills[i])
 	}
 
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-6.1-sol\ncustomShell: /usr/local/bin/agent-sandbox\nspace: Billing\npermission:\n  skill: {alpha: allow, zeta: auto}\n---\nHelp."), 0o600))
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "selected.md"), []byte("---\nmodel: gpt-6.1-sol\npermission:\n  skill: {alpha: deny, zeta: allow}\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-6.1-sol\nshell: /usr/local/bin/agent-sandbox\nspace: Billing\npermission:\n  skill: {alpha: allow, zeta: auto}\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "selected.md"), []byte("---\nmodel: gpt-6.1-sol\nshell: emulated\nworkingDirectory: data\npermission:\n  skill: {alpha: deny, zeta: allow}\n---\nHelp."), 0o600))
 
 	for _, tc := range []struct {
 		agent string
@@ -2070,7 +2071,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		require.Equal(t, name, catalog.Agents[i].Name)
 	}
 
-	require.Equal(t, []string{"", "/usr/local/bin/agent-sandbox", ""}, []string{catalog.Agents[0].CustomShell, catalog.Agents[1].CustomShell, catalog.Agents[2].CustomShell})
+	require.Equal(t, []string{"", "/usr/local/bin/agent-sandbox", "emulated"}, []string{catalog.Agents[0].CustomShell, catalog.Agents[1].CustomShell, catalog.Agents[2].CustomShell})
 	require.Equal(t, []string{"", "Billing", ""}, []string{catalog.Agents[0].GetSpace(), catalog.Agents[1].GetSpace(), catalog.Agents[2].GetSpace()})
 	require.Equal(t, "marin", catalog.Agents[0].Voices[0], "an API-key agent offers the public voices, its default first")
 
@@ -3796,8 +3797,9 @@ func TestContinueCronRun(t *testing.T) {
 // withoutBackgroundJobs is a backend with no Background Jobs, nothing to move, and no pending questions.
 func withoutBackgroundJobs() *mockBackend {
 	return &mockBackend{
-		BackgroundJobsFunc:   func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return nil, false, nil },
-		PendingQuestionsFunc: func(context.Context, string) ([]protocol.AskUserQuestionRequest, error) { return nil, nil },
+		JustBashInstallErrorFunc: noJustBashError,
+		BackgroundJobsFunc:       func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return nil, false, nil },
+		PendingQuestionsFunc:     func(context.Context, string) ([]protocol.AskUserQuestionRequest, error) { return nil, nil },
 	}
 }
 
@@ -3943,8 +3945,9 @@ func TestBackgroundJobRPCs(t *testing.T) {
 		"turn-1/call/b": {ID: "turn-1/call/b", Kind: "task", State: "stopped", Label: `say "hi"`, SubagentKey: "/call_b", StoppedBy: "user", Note: stopped},
 	}
 	core := &mockBackend{
-		BackgroundJobsFunc:   func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return listed, true, nil },
-		PendingQuestionsFunc: withoutBackgroundJobs().PendingQuestionsFunc,
+		JustBashInstallErrorFunc: noJustBashError,
+		BackgroundJobsFunc:       func(context.Context, string) ([]protocol.BackgroundJob, bool, error) { return listed, true, nil },
+		PendingQuestionsFunc:     withoutBackgroundJobs().PendingQuestionsFunc,
 		CompletionNotesFunc: func(_ context.Context, _ string, jobIDs []string) (jobs []protocol.BackgroundJob, _ error) {
 			for _, id := range jobIDs {
 				jobs = append(jobs, noted[id])
@@ -4117,3 +4120,6 @@ func TestQuestionRPCs(t *testing.T) {
 
 	require.Len(t, core.AnswerQuestionCalls(), 2, "an unrecorded conversation never reaches the backend")
 }
+
+// noJustBashError is a backend whose just-bash install did not fail.
+func noJustBashError() string { return "" }

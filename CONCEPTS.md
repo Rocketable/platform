@@ -106,6 +106,13 @@ Host tools inside the script return full strings to the script. Only the string 
 
 A sandbox capability the Code Mode script can call directly, as opposed to a model-facing tool such as Execute. Host tools include filesystem, shell, fetch, and embedder-custom tools.
 
+### Emulated Shell
+
+An agent's opt-in shell mode in which its shell commands run in a bash emulator instead of host bash.
+*Avoid:* just-bash shell
+
+Each command runs in a fresh emulator process. Only the agent's declared working directory reaches the host disk; everything else, temporary files included, lives in memory and is gone when the command ends. The commands can start only the host programs the agent approves, and those programs see only the host's environment, never variables the emulated script set. Network access follows the agent's allowed targets. An agent that asked for the Emulated Shell but never received one has its shell commands fail rather than fall back to host bash.
+
 ### Script Call Record
 
 A small record of one Host Tool or MCP call a Code Mode script made, which Web lists under the script's Execute call.

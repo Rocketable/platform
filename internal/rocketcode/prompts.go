@@ -20,7 +20,7 @@ type promptExpansionEnvironment struct {
 	shellTemp    shellTempConfig
 	env          []string
 	shellCommand shellCommander
-	customShell  string
+	customShell  CustomShell
 }
 
 func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env []string, shellCommand shellCommander) (promptExpansionEnvironment, error) {
@@ -55,11 +55,16 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 			return ""
 		}
 
-		shell, args := withCustomShell(e.shellCommand, e.customShell, command)
+		env := append(os.Environ(), e.env...)
+		env = append(env, "TMPDIR="+e.shellTemp.tmpDir)
+
+		shell, args, stdin := withCustomShell(e.shellCommand, e.customShell, command, env)
 		cmd := exec.CommandContext(context.WithoutCancel(ctx), shell, args...)
-		cmd.Dir = e.hostDir
-		cmd.Env = append(os.Environ(), e.env...)
-		cmd.Env = append(cmd.Env, "TMPDIR="+e.shellTemp.tmpDir)
+
+		cmd.Dir, cmd.Env = e.hostDir, env
+		if stdin != nil {
+			cmd.Stdin = bytes.NewReader(stdin)
+		}
 
 		var stdout bytes.Buffer
 

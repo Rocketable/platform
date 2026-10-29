@@ -119,7 +119,7 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 		agent = &scopedAgent
 		scoped.promptExpansion.customShell = agent.CustomShell
 
-		if agent.CustomShell != "" {
+		if agent.CustomShell.Path != "" || agent.CustomShell.Emulated {
 			tools["bash"] = bashTool(f.shellSystem, agent.CustomShell)
 		}
 	}
@@ -381,14 +381,16 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 				return webFetch(ctx, params)
 			},
 		},
-		"bash": bashTool(sss, ""),
+		"bash": bashTool(sss, CustomShell{}),
 	}
 }
 
-func bashTool(sss *sandboxedShellSystem, customShell string) looperTool {
+func bashTool(sss *sandboxedShellSystem, customShell CustomShell) looperTool {
 	description := "Run a shell script in the workspace. Every operation needs permission, including declarations, assignments, redirections, expansions, and nested commands. Whole-script rules support wildcards within the same operation tree; last matching rule wins per operation. Invalid syntax and unresolved executable names are denied. Inside execute JSON code, bash(command=...) takes r'''...''' only.\nExample: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}"
-	if customShell != "" {
-		description += "\nCommands run through this agent's customShell program, " + customShell + ", which may limit what they can reach."
+	if customShell.Emulated {
+		description += "\nCommands run in an emulated bash shell, which may limit what they can reach."
+	} else if customShell.Path != "" {
+		description += "\nCommands run through this agent's shell program, " + customShell.Path + ", which may limit what they can reach."
 	}
 
 	return looperTool{

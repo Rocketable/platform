@@ -70,7 +70,7 @@ export const queries = {
   searchMessages: (query: string) => ({ queryKey: ["searchMessages", query], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<SearchMessagesResponse>("SearchMessages", { query }, signal)).matches }),
   slackName: (id: string) => ({ queryKey: ["slackName", id], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<SlackNamesResponse>("SlackNames", { ids: [id] }, signal)).names?.[id], retry: false, staleTime: (query: { state: { data: string | undefined } }) => query.state.data ? 8 * 60 * 60 * 1000 : 60_000 }),
   protocol: () => ({ queryKey: ["protocol"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ protoSha256: string }>("Protocol", {}, signal)).protoSha256 }),
-  identity: () => ({ queryKey: ["identity"], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ username: string; principal?: string }>("Identity", {}, signal) }),
+  identity: () => ({ queryKey: ["identity"], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ username: string; principal?: string; justBashError?: string }>("Identity", {}, signal) }),
   agents: (input?: { conversationId: string }) => ({ queryKey: ["agents", input], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<AgentChoices>("ListAgents", input, signal) }),
   skills: (input?: { agent: string }) => ({ queryKey: ["skills", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ skills: Skill[] }>("ListSkills", input, signal)).skills }),
   workflows: () => ({ queryKey: ["workflows"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ workflows: Workflow[] }>("ListWorkflows", {}, signal)).workflows }),

@@ -84,7 +84,7 @@ func sidebarChoicesFixture(tb testing.TB, count int) (*Server, context.Context) 
 		require.NoError(tb, err)
 	}
 
-	return New(&mockBackend{}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}), metadata.NewIncomingContext(tb.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	return New(&mockBackend{JustBashInstallErrorFunc: noJustBashError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}), metadata.NewIncomingContext(tb.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 }
 
 func TestSidebarFingerprintAllocationBudget(t *testing.T) {
@@ -128,7 +128,7 @@ func TestSidebarSendFailures(t *testing.T) {
 
 	// This test-only limit rejects both the owner-bearing terminal and a session row.
 	transport := grpc.NewServer(grpc.MaxSendMsgSize(1))
-	New(&mockBackend{}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{JustBashInstallErrorFunc: noJustBashError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error {
@@ -221,7 +221,7 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 
 		return handler(service, stream)
 	}))
-	core := &mockBackend{RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
+	core := &mockBackend{JustBashInstallErrorFunc: noJustBashError, RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
 		if inbound.ConversationID != "slack-thread:C1:1.1" || inbound.Text != "send while listing" || inbound.Metadata[protocol.InboundPrincipalMetadataKey] != "alice" {
 			return fmt.Errorf("unexpected prompt during enumeration: %v", inbound)
 		}

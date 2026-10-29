@@ -4,6 +4,7 @@ package rocketcode
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,14 +26,51 @@ type shellCommander interface {
 	Command(command string) (path string, args []string)
 }
 
-// withCustomShell runs command as the only argument of an agent's customShell,
-// or through shell when the agent declares none.
-func withCustomShell(shell shellCommander, customShell, command string) (path string, args []string) {
-	if customShell != "" {
-		return customShell, []string{command}
+// CustomShell is the program that runs an agent's shell commands instead of bash, from the agent's
+// shell frontmatter.
+type CustomShell struct {
+	// Path is the program. Without Setup it runs as <Path> <command>.
+	Path string
+	// Setup, when set, makes Path take no arguments and read from stdin one JSON line,
+	// {"config": Setup, "env": the command's environment}, then the command.
+	Setup json.RawMessage
+	// Emulated means the agent asked for the embedding application's emulated shell (shell: emulated).
+	// The embedder fills in Path and Setup; until it does, the agent's shell commands do not run.
+	Emulated bool
+}
+
+// withCustomShell runs command with an agent's customShell, or through shell when the agent declares
+// none. stdin is what the program reads, empty unless customShell has a Setup; env is its environment.
+// An emulated customShell without a Path returns an empty path, so the command fails instead of running
+// under bash.
+func withCustomShell(shell shellCommander, customShell CustomShell, command string, env []string) (path string, args []string, stdin []byte) {
+	if customShell.Path == "" {
+		if customShell.Emulated {
+			return "", nil, nil
+		}
+
+		path, args = shell.Command(command)
+
+		return path, args, nil
 	}
 
-	return shell.Command(command)
+	if customShell.Setup == nil {
+		return customShell.Path, []string{command}, nil
+	}
+
+	vars := make(map[string]string, len(env))
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		vars[k] = v // Later entries win, as they do for exec.
+	}
+
+	// Setup is valid JSON by contract, so encoding cannot fail.
+	line, _ := json.Marshal(struct {
+		Config json.RawMessage   `json:"config"`
+		Env    map[string]string `json:"env"`
+	}{customShell.Setup, vars})
+
+	return customShell.Path, nil, append(append(line, '\n'), command...)
 }
 
 // Config contains runtime settings supplied by the embedding application.
@@ -67,7 +105,7 @@ type Config struct {
 	// ShellCommand builds the executable used for bash tool (and prompt !`…`)
 	// commands. Required; pass DefaultShellCommand{} to match permission validation.
 	// Custom implementations must preserve the validated Bash syntax and semantics.
-	// An agent's customShell overrides it for that agent.
+	// An agent's shell frontmatter overrides it for that agent.
 	ShellCommand shellCommander
 	MCPServers   map[string]mcpclient.ServerConfig
 	MCPWorkspace string

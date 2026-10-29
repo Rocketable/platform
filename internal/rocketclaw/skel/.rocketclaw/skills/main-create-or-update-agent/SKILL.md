@@ -173,7 +173,7 @@ Account for these rocketcode runtime facts when designing agent instructions and
 - `task` subagents never get `ask_user_question`, whatever their permissions.
 - Each `task` subagent runs as a session of its own, hidden from the sidebar, with its own permissions and Background Jobs; its `rocketclaw_sessions_write` and session tags act for its top-level session, but replies to its writes come back to the subagent itself. When a reply or one of its own Background Jobs wakes a subagent after its `task` call returned, its new answer reaches its parent as a note.
 - Prompt shell expansion with ``!`command` `` is opt-in per prompt source. Do not rely on it unless the runtime enables it.
-- Prompt shell expansion runs from the workspace root and captures stdout only. The default runner uses `/bin/bash`, ignores `$SHELL`, and disables startup files and inherited shell functions/options. For an agent that sets `customShell`, these lines run through that program instead.
+- Prompt shell expansion runs from the workspace root and captures stdout only. The default runner uses `/bin/bash`, ignores `$SHELL`, and disables startup files and inherited shell functions/options. For an agent that sets `shell`, these lines run through that shell instead.
 
 ## Name and path handling
 
@@ -229,14 +229,14 @@ The optional `maxRecursion` frontmatter field controls task subdelegation depth 
 - a positive integer caps delegation to that many task levels
 - invalid values fail agent loading
 
-The optional `customShell` frontmatter field is an absolute path to a program that runs every shell command for that agent instead of `/bin/bash`, called as `<customShell> <command>`. That includes the agent's ``!`…` `` prompt lines and those in the skills it loads. A value that is not an absolute path string fails agent loading. When handling it:
-- set, change, or remove `customShell` only when the human explicitly asks, and use the exact value they give
-- never create or edit a `customShell` program inside the workspace
-- carry `customShell` over unchanged on updates and renames
+The optional `shell` frontmatter field runs every shell command for that agent instead of `/bin/bash`. Its value is either an absolute path to a program, called as `<shell> <command>`, or `emulated`, which runs the commands in a built-in bash emulator and requires `workingDirectory`. That includes the agent's ``!`…` `` prompt lines and those in the skills it loads. Any other value fails agent loading. When handling it:
+- set, change, or remove `shell` only when the human explicitly asks, and use the exact value they give
+- never create or edit a `shell` program inside the workspace
+- carry `shell` over unchanged on updates and renames
 - never give an agent `edit` permission over a sandboxed agent's file or its wrapper program; editing either can remove the sandboxing, and `rocketclaw lint` reports it
-- the setting covers only the agent that declares it: task subagents, the guardrail, and permission reviewers without their own `customShell` run plain `/bin/bash`, and workflow workers use the root agent's. When the human asks to sandbox an agent, list the agents it delegates to and its guardrail, and ask whether each needs `customShell` too
+- the setting covers only the agent that declares it: task subagents, the guardrail, and permission reviewers without their own `shell` run plain `/bin/bash`, and workflow workers use the root agent's. When the human asks to sandbox an agent, list the agents it delegates to and its guardrail, and ask whether each needs `shell` too
 
-A `customShell` program must:
+A `shell` program must:
 - take the whole command as its only argument (there is no `-c`) and run it with bash, for example `bash --noprofile --norc -p -c "$1"`, because permission checks parse every command as bash
 - treat that argument as data even when it starts with `-`: pass it as the `-c` argument or after `--`, never where the program or a sandbox tool parses options
 - start with `#!/bin/bash -p` when it is itself a bash script

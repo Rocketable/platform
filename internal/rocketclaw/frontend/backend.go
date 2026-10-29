@@ -34,4 +34,5 @@ type Backend interface {
 	CompletionNotes(context.Context, string, []string) ([]protocol.BackgroundJob, error)
 	PendingQuestions(context.Context, string) ([]protocol.AskUserQuestionRequest, error)
 	AnswerQuestion(context.Context, string, string, protocol.AskUserQuestionAnswer) error
+	JustBashInstallError() string
 }
