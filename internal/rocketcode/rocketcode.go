@@ -230,7 +230,7 @@ func (c *shellTempConfig) effectivePermissions(permissions PermissionSet) Permis
 	)
 	buckets = append(buckets, permissions.Buckets...)
 
-	return PermissionSet{Buckets: buckets, skillRead: permissions.skillRead}
+	return PermissionSet{Buckets: buckets, Sudo: permissions.Sudo, skillRead: permissions.skillRead}
 }
 
 // NewWithProviders loads the supplied runtime dependencies and returns a configured looper.

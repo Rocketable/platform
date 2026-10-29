@@ -352,6 +352,10 @@ Prompt
 			{name: "custom shell map", field: "customShell", value: "{a: b}", want: "main.md: customShell:"},
 			{name: "space sequence", field: "space", value: "[Billing]", want: "main.md: space:"},
 			{name: "space number", field: "space", value: "123", want: "main.md: space:"},
+			{name: "sudo word", field: "sudo", value: "maybe", want: "main.md: sudo:"},
+			{name: "sudo number", field: "sudo", value: "2", want: "main.md: sudo:"},
+			{name: "sudo null", field: "sudo", value: "null", want: "main.md: sudo:"},
+			{name: "sudo sequence", field: "sudo", value: "[yes]", want: "main.md: sudo:"},
 		}
 
 		for _, tt := range tests {
@@ -364,6 +368,27 @@ Prompt
 				require.Len(t, result.Errors, 1)
 				require.Contains(t, result.Errors[0].Error(), tt.want)
 			})
+		}
+	})
+
+	t.Run("loads sudo values", func(t *testing.T) {
+		for value, sudo := range map[string]bool{"True": true, "1": true, "ON": true, "yes": true, "\"yes\"": true, "false": false, "0": false, "Off": false, "NO": false} {
+			result := LoadAgents(fstest.MapFS{
+				"main.md": testMapFile("---\nmodel: gpt-5.4\nsudo: " + value + "\npermission:\n  bash: allow\n---\nPrompt\n"),
+			}, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
+
+			require.Empty(t, result.Errors, value)
+
+			permission := result.Agents.Items["main"].Permission
+			require.Equal(t, sudo, permission.Sudo, value)
+
+			// Sudo replaces the permission block and allows skills and delegation.
+			want := []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}
+			if sudo {
+				want = []PermissionBucket{{Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}
+			}
+
+			require.Equal(t, want, permission.Buckets, value)
 		}
 	})
 

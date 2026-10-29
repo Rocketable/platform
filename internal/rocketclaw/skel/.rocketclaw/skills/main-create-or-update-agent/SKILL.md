@@ -46,6 +46,8 @@ RocketCode denies all tools by default. Write only the explicit `allow` rules th
 
 A scalar `permission: allow` does not grant global access. Use explicit permission buckets instead.
 
+If the human wants an agent with every tool and feature, set `sudo: yes` and omit `permission`, except `permission.rocketclaw.rocketclaw_set_tag` tag groups. Sudo offers every tool and sends every call to `guardian` for review, except skills, `task`, and the default-on RocketClaw tools. Also set a bounded `maxRecursion`, because a sudo agent can delegate to every agent, itself included.
+
 Built-in permission buckets:
 - `read`: root-relative file paths for the `read` tool
 - `glob`: requested glob patterns for the `glob` tool

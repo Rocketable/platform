@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -81,6 +82,22 @@ func TestBackgroundSchemasFollowPermission(t *testing.T) {
 			require.JSONEq(t, fmt.Sprintf(`{"type":"object","additionalProperties":false,"required":["session_id","mode"],"properties":{"session_id":{"type":"string","description":%q},"mode":{"type":"string","enum":["stop","steer","enqueue"],"description":%q}}}`, backgroundContinueParam, backgroundModeParam), string(parameters.Properties["continue"]))
 		})
 	}
+}
+
+func TestSudoAgentSeesEveryTool(t *testing.T) {
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child")}})
+	factory.backgroundJobs = enabledBackgroundJobs()
+	result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\nmodel: gpt-5.4\nsudo: yes\n---\nPrompt\n")}, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
+	require.Empty(t, result.Errors)
+
+	agent := result.Agents.Items["main"]
+	model, hosts := factory.assembleTools(&agent)
+
+	require.Subset(t, slices.Collect(maps.Keys(model)), []string{"skill", "task", executeToolName, loadExecuteResultToolName})
+	require.Subset(t, slices.Collect(maps.Keys(hosts)), []string{"bash", "read"})
+	require.Contains(t, model[executeToolName].Definition.Parameters["properties"], "background")
+	require.Contains(t, model["task"].Definition.Description.Value, "child")
+	require.Contains(t, permissionPrompt(agent.Permission), "## Sudo Mode")
 }
 
 func TestBackgroundRequestsRejectedWhenNotOffered(t *testing.T) {

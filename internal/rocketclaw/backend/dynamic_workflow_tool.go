@@ -43,8 +43,7 @@ func parseDynamicWorkflowParams(raw json.RawMessage) (dynamicWorkflowParams, err
 // dynamicWorkflowTool runs a workflow's steps with shellEnv, the environment of the turn that calls it.
 func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agentName, tagConversationID string, definitions map[string]*workflow.Definition, shellEnv map[string]string) (rocketcode.Tool, bool) {
 	allowed := slices.DeleteFunc(workflow.Descriptions(definitions), func(description protocol.WorkflowDescription) bool {
-		action, _ := permissions.Evaluate("workflow", description.Name)
-		return action != rocketcode.PermissionAllow
+		return !permissions.Enabled("workflow", description.Name)
 	})
 	if len(allowed) == 0 {
 		return rocketcode.Tool{}, false
@@ -107,7 +106,7 @@ func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agent
 func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent, agentName, tagConversationID string, shellEnv map[string]string) (rocketcode.Tool, bool) {
 	runtimeCfg := b.runtime.Clone()
 
-	if !slices.ContainsFunc(agent.Permission.Buckets, func(bucket rocketcode.PermissionBucket) bool {
+	if !agent.Permission.Sudo && !slices.ContainsFunc(agent.Permission.Buckets, func(bucket rocketcode.PermissionBucket) bool {
 		return bucket.Name == "workflow" && slices.ContainsFunc(bucket.Rules, func(rule rocketcode.PermissionRule) bool {
 			return rule.Action == rocketcode.PermissionAllow
 		})

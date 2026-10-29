@@ -183,6 +183,13 @@ Some features are off until you turn them on under `permission.rocketclaw`:
 
 Name each tool under `permission.rocketclaw`. Wildcards such as `"*"` and the short form `rocketclaw: allow` are not accepted there.
 
+To give one agent every tool and feature, including ones added later, set `sudo: yes` in its frontmatter (`true`, `1`, `on` or `yes`; `false`, `0`, `off` or `no` turn it off). Sudo replaces the agent's `permission` block: every call goes to the guardian for review first, including each `execute` script and every call inside it. Skills, `task` delegation, `ask_user_question`, `rocketclaw_update_goal`, `rocketclaw_attach_files_to_response`, scheduled messages and `rocketclaw_reload` run without review. Web search runs on the provider and is never reviewed. Session tag groups still go under `permission.rocketclaw.rocketclaw_set_tag`; `rocketclaw lint` reports any other `permission` entry next to `sudo`. Sudo does not lift `.env` blocking, workspace confinement, or `maxRecursion`, and it does not pass to subagents.
+
+```yaml
+sudo: yes
+maxRecursion: 2
+```
+
 ```yaml
 permission:
   rocketclaw:

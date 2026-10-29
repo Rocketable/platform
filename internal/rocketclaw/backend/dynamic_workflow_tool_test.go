@@ -86,6 +86,10 @@ def main(args): return None
 	_, ok = bridge.dynamicWorkflowTool(rocketcode.PermissionSet{}, "main", "main", definitions, nil)
 	assert.False(t, ok)
 
+	sudo, ok := bridge.dynamicWorkflowTool(rocketcode.PermissionSet{Sudo: true}, "main", "main", definitions, nil)
+	require.True(t, ok)
+	assert.Equal(t, []string{"audit", "secret"}, sudo.VisibilitySubjects)
+
 	for _, definitions := range []map[string]*workflow.Definition{nil, {}} {
 		_, ok := bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil)
 		assert.False(t, ok)

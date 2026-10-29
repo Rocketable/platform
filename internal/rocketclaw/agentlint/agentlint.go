@@ -19,7 +19,7 @@ import (
 const (
 	rc000, rc001, rc002, rc003 = "RC000", "RC001", "RC002", "RC003"
 	rc004, rc005, rc006, rc007 = "RC004", "RC005", "RC006", "RC007"
-	rc008, rc009, rc010        = "RC008", "RC009", "RC010"
+	rc008, rc009, rc010, rc011 = "RC008", "RC009", "RC010", "RC011"
 )
 
 // Finding is one lint result line.
@@ -214,6 +214,12 @@ func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*
 				findings = append(findings, Finding{Code: rc006, Severity: "error", Path: filePath, Message: "plural permissions frontmatter is ignored; use permission", keys: []string{"permissions"}})
 			}
 
+			// Sudo replaces permission, which may keep only its session tag groups.
+			if value := frontmatter.Content[i+1]; key.Value == "permission" && agent.Permission.Sudo && (value.Kind != yaml.MappingNode || len(value.Content) != 2 || value.Content[0].Value != "rocketclaw" ||
+				value.Content[1].Kind != yaml.MappingNode || len(value.Content[1].Content) != 2 || value.Content[1].Content[0].Value != "rocketclaw_set_tag") {
+				findings = append(findings, Finding{Code: rc011, Severity: "error", Path: filePath, Message: "sudo replaces permission; only permission.rocketclaw.rocketclaw_set_tag may remain", keys: []string{"sudo", "permission"}})
+			}
+
 			if key.Value != "customShell" && strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key.Value)) == "customshell" {
 				findings = append(findings, Finding{Code: rc009, Severity: "error", Path: filePath, Message: key.Value + " is ignored; the field is customShell", keys: []string{key.Value}})
 			}
@@ -251,7 +257,7 @@ func addSuppressionsFromNode(filePath, key string, node *yaml.Node, suppressions
 			continue
 		}
 
-		if code != "" && !slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008, rc009, rc010}, code) {
+		if code != "" && !slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008, rc009, rc010, rc011}, code) {
 			*findings = append(*findings, Finding{Code: rc000, Severity: "error", Path: filePath, Message: "unknown #nolint code " + code})
 			continue
 		}

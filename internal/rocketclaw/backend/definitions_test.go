@@ -89,6 +89,48 @@ func TestSessionTagDefinitions(t *testing.T) {
 	}
 }
 
+func TestLoadRocketCodeDefinitionsSudo(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	root, err := os.OpenRoot(workspace)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, root.Close()) }()
+
+	require.NoError(t, root.MkdirAll(".rocketclaw/agents", 0o755))
+	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+	require.NoError(t, root.WriteFile(".rocketclaw/agents/tagged.md", []byte("---\nmodel: openai/gpt-6-luna\nsudo: yes\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[red, green]]\n---\nPrompt\n"), 0o644))
+	require.NoError(t, root.WriteFile(".rocketclaw/agents/untagged.md", []byte("---\nmodel: openai/gpt-6-luna\nsudo: yes\n---\nPrompt\n"), 0o644))
+
+	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	require.NoError(t, err)
+
+	tagged, untagged := agents.Items["tagged"], agents.Items["untagged"]
+
+	// Conversation helpers skip review; every other RocketClaw tool is reviewed.
+	for subject, want := range map[string]rocketcode.PermissionAction{
+		reloadToolName: rocketcode.PermissionAllow, scheduleMessageToolName: rocketcode.PermissionAllow, attachFilesToolName: rocketcode.PermissionAllow,
+		updateGoalToolName: rocketcode.PermissionAllow, askUserQuestionToolName: rocketcode.PermissionAllow,
+		restartToolName: rocketcode.PermissionAuto, sessionsWriteToolName: rocketcode.PermissionAuto, sessionsListToolName: rocketcode.PermissionAuto,
+	} {
+		action, _ := tagged.Permission.Evaluate("rocketclaw", subject)
+		require.Equal(t, want, action, subject)
+	}
+
+	require.True(t, tagged.Permission.Enabled("rocketclaw", restartToolName))
+
+	for _, name := range []string{setTagToolName, getTagsToolName} {
+		action, _ := tagged.Permission.Evaluate("rocketclaw_tags", name)
+		require.Equal(t, rocketcode.PermissionAuto, action, name)
+		require.Contains(t, tagged.Prompt, name)
+
+		action, _ = untagged.Permission.Evaluate("rocketclaw_tags", name)
+		require.Equal(t, rocketcode.PermissionDeny, action, name)
+		require.NotContains(t, untagged.Prompt, name)
+	}
+}
+
 func TestSessionTagsExistingPermissions(t *testing.T) {
 	t.Parallel()
 

@@ -671,6 +671,8 @@ func TestMCPServerVisibility(t *testing.T) {
 		})
 	}
 
+	assert.Equal(t, []string{"demo", "acme"}, visibleMCPServers(PermissionSet{Sudo: true}, []string{"demo", "acme"}))
+
 	prompt := codeModeSystemPrompt(nil, []string{"demo"})
 	assert.Contains(t, prompt, "demo")
 	assert.NotContains(t, prompt, "acme")

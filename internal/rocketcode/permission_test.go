@@ -306,6 +306,34 @@ func TestPermissionSetEvaluate(t *testing.T) {
 			require.Equal(t, tt.matched, matched)
 		})
 	}
+
+	t.Run("sudo", func(t *testing.T) {
+		sudo := PermissionSet{Sudo: true}
+		require.NoError(t, sudo.Allow("rocketclaw", "rocketclaw_reload"))
+
+		for _, tc := range []struct {
+			permission, subject string
+			action              PermissionAction
+		}{
+			{"bash", "rm -rf build", PermissionAuto},
+			{"read", "notes.md", PermissionAuto},
+			{"mcp", "context7.query", PermissionAuto},
+			{"rocketclaw", "rocketclaw_restart", PermissionAuto},
+			{"rocketclaw", "allow_background", PermissionAuto},
+			{"rocketclaw", "code_mode_approve", PermissionAuto},
+			{"rocketclaw", "load_agents_md", PermissionAllow},
+			{"rocketclaw", "rocketclaw_reload", PermissionAllow},
+		} {
+			action, _ := sudo.Evaluate(tc.permission, tc.subject)
+			require.Equal(t, tc.action, action, tc.subject)
+			require.True(t, sudo.Enabled(tc.permission, tc.subject), tc.subject)
+		}
+
+		require.True(t, sudo.hasRuleForPermission("websearch", permissionAllow, permissionAuto))
+		require.False(t, sudo.hasRuleForPermission("bash", permissionAllow))
+		require.False(t, PermissionSet{}.Enabled("rocketclaw", "rocketclaw_restart"))
+		require.False(t, parsePermissionYAML(t, `rocketclaw: {rocketclaw_restart: auto}`).Enabled("rocketclaw", "rocketclaw_restart"))
+	})
 }
 
 func TestSkillReadPermissionsUseFoldedPaths(t *testing.T) {

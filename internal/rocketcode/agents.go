@@ -180,8 +180,27 @@ func loadAgent(fsys fs.FS, filePath string, models agentModelRenderer) (Agent, e
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
 
-	permission, err := parsePermissionNode(frontmatterField(frontmatterNode, "permission"))
-	if err != nil {
+	var sudo bool
+
+	if field := frontmatterField(frontmatterNode, "sudo"); field != nil {
+		// Non-scalar nodes have an empty Value and fail here too.
+		switch strings.ToLower(field.Value) {
+		case "true", "1", "on", "yes":
+			sudo = true
+		case "false", "0", "off", "no":
+		default:
+			return Agent{}, fmt.Errorf("%s: sudo: must be one of true/1/on/yes or false/0/off/no", filePath)
+		}
+	}
+
+	var permission PermissionSet
+
+	if sudo {
+		// Sudo replaces the permission block; skills and delegation skip review.
+		permission.Sudo = true
+		_ = permission.Allow("skill", "*") // The fixed categories and allow action cannot fail.
+		_ = permission.Allow("task", "*")
+	} else if permission, err = parsePermissionNode(frontmatterField(frontmatterNode, "permission")); err != nil {
 		return Agent{}, fmt.Errorf("%s: parse permission: %w", filePath, err)
 	}
 
