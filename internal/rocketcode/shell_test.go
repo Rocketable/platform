@@ -200,10 +200,10 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	t.Run("configured env overrides process env", func(t *testing.T) {
 		t.Setenv("ROCKETCLAW_CONVERSATION_ID", "old")
 
-		sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new"}, DefaultShellCommand{})
+		got, err := RunBash(t.Context(), root, outputDir, map[string]string{"ROCKETCLAW_CONVERSATION_ID": "new"}, "", BashCommand{Command: `printf %s "$ROCKETCLAW_CONVERSATION_ID"`, Description: "override env"})
+		require.NoError(t, err)
 
-		got := sss.Bash(context.Background(), "", bashParams{Command: `printf %s "$ROCKETCLAW_CONVERSATION_ID"`, TimeoutMillisecond: 0, Workdir: "", Description: "override env"})
-
+		require.True(t, got.Success, got.Output)
 		require.Equal(t, "new", got.String())
 	})
 
@@ -240,7 +240,8 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			require.Equal(t, fmt.Sprintf("argc=1 arg=%s pwd=%s tmp=%s", command, realDir, outputDir), got.Output)
 		})
 		t.Run("runs in the nested workdir with the session TMPDIR", func(t *testing.T) {
-			got := sss.Bash(t.Context(), filepath.Join(dir, "wrap.sh"), bashParams{Command: "ls", Workdir: filepath.Join(dir, "nested")})
+			got, err := RunBash(t.Context(), root, outputDir, nil, filepath.Join(dir, "wrap.sh"), BashCommand{Command: "ls", Workdir: filepath.Join(dir, "nested")})
+			require.NoError(t, err)
 			require.True(t, got.Success, got.Output)
 			require.Equal(t, fmt.Sprintf("argc=1 arg=ls pwd=%s tmp=%s", filepath.Join(realDir, "nested"), outputDir), got.Output)
 		})
