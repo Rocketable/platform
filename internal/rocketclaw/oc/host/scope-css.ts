@@ -58,7 +58,10 @@ export const scopeCss: PluginCreator<void> = () => ({
 
         if (parent.type === "atrule" && /keyframes$/i.test((parent as { name: string }).name)) return
       }
-      rule.selectors = rule.selectors.map(scopeSelector)
+      // The quote sheet's shadow-only selection must not become selection styling for the whole mounted view.
+      const selectors = rule.selectors.filter((selector) => selector !== ":host ::selection")
+      if (!selectors.length) return void rule.remove()
+      rule.selectors = selectors.map(scopeSelector)
     })
     // Font families cannot be scoped, so the view's Inter, its @font-face included, takes a name of its own.
     root.walkDecls(/^(font-family|--.*)$/, (decl) => {

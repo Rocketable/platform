@@ -101,6 +101,16 @@ describe("the committed build", () => {
     expect(faces).not.toContain("Inter")
   })
 
+  test("quote backgrounds keep shadow-local selectors in diffs without styling selection across the view", async () => {
+    const scripts = (
+      await Promise.all(files.filter((file) => file.endsWith(".js")).map((file) => Bun.file(dist + file).text()))
+    ).join("\n")
+
+    expect(scripts.includes(".timeline-quote-highlight-relative {")).toBe(true)
+    expect(scripts.includes(".timeline-quote-highlight-relative:where(")).toBe(false)
+    expect((await Promise.all(sheets)).join("\n").includes("[data-oc-view] ::selection")).toBe(false)
+  })
+
   test("the session screen's column direction switches on the view's width", async () => {
     const css = (await Promise.all(sheets)).join("\n")
 

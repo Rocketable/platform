@@ -1,6 +1,8 @@
 import { createEffect, onCleanup } from "solid-js"
 import type { QuoteSource, createComposerQuoteSource } from "@/composer/quote-source"
 import { createQuoteBackground } from "./quote-background"
+// rocketclaw: theme and direction belong to the mounted view (upstream packages/app/src/session/timeline/quote-highlight.ts)
+import { themeTargets } from "@rocketclaw/host/fences"
 
 const BASE = "timeline-quote-source"
 
@@ -118,7 +120,8 @@ export function createTimelineQuoteHighlight(input: {
       })
       background.update(ranges)
       observer.observe(root, { childList: true, subtree: true, characterData: true })
-      observer.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class", "dir"] })
+      // rocketclaw: redraw when this view changes theme or direction, not the host page (upstream packages/app/src/session/timeline/quote-highlight.ts)
+      observer.observe(themeTargets()[0], { attributes: true, attributeFilter: ["style", "class", "dir"] })
       shadows.forEach((shadow) => observer.observe(shadow, { childList: true, subtree: true, characterData: true }))
 
       const targets = new Set<Element>([root, ...containers.keys()])

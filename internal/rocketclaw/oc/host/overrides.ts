@@ -8,4 +8,7 @@ import { fileURLToPath } from "node:url"
 export const overrides: Record<string, string> = {
   "solid-js/web": fileURLToPath(new URL("./solid-web.ts", import.meta.url)),
   "@solid-primitives/media": fileURLToPath(new URL("./media.ts", import.meta.url)),
+  // Pierre inserts this sheet into its shadow root; document scoping would make its selectors unreachable there.
+  "../components/quote-highlight.css?inline":
+    fileURLToPath(new URL("../packages/session-ui/src/components/quote-highlight.css", import.meta.url)) + "?raw",
 }
