@@ -35,7 +35,7 @@ tags:
 
 The repository requires every temporary file to live under `<repo-root>/.tmp/`, so tests run with `TMPDIR` set there. Agent runs work in JJ workspaces nested inside that same directory, at `<main-checkout>/.tmp/workspaces/<date>-<slug>/`. Setting `TMPDIR` to that workspace's own `.tmp/` follows the rule, but on macOS it breaks `make test`.
 
-The `internal/rocketclaw/frontend/rpc` tests start real gRPC servers on Unix sockets. Every one of them gets its socket path from `testSocketPath` (`internal/rocketclaw/frontend/rpc/server_test.go:3888`):
+The `internal/rocketclaw/frontend/rpc` tests start real gRPC servers on Unix sockets. Every one of them gets its socket path from `testSocketPath` (`internal/rocketclaw/frontend/rpc/server_test.go:3879`):
 
 ```go
 dir, err := os.MkdirTemp(os.Getenv("TMPDIR"), "rpc-")

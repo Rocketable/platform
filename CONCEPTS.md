@@ -46,6 +46,18 @@ The human actor a connector attributes to a human-originated prompt.
 
 Each connector chooses the string. The backend prints it in the model header, which Web also exposes through the message footer's info icon. Authorization uses connector identity, not this string.
 
+## Conversation Work
+
+### Goal
+
+An objective a person sets on a conversation from Web that keeps its agent taking turns toward it until the agent marks it complete, someone stops it, or its turn budget, when it has one, is spent.
+
+While a Goal continues, its next turn takes the conversation's next slot ahead of waiting Thread Queue items, and its turns carry the Principal of the person who set it. Stopping the conversation's running turn stops its Goal too.
+
+### Workflow
+
+A saved Starlark program that runs a task as agent calls made by named workers, grouped in phases. A person starts one from Web with `$workflow`, and an agent whose permissions allow it can run one too. A workflow turn has no Shadow Sessions, and a steer sent during it runs as the next turn instead of joining it.
+
 ## Runtime Assets
 
 ### Overlay Clone
@@ -98,7 +110,7 @@ A sandbox capability the Code Mode script can call directly, as opposed to a mod
 
 A small record of one Host Tool or MCP call a Code Mode script made, which Web lists under the script's Execute call.
 
-It holds the call's name, its clipped arguments, a status, a one-line summary of the output, and the approver's outcome and reason when the approver checked the call; it never holds the output. While its RocketCode Turn runs, each record is saved on its own when the call starts and when it finishes, so the turn's other saves never rewrite it; the finished turn keeps its records. An Execute call keeps a bounded number of records, and none are added after the turn ends.
+It holds the call's name, its clipped arguments, a status, a one-line summary of the output, and the outcome and reason of the call's Permission Review when it had one; it never holds the output. While its RocketCode Turn runs, each record is saved on its own when the call starts and when it finishes, so the turn's other saves never rewrite it; the finished turn keeps its records. An Execute call keeps a bounded number of records, and none are added after the turn ends.
 
 ### Spill
 
@@ -114,9 +126,18 @@ A RocketCode Turn is not the active-turn slot on a Managed Slack Thread. Slack o
 
 ### Delegation History
 
-A session history of work one tool call delegated: its automatic permission reviews, made before the call runs and during it, or its Task subagent with the subagent's guardrail checks.
+A session history of work one tool call delegated: its Permission Reviews, made before the call runs and during it, or its Task subagent with the subagent's Guardrail checks.
 
 Its conversation ID extends the producing conversation's ID with a segment derived from the tool call, so it stays unique when a provider reuses call IDs and stays the same when a turn resumes; a delegation inside it adds another segment. A Task subagent's Delegation History is a Subagent Session, which a later Task call can continue. Review histories have no Managed Slack Thread or Web chat of their own. All of them are deleted and forked with their producing conversation; that, not the shape of the ID, is what sets them apart, since other conversation IDs can contain the same separator.
+
+### Permission Review
+
+An automatic check, by a reviewer agent, of a tool call or a whole Execute script that an agent's permissions mark for review, made before it runs. It allows or denies with a reason; a denial, an unreadable answer, or a failed review blocks the call. Its decision is read from the reviewer's final answer, whichever way the model was reached.
+*Avoid:* approval, approver check
+
+### Guardrail
+
+An agent that an agent type names to check every Task delegation to that type: each prompt before the subagent receives it, and each answer before the parent sees it. A Guardrail approves or rejects and never rewrites the prompt or the answer; a rejected prompt never reaches the subagent. Not a Permission Review, which judges tool calls rather than delegations.
 
 ### Subagent Session
 
@@ -233,7 +254,7 @@ The one RocketClaw engine: conversation execution, the Thread Queue, cron, skill
 
 ### Frontend
 
-A connector surface, Slack or External MCP, that the process builds around the Backend. Frontends never import the Backend.
+A surface the process builds around the Backend that brings work in and carries results out: Web, Slack, External MCP, or cron.
 
 ### Protocol
 
@@ -262,7 +283,7 @@ A running turn saves each item of its record once, as a step of its own, instead
 - A Report Thread ignores Slack input; its conversation continues in Web.
 - A Managed Slack Thread, Thread Queue, External MCP binding, and Step Journal persist in the State Store.
 - Reload replaces Overlay Clones.
-- Frontends and the backend import Protocol. Frontends do not import the backend.
+- Frontends and the Backend share Protocol.
 - A turn uses the Autocompaction Threshold of the Provider that serves its model.
 - Code Mode exposes Execute and Host Tools; an oversized Execute result becomes a Spill owned by that RocketCode Turn.
 
