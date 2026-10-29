@@ -5,7 +5,7 @@ import type { SearchPage } from "./types";
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
-const rows: { id: string; name: string; agent: string; running?: boolean; background?: boolean; spaceId?: string; unreadAt?: string }[] = [
+const rows: { id: string; name: string; agent: string; running?: boolean; background?: boolean; spaceId?: string; unreadAt?: string; asking?: boolean }[] = [
   { id: "alpha", name: "Alpha", agent: "main" },
   { id: "bravo", name: "Bravo", agent: "main" },
   { id: "charlie", name: "Charlie", agent: "main" },
@@ -14,6 +14,8 @@ const rows: { id: string; name: string; agent: string; running?: boolean; backgr
   { id: "echo", name: "Echo", agent: "main", spaceId: "ops", background: true },
   // A turn of the person's ended unseen, and another runs now.
   { id: "foxtrot", name: "Foxtrot", agent: "main", running: true, unreadAt: "2026-10-22T10:00:00Z" },
+  // Golf's running turn waits on the person's answer.
+  { id: "golf", name: "Golf", agent: "main", running: true, asking: true },
 ];
 const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
 type SharedTab = { space: string; path: string; search?: SearchPage };
@@ -769,6 +771,30 @@ test("an unread tab shows a bold title", () => withPage({}, async (page, origin,
   await header.click();
   expect(await header.getAttribute("aria-expanded")).toBe("false");
   expect(await groupWeight()).toBe("700");
+}), 60_000);
+
+test("a tab waiting on this person stops shimmering and needs them, as do its collapsed group and the window title", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  await openSaved(page, origin, href("golf"), "Golf", saved);
+  expect(await tab("Golf").getAttribute("aria-description")).toBe("Space: Main, Needs your answer");
+  expect(await animation(tab("Golf").locator("span").first())).toBe("none");
+  expect(await tab("Golf").getByText("Needs you", { exact: true }).isVisible()).toBe(true);
+  expect(await tab("Alpha").getByText("Needs you").count()).toBe(0);
+  expect(await page.title()).toBe("(1) RocketClaw");
+
+  const field = page.getByRole("textbox", { name: "Group name" });
+  await menu(page, "Golf", "Add to group", "New group");
+  await field.waitFor();
+  await page.keyboard.type("Work");
+  await page.keyboard.press("Escape");
+  await field.waitFor({ state: "detached" });
+  await tab("Alpha").click();
+  const header = strip(page).locator("[data-group]");
+  expect(await header.getByText("Needs you").count()).toBe(0);
+  await header.getByRole("button", { name: "Work", exact: true }).click();
+  await tab("Golf").waitFor({ state: "detached" });
+  expect(await header.getByText("Needs you", { exact: true }).isVisible()).toBe(true);
 }), 60_000);
 
 test("collapsed Shared with a tab unread for this person shows a bold name", () => withPage({}, async (page, origin, _prompts, saved) => {

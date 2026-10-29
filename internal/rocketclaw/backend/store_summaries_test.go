@@ -399,6 +399,45 @@ func TestSidebarSessionsListFirstTurnBeforeHistory(t *testing.T) {
 	require.Equal(t, "answer", row.Summary.LastMessage)
 }
 
+// A session asks while its running turn has an unanswered Web question; an answer or the turn's end stops it.
+func TestSidebarSessionsMarkUnansweredQuestions(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, service.UpsertThread("asking", ThreadState{Agent: "main"}))
+	seedActiveTurn(t, service, "asking", "turn-1", nil)
+
+	asking := func() bool {
+		var rows []bool
+
+		for row, err := range service.sidebarSessions(ctx, "", nil) {
+			require.NoError(t, err)
+
+			rows = append(rows, row.Asking)
+		}
+
+		require.Len(t, rows, 1)
+
+		return rows[0]
+	}
+
+	require.False(t, asking())
+
+	questions := &webQuestions{store: service}
+	require.NoError(t, questions.change(ctx, saveWebQuestionStep, "asking", "turn-1/call/c1"+webQuestionStep, "{}"))
+	require.True(t, asking())
+
+	require.NoError(t, questions.change(ctx, saveWebQuestionStep, "asking", "turn-1/call/c1/answer", "{}"))
+	require.False(t, asking())
+
+	_, err := service.finishTurn(ctx, "turn-1", &turnFinish{store: newSessionStore("asking", service), outbound: protocol.NewOutboundMessage("asking", ""), entries: []harness.SessionEntry{*testSessionEntry("question", "answer")}})
+	require.NoError(t, err)
+	require.NoError(t, service.closeTurn(ctx, "turn-1"))
+	require.NoError(t, questions.change(ctx, saveWebQuestionStep, "asking", "turn-0/call/c2"+webQuestionStep, "{}"))
+	require.False(t, asking(), "a question no running turn waits on asks nothing")
+}
+
 func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	t.Parallel()
 

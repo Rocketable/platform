@@ -1560,6 +1560,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       await runningPalette.getByText("latest assistant reply", { exact: true }).waitFor();
       expect(await indicator.count()).toBe(0);
       expect(await runningPalette.getByRole("button").filter({ hasText: "latest assistant reply" }).boundingBox()).toEqual(before);
+      // A turn waiting on the person's answer says it needs them in place of the running indicator.
+      ctrl.yieldBatches = complete([{ ...slackRow("slack-thread:C:running-chat", "latest assistant reply"), running: true, asking: true }], "bob");
+      await runningPalette.getByText("Needs you", { exact: true }).waitFor();
+      expect(await indicator.count()).toBe(0);
     }
     await runningPage.close();
     // Exercise the palette layout and suggestions against the built App.

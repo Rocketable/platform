@@ -51,6 +51,9 @@ message Session {
   string label = 26;
   // When a turn the caller sent into ended unseen, RFC3339Nano; empty once read.
   string unread_at = 27;
+  // The session waits on a person: a running turn's unanswered question, or a remote OpenCode
+  // session's pending form or permission request, its own or a child session's.
+  bool asking = 28;
 }
 
 // What a conversation is, as RocketClaw records it when it creates the conversation.

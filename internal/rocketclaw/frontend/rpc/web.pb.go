@@ -282,7 +282,10 @@ type Session struct {
 	// What the session is called when it has no name or preview.
 	Label string `protobuf:"bytes,26,opt,name=label,proto3" json:"label,omitempty"`
 	// When a turn the caller sent into ended unseen, RFC3339Nano; empty once read.
-	UnreadAt      string `protobuf:"bytes,27,opt,name=unread_at,json=unreadAt,proto3" json:"unread_at,omitempty"`
+	UnreadAt string `protobuf:"bytes,27,opt,name=unread_at,json=unreadAt,proto3" json:"unread_at,omitempty"`
+	// The session waits on a person: a running turn's unanswered question, or a remote OpenCode
+	// session's pending form or permission request, its own or a child session's.
+	Asking        bool `protobuf:"varint,28,opt,name=asking,proto3" json:"asking,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -476,6 +479,13 @@ func (x *Session) GetUnreadAt() string {
 		return x.UnreadAt
 	}
 	return ""
+}
+
+func (x *Session) GetAsking() bool {
+	if x != nil {
+		return x.Asking
+	}
+	return false
 }
 
 type HistoryRequest struct {
@@ -6936,7 +6946,7 @@ const file_web_proto_rawDesc = "" +
 	"\tweb.proto\x12\x03rpc\"E\n" +
 	"\x13ListSessionsRequest\x12\x18\n" +
 	"\aviewing\x18\x01 \x01(\tR\aviewing\x12\x14\n" +
-	"\x05since\x18\x02 \x01(\tR\x05since\"\x93\x05\n" +
+	"\x05since\x18\x02 \x01(\tR\x05since\"\xab\x05\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -6965,7 +6975,8 @@ const file_web_proto_rawDesc = "" +
 	"\x04kind\x18\x18 \x01(\x0e2\x15.rpc.ConversationKindR\x04kind\x12*\n" +
 	"\x11remote_session_id\x18\x19 \x01(\tR\x0fremoteSessionId\x12\x14\n" +
 	"\x05label\x18\x1a \x01(\tR\x05label\x12\x1b\n" +
-	"\tunread_at\x18\x1b \x01(\tR\bunreadAtJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\x0eallowed_agents\"\xba\x01\n" +
+	"\tunread_at\x18\x1b \x01(\tR\bunreadAt\x12\x16\n" +
+	"\x06asking\x18\x1c \x01(\bR\x06askingJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\x0eallowed_agents\"\xba\x01\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
 	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\x12\x1a\n" +
