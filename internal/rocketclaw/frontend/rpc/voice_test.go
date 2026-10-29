@@ -89,9 +89,17 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	h := &voiceHarness{requests: make(chan string, 64), replies: make(chan string, 64), creates: make(chan voiceCreate, 16), peers: make(chan *voicePeer, 16), hangups: make(chan string, 16)}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/responses", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /{provider}/responses", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		assert.NoError(t, err)
+
+		var request struct{ Model string }
+		assert.NoError(t, json.Unmarshal(body, &request))
+
+		if request.Model == "test-model" {
+			assert.Equal(t, "/worker/responses", r.URL.Path)
+			assert.Equal(t, "Bearer worker-key", r.Header.Get("Authorization"))
+		}
 
 		h.requests <- string(body)
 
@@ -166,17 +174,14 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	cfg := &config.Config{
 		DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"},
 		OpenAI:    config.OpenAIConfig{APIKey: voiceSecret, APIBaseURL: openai.URL + "/v1"},
-		Providers: map[string]config.OpenAIConfig{"nokey": {APIBaseURL: openai.URL + "/v1"}, "chat": {RocketCodeAuth: "chatgpt"}, "stale": {RocketCodeAuth: "chatgpt"}},
+		Providers: map[string]config.OpenAIConfig{"nokey": {APIBaseURL: openai.URL + "/v1"}, "chat": {RocketCodeAuth: "chatgpt"}, "stale": {RocketCodeAuth: "chatgpt"}, "worker": {APIKey: "worker-key", APIBaseURL: openai.URL + "/worker"}},
 	}
-	// An expired login whose refresh TestVoiceRejections makes fail.
-	require.NoError(t, oai.SaveTokenIn(cfg.Workspace, cfg.RuntimeDirName(), "stale", oai.Token{Refresh: "stale-refresh"}))
-
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.Mkdir("agents", 0o700))
 
-	for name, model := range map[string]string{"main": "gpt-6.1-sol", "nokey": "nokey/gpt-6.1-sol", "chat": "chat/gpt-6.1-sol", "stale": "stale/gpt-6.1-sol"} {
+	for name, model := range map[string]string{"main": "gpt-6.1-sol", "nokey": "nokey/gpt-6.1-sol", "chat": "chat/gpt-6.1-sol", "stale": "stale/gpt-6.1-sol", "worker": "worker/test-model"} {
 		require.NoError(t, root.WriteFile(filepath.Join("agents", name+".md"), []byte("---\ndescription: Voice fixture\nmode: primary\nmodel: "+model+"\npermission: {}\n---\nReply plainly.\n"), 0o600))
 	}
 
@@ -213,7 +218,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	t.Cleanup(web.Close)
 	h.url = web.URL
 
-	for _, id := range []string{"main", "nokey", "chat", "stale"} {
+	for _, id := range []string{"main", "nokey", "chat", "stale", "worker"} {
 		require.NoError(t, h.rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: id, CreatedBy: "alice"}))
 	}
 
@@ -388,6 +393,37 @@ func (h *voiceHarness) prompt(group *errgroup.Group, text string) {
 // The subtests share one backend and run in order on conversation main.
 func TestVoice(t *testing.T) {
 	h := startVoiceHarness(t)
+	if !t.Run("voice transport is independent of the agent provider", func(t *testing.T) {
+		_, cancel, peer := h.call(t, "worker", "offer-worker")
+		assert.Contains(t, peer.create, `"instructions":"You are the voice of worker,`)
+		handOff(t, peer, "worker-request", "please check the result")
+		assert.Contains(t, <-h.requests, `"model":"test-model"`)
+
+		h.replies <- voiceModelText("worker-reply", "The check passed.")
+
+		peer.expect(t, "The check passed.")
+		cancel()
+		assert.Contains(t, peer.all(t), voiceCloseMessage)
+		h.ended(t)
+
+		cfg := h.server.cfg.Clone()
+
+		t.Cleanup(func() { h.server.cfg.Store(cfg) })
+
+		next := *cfg
+		next.OpenAI.RocketCodeAuth = "chatgpt"
+		h.server.cfg.Store(&next)
+
+		ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+		catalog, err := h.server.listAgents(ctx, "")
+		require.NoError(t, err)
+
+		for _, agent := range catalog.Agents {
+			assert.Equal(t, newCodexVoice().voices(), agent.Voices, agent.Name)
+		}
+	}) {
+		return
+	}
 	// The subtests share conversation main: after one fails, the rest would wait on it forever.
 	if !t.Run("rejections", func(t *testing.T) {
 		// The stale login's token refresh is refused before it leaves the host.
@@ -413,15 +449,36 @@ func TestVoice(t *testing.T) {
 			{"not routed for GET", http.MethodGet, "", "", http.StatusNotFound, ""},
 			{"sdp required", http.MethodPost, `{"conversationId":"main"}`, "", http.StatusBadRequest, "sdp is required"},
 			{"conversation required", http.MethodPost, `{"sdp":"offer-x"}`, "", http.StatusBadRequest, "conversationId is required"},
-			{"no api key", http.MethodPost, `{"conversationId":"nokey","sdp":"offer-x"}`, "", http.StatusBadRequest, `"code":9`},
-			{"no ChatGPT login", http.MethodPost, `{"conversationId":"chat","sdp":"offer-x"}`, "", http.StatusBadRequest, "no usable voice credentials"},
-			{"ChatGPT refresh failure", http.MethodPost, `{"conversationId":"stale","sdp":"offer-x"}`, "", http.StatusBadRequest, `refresh ChatGPT OAuth token for provider \"stale\"; run ` + "`rocketclaw oai login stale`"},
+			{"no api key", http.MethodPost, `{"conversationId":"main","sdp":"offer-x"}`, "", http.StatusBadRequest, `"code":9`},
+			{"no ChatGPT login", http.MethodPost, `{"conversationId":"main","sdp":"offer-x"}`, "", http.StatusBadRequest, "no usable voice credentials"},
+			{"ChatGPT refresh failure", http.MethodPost, `{"conversationId":"main","sdp":"offer-x"}`, "", http.StatusBadRequest, `refresh ChatGPT OAuth token for provider \"openai\"; run ` + "`rocketclaw oai login`"},
 			{"voice not offered", http.MethodPost, `{"conversationId":"main","sdp":"offer-x","voice":"cove"}`, "", http.StatusBadRequest, `provider \"openai\" offers no voice \"cove\"`},
 			{"upstream rejection", http.MethodPost, `{"conversationId":"main","sdp":"offer-reject"}`, "", http.StatusBadRequest, "openai voice request failed with HTTP 401"},
 			// OpenAI created and bills the call, but its sideband is refused: the call is hung up.
 			{"sideband refused", http.MethodPost, `{"conversationId":"main","sdp":"offer-unattached"}`, "", http.StatusBadRequest, "openai voice request failed with HTTP 503"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
+				cfg := h.server.cfg.Clone()
+
+				t.Cleanup(func() { h.server.cfg.Store(cfg) })
+
+				next := *cfg
+
+				switch tc.name {
+				case "no api key":
+					next.OpenAI.APIKey = ""
+				case "no ChatGPT login", "ChatGPT refresh failure":
+					next.OpenAI.RocketCodeAuth = "chatgpt"
+
+					if tc.name == "ChatGPT refresh failure" {
+						require.NoError(t, oai.SaveTokenIn(cfg.Workspace, cfg.RuntimeDirName(), "openai", oai.Token{Refresh: "stale-refresh"}))
+						t.Cleanup(func() {
+							require.NoError(t, oai.RemoveTokenIn(cfg.Workspace, cfg.RuntimeDirName(), "openai"))
+						})
+					}
+				}
+
+				h.server.cfg.Store(&next)
 				request, err := http.NewRequestWithContext(t.Context(), tc.method, h.url+"/api/Voice", strings.NewReader(tc.body))
 				require.NoError(t, err)
 

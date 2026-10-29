@@ -1237,12 +1237,10 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 
 		var voices []string
 
-		if provider, ok := cfg.Provider(voiceProvider(agent.Model)); ok {
-			if provider.RocketCodeAuth == "chatgpt" {
-				voices = newCodexVoice().voices()
-			} else if public, err := newPublicVoice(provider); err == nil {
-				voices = public.voices()
-			}
+		if cfg.OpenAI.RocketCodeAuth == "chatgpt" {
+			voices = newCodexVoice().voices()
+		} else if public, err := newPublicVoice(cfg.OpenAI); err == nil {
+			voices = public.voices()
 		}
 
 		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt, CustomShell: agent.CustomShell, Voices: voices, Space: agent.Space})

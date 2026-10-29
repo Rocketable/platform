@@ -148,7 +148,7 @@ const lost = "Connection to RocketClaw ended.";
 for (const [name, end, message] of [
   ["stream end while live", (wire: Wire) => wire.close(), lost],
   ["stream completion while live", (wire: Wire) => { wire.push("event: complete\ndata: {}\n\n"); wire.close(); }, lost],
-  ["rejected credential error frame", (wire: Wire) => wire.push('event: error\ndata: {"code":9,"message":"openai voice request failed with HTTP 403"}\n\n'), "OpenAI rejected this agent's credential."],
+  ["rejected credential error frame", (wire: Wire) => wire.push('event: error\ndata: {"code":9,"message":"openai voice request failed with HTTP 403"}\n\n'), "OpenAI rejected the default provider's credential."],
   ["replaced", (wire: Wire) => wire.push({ ended: { reason: "replaced" } }), "Voice moved to another device or tab."],
   ["expired", (wire: Wire) => wire.push({ ended: { reason: "expired" } }), "Call ended: time limit reached."],
   ["safety", (wire: Wire) => wire.push({ ended: { reason: "safety" } }), "Call ended by OpenAI safety."],
@@ -364,10 +364,10 @@ test("the retry shows its note and goes live once its channel opens", async () =
 });
 
 for (const [code, message, shown] of [
-  [9, "openai voice request failed with HTTP 401", "OpenAI rejected this agent's credential."],
-  [9, "openai voice request failed with HTTP 404", "OpenAI's voice route is unavailable for this agent."],
+  [9, "openai voice request failed with HTTP 401", "OpenAI rejected the default provider's credential."],
+  [9, "openai voice request failed with HTTP 404", "The default OpenAI provider's voice route is unavailable."],
   [9, "web voice: refresh ChatGPT OAuth token for provider \"openai\"; run `rocketclaw oai login`: token request failed (400): invalid_grant", "web voice: refresh ChatGPT OAuth token for provider \"openai\"; run `rocketclaw oai login`: token request failed (400): invalid_grant"],
-  [9, 'web voice: rpc error: code = FailedPrecondition desc = provider "openai" has no usable voice credentials', "This agent's provider has no credential for voice."],
+  [9, 'web voice: rpc error: code = FailedPrecondition desc = provider "openai" has no usable voice credentials', "The default OpenAI provider has no credential for voice."],
   [5, "conversation not found", "conversation not found"],
 ] as const) test(`a pre-answer JSON error shows: ${shown}`, async () => {
   reply = Response.json({ code, message }, { status: code === 9 ? 400 : 404 });
@@ -485,7 +485,7 @@ test("the wake lock is held until released and requested again when visible; a c
   expect(locks.length).toBe(2);
 });
 
-test("a person's voice applies while the agent's provider offers it, else its default", () => {
+test("a person's voice applies while the default provider offers it, else its default", () => {
   const openai = { name: "main", voices: ["cove", "juniper"] }, keyed = { name: "helper", model: "keyed/gpt", voices: ["marin", "cedar"] };
   expect(voiceChoice()).toBe("");
   expect(voiceChoice({ name: "empty" }, "cove")).toBe("");

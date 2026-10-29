@@ -33,7 +33,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
     if (url.pathname === "/api/ListAgents") {
       const { conversationId = "" } = JSON.parse(await request.text() || "{}");
       await listing?.promise;
-      return Response.json({ agents: [{ name: "main", model: "openai/gpt", voices: ["cove", "juniper"] }, { name: "helper", model: "keyed/gpt", voices: ["marin", "cedar"] }], currentAgent: agents[conversationId] ?? "main" });
+      return Response.json({ agents: [{ name: "main", model: "openai/gpt", voices: ["cove", "juniper", "marin", "cedar"] }, { name: "helper", model: "keyed/gpt", voices: ["cove", "juniper", "marin", "cedar"] }], currentAgent: agents[conversationId] ?? "main" });
     }
     if (url.pathname === "/api/History") return Response.json({ messages: [], origin: "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
     if (url.pathname === "/api/VoiceSettings") {
@@ -139,7 +139,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
     expect(stored()).toBe("");
     await held(1); // The open Voice page keeps the screen on.
 
-    const voicePicker = page.getByRole("combobox", { name: "Choose voice" }); // Covers the voice picker: the agent's provider offers its voices, the default first.
+    const voicePicker = page.getByRole("combobox", { name: "Choose voice" });
     const shownVoice = () => voicePicker.locator('[data-slot="select-value"]').textContent();
     expect(await shownVoice()).toBe("Cove");
     // A transcript update can finish before an earlier voice choice reaches the server.
@@ -226,7 +226,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
     await page.getByRole("menuitemradio", { name: /helper/ }).click();
     await page.waitForFunction(() => document.querySelector('[aria-label="Choose agent"]')?.textContent === "helper");
     expect(prompts).toEqual([{ id: "voice-1", text: "$agent helper" }]);
-    expect(await shownVoice()).toBe("Marin"); // Another provider offers other voices.
+    expect(await shownVoice()).toBe("Juniper");
 
     await page.reload(); // The stored conversation is reused, with its agent.
     await page.waitForFunction(() => document.querySelector('[aria-label="Choose agent"]')?.textContent === "helper");
@@ -234,8 +234,8 @@ test("Voice page keeps each person's conversation and settings on the server, an
     await live();
     expect(created).toHaveLength(1);
     expect(calls).toEqual(["voice-1", "voice-1"]);
-    expect(spoken).toEqual(["juniper", "marin"]);
-    expect(settings().voice).toBe("juniper"); // One voice per person, kept by the server; helper's provider lacks it, so its default spoke.
+    expect(spoken).toEqual(["juniper", "juniper"]);
+    expect(settings().voice).toBe("juniper");
     await page.getByRole("button", { name: "Reset", exact: true }).click(); // Covers R4: Reset ends the call and forgets the conversation.
     await closes(2);
     await status.getByText("Tap to talk", { exact: true }).waitFor();
@@ -281,7 +281,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
     expect(await openai.evaluate(() => (window as unknown as { messages?: number }).messages ?? 0)).toBe(0); // The browser sends nothing on the data channel.
     voiceFails = true; // A failed call's error shows in the composer until the next send clears it.
     await toggle.click();
-    const failure = page.getByText("This agent's provider has no credential for voice.");
+    const failure = page.getByText("The default OpenAI provider has no credential for voice.");
     await failure.waitFor();
     await page.getByPlaceholder("Message or $command").fill("hello");
     await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -292,7 +292,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
     await toggle.click(); // A new session's toggle creates it with the shown agent, then calls on it.
     await page.waitForURL(`**/s/${Buffer.from("new-1").toString("base64url")}`);
     await toggle.locator("svg.lucide-mic-off").waitFor();
-    expect({ sessions, call: calls.at(-1), voice: spoken.at(-1) }).toEqual({ sessions: [{ agent: "main", spaceId: "main" }], call: "new-1", voice: "cove" });
+    expect({ sessions, call: calls.at(-1), voice: spoken.at(-1) }).toEqual({ sessions: [{ agent: "main", spaceId: "main" }], call: "new-1", voice: "cedar" });
     await toggle.click();
     await closes(6);
     await page.setViewportSize({ width: 1280, height: 800 });
@@ -328,7 +328,7 @@ test("Voice page keeps each person's conversation and settings on the server, an
     await page.getByRole("link", { name: "Open conversation" }).waitFor();
     voiceFails = true;
     await page.getByRole("button", { name: "Start voice call", exact: true }).click();
-    const noCredential = page.getByText("This agent's provider has no credential for voice.");
+    const noCredential = page.getByText("The default OpenAI provider has no credential for voice.");
     await noCredential.waitFor();
     settings().conversationId = "voice-2";
     await refetch();
@@ -374,6 +374,19 @@ test("Voice page keeps each person's conversation and settings on the server, an
     await page.getByRole("button", { name: "End voice call", exact: true }).click({ force: true });
     await status.getByText("Tap to talk", { exact: true }).waitFor();
     expect(await sticky.getAttribute("aria-pressed")).toBe("false");
+
+    await page.route("**/api/VoiceSettings", async (route: any) => {
+      if (route.request().postDataJSON().action !== "START") return route.continue();
+      Object.assign(settings(), { conversationId: "voice-other", agent: "main" });
+      agents["voice-other"] = "main";
+      await route.fulfill({ json: settings() });
+    });
+    await page.getByRole("button", { name: "Start voice call", exact: true }).click();
+    await live();
+    expect(calls.at(-1)).toBe("voice-other");
+    expect(spoken.at(-1)).toBe("cedar");
+    await page.getByRole("button", { name: "End voice call", exact: true }).click({ force: true });
+    await status.getByText("Tap to talk", { exact: true }).waitFor();
   } finally {
     await browser.close();
     server.stop(true);

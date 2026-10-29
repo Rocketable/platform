@@ -48,12 +48,14 @@ RocketClaw identifies each browser by IP address, using the `web_users` map (for
 
 The Voice page (`/voice`) and the voice button in each session's composer let you talk to an agent out loud. The browser sends audio straight to OpenAI's GPT-Live voice model. Each task the voice model hands off becomes a Web message in the conversation, marked `media=Voice`. Hand-offs enter the conversation in the order they arrive, without waiting for the agent: each one joins the running turn or starts the next. The voice model hears nothing about the agent's work while it runs. When a turn the call handed off finishes, its final reply is spoken once, as written. A reply over about 990 tokens (3,960 bytes) is not spoken: the voice says it is on the screen, and the Voice page switches to its transcript and shows the reply there as written. A message typed during the call cancels the spoken reply of every earlier hand-off; only a later hand-off is spoken again. It also mutes the voice at once, mid-sentence if need be, until the voice answers something you say after it. When the agent asks a question, the voice model says "I need your input. Please respond in the app." and reads the question and its options. Answer it in the app: spoken words never answer a question. Each person has one live call at a time: starting voice on the desk ends their call on the phone, while other people's calls, even on the same conversation, keep running. The Voice page's conversation, agent, voice and transcript choice belong to the person and are kept by RocketClaw, so they are the same on every device and survive restarts until Reset. Ending a call never stops the agent's work.
 
-Voice has no settings of its own. It uses the provider behind the conversation agent's model:
+Voice has no settings of its own. Every agent uses the default `openai` provider for audio, independently of the provider running its model. Hand-offs still run on the conversation's selected agent and model:
 
 - `rocketcode_auth: api_key`: the public GPT-Live API, model `gpt-live-1`. It costs about $0.05 per minute, silence included. An `api_base_url` must use HTTPS unless its host is `localhost` or a loopback IP; otherwise voice refuses to send the API key.
 - `rocketcode_auth: chatgpt`: Codex's internal voice route, model `gpt-live-1-codex`, with the provider's ChatGPT login. This route is unofficial and may stop working at any time. The ChatGPT account's data settings apply.
 
 On both routes, a redirect to another scheme, host, or port drops the voice credentials.
+
+The default provider must have usable credentials even when every agent uses a named provider. Voice calls send conversation context to that default account, and any voice charges belong to it; named providers' credentials and accounts are not used for voice.
 
 Per call, OpenAI receives your microphone audio; up to 40 of the conversation's recent messages, as written, each cut to 600 bytes and 12,000 bytes in total; the final replies it speaks; and the question notices. It never receives tool names, tool arguments, tool results, progress, reasoning, or attachments.
 

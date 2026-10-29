@@ -397,7 +397,7 @@ message Agent {
   string permissions = 7;
   string origin = 8;
   string custom_shell = 9;
-  // Voices a call with this agent may use, the default first; empty when its provider offers none.
+  // Voices offered by the default openai provider, the default first; empty when unavailable.
   repeated string voices = 10;
   // New sessions in another space do not offer this agent; empty offers it in every space.
   string space = 11;

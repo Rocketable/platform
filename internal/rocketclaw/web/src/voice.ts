@@ -60,7 +60,6 @@ export function useVoice() {
   return useSyncExternalStore(subscribeVoice, voiceView, voiceView);
 }
 
-// voiceChoice is the person's voice while the agent's provider offers it, else the provider's default.
 export function voiceChoice(agent?: Agent, voice = "") {
   const voices = agent?.voices ?? [];
   return voices.includes(voice) ? voice : voices[0] ?? "";
@@ -96,8 +95,8 @@ function failureMessage(failure: unknown) {
   // FailedPrecondition carries the provider credential and route failures.
   if (failure instanceof RPCError && failure.code === 9) {
     const status = /openai voice request failed with HTTP (\d{3})/.exec(error)?.[1];
-    if (status) error = /^40[13]$/.test(status) ? "OpenAI rejected this agent's credential." : "OpenAI's voice route is unavailable for this agent.";
-    else if (/no usable voice credentials/i.test(error)) error = "This agent's provider has no credential for voice.";
+    if (status) error = /^40[13]$/.test(status) ? "OpenAI rejected the default provider's credential." : "The default OpenAI provider's voice route is unavailable.";
+    else if (/no usable voice credentials/i.test(error)) error = "The default OpenAI provider has no credential for voice.";
   }
   return error;
 }

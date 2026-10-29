@@ -3224,7 +3224,7 @@ type Agent struct {
 	Permissions string                 `protobuf:"bytes,7,opt,name=permissions,proto3" json:"permissions,omitempty"`
 	Origin      string                 `protobuf:"bytes,8,opt,name=origin,proto3" json:"origin,omitempty"`
 	CustomShell string                 `protobuf:"bytes,9,opt,name=custom_shell,json=customShell,proto3" json:"custom_shell,omitempty"`
-	// Voices a call with this agent may use, the default first; empty when its provider offers none.
+	// Voices offered by the default openai provider, the default first; empty when unavailable.
 	Voices []string `protobuf:"bytes,10,rep,name=voices,proto3" json:"voices,omitempty"`
 	// New sessions in another space do not offer this agent; empty offers it in every space.
 	Space         string `protobuf:"bytes,11,opt,name=space,proto3" json:"space,omitempty"`

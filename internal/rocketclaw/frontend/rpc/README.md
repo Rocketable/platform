@@ -275,11 +275,11 @@ stored but cannot be downloaded; garbage collection is not part of this transpor
 long as its request lives. HTTP serves it only as `POST /api/Voice`, so
 `CrossOriginProtection` blocks cross-site starts; it is not a GET stream route. The
 body is `{"conversationId":"<visible-id>","sdp":"<offer>","voice":"<name>"}`; `voice`
-is optional and must be one the agent's provider offers (`ListAgents` lists them per
+is optional and must be one the default `openai` provider offers (`ListAgents` lists them per
 agent, the default first: Codex's voices on `chatgpt`, the public API's on `api_key`),
 else the call is refused with `InvalidArgument`. The handler checks
-identity and visibility, takes credentials from the provider of the conversation
-agent's model (`api_key` uses the public API and honors `api_base_url`; `chatgpt`
+identity and visibility, takes credentials from the default `openai` provider,
+independently of the conversation agent's model (`api_key` uses the public API and honors `api_base_url`; `chatgpt`
 uses the saved login on Codex's fixed internal URLs), creates the call, and attaches
 its sideband socket before answering. SSE frames are `{"answer":{"sdp":"…","route":"public"|"codex"}}`
 first, then any `{"notice":"…"}` frames, then one `{"ended":{"reason":"…"}}` with

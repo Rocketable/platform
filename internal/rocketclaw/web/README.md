@@ -159,8 +159,8 @@ next call begins a fresh one; the old one stays in the session list and search u
 ordinary cleanup (an empty one is removed at the next restart), and a running turn
 keeps running there. A call already live on another device keeps its conversation
 until it ends. A voice picker next to the agent picker lists the voices the
-agent's provider offers (ChatGPT-login and API-key providers offer different ones).
-Each person has one voice: a call uses it when the agent's provider offers it, and
+default `openai` provider offers (ChatGPT-login and API-key providers offer different ones).
+Each person has one voice: a call uses it when the default `openai` provider offers it, and
 that provider's default otherwise, and the composer's voice button follows it too. **Sticky** (below) sits after the pickers. Icon buttons on the right show the transcript, open the
 conversation, and reset. The row stays on one line: on phones the agent picker drops
 its robot icon, and a long agent name is shortened. The page shows the call state, elapsed time and notices
