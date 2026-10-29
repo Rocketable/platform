@@ -30,18 +30,6 @@
   pointer-events: auto;
 }
 
-/* RocketClaw's theme toggle is fixed at the window's top right, over the session's review toggle. The header's own
-   controls move with the toggle, so the space they keep for it stays under it (upstream's pe-3 plus the move). */
-@container oc-view (width >= 64rem) {
-  [data-slot="session-review-toggle"] {
-    margin-inline-end: 3rem;
-  }
-
-  [data-session-title] > div {
-    padding-inline-end: 3.75rem;
-  }
-}
-
 [data-component="rocketclaw-version-pill"],
 [data-component="rocketclaw-server-banner"] {
   position: absolute;

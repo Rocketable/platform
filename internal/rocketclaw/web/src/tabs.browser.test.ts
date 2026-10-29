@@ -297,8 +297,10 @@ for (const width of [1280, 320]) test(`copy page link across pages at ${width}px
       const { x, y, width, height } = node.getBoundingClientRect();
       return { x, y, width, height };
     }));
-    // Wide screens add the sidebar toggle.
-    expect(boxes).toHaveLength(width === 320 ? 4 : 5);
+    // The sidebar toggle, the four middle buttons, and the theme toggle, left to right without overlap.
+    expect(boxes).toHaveLength(6);
+    expect(boxes[0].x).toBeLessThan(16);
+    expect(boxes[5].x + boxes[5].width).toBeGreaterThan(width - 16);
     for (const [index, box] of boxes.entries()) {
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(width);
@@ -609,16 +611,13 @@ test("running tabs keep a reachable close control, and closing hands focus to th
   await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Charlie"]'));
 }), 60_000);
 
-test("narrow screens show the tabs in a drawer opened by the top-left button or a right swipe and closed by a pick, Escape, or a left swipe", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin, _prompts, saved) => {
+test("narrow screens show the tabs in a drawer opened by the footer's sidebar button or a right swipe and closed by a pick, Escape, or a left swipe", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   for (const id of ["alpha", "bravo"]) {
     await page.goto(`${origin}${href(id)}`);
     await until(() => saved.state.tabs.some((tab) => tab.path === href(id)));
   }
-  const toggle = page.getByRole("button", { name: "Show sidebar", exact: true });
-  const box = (await toggle.boundingBox())!;
-  expect(box.x + box.y).toBeLessThan(24);
-  expect(await page.locator("footer").getByRole("button", { name: "Show sidebar" }).count()).toBe(0);
+  const toggle = page.locator("footer").getByRole("button", { name: "Show sidebar", exact: true });
   expect(await strip(page).count()).toBe(0);
 
   await toggle.tap();

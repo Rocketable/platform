@@ -597,9 +597,9 @@ active tab.
   at the ends. This replaces the browser's Back/Forward for those keys.
 - **Sidebar.** Tabs sit in a 14rem sidebar on the left. Drag its right edge, or
   focus the edge and press Left/Right, to resize it; the width is kept in this
-  browser. The footer's **Hide sidebar** button or Cmd/Ctrl+B hides and shows it
-  until the next reload. Below the `md` breakpoint, the sidebar is a drawer: the
-  **Show sidebar** button at the top left or a swipe right opens it, and picking a
+  browser. The **Hide sidebar** button at the footer's left end or Cmd/Ctrl+B hides
+  and shows it until the next reload. Below the `md` breakpoint, the sidebar is a
+  drawer: the same footer button or a swipe right opens it, and picking a
   tab, tapping outside, Escape, or a swipe left closes it. A swipe that starts on
   a text field, a slider, or something that scrolls sideways is left to that element.
 - **Storage.** The server keeps each person's tabs, so they follow you to every
@@ -649,9 +649,11 @@ down to hide it and up to show it. On mobile it floats over a slim 16px strip wh
 retaining a 44px touch target. The handle stays
 visible when the controls are hidden and supports Enter/Space when focused.
 Touch devices and narrow screens use 48px navigation targets and 8px gaps;
-desktop uses 32px targets and 4px gaps. Icons are 24px in both layouts.
-The centered bar has New session, Search sessions and commands, Voice, and Copy
-page link.
+desktop uses 32px targets and 4px gaps. Screens narrower than 22rem keep 48px
+targets but tighten gaps and side padding to 4px. Icons are 24px in all layouts.
+The sidebar toggle sits at the bar's left end and the theme toggle at its right end;
+between them, centered, are New session, Search sessions and commands, Voice, and
+Copy page link.
 Cmd/Ctrl+Alt+N opens a new session. The magnifying glass beside New session opens
 the palette, like Cmd/Ctrl+P. The **Sessions: Search** command opens
 the Search page. Each search has its own editable tab, saved in this browser for
@@ -971,7 +973,7 @@ deleting its record or its Slack messages.
 On desktop, the page header's close button closes that page's tab (see
 [Tabs](#tabs)), and Escape on a page does too unless a dialog or tooltip is open.
 New chat and search form a centered group in the footer.
-The theme toggle floats in the upper-right corner of the page and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
+The theme toggle sits at the right end of the footer and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
 Config's Timeline section has the **Timeline detail** card, following OpenCode v2. A
 five-stop slider picks Messages only, Quiet, Compact, Detailed, or Everything, and an
 Advanced table sets visibility, Group, and Collapse per category; settings that match

@@ -69,10 +69,11 @@ export function ThemeToggle() {
     return () => mq.removeEventListener("change", onChange);
   }, [mode]);
   const next: Mode = mode === "system" ? "light" : mode === "light" ? "dark" : "system";
+  const Icon = mode === "system" ? Monitor : mode === "dark" ? Moon : Sun;
   return (
     <Tooltip>
-      <TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" />} aria-label={`Theme ${mode}`} onClick={() => setMode(next)}>
-        {mode === "system" ? <Monitor /> : mode === "dark" ? <Moon /> : <Sun />}
+      <TooltipTrigger render={<Button type="button" variant="ghost" size="icon" className="size-[var(--navigation-button)]" />} aria-label={`Theme ${mode}`} onClick={() => setMode(next)}>
+        <Icon className="size-[var(--navigation-icon)]" />
       </TooltipTrigger>
       <TooltipContent>Switch to {next} theme</TooltipContent>
     </Tooltip>
