@@ -72,10 +72,6 @@ Start goals from the Web composer; Slack has no `$goal`.
 | `$goal ship the release` | Starts a goal loop with default `maxTurns: 5`. |
 | `$goal maxTurns: 10 ship the release` | Starts a finite goal loop with a 10-turn budget. |
 | `$goal maxTurns:10 ship the release` | Same as above; goal parameters may attach values directly after `:`. |
-| `$goal checkScript: ./scripts/check.sh ship the release` | Starts a goal loop that must pass the workspace-local check script before `complete` can stick. |
-| `$goal checkScript:./scripts/check.sh ship the release` | Same as above; `checkScript:` values may attach directly after `:`. |
-| `$goal checkScript: "./scripts/check.sh --full" ship the release` | Uses a quoted simple command for the check script. |
-| `$goal checkScript:"./scripts/check.sh --full" ship the release` | Same as above with the quoted command attached directly after `:`. |
 | `$stop` | Stops the active managed-conversation turn. If an active goal is present, it becomes `stopped`. |
 | `✅` | Marker RocketClaw adds when a goal reaches `complete`. Humans generally do not send it as a command. |
 
@@ -84,7 +80,6 @@ Start goals from the Web composer; Slack has no `$goal`.
 | `maxTurns:` | Omitted | Defaults to `5`. |
 | `maxTurns:` | Positive integer | Finite goal budget. Progress shows `_Pursuing Goal (n/m)..._`. |
 | `maxTurns:` | `0`, `-1`, `infinite` | Infinite goal budget. Progress shows `_Pursuing Goal..._`. |
-| `checkScript:` | Workspace-local safe simple command | Runs when the model calls `rocketclaw_update_goal` with `complete`; failure keeps the goal active. |
 
 ## Saved Starlark Workflows
 
@@ -215,7 +210,7 @@ RocketClaw injects these tools into RocketCode turns as **Code Mode builtins ins
 | `rocketclaw_schedule_message` | Persistent bridge turns and raw/cron runs of top-level sessions, hidden cron and External MCP runs included. Never subagent sessions. | Auto-allow unless explicitly denied. | Schedules a one-shot or recurring prompt in the current conversation. Recurring schedules persist until reset and do not replay missed intervals. |
 | `rocketclaw_reset_scheduled_messages` | Persistent bridge turns and raw/cron runs of top-level sessions, hidden cron and External MCP runs included. Never subagent sessions. | Treat as part of the schedule-message permission family. Deny `rocketclaw_schedule_message` to block schedule reset behavior. | Clears scheduled messages for the current conversation. |
 | `rocketclaw_attach_files_to_response` | Persistent bridge turns and raw/cron runs. | Auto-allow unless explicitly denied. | Attaches collected files to the final outbound response through RocketClaw's shared response-attachment path. |
-| `rocketclaw_update_goal` | Persistent bridge turns only, and only when the current text conversation has an active goal. | Auto-allow unless explicitly denied, but hidden when no active goal exists. | Reports goal status as `progress`, `complete`, or `blocked` with an optional note. `complete` runs any configured `checkScript:` before the goal becomes complete. |
+| `rocketclaw_update_goal` | Persistent bridge turns only, and only when the current text conversation has an active goal. | Auto-allow unless explicitly denied, but hidden when no active goal exists. | Reports goal status as `progress`, `complete`, or `blocked` with an optional note. |
 | `rocketclaw_sessions_list` | Every bridge turn, cron and External MCP runs and subagent sessions included. | Default-deny. Needs an explicit `allow` or `auto` rule on this name. | Lists stored conversations, newest first, with all five fields: `criteria`, `since` (required), `until`, `limit` (1 to 200), and `include_message_preview`. Empty `criteria` lists every stored conversation, private MCP and cron ones included; other `criteria` is a Web `/search` query that returns only the chats Web lists, with up to 3 matching messages each. |
 | `rocketclaw_sessions_get` | Same as `rocketclaw_sessions_list`. | Same as `rocketclaw_sessions_list`. | Reads up to 100 stored entries of any conversation, private ones included, older than `before_entry_id` (0 for the newest). Ends with `[next_before_entry_id=N]` when older entries remain. |
 | `rocketclaw_sessions_current_id` | Same as `rocketclaw_sessions_list`. | Same as `rocketclaw_sessions_list`. | Returns the owning conversation ID. Subagents get their own session's ID. |

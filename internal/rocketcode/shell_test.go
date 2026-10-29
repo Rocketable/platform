@@ -37,41 +37,21 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	t.Run("rejects invalid commands before execution", func(t *testing.T) {
 		for _, tc := range []struct {
 			name    string
-			command BashCommand
+			command bashParams
 			want    string
 		}{
-			{"blank command", BashCommand{Command: " \t\n"}, "command is required"},
-			{"negative timeout", BashCommand{Command: "touch rejected-command", TimeoutMillisecond: -1}, "Invalid timeout_ms value: -1. timeout_ms must be a positive number."},
-			{"missing workdir", BashCommand{Command: "touch rejected-command", Workdir: "missing"}, `resolve workdir "missing":`},
-			{"file workdir", BashCommand{Command: "touch rejected-command", Workdir: "root.txt"}, `resolve workdir "root.txt": not a directory`},
+			{"blank command", bashParams{Command: " \t\n"}, "command is required"},
+			{"negative timeout", bashParams{Command: "touch rejected-command", TimeoutMillisecond: -1}, "Invalid timeout_ms value: -1. timeout_ms must be a positive number."},
+			{"missing workdir", bashParams{Command: "touch rejected-command", Workdir: "missing"}, `resolve workdir "missing":`},
+			{"file workdir", bashParams{Command: "touch rejected-command", Workdir: "root.txt"}, `resolve workdir "root.txt": not a directory`},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				got, err := RunBash(t.Context(), root, outputDir, nil, "", tc.command)
-				require.NoError(t, err)
+				got := sss.Bash(t.Context(), "", tc.command)
 				require.False(t, got.Success)
 				require.Equal(t, "error", got.ErrorCode)
 				require.Contains(t, got.Output, tc.want)
 
-				_, err = root.Stat("rejected-command")
-				require.ErrorIs(t, err, fs.ErrNotExist)
-			})
-		}
-	})
-	t.Run("rejects invalid configuration before execution", func(t *testing.T) {
-		for _, tc := range []struct {
-			name, tempDir string
-			env           map[string]string
-			want          string
-		}{
-			{"missing temp directory", filepath.Join(dir, "missing-tmp"), nil, "resolve shell temp dir"},
-			{"invalid environment", outputDir, map[string]string{"BAD=KEY": "value"}, `shell env key "BAD=KEY" must not contain =`},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				got, err := RunBash(t.Context(), root, tc.tempDir, tc.env, "", BashCommand{Command: "touch rejected-command"})
-				require.ErrorContains(t, err, tc.want)
-				require.Equal(t, BashResult{}, got)
-
-				_, err = root.Stat("rejected-command")
+				_, err := root.Stat("rejected-command")
 				require.ErrorIs(t, err, fs.ErrNotExist)
 			})
 		}
@@ -242,9 +222,9 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	t.Run("configured env overrides process env", func(t *testing.T) {
 		t.Setenv("ROCKETCLAW_CONVERSATION_ID", "old")
 
-		got, err := RunBash(t.Context(), root, outputDir, map[string]string{"ROCKETCLAW_CONVERSATION_ID": "new"}, "", BashCommand{Command: `printf %s "$ROCKETCLAW_CONVERSATION_ID"`, Description: "override env"})
-		require.NoError(t, err)
+		sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new"}, DefaultShellCommand{})
 
+		got := sss.Bash(t.Context(), "", bashParams{Command: `printf %s "$ROCKETCLAW_CONVERSATION_ID"`, Description: "override env"})
 		require.True(t, got.Success, got.Output)
 		require.Equal(t, "new", got.String())
 	})
@@ -282,8 +262,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			require.Equal(t, fmt.Sprintf("argc=1 arg=%s pwd=%s tmp=%s", command, realDir, outputDir), got.Output)
 		})
 		t.Run("runs in the nested workdir with the session TMPDIR", func(t *testing.T) {
-			got, err := RunBash(t.Context(), root, outputDir, nil, filepath.Join(dir, "wrap.sh"), BashCommand{Command: "ls", Workdir: filepath.Join(dir, "nested")})
-			require.NoError(t, err)
+			got := sss.Bash(t.Context(), filepath.Join(dir, "wrap.sh"), bashParams{Command: "ls", Workdir: filepath.Join(dir, "nested")})
 			require.True(t, got.Success, got.Output)
 			require.Equal(t, fmt.Sprintf("argc=1 arg=ls pwd=%s tmp=%s", filepath.Join(realDir, "nested"), outputDir), got.Output)
 		})

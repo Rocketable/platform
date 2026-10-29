@@ -261,13 +261,7 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 		}
 	}
 
-	if strings.TrimSpace(goal.CheckScript) != "" {
-		if err := ValidateGoalCheckScriptStart(r.Cfg, bridge.agentSnapshot(), goal.CheckScript); err != nil {
-			return fmt.Errorf("validate goal check script: %w", err)
-		}
-	}
-
-	if err := r.Sessions.BeginGoal(inbound.ConversationID, &GoalState{Objective: goal.Objective, CheckScript: goal.CheckScript, MaxTurns: goal.MaxTurns, PrincipalName: inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], PrincipalEmail: inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey]}); err != nil {
+	if err := r.Sessions.BeginGoal(inbound.ConversationID, &GoalState{Objective: goal.Objective, MaxTurns: goal.MaxTurns, PrincipalName: inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], PrincipalEmail: inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey]}); err != nil {
 		return fmt.Errorf("persist goal: %w", err)
 	}
 

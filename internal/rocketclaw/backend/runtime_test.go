@@ -790,12 +790,6 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 		return inbound
 	}
 
-	require.ErrorContains(t, rt.StartGoal(t.Context(), webGoal(), protocol.GoalRequest{Objective: "ship it", CheckScript: "make test", MaxTurns: 3}), "validate goal check script")
-
-	_, exists, err := store.Goal(conversationID)
-	require.NoError(t, err)
-	require.False(t, exists)
-
 	require.NoError(t, rt.StartGoal(t.Context(), webGoal(), protocol.GoalRequest{Objective: "ship it", MaxTurns: 3}))
 
 	goal, exists, err := store.Goal(conversationID)

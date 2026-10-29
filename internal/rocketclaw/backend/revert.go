@@ -836,12 +836,6 @@ func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, request *bridgeReques
 		return false, err
 	}
 
-	if strings.TrimSpace(goal.CheckScript) != "" {
-		if err := ValidateGoalCheckScriptStart(r.Cfg, b.agentSnapshot(), goal.CheckScript); err != nil {
-			return false, fmt.Errorf("validate goal check script: %w", err)
-		}
-	}
-
 	if inbound.Workflow.Name != "" {
 		if err := b.prepareWorkflow(request); err != nil {
 			return false, err
@@ -905,7 +899,7 @@ func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, request *bridgeReques
 	}
 
 	if goal.Objective != "" {
-		if err := beginGoalDB(ctx, tx, inbound.ConversationID, &GoalState{Objective: goal.Objective, CheckScript: goal.CheckScript, MaxTurns: goal.MaxTurns, PrincipalName: inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], PrincipalEmail: inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey]}); err != nil {
+		if err := beginGoalDB(ctx, tx, inbound.ConversationID, &GoalState{Objective: goal.Objective, MaxTurns: goal.MaxTurns, PrincipalName: inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], PrincipalEmail: inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey]}); err != nil {
 			return false, err
 		}
 	}

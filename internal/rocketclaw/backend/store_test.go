@@ -864,27 +864,6 @@ func TestSessionServiceActiveGoalThreads(t *testing.T) {
 	}, threads)
 }
 
-func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat, "thread-2": KindWebChat})
-
-	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: " fix lint ", CheckScript: " ./scripts/check.sh --linter-mode ", MaxTurns: 3}))
-	goal, ok, err := store.Goal("thread-1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "fix lint", goal.Objective)
-	assert.Equal(t, "./scripts/check.sh --linter-mode", goal.CheckScript)
-	assert.Equal(t, 3, goal.MaxTurns)
-
-	require.NoError(t, store.BeginGoal("thread-2", &GoalState{Objective: "write docs", CheckScript: " ", MaxTurns: 1}))
-	goal, ok, err = store.Goal("thread-2")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Empty(t, goal.CheckScript)
-}
-
 func TestSessionServiceBeginGoalAllowsGoalAfterTerminal(t *testing.T) {
 	t.Parallel()
 
@@ -894,7 +873,7 @@ func TestSessionServiceBeginGoalAllowsGoalAfterTerminal(t *testing.T) {
 	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "first", MaxTurns: 3}))
 	_, err := store.UpdateGoalStatus("thread-1", GoalStatusComplete, "done")
 	require.NoError(t, err)
-	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "second", CheckScript: "./check.sh", MaxTurns: 1}))
+	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "second", MaxTurns: 1}))
 
 	goal, ok, err := store.Goal("thread-1")
 	require.NoError(t, err)

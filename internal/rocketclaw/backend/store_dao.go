@@ -715,8 +715,8 @@ func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, b
 		createdAt, updatedAt int64
 	)
 
-	err := d.db.QueryRowContext(ctx, `SELECT goal_objective, goal_check_script, goal_max_turns, goal_turns_used, goal_status, goal_note, goal_created_at_unix_ns, goal_updated_at_unix_ns, goal_principal_name, goal_principal_email
-FROM conversations WHERE conversation_id = $1 AND goal_objective IS NOT NULL`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.CheckScript, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &createdAt, &updatedAt, &goal.PrincipalName, &goal.PrincipalEmail)
+	err := d.db.QueryRowContext(ctx, `SELECT goal_objective, goal_max_turns, goal_turns_used, goal_status, goal_note, goal_created_at_unix_ns, goal_updated_at_unix_ns, goal_principal_name, goal_principal_email
+FROM conversations WHERE conversation_id = $1 AND goal_objective IS NOT NULL`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &createdAt, &updatedAt, &goal.PrincipalName, &goal.PrincipalEmail)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GoalState{}, false, nil
 	}

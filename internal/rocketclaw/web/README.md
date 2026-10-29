@@ -825,7 +825,7 @@ Only the outer delivery command is removed; inner commands and text are preserve
 idle, after the active turn when steered, and as later work when queued. Bare
 `$workflow` privately lists the saved workflows, and typing `$workflow ` in the
 composer suggests them by name. `$goal <objective>` starts a goal
-loop on the conversation, with `maxTurns:` and `checkScript:` options; its first turn runs right away when idle, otherwise after the active turn.
+loop on the conversation, with a `maxTurns:` option; its first turn runs right away when idle, otherwise after the active turn.
 Bare `$goal` privately shows usage, and `$stop` ends the goal.
 The Stash button and shortcut still hold the entire draft literally, including
 any `$command` text. Slack has no commands: `$` text in a Slack mention reaches
