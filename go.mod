@@ -18,7 +18,7 @@ require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/openai/openai-go/v3 v3.90.0
-	github.com/posthog/posthog-go v1.38.0
+	github.com/posthog/posthog-go v1.39.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rubenv/sql-migrate v1.8.1
 	github.com/slack-go/slack v0.32.0
@@ -62,7 +62,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.44.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.6 // indirect
 	github.com/aws/smithy-go v1.28.7 // indirect
-	github.com/axiomhq/hyperloglog v0.2.6 // indirect
+	github.com/axiomhq/hyperloglog v0.3.0 // indirect
 	github.com/benbjohnson/immutable v0.4.3 // indirect
 	github.com/bradfitz/reco v0.0.0-20260929154613-b883fbd17e3f // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
@@ -70,7 +70,7 @@ require (
 	github.com/coder/websocket v1.8.15 // indirect
 	github.com/creachadair/msync v0.10.1 // indirect
 	github.com/dblohm7/wingoes v0.0.0-20260526185140-fb298caac7ca // indirect
-	github.com/dgryski/go-metro v0.0.0-20250106013310-edb8663e5e33 // indirect
+	github.com/dgryski/go-metro v0.0.0-20261008173524-5059e0b1da03 // indirect
 	github.com/fxamacker/cbor/v2 v2.10.0 // indirect
 	github.com/gaissmai/bart v0.30.0 // indirect
 	github.com/go-gorp/gorp/v3 v3.1.0 // indirect

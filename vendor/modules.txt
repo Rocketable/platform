@@ -190,7 +190,7 @@ github.com/aws/smithy-go/transport/http/protocol/internal/json
 github.com/aws/smithy-go/transport/http/protocol/internal/json/internal/stdlib
 github.com/aws/smithy-go/transport/http/protocol/restjson1
 github.com/aws/smithy-go/waiter
-# github.com/axiomhq/hyperloglog v0.2.6
+# github.com/axiomhq/hyperloglog v0.3.0
 ## explicit; go 1.23
 github.com/axiomhq/hyperloglog
 # github.com/benbjohnson/immutable v0.4.3
@@ -223,8 +223,8 @@ github.com/dblohm7/wingoes
 github.com/dblohm7/wingoes/com
 github.com/dblohm7/wingoes/com/automation
 github.com/dblohm7/wingoes/pe
-# github.com/dgryski/go-metro v0.0.0-20250106013310-edb8663e5e33
-## explicit
+# github.com/dgryski/go-metro v0.0.0-20261008173524-5059e0b1da03
+## explicit; go 1.24
 github.com/dgryski/go-metro
 # github.com/fxamacker/cbor/v2 v2.10.0
 ## explicit; go 1.24
@@ -438,7 +438,7 @@ github.com/openai/openai-go/v3/webhooks
 # github.com/pires/go-proxyproto v0.16.0
 ## explicit; go 1.26.9
 github.com/pires/go-proxyproto
-# github.com/posthog/posthog-go v1.38.0
+# github.com/posthog/posthog-go v1.39.0
 ## explicit; go 1.21
 github.com/posthog/posthog-go
 # github.com/robfig/cron/v3 v3.0.1
