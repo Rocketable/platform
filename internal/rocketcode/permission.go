@@ -229,12 +229,12 @@ func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule,
 		rules := []PermissionRule{}
 
 		for i := 0; i+1 < len(node.Content); i += 2 {
-			if permission == "rocketclaw" && node.Content[i].Value == "rocketclaw_set_tag" && node.Content[i+1].Kind == yaml.SequenceNode {
+			if permission == "rocketclaw" && (node.Content[i].Value == "rocketclaw_set_tag" && node.Content[i+1].Kind == yaml.SequenceNode || node.Content[i].Value == "rocketclaw_sessions_recipient") {
 				continue
 			}
 
 			if permission == "rocketclaw" && node.Content[i].Value == "session" {
-				return nil, errors.New("session.spawn_mode is removed; use rocketclaw_sessions_write")
+				return nil, errors.New("session.spawn_mode is removed; use rocketclaw_sessions")
 			}
 
 			if permission == "rocketclaw" && strings.ContainsAny(node.Content[i].Value, "*?") {
@@ -244,10 +244,6 @@ func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule,
 			value := node.Content[i+1]
 
 			actionValue := value.Value
-			if permission == "rocketclaw" && node.Content[i].Value == "rocketclaw_sessions_write" && actionValue == "children" {
-				// RocketClaw reads the children scope from the frontmatter when the tool runs.
-				actionValue = string(permissionAllow)
-			}
 
 			if permission == "rocketclaw" && node.Content[i].Value == "load_agents_md" {
 				if value.Kind != yaml.ScalarNode || value.ShortTag() != "!!bool" {

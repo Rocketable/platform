@@ -945,7 +945,7 @@ func TestSessionEntries(t *testing.T) {
 
 			return true, nil
 		},
-		DeleteQueueItemFunc: func(_ context.Context, conversationID, itemID string) (bool, error) {
+		DeleteQueueItemFunc: func(ctx context.Context, conversationID, itemID string) (bool, error) {
 			if itemID == "missing" {
 				return false, nil
 			}
@@ -957,7 +957,11 @@ func TestSessionEntries(t *testing.T) {
 
 			for i := range items {
 				if items[i].ID == itemID {
-					return true, sessions.DeleteThreadQueueItem(itemID)
+					if _, _, err := sessions.DeleteThreadQueueItem(ctx, conversationID, itemID); err != nil {
+						return true, fmt.Errorf("delete queue item: %w", err)
+					}
+
+					return true, nil
 				}
 			}
 
@@ -1120,7 +1124,8 @@ func TestSessionEntries(t *testing.T) {
 			require.Equal(t, []protocol.InboundKind{protocol.InboundKindEnqueue, protocol.InboundKindHeld}[i], item.Inbound.Kind)
 			require.Equal(t, item.ID, item.Inbound.Metadata["web_message_id"])
 			require.Subset(t, item.Inbound.Metadata, person, "the queued request names its writer")
-			require.NoError(t, sessions.DeleteThreadQueueItem(item.ID))
+			_, _, err := sessions.DeleteThreadQueueItem(t.Context(), item.ConversationID, item.ID)
+			require.NoError(t, err)
 		}
 
 		_, err = invoke[PromptResponse](browser, connection, "Prompt", &PromptRequest{Id: "unrecorded", Text: "hello"})
@@ -3181,7 +3186,8 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			})
 		}
 
-		require.NoError(t, sessions.DeleteThreadQueueItem(queue[0].ID))
+		_, _, err = sessions.DeleteThreadQueueItem(ctx, queue[0].ConversationID, queue[0].ID)
+		require.NoError(t, err)
 
 		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: "another", Text: exact, AttachmentIds: []string{file.Id}})
 		require.Equal(t, codes.NotFound, status.Code(err))

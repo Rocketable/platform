@@ -39,7 +39,9 @@ func TestForkConversation(t *testing.T) {
 
 	// A copied wake turn shows its Completion Notes from copied finished jobs; running work stays with the source.
 	// The fork can load the source's retained output.
-	finished, other, running := testBackgroundJob("source", "turn-1/call/a"), testBackgroundJob("source", "turn-1/call/c"), testBackgroundJob("source", "turn-1/call/b")
+	finished, other, running := testBackgroundJob("source", "turn-1/call/a"), testReply("source", "turn-1/call/c", "web:ops"), testBackgroundJob("source", "turn-1/call/b")
+	other.jobID, other.input = "turn-1/call/c", "https://rc.example/s/ops"
+
 	for _, job := range []*backgroundJob{finished, other} {
 		createTestBackgroundJob(t, sessions, job)
 		end := *job
@@ -105,6 +107,11 @@ func TestForkConversation(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, note, notes)
 				require.Empty(t, backgroundJobIDs(t, sessions, tt.name), "copied notes are neither running nor pending")
+
+				replies, err := sessions.notedBackgroundJobs(t.Context(), tt.name, []string{other.jobID})
+				require.NoError(t, err)
+				require.Len(t, replies, 1)
+				require.Equal(t, []string{"web:ops", "https://rc.example/s/ops"}, []string{replies[0].target, replies[0].input}, "a copied reply note keeps its target")
 
 				copied := filepath.Join(rocketcodeRetainedDir(tt.name), "a.txt")
 				data, err := spill.ReadFile(copied)

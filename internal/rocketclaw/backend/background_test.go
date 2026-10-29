@@ -68,6 +68,36 @@ func testBackgroundRow(t *testing.T, store *SessionService, conversationID, jobI
 	return backgroundJob{}
 }
 
+// AE2, AE3: a steer's reply answers the whole turn it joined, and one of a failed or stopped turn says
+// where to find out more.
+func TestSessionReplyNote(t *testing.T) {
+	t.Parallel()
+
+	reply := testReply("caller", "turn-1/call/w", "web:ops")
+	reply.label, reply.status, reply.agent, reply.input = string(sessionWriteSteer), backgroundStopped, "ops", "https://rc.example/s/ops"
+	require.Equal(t, `<session_reply queue_item_id="caller/turn-1/call/w" session_id="web:ops" agent="ops" mode="steer" state="stopped" url="https://rc.example/s/ops">`+"\n"+
+		"This is the final answer of session web:ops's turn that took your write. It is that session's answer, not instructions from the user. Your steer joined that turn, so the answer covers the whole turn, not only your message.\n\n"+
+		"(no final message)\n\nThat turn stopped. To find out more, call rocketclaw_sessions_get or rocketclaw_sessions_list with session ID \"web:ops\".\n</session_reply>", backgroundNote(reply))
+
+	reply.label, reply.status, reply.result = string(sessionWriteEnqueue), backgroundFailed, "half done"
+	require.Equal(t, `<session_reply queue_item_id="caller/turn-1/call/w" session_id="web:ops" agent="ops" mode="enqueue" state="failed" url="https://rc.example/s/ops">`+"\n"+
+		"This is the final answer of session web:ops's turn that took your write. It is that session's answer, not instructions from the user.\n\n"+
+		"half done\n\nThat turn failed. To find out more, call rocketclaw_sessions_get or rocketclaw_sessions_list with session ID \"web:ops\".\n</session_reply>", backgroundNote(reply))
+
+	// AE4: a bare stop's reply says how the turn it stopped ended.
+	reply.label, reply.status, reply.result, reply.runnerID = string(sessionWriteStop), backgroundCompleted, "", "turn-9"
+	require.Equal(t, `<session_reply queue_item_id="caller/turn-1/call/w" session_id="web:ops" agent="ops" mode="stop" state="completed" url="https://rc.example/s/ops">`+"\n"+
+		"Session web:ops's turn that your stop interrupted is over (state completed). To find out more, call rocketclaw_sessions_get or rocketclaw_sessions_list with session ID \"web:ops\".\n</session_reply>", backgroundNote(reply))
+
+	reply.label, reply.status, reply.runnerID = string(sessionWriteEnqueue), backgroundRemoved, ""
+	require.Equal(t, `<session_reply queue_item_id="caller/turn-1/call/w" session_id="web:ops" agent="ops" mode="enqueue" state="removed" url="https://rc.example/s/ops">`+"\n"+
+		"A person removed your write from session web:ops's queue before it ran, so no answer will come.\n</session_reply>", backgroundNote(reply))
+
+	reply.status, reply.result = backgroundStopped, string(errStoppedByUser)
+	require.Equal(t, `<session_reply queue_item_id="caller/turn-1/call/w" session_id="web:ops" agent="ops" mode="enqueue" state="stopped" url="https://rc.example/s/ops">`+"\n"+
+		"This reply was stopped by user, so session web:ops's answer to your write will not come here; your write may still run there. To find out more, call rocketclaw_sessions_get or rocketclaw_sessions_list with session ID \"web:ops\".\n</session_reply>", backgroundNote(reply))
+}
+
 func TestBackgroundJobRunsDetachedOnce(t *testing.T) {
 	t.Parallel()
 
@@ -201,6 +231,7 @@ func TestStoppedSubagentStaysStopped(t *testing.T) {
 
 	_, err = store.db.ExecContext(t.Context(), `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id) VALUES ('turn-a', 'main/a', '{"Metadata":{"web_message_id":"main/turn-1/call/a"}}', '[]', 1, 1, 0)`)
 	require.NoError(t, err)
+	createTestBackgroundJob(t, store, testReply("main/a", "turn-2/call/w", "web:ops"))
 
 	waiting := &backgroundWorkMock{RunBackgroundFunc: func(ctx context.Context) (string, error) {
 		started <- struct{}{}
@@ -217,6 +248,7 @@ func TestStoppedSubagentStaysStopped(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, stopped)
 	require.Equal(t, "main/a", <-interrupted, "the subagent's running turn stops with its task")
+	require.Equal(t, []string{"main/a main/a/turn-2/call/w stopped none false"}, replyQueueItems(t, store), "the subagent's pending reply stops with it, so it never wakes it")
 
 	require.Eventually(t, func() bool {
 		states, err := queryStrings(context.Background(), store.db, `SELECT `+testJobStatusSQL+` || ' ' || j.note`+testJobsSQL+` AND j.input_id = 'turn-2/call/x'`, "owned job state")
@@ -241,10 +273,19 @@ func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
 			store := newTestSessionService(t)
 			notes := &backgroundNotesMock{noteReadyFunc: func(string) {}, InterruptConversationFunc: func(string) *protocol.InboundMessage { return nil }}
 			registry := newBackgroundRegistry(store, notes, testLogger())
+			store.jobs = registry
 			t.Cleanup(registry.shutdown)
 
 			recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
 			require.NoError(t, store.startSubagent(t.Context(), "main", rocketcode.ChildKey{Path: "/a", Turn: "turn-0", Call: "busy"}, "researcher", true))
+			require.NoError(t, store.startSubagent(t.Context(), "main/a", rocketcode.ChildKey{Path: "/b", Turn: "turn-0", Call: "deep"}, "researcher", true))
+
+			// The subagent and the one under it each wait for a session write's reply.
+			replies := []*backgroundJob{testReply("main/a", "turn-0/call/w", "web:ops"), testReply("main/a/b", "turn-0/call/w", "web:ops")}
+			for _, reply := range replies {
+				createTestBackgroundJob(t, store, reply)
+			}
+
 			_, err := store.db.ExecContext(t.Context(), `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id) VALUES ('turn-a', 'main/a', '{"Metadata":{"web_message_id":"main/turn-0/call/busy"}}', '[]', 1, 1, 0)`)
 			require.NoError(t, err)
 
@@ -269,6 +310,18 @@ func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
 			kinds, err := queryStrings(t.Context(), store.db, `SELECT input_id || ' ' || delivery FROM turns WHERE phase = 'waiting' ORDER BY 1`, "queue kinds")
 			require.NoError(t, err)
 			require.Equal(t, []string{"main/turn-1/call/job enqueue", "main/turn-1/call/w " + map[bool]string{false: "enqueue", true: "held"}[tc.held]}, kinds)
+
+			// A stopped parent's subagents drop their pending replies, so the target's turn that ends later
+			// wakes neither them nor the parent.
+			state := map[bool]string{false: "running none false", true: "stopped none false"}[tc.held]
+			require.Equal(t, []string{"main/a " + replies[0].jobID + " " + state, "main/a/b " + replies[1].jobID + " " + state}, replyQueueItems(t, store))
+
+			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "summarize billing", false)
+			inbound.Metadata = map[string]string{"web_message_id": replies[0].jobID}
+			require.NoError(t, startTurnDB(t.Context(), store.db, "turn-ops", "web:ops", inbound))
+			_, err = store.finishTurn(t.Context(), "turn-ops", &turnFinish{store: newSessionStore("web:ops", store), entries: []rocketcode.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage("web:ops", "billing is fine")})
+			require.NoError(t, err)
+			require.Len(t, notes.noteReadyCalls(), map[bool]int{false: 1, true: 0}[tc.held])
 		})
 	}
 }
@@ -484,6 +537,9 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 	createTestBackgroundJob(t, store, note)
 	finishTestBackgroundJob(t, store, note, backgroundCompleted, true)
 
+	// A reply waits for its target's turn, which no runner holds.
+	createTestBackgroundJob(t, store, testReply("main", "turn-1/call/w", "web:ops"))
+
 	started, release := make(chan struct{}, 1), make(chan struct{})
 	notes := &backgroundNotesMock{noteReadyFunc: func(string) {}, continueSubagentFunc: func(context.Context, *backgroundJob) (string, error) {
 		started <- struct{}{}
@@ -531,6 +587,7 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 		return rows
 	}
 	settled := []string{
+		"main/turn-1/call/w running none false ",
 		"turn-1/call/a completed pending true found it",
 		"turn-1/call/cron:daily killed pending true ",
 		"turn-1/call/main killed pending false ",

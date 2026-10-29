@@ -27,6 +27,8 @@ const (
 	getTagsToolName           = "rocketclaw_get_tags"
 	sessionsWriteToolName     = "rocketclaw_sessions_write"
 	sessionsGetURLToolName    = "rocketclaw_sessions_get_url"
+	sessionsSubject           = "rocketclaw_sessions"
+	recipientSetting          = "rocketclaw_sessions_recipient"
 
 	// Store-wide session reads compete with live turns for the State Store, so each call is capped.
 	maxListedSessions = 200
@@ -35,16 +37,17 @@ const (
 	summaryReaders = 8
 )
 
-// topLevelSessionCreator returns who created id when id is a top-level session: a chat Web shows.
-func (s *SessionService) topLevelSessionCreator(ctx context.Context, id string) (string, error) {
-	var spawnedBy string
+// checkTopLevelSession refuses id unless it is a top-level session: a chat Web shows. It returns the
+// session's agent.
+func (s *SessionService) checkTopLevelSession(ctx context.Context, id string) (string, error) {
+	var agent string
 
-	err := queryScalar(ctx, s.db, fmt.Sprintf("read session %q", id), `WITH `+visibleChatsSQL+` SELECT spawned_by FROM visible_chats WHERE conversation_id = $1`, &spawnedBy, id)
+	err := queryScalar(ctx, s.db, fmt.Sprintf("read session %q", id), `WITH `+visibleChatsSQL+` SELECT agent FROM visible_chats WHERE conversation_id = $1`, &agent, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("session %q is not a top-level session", id)
 	}
 
-	return spawnedBy, err
+	return agent, err
 }
 
 // startSubagent records the subagent session at key under conversation, run by agent, unless recorded. A
@@ -105,28 +108,24 @@ FROM lineage_turns t CROSS JOIN inputs i WHERE t.parent_conversation_id IS NULL`
 	return root, turnID, origin, jobs, nil
 }
 
-// checkSessionTarget refuses a write target that is not a top-level session, that is the
-// calling turn's own session, or, for children, that the caller's top-level session did not create.
-func (s *SessionService) checkSessionTarget(ctx context.Context, children bool, owner, syncDestination, target string) error {
-	spawnedBy, err := s.topLevelSessionCreator(ctx, target)
+// checkSessionTarget refuses a write target that is not a top-level session or that is the
+// calling turn's own session. It returns the target's agent.
+func (s *SessionService) checkSessionTarget(ctx context.Context, owner, syncDestination, target string) (string, error) {
+	agent, err := s.checkTopLevelSession(ctx, target)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	var reportsTo string
 	if err := queryScalar(ctx, s.db, "read session destination", `SELECT COALESCE(max(reports_to), '') FROM conversations WHERE conversation_id = $1`, &reportsTo, owner); err != nil {
-		return err
+		return "", err
 	}
 
 	if target == owner || target == syncDestination || target == reportsTo {
-		return fmt.Errorf("session %q is this session", target)
+		return "", fmt.Errorf("session %q is this session", target)
 	}
 
-	if children && spawnedBy != cmp.Or(syncDestination, owner) {
-		return fmt.Errorf("session %q was not created by this session", target)
-	}
-
-	return nil
+	return agent, nil
 }
 
 func agentTagGroups(agent *rocketcode.Agent) ([][]string, error) {
@@ -173,6 +172,50 @@ func agentTagGroups(agent *rocketcode.Agent) ([][]string, error) {
 	}
 
 	return groups, nil
+}
+
+// agentRecipients reads agent's rocketclaw_sessions_recipient: whether every agent may write into its
+// sessions and, when not, the agents that may. Absent means every agent, or none for a sudo agent;
+// false means none.
+func agentRecipients(agent *rocketcode.Agent) (all bool, names []string, err error) {
+	permission, _ := agent.Frontmatter["permission"].(map[string]any)
+	rocketclaw, _ := permission["rocketclaw"].(map[string]any)
+
+	raw, present := rocketclaw[recipientSetting]
+	if !present {
+		return !agent.Permission.Sudo, nil, nil
+	}
+
+	if all, ok := raw.(bool); ok {
+		return all, nil, nil
+	}
+
+	list, _ := raw.([]any)
+	if len(list) == 0 {
+		return false, nil, errors.New("must be true, false, or a non-empty list of agent names")
+	}
+
+	for _, item := range list {
+		name, _ := item.(string)
+		if name == "" || slices.Contains(names, name) {
+			return false, nil, fmt.Errorf("agent names must be unique non-empty strings, got %v", item)
+		}
+
+		names = append(names, name)
+	}
+
+	return false, names, nil
+}
+
+// checkRecipient refuses a write by agent sender into a session of agent target unless target's
+// rocketclaw_sessions_recipient accepts sender.
+func checkRecipient(agents rocketcode.Agents, target, sender string) error {
+	definition := agents.Items[target]
+	if all, names, _ := agentRecipients(&definition); all || slices.Contains(names, sender) {
+		return nil
+	}
+
+	return fmt.Errorf("agent %q does not accept writes from agent %q (permission.rocketclaw.%s)", target, sender, recipientSetting)
 }
 
 func appendSessionTagPrompt(agent *rocketcode.Agent, groups [][]string) {
@@ -291,8 +334,8 @@ func listSessionsTool(service *SessionService, threads *threadBridgeManager) roc
 			"All remaining text is ONE case-insensitive phrase, not separate keywords, matched against name, room, agent, preview, session label, chat origin and message text. "+
 			"With criteria, rows add name, agent, room, tags and matched (the field holding the phrase, or messages when only message text did), and a messages block lists up to 3 matching messages per listed chat; rocketclaw_sessions_get with a row's before_entry_id and limit 1 shows that message. Messages of stopped turns are not listed. "+
 			"Trailing lines show how criteria was read and whether the limit cut results.", maxListedSessions),
-		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsListToolName},
-		Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsListToolName}, nil },
+		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject},
+		Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
 		Parameters: map[string]any{"properties": map[string]any{
 			"criteria":                map[string]any{"type": "string", "description": "Web session search query, or empty for every stored conversation."},
 			"since":                   map[string]any{"type": "string", "description": "Required inclusive bound on the latest entry, or on the summary time with criteria: Go duration relative to now or RFC3339Nano."},
@@ -581,8 +624,8 @@ GROUP BY f.id, f.turns, f."timestamp" ORDER BY f.id DESC`, "session tool entries
 func currentSessionIDTool(conversationID string) rocketcode.Tool {
 	return rocketcode.Tool{
 		Name: sessionsCurrentIDToolName, Description: "Return only the owning RocketClaw bridge's bare stored conversation ID, without a JSON wrapper. Pass it as conversation_id to rocketclaw_sessions_get inside execute to read durable history, including entries before compaction. Child agents inherit this owning conversation ID, not a separate child-run ID. No arguments.",
-		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsCurrentIDToolName},
-		Subjects:   func(json.RawMessage) ([]string, error) { return []string{sessionsCurrentIDToolName}, nil },
+		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject},
+		Subjects:   func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
 		Parameters: map[string]any{"type": "object", "properties": map[string]any{}, "required": []string{}, "additionalProperties": false},
 		Call: func(context.Context, json.RawMessage, chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 			return rocketcode.TextToolResult(conversationID), nil
@@ -593,8 +636,8 @@ func currentSessionIDTool(conversationID string) rocketcode.Tool {
 func sessionsGetURLTool(threads *threadBridgeManager) rocketcode.Tool {
 	return rocketcode.Tool{
 		Name: sessionsGetURLToolName, Description: "Return only the clickable Web URL of a top-level session, one Web lists. Fails for Delegation Histories, private External MCP and cron producer conversations, and unknown IDs.",
-		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsGetURLToolName},
-		Subjects:   func(json.RawMessage) ([]string, error) { return []string{sessionsGetURLToolName}, nil },
+		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject},
+		Subjects:   func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
 		Parameters: map[string]any{"properties": map[string]any{"session_id": map[string]any{"type": "string"}}, "required": []string{"session_id"}},
 		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 			var params struct {
@@ -604,7 +647,7 @@ func sessionsGetURLTool(threads *threadBridgeManager) rocketcode.Tool {
 				return rocketcode.ToolResult{}, fmt.Errorf("parse get session URL: %w", err)
 			}
 
-			if _, err := threads.store.topLevelSessionCreator(ctx, params.SessionID); err != nil {
+			if _, err := threads.store.checkTopLevelSession(ctx, params.SessionID); err != nil {
 				return rocketcode.ToolResult{}, err
 			}
 
@@ -625,7 +668,6 @@ const (
 	sessionWriteStop    sessionWriteMode = "stop"
 	sessionWriteSteer   sessionWriteMode = "steer"
 	sessionWriteEnqueue sessionWriteMode = "enqueue"
-	sessionWriteStash   sessionWriteMode = "stash"
 )
 
 // sessionWriteOutcome is what became of a rocketclaw_sessions_write call.
@@ -635,16 +677,47 @@ const (
 	sessionCreated sessionWriteOutcome = "created"
 	sessionSteered sessionWriteOutcome = "steered"
 	sessionQueued  sessionWriteOutcome = "queued"
-	sessionStashed sessionWriteOutcome = "stashed"
 	sessionStopped sessionWriteOutcome = "stopped"
 )
 
 // stopLineStep prefixes the turn steps that park a stop write's "Stopped by" line for its session.
 const stopLineStep = "stopped_by/"
 
+// parkStopLine parks a stop write's "Stopped by" line for conversationID under key, with the write's
+// reply, unless nil because no turn was running, which postStopLines settles when it posts the line.
+func (s *SessionService) parkStopLine(ctx context.Context, conversationID, key string, line json.RawMessage, reply *backgroundJob) error {
+	tx, err := s.beginStateTx(ctx, "park stop line")
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO steps (conversation_id, key, value) VALUES ($1, $2, $3) ON CONFLICT (conversation_id, key) DO UPDATE SET value = excluded.value`, conversationID, key, string(removeSessionEntryNUL(line))); err != nil {
+		return fmt.Errorf("park stop line: %w", err)
+	}
+
+	if reply != nil {
+		if _, _, err := createBackgroundJob(ctx, tx, reply); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit stop line: %w", err)
+	}
+
+	return nil
+}
+
 // postStopLines moves conversationID's parked "Stopped by" lines into its history unless a turn
 // still runs there. Under the history lock a turn's finish also takes, each line posts once, after
-// the turn it stopped; the bridge calls this when it starts and after each request.
+// the turn it stopped; the bridge calls this when it starts and after each request. Each line's reply
+// settles with the state that turn ended in, and wakes its caller.
 func (s *SessionService) postStopLines(ctx context.Context, conversationID string) error {
 	tx, err := s.beginStateTx(ctx, "post stop lines")
 	if err != nil {
@@ -654,6 +727,20 @@ func (s *SessionService) postStopLines(ctx context.Context, conversationID strin
 	defer func() { _ = tx.Rollback() }()
 
 	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+		return err
+	}
+
+	// A stopped turn's row ends with it; closeTurn deletes only a completed one.
+	owners, err := queryStrings(ctx, tx, `WITH running AS (SELECT count(*) AS turns FROM turns WHERE conversation_id = $1 AND phase = $3 AND takes_lane),
+parked AS (SELECT substr(key, length($2) + 1) AS input_id FROM steps, running WHERE conversation_id = $1 AND starts_with(key, $2) AND turns = 0),
+ended AS (
+    SELECT r.id, COALESCE(t.terminal, '') AS terminal FROM parked p JOIN turns r ON r.input_id = p.input_id LEFT JOIN turns t ON t.id = r.runner_id
+    WHERE r.kind = 'reply' AND r.phase = 'running' AND r.reply_target = $1
+), settled AS (
+    UPDATE turns r SET phase = 'done', terminal = e.terminal, note = $4, wake = TRUE, updated_at_unix_ns = $5 FROM ended e WHERE r.id = e.id RETURNING r.conversation_id
+)
+SELECT DISTINCT conversation_id FROM settled`, "settle stop replies", conversationID, stopLineStep, turnRunning, notePending, timeUnixNano(time.Now()))
+	if err != nil {
 		return err
 	}
 
@@ -667,26 +754,35 @@ SELECT value FROM parked ORDER BY (value::jsonb->>'timestamp')::timestamptz`, co
 		return fmt.Errorf("commit stop lines: %w", err)
 	}
 
+	if len(owners) > 0 {
+		s.jobs.turnFinished(owners)
+	}
+
 	return nil
 }
 
 // sessionsWriteTool builds rocketclaw_sessions_write for a turn of b acting as the turn agentName runs
-// for msg in the session self: b's own turn or, for a subagent session, its top-level session's, and for
-// the destination msg reports to as a hidden run. It never waits for the target's turn.
-func sessionsWriteTool(b *Bridge, msg *protocol.InboundMessage, agentName, self string) rocketcode.Tool {
-	owner := cmp.Or(msg.SyncDestination, self)
-	properties := map[string]any{"session_id": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []sessionWriteMode{sessionWriteStop, sessionWriteSteer, sessionWriteEnqueue, sessionWriteStash}}}
+// for origin in the session self: b's own turn or, for a subagent session, its top-level session's, and
+// for the destination origin reports to as a hidden run. agents are the turn's definitions. It never waits
+// for the target's turn: each write's reply is a job of b's own session, routed as its turn, whose inbound
+// is msg.
+func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentName, self string, agents rocketcode.Agents) rocketcode.Tool {
+	owner := cmp.Or(origin.SyncDestination, self)
+	properties := map[string]any{"session_id": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []sessionWriteMode{sessionWriteStop, sessionWriteSteer, sessionWriteEnqueue}}}
 
 	for _, field := range []string{"prompt", "title", "agent"} {
 		properties[field] = map[string]any{"type": "string"}
 	}
 
-	return rocketcode.Tool{Name: sessionsWriteToolName, Permission: "rocketclaw", VisibilitySubjects: []string{sessionsWriteToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsWriteToolName}, nil },
+	return rocketcode.Tool{Name: sessionsWriteToolName, Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject}, Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
 		Description: "Create a top-level RocketClaw Web session, or write prompt to an existing one, without waiting for its turn. Supply every field. " +
-			"With an empty session_id, create a session named title, run by agent (empty for this turn's agent), whose first task is prompt; mode is ignored. The new session cannot see this conversation, so prompt must carry all the context it needs. " +
-			"With session_id, deliver prompt to that session; title and agent are ignored. steer joins its running turn while that turn still takes input, otherwise runs as its next turn; enqueue runs after the work already queued; stash waits in its Web queue until a person releases it; stop stops its current turn and goal, then runs prompt before anything already queued. " +
+			"With an empty session_id, create a session named title, run by agent (empty for this turn's agent), whose first turn runs prompt; mode is ignored. The new session cannot see this conversation, so prompt must carry all the context it needs. " +
+			"With session_id, deliver prompt to that session; title and agent are ignored. steer joins its running turn while that turn still takes input, otherwise runs as its next turn; enqueue runs after the work already queued; stop stops its current turn and goal, then runs prompt before anything already queued. " +
 			"Only stop takes an empty prompt: it then just stops the turn and goal, queues nothing, and posts that this session stopped it into that session's transcript without starting a turn. " +
-			"The receiver is told this session and agent sent it. Returns JSON with outcome (created, steered, queued, stashed or stopped), session_id, url, queue_item_id when a prompt was delivered and, for stop, turn_was_running. Share url so a person can open the session.",
+			"The receiver is told this session and agent sent it and that its answer comes back here. Each call that returns a queue_item_id gets exactly one reply: when the target's turn that took prompt ends, or, for an empty-prompt stop, once the stopped turn is over, a <session_reply> note naming that queue_item_id arrives here with the outcome and that turn's final answer. A steer's answer covers the whole turn it joined. " +
+			"DO NOT wait, sleep, poll, or write again to get the reply: work on anything that does not depend on it, or end your response; you will be resumed when it arrives. " +
+			"Every call, including create and stop, fails before doing anything when the target agent's permission.rocketclaw." + recipientSetting + " does not accept this agent. " +
+			"Returns JSON with outcome (created, steered, queued or stopped), session_id, url, queue_item_id (absent only for an empty-prompt stop when no turn was running, which gets no reply) and, for stop, turn_was_running. Share url so a person can open the session.",
 		Parameters: map[string]any{"properties": properties, "required": slices.Sorted(maps.Keys(properties))},
 		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 			var input struct {
@@ -722,28 +818,36 @@ func sessionsWriteTool(b *Bridge, msg *protocol.InboundMessage, agentName, self 
 				err     error
 			)
 
+			result.QueueItemID = b.config.ConversationID + "/" + rocketcode.ToolCallKey(ctx)
+			reply := &backgroundJob{conversationID: b.config.ConversationID, jobID: result.QueueItemID, kind: turnReply, label: string(input.Mode), origin: msg}
+
 			if input.SessionID == "" {
 				title := strings.TrimSpace(input.Title)
 				if title == "" {
 					return rocketcode.ToolResult{}, errors.New("title is required to create a session")
 				}
 
-				allowed := strings.FieldsFunc(msg.Metadata[protocol.InboundAllowedAgentsMetadataKey], func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' })
-				start := threadStart{agent: cmp.Or(strings.TrimSpace(input.Agent), agentName), createdBy: ThreadCreator(msg.Metadata[protocol.InboundPrincipalMetadataKey]), spawnedBy: owner}
+				allowed := strings.FieldsFunc(origin.Metadata[protocol.InboundAllowedAgentsMetadataKey], func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' })
+				start := threadStart{agent: cmp.Or(strings.TrimSpace(input.Agent), agentName), createdBy: ThreadCreator(origin.Metadata[protocol.InboundPrincipalMetadataKey])}
 
-				if msg.Cronjob != nil {
+				if origin.Cronjob != nil {
 					allowed, start.createdBy = []string{agentName}, ThreadCreatedByCron
 				}
 
-				result.Outcome = sessionCreated
-				result.URL, err = b.threads.createSession(ctx, &start, allowed, title, inbound)
+				if err := checkRecipient(agents, start.agent, agent.Name); err != nil {
+					return rocketcode.ToolResult{}, err
+				}
+
+				result.Outcome, reply.agent, reply.label = sessionCreated, start.agent, "create"
+				result.URL, err = b.threads.createSession(ctx, &start, allowed, title, inbound, reply)
 				result.SessionID = start.conversationID
 			} else {
-				// RocketCode loaded permission.rocketclaw.rocketclaw_sessions_write: children as allow; sudo ignores it.
-				permission, _ := agent.Frontmatter["permission"].(map[string]any)
-				rocketclaw, _ := permission["rocketclaw"].(map[string]any)
+				var targetAgent string
+				if targetAgent, err = b.config.SessionService.checkSessionTarget(ctx, self, origin.SyncDestination, input.SessionID); err == nil {
+					err = checkRecipient(agents, targetAgent, agent.Name)
+				}
 
-				if err := b.config.SessionService.checkSessionTarget(ctx, !agent.Permission.Sudo && rocketclaw[sessionsWriteToolName] == "children", self, msg.SyncDestination, input.SessionID); err != nil {
+				if err != nil {
 					return rocketcode.ToolResult{}, err
 				}
 
@@ -753,6 +857,7 @@ func sessionsWriteTool(b *Bridge, msg *protocol.InboundMessage, agentName, self 
 					return rocketcode.ToolResult{}, err
 				}
 
+				reply.agent, reply.input, reply.target = targetAgent, result.URL, input.SessionID
 				result.Outcome = sessionStopped
 
 				if stopOnly {
@@ -760,16 +865,27 @@ func sessionsWriteTool(b *Bridge, msg *protocol.InboundMessage, agentName, self 
 					// It is parked only after the stop succeeds and posts once no turn runs there: here if the
 					// stopped turn already ended, otherwise when the bridge flushes at that turn's end.
 					line, _ := json.Marshal(&rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: replayInputForMessage("developer", fmt.Sprintf("Stopped by session %s (agent %s)", owner, agent.Name))}) // Strings and messages cannot fail to encode.
-					if running, err = b.threads.stopSession(input.SessionID); err == nil {
-						err = b.config.SessionService.SaveTurnStep(ctx, input.SessionID, stopLineStep+b.config.ConversationID+"/"+rocketcode.ToolCallKey(ctx), line)
+					key := stopLineStep + result.QueueItemID
+
+					// Only a stopped running turn gets a reply, which holds that turn, read before the stop
+					// can end it, to report how it ended.
+					if err = queryScalar(ctx, b.config.SessionService.db, "read stopped turn", `SELECT COALESCE(max(id), '') FROM turns WHERE conversation_id = $1 AND phase NOT IN ('waiting', 'done') AND takes_lane`, &reply.runnerID, input.SessionID); err == nil {
+						running, err = b.threads.stopSession(input.SessionID)
+					}
+
+					if !running {
+						reply, result.QueueItemID = nil, ""
+					}
+
+					if err == nil {
+						err = b.config.SessionService.parkStopLine(ctx, input.SessionID, key, line, reply)
 					}
 
 					if err == nil {
 						err = b.config.SessionService.postStopLines(ctx, input.SessionID)
 					}
 				} else {
-					result.QueueItemID = b.config.ConversationID + "/" + rocketcode.ToolCallKey(ctx)
-					result.Outcome, running, err = b.threads.writeSession(ctx, input.SessionID, result.QueueItemID, input.Mode, inbound)
+					result.Outcome, running, err = b.threads.writeSession(ctx, input.SessionID, result.QueueItemID, input.Mode, inbound, reply)
 				}
 
 				if result.Outcome == sessionStopped {
@@ -801,8 +917,8 @@ func storedEventLine(kind string, raw json.RawMessage) (role, text string) {
 func getSessionTool(service *SessionService) rocketcode.Tool {
 	return rocketcode.Tool{
 		Name: sessionsGetToolName, Description: fmt.Sprintf("Read the newest limit (1 to %d) stored entries of a durable conversation older than before_entry_id (0 for the newest) as timestamp, role and content TSV in stored entry order, including messages, readable reasoning and tool events before compaction. When older entries exist, the last line is [next_before_entry_id=N]; pass N to read the previous page. Store-wide access includes private MCP sessions. One snapshot, no polling or read-state changes. Use rocketclaw_sessions_current_id for your owning conversation or rocketclaw_sessions_list to find another ID.", maxSessionEntries),
-		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsGetToolName},
-		Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsGetToolName}, nil },
+		Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject},
+		Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
 		Parameters: map[string]any{"properties": map[string]any{
 			"conversation_id": map[string]any{"type": "string"},
 			"limit":           map[string]any{"type": "integer", "minimum": 1, "maximum": maxSessionEntries},

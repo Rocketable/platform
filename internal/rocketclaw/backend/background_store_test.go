@@ -425,6 +425,143 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 	})
 }
 
+// testReply is a running reply of caller's write, call key, to target.
+func testReply(caller, call, target string) *backgroundJob {
+	return &backgroundJob{conversationID: caller, jobID: caller + "/" + call, kind: turnReply, agent: "main", label: string(sessionWriteEnqueue), origin: &protocol.InboundMessage{}, target: target}
+}
+
+// AE2, AE3: a write's reply settles with the target's turn that consumed it, as that turn's input or an
+// applied steer, taking the turn's state and answer, and its caller then learns of the note. A turn of
+// another session with the same input, such as a shadow copy's, settles nothing.
+func TestFinishTurnSettlesSessionReplies(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, conversation string
+		applied            bool
+		terminal           protocol.Terminal
+		want               string
+	}{
+		{"own input", "target", false, "", "completed pending true billing is fine"},
+		{"applied steer", "target", true, "", "completed pending true billing is fine"},
+		{"stopped", "target", false, protocol.TerminalStopped, "stopped pending true billing is fine"},
+		{"failed", "target", true, protocol.TerminalFailed, "failed pending true billing is fine"},
+		{"shadow copy", "shadow", false, "", "running none false "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newTestSessionService(t)
+			ctx := t.Context()
+			notes := &backgroundNotesMock{noteReadyFunc: func(string) {}}
+			store.jobs = newBackgroundRegistry(store, notes, testLogger())
+
+			reply := testReply("caller", "turn-1/call/w", "target")
+			createTestBackgroundJob(t, store, reply)
+
+			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "summarize billing", false)
+			inbound.Metadata = map[string]string{"web_message_id": reply.jobID}
+
+			if tc.applied {
+				inbound.Metadata["web_message_id"] = "earlier"
+
+				require.NoError(t, store.SaveTurnStep(ctx, tc.conversation, "turn-2", json.RawMessage(`{"applied_input_ids":["`+reply.jobID+`"]}`)))
+			}
+
+			require.NoError(t, startTurnDB(ctx, store.db, "turn-2", tc.conversation, inbound))
+			_, err := store.finishTurn(ctx, "turn-2", &turnFinish{store: newSessionStore(tc.conversation, store), entries: []harness.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage(tc.conversation, "billing is fine"), terminal: tc.terminal})
+			require.NoError(t, err)
+
+			rows, err := queryStrings(ctx, store.db, `SELECT `+testJobStatusSQL+` || ' ' || j.note || ' ' || j.wake::text || ' ' || j.result`+testJobsSQL, "replies")
+			require.NoError(t, err)
+			require.Equal(t, []string{tc.want}, rows)
+
+			woken := make([]string, 0, len(notes.noteReadyCalls()))
+			for _, call := range notes.noteReadyCalls() {
+				woken = append(woken, call.ConversationID)
+			}
+
+			require.Equal(t, map[bool][]string{true: {"caller"}, false: {}}[tc.conversation == "target"], woken)
+		})
+	}
+}
+
+// R14: a subagent's wake turn, which no task call awaits, reports to its parent, waking it, as a task note
+// that continues the subagent: its answer as reviewed for the parent, or why it failed. The note of a
+// hidden-run parent wakes it in the chat it reports to. A stopped wake turn, a turn that ran a task's input, and a wake
+// turn that took a task's steer, whose task call gets the answer, report nothing.
+func TestFinishTurnReportsSubagentWakeUp(t *testing.T) {
+	t.Parallel()
+
+	answered := "<subagent id=\"turn-1\" state=\"completed\" description=\"researcher\" continue=\"/a\">\n<task_result>\nbilling noted\n</task_result>\n</subagent>"
+
+	for _, tc := range []struct {
+		name                  string
+		wake, steered, hidden bool
+		terminal              protocol.Terminal
+		want, destination     string
+	}{
+		{"wake turn", true, false, false, "", answered, ""},
+		{"hidden-run parent", true, false, true, "", answered, "web:main"},
+		{"failed wake turn", true, false, false, protocol.TerminalFailed, "<subagent id=\"turn-1\" state=\"failed\" description=\"researcher\" continue=\"/a\">\nturn failed\n</subagent>", ""},
+		{"stopped wake turn", true, false, false, protocol.TerminalStopped, "", ""},
+		{"task input", false, false, false, "", "", ""},
+		{"wake turn took a task steer", true, true, false, "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newTestSessionService(t)
+			ctx := t.Context()
+			notes := &backgroundNotesMock{noteReadyFunc: func(string) {}}
+			store.jobs = newBackgroundRegistry(store, notes, testLogger())
+
+			recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+
+			if tc.hidden {
+				reportTestRun(t, store, "main", "web:main")
+			}
+
+			require.NoError(t, store.startSubagent(ctx, "main", harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "a"}, "researcher", true))
+
+			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
+
+			inbound.Metadata = map[string]string{"web_message_id": "main/turn-0/call/a"}
+			if tc.wake {
+				inbound.Metadata = map[string]string{backgroundNotesMetadataKey: "turn-0/call/x"}
+			}
+
+			if tc.steered {
+				require.NoError(t, store.PutThreadQueueItem("main/turn-2/call/s", &protocol.ThreadQueueItem{ID: "main/turn-2/call/s", ConversationID: "main/a", Kind: protocol.InboundKindSteer}))
+				require.NoError(t, store.SaveTurnStep(ctx, "main/a", "turn-1", json.RawMessage(`{"applied_input_ids":["main/turn-2/call/s"]}`)))
+			}
+
+			require.NoError(t, startTurnDB(ctx, store.db, "turn-1", "main/a", inbound))
+			_, err := store.finishTurn(ctx, "turn-1", &turnFinish{store: newSessionStore("main/a", store), entries: []harness.SessionEntry{*testSessionEntry("notes", "billing noted")}, outbound: protocol.NewOutboundMessage("main/a", "turn failed"), terminal: tc.terminal, report: "<task_result>\nbilling noted\n</task_result>"})
+			require.NoError(t, err)
+
+			reports, err := store.notedBackgroundJobs(ctx, "main", []string{"turn-1"})
+			require.NoError(t, err)
+
+			woken := make([]string, 0, len(notes.noteReadyCalls()))
+			for _, call := range notes.noteReadyCalls() {
+				woken = append(woken, call.ConversationID)
+			}
+
+			if tc.want == "" {
+				require.Empty(t, reports)
+				require.Empty(t, woken)
+
+				return
+			}
+
+			require.Len(t, reports, 1)
+			require.Equal(t, []any{tc.want, notePending, true, tc.destination}, []any{backgroundNote(&reports[0]), reports[0].noteState, reports[0].wake, reports[0].origin.SyncDestination})
+			require.Equal(t, []string{"main"}, woken)
+		})
+	}
+}
+
 func TestReleaseStaleBackgroundClaims(t *testing.T) {
 	t.Parallel()
 

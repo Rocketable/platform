@@ -236,7 +236,7 @@ SELECT r.target, t.agent FROM run r JOIN conversations t ON t.conversation_id = 
 func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error) {
 	var thread ThreadState
 
-	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by, spawned_by, COALESCE(parent_conversation_id, '') FROM conversations WHERE conversation_id = $1 AND retention = 'record'`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &thread.CreatedBy, &thread.spawnedBy, &thread.parent)
+	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by, COALESCE(parent_conversation_id, '') FROM conversations WHERE conversation_id = $1 AND retention = 'record'`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &thread.CreatedBy, &thread.parent)
 	if err == sql.ErrNoRows {
 		return ThreadState{}, false, nil
 	}
@@ -834,10 +834,22 @@ func (s *SessionService) ThreadQueueForConversation(conversationID string) ([]pr
 	return queryRows(context.Background(), s.db, `SELECT `+waitingColumns+` FROM turns WHERE conversation_id = $1 AND phase = 'waiting' AND reason <> $2 ORDER BY position, created_at_unix_ns`, "thread queue", scanThreadQueueItem, strings.TrimSpace(conversationID), waitScheduled)
 }
 
-// DeleteThreadQueueItem deletes one Enqueued Slack Message.
-func (s *SessionService) DeleteThreadQueueItem(id string) error {
-	_, err := execState(context.Background(), s.db, "delete thread queue item", `DELETE FROM turns WHERE input_id = $1 AND phase = 'waiting'`, strings.TrimSpace(id))
-	return err
+// DeleteThreadQueueItem deletes conversationID's queued item id and, in the same statement, settles the
+// reply of the session write it was as removed. It reports whether it deleted the item, and the reply's
+// owner to wake, if any.
+func (s *SessionService) DeleteThreadQueueItem(ctx context.Context, conversationID, id string) (removed bool, owner string, err error) {
+	owners, err := queryStrings(ctx, s.db, `WITH gone AS (
+    DELETE FROM turns WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting' RETURNING conversation_id, input_id
+), settled AS (
+    UPDATE turns r SET phase = 'done', terminal = $3, note = $4, wake = TRUE, updated_at_unix_ns = $5 FROM gone g
+    WHERE r.kind = 'reply' AND r.phase = 'running' AND r.reply_target = g.conversation_id AND r.input_id = g.input_id RETURNING r.conversation_id
+)
+SELECT COALESCE(s.conversation_id, '') FROM gone LEFT JOIN settled s ON TRUE`, "delete thread queue item", conversationID, id, backgroundRemoved, notePending, timeUnixNano(time.Now()))
+	if err != nil || len(owners) == 0 {
+		return false, "", err
+	}
+
+	return true, owners[0], nil
 }
 
 // claimThreadQueueItem withdraws a queued waiting turn, so it can be delivered as a steer.
@@ -919,6 +931,8 @@ type turnFinish struct {
 	outbound    *protocol.OutboundMessage
 	terminal    protocol.Terminal
 	hidden      bool // The turn is a hidden run's (hiddenRun).
+	// report is a subagent session's wake turn's answer as its parent gets it (Runtime.ReviewTask).
+	report string
 	// target and schedules are set by finishTurn: where a hidden run's schedule changes took
 	// effect, and the scheduled messages to arm there.
 	target    string
@@ -1289,15 +1303,9 @@ FROM shadow_turns t WHERE a.id = $1 AND t.child_turn_id = $1 AND $2 = 'stopped' 
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `WITH queued AS (
-    SELECT input_id FROM turns WHERE conversation_id = $1 AND phase = 'waiting'
-), recorded AS (
-    SELECT q.input_id FROM queued q JOIN entries e ON e.conversation_id = $1
-    CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item WHERE item->>'input_id' = q.input_id
-    UNION ALL SELECT q.input_id FROM queued q JOIN turns a ON a.id = $2 AND a.applied_input_ids ? q.input_id
-)
-DELETE FROM turns q USING recorded r WHERE q.conversation_id = $1 AND q.phase = 'waiting' AND q.input_id = r.input_id`, finish.store.conversationID, turnID); err != nil {
-		return nil, fmt.Errorf("release recorded input ownership: %w", err)
+	owners, err := finish.settleInputs(ctx, tx, turnID)
+	if err != nil {
+		return nil, err
 	}
 
 	if finish.accountGoal {
@@ -1340,9 +1348,80 @@ SELECT COALESCE(MIN(wake_attempts), 0) FROM released`, finish.store.conversation
 		return nil, fmt.Errorf("commit turn finish: %w", err)
 	}
 
-	s.jobs.turnFinished()
+	s.jobs.turnFinished(owners)
 
 	return finish.outbound, nil
+}
+
+// settleInputs, in finishTurn's transaction tx, releases the queued inputs turn turnID consumed, settles
+// the replies owed for the session writes among them and, for a subagent session's wake turn, reports
+// its answer to the parent. It returns the conversations to wake once tx commits.
+func (f *turnFinish) settleInputs(ctx context.Context, tx stateStoreDB, turnID string) ([]string, error) {
+	released, err := execRows(ctx, tx, "release recorded input ownership", "count released inputs", `WITH queued AS (
+    SELECT input_id FROM turns WHERE conversation_id = $1 AND phase = 'waiting'
+), recorded AS (
+    SELECT q.input_id FROM queued q JOIN entries e ON e.conversation_id = $1
+    CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item WHERE item->>'input_id' = q.input_id
+    UNION ALL SELECT q.input_id FROM queued q JOIN turns a ON a.id = $2 AND a.applied_input_ids ? q.input_id
+)
+DELETE FROM turns q USING recorded r WHERE q.conversation_id = $1 AND q.phase = 'waiting' AND q.input_id = r.input_id`, f.store.conversationID, turnID)
+	if err != nil {
+		return nil, err
+	}
+
+	answer := ""
+
+	for i := range f.entries {
+		text, err := turnAnswer(&f.entries[i])
+		if err != nil {
+			return nil, err
+		}
+
+		answer = appendText(answer, text)
+	}
+
+	// The session writes the turn consumed, as its input or an applied steer, get their replies with its
+	// state and answer. Matching the target keeps a shadow copy, which reuses the input's ID, from them.
+	owners, err := queryStrings(ctx, tx, `WITH turn AS (
+    SELECT conversation_id, inbound_json->'Metadata'->>'web_message_id' AS input, applied_input_ids FROM turns WHERE id = $1
+), settled AS (
+    UPDATE turns r SET phase = 'done', terminal = $2, note = $3, wake = TRUE, result = $4, updated_at_unix_ns = $5 FROM turn t
+    WHERE r.kind = 'reply' AND r.phase = 'running' AND r.reply_target = t.conversation_id AND (r.input_id = t.input OR t.applied_input_ids ? r.input_id)
+    RETURNING r.conversation_id
+)
+SELECT DISTINCT conversation_id FROM settled`, "settle session replies", turnID, f.terminal, notePending, strings.ReplaceAll(answer, "\x00", ""), timeUnixNano(time.Now()))
+	if err != nil {
+		return nil, err
+	}
+
+	// A subagent session's wake turn, which no task call awaits, reports its answer to its parent as a
+	// task note; a parent that is a subagent reports its own wake turn in turn. A turn that took a task's input,
+	// the only input written there, reports nothing, since that task call gets the answer, and neither does a
+	// stopped one, so stopped work stays stopped. Without routing of its own, the note reports where the
+	// parent does (reports_to).
+	if released == 0 && f.terminal != protocol.TerminalStopped {
+		result := f.report
+		if f.terminal != "" {
+			result = f.outbound.Text
+		}
+
+		parents, err := queryStrings(ctx, tx, `WITH wake AS (
+    SELECT conversation_id FROM turns WHERE id = $1 AND inbound_json->'Metadata'->>$2::text <> ''
+), subagent AS (
+    SELECT c.parent_conversation_id AS parent, c.agent FROM conversations c JOIN wake USING (conversation_id) WHERE c.parent_conversation_id IS NOT NULL
+)
+INSERT INTO turns (conversation_id, input_id, kind, takes_lane, phase, terminal, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message)
+SELECT s.parent, $1, $3, FALSE, 'done', $4, '', s.agent, '', substr(w.conversation_id, length(s.parent) + 1), '{}', '', $5, TRUE, 0, 0, '', $6, $6, $7, ''
+FROM subagent s CROSS JOIN wake w
+ON CONFLICT (conversation_id, input_id) WHERE NOT takes_lane DO NOTHING RETURNING conversation_id`, "report subagent wake", turnID, backgroundNotesMetadataKey, turnNote, f.terminal, notePending, timeUnixNano(time.Now()), strings.ReplaceAll(result, "\x00", ""))
+		if err != nil {
+			return nil, err
+		}
+
+		owners = append(owners, parents...)
+	}
+
+	return owners, nil
 }
 
 // applyEffects applies the schedule changes a hidden run's turn recorded, which take effect only
@@ -1474,17 +1553,19 @@ UPDATE turns SET phase = $1 FROM kept WHERE id = $2 AND undelivered`, turnDone, 
 }
 
 // turnKind is what a turn runs. A model turn takes its conversation's lane; a Background Job is a
-// turn beside them: a script, or a task's note, which waits for its subagent session's turn.
+// turn beside them: a script, a task's note, which waits for its subagent session's turn, or a session
+// write's reply, which the target session's turn that consumes the write settles (finishTurn).
 type turnKind string
 
 const (
 	turnScript turnKind = "script"
 	turnNote   turnKind = "note"
+	turnReply  turnKind = "reply"
 )
 
-// tool is the rocketcode tool that starts a Background Job of kind k, as Web and the model name it.
+// tool is the tool that starts a Background Job of kind k, as Web and the model name it.
 func (k turnKind) tool() harness.BackgroundKind {
-	return map[turnKind]harness.BackgroundKind{turnScript: harness.BackgroundKindExecute, turnNote: harness.BackgroundKindTask}[k]
+	return map[turnKind]harness.BackgroundKind{turnScript: harness.BackgroundKindExecute, turnNote: harness.BackgroundKindTask, turnReply: sessionsWriteToolName}[k]
 }
 
 // backgroundJobStatus is a Background Job's lifecycle state; only running is not terminal.
@@ -1496,6 +1577,7 @@ const (
 	backgroundFailed    backgroundJobStatus = "failed"
 	backgroundStopped   backgroundJobStatus = "stopped"
 	backgroundKilled    backgroundJobStatus = "killed"
+	backgroundRemoved   backgroundJobStatus = "removed"
 )
 
 // noteState tracks a Background Job's Completion Note.
@@ -1518,7 +1600,9 @@ type backgroundJob struct {
 	subagentKey string
 	// origin is the originating turn's frozen routing; without a SyncDestination of its own,
 	// it reports where its conversation does (reports_to), which also lists the job.
-	origin    *protocol.InboundMessage
+	origin *protocol.InboundMessage
+	// runnerID is the process running the job; a reply has none, but a bare stop's holds the turn it
+	// stopped, whose end its note reports (postStopLines).
 	runnerID  string
 	noteState noteState
 	wake      bool
@@ -1529,13 +1613,16 @@ type backgroundJob struct {
 	finishedAt    time.Time
 	// result is the job's output, or its error when it failed.
 	result string
-	// input is a task's prompt, which its subagent's answer is reviewed with after a restart.
+	// input is a task's prompt, which its subagent's answer is reviewed with after a restart, or a
+	// reply's target URL. A reply's label is its write's mode, and its agent the target's.
 	input string
+	// target is a reply's target session.
+	target string
 }
 
 // backgroundJobColumns reads the Background Job of turn j, whose conversation c is joined: a done job
 // ended with its terminal, or completed, at its last update.
-const backgroundJobColumns = `j.conversation_id, j.input_id, j.kind, CASE WHEN j.phase = 'running' THEN 'running' WHEN j.terminal = '' THEN 'completed' ELSE j.terminal END, j.agent, j.label, j.call_id, j.subagent_key, j.inbound_json, COALESCE(c.reports_to, ''), j.runner_id, j.note, j.wake, j.run_at_unix_ns, j.claimed_by, j.created_at_unix_ns, CASE WHEN j.phase = 'running' THEN 0 ELSE j.updated_at_unix_ns END, j.result, j.message`
+const backgroundJobColumns = `j.conversation_id, j.input_id, j.kind, CASE WHEN j.phase = 'running' THEN 'running' WHEN j.terminal = '' THEN 'completed' ELSE j.terminal END, j.agent, j.label, j.call_id, j.subagent_key, j.inbound_json, COALESCE(c.reports_to, ''), j.runner_id, j.note, j.wake, j.run_at_unix_ns, j.claimed_by, j.created_at_unix_ns, CASE WHEN j.phase = 'running' THEN 0 ELSE j.updated_at_unix_ns END, j.result, j.message, COALESCE(j.reply_target, '')`
 
 func scanBackgroundJob(scanner rowScanner) (backgroundJob, error) {
 	var (
@@ -1545,7 +1632,7 @@ func scanBackgroundJob(scanner rowScanner) (backgroundJob, error) {
 		wakeAfter, createdAt, finishedAt int64
 	)
 
-	if err := scanner.Scan(&job.conversationID, &job.jobID, &job.kind, &job.status, &job.agent, &job.label, &job.callID, &job.subagentKey, &origin, &reportsTo, &job.runnerID, &job.noteState, &job.wake, &wakeAfter, &job.claimedTurnID, &createdAt, &finishedAt, &job.result, &job.input); err != nil {
+	if err := scanner.Scan(&job.conversationID, &job.jobID, &job.kind, &job.status, &job.agent, &job.label, &job.callID, &job.subagentKey, &origin, &reportsTo, &job.runnerID, &job.noteState, &job.wake, &wakeAfter, &job.claimedTurnID, &createdAt, &finishedAt, &job.result, &job.input, &job.target); err != nil {
 		return backgroundJob{}, fmt.Errorf("scan background job: %w", err)
 	}
 
@@ -1564,8 +1651,8 @@ func scanBackgroundJob(scanner rowScanner) (backgroundJob, error) {
 func createBackgroundJob(ctx context.Context, db stateStoreDB, job *backgroundJob) (stored backgroundJob, created bool, err error) {
 	origin, _ := json.Marshal(job.origin)
 
-	inserted, err := execRows(ctx, db, "create background job", "count created background job", `INSERT INTO turns (conversation_id, input_id, kind, takes_lane, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message)
-VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, FALSE, 0, 0, '', $11, $11, '', $12) ON CONFLICT (conversation_id, input_id) WHERE NOT takes_lane DO NOTHING`, job.conversationID, job.jobID, job.kind, job.agent, job.label, job.callID, job.subagentKey, string(removeSessionEntryNUL(origin)), job.runnerID, noteNone, timeUnixNano(time.Now()), strings.ReplaceAll(job.input, "\x00", ""))
+	inserted, err := execRows(ctx, db, "create background job", "count created background job", `INSERT INTO turns (conversation_id, input_id, kind, takes_lane, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message, reply_target)
+VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, FALSE, 0, 0, '', $11, $11, '', $12, NULLIF($13, '')) ON CONFLICT (conversation_id, input_id) WHERE NOT takes_lane DO NOTHING`, job.conversationID, job.jobID, job.kind, job.agent, job.label, job.callID, job.subagentKey, string(removeSessionEntryNUL(origin)), job.runnerID, noteNone, timeUnixNano(time.Now()), strings.ReplaceAll(job.input, "\x00", ""), job.target)
 	if err != nil {
 		return backgroundJob{}, false, err
 	}

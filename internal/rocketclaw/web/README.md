@@ -14,7 +14,8 @@ Human messages also show their recorded author as a small, always-visible label
 above the text inside the bubble. Queued/stashed rows and pending steers retain
 their own author across viewers, reloads, and promotion. Rows another session's
 agent wrote with `rocketclaw_sessions_write` show `agent <name> (session <ID>)`
-as their author. The info control keeps
+as their author. Removing such a row tells the writing session, with a note,
+that its message was removed before it ran. The info control keeps
 the exact raw prompt header. Historical messages without author metadata stay
 unlabeled; text that looks like a header is not treated as attribution.
 New composer and handoff previews snapshot the server-resolved author only when
@@ -1066,9 +1067,11 @@ parent sends a busy subagent wait in that subagent's own queue. Open shows a sub
 History, which lists that subagent's own jobs with Open and Stop, or scrolls to a
 script's call, loading earlier turns when needed. Jobs
 started by hidden cron or External MCP runs that report to this chat are listed
-too, without Open. Calls running in the background stay visible at every Timeline
-detail level. Background Jobs and Completion Notes are Trace lines too: a running
-job spins, and a failed or killed one shows in red. Each Completion Note is one
+too, without Open. A `rocketclaw_sessions_write` call that awaits a reply is
+also listed as a job until the other session's answer comes back; its Stop only
+stops waiting for that answer and leaves the other session alone. Calls running
+in the background stay visible at every Timeline detail level. Background Jobs
+and Completion Notes are Trace lines too: a running job spins, and a failed or killed one shows in red. Each Completion Note is one
 row, its label followed by `finished`, `failed`, `stopped by user`,
 `stopped by agent`, or `killed (server restarted)`, shown at every level with the
 full note collapsed beneath it. `$stop` does not stop

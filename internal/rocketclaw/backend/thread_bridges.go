@@ -52,8 +52,8 @@ type bridgeFactory interface {
 }
 
 type threadStart struct {
-	conversationID, agent, spawnedBy string
-	createdBy                        ThreadCreator
+	conversationID, agent string
+	createdBy             ThreadCreator
 }
 
 type threadBridgeManager struct {
@@ -401,8 +401,11 @@ func (m *threadBridgeManager) InterruptThread(target protocol.TextConversationTa
 	return m.InterruptConversation(conversationID), nil
 }
 
+// StartQueuedConversations starts the conversations with queued work and those holding a parked stop
+// line, which their bridge posts when it starts (postStopLines), settling the stop's reply.
 func (m *threadBridgeManager) StartQueuedConversations(ctx context.Context) error {
-	conversationIDs, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT conversation_id FROM turns WHERE phase = 'waiting' AND reason <> $1 ORDER BY conversation_id`, "queued conversation IDs", waitScheduled)
+	conversationIDs, err := queryStrings(ctx, m.store.db, `SELECT conversation_id FROM turns WHERE phase = 'waiting' AND reason <> $1
+UNION SELECT conversation_id FROM steps WHERE starts_with(key, $2) ORDER BY conversation_id`, "queued conversation IDs", waitScheduled, stopLineStep)
 	if err != nil {
 		return fmt.Errorf("load queued conversations: %w", err)
 	}
@@ -484,9 +487,10 @@ func (m *threadBridgeManager) webOrigin(ctx context.Context) (string, error) {
 }
 
 // createSession creates a Web session named title for start's agent, unless allowed excludes it, and
-// submits inbound as its first turn. It mints start.conversationID and returns its WebURL, looked up
-// before any side effect.
-func (m *threadBridgeManager) createSession(ctx context.Context, start *threadStart, allowed []string, title string, inbound *protocol.InboundMessage) (string, error) {
+// queues inbound with reply, under its job ID as queue item ID, as its first turn, as writeSession queues
+// an enqueue, so that turn survives a restart. It mints start.conversationID and returns its WebURL,
+// looked up before any side effect, which reply keeps.
+func (m *threadBridgeManager) createSession(ctx context.Context, start *threadStart, allowed []string, title string, inbound *protocol.InboundMessage, reply *backgroundJob) (string, error) {
 	if len(allowed) > 0 && !slices.Contains(allowed, start.agent) {
 		return "", fmt.Errorf("agent %q is not allowed on this source surface", start.agent)
 	}
@@ -507,7 +511,7 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 		return "", err
 	}
 
-	thread := ThreadState{Agent: start.agent, CreatedBy: start.createdBy, spawnedBy: start.spawnedBy}
+	thread := ThreadState{Agent: start.agent, CreatedBy: start.createdBy}
 
 	managed, err := m.ensureThreadBridge(ctx, start.conversationID, thread)
 	if err != nil {
@@ -528,17 +532,18 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 		return "", fmt.Errorf("name new Web session: %w", err)
 	}
 
-	if err := managed.Submit(ctx, inbound); err != nil {
-		return "", fmt.Errorf("submit new Web session first prompt: %w", err)
+	reply.input, reply.target = url, start.conversationID
+	if _, _, err := m.writeSession(ctx, start.conversationID, reply.jobID, sessionWriteEnqueue, inbound, reply); err != nil {
+		return "", fmt.Errorf("queue new Web session first prompt: %w", err)
 	}
 
 	return url, nil
 }
 
 // writeSession delivers an agent's write, inbound under queue item ID id, to the session target
-// without waiting for its turn. It returns what became of the write and, for a stop write, whether a
-// turn was running.
-func (m *threadBridgeManager) writeSession(ctx context.Context, target, id string, mode sessionWriteMode, inbound *protocol.InboundMessage) (sessionWriteOutcome, bool, error) {
+// without waiting for its turn, with reply, unless nil as for a task's prompt. It returns what became of
+// the write and, for a stop write, whether a turn was running.
+func (m *threadBridgeManager) writeSession(ctx context.Context, target, id string, mode sessionWriteMode, inbound *protocol.InboundMessage, reply *backgroundJob) (sessionWriteOutcome, bool, error) {
 	b, err := m.recordedBridge(ctx, target)
 	if err != nil {
 		return "", false, err
@@ -549,7 +554,7 @@ func (m *threadBridgeManager) writeSession(ctx context.Context, target, id strin
 		inbound.Metadata[protocol.InboundSenderActionMetadataKey] = protocol.SenderActionStopped
 	}
 
-	outcome, resubmit, err := b.admitAgentWrite(ctx, mode, inbound)
+	outcome, resubmit, err := b.admitAgentWrite(ctx, mode, inbound, reply)
 	for i := range resubmit {
 		select {
 		case b.requestCh <- resubmit[i]:
@@ -575,8 +580,9 @@ func (m *threadBridgeManager) writeSession(ctx context.Context, target, id strin
 // admitAgentWrite stores inbound, an agent's write, as a Thread Queue row first, so it outlives a
 // staged revert and a replayed write adds nothing, and a steer joins the running turn while its input
 // is open. A stop write's row goes first, and queued requests already handed to the loop wait behind
-// it, as StageRevert's do; it returns the loop's other requests to resubmit.
-func (b *Bridge) admitAgentWrite(ctx context.Context, mode sessionWriteMode, inbound *protocol.InboundMessage) (outcome sessionWriteOutcome, resubmit []bridgeRequest, err error) {
+// it, as StageRevert's do; it returns the loop's other requests to resubmit. A session write's reply, a
+// running job of its caller targeting this session, is recorded with the row.
+func (b *Bridge) admitAgentWrite(ctx context.Context, mode sessionWriteMode, inbound *protocol.InboundMessage, reply *backgroundJob) (outcome sessionWriteOutcome, resubmit []bridgeRequest, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -589,8 +595,6 @@ func (b *Bridge) admitAgentWrite(ctx context.Context, mode sessionWriteMode, inb
 	switch {
 	case mode == sessionWriteStop:
 		outcome = sessionStopped
-	case mode == sessionWriteStash:
-		outcome, inbound.Kind = sessionStashed, protocol.InboundKindHeld
 	case mode == sessionWriteSteer && b.inputOpen && !b.stopped:
 		outcome, inbound.Kind = sessionSteered, protocol.InboundKindSteer
 	}
@@ -631,14 +635,18 @@ func (b *Bridge) admitAgentWrite(ctx context.Context, mode sessionWriteMode, inb
 		return "", resubmit, fmt.Errorf("read agent write position: %w", err)
 	}
 
-	if mode != sessionWriteStash {
-		if _, err := releaseHeldInputs(ctx, tx, b.config.ConversationID, &item.Position); err != nil {
-			return "", resubmit, err
-		}
+	if _, err := releaseHeldInputs(ctx, tx, b.config.ConversationID, &item.Position); err != nil {
+		return "", resubmit, err
 	}
 
 	if err := putThreadQueueItem(ctx, tx, item.ID, &item); err != nil {
 		return "", resubmit, err
+	}
+
+	if reply != nil {
+		if _, _, err := createBackgroundJob(ctx, tx, reply); err != nil {
+			return "", resubmit, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -854,7 +862,8 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 
 			request := bridge.waiting[i]
 
-			if err := m.store.DeleteThreadQueueItem(id); err != nil {
+			_, owner, err := m.store.DeleteThreadQueueItem(ctx, conversationID, id)
+			if err != nil {
 				bridge.mu.Unlock()
 				return false, err
 			}
@@ -866,6 +875,7 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 				close(request.completion.done)
 			}
 			bridge.mu.Unlock()
+			m.noteReady(owner)
 
 			return true, nil
 		}
@@ -873,7 +883,8 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 		for i := bridge.steersRead; i < len(bridge.steers); i++ {
 			request := bridge.steers[i]
 			if request.queueItemID == id {
-				if err := m.store.DeleteThreadQueueItem(id); err != nil {
+				_, owner, err := m.store.DeleteThreadQueueItem(ctx, conversationID, id)
+				if err != nil {
 					bridge.mu.Unlock()
 					return false, err
 				}
@@ -886,6 +897,7 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 				bridge.mu.Unlock()
 				request.inbound.CompleteResponseWithAttachments("", nil, context.Canceled)
 				m.log.Info("steer removed", "event", "steer_removed", "conversation_id", conversationID, "queue_item_id", id)
+				m.noteReady(owner)
 
 				return true, nil
 			}
@@ -893,12 +905,13 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 		bridge.mu.Unlock()
 	}
 
-	removed, err := execRows(ctx, m.store.db, "delete queue item", "count deleted queue items", `DELETE FROM turns WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting'`, conversationID, id)
-	if err != nil || removed == 0 {
+	removed, owner, err := m.store.DeleteThreadQueueItem(ctx, conversationID, id)
+	if err != nil || !removed {
 		return false, err
 	}
 
 	m.log.Info("queue item removed", "event", "queue_removed", "conversation_id", conversationID, "queue_item_id", id)
+	m.noteReady(owner)
 
 	return true, m.PickLaterWork(ctx, conversationID)
 }

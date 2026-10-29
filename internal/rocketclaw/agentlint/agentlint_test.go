@@ -213,13 +213,18 @@ func TestLintSudo(t *testing.T) {
 	writeAgent(t, runtimeRoot, "tagged.md", "---\ndescription: tagged\nsudo: yes\nmaxRecursion: 2\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[red, green]]\n---\ntagged\n")
 	writeAgent(t, runtimeRoot, "mixed.md", "---\ndescription: mixed\nsudo: on\nmaxRecursion: 2\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[red, green]]\n  bash: allow\n---\nmixed\n")
 	writeAgent(t, runtimeRoot, "unbounded.md", "---\ndescription: unbounded\nsudo: true\n---\nunbounded\n")
+	writeAgent(t, runtimeRoot, "guarded.md", "---\ndescription: guarded\nsudo: yes\nmaxRecursion: 2\npermission:\n  rocketclaw:\n    rocketclaw_sessions_recipient: [main]\n---\nguarded\n")
+	writeAgent(t, runtimeRoot, "both.md", "---\ndescription: both\nsudo: yes\nmaxRecursion: 2\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[red, green]]\n    rocketclaw_sessions_recipient: false\n---\nboth\n")
+	writeAgent(t, runtimeRoot, "extra.md", "---\ndescription: extra\nsudo: yes\nmaxRecursion: 2\npermission:\n  rocketclaw:\n    rocketclaw_sessions_recipient: [main]\n    rocketclaw_sessions: allow\n---\nextra\n")
 
 	result, err := Lint(runtimeRoot, new(config.Config))
 	require.NoError(t, err)
 
+	message := "sudo replaces permission; only permission.rocketclaw.rocketclaw_set_tag and permission.rocketclaw.rocketclaw_sessions_recipient may remain"
 	assert.Equal(t, []Finding{
 		{Code: rc003, Severity: "error", Path: "agents/unbounded.md", Message: "unbounded participates in a task delegation cycle without bounded maxRecursion", keys: []string{"maxRecursion", "task"}},
-		{Code: rc011, Severity: "error", Path: "agents/mixed.md", Message: "sudo replaces permission; only permission.rocketclaw.rocketclaw_set_tag may remain", keys: []string{"sudo", "permission"}},
+		{Code: rc011, Severity: "error", Path: "agents/extra.md", Message: message, keys: []string{"sudo", "permission"}},
+		{Code: rc011, Severity: "error", Path: "agents/mixed.md", Message: message, keys: []string{"sudo", "permission"}},
 	}, result.Findings)
 }
 

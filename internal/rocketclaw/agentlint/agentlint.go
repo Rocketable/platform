@@ -214,10 +214,16 @@ func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*
 				findings = append(findings, Finding{Code: rc006, Severity: "error", Path: filePath, Message: "plural permissions frontmatter is ignored; use permission", keys: []string{"permissions"}})
 			}
 
-			// Sudo replaces permission, which may keep only its session tag groups.
-			if value := frontmatter.Content[i+1]; key.Value == "permission" && agent.Permission.Sudo && (value.Kind != yaml.MappingNode || len(value.Content) != 2 || value.Content[0].Value != "rocketclaw" ||
-				value.Content[1].Kind != yaml.MappingNode || len(value.Content[1].Content) != 2 || value.Content[1].Content[0].Value != "rocketclaw_set_tag") {
-				findings = append(findings, Finding{Code: rc011, Severity: "error", Path: filePath, Message: "sudo replaces permission; only permission.rocketclaw.rocketclaw_set_tag may remain", keys: []string{"sudo", "permission"}})
+			// Sudo replaces permission, which may keep only its session tag groups and recipient setting.
+			if value := frontmatter.Content[i+1]; key.Value == "permission" && agent.Permission.Sudo {
+				kept := value.Kind == yaml.MappingNode && len(value.Content) == 2 && value.Content[0].Value == "rocketclaw" && value.Content[1].Kind == yaml.MappingNode && len(value.Content[1].Content) > 0
+				for j := 0; kept && j < len(value.Content[1].Content); j += 2 {
+					kept = slices.Contains([]string{"rocketclaw_set_tag", "rocketclaw_sessions_recipient"}, value.Content[1].Content[j].Value)
+				}
+
+				if !kept {
+					findings = append(findings, Finding{Code: rc011, Severity: "error", Path: filePath, Message: "sudo replaces permission; only permission.rocketclaw.rocketclaw_set_tag and permission.rocketclaw.rocketclaw_sessions_recipient may remain", keys: []string{"sudo", "permission"}})
+				}
 			}
 
 			if key.Value != "customShell" && strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key.Value)) == "customshell" {

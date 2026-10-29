@@ -46,7 +46,7 @@ RocketCode denies all tools by default. Write only the explicit `allow` rules th
 
 A scalar `permission: allow` does not grant global access. Use explicit permission buckets instead.
 
-If the human wants an agent with every tool and feature, set `sudo: yes` and omit `permission`, except `permission.rocketclaw.rocketclaw_set_tag` tag groups. Sudo offers every tool and sends every call to `guardian` for review, except skills, `task`, and the default-on RocketClaw tools. Also set a bounded `maxRecursion`, because a sudo agent can delegate to every agent, itself included.
+If the human wants an agent with every tool and feature, set `sudo: yes` and omit `permission`, except `permission.rocketclaw.rocketclaw_set_tag` tag groups and `permission.rocketclaw.rocketclaw_sessions_recipient`. Sudo offers every tool and sends every call to `guardian` for review, except skills, `task`, and the default-on RocketClaw tools. Also set a bounded `maxRecursion`, because a sudo agent can delegate to every agent, itself included.
 
 Built-in permission buckets:
 - `read`: root-relative file paths for the `read` tool
@@ -64,7 +64,8 @@ Built-in permission buckets:
 - `rocketclaw`: exact RocketClaw tool and setting names only; a wildcard key such as `"*"` or `rocketclaw_sessions_*`, or the scalar form `rocketclaw: allow`, fails agent loading
 - `rocketclaw.code_mode_approve`: optional whole-script Code Mode approval before `execute` runs; `allow` by default, independent of other RocketClaw rules and nested tool grants
 - `rocketclaw.allow_background`: `allow` lets the agent run `execute` scripts and `task` subagents in the background, steer, queue behind, or stop a running subagent through `task`'s `continue`, and gives it `rocketclaw_stop_background_job`; only `allow` or `deny`, `deny` by default, independent of other RocketClaw rules
-- `rocketclaw.rocketclaw_sessions_write`: lets the agent start, message, and stop other Web sessions; `deny` (default), `children`, `auto`, `auto(<agent-name>)`, or `allow`
+- `rocketclaw.rocketclaw_sessions`: lets the agent read saved conversations and start, message, and stop other Web sessions; `deny` (default), `auto`, `auto(<agent-name>)`, or `allow`
+- `rocketclaw.rocketclaw_sessions_recipient`: which agents may start, message, or stop this agent's sessions; `true` (default, except `false` for sudo agents), `false`, or a list of agent names
 
 For edit-only agents, an `edit` allow also permits reading the same path unless a `read` rule matched first. Do not add a top-level deny that would block this fallback.
 
@@ -76,21 +77,28 @@ If the human wants whole-script review rather than just reviews of nested calls,
 
 If the human wants the agent to leave long scripts or subagents running while the conversation moves on, set `permission.rocketclaw.allow_background: allow`. Omit it otherwise. Any value other than `allow` or `deny` fails agent loading. Background work cannot ask questions, attach files, or restart RocketClaw.
 
-If the human wants the agent to start Web sessions or send messages into other sessions, set `permission.rocketclaw.rocketclaw_sessions_write`:
+If the human wants the agent to read other conversations, start Web sessions, or send messages into other sessions, set `permission.rocketclaw.rocketclaw_sessions`. This one key offers `rocketclaw_sessions_list`, `rocketclaw_sessions_get`, `rocketclaw_sessions_current_id`, `rocketclaw_sessions_get_url`, and `rocketclaw_sessions_write`:
 
-- `children`: only sessions its own session created, without review
-- `auto` or `auto(<agent-name>)`: any chat Web lists, including Slack threads RocketClaw manages, with every write reviewed first
-- `allow`: any chat Web lists, without review
+- `auto` or `auto(<agent-name>)`: every read and write is reviewed first; writes reach any chat Web lists, including Slack threads RocketClaw manages
+- `allow`: the same, without review
 
-Omit it otherwise; the default is `deny`. For example:
+Omit it otherwise; the default is `deny`. The reads cover every conversation, private ones included. Older per-tool keys such as `rocketclaw_sessions_get: allow` or `rocketclaw_sessions_write: allow` still load but grant nothing, and `rocketclaw_sessions_write: children` fails agent loading. For example:
 
 ```yaml
 permission:
   rocketclaw:
-    rocketclaw_sessions_write: children
+    rocketclaw_sessions: auto
 ```
 
-There is no separate stop tool: `rocketclaw_sessions_write` with `mode: stop` and an empty `prompt` stops a session. The session read tools `rocketclaw_sessions_list`, `rocketclaw_sessions_get`, `rocketclaw_sessions_current_id`, and `rocketclaw_sessions_get_url` each need their own `allow` rule.
+There is no separate stop tool: `rocketclaw_sessions_write` with `mode: stop` and an empty `prompt` stops a session. Each write that returns a `queue_item_id` comes back later as one `<session_reply>` note carrying the other session's answer, so tell the agent not to wait, poll, or write again for it.
+
+If the human wants to protect an agent from other agents, set `permission.rocketclaw.rocketclaw_sessions_recipient` on the protected agent:
+
+- `true` (default): any agent may start, message, or stop its sessions
+- `false` (default for sudo agents): no agent may, not even another session of the same agent
+- a list of agent names, such as `[main]`: only those agents may
+
+The check uses the agent that makes the call, so a `task` subagent is checked as its own agent, not as its parent's. A refused write fails before anything is created, queued, or stopped.
 
 The Hosted Page tools `rocketclaw_store`, `rocketclaw_read`, `rocketclaw_delete`, `rocketclaw_list`, `rocketclaw_kv_store`, and `rocketclaw_kv_read` each need their own `allow` rule too. Grant them to agents that publish reports, dashboards, or graphs; their pages show in the space named by the agent's `space:`.
 
@@ -163,7 +171,7 @@ Account for these rocketcode runtime facts when designing agent instructions and
 - Symlink aliases are rejected for direct read, edit, and search targets. Directory grep pre-filters files before invoking `rg`; built-in `rg` calls use `--no-config` and `--no-follow`.
 - The shell tool statically denies common direct env-file and external-path attempts such as `cat .env`, `cat ../outside`, and `cd /tmp`, but this is only a preflight guardrail, not an OS-enforced shell sandbox for dynamically generated paths.
 - `task` subagents never get `ask_user_question`, whatever their permissions.
-- Each `task` subagent runs as a session of its own, hidden from the sidebar, with its own permissions and Background Jobs; its `rocketclaw_sessions_write` and session tags act for its top-level session.
+- Each `task` subagent runs as a session of its own, hidden from the sidebar, with its own permissions and Background Jobs; its `rocketclaw_sessions_write` and session tags act for its top-level session, but replies to its writes come back to the subagent itself. When a reply or one of its own Background Jobs wakes a subagent after its `task` call returned, its new answer reaches its parent as a note.
 - Prompt shell expansion with ``!`command` `` is opt-in per prompt source. Do not rely on it unless the runtime enables it.
 - Prompt shell expansion runs from the workspace root and captures stdout only. The default runner uses `/bin/bash`, ignores `$SHELL`, and disables startup files and inherited shell functions/options. For an agent that sets `customShell`, these lines run through that program instead.
 

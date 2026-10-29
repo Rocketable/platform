@@ -1997,7 +1997,7 @@ func TestTaskRunsSubagentAsSession(t *testing.T) {
 		}
 	})
 	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\nmaxRecursion: 1\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n")
-	writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw:\n    rocketclaw_sessions_current_id: allow\n---\nResearch\n")
+	writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw:\n    rocketclaw_sessions: allow\n---\nResearch\n")
 
 	manager, _ := nt.run(t, ignoreOutbound)
 	parent := nt.bridge(t, manager, nt.conversationID)
@@ -2029,7 +2029,7 @@ func TestTaskRunsSubagentAsSession(t *testing.T) {
 	require.Len(t, saved, 1, "the subagent's turn saves once, into its own history")
 	assert.Equal(t, "researcher", saved[0].Entry.Agent)
 
-	_, err = nt.service.topLevelSessionCreator(t.Context(), subagent)
+	_, err = nt.service.checkTopLevelSession(t.Context(), subagent)
 	require.ErrorContains(t, err, "is not a top-level session", "the sidebar and rocketclaw_sessions_write never reach a subagent")
 
 	// With no turn of its own running, a hidden run's subagent acts, as the run does, for the run's visible destination.
@@ -2075,6 +2075,7 @@ SELECT item->>'input_id' FROM items WHERE item->>'input_id' <> ''`, "subagent in
 	answer, _, err = parent.AwaitSubagent(t.Context(), key, "turn-2/call/c")
 	require.NoError(t, err)
 	assert.Equal(t, "checked", answer, "the answer is the turn's final answer, without the commentary that ended it")
+	assert.Empty(t, replyQueueItems(t, nt.service), "a task's prompts get no session reply")
 }
 
 // Stopping a parent stops the turn of the subagent its task call waits on (OpenCode
@@ -2159,6 +2160,145 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 	assert.Empty(t, nt.requests, "the parent stays stopped")
 }
 
+// R14: a helper woken by its own late Background Job after its task call returned reports its new answer to
+// its parent, level by level up to the top-level session, as a note that continues it. A busy parent takes
+// the note into its running turn; an idle one wakes once, also when a restart came before it heard. A
+// guarded helper type's rejected answer reaches the parent as the blocked result. A wake turn that took a
+// task's steer answers that task call instead.
+func TestSubagentWakeReportsUp(t *testing.T) {
+	t.Parallel()
+
+	report := func(key, result string) string {
+		return `" state="completed" description="researcher" continue="` + key + `">` + "\n<task_result>\n" + result + "\n</task_result>\n</subagent>"
+	}
+
+	for _, tc := range []struct {
+		name, woken, want         string
+		busy, guarded, steer, cut bool
+	}{
+		{name: "two levels", woken: "/a/b", want: report("/a", "relayed")},
+		{name: "busy parent", woken: "/a", want: report("/a", "found it"), busy: true},
+		{name: "guardrail rejects", woken: "/a", want: report("/a", "delegation response blocked: leaks secrets"), guarded: true},
+		{name: "wake turn took a task steer", woken: "/a", steer: true},
+		{name: "restart before the parent heard", woken: "/a", want: report("/a", "found it"), cut: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			hold, release, relayed, noted := make(chan struct{}, 1), make(chan struct{}), make(chan string, 1), make(chan string, 2)
+			if tc.busy || tc.steer {
+				hold <- struct{}{}
+			}
+
+			nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, _ int, body string) {
+				// The first request of the busy parent or of the steered helper waits for release.
+				select {
+				case <-hold:
+					select {
+					case <-release:
+					case <-r.Context().Done():
+						return
+					}
+				default:
+				}
+
+				research, text := strings.Contains(body, `"instructions":"Research`), "found it"
+
+				switch {
+				case strings.Contains(body, "Current Action: "):
+					text = `{"approved":false,"reason":"leaks secrets"}`
+				case research && strings.Contains(body, "<subagent id="):
+					relayed <- lastRequestMessage(t, body)
+
+					text = "relayed"
+				case research && strings.Contains(body, "also the logs"):
+					text = "logs fine"
+				case !research:
+					if strings.Contains(body, "<subagent id=") {
+						noted <- lastRequestMessage(t, body)
+					}
+
+					text = "noted"
+				}
+
+				writeRawRunMessage(t, w, "resp", "msg", text)
+			})
+			if tc.guarded {
+				writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\nguardrail: guard\npermission: {}\n---\nResearch\n")
+				writeAgent(t, nt.cfg.Workspace, "guard", "---\ndescription: Guard\nmode: subagent\nmodel: gpt-6.1-sol\npermission: {}\n---\nGuard\n")
+			}
+
+			require.NoError(t, nt.service.startSubagent(t.Context(), nt.conversationID, rocketcode.ChildKey{Path: "/a", Turn: "turn-0", Call: "a"}, "researcher", true))
+			require.NoError(t, nt.service.startSubagent(t.Context(), nt.conversationID+"/a", rocketcode.ChildKey{Path: "/b", Turn: "turn-0", Call: "b"}, "researcher", true))
+			helper := nt.conversationID + tc.woken
+
+			var manager *threadBridgeManager
+
+			if tc.cut { // The helper's wake turn ended, but the process stopped before its parent heard.
+				inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
+				inbound.Metadata = map[string]string{backgroundNotesMetadataKey: "turn-0/call/x"}
+				require.NoError(t, startTurnDB(t.Context(), nt.service.db, "turn-1", helper, inbound))
+				_, err := nt.service.finishTurn(t.Context(), "turn-1", &turnFinish{store: newSessionStore(helper, nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("notes", "found it")}, outbound: protocol.NewOutboundMessage(helper, "found it"), report: "<task_result>\nfound it\n</task_result>"})
+				require.NoError(t, err)
+				require.NoError(t, nt.service.closeTurn(t.Context(), "turn-1"))
+
+				manager, _ = nt.restart(t)
+			} else {
+				manager, _ = nt.run(t, ignoreOutbound)
+				if tc.busy {
+					require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
+					require.Eventually(t, func() bool { return len(hold) == 0 }, 10*time.Second, 10*time.Millisecond, "the parent's turn runs")
+				}
+
+				nt.addNote(t, helper, "turn-0/call/x", &protocol.InboundMessage{})
+				manager.noteReady(helper)
+			}
+
+			if tc.steer {
+				require.Eventually(t, func() bool { return len(hold) == 0 }, 10*time.Second, 10*time.Millisecond, "the helper's wake turn runs")
+				steered, err := nt.bridge(t, manager, nt.conversationID).WriteSubagent(t.Context(), &rocketcode.SubagentWrite{Key: rocketcode.ChildKey{Path: "/a"}, CallKey: "turn-2/call/s", Agent: "researcher", Delegator: "main", Prompt: "also the logs", Mode: rocketcode.ContinueSteer})
+				require.NoError(t, err)
+				require.True(t, steered, "the steer joins the helper's wake turn")
+				close(release)
+
+				answer, _, err := nt.bridge(t, manager, nt.conversationID).AwaitSubagent(t.Context(), "/a", "turn-2/call/s")
+				require.NoError(t, err)
+				assert.True(t, strings.HasSuffix(answer, "logs fine"), "the task call gets the wake turn's answer: %q", answer)
+				nt.waitIdle(t, manager, helper)
+				assert.Empty(t, noted, "the parent is not woken")
+				assert.Equal(t, []string{"turn-0/call/x consumed true"}, noteStates(t, nt.service), "the parent gets no note")
+
+				return
+			}
+
+			if tc.busy {
+				require.Eventually(t, func() bool {
+					states, err := queryStrings(context.Background(), nt.service.db, `SELECT j.note`+testJobsSQL+` AND j.conversation_id = $1`, "parent notes", nt.conversationID)
+					return err == nil && slices.Equal(states, []string{string(notePending)})
+				}, 10*time.Second, 10*time.Millisecond, "the helper reports while its parent runs")
+				close(release)
+			}
+
+			got := nextReplyBody(t, noted)
+			readFinalFor(t, nt.finals, nt.conversationID)
+			nt.waitIdle(t, manager, nt.conversationID)
+			assert.Empty(t, noted, "the parent takes the note once")
+
+			if tc.woken == "/a/b" {
+				assert.True(t, strings.HasSuffix(nextReplyBody(t, relayed), report("/b", "found it")), "the helper under the helper reports to it first")
+			}
+
+			wakes, err := queryStrings(t.Context(), nt.service.db, `SELECT j.input_id`+testJobsSQL+` AND j.conversation_id = $1`, "parent notes", nt.conversationID)
+			require.NoError(t, err)
+			require.Len(t, wakes, 1)
+
+			header := map[bool]string{false: systemPromptHeader(), true: "[System]"}[tc.busy]
+			assert.Equal(t, header+"\n\n"+`<subagent id="`+wakes[0]+tc.want, got)
+			assert.Contains(t, noteStates(t, nt.service), wakes[0]+" consumed true")
+		})
+	}
+}
+
 // A subagent acts for its top-level session's running turn, as it did when it ran inside that turn:
 // the files it attaches reach that turn's reply, and the sessions it creates keep that turn's creator
 // and limits: a Web or External MCP principal, or a cron run's own agent and cron creator. Its shell
@@ -2209,7 +2349,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 				writeAgent(t, nt.cfg.Workspace, agent, "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n---\nPrompt\n")
 			}
 
-			writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n  rocketclaw: {rocketclaw_attach_files_to_response: allow, rocketclaw_schedule_message: allow, rocketclaw_sessions_write: allow}\n---\nResearch\n")
+			writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n  rocketclaw: {rocketclaw_attach_files_to_response: allow, rocketclaw_schedule_message: allow, rocketclaw_sessions: allow}\n---\nResearch\n")
 			nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 
 			manager, _ := nt.run(t, ignoreOutbound)
@@ -2235,7 +2375,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 			assert.Contains(t, body, attachFilesToolName+"(")
 			assert.NotContains(t, body, scheduleMessageToolName+"(", "a subagent is not offered scheduling")
 
-			created, err := queryStrings(t.Context(), nt.service.db, `SELECT agent || ' ' || created_by FROM conversations WHERE spawned_by = $1`, "created sessions", root)
+			created, err := queryStrings(t.Context(), nt.service.db, `SELECT agent || ' ' || created_by FROM conversations WHERE name = 'Child'`, "created sessions")
 			require.NoError(t, err)
 			assert.Equal(t, []string{tc.agent + " " + tc.maker}, created, "the created session keeps the top-level turn's agent and creator")
 

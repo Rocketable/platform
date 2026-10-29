@@ -51,9 +51,8 @@ const (
 type ThreadState struct {
 	Agent     string        `json:"agent,omitempty"`
 	CreatedBy ThreadCreator `json:"created_by,omitempty"`
-	// spawnedBy is the top-level session whose agent created this one; it is set only at creation.
 	// parent is the session a subagent session belongs to, empty for any other.
-	spawnedBy, parent string
+	parent string
 }
 
 // ThreadCreator records which subsystem created a managed text conversation.
@@ -229,7 +228,7 @@ func (s *SessionService) UpsertThread(conversationID string, thread ThreadState)
 		return err
 	}
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, spawned_by, kind, listed) VALUES ($1, $2, $3, $4, $5, TRUE) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN conversations.created_by ELSE excluded.created_by END`, conversationID, thread.Agent, string(thread.CreatedBy), thread.spawnedBy, KindWebChat); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ($1, $2, $3, $4, TRUE) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN conversations.created_by ELSE excluded.created_by END`, conversationID, thread.Agent, string(thread.CreatedBy), KindWebChat); err != nil {
 		return fmt.Errorf("upsert managed conversation: %w", err)
 	}
 

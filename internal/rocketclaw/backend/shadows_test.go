@@ -462,7 +462,7 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 		t.Run(permission, func(t *testing.T) {
 			store, root := newShadowTestStore(t)
 			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
-			require.NoError(t, root.WriteFile(".rocketclaw/agents/main/a.md", fmt.Appendf(nil, "---\nmodel: gpt-child\npermission:\n  bash: %s\n  rocketclaw: {rocketclaw_restart: allow, rocketclaw_sessions_write: allow}\n---\nChild prompt", permission), 0o600))
+			require.NoError(t, root.WriteFile(".rocketclaw/agents/main/a.md", fmt.Appendf(nil, "---\nmodel: gpt-child\npermission:\n  bash: %s\n  rocketclaw: {rocketclaw_restart: allow, rocketclaw_sessions: allow}\n---\nChild prompt", permission), 0o600))
 			require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\nmodel: gpt-parent\npermission: {bash: allow}\n---\nParent prompt"), 0o600))
 
 			toolResults := make(chan string, 4)

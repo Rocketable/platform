@@ -255,7 +255,14 @@ func (f *toolFactory) awaitTask(ctx context.Context, originatingAgent, prompt, c
 	}
 
 	agent := f.agents.Items[final.Agent]
-	if blocked, err := f.guardTask(ctx, &agent, ChildKey{Path: key}, ChildRunStageResponse, originatingAgent, prompt, last, progress, metadata, parentOutput); err != nil || blocked != "" {
+
+	return f.taskResult(ctx, &agent, ChildKey{Path: key}, originatingAgent, prompt, last, progress, metadata, parentOutput)
+}
+
+// taskResult is the task result of last, the answer of agent's subagent session at key to originatingAgent's
+// prompt, once agent's response guardrail approves it, or the blocked result.
+func (f *toolFactory) taskResult(ctx context.Context, agent *Agent, key ChildKey, originatingAgent, prompt, last string, progress *PublicProgress, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (string, error) {
+	if blocked, err := f.guardTask(ctx, agent, key, ChildRunStageResponse, originatingAgent, prompt, last, progress, metadata, parentOutput); err != nil || blocked != "" {
 		return blocked, err
 	}
 
@@ -385,6 +392,15 @@ func (l *looper) asRecordAgent(ctx context.Context, record *SessionEntry, histor
 func (r *Runtime) AwaitTask(ctx context.Context, jobID, subagentKey, delegator, prompt string) (string, error) {
 	// NewWithModelResolver installs its tool factory as the reviewer.
 	return r.PermissionReviewer.(*toolFactory).awaitTask(ctx, delegator, prompt, jobID, subagentKey, &PublicProgress{}, toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}}, nil)
+}
+
+// ReviewTask returns, as a task call would, the task result of answer, the final answer of a turn of r's
+// subagent session that ran prompt and that no task call awaits, for delegator, its parent session's agent:
+// once the response guardrail of r's agent, which saves its run in r's session, approves it.
+func (r *Runtime) ReviewTask(ctx context.Context, delegator, prompt, answer string) (string, error) {
+	f := r.PermissionReviewer.(*toolFactory)
+
+	return f.taskResult(ctx, f.agent, ChildKey{}, delegator, prompt, answer, &PublicProgress{}, toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}}, nil)
 }
 
 func (f *toolFactory) childSession(yield func(SessionEntry, error) bool) {

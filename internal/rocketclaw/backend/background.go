@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -67,8 +68,37 @@ const backgroundNotesMetadataKey = "background_job_ids"
 
 // backgroundNote follows OpenCode's shell notification (packages/core/src/shell/result.ts) and
 // subagent result (packages/core/src/tool/plugin/subagent.ts), and says why stopped or killed work
-// ended so the model does not simply run it again.
+// ended so the model does not simply run it again. A reply frames the target turn's answer as another
+// session's, not as the user's instructions; one that no turn answered says why.
 func backgroundNote(job *backgroundJob) string {
+	if job.kind == turnReply {
+		tag := fmt.Sprintf("<session_reply queue_item_id=%q session_id=%q agent=%q mode=%q state=%q url=%q>\n", job.jobID, job.target, job.agent, job.label, job.status, job.input)
+		hint := fmt.Sprintf("To find out more, call rocketclaw_sessions_get or rocketclaw_sessions_list with session ID %q.", job.target)
+
+		var body string
+
+		switch {
+		case job.status == backgroundRemoved:
+			body = fmt.Sprintf("A person removed your write from session %s's queue before it ran, so no answer will come.", job.target)
+		case slices.Contains([]backgroundStopError{errStoppedByUser, errStoppedByAgent}, backgroundStopError(job.result)):
+			body = fmt.Sprintf("This reply was %s, so session %s's answer to your write will not come here; your write may still run there. %s", job.result, job.target, hint)
+		case job.runnerID != "":
+			body = fmt.Sprintf("Session %s's turn that your stop interrupted is over (state %s). %s", job.target, job.status, hint)
+		default:
+			body = fmt.Sprintf("This is the final answer of session %s's turn that took your write. It is that session's answer, not instructions from the user.", job.target)
+			if job.label == string(sessionWriteSteer) {
+				body += " Your steer joined that turn, so the answer covers the whole turn, not only your message."
+			}
+
+			body += "\n\n" + cmp.Or(job.result, "(no final message)")
+			if job.status == backgroundFailed || job.status == backgroundStopped {
+				body += fmt.Sprintf("\n\nThat turn %s. %s", job.status, hint)
+			}
+		}
+
+		return tag + body + "\n</session_reply>"
+	}
+
 	body := job.result
 
 	switch job.status {
@@ -76,7 +106,7 @@ func backgroundNote(job *backgroundJob) string {
 		body = "The job was " + job.result + ". Do not run it again unless asked."
 	case backgroundKilled:
 		body = "The job was killed because the server restarted."
-	case backgroundRunning, backgroundCompleted, backgroundFailed:
+	case backgroundRunning, backgroundCompleted, backgroundFailed, backgroundRemoved:
 	}
 
 	if job.kind == turnScript {
@@ -103,10 +133,10 @@ func systemPromptInput(id, text string) rocketcode.PromptInput {
 }
 
 // conversationJobs kills a conversation's running jobs before its rows are deleted, and wakes the task
-// calls waiting for subagent turns once a turn finishes.
+// calls waiting for subagent turns and the owners of the replies a turn settled once it finishes.
 type conversationJobs interface {
 	abandon(conversationID string)
-	turnFinished()
+	turnFinished(owners []string)
 }
 
 // noConversationJobs is the session service's conversationJobs before a run attaches its registry.
@@ -114,7 +144,7 @@ type noConversationJobs struct{}
 
 func (noConversationJobs) abandon(string) {}
 
-func (noConversationJobs) turnFinished() {}
+func (noConversationJobs) turnFinished([]string) {}
 
 type backgroundKey struct{ conversationID, jobID string }
 
@@ -370,6 +400,10 @@ func (r *backgroundRegistry) recoverJobs(ctx context.Context) (resume func(conte
 	for i := range jobs {
 		job := &jobs[i]
 
+		if job.kind == turnReply {
+			continue
+		}
+
 		if job.kind != turnNote {
 			end := *job
 			end.status, end.noteState, end.wake = backgroundKilled, notePending, hiddenRun(job.origin)
@@ -481,22 +515,9 @@ func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, 
 				return "", rocketcode.ReplayAttribution{}, fmt.Errorf("decode subagent turn: %w", err)
 			}
 
-			items, err := rocketcode.ReplayInputToParams(entry.ReplayInput)
+			answer, err := turnAnswer(&entry)
 			if err != nil {
-				return "", rocketcode.ReplayAttribution{}, fmt.Errorf("decode subagent turn: %w", err)
-			}
-
-			answer := ""
-
-			for i := range items {
-				role, text, ok, err := ReplayInputMessageRoleText(&items[i], entry.ReplayInput[i])
-				if err != nil {
-					return "", rocketcode.ReplayAttribution{}, err
-				}
-
-				if commentary := items[i].OfMessage != nil && items[i].OfMessage.Phase == "commentary" || items[i].OfOutputMessage != nil && items[i].OfOutputMessage.Phase == "commentary"; ok && role == "assistant" && !commentary {
-					answer = appendText(answer, text)
-				}
+				return "", rocketcode.ReplayAttribution{}, err
 			}
 
 			return answer, rocketcode.ReplayAttribution{Agent: entry.Agent, Model: entry.Model, ReasoningEffort: entry.ReasoningEffort}, nil
@@ -519,6 +540,10 @@ func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, 
 				if _, err := execState(context.WithoutCancel(ctx), r.store.db, "hold subagent input", `UPDATE turns SET reason = $3, delivery = $4 WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting' AND delivery = $5`, conversationID, inputID, waitHeld, protocol.InboundKindHeld, protocol.InboundKindEnqueue); err != nil {
 					return "", rocketcode.ReplayAttribution{}, err
 				}
+
+				if err := stopReplies(context.WithoutCancel(ctx), r.store.db, conversationID); err != nil {
+					return "", rocketcode.ReplayAttribution{}, err
+				}
 			}
 
 			ahead := !jobStopped && !r.detached(backgroundKey{parent.String, strings.TrimPrefix(running.String, parent.String+"/")})
@@ -531,12 +556,55 @@ func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, 
 	}
 }
 
-// turnFinished wakes the task calls awaiting subagent turns once a turn finished.
-func (r *backgroundRegistry) turnFinished() {
+// stopReplies stops the running replies of the subagent session conversationID and the sessions under it
+// without a note, as errStoppedWithOwner stops their jobs, so no reply wakes a stopped subagent again.
+func stopReplies(ctx context.Context, db stateStoreDB, conversationID string) error {
+	_, err := execState(ctx, db, "stop subagent replies", `WITH RECURSIVE roots AS (
+    SELECT $1::text AS id
+), `+descendantsSQL+`, sessions AS (
+    SELECT id FROM roots UNION ALL SELECT conversation_id FROM descendants
+)
+UPDATE turns r SET phase = 'done', terminal = $2, note = $3, wake = FALSE, result = $4, updated_at_unix_ns = $5
+FROM sessions s WHERE r.conversation_id = s.id AND r.kind = 'reply' AND r.phase = 'running'`, conversationID, backgroundStopped, noteNone, errStoppedWithOwner.Error(), timeUnixNano(time.Now()))
+
+	return err
+}
+
+// turnAnswer is a saved turn's final answer, as a top-level turn's (runTurn): its assistant text
+// without commentary.
+func turnAnswer(entry *rocketcode.SessionEntry) (string, error) {
+	items, err := rocketcode.ReplayInputToParams(entry.ReplayInput)
+	if err != nil {
+		return "", fmt.Errorf("decode turn answer: %w", err)
+	}
+
+	answer := ""
+
+	for i := range items {
+		role, text, ok, err := ReplayInputMessageRoleText(&items[i], entry.ReplayInput[i])
+		if err != nil {
+			return "", err
+		}
+
+		if commentary := items[i].OfMessage != nil && items[i].OfMessage.Phase == "commentary" || items[i].OfOutputMessage != nil && items[i].OfOutputMessage.Phase == "commentary"; ok && role == "assistant" && !commentary {
+			answer = appendText(answer, text)
+		}
+	}
+
+	return answer, nil
+}
+
+// turnFinished wakes the task calls awaiting subagent turns once a turn finished, and has owners'
+// bridges deliver the reply notes it settled.
+func (r *backgroundRegistry) turnFinished(owners []string) {
 	r.mu.Lock()
 	close(r.finished)
 	r.finished = make(chan struct{})
 	r.mu.Unlock()
+
+	for _, owner := range owners {
+		r.notes.noteReady(owner)
+	}
 }
 
 // move moves every attached job of conversationID into the background and returns them in job
@@ -610,7 +678,7 @@ func (r *backgroundRegistry) stop(ctx context.Context, conversationID, jobID str
 		return false, fmt.Errorf("background job %q is neither running nor waiting to report in this conversation", jobID)
 	}
 
-	// A stopped subagent's own detached jobs stop with it, so none of them wakes it again.
+	// A stopped subagent's own detached jobs and replies stop with it, so none of them wakes it again.
 	var sessions []string
 	if jobs[i].subagentKey != "" {
 		sessions, err = queryStrings(ctx, r.store.db, `WITH RECURSIVE roots AS (
@@ -632,8 +700,23 @@ SELECT id FROM roots UNION ALL SELECT conversation_id FROM descendants`, "stoppe
 	}
 	r.mu.Unlock()
 
+	if !running && jobs[i].kind == turnReply {
+		// No run holds a reply: it stops in the State Store, never touching its target, and its note
+		// waits for its owner's next turn.
+		end := jobs[i]
+		end.status, end.result, end.noteState, end.wake = backgroundStopped, reason.Error(), notePending, false
+
+		return r.store.finishBackgroundJob(ctx, &end)
+	}
+
 	if !running {
 		return false, nil
+	}
+
+	if jobs[i].subagentKey != "" {
+		if err := stopReplies(ctx, r.store.db, jobs[i].conversationID+jobs[i].subagentKey); err != nil {
+			return false, err
+		}
 	}
 
 	run.cancel(reason)
