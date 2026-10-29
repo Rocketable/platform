@@ -77,7 +77,7 @@ UNION ALL SELECT format('%s unread=%s', conversation_id, unread_at IS NOT NULL) 
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{JustBashInstallErrorFunc: noJustBashError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })

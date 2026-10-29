@@ -21,7 +21,7 @@ The coordinator name is the public council target. Member names are ordinary loa
 
 Ask for the council name, purpose, coordinator and member descriptions, models, member capabilities, caller agent files, direct surfaces, and any intentional delegation cycles. Ask for one item at a time.
 
-`customShell` does not pass from the coordinator to members: when the human wants the council sandboxed, ask whether each member also needs `customShell`.
+`shell` does not pass from the coordinator to members: when the human wants the council sandboxed, ask whether each member also needs `shell`.
 
 Every agent needs a non-empty `description` and `model`. Write descriptions as useful selection guidance because the task roster displays them. Check the active root `maxRecursion` budget for each delegation path: caller -> coordinator -> member requires two task hops; a direct surface -> coordinator -> member requires one.
 

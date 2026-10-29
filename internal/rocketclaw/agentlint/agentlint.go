@@ -19,7 +19,7 @@ import (
 const (
 	rc000, rc001, rc002, rc003 = "RC000", "RC001", "RC002", "RC003"
 	rc004, rc005, rc006, rc007 = "RC004", "RC005", "RC006", "RC007"
-	rc008, rc009, rc010, rc011 = "RC008", "RC009", "RC010", "RC011"
+	rc008, rc010, rc011        = "RC008", "RC010", "RC011"
 )
 
 // Finding is one lint result line.
@@ -154,8 +154,10 @@ func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
 		}
 
 		label := name + "\nmaxRecursion=" + maxRecursion
-		if customShell := infos[name].agent.CustomShell; customShell != "" {
-			label += "\ncustomShell=" + customShell
+		if shell := infos[name].agent.CustomShell; shell.Emulated {
+			label += "\nshell=emulated"
+		} else if shell.Path != "" {
+			label += "\nshell=" + shell.Path
 		}
 
 		fmt.Fprintf(&b, "  %s [label=%s];\n", strconv.Quote(name), strconv.Quote(label))
@@ -226,10 +228,6 @@ func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*
 				}
 			}
 
-			if key.Value != "customShell" && strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key.Value)) == "customshell" {
-				findings = append(findings, Finding{Code: rc009, Severity: "error", Path: filePath, Message: key.Value + " is ignored; the field is customShell", keys: []string{key.Value}})
-			}
-
 			collectSuppressions(filePath, key.Value, frontmatter.Content[i+1], suppressions, &findings)
 		}
 	}
@@ -263,7 +261,7 @@ func addSuppressionsFromNode(filePath, key string, node *yaml.Node, suppressions
 			continue
 		}
 
-		if code != "" && !slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008, rc009, rc010, rc011}, code) {
+		if code != "" && !slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008, rc010, rc011}, code) {
 			*findings = append(*findings, Finding{Code: rc000, Severity: "error", Path: filePath, Message: "unknown #nolint code " + code})
 			continue
 		}
@@ -297,16 +295,17 @@ func lintCustomShellEdits(infos map[string]*agentInfo, workspace string, writes 
 
 	for _, write := range writes {
 		for name, info := range infos {
-			if info.agent.CustomShell == "" {
+			shell := info.agent.CustomShell
+			if shell.Path == "" && !shell.Emulated {
 				continue
 			}
 
-			if wrapper, err := filepath.Rel(workspace, info.agent.CustomShell); err == nil && filepath.IsLocal(wrapper) && pathsOverlap(write.pattern, filepath.ToSlash(wrapper)) {
-				findings = append(findings, Finding{Code: rc010, Severity: "error", Path: write.file, Message: fmt.Sprintf("%s can edit %s, the customShell of %s", write.agent, filepath.ToSlash(wrapper), name), keys: []string{write.bucket, write.pattern}})
+			if wrapper, err := filepath.Rel(workspace, shell.Path); shell.Path != "" && err == nil && filepath.IsLocal(wrapper) && pathsOverlap(write.pattern, filepath.ToSlash(wrapper)) {
+				findings = append(findings, Finding{Code: rc010, Severity: "error", Path: write.file, Message: fmt.Sprintf("%s can edit %s, the shell of %s", write.agent, filepath.ToSlash(wrapper), name), keys: []string{write.bucket, write.pattern}})
 			}
 
 			if pathsOverlap(write.pattern, info.filePath) {
-				findings = append(findings, Finding{Code: rc010, Severity: "error", Path: write.file, Message: fmt.Sprintf("%s can edit %s, which defines %s and its customShell", write.agent, info.filePath, name), keys: []string{write.bucket, write.pattern}})
+				findings = append(findings, Finding{Code: rc010, Severity: "error", Path: write.file, Message: fmt.Sprintf("%s can edit %s, which defines %s and its shell", write.agent, info.filePath, name), keys: []string{write.bucket, write.pattern}})
 			}
 		}
 	}

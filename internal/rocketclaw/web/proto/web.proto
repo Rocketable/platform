@@ -616,7 +616,8 @@ message DeleteSessionEntriesResponse {
 
 message IdentityRequest {}
 
-message IdentityResponse { string username = 1; string principal = 2; }
+// just_bash_error is why just-bash failed to install, empty when it did not fail.
+message IdentityResponse { string username = 1; string principal = 2; string just_bash_error = 3; }
 
 message ReloadRequest { string reason = 1; }
 

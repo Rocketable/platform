@@ -680,7 +680,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 
 		shell := writeCustomShell(t, root)
 		boxed := agentWithSkillPermission()
-		boxed.CustomShell = shell
+		boxed.CustomShell = CustomShell{Path: shell}
 
 		for _, tc := range []struct {
 			name  string
@@ -695,7 +695,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 				factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
 				factory.promptExpansion = env
 				// A factory scoped to a sandboxed parent carries the parent's shell.
-				factory.promptExpansion.customShell = shell
+				factory.promptExpansion.customShell = CustomShell{Path: shell}
 
 				model, _ := factory.assembleTools(tc.agent)
 				got, err := model["skill"].Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill","arguments":"MEMORY.md"}`), nil, emptyToolCallMetadata())

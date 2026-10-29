@@ -143,7 +143,7 @@ func TestWorkflowAgentRunnerUsesRootCustomShell(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
 	require.NoError(t, root.WriteFile("enter.sh", []byte("#!/bin/sh\nprintf 'custom:%s:%s' \"$#\" \"$1\""), 0o755))
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\ncustomShell: "+filepath.Join(workspace, "enter.sh")+"\npermission:\n  bash: {\"*\": allow}\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\nshell: "+filepath.Join(workspace, "enter.sh")+"\npermission:\n  bash: {\"*\": allow}\n---\nMain prompt\n")
 
 	var (
 		mu          sync.Mutex

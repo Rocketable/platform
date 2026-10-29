@@ -53,6 +53,10 @@ type Runtime struct {
 
 	eventsMu    sync.Mutex
 	subscribers map[chan protocol.Event]<-chan struct{}
+
+	// justBashMu is apart from reloadMu: the Web reads justBashErr while a reload installs.
+	justBashMu  sync.Mutex
+	justBashErr error
 }
 
 // Reload validates and replaces runtime assets, then refreshes External MCP agents.
@@ -77,6 +81,8 @@ func (r *Runtime) Reload(reason string) (string, error) {
 	if err := r.ExternalMCPAgents.Refresh(); err != nil {
 		return "", fmt.Errorf("refresh external MCP agents: %w", err)
 	}
+
+	r.installJustBash()
 
 	return "rocketclaw runtime assets reloaded", nil
 }

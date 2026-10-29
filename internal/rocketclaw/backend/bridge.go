@@ -36,6 +36,7 @@ import (
 	instrumentation "github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/justbash"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
@@ -2844,6 +2845,10 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 			err = fmt.Errorf("permission.rocketclaw.%s: %w", setTagToolName, err)
 		} else if _, _, errRecipients := agentRecipients(&agent); errRecipients != nil {
 			err = fmt.Errorf("permission.rocketclaw.%s: %w", recipientSetting, errRecipients)
+		} else if shell, ok, errShell := justbash.Shell(agent.Frontmatter, cfg.Workspace, filepath.Join(cfg.Workspace, cfg.RuntimeDirName()), justBashDir(cfg)); errShell != nil {
+			err = errShell
+		} else if ok {
+			agent.CustomShell = shell
 		}
 
 		if err != nil {

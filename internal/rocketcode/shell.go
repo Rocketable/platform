@@ -92,7 +92,7 @@ func shellEnvList(shellEnv map[string]string) ([]string, error) {
 	return env, nil
 }
 
-func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell string, params bashParams) BashResult {
+func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell CustomShell, params bashParams) BashResult {
 	sss.mu.Lock()
 	defer sss.mu.Unlock()
 
@@ -159,16 +159,20 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell string, p
 
 	timedOut := false
 
-	shell, args := withCustomShell(sss.shellCommand, customShell, params.Command)
+	env := append(os.Environ(), sss.env...)
+	env = append(env, "TMPDIR="+sss.shellTemp.tmpDir)
+
+	shell, args, stdin := withCustomShell(sss.shellCommand, customShell, params.Command, env)
 	if strings.TrimSpace(shell) == "" {
 		return bashFailure("shell command path is required")
 	}
 
 	cmd := exec.CommandContext(commandCtx, shell, args...)
-	cmd.Dir = hostDir
 
-	cmd.Env = append(os.Environ(), sss.env...)
-	cmd.Env = append(cmd.Env, "TMPDIR="+sss.shellTemp.tmpDir)
+	cmd.Dir, cmd.Env = hostDir, env
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	// The command writes to a pipe this call owns, so a child that leaves the
 	// process group and keeps the output open cannot hold the call past its timeout.

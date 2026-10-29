@@ -596,6 +596,7 @@ func resetRuntimeDirectory(target string, logger *slog.Logger, preserveOverlays 
 	preserved := map[string]struct{}{
 		".rocketcode":    {},
 		"attachments":    {},
+		"justbash":       {},
 		"auth.json":      {},
 		"auth.json.lock": {},
 	}

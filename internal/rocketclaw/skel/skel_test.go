@@ -118,12 +118,16 @@ func TestResetRuntimeDirectoryPreservesAuthAndAttachments(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(target, "remove-me"), []byte("trash"), 0o600))
 	require.NoError(t, os.Mkdir(filepath.Join(target, "attachments"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(target, "attachments", "original"), []byte("immutable"), 0o600))
+	// A reload keeps the just-bash install that running bash calls use.
+	require.NoError(t, os.Mkdir(filepath.Join(target, "justbash"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(target, "justbash", "wrapper.ts"), []byte("wrapper"), 0o755))
 
 	for _, preserveOverlays := range []bool{false, true} {
 		require.NoError(t, resetRuntimeDirectory(target, testLogger(), preserveOverlays))
 		data, err := os.ReadFile(filepath.Join(target, "attachments", "original"))
 		require.NoError(t, err)
 		require.Equal(t, "immutable", string(data))
+		require.FileExists(t, filepath.Join(target, "justbash", "wrapper.ts"))
 	}
 
 	data, err := os.ReadFile(filepath.Join(target, ".auth.json-in-flight"))
@@ -661,7 +665,7 @@ func TestSyncCreatesEmbeddedRuntimeSupport(t *testing.T) {
 
 	data, err := os.ReadFile(filepath.Join(tmp, targetRoot, ".gitignore"))
 	require.NoError(t, err)
-	assert.Equal(t, "auth.json\nauth.json.lock\n", string(data))
+	assert.Equal(t, "auth.json\nauth.json.lock\njustbash/\n", string(data))
 }
 
 func TestSyncEffectiveRuntimeAssetsDoesNotMutateRuntimeOrScriptSymlinks(t *testing.T) {

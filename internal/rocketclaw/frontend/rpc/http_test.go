@@ -166,7 +166,7 @@ func TestHTTPBoundary(t *testing.T) {
 }
 
 func TestHTTPReload(t *testing.T) {
-	core := &mockBackend{ReloadFunc: func(reason string) (string, error) {
+	core := &mockBackend{JustBashInstallErrorFunc: noJustBashError, ReloadFunc: func(reason string) (string, error) {
 		require.Equal(t, "updated assets", reason)
 		return "rocketclaw runtime assets reloaded", nil
 	}}

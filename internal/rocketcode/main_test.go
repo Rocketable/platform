@@ -310,7 +310,7 @@ func TestNewBindsBashToEachAgentCustomShell(t *testing.T) {
 
 	shell := writeCustomShell(t, root)
 	agents := LoadAgents(fstest.MapFS{
-		"boxed.md": {Data: []byte("---\nmodel: gpt-5.4\ncustomShell: " + shell + "\npermission: {bash: allow, task: allow}\n---\nBOXED")},
+		"boxed.md": {Data: []byte("---\nmodel: gpt-5.4\nshell: " + shell + "\npermission: {bash: allow, task: allow}\n---\nBOXED")},
 		"plain.md": {Data: []byte("---\nmodel: gpt-5.4\npermission: {bash: allow, task: allow}\n---\nPLAIN")},
 	}, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
 	require.Empty(t, agents.Errors)
@@ -358,6 +358,17 @@ func TestNewBindsBashToEachAgentCustomShell(t *testing.T) {
 			require.Equal(t, tc.rootWant, run(t, loop.CodeModeHosts["bash"]))
 		})
 	}
+
+	t.Run("emulated shell without a program fails instead of running under bash", func(t *testing.T) {
+		loop, err := NewWithModelResolver(testResolverForResponsesAPI(mockResponses()), testWorkspaceConfig(t, dir), root, agents.Agents, Skills{Items: map[string]Skill{}}, "plain", nil)
+		require.NoError(t, err)
+
+		emulated := agents.Agents.Items["plain"]
+		emulated.CustomShell = CustomShell{Emulated: true}
+
+		_, hosts := loop.PermissionReviewer.(*toolFactory).assembleTools(&emulated)
+		require.Equal(t, "shell command path is required", run(t, hosts["bash"]))
+	})
 }
 
 func TestNewExpandsPromptsThroughRootAgentCustomShell(t *testing.T) {
@@ -374,7 +385,7 @@ func TestNewExpandsPromptsThroughRootAgentCustomShell(t *testing.T) {
 	config.ExpandPromptShellCommands.InputPrompts = true
 	client := openai.NewClient()
 	loop, err := NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Model: "gpt-5.4", Prompt: "remember !`echo hi`", CustomShell: writeCustomShell(t, root)},
+		"main": {Name: "main", Model: "gpt-5.4", Prompt: "remember !`echo hi`", CustomShell: CustomShell{Path: writeCustomShell(t, root)}},
 	}}, Skills{Items: map[string]Skill{}}, "main", &diagnostics)
 	require.NoError(t, err)
 	require.Contains(t, diagnostics.String(), "remember custom:1:echo hi\n")

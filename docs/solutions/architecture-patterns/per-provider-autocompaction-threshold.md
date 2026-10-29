@@ -1,6 +1,7 @@
 ---
 title: Per-Provider Autocompaction Threshold
 date: 2026-08-24
+last_updated: 2026-10-29
 category: docs/solutions/architecture-patterns/
 module: internal/rocketclaw/config
 problem_type: architecture_pattern
@@ -44,10 +45,10 @@ The copy path is:
 
 1. Load and validate provider JSON. `Validate` runs `normalizeOpenAIConfig` on `openai` and every named provider (`internal/rocketclaw/config/config.go:404-420`).
 2. `modelResolver.Resolve` copies `providerConfig.AutocompactionThreshold` onto `ProviderOrigin.CompactThreshold` (`internal/rocketclaw/backend/model_resolver.go:70`).
-3. Every looper is built by `toolFactory.newLooper`, which uses `cmp.Or(origin.CompactThreshold, f.compactThreshold)` so a set provider value wins and a zero origin falls back (`internal/rocketcode/tools.go:200`). Root (`internal/rocketcode/rocketcode.go:439`, which also builds each Task Subagent Session's turn), steer agent-type switches (`asRecordAgent`, `internal/rocketcode/tasks.go:351`), guardrail children (`runGuardrail`, `internal/rocketcode/tasks.go:480`) and permission-review children (`internal/rocketcode/permission_review.go:109`) all call it.
+3. Every looper is built by `toolFactory.newLooper`, which uses `cmp.Or(origin.CompactThreshold, f.compactThreshold)` so a set provider value wins and a zero origin falls back (`internal/rocketcode/tools.go:200`). Root (`internal/rocketcode/rocketcode.go:477`, which also builds each Task Subagent Session's turn), steer agent-type switches (`asRecordAgent`, `internal/rocketcode/tasks.go:351`), guardrail children (`runGuardrail`, `internal/rocketcode/tasks.go:480`) and permission-review children (`internal/rocketcode/permission_review.go:109`) all call it.
 4. `looper.compactThreshold()` still treats `<= 0` as `defaultCompactThreshold` (`internal/rocketcode/looper.go:33`, `internal/rocketcode/looper.go:1930-1936`). `buildParams` sends that value as Responses `context_management[].compact_threshold` (`internal/rocketcode/looper.go:1882-1885`).
 
-`normalizeConfig` also writes `defaultCompactThreshold` onto `Config.CompactThreshold` when the factory input is `0` (`internal/rocketcode/rocketcode.go:549-551`). RocketClaw `NewWithModelResolver` sites either pass `CompactThreshold: 0` or omit the field (same zero). The RocketClaw path depends on the resolver origin plus that default.
+`normalizeConfig` also writes `defaultCompactThreshold` onto `Config.CompactThreshold` when the factory input is `0` (`internal/rocketcode/rocketcode.go:587-589`). RocketClaw `NewWithModelResolver` sites either pass `CompactThreshold: 0` or omit the field (same zero). The RocketClaw path depends on the resolver origin plus that default.
 
 The standalone RocketCode resolver does not copy a threshold (`internal/rocketcode/models.go:39`). It relies on `Config.CompactThreshold`, not provider JSON.
 
@@ -144,4 +145,4 @@ Codex extracts the threshold, then strips the field the API does not accept:
 	}
 ```
 
-Operator-facing text: omit `autocompaction_threshold` to keep the runtime default; set it on `openai` or a named provider to override that provider only (`README.md:319`, `cmd/rocketclaw/CHEATSHEET.md:175`).
+Operator-facing text: omit `autocompaction_threshold` to keep the runtime default; set it on `openai` or a named provider to override that provider only (`README.md:339`, `cmd/rocketclaw/CHEATSHEET.md:175`).

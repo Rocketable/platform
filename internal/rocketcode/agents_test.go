@@ -343,13 +343,13 @@ Prompt
 			{name: "max recursion null", field: "maxRecursion", value: "null", want: "main.md: parse maxRecursion:"},
 			{name: "max recursion sequence", field: "maxRecursion", value: "[]", want: "main.md: parse maxRecursion:"},
 			{name: "max recursion map", field: "maxRecursion", value: "{}", want: "main.md: parse maxRecursion:"},
-			{name: "custom shell relative path", field: "customShell", value: "sandbox/enter", want: "main.md: customShell:"},
-			{name: "custom shell bare name", field: "customShell", value: "enter", want: "main.md: customShell:"},
-			{name: "custom shell empty", field: "customShell", value: "\"\"", want: "main.md: customShell:"},
-			{name: "custom shell null", field: "customShell", value: "null", want: "main.md: customShell:"},
-			{name: "custom shell number", field: "customShell", value: "123", want: "main.md: customShell:"},
-			{name: "custom shell sequence", field: "customShell", value: "[/a]", want: "main.md: customShell:"},
-			{name: "custom shell map", field: "customShell", value: "{a: b}", want: "main.md: customShell:"},
+			{name: "shell relative path", field: "shell", value: "sandbox/enter", want: "main.md: shell: must be an absolute path or emulated"},
+			{name: "shell bare name", field: "shell", value: "enter", want: "main.md: shell: must be an absolute path or emulated"},
+			{name: "shell empty", field: "shell", value: "\"\"", want: "main.md: shell: must be an absolute path or emulated"},
+			{name: "shell null", field: "shell", value: "null", want: "main.md: shell: must be an absolute path or emulated"},
+			{name: "shell number", field: "shell", value: "123", want: "main.md: shell: must be an absolute path or emulated"},
+			{name: "shell sequence", field: "shell", value: "[/a]", want: "main.md: shell: must be an absolute path or emulated"},
+			{name: "shell map", field: "shell", value: "{a: b}", want: "main.md: shell: must be an absolute path or emulated"},
 			{name: "space sequence", field: "space", value: "[Billing]", want: "main.md: space:"},
 			{name: "space number", field: "space", value: "123", want: "main.md: space:"},
 			{name: "sudo word", field: "sudo", value: "maybe", want: "main.md: sudo:"},
@@ -392,19 +392,21 @@ Prompt
 		}
 	})
 
-	t.Run("loads custom shell values", func(t *testing.T) {
+	t.Run("loads shell values", func(t *testing.T) {
 		result := LoadAgents(fstest.MapFS{
-			"sandboxed.md": testMapFile("---\ndescription: Sandboxed\nmodel: gpt-5.4\ncustomShell: /opt/sandbox/enter\n---\nPrompt\n"),
+			"sandboxed.md": testMapFile("---\ndescription: Sandboxed\nmodel: gpt-5.4\nshell: /opt/sandbox/enter\n---\nPrompt\n"),
+			"emulated.md":  testMapFile("---\ndescription: Emulated\nmodel: gpt-5.4\nshell: emulated\n---\nPrompt\n"),
 			"host.md":      testMapFile("---\ndescription: Host\nmodel: gpt-5.4\n---\nPrompt\n"),
-			"fallback.md":  testMapFile("---\ndescription: Review: code\nmodel: gpt-5.4\ncustomShell: /opt/sandbox/enter\nspace: Billing\n---\nPrompt\n"),
+			"fallback.md":  testMapFile("---\ndescription: Review: code\nmodel: gpt-5.4\nshell: /opt/sandbox/enter\nspace: Billing\n---\nPrompt\n"),
 		}, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
 
 		require.Empty(t, result.Errors)
 		require.Equal(t, "Billing", result.Agents.Items["fallback"].Space, "space survives fallback sanitization")
-		require.Equal(t, "/opt/sandbox/enter", result.Agents.Items["sandboxed"].CustomShell)
+		require.Equal(t, CustomShell{Path: "/opt/sandbox/enter"}, result.Agents.Items["sandboxed"].CustomShell)
+		require.Equal(t, CustomShell{Emulated: true}, result.Agents.Items["emulated"].CustomShell)
 		require.Empty(t, result.Agents.Items["host"].CustomShell)
 		require.Equal(t, "Review: code", result.Agents.Items["fallback"].Description)
-		require.Equal(t, "/opt/sandbox/enter", result.Agents.Items["fallback"].CustomShell)
+		require.Equal(t, "/opt/sandbox/enter", result.Agents.Items["fallback"].CustomShell.Path)
 	})
 
 	t.Run("supports fallback yaml sanitization", func(t *testing.T) {
