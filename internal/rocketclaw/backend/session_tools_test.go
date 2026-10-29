@@ -820,8 +820,14 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 	for _, tc := range []struct {
 		value           string
 		finals, reviews int
-	}{{"allow", 3, 0}, {"auto", 3, 2}, {"children", 2, 0}} {
+	}{{"allow", 3, 0}, {"auto", 3, 2}, {"children", 2, 0}, {"sudo", 3, 3}} {
 		t.Run(tc.value, func(t *testing.T) {
+			permission := "permission:\n  rocketclaw: {rocketclaw_sessions_write: " + tc.value + "}"
+			if tc.value == "sudo" {
+				// Sudo ignores the children scope and reviews the script and each write.
+				permission = "sudo: yes\npermission:\n  rocketclaw: {rocketclaw_sessions_write: children}"
+			}
+
 			nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 				switch {
 				case strings.Contains(body, `"model":"review-model"`):
@@ -832,7 +838,7 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 					_, _ = w.Write([]byte(script("write", "def main():\n    return rocketclaw_sessions_write(session_id='', mode='stop', prompt='child task', title='Child', agent='') + '|' + rocketclaw_sessions_write(session_id='slack-thread:C123:111.222', mode='steer', prompt='also check 2025', title='', agent='')\n")))
 				}
 			})
-			writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_sessions_write: "+tc.value+"}\n---\nPrompt\n")
+			writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\n"+permission+"\n---\nPrompt\n")
 			nt.cfg.AutoApproverModel = "review-model"
 			nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 			require.NoError(t, nt.service.UpsertThread(caller, ThreadState{Agent: "main"}))

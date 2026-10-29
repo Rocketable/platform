@@ -208,6 +208,21 @@ editor
 	}, result.Findings)
 }
 
+func TestLintSudo(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	writeAgent(t, runtimeRoot, "tagged.md", "---\ndescription: tagged\nsudo: yes\nmaxRecursion: 2\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[red, green]]\n---\ntagged\n")
+	writeAgent(t, runtimeRoot, "mixed.md", "---\ndescription: mixed\nsudo: on\nmaxRecursion: 2\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[red, green]]\n  bash: allow\n---\nmixed\n")
+	writeAgent(t, runtimeRoot, "unbounded.md", "---\ndescription: unbounded\nsudo: true\n---\nunbounded\n")
+
+	result, err := Lint(runtimeRoot, new(config.Config))
+	require.NoError(t, err)
+
+	assert.Equal(t, []Finding{
+		{Code: rc003, Severity: "error", Path: "agents/unbounded.md", Message: "unbounded participates in a task delegation cycle without bounded maxRecursion", keys: []string{"maxRecursion", "task"}},
+		{Code: rc011, Severity: "error", Path: "agents/mixed.md", Message: "sudo replaces permission; only permission.rocketclaw.rocketclaw_set_tag may remain", keys: []string{"sudo", "permission"}},
+	}, result.Findings)
+}
+
 // Lint reads the frontmatter the runtime loaded, so agents the runtime accepts lint too.
 func TestLintAcceptsAgentsTheRuntimeLoads(t *testing.T) {
 	runtimeRoot := t.TempDir()

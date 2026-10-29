@@ -215,7 +215,7 @@ func (w *backgroundWork) RunBackground(ctx context.Context) (string, error) {
 // Otherwise the tool keeps its definition and only rejects background requests.
 func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *looperTool) looperTool {
 	call := tool.Call
-	if agent == nil || agent.Permission.evaluate("rocketclaw", AllowBackgroundSubject).Action != permissionAllow || !f.backgroundJobs.Enabled() {
+	if agent == nil || !agent.Permission.Enabled("rocketclaw", AllowBackgroundSubject) || !f.backgroundJobs.Enabled() {
 		tool.Call = func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse, metadata toolCallMetadata) (ToolResult, error) {
 			// Malformed input is left to the call's own decoding error; continue counts as a string or an object.
 			var params struct {

@@ -2295,7 +2295,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	agent := agents.Items[agentName]
-	if action, matched := agent.Permission.Evaluate("rocketclaw", restartToolName); matched && action == rocketcode.PermissionAllow {
+	if agent.Permission.Enabled("rocketclaw", restartToolName) {
 		customTools = append(customTools, restartTool(b.config.RequestRestart))
 	}
 
@@ -2840,7 +2840,9 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 		}
 
 		action := rocketcode.PermissionDeny
-		if len(groups) > 0 {
+		if len(groups) > 0 && agent.Permission.Sudo {
+			action = rocketcode.PermissionAuto
+		} else if len(groups) > 0 {
 			action = rocketcode.PermissionAllow
 		}
 

@@ -300,6 +300,7 @@ Known frontmatter fields:
 | `additionalInstructions` | Optional RocketClaw normal-reply prompt-header override for this selected agent. Use it for response-format guidance, such as telling an agent to avoid Markdown for Slack, prefer Markdown for technical answers, keep answers terse, or follow another surface-specific style. When omitted, RocketClaw uses `Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.` It does not affect internal notes or raw cron runs. |
 | `schema.output` | Optional JSON Schema mapping. When set, that agent's own turns (including `task` children) use OpenAI structured output. Guardrail and permission-review child runs keep their fixed decision schemas. Workflow `agent(..., schema=...)` still overrides for that call. Object schemas are sent with `additionalProperties: false`; list every property in `required`. |
 | `permission` | Optional singular permission map. Omit it when the agent needs no tools. Do not use plural `permissions`; RocketCode ignores it and `rocketclaw lint` reports it. |
+| `sudo` | Optional `true`/`1`/`on`/`yes` or `false`/`0`/`off`/`no`, any case; other values stop the agent from loading. When on, it replaces `permission`: every tool and feature is offered, and every call requires automatic approval by `guardian`, including the whole `execute` script, except `skill`, `find_skills`, `task` and the default-on RocketClaw tools (`rocketclaw_reload`, scheduled messages, `rocketclaw_attach_files_to_response`, `rocketclaw_update_goal`, `ask_user_question`), which run without review. Only `permission.rocketclaw.rocketclaw_set_tag` tag groups may stay next to it; `rocketclaw lint` reports anything else (`RC011`). Hard limits such as `.env` blocking and `maxRecursion` still apply. |
 
 When an agent sets `customShell`, RocketCode runs each shell command made on that agent's behalf as `<customShell> <command>`: its `bash` tool calls, the ``!`…` `` lines in its prompt and in the skills it loads, and, for the root agent, input-prompt expansion. RocketCode does not check at load time that the program exists. If it cannot start, the `bash` tool reports the error to the agent and does not fall back to bash. A wrapper program must follow this contract:
 
@@ -377,7 +378,7 @@ permission:
     rocketclaw_sessions_write: children
 ```
 
-Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-execute risk, read-plus-execute leakage, task delegation cycles, delegation-chain escalation, external-content contamination, plural `permissions`, missing guardrails, excessive reasoning effort, a misspelled `customShell` key, and `edit` permissions that could change a sandboxed agent's file or wrapper.
+Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-execute risk, read-plus-execute leakage, task delegation cycles, delegation-chain escalation, external-content contamination, plural `permissions`, missing guardrails, excessive reasoning effort, a misspelled `customShell` key, `edit` permissions that could change a sandboxed agent's file or wrapper, and `permission` entries beside `sudo`.
 
 ## Subcommands
 

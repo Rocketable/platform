@@ -59,6 +59,10 @@ func ruleMatchesMCPServer(pattern, server string) bool {
 }
 
 func visibleMCPServers(permissions PermissionSet, servers []string) []string {
+	if permissions.Sudo {
+		return servers
+	}
+
 	var visible []string
 
 	for _, server := range servers {

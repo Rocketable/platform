@@ -60,8 +60,10 @@ type PermissionBucket struct {
 }
 
 // PermissionSet contains all permission buckets configured for an agent.
+// Sudo makes every subject no rule matches require automatic approval.
 type PermissionSet struct {
 	Buckets   []PermissionBucket
+	Sudo      bool
 	skillRead map[string]skillReadAccess
 }
 
@@ -382,12 +384,19 @@ func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction
 
 // Evaluate returns the effective permission action for permission and subject.
 // The matched result reports whether a configured rule explicitly matched.
-// When matched is false, action defaults to PermissionDeny, except that
-// rocketclaw.code_mode_approve and rocketclaw.load_agents_md default to PermissionAllow.
-// Only exact rules match rocketclaw subjects.
+// When matched is false, action defaults to PermissionDeny, or PermissionAuto under Sudo,
+// except that rocketclaw.load_agents_md and, without Sudo, rocketclaw.code_mode_approve
+// default to PermissionAllow. Only exact rules match rocketclaw subjects.
 func (ps PermissionSet) Evaluate(permission, subject string) (action PermissionAction, matched bool) {
 	decision := ps.evaluate(permission, subject)
 	return decision.Action, decision.Matched
+}
+
+// Enabled reports whether a feature that needs an exact allow is on for subject:
+// it evaluates to allow, or to automatic approval under Sudo.
+func (ps PermissionSet) Enabled(permission, subject string) bool {
+	action := ps.evaluate(permission, subject).Action
+	return action == permissionAllow || ps.Sudo && action == permissionAuto
 }
 
 func (ps PermissionSet) evaluate(permission, subject string, scripts ...string) permissionDecision {
@@ -429,8 +438,11 @@ func (ps PermissionSet) evaluate(permission, subject string, scripts ...string) 
 
 func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, scripts ...string) permissionDecision {
 	decision := permissionDecision{Action: permissionDeny, Bucket: "", Rule: PermissionRule{Pattern: "", Action: ""}, Matched: false, Permission: permission, Subject: subject}
+	if ps.Sudo {
+		decision.Action = permissionAuto
+	}
 
-	if permission == "rocketclaw" && (subject == codeModeApproveSubject || subject == "load_agents_md") {
+	if permission == "rocketclaw" && (subject == codeModeApproveSubject && !ps.Sudo || subject == "load_agents_md") {
 		decision.Action = permissionAllow
 	}
 
@@ -480,6 +492,10 @@ func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, s
 }
 
 func (ps PermissionSet) hasRuleForPermission(permission string, actions ...PermissionAction) bool {
+	if ps.Sudo && slices.Contains(actions, permissionAuto) {
+		return true
+	}
+
 	if permission == "read" && slices.Contains(actions, permissionAllow) {
 		for _, access := range ps.skillRead {
 			if access.allowed {

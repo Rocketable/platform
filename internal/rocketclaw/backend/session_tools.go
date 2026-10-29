@@ -179,7 +179,7 @@ func appendSessionTagPrompt(agent *rocketcode.Agent, groups [][]string) {
 	var tools []string
 
 	for _, name := range []string{setTagToolName, getTagsToolName} {
-		if action, _ := agent.Permission.Evaluate("rocketclaw_tags", name); action == rocketcode.PermissionAllow {
+		if agent.Permission.Enabled("rocketclaw_tags", name) {
 			tools = append(tools, name)
 		}
 	}
@@ -739,11 +739,11 @@ func sessionsWriteTool(b *Bridge, msg *protocol.InboundMessage, agentName, self 
 				result.URL, err = b.threads.createSession(ctx, &start, allowed, title, inbound)
 				result.SessionID = start.conversationID
 			} else {
-				// RocketCode loaded permission.rocketclaw.rocketclaw_sessions_write: children as allow.
+				// RocketCode loaded permission.rocketclaw.rocketclaw_sessions_write: children as allow; sudo ignores it.
 				permission, _ := agent.Frontmatter["permission"].(map[string]any)
 				rocketclaw, _ := permission["rocketclaw"].(map[string]any)
 
-				if err := b.config.SessionService.checkSessionTarget(ctx, rocketclaw[sessionsWriteToolName] == "children", self, msg.SyncDestination, input.SessionID); err != nil {
+				if err := b.config.SessionService.checkSessionTarget(ctx, !agent.Permission.Sudo && rocketclaw[sessionsWriteToolName] == "children", self, msg.SyncDestination, input.SessionID); err != nil {
 					return rocketcode.ToolResult{}, err
 				}
 

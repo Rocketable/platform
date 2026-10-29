@@ -354,6 +354,10 @@ func permissionPrompt(permissions PermissionSet) string {
 		lines = append(lines, permissionRuleLines(bucket.Rules)...)
 	}
 
+	if permissions.Sudo {
+		lines = append(lines, "", "## Sudo Mode", "", "Every tool is available. Any call no rule above covers requires automatic approval.")
+	}
+
 	if len(lines) == 0 {
 		return ""
 	}
