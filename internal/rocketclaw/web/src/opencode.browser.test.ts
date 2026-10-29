@@ -309,7 +309,7 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
   }
 }, 60_000);
 
-test("remote sessions list, tag, go offline, start, and keep the theme toggle clear of the view", async () => {
+test("remote sessions list, tag, go offline, and start", async () => {
   const { chromium: engine } = await import(playwright!);
   const { web, calls, release, creates, entryFailures, base } = start();
   release();
@@ -319,15 +319,8 @@ test("remote sessions list, tag, go offline, start, and keep the theme toggle cl
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
 
-    // RocketClaw's fixed theme toggle does not cover the view's review toggle.
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
-    const review = page.locator("main [data-oc-view] [data-slot=session-review-toggle]");
-    await review.waitFor();
-    const [theme, toggle] = [await page.locator("div.fixed.top-2.right-2").boundingBox(), await review.boundingBox()];
-    expect(theme!.y + theme!.height <= toggle!.y || toggle!.x + toggle!.width <= theme!.x).toBe(true);
-    // Moving clear of it, the review toggle does not land on the session header's own buttons.
-    const details = await page.locator('main [data-oc-view] [aria-label="Session details"]').boundingBox();
-    expect(details!.x + details!.width <= toggle!.x || toggle!.x + toggle!.width <= details!.x).toBe(true);
+    await page.locator("main [data-oc-view] [data-slot=session-review-toggle]").waitFor();
 
     await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("Name session");

@@ -727,7 +727,7 @@ function BottomNavigation({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const swipe = useRef({ pointerId: -1, y: 0, completed: false });
   return (
-    <footer className="order-last flex shrink-0 flex-col md:border-t px-2 pb-[env(safe-area-inset-bottom)] [--navigation-button:32px] [--navigation-icon:24px] [--navigation-gap:4px] [--navigation-handle:24px] max-lg:[--navigation-button:48px] max-lg:[--navigation-gap:8px] [@media(any-pointer:coarse)]:[--navigation-button:48px] [@media(any-pointer:coarse)]:[--navigation-gap:8px]">
+    <footer className="order-last flex shrink-0 flex-col md:border-t px-2 pb-[env(safe-area-inset-bottom)] [--navigation-button:32px] [--navigation-icon:24px] [--navigation-gap:4px] [--navigation-handle:24px] max-lg:[--navigation-button:48px] max-lg:[--navigation-gap:8px] [@media(any-pointer:coarse)]:[--navigation-button:48px] [@media(any-pointer:coarse)]:[--navigation-gap:8px] max-[22rem]:px-1 max-[22rem]:[--navigation-gap:4px]!">
       <div className="relative h-6 shrink-0 max-md:h-4">
       <button type="button" className="flex h-[var(--navigation-handle)] w-full touch-none items-center justify-center rounded-sm focus-visible:outline-2 focus-visible:outline-ring max-md:absolute max-md:left-1/2 max-md:top-1/2 max-md:z-40 max-md:h-11 max-md:w-20 max-md:-translate-x-1/2 max-md:-translate-y-1/2" aria-label={collapsed ? "Show bottom navigation" : "Hide bottom navigation"} title={collapsed ? "Show bottom navigation" : "Hide bottom navigation"} aria-expanded={!collapsed} aria-controls="bottom-navigation"
         onPointerDown={(event) => {
@@ -751,7 +751,7 @@ function BottomNavigation({ children }: { children: ReactNode }) {
         <span aria-hidden="true" className="h-1 w-10 rounded-full bg-muted-foreground" />
       </button>
       </div>
-      <div id="bottom-navigation" className={cn("min-h-0 items-center gap-[var(--navigation-gap)] py-1 md:grid-cols-[1fr_auto_1fr]", collapsed ? "hidden" : "grid")}>{children}</div>
+      <div id="bottom-navigation" className={cn("min-h-0 grid-cols-[1fr_auto_1fr] items-center gap-[var(--navigation-gap)] py-1", collapsed ? "hidden" : "grid")}>{children}</div>
     </footer>
   );
 }
@@ -766,7 +766,7 @@ function useTabSidebar(pathname: string) {
   return { medium, open, toggle: () => medium ? setShown(!shown) : setDrawerAt(open ? undefined : pathname) };
 }
 
-// The drawer opens from the top-left button or a rightward swipe that starts anywhere except text fields, sliders,
+// The drawer opens from the footer's sidebar button or a rightward swipe that starts anywhere except text fields, sliders,
 // sideways scrollers, and open popups; a leftward swipe closes it. While it listens, the page claims sideways pans:
 // a browser that takes one over (such as Chrome on Linux) cancels the pointer and can replay a stale touch from the
 // previous gesture, which reads as a vertical scroll.
@@ -800,22 +800,19 @@ function TabDrawer({ medium, open, toggle, children }: ReturnType<typeof useTabS
     };
   }, [medium, open]);
   if (medium) return null;
-  return <>
-    <div className="flex h-12 shrink-0 items-center border-b px-1 [--navigation-button:2.5rem] [--navigation-icon:1.25rem]"><SidebarToggle open={open} toggle={toggle} /></div>
-    <Drawer.Root open={open} onOpenChange={toggle} swipeDirection="left">
-      <Drawer.Portal>
-        <Drawer.Backdrop className="fixed inset-0 z-50 bg-black/10 opacity-[calc(1-var(--drawer-swipe-progress))] transition-opacity duration-200 data-swiping:duration-0 data-starting-style:opacity-0 data-ending-style:opacity-0 supports-backdrop-filter:backdrop-blur-xs" />
-        <Drawer.Viewport className="fixed inset-0 z-50 flex">
-          {/* Picking the tab already shown leaves the address alone, so the pick itself closes the drawer. A mouse
-              click lands on the popup, which holds the pointer for its swipe, so the tab is found under the pointer. */}
-          <Drawer.Popup id="tab-sidebar" onClick={(event) => { if (document.elementFromPoint(event.clientX, event.clientY)?.closest('[role="tab"]')) toggle(); }} className="flex h-full w-3/4 max-w-sm flex-col border-r bg-popover text-sm text-popover-foreground shadow-lg outline-none touch-auto [transform:translateX(var(--drawer-swipe-movement-x))] transition-transform duration-200 ease-in-out data-swiping:select-none data-starting-style:[transform:translateX(-100%)] data-ending-style:[transform:translateX(-100%)]">
-            <Drawer.Title className="sr-only">Tabs</Drawer.Title>
-            {children}
-          </Drawer.Popup>
-        </Drawer.Viewport>
-      </Drawer.Portal>
-    </Drawer.Root>
-  </>;
+  return <Drawer.Root open={open} onOpenChange={toggle} swipeDirection="left">
+    <Drawer.Portal>
+      <Drawer.Backdrop className="fixed inset-0 z-50 bg-black/10 opacity-[calc(1-var(--drawer-swipe-progress))] transition-opacity duration-200 data-swiping:duration-0 data-starting-style:opacity-0 data-ending-style:opacity-0 supports-backdrop-filter:backdrop-blur-xs" />
+      <Drawer.Viewport className="fixed inset-0 z-50 flex">
+        {/* Picking the tab already shown leaves the address alone, so the pick itself closes the drawer. A mouse
+            click lands on the popup, which holds the pointer for its swipe, so the tab is found under the pointer. */}
+        <Drawer.Popup id="tab-sidebar" onClick={(event) => { if (document.elementFromPoint(event.clientX, event.clientY)?.closest('[role="tab"]')) toggle(); }} className="flex h-full w-3/4 max-w-sm flex-col border-r bg-popover text-sm text-popover-foreground shadow-lg outline-none touch-auto [transform:translateX(var(--drawer-swipe-movement-x))] transition-transform duration-200 ease-in-out data-swiping:select-none data-starting-style:[transform:translateX(-100%)] data-ending-style:[transform:translateX(-100%)]">
+          <Drawer.Title className="sr-only">Tabs</Drawer.Title>
+          {children}
+        </Drawer.Popup>
+      </Drawer.Viewport>
+    </Drawer.Portal>
+  </Drawer.Root>;
 }
 
 function SidebarToggle({ open, toggle }: { open: boolean; toggle: () => void }) {
@@ -1727,8 +1724,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
             <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} keyCommands={keyCommands(tabs.step, sidebar.toggle, sidebar.medium)} />
          <div className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-y-none bg-background">
             <BottomNavigation>
-              {sidebar.medium ? <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} /> : null}
-              <div className="min-w-0 max-w-full justify-self-center overflow-x-auto md:col-start-2 overflow-y-hidden scrollbar-none">
+              <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} />
+              <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
                 <div className="flex w-max items-center gap-[var(--navigation-gap)]">
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="New session" onClick={newChat}>
                     <SquarePen className="size-[var(--navigation-icon)]" />
@@ -1742,8 +1739,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
                   <CopyPageLink />
                 </div>
               </div>
+              <div className="justify-self-end"><ThemeToggle /></div>
             </BottomNavigation>
-            <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
           <TabDrawer {...sidebar}><TabStrip tabs={tabs} newChat={newChat} /></TabDrawer>
           <div className="flex min-h-0 min-w-0 flex-1">
             {sidebar.medium ? <ResizableAside side="tabs" id="tab-sidebar" className={cn("border-r", !sidebar.open && "hidden")}><TabStrip tabs={tabs} newChat={newChat} /></ResizableAside> : null}

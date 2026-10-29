@@ -46,7 +46,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     };
     const notice = page.getByText("A new version of RocketClaw is available.", { exact: true });
     const refresh = page.getByRole("button", { name: "Refresh", exact: true });
-    // Narrow screens keep the tabs in a drawer behind the top-left Show sidebar button.
+    // Narrow screens keep the tabs in a drawer behind the footer's Show sidebar button.
     const tabs = width < 768 ? page.getByRole("button", { name: "Show sidebar", exact: true }) : page.getByRole("tablist", { name: "Open tabs" }).locator("..");
     await page.goto(`http://127.0.0.1:${server.port}/`);
     await tabs.waitFor();
@@ -58,7 +58,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     await recheck();
     await notice.waitFor();
     expect(await page.getByRole("status").filter({ hasText: "A new version of RocketClaw is available." }).count()).toBe(1);
-    // Nothing on the page may hide behind the bar, and the fixed theme toggle may not hide its button.
+    // Nothing on the page may hide behind the bar, and the bar may not hide the theme toggle.
     const unobstructed = async (locator: { evaluate<T>(fn: (el: Element) => T): Promise<T> }) => locator.evaluate((el: Element) => {
       const box = el.getBoundingClientRect();
       return box.width > 0 && box.top >= 0 && box.left >= 0 && box.bottom <= innerHeight && box.right <= innerWidth && el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));

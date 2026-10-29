@@ -827,8 +827,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const navigation = page.locator("footer");
     const compactHeight = (await navigation.boundingBox())!.height;
     const navigationSearch = navigation.getByRole("button", { name: "Search sessions and commands", exact: true });
-    // New session, Search, Voice, Copy page link, and the wide-screen sidebar toggle.
-    expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(5);
+    // The sidebar toggle, New session, Search, Voice, Copy page link, and the theme toggle.
+    expect(await navigation.locator("#bottom-navigation button:visible").count()).toBe(6);
     expect(await navigation.getByRole("link").count()).toBe(0);
     expect((await navigationSearch.boundingBox())!.width).toBe(48);
     expect((await navigationSearch.locator("svg").boundingBox())!.width).toBe(24);
@@ -2611,7 +2611,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandsBox = (await desktopSearch.boundingBox())!;
     await desktopSearch.hover();
     expect((await desktopSearch.boundingBox())!.x).toBe(commandsBox.x);
-    expect(await desktopPage.locator("#bottom-navigation > :last-child").evaluate((el: HTMLElement) => {
+    expect(await desktopPage.locator("#bottom-navigation > :nth-child(2)").evaluate((el: HTMLElement) => {
       const style = getComputedStyle(el);
       return [style.overflowY, style.scrollbarWidth];
     })).toEqual(["hidden", "none"]);
