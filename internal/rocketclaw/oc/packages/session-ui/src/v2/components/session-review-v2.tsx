@@ -157,6 +157,8 @@ export function SessionReviewV2Sidebar(props: SessionReviewV2SidebarProps) {
 export function SessionReviewV2(props: SessionReviewV2Props) {
   const i18n = useI18n()
   const locale = useLocale()
+  let previousButton: HTMLButtonElement | undefined
+  let nextButton: HTMLButtonElement | undefined
 
   createEffect(() => {
     getWorkerPool()
@@ -215,11 +217,17 @@ export function SessionReviewV2(props: SessionReviewV2Props) {
     if (target instanceof HTMLElement && (target.isContentEditable || target.closest("input, textarea, select"))) return
 
     if (!props.hasDiffs || !canCycle()) return
-    const file = event.key === previousKey() ? prev() : next()
+    const previous = event.key === previousKey()
+    const file = previous ? prev() : next()
 
     if (!file) return
+    const active = document.activeElement
+
     event.preventDefault()
     cycle(file)
+
+    if (active !== previousButton && active !== nextButton) return
+    ;(previous ? previousButton : nextButton)?.focus({ preventScroll: true })
   })
 
   const toolbarStart = () => (
@@ -249,6 +257,7 @@ export function SessionReviewV2(props: SessionReviewV2Props) {
           }
         >
           <IconButton
+            ref={previousButton}
             icon={<Icon name="arrow-left" />}
             variant="ghost"
             size="small"
@@ -269,6 +278,7 @@ export function SessionReviewV2(props: SessionReviewV2Props) {
           }
         >
           <IconButton
+            ref={nextButton}
             icon={<Icon name="arrow-right" />}
             variant="ghost"
             size="small"
