@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, expect, jest, spyOn, test } from "bun:test";
-import { holdWakeLock, setVoiceSticky, startVoice, stopVoice, subscribeVoice, voiceChoice, voiceLevel, voiceView } from "./voice";
+import { holdWakeLock, startVoice, stopVoice, subscribeVoice, voiceChoice, voiceLevel, voiceView } from "./voice";
 
 // Minimal stand-ins for the browser media, WebRTC and page APIs a call touches.
 class FakeChannel {
@@ -88,7 +88,6 @@ beforeEach(async () => {
   stopVoice();
   await until(() => voiceView().state !== "ending");
   stopVoice();
-  setVoiceSticky(false);
   notes = []; peers = []; wires = []; tracks = []; locks = []; micDenied = false; micPrompt = undefined; reply = undefined; openOnAnswer = false; globals.isSecureContext = true;
 });
 
@@ -144,33 +143,29 @@ test("a call goes idle, connecting, live, then ending and idle on Stop", async (
   expect({ aborted: wire.aborted, closed: peer.closed, micStopped: tracks[0].stopped, sent: peer.channel.sent }).toEqual({ aborted: true, closed: true, micStopped: true, sent: [] });
 });
 
-const lost = "Connection to RocketClaw ended.";
-for (const [name, end, message] of [
-  ["stream end while live", (wire: Wire) => wire.close(), lost],
-  ["stream completion while live", (wire: Wire) => { wire.push("event: complete\ndata: {}\n\n"); wire.close(); }, lost],
-  ["rejected credential error frame", (wire: Wire) => wire.push('event: error\ndata: {"code":9,"message":"openai voice request failed with HTTP 403"}\n\n'), "OpenAI rejected the default provider's credential."],
-  ["replaced", (wire: Wire) => wire.push({ ended: { reason: "replaced" } }), "Voice moved to another device or tab."],
-  ["expired", (wire: Wire) => wire.push({ ended: { reason: "expired" } }), "Call ended: time limit reached."],
-  ["safety", (wire: Wire) => wire.push({ ended: { reason: "safety" } }), "Call ended by OpenAI safety."],
-  ["lost", (wire: Wire) => wire.push({ ended: { reason: "lost" } }), "Lost the connection to OpenAI."],
-  ["closed by OpenAI", (wire: Wire) => wire.push({ ended: { reason: "closed" } }), "OpenAI ended the call."],
-] as const) test(`a live call ends in error on ${name} and hangs up`, async () => {
+for (const [name, ending, message] of [
+  ["a rejected credential", 'event: error\ndata: {"code":9,"message":"openai voice request failed with HTTP 403"}\n\n', "OpenAI rejected the default provider's credential."],
+  ["replaced", { ended: { reason: "replaced" } }, "Voice moved to another device or tab."],
+  ["expired", { ended: { reason: "expired" } }, "Call ended: time limit reached."],
+  ["safety", { ended: { reason: "safety" } }, "Call ended by OpenAI safety."],
+  ["closed by OpenAI", { ended: { reason: "closed" } }, "OpenAI ended the call."],
+  ["a server error", { ended: { reason: "error" } }, "The call failed on the server."],
+] as const) test(`a live call ends in error on ${name}, hangs up, and does not reconnect`, async () => {
   const { done, wire, peer } = await live("conversation");
-  end(wire);
+  wire.push(ending);
   await done;
   expect(voiceView()).toMatchObject({ state: "error", error: message, conversationId: "conversation" });
-  expect({ closed: peer.closed, micStopped: tracks[0].stopped, sent: peer.channel.sent }).toEqual({ closed: true, micStopped: true, sent: [] });
+  expect({ requests: wires.length, notes, closed: peer.closed, micStopped: tracks[0].stopped, sent: peer.channel.sent }).toEqual({ requests: 1, notes: [], closed: true, micStopped: true, sent: [] });
 });
 
-test("a sticky call reconnects on the same microphone after each network loss, with cues, until it is hung up", async () => {
-  setVoiceSticky(true);
+test("a call reconnects on the same microphone after each network loss, with cues, until it is hung up", async () => {
   const { done, peer } = await live("conversation");
   jest.useFakeTimers();
   try {
     peer.connectionState = "failed";
     peer.onconnectionstatechange!();
     await until(() => voiceView().state === "reconnecting");
-    expect(voiceView()).toMatchObject({ error: "", notice: "", sticky: true });
+    expect(voiceView()).toMatchObject({ error: "", notice: "" });
     expect({ aborted: wires[0].aborted, closed: peer.closed, notes }).toEqual({ aborted: true, closed: true, notes: [660, 440] });
     jest.advanceTimersByTime(999);
     expect(wires.length).toBe(1);
@@ -191,7 +186,7 @@ test("a sticky call reconnects on the same microphone after each network loss, w
     await until(() => peers[3].remote);
     peers[3].channel.onopen!();
     expect(notes).toEqual([660, 440, 880, 880, 880, 880, 880, 440, 660]);
-    expect(voiceView()).toMatchObject({ state: "live", notice: "", sticky: true });
+    expect(voiceView()).toMatchObject({ state: "live", notice: "" });
     expect({ mics: tracks.length, sameMic: peers.every((each) => each.tracks[0] === tracks[0]), micStopped: tracks[0].stopped }).toEqual({ mics: 1, sameMic: true, micStopped: false });
 
     wires[3].push({ ended: { reason: "lost" } });
@@ -200,36 +195,9 @@ test("a sticky call reconnects on the same microphone after each network loss, w
     stopVoice();
     await done;
     jest.advanceTimersByTime(60_000);
-    expect(voiceView()).toMatchObject({ state: "idle", error: "", notice: "", sticky: false });
+    expect(voiceView()).toMatchObject({ state: "idle", error: "", notice: "" });
     expect({ requests: wires.length, notes: notes.length, micStopped: tracks[0].stopped }).toEqual({ requests: 4, notes: 11, micStopped: true });
   } finally { jest.useRealTimers(); }
-});
-
-for (const [name, ending] of [
-  ["replaced", { ended: { reason: "replaced" } }],
-  ["expired", { ended: { reason: "expired" } }],
-  ["safety", { ended: { reason: "safety" } }],
-  ["closed by OpenAI", { ended: { reason: "closed" } }],
-  ["a server error", { ended: { reason: "error" } }],
-  ["a rejected credential", 'event: error\ndata: {"code":9,"message":"openai voice request failed with HTTP 403"}\n\n'],
-] as const) test(`a sticky call ends on ${name} without reconnecting, and sticky turns off`, async () => {
-  setVoiceSticky(true);
-  const { done, wire } = await live("conversation");
-  wire.push(ending);
-  await done;
-  expect(voiceView()).toMatchObject({ state: "error", sticky: false });
-  expect({ requests: wires.length, notes }).toEqual({ requests: 1, notes: [] });
-});
-
-test("turning sticky off during a call lets a network loss end it", async () => {
-  setVoiceSticky(true);
-  const { done, peer } = await live("conversation");
-  setVoiceSticky(false);
-  peer.connectionState = "failed";
-  peer.onconnectionstatechange!();
-  await done;
-  expect(voiceView()).toMatchObject({ state: "error", error: "Voice call failed: audio connection lost.", sticky: false });
-  expect({ requests: wires.length, notes }).toEqual({ requests: 1, notes: [] });
 });
 
 test("notices show during a call, newest first, and clear when it ends", async () => {
@@ -243,24 +211,6 @@ test("notices show during a call, newest first, and clear when it ends", async (
   await done;
   expect(voiceView()).toMatchObject({ state: "idle", error: "", notice: "" });
   expect(peer.closed).toBe(true);
-});
-
-test("an audio connection that does not open in 20 s retries once with the same microphone, then fails", async () => {
-  jest.useFakeTimers();
-  try {
-    const done = startVoice("conversation");
-    for (const attempt of [0, 1]) {
-      await until(() => wires.length > attempt);
-      wires[attempt].push({ answer: { sdp: "answer-sdp", route: "public" } });
-      await until(() => peers[attempt].remote);
-      jest.advanceTimersByTime(19_999);
-      expect(wires[attempt].aborted).toBe(false);
-      jest.advanceTimersByTime(1);
-    }
-    await done;
-    expect(voiceView()).toMatchObject({ state: "error", error: "Voice connection timed out.", notice: "" });
-    expect({ aborted: wires.map((wire) => wire.aborted), closed: peers.map((peer) => peer.closed), mics: tracks.length, sameMic: peers[1].tracks[0] === tracks[0], micStopped: tracks[0].stopped }).toEqual({ aborted: [true, true], closed: [true, true], mics: 1, sameMic: true, micStopped: true });
-  } finally { jest.useRealTimers(); }
 });
 
 test("an audio connection that opens while the answer is applied starts no retry countdown", async () => {
@@ -342,27 +292,6 @@ test("a typed message mutes playback until the voice answers new speech", async 
   expect(voiceLevel()).toBe(0);
 });
 
-test("the retry shows its note and goes live once its channel opens", async () => {
-  jest.useFakeTimers();
-  try {
-    const done = startVoice("conversation");
-    await until(() => wires.length);
-    wires[0].push({ answer: { sdp: "answer-sdp", route: "public" } });
-    await until(() => peers[0].remote);
-    jest.advanceTimersByTime(20_000);
-    await until(() => wires.length === 2);
-    expect(voiceView()).toMatchObject({ state: "connecting", notice: "Voice connection timed out. Retrying once." });
-    wires[1].push({ answer: { sdp: "answer-sdp", route: "public" } });
-    await until(() => peers[1].remote);
-    peers[1].channel.onopen!();
-    jest.advanceTimersByTime(60_000);
-    expect(voiceView()).toMatchObject({ state: "live", error: "" });
-    expect(wires.length).toBe(2);
-    stopVoice();
-    await done;
-  } finally { jest.useRealTimers(); }
-});
-
 for (const [code, message, shown] of [
   [9, "openai voice request failed with HTTP 401", "OpenAI rejected the default provider's credential."],
   [9, "openai voice request failed with HTTP 404", "The default OpenAI provider's voice route is unavailable."],
@@ -377,21 +306,14 @@ for (const [code, message, shown] of [
   expect(tracks[0].stopped).toBe(true);
 });
 
-test("Stop while connecting reaches idle; the stream ending while connecting is an error", async () => {
-  let done = startVoice("conversation");
+test("Stop while connecting reaches idle", async () => {
+  const done = startVoice("conversation");
   await until(() => wires.length);
   stopVoice();
   expect(voiceView().state).toBe("ending");
   await done;
   expect(voiceView()).toMatchObject({ state: "idle", error: "" });
   expect({ aborted: wires[0].aborted, closed: peers[0].closed, sent: peers[0].channel.sent }).toEqual({ aborted: true, closed: true, sent: [] });
-
-  done = startVoice("conversation");
-  await until(() => wires.length === 2);
-  wires[1].close();
-  await done;
-  expect(voiceView()).toMatchObject({ state: "error", error: lost });
-  expect(peers[1].closed).toBe(true);
 });
 
 test("starting a second call hangs up the first; captions follow each dialect and reset per call", async () => {
