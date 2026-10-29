@@ -313,21 +313,21 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     const params = () => Object.fromEntries(["delegation", "reason", "answer"].map((name) => [name, new URL(page.url()).searchParams.get(name)]));
     // Two calls with the same reason each open their own answer.
     await heredoc.getByRole("link", { name: "Open permission review", exact: true }).click();
-    expect(params()).toEqual({ delegation: "chat/call-a-review-1", reason: "Reading the diff is in scope.", answer: "t-read" });
     await shown("21:1");
+    expect(params()).toEqual({ delegation: "chat/call-a-review-1", reason: "Reading the diff is in scope.", answer: "t-read" });
     await page.goBack();
     await panel.waitFor({ state: "detached" });
     const diff = row("call-a", "bash · git diff");
     await diff.locator('> [data-slot="trace-collapsible-trigger"]').click();
     await diff.getByRole("link", { name: "Open permission review", exact: true }).click();
-    expect(params()).toEqual({ delegation: "chat/call-a-review-1", reason: "Reading the diff is in scope.", answer: "t-diff" });
     await shown("24:1");
+    expect(params()).toEqual({ delegation: "chat/call-a-review-1", reason: "Reading the diff is in scope.", answer: "t-diff" });
     await page.goBack();
     await panel.waitFor({ state: "detached" });
     // A reason with no review turn, as saved before turns were named, opens at the first answer giving it.
     await reasons("call-a").last().getByRole("link", { name: "Open permission review", exact: true }).click();
-    expect(params()).toEqual({ delegation: "chat/call-a-review-1", reason: "The late cleanup is in scope.", answer: null });
     await shown("23:1");
+    expect(params()).toEqual({ delegation: "chat/call-a-review-1", reason: "The late cleanup is in scope.", answer: null });
     await atEnd(false);
     const latest = panel.getByRole("button", { name: "Scroll to latest", exact: true });
     await latest.and(panel.locator('[data-active="true"]')).waitFor();
