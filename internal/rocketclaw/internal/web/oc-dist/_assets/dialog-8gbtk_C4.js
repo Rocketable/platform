@@ -1,1 +1,0 @@
-import{s as e}from"./palette-D8IoH3n_.js";import{n as t,t as n}from"./dialog-ZrrlHQwu.js";export{n as CommandPaletteView,t as DialogCommandPalette,e as matchesCommandPaletteEntry};

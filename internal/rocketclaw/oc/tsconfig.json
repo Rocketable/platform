@@ -151,6 +151,12 @@
       "@opencode/session-ui/actions": [
         "./packages/session-ui/src/actions.ts"
       ],
+      "@opencode/session-ui/tools/shell-output": [
+        "./packages/session-ui/src/tools/shell-output.ts"
+      ],
+      "@opencode/session-ui/tools/ansi": [
+        "./packages/session-ui/src/tools/ansi.ts"
+      ],
       "@opencode/session-ui/document": [
         "./packages/session-ui/src/document.ts"
       ],
@@ -294,6 +300,9 @@
       ],
       "@opencode/ui/button.css": [
         "./packages/ui/src/actions/button/button.css"
+      ],
+      "@opencode/ui/document-surface.css": [
+        "./packages/ui/src/components/document-surface.css"
       ],
       "@opencode/ui/checkbox": [
         "./packages/ui/src/forms/checkbox/checkbox.tsx"

@@ -20,13 +20,15 @@ type PromptTarget = {
 export type ComposerAttachmentConfig = {
   picker?: (
     options: { defaultPath?: string; multiple?: boolean; accept?: string[] },
-    onFile: (file: File) => Promise<unknown>,
+    onFile: (file: File) => Promise<boolean>,
   ) => Promise<void>
   directory: () => string
   destination: () => AttachmentDestination
   isDialogActive: () => boolean
   duplicate: () => void
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- a failed attachment is opaque; the host formats it
   onError: (error: unknown) => void
+  // oxlint-disable-next-line anti-slop/no-unknown-parameters -- a failed upload is opaque; the host formats it
   onUploadError: (error: unknown) => void
   readClipboardImage?: () => Promise<File | null>
   getPathForFile?: (file: File) => string
@@ -133,7 +135,7 @@ export function createComposerAttachments(
       .track({ id, filename: file.name, mime, size: file.size }, (report, signal) =>
         destination.upload(file, report, signal),
       )
-      .catch((error: unknown) => {
+      .catch((error) => {
         input.onUploadError(error)
 
         return undefined
@@ -143,13 +145,20 @@ export function createComposerAttachments(
     if (path) addPath(target, { filename: file.name, mime, path })
   }
 
-  const addAttachments = async (files: File[], target = capture()) => {
-    return files.reduce(async (result, file) => {
-      const previous = await result
+  // Callers start this without awaiting it, so a failure (for example a blob write on a full disk)
+  // is reported through onError instead of escaping as an unhandled rejection.
+  const addAttachments = (files: File[], target = capture(), clipboard = false) =>
+    files
+      .reduce(async (result, file) => {
+        const previous = await result
 
-      return (await add(file, target)) || previous
-    }, Promise.resolve(false))
-  }
+        return (await add(file, target, clipboard)) || previous
+      }, Promise.resolve(false))
+      .catch((error) => {
+        input.onError(error)
+
+        return false
+      })
 
   const handlePaste = async (event: ClipboardEvent) => {
     const clipboardData = event.clipboardData
@@ -179,7 +188,7 @@ export function createComposerAttachments(
     if (input.readClipboardImage && !plainText) {
       const file = await input.readClipboardImage()
 
-      if (file && (await add(file, target, true))) return
+      if (file && (await addAttachments([file], target, true))) return
     }
 
     if (!plainText) return
@@ -198,6 +207,7 @@ export function createComposerAttachments(
       return
     }
 
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- probing for a deprecated browser API that some environments lack
     if (typeof document.execCommand === "function" && document.execCommand("insertText", false, text)) return
     put()
   }

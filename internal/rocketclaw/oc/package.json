@@ -31,16 +31,16 @@
     "@tanstack/solid-query": "5.91.4",
     "@tanstack/solid-virtual": "3.13.37",
     "diff": "8.0.4",
-    "dompurify": "3.4.14",
-    "effect": "4.0.1",
+    "dompurify": "3.4.17",
+    "effect": "4.0.6",
     "fuzzysort": "3.1.0",
     "ghostty-web": "github:anomalyco/ghostty-web#e91e38a9ceb13c566ddfa15185a9393849f712a9",
-    "katex": "0.16.47",
+    "katex": "0.18.11",
     "knobs": "npm:@kitlangton/knobs@0.4.0-next.22",
     "marked": "18.0.11",
     "pele": "1.7.0",
     "remeda": "2.26.0",
-    "solid-js": "1.9.15",
+    "solid-js": "1.9.17",
     "solid-list": "0.3.0",
     "solid-presence": "0.2.0",
     "solid-sonner": "0.3.1",
@@ -62,21 +62,21 @@
     "rolldown": "1.2.5",
     "tailwindcss": "4.3.3",
     "tw-animate-css": "1.4.0",
-    "vite": "8.2.2",
+    "vite": "8.2.4",
     "vite-plugin-solid": "2.11.14"
   },
   "overrides": {
     "@types/bun": "1.4.3",
     "@types/node": "24.12.2",
     "bun-types": "1.4.4",
-    "effect": "4.0.1",
-    "solid-js": "1.9.15"
+    "effect": "4.0.6",
+    "solid-js": "1.9.17"
   },
   "patchedDependencies": {
     "@tanstack/virtual-core@3.17.8": "patches/@tanstack%2Fvirtual-core@3.17.8.patch",
     "@pierre/trees@1.0.0-beta.6": "patches/@pierre%2Ftrees@1.0.0-beta.6.patch",
-    "solid-js@1.9.15": "patches/solid-js@1.9.15.patch",
-    "vite@8.2.2": "patches/vite@8.2.2.patch",
+    "solid-js@1.9.17": "patches/solid-js@1.9.17.patch",
+    "vite@8.2.4": "patches/vite@8.2.4.patch",
     "@corvu/drawer@0.2.4": "patches/@corvu%2Fdrawer@0.2.4.patch",
     "@dnd-kit/dom@0.5.0": "patches/@dnd-kit%2Fdom@0.5.0.patch"
   }
