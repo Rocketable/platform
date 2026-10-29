@@ -48,15 +48,15 @@ All of this is history. The connector code it names has been removed.
 
 Slack intake is now mention-only, and duplicates are refused at one durable point.
 
-1. The connector handles only channel renames, `AppMentionEvent` and `AgentSessionStoppedEvent` (`internal/rocketclaw/frontend/slack/connector.go:1430-1439`). Plain messages, including the parent `message` redelivery, never reach the router. Nothing else in Slack drives an agent.
-2. `handleAppMentionEvent` (`internal/rocketclaw/frontend/slack/connector.go:1493-1581`) builds the inbound message and calls `threadRouter.SubmitMention` (line 1565). It adds the robot reaction only when the mention is accepted (lines 1577-1580). A refused redelivery returns `false, nil`, so it gets no reaction and no failure reply.
-3. `threadBridgeManager.SubmitMention` (`internal/rocketclaw/backend/thread_bridges.go:338-374`) makes the Thread Queue item ID `"slack:" + channel + ":" + message ts` (line 343). Inside one State Store transaction, holding the session history lock, it checks for that ID in two places: any model turn row (`turns` with `takes_lane`, whether waiting, running or finished) and saved history (`entries` whose `replay_input` carries that `input_id`) (SQL at lines 361-368). If it finds the ID, it returns `false, nil` (lines 372-373) and writes nothing.
+1. The connector handles only channel renames, `AppMentionEvent` and `AgentSessionStoppedEvent` (`internal/rocketclaw/frontend/slack/connector.go:1013-1022`). Plain messages, including the parent `message` redelivery, never reach the router. Nothing else in Slack drives an agent.
+2. `handleAppMentionEvent` (`internal/rocketclaw/frontend/slack/connector.go:1076-1164`) builds the inbound message and calls `threadRouter.SubmitMention` (line 1148). It adds the robot reaction only when the mention is accepted (lines 1160-1163). A refused redelivery returns `false, nil`, so it gets no reaction and no failure reply.
+3. `threadBridgeManager.SubmitMention` (`internal/rocketclaw/backend/thread_bridges.go:323-379`) makes the Thread Queue item ID `"slack:" + channel + ":" + message ts` (line 325). Inside one State Store transaction, holding the session history lock, it checks for that ID in two places: any model turn row (`turns` with `takes_lane`, whether waiting, running or finished) and saved history (`entries` whose `replay_input` carries that `input_id`) (SQL at lines 343-350). If it finds the ID, it returns `false, nil` (lines 354-355) and writes nothing.
 
 Tests that pin this behavior:
 
-- `TestHandleAppMentionEventRedeliveryReactsOnce` (`internal/rocketclaw/frontend/slack/connector_test.go:4242-4271`) sends the root mention, the parent `message` and a threaded reply mention, twice each. It expects four `SubmitMention` calls (the two parent messages never reach the router) and exactly two robot reactions.
-- `TestHandleEventsAPIIgnoresMessagesAndReactions` (`internal/rocketclaw/frontend/slack/connector_test.go:4180-4198`) shows that a parent `message` with `ts == thread_ts`, a plain reply, a reaction and an edited mention cause no router call.
-- `TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce` (`internal/rocketclaw/backend/thread_bridges_test.go:239-305`) refuses a redelivery in each state: while the mention waits, mid-turn, after a restart, and after its turn has finished. It also checks that a mention never steers the running turn.
+- `TestHandleAppMentionEventRedeliveryReactsOnce` (`internal/rocketclaw/frontend/slack/connector_test.go:2923-2952`) sends the root mention, the parent `message` and a threaded reply mention, twice each. It expects four `SubmitMention` calls (the two parent messages never reach the router) and exactly two robot reactions.
+- `TestHandleEventsAPIIgnoresMessagesAndReactions` (`internal/rocketclaw/frontend/slack/connector_test.go:2861-2879`) shows that a parent `message` with `ts == thread_ts`, a plain reply, a reaction and an edited mention cause no router call.
+- `TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce` (`internal/rocketclaw/backend/thread_bridges_test.go:223-289`) refuses a redelivery in each state: while the mention waits, mid-turn, after a restart, and after its turn has finished. It also checks that a mention never steers the running turn.
 
 ## Why This Works
 

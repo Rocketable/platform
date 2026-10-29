@@ -30,11 +30,11 @@ tags:
 
 RocketCode compacts conversation history when token usage crosses a threshold. That threshold used to be a single hardcoded default on every looper. Providers now carry their own override.
 
-The config field is per provider, not per model. `OpenAIConfig.AutocompactionThreshold` serializes as `autocompaction_threshold` and is omitted when zero (`internal/rocketclaw/config/config.go:223-231`). The default `openai` object and each named `providers` entry have their own copy. An agent that resolves a named `provider/model` selector uses that provider's config; an unqualified model uses `openai`. Child agents resolve their own model independently. There is no implicit provider failover.
+The config field is per provider, not per model. `OpenAIConfig.AutocompactionThreshold` serializes as `autocompaction_threshold` and is omitted when zero (`internal/rocketclaw/config/config.go:212-220`). The default `openai` object and each named `providers` entry have their own copy. An agent that resolves a named `provider/model` selector uses that provider's config; an unqualified model uses `openai`. Child agents resolve their own model independently. There is no implicit provider failover.
 
 The change from [PR #6](https://github.com/Rocketable/platform/pull/6) is in the current tree.
 
-Zero means unset. `normalizeOpenAIConfig` rejects only values `< 0` (`internal/rocketclaw/config/config.go:525-527`). The error text says "must be a positive integer," but `0` is accepted and means fall back to the runtime default.
+Zero means unset. `normalizeOpenAIConfig` rejects only values `< 0` (`internal/rocketclaw/config/config.go:517-519`). The error text says "must be a positive integer," but `0` is accepted and means fall back to the runtime default.
 
 ## Guidance
 
@@ -42,10 +42,10 @@ Keep the threshold on the provider that owns the client. Do not add a second mod
 
 The copy path is:
 
-1. Load and validate provider JSON. `Validate` runs `normalizeOpenAIConfig` on `openai` and every named provider (`internal/rocketclaw/config/config.go:408-423`).
+1. Load and validate provider JSON. `Validate` runs `normalizeOpenAIConfig` on `openai` and every named provider (`internal/rocketclaw/config/config.go:404-420`).
 2. `modelResolver.Resolve` copies `providerConfig.AutocompactionThreshold` onto `ProviderOrigin.CompactThreshold` (`internal/rocketclaw/backend/model_resolver.go:70`).
-3. Every looper is built by `toolFactory.newLooper`, which uses `cmp.Or(origin.CompactThreshold, f.compactThreshold)` so a set provider value wins and a zero origin falls back (`internal/rocketcode/tools.go:200`). Root (`internal/rocketcode/rocketcode.go:439`), task children (`internal/rocketcode/tasks.go:344`, `internal/rocketcode/tasks.go:464`) and permission-review children (`internal/rocketcode/permission_review.go:109`) all call it.
-4. `looper.compactThreshold()` still treats `<= 0` as `defaultCompactThreshold` (`internal/rocketcode/looper.go:32`, `internal/rocketcode/looper.go:1922-1928`). `buildParams` sends that value as Responses `context_management[].compact_threshold` (`internal/rocketcode/looper.go:1874-1877`).
+3. Every looper is built by `toolFactory.newLooper`, which uses `cmp.Or(origin.CompactThreshold, f.compactThreshold)` so a set provider value wins and a zero origin falls back (`internal/rocketcode/tools.go:200`). Root (`internal/rocketcode/rocketcode.go:439`), task children (`internal/rocketcode/tasks.go:351`, `internal/rocketcode/tasks.go:480`) and permission-review children (`internal/rocketcode/permission_review.go:109`) all call it.
+4. `looper.compactThreshold()` still treats `<= 0` as `defaultCompactThreshold` (`internal/rocketcode/looper.go:33`, `internal/rocketcode/looper.go:1930-1936`). `buildParams` sends that value as Responses `context_management[].compact_threshold` (`internal/rocketcode/looper.go:1882-1885`).
 
 `normalizeConfig` also writes `defaultCompactThreshold` onto `Config.CompactThreshold` when the factory input is `0` (`internal/rocketcode/rocketcode.go:549-551`). RocketClaw `NewWithModelResolver` sites either pass `CompactThreshold: 0` or omit the field (same zero). The RocketClaw path depends on the resolver origin plus that default.
 
@@ -75,7 +75,7 @@ Do not apply this as a per-agent or per-model knob. The current contract is per 
 
 Provider JSON field and zero-omit tag:
 
-```223:227:internal/rocketclaw/config/config.go
+```212:216:internal/rocketclaw/config/config.go
 type OpenAIConfig struct {
 	APIKey                  string `json:"api_key"`
 	APIBaseURL              string `json:"api_base_url"`
@@ -85,7 +85,7 @@ type OpenAIConfig struct {
 
 Negative values fail validation; zero does not:
 
-```525:527:internal/rocketclaw/config/config.go
+```517:519:internal/rocketclaw/config/config.go
 	if cfg.AutocompactionThreshold < 0 {
 		return fmt.Errorf("%s.autocompaction_threshold must be a positive integer", field)
 	}
@@ -105,11 +105,11 @@ Origin wins over factory config:
 
 Default and request field:
 
-```32:32:internal/rocketcode/looper.go
+```33:33:internal/rocketcode/looper.go
 const defaultCompactThreshold int64 = 200000
 ```
 
-```1874:1877:internal/rocketcode/looper.go
+```1882:1885:internal/rocketcode/looper.go
 	params.ContextManagement = []responses.ResponseNewParamsContextManagement{{
 		Type:             "compaction",
 		CompactThreshold: openai.Int(l.compactThreshold()),
@@ -144,4 +144,4 @@ Codex extracts the threshold, then strips the field the API does not accept:
 	}
 ```
 
-Operator-facing text: omit `autocompaction_threshold` to keep the runtime default; set it on `openai` or a named provider to override that provider only (`README.md:282`, `cmd/rocketclaw/CHEATSHEET.md:180`).
+Operator-facing text: omit `autocompaction_threshold` to keep the runtime default; set it on `openai` or a named provider to override that provider only (`README.md:319`, `cmd/rocketclaw/CHEATSHEET.md:175`).
