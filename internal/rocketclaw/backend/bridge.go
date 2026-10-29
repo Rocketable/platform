@@ -316,7 +316,7 @@ func (b *Bridge) WriteSubagent(ctx context.Context, write *rocketcode.SubagentWr
 	inbound.PreserveWhitespace = true
 	inbound.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text", protocol.InboundSenderSessionMetadataKey: b.config.ConversationID, protocol.InboundSenderAgentMetadataKey: write.Delegator, inboundAgentMetadataKey: write.Agent}
 
-	outcome, _, err := b.threads.writeSession(ctx, target, b.config.ConversationID+"/"+write.CallKey, sessionWriteMode(cmp.Or(write.Mode, rocketcode.ContinueEnqueue)), inbound)
+	outcome, _, err := b.threads.writeSession(ctx, target, b.config.ConversationID+"/"+write.CallKey, sessionWriteMode(cmp.Or(write.Mode, rocketcode.ContinueEnqueue)), inbound, nil)
 	if errors.Is(err, errWriteDelivered) {
 		return false, nil
 	}
@@ -2319,7 +2319,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		customTools = append(customTools, askUserQuestionTool(b.config.UserQuestionAsker, msg))
 	}
 
-	customTools = append(customTools, sessionsWriteTool(b, origin, rootAgent, self))
+	customTools = append(customTools, sessionsWriteTool(b, origin, msg, rootAgent, self, agents))
 	customTools = append(customTools, pageTools(b.config.SessionService, root, b.threads, rootAgent, agents.Items[rootAgent].Space, "")...)
 
 	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, customTools...)
@@ -2501,6 +2501,19 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	if len(staged.entries) > 0 {
 		result.responseID = staged.entries[len(staged.entries)-1].ResponseID
+	}
+
+	// A subagent session's wake turn, which no task call awaits, answers its parent as a task call would
+	// (finishTurn). A resumed turn reviews its answer again.
+	if b.parent != "" && msg.Metadata[backgroundNotesMetadataKey] != "" {
+		var parent ThreadState
+		if parent, _, err = b.config.SessionService.Thread(b.parent); err != nil {
+			return result, err
+		}
+
+		if finish.report, err = looper.ReviewTask(ctx, parent.Agent, strings.Join(prepared.Texts, "\n\n"), result.text); err != nil {
+			return result, fmt.Errorf("review subagent answer: %w", err)
+		}
 	}
 
 	// The reply sends the files the turn and its subagents attached; an empty cron reply is silent, files included.
@@ -2818,6 +2831,12 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 
 		groups, err := agentTagGroups(&agent)
 		if err != nil {
+			err = fmt.Errorf("permission.rocketclaw.%s: %w", setTagToolName, err)
+		} else if _, _, errRecipients := agentRecipients(&agent); errRecipients != nil {
+			err = fmt.Errorf("permission.rocketclaw.%s: %w", recipientSetting, errRecipients)
+		}
+
+		if err != nil {
 			if strings.Contains(name, "/") {
 				slog.Warn("load shadow definition", "path", agent.Location, "error", err)
 				delete(agents.Items, name)
@@ -2825,7 +2844,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 				continue
 			}
 
-			return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("%s: permission.rocketclaw.rocketclaw_set_tag: %w", agent.Location, err)
+			return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("%s: %w", agent.Location, err)
 		}
 
 		agent.Permission.Buckets = slices.DeleteFunc(agent.Permission.Buckets, func(bucket rocketcode.PermissionBucket) bool {
@@ -3375,6 +3394,11 @@ func buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any, 
 			provenance.sender = "steer from " + sender
 		default:
 			provenance.sender = "message from " + sender
+		}
+
+		// Only a task's prompt names the agent its turn runs as; that answer is the task call's result.
+		if msg.Metadata[inboundAgentMetadataKey] == "" {
+			provenance.sender += "; your final answer returns to that session automatically, so do not write back to it"
 		}
 	}
 

@@ -83,7 +83,7 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		workspace := t.TempDir()
-		writeAgent(t, workspace, "main", "---\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_sessions_current_id: allow\n    rocketclaw_get_tags: allow\n    rocketclaw_set_tag: [[red, yellow]]\n---\nPrompt\n")
+		writeAgent(t, workspace, "main", "---\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_sessions: allow\n    rocketclaw_get_tags: allow\n    rocketclaw_set_tag: [[red, yellow]]\n---\nPrompt\n")
 
 		var tagOutputs []string
 
@@ -1011,7 +1011,7 @@ func TestRuntimeQueueEditKeepsPreparedWorkflow(t *testing.T) {
 			if test.waiting {
 				stop := protocol.NewInboundMessageFromContent(protocol.SourceSystem, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: "stop"}, false)
 				stop.ConversationID, stop.Metadata["web_message_id"] = "main", "stop"
-				_, _, err = bridge.admitAgentWrite(t.Context(), sessionWriteStop, stop)
+				_, _, err = bridge.admitAgentWrite(t.Context(), sessionWriteStop, stop, nil)
 				require.NoError(t, err)
 				require.Len(t, bridge.waiting, 1)
 			}
@@ -1090,7 +1090,7 @@ func TestRuntimeQueueEditRejectsPreservedSteer(t *testing.T) {
 
 	stop := protocol.NewInboundMessageFromContent(protocol.SourceSystem, protocol.InboundKindEnqueue, &protocol.InboundContent{Text: "stop"}, false)
 	stop.ConversationID, stop.Metadata["web_message_id"] = "main", "stop"
-	_, _, err = bridge.admitAgentWrite(t.Context(), sessionWriteStop, stop)
+	_, _, err = bridge.admitAgentWrite(t.Context(), sessionWriteStop, stop, nil)
 	require.NoError(t, err)
 	require.Len(t, bridge.waiting, 1)
 	changed, err := rt.EditQueueItem(t.Context(), "main", "steer", "changed")

@@ -631,7 +631,8 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 2)
 
-	require.NoError(t, store.DeleteThreadQueueItem("q2"))
+	_, _, err = store.DeleteThreadQueueItem(t.Context(), conversationID, "q2")
+	require.NoError(t, err)
 
 	items, err = store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
@@ -674,7 +675,7 @@ func TestSessionServiceInitializesActiveTurnIndexes(t *testing.T) {
 	}
 
 	require.NoError(t, rows.Err())
-	assert.Equal(t, []string{"turns", "turns_conversation_updated", "turns_job", "turns_pending_notes", "turns_pkey", "turns_search_text", "turns_waiting_input"}, names)
+	assert.Equal(t, []string{"turns", "turns_conversation_updated", "turns_job", "turns_pending_notes", "turns_pkey", "turns_running_replies", "turns_search_text", "turns_waiting_input"}, names)
 }
 
 func TestInitializeSessionDBReportsMigrationError(t *testing.T) {
@@ -1724,10 +1725,12 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	assert.Len(t, entries, 1)
 
 	for _, id := range []string{"orphan-q1", "orphan-q2"} {
-		require.NoError(t, store.DeleteThreadQueueItem(id))
+		_, _, err := store.DeleteThreadQueueItem(t.Context(), orphanID, id)
+		require.NoError(t, err)
 	}
 
-	require.NoError(t, store.DeleteThreadQueueItem(privateItem.ID))
+	_, _, err = store.DeleteThreadQueueItem(t.Context(), privateID, privateItem.ID)
+	require.NoError(t, err)
 	_, err = store.PruneStateBefore(t.Context(), cutoff, 0)
 	require.NoError(t, err)
 	_, ok, err = store.ExternalMCPSession("public-1")

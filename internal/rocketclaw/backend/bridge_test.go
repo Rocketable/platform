@@ -2227,16 +2227,22 @@ func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
 	assert.Equal(t, `[Web media=Voice principal="Alice"]`, provenanceHeader(&voice))
 }
 
-// R17: the builder names an agent sender and picks the verb by how the message reaches the turn.
+// R17: the builder names an agent sender and picks the verb by how the message reaches the turn. An
+// agent's write tells the receiver its answer returns on its own; a task prompt's answer is the task
+// call's result, so its header does not.
 func TestBuildPromptNamesAgentSender(t *testing.T) {
 	msg := &protocol.InboundMessage{Source: protocol.SourceSystem, Text: "hi", Metadata: map[string]string{protocol.InboundSenderSessionMetadataKey: `web:"a"`, protocol.InboundSenderAgentMetadataKey: "planner"}}
 	instructions := ` additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]` + "\n\nhi"
+	returns := `; your final answer returns to that session automatically, so do not write back to it"`
 
-	assert.Equal(t, `[System sender="steer from session web:\"a\" (agent planner)"`+instructions, buildPrompt(msg, nil, true))
-	assert.Equal(t, `[System sender="message from session web:\"a\" (agent planner)"`+instructions, buildPrompt(msg, nil, false))
+	assert.Equal(t, `[System sender="steer from session web:\"a\" (agent planner)`+returns+instructions, buildPrompt(msg, nil, true))
+	assert.Equal(t, `[System sender="message from session web:\"a\" (agent planner)`+returns+instructions, buildPrompt(msg, nil, false))
 
 	msg.Metadata[protocol.InboundSenderActionMetadataKey] = protocol.SenderActionStopped
-	assert.Equal(t, `[System sender="session web:\"a\" (agent planner) stopped your previous turn and sent this"`+instructions, buildPrompt(msg, nil, false))
+	assert.Equal(t, `[System sender="session web:\"a\" (agent planner) stopped your previous turn and sent this`+returns+instructions, buildPrompt(msg, nil, false))
+
+	task := &protocol.InboundMessage{Source: protocol.SourceSystem, Text: "hi", Metadata: map[string]string{protocol.InboundSenderSessionMetadataKey: `web:"a"`, protocol.InboundSenderAgentMetadataKey: "planner", inboundAgentMetadataKey: "researcher"}}
+	assert.Equal(t, `[System sender="message from session web:\"a\" (agent planner)"`+instructions, buildPrompt(task, nil, false))
 }
 
 func TestBridgeScheduleMessageSubmitsAfterDelay(t *testing.T) {
@@ -5297,7 +5303,7 @@ func TestTurnBoundPlatformTools(t *testing.T) {
 
 	origin := new(protocol.InboundMessage)
 	bridge := &Bridge{runtime: new(config.LockedConfig), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
-	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []rocketcode.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{restartFunc: testNoopRestart}), attachFilesTool(nil, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), sessionsWriteTool(bridge, origin, "main", "main"), currentSessionIDTool("main")}, pageTools(bridge.config.SessionService, nil, nil, "main", "", ""))
+	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []rocketcode.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{restartFunc: testNoopRestart}), attachFilesTool(nil, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), sessionsWriteTool(bridge, origin, origin, "main", "main", rocketcode.Agents{}), currentSessionIDTool("main")}, pageTools(bridge.config.SessionService, nil, nil, "main", "", ""))
 
 	var bound []string
 

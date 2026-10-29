@@ -20,11 +20,16 @@ func TestStopBackgroundJobTool(t *testing.T) {
 
 	store := newTestSessionService(t)
 	started, release := make(chan struct{}, 4), make(chan struct{})
-	registry := newBackgroundRegistry(store, &backgroundNotesMock{noteReadyFunc: func(string) {}}, testLogger())
+	notes := &backgroundNotesMock{noteReadyFunc: func(string) {}}
+	registry := newBackgroundRegistry(store, notes, testLogger())
 
 	defer close(release)
 
 	reportTestRun(t, store, "cron:daily", "main")
+
+	// A session write's reply has no run: stopping it ends the row, not the target's turn.
+	reply := testReply("main", "turn-1/call/w", "web:ops")
+	createTestBackgroundJob(t, store, reply)
 
 	for i, job := range []struct{ conversationID, destination string }{{"main", ""}, {"main", ""}, {"cron:daily", "main"}, {"other", ""}} {
 		turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: job.conversationID, origin: &protocol.InboundMessage{SyncDestination: job.destination}}
@@ -38,7 +43,7 @@ func TestStopBackgroundJobTool(t *testing.T) {
 		return tool.Call(t.Context(), json.RawMessage(`{"job_id":"`+jobID+`"}`), nil)
 	}
 
-	for _, jobID := range []string{"turn-1/call/0", "turn-1/call/1", "turn-1/call/2"} {
+	for _, jobID := range []string{"turn-1/call/0", "turn-1/call/1", "turn-1/call/2", reply.jobID} {
 		result, err := stop(jobID)
 		require.NoError(t, err)
 		require.Equal(t, "Stopped background job "+jobID+".", result.Output)
@@ -51,6 +56,10 @@ func TestStopBackgroundJobTool(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "Background job "+jobID+" had already finished.", result.Output)
 	}
+
+	stopped := testBackgroundRow(t, store, "main", reply.jobID)
+	require.Equal(t, []any{notePending, false}, []any{stopped.noteState, stopped.wake}, "the stopped reply's note waits for its owner's next turn")
+	require.Len(t, notes.noteReadyCalls(), 3, "only the stopped scripts wake their owners")
 
 	_, err := stop("turn-1/call/3")
 	require.EqualError(t, err, `background job "turn-1/call/3" is neither running nor waiting to report in this conversation`)

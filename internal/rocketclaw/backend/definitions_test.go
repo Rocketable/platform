@@ -36,7 +36,7 @@ func TestSessionTagDefinitions(t *testing.T) {
 				frontmatter = "    rocketclaw_set_tag: " + tags + "\n"
 			}
 
-			require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_get_tags: allow\n    rocketclaw_sessions_get: allow\n"+frontmatter+"---\nPrompt\n"), 0o644))
+			require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_get_tags: allow\n    rocketclaw_sessions: allow\n"+frontmatter+"---\nPrompt\n"), 0o644))
 
 			if tags == "example" {
 				// Read the shipped example, then install the fixture through the sandbox root.
@@ -83,7 +83,7 @@ func TestSessionTagDefinitions(t *testing.T) {
 					require.False(t, matched)
 				}
 
-				require.Equal(t, tags != "example", permissionSetAllows(agent.Permission, "rocketclaw", "rocketclaw_sessions_get"))
+				require.Equal(t, tags != "example", permissionSetAllows(agent.Permission, "rocketclaw", sessionsSubject))
 			}
 		})
 	}
@@ -210,6 +210,41 @@ func TestSessionTagsExistingPermissions(t *testing.T) {
 	}
 }
 
+// rocketclaw_sessions_recipient loads as a boolean or a non-empty list of unique agent names. Any other
+// value fails the load naming the file and key, except in a shadow definition, which is dropped.
+func TestSessionRecipientDefinitions(t *testing.T) {
+	t.Parallel()
+
+	for value, valid := range map[string]bool{"true": true, "false": true, "[main]": true, "[main, researcher]": true, "allow": false, "'true'": false, "null": false, "[]": false, "['']": false, "[main, main]": false, "[12]": false, "[[main]]": false} {
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+
+			workspace := t.TempDir()
+			definition := "---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_sessions_recipient: " + value + "\n---\nPrompt\n"
+			writeMainAgentSkills(t, workspace, definition)
+			root := openWorkspaceRoot(t, workspace)
+
+			agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+			if valid {
+				require.NoError(t, err)
+				requireNoRocketClawPermissionMatch(t, agents.Items["main"].Permission, recipientSetting)
+			} else {
+				require.ErrorContains(t, err, "main.md: permission.rocketclaw."+recipientSetting)
+				writeMainAgentSkills(t, workspace, "---\nmodel: gpt-5.4\n---\nPrompt\n")
+			}
+
+			require.NoError(t, root.MkdirAll(".rocketclaw/agents/main", 0o755))
+			require.NoError(t, root.WriteFile(".rocketclaw/agents/main/a.md", []byte(definition), 0o644))
+
+			agents, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+			require.NoError(t, err)
+			require.Contains(t, agents.Items, "main")
+			_, shadow := agents.Items["main/a"]
+			require.Equal(t, valid, shadow, "an invalid shadow definition is dropped")
+		})
+	}
+}
+
 func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode, models ...map[string]string) (rocketcode.Agents, rocketcode.Skills, error) {
 	cfg := &config.Config{Workspace: workspace}
 	if len(models) > 0 {
@@ -245,19 +280,19 @@ func TestLoadRocketCodeDefinitionsKeepsBackgroundExact(t *testing.T) {
 	require.ErrorContains(t, err, "allow_background must be allow or deny")
 }
 
-// Only an exact rule offers rocketclaw_sessions_write; wildcards, the scalar form, and session.spawn_mode fail to load.
-func TestLoadRocketCodeDefinitionsSessionsWrite(t *testing.T) {
+// Only an exact rocketclaw_sessions rule offers the session tools; wildcards, the scalar form, the
+// removed children scope, and session.spawn_mode fail to load.
+func TestLoadRocketCodeDefinitionsSessions(t *testing.T) {
 	workspace := t.TempDir()
 	cases := []struct {
 		name, rule string
 		want       rocketcode.PermissionAction
 	}{
 		{"missing", "", rocketcode.PermissionDeny},
-		{"deny", "rocketclaw_sessions_write: deny", rocketcode.PermissionDeny},
-		{"children", "rocketclaw_sessions_write: children", rocketcode.PermissionAllow},
-		{"auto", "rocketclaw_sessions_write: auto", rocketcode.PermissionAuto},
-		{"reviewed", "rocketclaw_sessions_write: auto(guardian)", rocketcode.PermissionAuto},
-		{"allow", "rocketclaw_sessions_write: allow", rocketcode.PermissionAllow},
+		{"deny", "rocketclaw_sessions: deny", rocketcode.PermissionDeny},
+		{"auto", "rocketclaw_sessions: auto", rocketcode.PermissionAuto},
+		{"reviewed", "rocketclaw_sessions: auto(guardian)", rocketcode.PermissionAuto},
+		{"allow", "rocketclaw_sessions: allow", rocketcode.PermissionAllow},
 	}
 
 	for _, tc := range cases {
@@ -275,15 +310,16 @@ func TestLoadRocketCodeDefinitionsSessionsWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, tc := range cases {
-		action, _ := agents.Items[tc.name].Permission.Evaluate("rocketclaw", sessionsWriteToolName)
+		action, _ := agents.Items[tc.name].Permission.Evaluate("rocketclaw", sessionsSubject)
 		require.Equal(t, tc.want, action, tc.name)
 	}
 
 	for permission, message := range map[string]string{
-		"rocketclaw: allow":                          "name each rocketclaw tool",
-		"rocketclaw: {'*': allow}":                   "name each rocketclaw tool",
-		"rocketclaw: {rocketclaw_sessions_*: allow}": "name each rocketclaw tool",
-		"rocketclaw: {session: {spawn_mode: all}}":   "session.spawn_mode is removed; use rocketclaw_sessions_write",
+		"rocketclaw: allow":                                 "name each rocketclaw tool",
+		"rocketclaw: {'*': allow}":                          "name each rocketclaw tool",
+		"rocketclaw: {rocketclaw_sessions_*: allow}":        "name each rocketclaw tool",
+		"rocketclaw: {rocketclaw_sessions_write: children}": `pattern "rocketclaw_sessions_write": unknown permission action "children"`,
+		"rocketclaw: {session: {spawn_mode: all}}":          "session.spawn_mode is removed; use rocketclaw_sessions",
 	} {
 		writeAgent(t, workspace, "bad", "---\nmodel: gpt-5.4\npermission:\n  "+permission+"\n---\nPrompt\n")
 
@@ -343,9 +379,7 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 		require.NoError(t, err)
 
 		for _, agent := range prepared.Items {
-			requireNoRocketClawPermissionMatch(t, agent.Permission, sessionsListToolName)
-			requireNoRocketClawPermissionMatch(t, agent.Permission, sessionsGetToolName)
-			requireNoRocketClawPermissionMatch(t, agent.Permission, sessionsCurrentIDToolName)
+			requireNoRocketClawPermissionMatch(t, agent.Permission, sessionsSubject)
 		}
 	}
 

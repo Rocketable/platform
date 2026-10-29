@@ -43,7 +43,7 @@ Keep queued conversations through retention, then discover the distinct conversa
 
 Since 2026-10-05 (step-journal change) there is no separate recovery phase. An interrupted turn is a lane-taking `turns` row that is neither `waiting` nor `done`; each worker runs its oldest such row, its own or that of a hidden run that reports to it, before anything else (`headTurn`), and `StartActiveTurns` wakes those workers before `StartQueuedConversations`. A turn that failed or was stopped is kept with phase `done` for the transcript, so it never holds back later queue rows.
 
-```1870:1873:internal/rocketclaw/backend/store.go
+```1872:1875:internal/rocketclaw/backend/store.go
 	pending, err := conversationHasPendingWork(ctx, db, conversationID)
 	if err != nil || pending {
 		return false, err
@@ -52,9 +52,10 @@ Since 2026-10-05 (step-journal change) there is no separate recovery phase. An i
 
 `conversationHasPendingWork` counts, among other work, `SELECT 1 FROM turns WHERE conversation_id = $1 AND phase = 'waiting'`.
 
-```422:435:internal/rocketclaw/backend/thread_bridges.go
+```406:419:internal/rocketclaw/backend/thread_bridges.go
 func (m *threadBridgeManager) StartQueuedConversations(ctx context.Context) error {
-	conversationIDs, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT conversation_id FROM turns WHERE phase = 'waiting' AND reason <> $1 ORDER BY conversation_id`, "queued conversation IDs", waitScheduled)
+	conversationIDs, err := queryStrings(ctx, m.store.db, `SELECT conversation_id FROM turns WHERE phase = 'waiting' AND reason <> $1
+UNION SELECT conversation_id FROM steps WHERE starts_with(key, $2) ORDER BY conversation_id`, "queued conversation IDs", waitScheduled, stopLineStep)
 	if err != nil {
 		return fmt.Errorf("load queued conversations: %w", err)
 	}
@@ -68,6 +69,8 @@ func (m *threadBridgeManager) StartQueuedConversations(ctx context.Context) erro
 	return nil
 }
 ```
+
+The same startup pass also wakes conversations that hold a parked "Stopped by" line from another session's stop write (a `steps` row keyed `stopped_by/...`, `stopLineStep` in `internal/rocketclaw/backend/session_tools.go`), so the line still posts after a restart.
 
 A private External MCP turn's row runs on its destination worker (the chat its conversation reports to, `conversations.reports_to`, recorded from `SyncDestination` when the turn starts); after it finishes, both sides pick later work. Schedule deletion and park-link clearing share one transaction so a failed delete cannot unpark waiting rows.
 

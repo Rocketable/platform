@@ -22,7 +22,7 @@ const (
 	executeDescriptionParam = "A short 3-5 word label for the script, displayed to the user."
 	backgroundContinueParam = "Continue a specific previous subagent by passing its continue ID. An empty string starts a new subagent."
 	backgroundModeParam     = "How the prompt reaches the subagent if it is still running: steer adds it to the running turn at its next step, enqueue runs it as a new turn after the work ahead of it, and stop stops the running turn and runs it next. A subagent that is not running runs it as its next turn in every mode. Ignored when starting a new subagent."
-	continueSteered         = "Steered: the prompt joins the subagent's running turn at its next step. That turn's result reaches you as it would have without the steer: as its job's note, as the result of the task call running it, or, for a turn the subagent started itself, only in its history; continue the subagent again to get its answer. DO NOT sleep or poll for it."
+	continueSteered         = "Steered: the prompt joins the subagent's running turn at its next step. That turn's result reaches you as it would have without the steer: as its job's note, as the result of the task call running it, or, for a turn the subagent started itself, as a note reporting its answer to you. DO NOT sleep or poll for it."
 	// taskContinueID follows the task_id line of OpenCode's former packages/opencode/src/tool/task.ts output.
 	taskContinueID   = "continue ID: %s (for resuming to continue this task if needed)\n\n"
 	continueNotChild = "continue ID %q is not a subagent you started; pass a continue ID from one of your own task results"

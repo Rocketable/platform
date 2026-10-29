@@ -160,7 +160,7 @@ func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
 
 	_, err := store.db.ExecContext(t.Context(), `ALTER TABLE conversations ADD CONSTRAINT reject_thread CHECK (false) NOT VALID`)
 	require.NoError(t, err)
-	_, err = manager.createSession(t.Context(), start, nil, "", nil)
+	_, err = manager.createSession(t.Context(), start, nil, "", nil, nil)
 	require.ErrorContains(t, err, "persist new Web session")
 	require.Len(t, bridges, 1)
 	assert.Len(t, bridges[0].StopCalls(), 1)
@@ -168,22 +168,6 @@ func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
 	_, err = manager.ensureThreadBridge(t.Context(), start.conversationID, ThreadState{Agent: "main"})
 	require.NoError(t, err)
 	require.Len(t, bridges, 2, "the retry starts a fresh bridge")
-}
-
-func TestStartedThreadKeepsSpawnedBy(t *testing.T) {
-	store := newWorkspaceSessionService(t)
-
-	require.NoError(t, store.UpsertThread("child", ThreadState{Agent: "main", spawnedBy: "parent"}))
-	require.NoError(t, store.UpsertThread("child", ThreadState{Agent: "planner", spawnedBy: "other"}))
-	_, err := store.ForkConversation(t.Context(), "child", protocol.Conversation{ID: "fork", Agent: "main"}, "")
-	require.NoError(t, err)
-
-	for id, want := range map[string]ThreadState{"child": {Agent: "planner", spawnedBy: "parent"}, "fork": {Agent: "main"}} {
-		thread, recorded, err := store.Thread(id)
-		require.NoError(t, err)
-		require.True(t, recorded)
-		require.Equal(t, want, thread, "only creation records the creator; a fork has none")
-	}
 }
 
 func TestRuntimeSwitchesConversationAgent(t *testing.T) {
@@ -506,19 +490,26 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 	writeAppTestAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-6.1-sol\n---\nPrompt\n")
 
 	store := newWorkspaceSessionService(t)
-	bridge := newDirectBridgeMock()
 
-	var created Config
+	var (
+		created Config
+		bridge  *Bridge
+	)
 
-	manager := newThreadBridgeManager(config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}), store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
+	// No manager runs the bridges' loops: a request handed to a loop never activates, as when the
+	// process stops before the new session's first turn starts.
+	runtime := config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}})
+	factory := &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 		created = *cfg
+		bridge = &Bridge{log: slog.New(slog.DiscardHandler), bus: newTestBus(), config: Config{ConversationID: cfg.ConversationID, Agent: cfg.Agent, SessionService: store}, requestCh: make(chan bridgeRequest, 8), stopCh: make(chan struct{})}
+
 		return bridge
-	}})
-	runTestManager(t, manager)
+	}}
+	manager := newThreadBridgeManager(runtime, store, slog.New(slog.DiscardHandler), factory)
 
 	caller := &Bridge{config: Config{ConversationID: "web:caller", SessionService: store}, threads: manager}
 	origin := &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}
-	write := sessionsWriteTool(caller, origin, "main", caller.config.ConversationID)
+	write := sessionsWriteTool(caller, origin, origin, "main", caller.config.ConversationID, rocketcode.Agents{})
 
 	output, err := write.Call(t.Context(), []byte(`{"session_id":"","mode":"steer","title":" Child ","prompt":" literal $(date) ","agent":""}`), nil)
 	require.NoError(t, err)
@@ -534,15 +525,29 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 
 	require.NotEmpty(t, conversationID)
 	assert.Empty(t, slackThread)
-	assert.JSONEq(t, fmt.Sprintf(`{"outcome":"created","session_id":%q,"url":%q}`, conversationID, "https://100.95.197.99:8080/s/"+base64.RawURLEncoding.EncodeToString([]byte(conversationID))), output.Output)
+	assert.JSONEq(t, fmt.Sprintf(`{"outcome":"created","session_id":%q,"url":%q,"queue_item_id":"web:caller/"}`, conversationID, "https://100.95.197.99:8080/s/"+base64.RawURLEncoding.EncodeToString([]byte(conversationID))), output.Output)
 	assert.Equal(t, Config{ConversationID: conversationID, Agent: "main"}, created)
-	require.Len(t, submittedMessages(bridge), 1)
+	assert.Equal(t, []string{"web:caller/"}, queueIDs(t, store, conversationID), "the first prompt is a Thread Queue row under the returned queue_item_id")
+	require.Len(t, bridge.requestCh, 1)
+	assert.Equal(t, "web:caller/", (<-bridge.requestCh).queueItemID)
 
-	first := submittedMessages(bridge)[0]
+	// After a restart the queued first prompt still runs as the session's first turn.
+	restarted := newThreadBridgeManager(runtime, store, slog.New(slog.DiscardHandler), factory)
+	require.NoError(t, restarted.StartQueuedConversations(t.Context()))
+	require.Len(t, bridge.requestCh, 1)
+
+	request := <-bridge.requestCh
+	assert.Equal(t, "web:caller/", request.queueItemID)
+
+	activated, err := bridge.activateInbound(t.Context(), &request)
+	require.NoError(t, err)
+	assert.True(t, activated, "the first prompt runs once")
+
+	first := request.inbound
 	assert.Equal(t, " literal $(date) ", first.Text)
 	assert.False(t, first.Human)
 	assert.Equal(t, protocol.SourceSystem, first.Source)
-	assert.Contains(t, buildPrompt(first, nil, false), `sender="message from session web:caller (agent )"`)
+	assert.Contains(t, buildPrompt(first, nil, false), `sender="message from session web:caller (agent ); your final answer returns to that session automatically, so do not write back to it"`)
 	assert.Contains(t, buildPrompt(first, nil, false), "\n\n literal $(date) ")
 	assert.Equal(t, "System", first.Metadata[protocol.InboundOriginMetadataKey])
 	assert.Nil(t, first.SlackReply)
@@ -550,7 +555,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 	thread, ok, err := store.Thread(conversationID)
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, ThreadState{Agent: "main", CreatedBy: "Alice", spawnedBy: "web:caller"}, thread, "the creator is recorded")
+	assert.Equal(t, ThreadState{Agent: "main", CreatedBy: "Alice"}, thread, "the creator is recorded")
 
 	var name string
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT name FROM conversations WHERE conversation_id = $1`, conversationID).Scan(&name))
@@ -590,7 +595,7 @@ func TestSessionsWriteRejectsUnavailableAgents(t *testing.T) {
 	write := func(origin *protocol.InboundMessage, agentName, agent, want string) {
 		t.Helper()
 
-		_, err := sessionsWriteTool(&Bridge{config: Config{ConversationID: "caller", SessionService: store}, threads: manager}, origin, agentName, "caller").Call(t.Context(), fmt.Appendf(nil, `{"session_id":"","mode":"enqueue","title":"Nightly","prompt":"run suite","agent":%q}`, agent), nil)
+		_, err := sessionsWriteTool(&Bridge{config: Config{ConversationID: "caller", SessionService: store}, threads: manager}, origin, origin, agentName, "caller", rocketcode.Agents{}).Call(t.Context(), fmt.Appendf(nil, `{"session_id":"","mode":"enqueue","title":"Nightly","prompt":"run suite","agent":%q}`, agent), nil)
 		require.ErrorContains(t, err, want)
 	}
 
@@ -761,7 +766,7 @@ func TestPromotedAgentQueueItemStaysNonHuman(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, inputs, 1)
 		assert.Nil(t, inputs[0].DirectSkill)
-		assert.True(t, strings.HasPrefix(inputs[0].Header, `[System sender="steer from session web:sender (agent planner)" additional_instructions=`), inputs[0].Header)
+		assert.True(t, strings.HasPrefix(inputs[0].Header, `[System sender="steer from session web:sender (agent planner)`), inputs[0].Header)
 	}
 }
 
@@ -776,7 +781,7 @@ func agentWrite(text string) *protocol.InboundMessage {
 // runningTestBridge is a recorded conversation's bridge whose turn runs with its input open.
 func runningTestBridge(t *testing.T, store *SessionService, manager *threadBridgeManager, conversationID string) *Bridge {
 	t.Helper()
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main", spawnedBy: "web:sender"}))
+	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
 
 	_, cancel := context.WithCancel(t.Context())
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: newTestBus(), config: Config{ConversationID: conversationID, SessionService: store}, threads: manager, requestCh: make(chan bridgeRequest, 8), stopCh: make(chan struct{}),
@@ -802,8 +807,8 @@ func queueIDs(t *testing.T, store *SessionService, conversationID string) []stri
 	return ids
 }
 
-// AE1, AE3, AE4: an agent's write is a Thread Queue row first; a steer joins only an open turn, a
-// stash waits for a person, both show in Web with their sender, and a replay adds nothing.
+// AE1, AE3: an agent's write is a Thread Queue row first; a steer joins only an open turn, every
+// write shows in Web with its sender, and a replay adds nothing.
 func TestWriteSessionDeliversByMode(t *testing.T) {
 	store := newTestSessionService(t)
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
@@ -818,19 +823,18 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 		{"steer into an open turn", sessionWriteSteer, true, sessionSteered, protocol.InboundKindSteer},
 		{"steer past the final answer or idle", sessionWriteSteer, false, sessionQueued, protocol.InboundKindEnqueue},
 		{"enqueue", sessionWriteEnqueue, true, sessionQueued, protocol.InboundKindEnqueue},
-		{"stash", sessionWriteStash, true, sessionStashed, protocol.InboundKindHeld},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			target := "web:" + tc.name
 			bridge := runningTestBridge(t, store, manager, target)
 			bridge.inputOpen = tc.open
 
-			outcome, running, err := manager.writeSession(t.Context(), target, "write "+tc.name, tc.mode, agentWrite("also check 2025"))
+			outcome, running, err := manager.writeSession(t.Context(), target, "write "+tc.name, tc.mode, agentWrite("also check 2025"), nil)
 			require.NoError(t, err)
 			assert.Equal(t, tc.outcome, outcome)
 			assert.False(t, running)
 
-			_, _, err = manager.writeSession(t.Context(), target, "write "+tc.name, tc.mode, agentWrite("also check 2025"))
+			_, _, err = manager.writeSession(t.Context(), target, "write "+tc.name, tc.mode, agentWrite("also check 2025"), nil)
 			require.ErrorContains(t, err, "already delivered", "a replayed write adds nothing")
 
 			queue, err := store.ThreadQueueForConversation(target)
@@ -854,28 +858,20 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 				inputs, err := bridge.Drain(t.Context(), "resp-1", rocketcode.TurnPhaseToolLoop, nil)
 				require.NoError(t, err)
 				require.Len(t, inputs, 1)
-				assert.True(t, strings.HasPrefix(inputs[0].Header, `[System sender="steer from session web:sender (agent planner)"`), inputs[0].Header)
+				assert.True(t, strings.HasPrefix(inputs[0].Header, `[System sender="steer from session web:sender (agent planner); your final answer returns to that session automatically, so do not write back to it"`), inputs[0].Header)
 			case sessionQueued:
 				require.Len(t, bridge.requestCh, 1, "the write waits for the running turn")
 
 				request := <-bridge.requestCh
 				assert.Equal(t, "write "+tc.name, request.queueItemID)
 				assert.False(t, request.inbound.Human)
-				assert.True(t, strings.HasPrefix(buildPrompt(request.inbound, nil, false), `[System sender="message from session web:sender (agent planner)"`))
+				assert.True(t, strings.HasPrefix(buildPrompt(request.inbound, nil, false), `[System sender="message from session web:sender (agent planner); your final answer returns to that session automatically, so do not write back to it"`))
 
 				for _, runs := range []bool{true, false} {
 					activated, err := bridge.activateInbound(t.Context(), &bridgeRequest{inbound: request.inbound, queueItemID: request.queueItemID})
 					require.NoError(t, err)
 					assert.Equal(t, runs, activated, "the write runs once")
 				}
-			case sessionStashed:
-				assert.Empty(t, bridge.requestCh, "a stash waits until a person pops it")
-				assert.Empty(t, bridge.steers)
-
-				popped, err := (&Runtime{Sessions: store, threads: manager}).PopQueueItem(t.Context(), target, "write "+tc.name)
-				require.NoError(t, err)
-				require.True(t, popped)
-				assert.False(t, (<-bridge.requestCh).inbound.Human, "a popped write stays non-human")
 			case sessionCreated, sessionStopped: // writeSession never creates; TestWriteSessionStopRunsFirst covers stops.
 			}
 		})
@@ -890,7 +886,7 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 		require.NoError(t, store.BeginGoal(target, &GoalState{Objective: "ship it", MaxTurns: 5}))
 		require.NoError(t, store.PutScheduledMessage("due", &protocol.ScheduledMessageState{ConversationID: target, Message: "scheduled", DueAt: time.Now().Add(-time.Minute)}))
 
-		outcome, _, err := manager.writeSession(t.Context(), target, "after goal", sessionWriteEnqueue, agentWrite("later"))
+		outcome, _, err := manager.writeSession(t.Context(), target, "after goal", sessionWriteEnqueue, agentWrite("later"), nil)
 		require.NoError(t, err)
 		assert.Equal(t, sessionQueued, outcome)
 		assert.Empty(t, bridge.requestCh, "the active goal holds the write")
@@ -905,7 +901,7 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 		bridge := runningTestBridge(t, store, manager, "web:busy")
 		bridge.historyMutation = true
 
-		_, _, err := manager.writeSession(t.Context(), "web:busy", "busy", sessionWriteEnqueue, agentWrite("later"))
+		_, _, err := manager.writeSession(t.Context(), "web:busy", "busy", sessionWriteEnqueue, agentWrite("later"), nil)
 		require.ErrorContains(t, err, "history is busy")
 		assert.Empty(t, queueIDs(t, store, "web:busy"))
 	})
@@ -919,7 +915,7 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 		require.NoError(t, err)
 
 		for _, mode := range []sessionWriteMode{sessionWriteEnqueue, sessionWriteSteer} {
-			outcome, _, err := manager.writeSession(t.Context(), target, string(mode), mode, agentWrite(string(mode)))
+			outcome, _, err := manager.writeSession(t.Context(), target, string(mode), mode, agentWrite(string(mode)), nil)
 			require.NoError(t, err)
 			assert.Equal(t, sessionQueued, outcome)
 		}
@@ -949,7 +945,7 @@ func TestWriteSessionStopRunsFirst(t *testing.T) {
 	bridge.inputOpen = false
 
 	for _, id := range []string{"first", "second"} {
-		_, _, err := manager.writeSession(t.Context(), target, id, sessionWriteEnqueue, agentWrite(id))
+		_, _, err := manager.writeSession(t.Context(), target, id, sessionWriteEnqueue, agentWrite(id), nil)
 		require.NoError(t, err)
 	}
 
@@ -959,7 +955,7 @@ func TestWriteSessionStopRunsFirst(t *testing.T) {
 
 	require.NoError(t, store.BeginGoal(target, &GoalState{Objective: "ship it", MaxTurns: 5}))
 
-	outcome, running, err := manager.writeSession(t.Context(), target, "stop", sessionWriteStop, agentWrite("do this instead"))
+	outcome, running, err := manager.writeSession(t.Context(), target, "stop", sessionWriteStop, agentWrite("do this instead"), nil)
 	require.NoError(t, err)
 	assert.Equal(t, sessionStopped, outcome)
 	assert.True(t, running)
@@ -979,21 +975,70 @@ func TestWriteSessionStopRunsFirst(t *testing.T) {
 
 	stop := <-bridge.requestCh
 	assert.Equal(t, "stop", stop.queueItemID)
-	assert.True(t, strings.HasPrefix(buildPrompt(stop.inbound, nil, false), `[System sender="session web:sender (agent planner) stopped your previous turn and sent this"`))
+	assert.True(t, strings.HasPrefix(buildPrompt(stop.inbound, nil, false), `[System sender="session web:sender (agent planner) stopped your previous turn and sent this`))
 
 	idle := runningTestBridge(t, store, manager, "web:idle")
 	idle.handling, idle.activeReply, idle.activeTurnCancel, idle.activeTurnInterrupts = false, nil, nil, nil
 
-	outcome, running, err = manager.writeSession(t.Context(), "web:idle", "idle-stop", sessionWriteStop, agentWrite("go"))
+	outcome, running, err = manager.writeSession(t.Context(), "web:idle", "idle-stop", sessionWriteStop, agentWrite("go"), nil)
 	require.NoError(t, err)
 	assert.Equal(t, sessionStopped, outcome)
 	assert.False(t, running, "no turn was running")
 	assert.Equal(t, "idle-stop", (<-idle.requestCh).queueItemID)
 }
 
+// A person removing an agent's write in Web, whether the loop holds it, it is an unread steer, or it is only
+// queued, settles its reply as removed and wakes its caller.
+func TestDeleteQueueItemSettlesReply(t *testing.T) {
+	store := newTestSessionService(t)
+	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
+
+	const target = "web:target"
+
+	bridge := runningTestBridge(t, store, manager, target)
+	caller := runningTestBridge(t, store, manager, "web:caller")
+	caller.handling, caller.activeReply, caller.activeTurnCancel, caller.activeTurnInterrupts = false, nil, nil, nil
+
+	write := func(call string, mode sessionWriteMode) string {
+		t.Helper()
+
+		reply := testReply("web:caller", call, target)
+		reply.origin = &protocol.InboundMessage{ConversationID: "web:caller", Source: protocol.SourceWeb}
+		_, _, err := manager.writeSession(t.Context(), target, reply.jobID, mode, agentWrite(call), reply)
+		require.NoError(t, err)
+
+		return reply.jobID
+	}
+
+	steer := write("turn-1/call/steer", sessionWriteSteer)
+
+	require.Len(t, bridge.steers, 1)
+
+	bridge.inputOpen = false
+	held := write("turn-1/call/held", sessionWriteEnqueue)
+	queued := write("turn-1/call/queued", sessionWriteEnqueue)
+
+	bridge.waiting = append(bridge.waiting, <-bridge.requestCh) // As a stop write's admission takes it from the loop.
+
+	want := make([]string, 0, 3)
+
+	for _, id := range []string{held, steer, queued} {
+		removed, err := manager.deleteQueueItem(t.Context(), target, id)
+		require.NoError(t, err)
+		require.True(t, removed, id)
+		require.Len(t, caller.requestCh, 1, "the caller wakes for the removed note of %s", id)
+		assert.True(t, (<-caller.requestCh).backgroundWake)
+
+		want = append(want, "web:caller "+id+" removed pending true")
+	}
+
+	assert.Empty(t, queueIDs(t, store, target))
+	assert.ElementsMatch(t, want, replyQueueItems(t, store))
+}
+
 // A request a stopped parent left held in its subagent's queue does not run, even from the loop that already
 // holds it, until an agent or a person queues the next write there; then it runs just before that write. A
-// stash, by hand or by an agent, stays held.
+// person's stash stays held.
 func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 	for _, writer := range []string{"agent", "person"} {
 		t.Run(writer, func(t *testing.T) {
@@ -1006,7 +1051,7 @@ func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 			bridge.inputOpen = false
 
 			for _, id := range []string{"held", "earlier"} {
-				_, _, err := manager.writeSession(t.Context(), target, id, sessionWriteEnqueue, agentWrite(id))
+				_, _, err := manager.writeSession(t.Context(), target, id, sessionWriteEnqueue, agentWrite(id), nil)
 				require.NoError(t, err)
 			}
 
@@ -1020,12 +1065,10 @@ func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 			require.False(t, activated, "the held request does not run")
 
 			require.NoError(t, manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "by hand", Kind: protocol.InboundKindHeld, Source: protocol.SourceWeb, Principal: "alice", Message: "later"}))
-			_, _, err = manager.writeSession(t.Context(), target, "agent stash", sessionWriteStash, agentWrite("later"))
-			require.NoError(t, err)
-			require.Equal(t, []string{"earlier"}, queueIDs(t, store, target), "stashes release nothing")
+			require.Equal(t, []string{"earlier"}, queueIDs(t, store, target), "a stash releases nothing")
 
 			if writer == "agent" {
-				_, _, err = manager.writeSession(t.Context(), target, "next", sessionWriteEnqueue, agentWrite("next"))
+				_, _, err = manager.writeSession(t.Context(), target, "next", sessionWriteEnqueue, agentWrite("next"), nil)
 			} else {
 				err = manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "next", Kind: protocol.InboundKindEnqueue, Source: protocol.SourceWeb, Principal: "alice", Message: "next", StashAt: time.Now().UTC()})
 			}
@@ -1035,7 +1078,7 @@ func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 
 			held, err := queryStrings(t.Context(), store.db, `SELECT input_id FROM turns WHERE conversation_id = $1 AND phase = 'waiting' AND delivery = 'held' ORDER BY 1`, "held rows", target)
 			require.NoError(t, err)
-			assert.Equal(t, []string{"agent stash", "by hand"}, held)
+			assert.Equal(t, []string{"by hand"}, held)
 		})
 	}
 }
@@ -1054,7 +1097,7 @@ func TestWebWriteRunsReleasedRequestFirst(t *testing.T) {
 			bridge := runningTestBridge(t, store, manager, target)
 			bridge.inputOpen = false
 
-			_, _, err := manager.writeSession(t.Context(), target, "held", sessionWriteEnqueue, agentWrite("parent work"))
+			_, _, err := manager.writeSession(t.Context(), target, "held", sessionWriteEnqueue, agentWrite("parent work"), nil)
 			require.NoError(t, err)
 			require.Equal(t, "held", (<-bridge.requestCh).queueItemID)
 			_, err = store.db.ExecContext(t.Context(), `UPDATE turns SET reason = 'held', delivery = 'held' WHERE input_id = 'held' AND phase = 'waiting'`) // As a stopped parent's wait does.
@@ -1113,7 +1156,7 @@ func TestWriteSessionMutualWritesDoNotBlock(t *testing.T) {
 	for _, pair := range [][2]string{{"web:a", "web:b"}, {"web:b", "web:a"}} {
 		for _, mode := range []sessionWriteMode{sessionWriteSteer, sessionWriteStop} {
 			writes.Go(func() error {
-				_, _, err := manager.writeSession(t.Context(), pair[1], pair[0]+string(mode), mode, agentWrite(string(mode)))
+				_, _, err := manager.writeSession(t.Context(), pair[1], pair[0]+string(mode), mode, agentWrite(string(mode)), nil)
 				return err
 			})
 		}

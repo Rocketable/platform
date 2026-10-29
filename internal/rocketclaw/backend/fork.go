@@ -183,8 +183,8 @@ ORDER BY e.id), noted_jobs AS (
     SELECT DISTINCT unnest(string_to_array(i->>'input_id', ' ')) AS job_id FROM entries e, jsonb_array_elements(e.entry_json::jsonb->'replay_input') i
     WHERE e.conversation_id = $1 AND (i->>'prompt_header' = '[System]' OR starts_with(i->>'prompt_header', '[System '))
 )
-INSERT INTO turns (conversation_id, input_id, kind, takes_lane, phase, terminal, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message)
-SELECT $1, input_id, kind, FALSE, phase, terminal, agent, label, call_id, subagent_key, inbound_json, runner_id, $3, FALSE, 0, 0, '', created_at_unix_ns, updated_at_unix_ns, result, ''
+INSERT INTO turns (conversation_id, input_id, kind, takes_lane, phase, terminal, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message, reply_target)
+SELECT $1, input_id, kind, FALSE, phase, terminal, agent, label, call_id, subagent_key, inbound_json, runner_id, $3, FALSE, 0, 0, '', created_at_unix_ns, updated_at_unix_ns, result, CASE WHEN kind = 'reply' THEN message ELSE '' END, reply_target
 FROM turns JOIN noted_jobs ON job_id = input_id WHERE conversation_id = ANY($2) AND NOT takes_lane AND phase = 'done'`, destination, producers, noteConsumed); err != nil {
 		return "", fmt.Errorf("copy fork delegations and completion notes: %w", err)
 	}
