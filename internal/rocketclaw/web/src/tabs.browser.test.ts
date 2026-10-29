@@ -68,7 +68,10 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+      if (await file.exists()) return new Response(file);
+      // Named like the Go handler names a server's page.
+      const index = (await Bun.file(path.join(dist, "index.html")).text()).replace("<title>RocketClaw</title>", "<title>lab - RocketClaw</title>");
+      return new Response(index, { headers: { "Content-Type": "text/html" } });
     }
     const input = await request.json().catch(() => ({})) as { id: string; text: string; name: string; query: string; agent?: string } & Parameters<typeof tabsCall>[1];
     if (url.pathname === "/api/UpdateSession") sessions.find((row) => row.id === input.id)!.name = input.name;
@@ -776,12 +779,13 @@ test("an unread tab shows a bold title", () => withPage({}, async (page, origin,
 test("a tab waiting on this person stops shimmering and needs them, as do its collapsed group and the window title", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  expect(await page.title()).toBe("lab - RocketClaw");
   await openSaved(page, origin, href("golf"), "Golf", saved);
   expect(await tab("Golf").getAttribute("aria-description")).toBe("Space: Main, Needs your answer");
   expect(await animation(tab("Golf").locator("span").first())).toBe("none");
   expect(await tab("Golf").getByText("Needs you", { exact: true }).isVisible()).toBe(true);
   expect(await tab("Alpha").getByText("Needs you").count()).toBe(0);
-  expect(await page.title()).toBe("(1) RocketClaw");
+  expect(await page.title()).toBe("(1) lab - RocketClaw");
 
   const field = page.getByRole("textbox", { name: "Group name" });
   await menu(page, "Golf", "Add to group", "New group");

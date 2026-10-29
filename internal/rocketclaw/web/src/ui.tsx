@@ -1316,11 +1316,11 @@ function TabNotifications() {
       notification.onclick = () => { focus(); navigate(path); notification.close(); };
     }
   }, [rows, enumerationComplete, owner, state.tabs, state.active, shared, mutes]);
-  // The window title counts the open, unmuted tabs whose session waits on this person, as "(2) RocketClaw".
-  // An OpenCode view's own titles come after index.html's, so they never show.
+  // The window title counts the open, unmuted tabs whose session waits on this person, as "(2) lab - RocketClaw",
+  // keeping the server's name from index.html. An OpenCode view's own titles come after index.html's, so they never show.
   const open = new Set([...state.tabs, ...shared].map((tab) => tab.path));
   const asking = rows.filter((row) => row.asking && open.has(rowPath(row)) && !muteOf(mutes, rowPath(row))).length;
-  useEffect(() => { document.title = asking ? `(${asking}) RocketClaw` : "RocketClaw"; }, [asking]);
+  useEffect(() => { document.title = (asking ? `(${asking}) ` : "") + document.title.replace(/^\(\d+\) /, ""); }, [asking]);
   // Notifications are on by default: the browser asks for its permission on the first click or key press, the
   // earliest a browser lets a page ask.
   useEffect(() => {
