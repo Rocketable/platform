@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -795,7 +795,7 @@ func TestToggleManualTag(t *testing.T) {
 		return nil
 	}))
 
-	agents := rocketcode.Agents{Items: map[string]rocketcode.Agent{"main": {Frontmatter: map[string]any{"permission": map[string]any{"rocketclaw": map[string]any{setTagToolName: []any{[]any{"customer", "internal"}}}}}}}}
+	agents := harness.Agents{Items: map[string]harness.Agent{"main": {Frontmatter: map[string]any{"permission": map[string]any{"rocketclaw": map[string]any{setTagToolName: []any{[]any{"customer", "internal"}}}}}}}}
 
 	require.NoError(t, s.UpsertThread("web", ThreadState{Agent: "main"}))
 	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session)
@@ -1119,7 +1119,7 @@ func TestOpenCodeAPITool(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			assert.Equal(t, rocketcode.TextToolResult(tt.want), result)
+			assert.Equal(t, harness.TextToolResult(tt.want), result)
 		})
 	}
 }

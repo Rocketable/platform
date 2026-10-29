@@ -27,9 +27,9 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/gorilla/websocket"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
@@ -96,7 +96,7 @@ func TestReplayInputForMessagePreservesSDKSerialization(t *testing.T) {
 	for _, role := range []string{"user", "developer", "assistant"} {
 		for _, text := range []string{"", " \n", "quotes: \" and \\ and <html>", "日本\x00\xff\u2028"} {
 			message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}, Type: "message"}
-			want, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &message}})
+			want, err := harness.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfMessage: &message}})
 			require.NoError(t, err, "string-only replay construction cannot fail")
 			require.Equal(t, want, replayInputForMessage(role, text))
 		}
@@ -137,9 +137,9 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	require.Equal(t, "steer-second", bridge.steers[1].queueItemID)
 	require.Len(t, bus.outbound, 1, "waiting steers are not consumed at submission")
 
-	bridge.activeAttribution = rocketcode.ReplayAttribution{Agent: "planner", Model: "work/model-a", ReasoningEffort: new("high")}
+	bridge.activeAttribution = harness.ReplayAttribution{Agent: "planner", Model: "work/model-a", ReasoningEffort: new("high")}
 	bridge.SwitchAgent("reviewer")
-	inputs := testDrainInputs(t, bridge, rocketcode.TurnPhaseFinalAnswer)
+	inputs := testDrainInputs(t, bridge, harness.TurnPhaseFinalAnswer)
 	require.Len(t, inputs, 2)
 
 	for i := range inputs {
@@ -169,7 +169,7 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 		require.False(t, message.Complete)
 	}
 
-	require.Empty(t, testDrainInputs(t, bridge, rocketcode.TurnPhaseFinalAnswer))
+	require.Empty(t, testDrainInputs(t, bridge, harness.TurnPhaseFinalAnswer))
 	require.Empty(t, bus.outbound, "a second drain must not repeat consumption")
 
 	// A disconnected observer must not drop or replay an admitted steer.
@@ -184,12 +184,12 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	disconnected := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &content, true)
 	disconnected.Metadata["web_message_id"] = "steer-disconnected"
 	require.NoError(t, bridge.Submit(t.Context(), disconnected))
-	inputs = testDrainInputs(t, bridge, rocketcode.TurnPhaseFinalAnswer)
+	inputs = testDrainInputs(t, bridge, harness.TurnPhaseFinalAnswer)
 	require.Len(t, inputs, 1)
 	require.Equal(t, buildPrompt(initial, nil, false), inputs[0].Texts[0])
 	require.Contains(t, logged.String(), "publish consumed web input")
 	require.Contains(t, logged.String(), "test publisher closed")
-	require.Empty(t, testDrainInputs(t, bridge, rocketcode.TurnPhaseFinalAnswer))
+	require.Empty(t, testDrainInputs(t, bridge, harness.TurnPhaseFinalAnswer))
 }
 
 func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
@@ -225,7 +225,7 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 	}
 
 	require.Empty(t, bus.outbound)
-	require.Len(t, testDrainInputs(t, bridge, rocketcode.TurnPhaseFinalAnswer), 2)
+	require.Len(t, testDrainInputs(t, bridge, harness.TurnPhaseFinalAnswer), 2)
 	require.Len(t, bus.outbound, 2)
 
 	for _, id := range []string{"queue-first", "queue-second"} {
@@ -862,7 +862,7 @@ func publishTestFinal(ctx context.Context, b *Bridge, inbound *protocol.InboundM
 	return b.finish(ctx, &bridgeRequest{inbound: inbound, turnID: result.turnID}, &turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService)}, result, "")
 }
 
-func workflowSummaryPayloadFromEntry(t *testing.T, entry *rocketcode.SessionEntry) string {
+func workflowSummaryPayloadFromEntry(t *testing.T, entry *harness.SessionEntry) string {
 	t.Helper()
 
 	messages, err := replayInputMessages(entry.ReplayInput)
@@ -880,7 +880,7 @@ func workflowSummaryPayloadFromEntry(t *testing.T, entry *rocketcode.SessionEntr
 	return ""
 }
 
-func workflowSummaryFromEntry(t *testing.T, entry *rocketcode.SessionEntry) workflowRunSummary {
+func workflowSummaryFromEntry(t *testing.T, entry *harness.SessionEntry) workflowRunSummary {
 	t.Helper()
 
 	var summary workflowRunSummary
@@ -1065,7 +1065,7 @@ func TestRocketCodeConfigEnablesDiagnostics(t *testing.T) {
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{AutoApproverModel: "gpt-5.4-mini"}), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, RequestReload: &runtimeReloaderMock{ReloadFunc: func(string) (string, error) {
 		return "rocketclaw runtime assets reloaded", nil
 	}}, SessionService: newTestSessionService(t)}}
-	cfg := bridge.rocketcodeConfig(t.TempDir(), nil, rocketcode.Tool{Name: attachFilesToolName})
+	cfg := bridge.rocketcodeConfig(t.TempDir(), nil, harness.Tool{Name: attachFilesToolName})
 
 	toolNames := make([]string, 0, len(cfg.CustomTools))
 	for i := range cfg.CustomTools {
@@ -1077,7 +1077,7 @@ func TestRocketCodeConfigEnablesDiagnostics(t *testing.T) {
 	assert.True(t, cfg.AutoApprovePermissions)
 	assert.Equal(t, "gpt-5.4-mini", cfg.AutoApproverModel)
 	assert.Equal(t, 16, cfg.ParallelToolCalls)
-	assert.Equal(t, rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, cfg.ExpandPromptShellCommands)
+	assert.Equal(t, harness.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, cfg.ExpandPromptShellCommands)
 	assert.NotContains(t, toolNames, restartToolName)
 	assert.NotContains(t, toolNames, scheduleMessageToolName, "each turn builds its schedule tools")
 	assert.Contains(t, toolNames, reloadToolName)
@@ -1094,7 +1094,7 @@ func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T)
 	t.Parallel()
 
 	workspace := t.TempDir()
-	agents := rocketcode.Agents{Items: map[string]rocketcode.Agent{"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "base prompt", Location: "", Permission: rocketcode.PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}}}
+	agents := harness.Agents{Items: map[string]harness.Agent{"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "base prompt", Location: "", Permission: harness.PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}}}
 
 	appendOverlayPromptToAgent(agents, "main", &config.Config{Workspace: workspace, Overlays: []string{"github.com/rocketable/overlay@main"}})
 
@@ -1324,7 +1324,7 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 		require.NoError(t, decoder.Decode(&event))
 
 		if event.Event == "first_response_item" {
-			assert.NotEqual(t, rocketcode.ChatResponseAssistantMessage, event.Kind)
+			assert.NotEqual(t, harness.ChatResponseAssistantMessage, event.Kind)
 		}
 	}
 
@@ -1926,15 +1926,15 @@ Prompt
 	agents, skills, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
 	require.NoError(t, err)
 
-	resolver := newModelResolver(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", RocketCodeAuth: "api_key"}}, slog.New(slog.DiscardHandler))
+	resolver := newModelResolver(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", Auth: "api_key"}}, slog.New(slog.DiscardHandler))
 	client, origin, err := resolver.Resolve("gpt-6.1-sol")
 	require.NoError(t, err)
 	require.NotNil(t, client)
-	require.Equal(t, rocketcode.ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, origin)
+	require.Equal(t, harness.ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, origin)
 
 	shellTempDir := filepath.Join(workspace, "shell-tmp")
 	require.NoError(t, os.Mkdir(shellTempDir, 0o755))
-	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellTempDir: shellTempDir, RetainedResultDir: "retained", ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand{}}, root, agents, skills, "main", io.Discard)
+	_, err = harness.NewWithModelResolver(resolver, &harness.Config{ShellTempDir: shellTempDir, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, ShellCommand: harness.DefaultShellCommand{}}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 }
 
@@ -2000,7 +2000,7 @@ func TestReplayInputMessageRoleTextCoversMessageShapes(t *testing.T) {
 func TestReplayInputMessagesFiltersBlankMessages(t *testing.T) {
 	t.Parallel()
 
-	raw, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+	raw, err := harness.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
 		{OfMessage: &responses.EasyInputMessageParam{Role: "user", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(" ")}, Type: "message"}},
 		{OfMessage: &responses.EasyInputMessageParam{Role: "assistant", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("answer")}, Type: "message"}},
 	})
@@ -2030,7 +2030,7 @@ func TestSeedReplayTextIncludesWebSearchContext(t *testing.T) {
 func TestReplayInputRawKindReportsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	assert.Empty(t, rocketcode.ReplayInputRawKind(json.RawMessage("{")))
+	assert.Empty(t, harness.ReplayInputRawKind(json.RawMessage("{")))
 }
 
 func TestBuildPromptCoversAttachments(t *testing.T) {
@@ -2069,7 +2069,7 @@ func TestParseDirectSkillTrigger(t *testing.T) {
 		directSkill := parseDirectSkillTrigger(text)
 
 		require.NotNil(t, directSkill)
-		assert.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: "write docs"}, directSkill)
+		assert.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "write docs"}, directSkill)
 	}
 
 	directSkill := parseDirectSkillTrigger("$skill   ")
@@ -2080,17 +2080,17 @@ func TestParseDirectSkillTrigger(t *testing.T) {
 
 	for _, name := range []string{"", "agent", "cron", "workflow", "stop", "enqueue", "queue", "goal"} {
 		assert.Nil(t, parseDirectSkillTrigger("$"+name))
-		assert.Equal(t, &rocketcode.PromptInputDirectSkill{Name: name, Arguments: ""}, parseDirectSkillTrigger("$skill "+name))
+		assert.Equal(t, &harness.PromptInputDirectSkill{Name: name, Arguments: ""}, parseDirectSkillTrigger("$skill "+name))
 	}
 
-	assert.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "Docs", Arguments: "\"API guide\"  Next\tLast "}, parseDirectSkillTrigger("  $Docs \"API guide\"  Next\tLast "))
+	assert.Equal(t, &harness.PromptInputDirectSkill{Name: "Docs", Arguments: "\"API guide\"  Next\tLast "}, parseDirectSkillTrigger("  $Docs \"API guide\"  Next\tLast "))
 
 	for _, source := range []protocol.Source{protocol.SourceSlack, protocol.SourceWeb, protocol.SourceSystem, protocol.SourceExternalMCP} {
 		for _, kind := range []protocol.InboundKind{protocol.InboundKindPrompt, protocol.InboundKindSteer, protocol.InboundKindEnqueue, protocol.InboundKindCancel} {
 			for _, text := range []string{"$docs-helper typed", ""} {
 				msg := protocol.NewInboundMessageFromContent(source, kind, &protocol.InboundContent{Text: text, TextAttachments: []string{"$docs-helper attachment"}}, true)
 				if text != "" && source == protocol.SourceWeb && kind != protocol.InboundKindCancel {
-					assert.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: "typed"}, inboundDirectSkill(msg))
+					assert.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "typed"}, inboundDirectSkill(msg))
 				} else {
 					assert.Nil(t, inboundDirectSkill(msg))
 				}
@@ -2144,7 +2144,7 @@ func TestVoiceInboundRunsNoDollarCommands(t *testing.T) {
 	skill := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper do it"}, true)
 	command := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$workflow deploy"}, true)
 
-	require.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: "do it"}, inboundDirectSkill(skill))
+	require.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "do it"}, inboundDirectSkill(skill))
 	require.Equal(t, protocol.WorkflowInvocation{Name: "deploy"}, inboundWorkflow(command))
 
 	for _, msg := range []*protocol.InboundMessage{skill, command} {
@@ -2300,7 +2300,7 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: privateConversationID, Agent: "planner", SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.activeTurnID = "producer" // The producer turn is running.
 	require.NoError(t, bridge.ScheduleMessage(inbound, 100*time.Millisecond, "later", false))
-	_, err = service.finishTurn(t.Context(), "producer", &turnFinish{store: newSessionStore(privateConversationID, service), entries: []rocketcode.SessionEntry{*testSessionEntry("producer context", "producer answer")}, outbound: protocol.NewOutboundMessage(privateConversationID, "")})
+	_, err = service.finishTurn(t.Context(), "producer", &turnFinish{store: newSessionStore(privateConversationID, service), entries: []harness.SessionEntry{*testSessionEntry("producer context", "producer answer")}, outbound: protocol.NewOutboundMessage(privateConversationID, "")})
 	require.NoError(t, err)
 	require.NoError(t, service.closeTurn(t.Context(), "producer"))
 
@@ -3722,7 +3722,7 @@ func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	_, err = service.AppendEntryID(t.Context(), conversationID, &rocketcode.SessionEntry{Version: 1, Type: "turn", Model: "openai/gpt", ResponseID: "provider-private-sentinel", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable","id":"provider-private-sentinel"}`)}, OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`)}})
+	_, err = service.AppendEntryID(t.Context(), conversationID, &harness.SessionEntry{Version: 1, Type: "turn", Model: "openai/gpt", ResponseID: "provider-private-sentinel", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable","id":"provider-private-sentinel"}`)}, OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`)}})
 	require.NoError(t, err)
 
 	var requestBody string
@@ -3833,10 +3833,10 @@ func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
 		entries, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
 		require.NoError(t, err)
 
-		if len(entries) == 1 && len(rocketcode.PublicProgressFromTrace(entries[0].Entry.OutputTrace)) > 0 {
-			progress := rocketcode.PublicProgressFromTrace(entries[0].Entry.OutputTrace)
+		if len(entries) == 1 && len(harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace)) > 0 {
+			progress := harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace)
 			require.Equal(t, "early-public", progress[0].Text)
-			require.Equal(t, rocketcode.PublicProgressWorking, progress[0].State)
+			require.Equal(t, harness.PublicProgressWorking, progress[0].State)
 			require.True(t, entries[0].Active)
 			reopened, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
 			require.NoError(t, err)
@@ -3853,10 +3853,10 @@ func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
 	entries, err := service.ObserveEntries(context.Background(), conversationID)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
-	progress := rocketcode.PublicProgressFromTrace(entries[0].Entry.OutputTrace)
+	progress := harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace)
 	require.Len(t, progress, 1)
 	require.Equal(t, "ok", progress[0].Text)
-	require.Equal(t, rocketcode.PublicProgressCompleted, progress[0].State)
+	require.Equal(t, harness.PublicProgressCompleted, progress[0].State)
 
 	active, err := service.HasActiveTurn(context.Background(), conversationID)
 	require.NoError(t, err)
@@ -4047,7 +4047,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 
 	assert.Equal(t, "[Web principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", userContent)
 
-	items, err := rocketcode.ReplayInputToParams(entries[0].Entry.ReplayInput)
+	items, err := harness.ReplayInputToParams(entries[0].Entry.ReplayInput)
 	require.NoError(t, err)
 	require.Equal(t, initial.ConsumedHeader, items[0].OfMessage.ExtraFields()["prompt_header"])
 	require.Equal(t, responses.EasyInputMessageRoleUser, items[2].OfMessage.Role)
@@ -4194,7 +4194,7 @@ func TestExternalMCPMetadataEnvSanitizesKeys(t *testing.T) {
 func TestExternalMCPStoredMetadataEnvDoesNotParseInjectedLines(t *testing.T) {
 	t.Parallel()
 
-	env, ok := externalMCPStoredMetadataEnv("slack-thread:C123:111.222", []ObservedSessionEntry{{Entry: rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", externalMCPMetadataEnv("slack-thread:C123:111.222", map[string]string{"note": "first\nROCKETCLAW_METADATA_BAD=second"}))})}}})
+	env, ok := externalMCPStoredMetadataEnv("slack-thread:C123:111.222", []ObservedSessionEntry{{Entry: harness.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", externalMCPMetadataEnv("slack-thread:C123:111.222", map[string]string{"note": "first\nROCKETCLAW_METADATA_BAD=second"}))})}}})
 	require.True(t, ok)
 	assert.Equal(t, "first\nROCKETCLAW_METADATA_BAD=second", env["ROCKETCLAW_METADATA_NOTE"])
 	assert.NotContains(t, env, "ROCKETCLAW_METADATA_BAD")
@@ -4216,27 +4216,27 @@ func TestExternalMCPStoredMetadataEnvSkipsInvalidEntriesAndUsesLatestMatch(t *te
 		externalMCPMetadataEnv("slack-thread:C999:999.999", map[string]string{"note": "other"}),
 	)
 	entries := []ObservedSessionEntry{
-		{Entry: rocketcode.SessionEntry{
+		{Entry: harness.SessionEntry{
 			Version:     1,
 			Type:        externalMCPMetadataEntryType,
 			ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: older}),
 		}},
-		{Entry: rocketcode.SessionEntry{
+		{Entry: harness.SessionEntry{
 			Version:     1,
 			Type:        externalMCPMetadataEntryType,
 			ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: latest}),
 		}},
-		{Entry: rocketcode.SessionEntry{
+		{Entry: harness.SessionEntry{
 			Version:     1,
 			Type:        externalMCPMetadataEntryType,
 			ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: otherConversation}),
 		}},
-		{Entry: rocketcode.SessionEntry{
+		{Entry: harness.SessionEntry{
 			Version:     1,
 			Type:        externalMCPMetadataEntryType,
 			ReplayInput: []json.RawMessage{json.RawMessage("{")},
 		}},
-		{Entry: rocketcode.SessionEntry{
+		{Entry: harness.SessionEntry{
 			Version:     1,
 			Type:        "turn",
 			ReplayInput: testReplayInput(replayInputMessage{role: "developer", text: latest}),
@@ -4406,7 +4406,7 @@ func seedReplayText(items []responses.ResponseInputItemUnionParam) string {
 
 			parts = append(parts, strings.TrimSpace(item.OfInputMessage.Role)+": "+strings.TrimSpace(strings.Join(texts, "\n")))
 		case item.OfCompaction != nil:
-			parts = append(parts, rocketcode.CompactionCheckpointText(item.OfCompaction))
+			parts = append(parts, harness.CompactionCheckpointText(item.OfCompaction))
 		case item.OfFunctionCall != nil:
 			parts = append(parts, "assistant tool call "+item.OfFunctionCall.Name+": "+item.OfFunctionCall.Arguments)
 		case item.OfFunctionCallOutput != nil:
@@ -4450,14 +4450,14 @@ func TestAppendSessionEntryKeepsPriorEntriesThenAdded(t *testing.T) {
 	t.Parallel()
 
 	continued := false
-	stopped := appendSessionEntry(iter.Seq2[rocketcode.SessionEntry, error](func(yield func(rocketcode.SessionEntry, error) bool) {
-		if !yield(rocketcode.SessionEntry{Type: "stored"}, nil) {
+	stopped := appendSessionEntry(iter.Seq2[harness.SessionEntry, error](func(yield func(harness.SessionEntry, error) bool) {
+		if !yield(harness.SessionEntry{Type: "stored"}, nil) {
 			return
 		}
 
 		continued = true
-	}), &rocketcode.SessionEntry{Type: "added"})
-	stopped(func(rocketcode.SessionEntry, error) bool { return false })
+	}), &harness.SessionEntry{Type: "added"})
+	stopped(func(harness.SessionEntry, error) bool { return false })
 	assert.False(t, continued)
 
 	var (
@@ -4465,13 +4465,13 @@ func TestAppendSessionEntryKeepsPriorEntriesThenAdded(t *testing.T) {
 		errFailed error
 	)
 
-	for entry, err := range appendSessionEntry(iter.Seq2[rocketcode.SessionEntry, error](func(yield func(rocketcode.SessionEntry, error) bool) {
-		if !yield(rocketcode.SessionEntry{Type: "stored"}, nil) {
+	for entry, err := range appendSessionEntry(iter.Seq2[harness.SessionEntry, error](func(yield func(harness.SessionEntry, error) bool) {
+		if !yield(harness.SessionEntry{Type: "stored"}, nil) {
 			return
 		}
 
-		yield(rocketcode.SessionEntry{Type: "failed"}, assert.AnError)
-	}), &rocketcode.SessionEntry{Type: "added"}) {
+		yield(harness.SessionEntry{Type: "failed"}, assert.AnError)
+	}), &harness.SessionEntry{Type: "added"}) {
 		got = append(got, entry.Type)
 
 		if err != nil {
@@ -4484,15 +4484,15 @@ func TestAppendSessionEntryKeepsPriorEntriesThenAdded(t *testing.T) {
 	require.ErrorIs(t, errFailed, assert.AnError)
 
 	replay := []json.RawMessage{[]byte(`"before"`)}
-	added := rocketcode.SessionEntry{Type: "added", Version: 1, Model: "early", ReplayInput: replay}
-	seq := appendSessionEntry(iter.Seq2[rocketcode.SessionEntry, error](func(yield func(rocketcode.SessionEntry, error) bool) {
-		yield(rocketcode.SessionEntry{Type: "stored"}, nil)
+	added := harness.SessionEntry{Type: "added", Version: 1, Model: "early", ReplayInput: replay}
+	seq := appendSessionEntry(iter.Seq2[harness.SessionEntry, error](func(yield func(harness.SessionEntry, error) bool) {
+		yield(harness.SessionEntry{Type: "stored"}, nil)
 	}), &added)
 	added.Model = "late"
 	replay[0] = []byte(`"after"`)
 	before := time.Now().UTC()
 
-	var seen []rocketcode.SessionEntry
+	var seen []harness.SessionEntry
 
 	for entry, err := range seq {
 		require.NoError(t, err)
@@ -4727,7 +4727,7 @@ func TestBackgroundNotesWakeIdleConversation(t *testing.T) {
 	entries, err := nt.service.ObserveEntries(t.Context(), nt.conversationID)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
-	items, err := rocketcode.ReplayInputToParams(entries[0].Entry.ReplayInput)
+	items, err := harness.ReplayInputToParams(entries[0].Entry.ReplayInput)
 	require.NoError(t, err)
 	assert.Equal(t, "turn-1/call/b turn-1/call/a", items[0].OfMessage.ExtraFields()["input_id"], "the Web finds the turn's notes by their job IDs")
 }
@@ -5012,7 +5012,7 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 
 		outbound := protocol.NewOutboundMessage("cron:daily", "Report started")
 		outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
-		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
+		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
 		require.NoError(t, err)
 		require.NoError(t, manager.StartActiveTurns(t.Context()))
 		readFinalFor(t, nt.finals, "cron:daily")
@@ -5043,7 +5043,7 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 
 		outbound := protocol.NewOutboundMessage("cron:daily", "Report started")
 		outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
-		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
+		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
 		require.NoError(t, err)
 		require.NoError(t, manager.StartActiveTurns(t.Context()))
 		readFinalFor(t, nt.finals, "cron:daily")
@@ -5207,7 +5207,7 @@ func TestStopLeavesBackgroundJobsRunning(t *testing.T) {
 
 	started, release := make(chan struct{}, 1), make(chan struct{})
 	turn := backgroundTurn{registry: bridge.background, root: testTurnRoot(t), conversationID: nt.conversationID, origin: nt.slackPrompt("run the tests")}
-	_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-0/call/a", Kind: rocketcode.BackgroundKindExecute, Label: "tests", Agent: "main", Detached: true}, blockedWork(started, release))
+	_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-0/call/a", Kind: harness.BackgroundKindExecute, Label: "tests", Agent: "main", Detached: true}, blockedWork(started, release))
 	require.NoError(t, err)
 	<-started
 
@@ -5303,7 +5303,7 @@ func TestTurnBoundPlatformTools(t *testing.T) {
 
 	origin := new(protocol.InboundMessage)
 	bridge := &Bridge{runtime: new(config.LockedConfig), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
-	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []rocketcode.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{restartFunc: testNoopRestart}), attachFilesTool(nil, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), sessionsWriteTool(bridge, origin, origin, "main", "main", rocketcode.Agents{}), currentSessionIDTool("main")}, pageTools(bridge.config.SessionService, nil, nil, "main", "", ""))
+	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []harness.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{restartFunc: testNoopRestart}), attachFilesTool(nil, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), sessionsWriteTool(bridge, origin, origin, "main", "main", harness.Agents{}), currentSessionIDTool("main")}, pageTools(bridge.config.SessionService, nil, nil, "main", "", ""))
 
 	var bound []string
 

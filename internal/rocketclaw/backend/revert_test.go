@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -404,7 +404,7 @@ func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
 
 	recordLegacyDelegations(t, s, "main", "call_k")
 
-	for _, key := range []rocketcode.ChildKey{{Path: "/call_k-aaaaaaaa", Turn: "turn-1", Call: "call_k"}, {Path: "/call_r-bbbbbbbb", Turn: "turn-2", Call: "call_r"}, {Path: "/call_b-cccccccc", Turn: "turn-2", Call: "call_b"}} {
+	for _, key := range []harness.ChildKey{{Path: "/call_k-aaaaaaaa", Turn: "turn-1", Call: "call_k"}, {Path: "/call_r-bbbbbbbb", Turn: "turn-2", Call: "call_r"}, {Path: "/call_b-cccccccc", Turn: "turn-2", Call: "call_b"}} {
 		require.NoError(t, s.startSubagent(ctx, "main", key, "helper", true))
 	}
 
@@ -481,7 +481,7 @@ func TestRevertFloor(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
-	message := func(header, text string) *rocketcode.SessionEntry {
+	message := func(header, text string) *harness.SessionEntry {
 		return testReplayEntry(fmt.Sprintf(`{"type":"message","role":"user"%s,"content":%q}`, header, text), `{"type":"message","role":"assistant","content":"reply"}`)
 	}
 
@@ -826,7 +826,7 @@ func TestRevertGoalIdentityAndPrompt(t *testing.T) {
 	replay := testSessionEntry("objective with generated goal instructions", "answer")
 	replay.TurnID = "goal-turn"
 	replay.ReplayInput[0] = json.RawMessage(`{"type":"message","role":"user","input_id":"goal","content":"objective with generated goal instructions"}`)
-	_, err := s.finishTurn(t.Context(), "goal-turn", &turnFinish{store: newSessionStore("main", s), entries: []rocketcode.SessionEntry{*replay}, outbound: &protocol.OutboundMessage{ConversationID: "main"}})
+	_, err := s.finishTurn(t.Context(), "goal-turn", &turnFinish{store: newSessionStore("main", s), entries: []harness.SessionEntry{*replay}, outbound: &protocol.OutboundMessage{ConversationID: "main"}})
 	require.NoError(t, err)
 	require.NoError(t, s.closeTurn(t.Context(), "goal-turn"))
 	_, prompt, err := stageRevertDB(t.Context(), s.db, "main", "")
@@ -861,7 +861,7 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 	require.Error(t, err)
 	_, err = rt.PromoteQueueItem(ctx, "main", "waiting")
 	require.ErrorContains(t, err, "busy")
-	require.Empty(t, testDrainInputs(t, b, rocketcode.TurnPhaseFinalAnswer))
+	require.Empty(t, testDrainInputs(t, b, harness.TurnPhaseFinalAnswer))
 
 	completion := &turnCompletion{done: make(chan struct{})}
 	request := bridgeRequest{inbound: inbound, queueItemID: "waiting", completion: completion}
@@ -878,7 +878,7 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 	entry.TurnID = "drained-turn"
 	entry.ReplayInput[0] = json.RawMessage(`{"type":"message","role":"user","input_id":"waiting","content":"waiting"}`)
 	require.NoError(t, startTurnDB(ctx, s.db, entry.TurnID, "main", inbound))
-	_, err = s.finishTurn(ctx, entry.TurnID, &turnFinish{store: newSessionStore("main", s), entries: []rocketcode.SessionEntry{*entry}, outbound: &protocol.OutboundMessage{ConversationID: "main"}})
+	_, err = s.finishTurn(ctx, entry.TurnID, &turnFinish{store: newSessionStore("main", s), entries: []harness.SessionEntry{*entry}, outbound: &protocol.OutboundMessage{ConversationID: "main"}})
 	require.NoError(t, err)
 	require.NoError(t, s.closeTurn(ctx, entry.TurnID))
 	entries, err := s.ObserveEntries(ctx, "main")
@@ -1429,7 +1429,7 @@ func TestRevertSavedAttachmentRetryIdentity(t *testing.T) {
 		{Type: "input_text", Text: prompt}, {Type: "input_image", ImageURL: attachments[0].URL}, {Type: "input_file", FileData: attachments[1].URL, Filename: attachments[1].Filename},
 	}})
 	require.NoError(t, err)
-	_, err = s.AppendEntryID(t.Context(), "main", &rocketcode.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{raw}})
+	_, err = s.AppendEntryID(t.Context(), "main", &harness.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{raw}})
 	require.NoError(t, err)
 	accepted, err := reconcileWebDB(t.Context(), s.db, inbound)
 	require.NoError(t, err)

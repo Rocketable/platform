@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,13 +33,13 @@ func TestStopBackgroundJobTool(t *testing.T) {
 
 	for i, job := range []struct{ conversationID, destination string }{{"main", ""}, {"main", ""}, {"cron:daily", "main"}, {"other", ""}} {
 		turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: job.conversationID, origin: &protocol.InboundMessage{SyncDestination: job.destination}}
-		_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: fmt.Sprintf("turn-1/call/%d", i), Kind: rocketcode.BackgroundKindExecute, Detached: true}, blockedWork(started, release))
+		_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: fmt.Sprintf("turn-1/call/%d", i), Kind: harness.BackgroundKindExecute, Detached: true}, blockedWork(started, release))
 		require.NoError(t, err)
 		<-started
 	}
 
 	tool := stopBackgroundJobTool(registry, "main")
-	stop := func(jobID string) (rocketcode.ToolResult, error) {
+	stop := func(jobID string) (harness.ToolResult, error) {
 		return tool.Call(t.Context(), json.RawMessage(`{"job_id":"`+jobID+`"}`), nil)
 	}
 
@@ -83,7 +83,7 @@ func TestStopBackgroundJobToolNeedsAllowBackground(t *testing.T) {
 
 			bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
 			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil)
-			runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+			runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
 			require.NoError(t, err)
 
 			host, hosted := runtime.CodeModeHosts[stopBackgroundJobToolName]

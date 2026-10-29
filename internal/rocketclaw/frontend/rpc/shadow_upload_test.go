@@ -18,8 +18,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -107,7 +107,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 		}
 	}
 	// Bridge-internal consumption writers persist these same provider inputs and turn correlation.
-	_, err = sessions.AppendEntryID(t.Context(), "parent", &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "parent-turn", ReplayInput: replay})
+	_, err = sessions.AppendEntryID(t.Context(), "parent", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "parent-turn", ReplayInput: replay})
 	require.NoError(t, err)
 	require.NoError(t, seeded.UpsertActiveTurn(t.Context(), &testCheckpoint{TurnID: "child-turn", ConversationKey: child, ReplayInput: replay}))
 	_, err = seeded.db.Exec(`INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, child_turn_id, inbound_json) VALUES ($1, 'parent', 'parent-turn', 'child-turn', '{}')`, child)
@@ -115,7 +115,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 
 	for _, completed := range []bool{false, true} {
 		if completed {
-			_, err = sessions.AppendEntryID(t.Context(), child, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "child-turn", ReplayInput: replay})
+			_, err = sessions.AppendEntryID(t.Context(), child, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "child-turn", ReplayInput: replay})
 			require.NoError(t, err)
 			_, err = seeded.db.Exec(`DELETE FROM turns WHERE id = 'child-turn'`)
 			require.NoError(t, err)

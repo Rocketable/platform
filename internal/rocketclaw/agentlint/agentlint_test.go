@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -362,9 +362,9 @@ hub
 func TestTaskEdgesSortsDestinations(t *testing.T) {
 	infos := map[string]*agentInfo{}
 	for _, name := range []string{"alpha", "beta", "delta", "epsilon", "gamma", "hub"} {
-		infos[name] = &agentInfo{agent: rocketcode.Agent{Permission: rocketcode.PermissionSet{Buckets: []rocketcode.PermissionBucket{{
+		infos[name] = &agentInfo{agent: harness.Agent{Permission: harness.PermissionSet{Buckets: []harness.PermissionBucket{{
 			Name:  "task",
-			Rules: []rocketcode.PermissionRule{{Pattern: "*", Action: rocketcode.PermissionAllow}},
+			Rules: []harness.PermissionRule{{Pattern: "*", Action: harness.PermissionAllow}},
 		}}}}}
 	}
 

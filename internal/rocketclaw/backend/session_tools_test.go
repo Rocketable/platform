@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,9 +119,9 @@ func TestSessionTagToolsBridge(t *testing.T) {
 
 			bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "external_mcp:owning", SessionService: service, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}}, log: slog.New(slog.DiscardHandler)}
 			runtimeConfig := bridge.rocketcodeConfig(workspace, nil, sessionTagTools(service, "external_mcp:owning")...)
-			runtimeConfig.Journal = rocketcode.InertJournal{}
-			runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
-			runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+			runtimeConfig.Journal = harness.InertJournal{}
+			runtimeConfig.ChildSessions = harness.InertChildSessions{}
+			runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
 			require.NoError(t, err)
 
 			for _, name := range []string{"rocketclaw_set_tag", "rocketclaw_get_tags"} {
@@ -140,8 +140,8 @@ func TestSessionTagToolsBridge(t *testing.T) {
 				}
 			}
 
-			input := make(chan rocketcode.PromptInput, 1)
-			input <- rocketcode.PromptInput{Texts: []string{"tag"}, Responses: make(chan rocketcode.ChatResponse, 100)}
+			input := make(chan harness.PromptInput, 1)
+			input <- harness.PromptInput{Texts: []string{"tag"}, Responses: make(chan harness.ChatResponse, 100)}
 
 			close(input)
 
@@ -175,11 +175,11 @@ func TestSessionTagToolsBridge(t *testing.T) {
 					}
 
 					runtimeConfig.CustomTools = sessionTagTools(service, "external_mcp:owning")
-					runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+					runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
 					require.NoError(t, err)
 
-					input := make(chan rocketcode.PromptInput, 1)
-					input <- rocketcode.PromptInput{Texts: []string{"resume"}, Responses: make(chan rocketcode.ChatResponse, 100)}
+					input := make(chan harness.PromptInput, 1)
+					input <- harness.PromptInput{Texts: []string{"resume"}, Responses: make(chan harness.ChatResponse, 100)}
 
 					close(input)
 
@@ -274,7 +274,7 @@ func TestSessionToolsStoredContract(t *testing.T) {
 	require.Equal(t, "timestamp\trole\tcontent\n", result.Output)
 
 	// The prompt header says who sent a human turn, so readers can tell an operator from a customer.
-	headed := &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: base, ReplayInput: []json.RawMessage{
+	headed := &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: base, ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Slack principal=\"Operator\"]","content":"[Slack principal=\"Operator\"]\n\nsend it"}`),
 		json.RawMessage(`{"type":"message","role":"user","content":"no header"}`),
 	}}
@@ -353,8 +353,8 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 	require.NoError(t, service.UpsertThread("web:stored", ThreadState{Agent: "main"}))
 	require.NoError(t, service.BeginGoal("web:stored", &GoalState{Objective: "work", MaxTurns: 3}))
 
-	entry := &rocketcode.SessionEntry{Version: 1, Type: "replay", Timestamp: time.Now().UTC(), Model: "model", ResponseID: "response",
-		TokenUsage: &rocketcode.TokenUsage{CompletionReasoningTokens: 7},
+	entry := &harness.SessionEntry{Version: 1, Type: "replay", Timestamp: time.Now().UTC(), Model: "model", ResponseID: "response",
+		TokenUsage: &harness.TokenUsage{CompletionReasoningTokens: 7},
 		ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call","call_id":"call","name":"Read","arguments":"{}"}`),
 			json.RawMessage(`{"type":"function_call_output","call_id":"call","output":"line\nΩ\t\\\r"}`),
@@ -370,7 +370,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 		},
 	}
 	// A synced producer schedule stores untyped bookkeeping, not a replay message, in its trace.
-	schedule := &rocketcode.SessionEntry{Version: 1, Type: "producer_schedule", Timestamp: entry.Timestamp, OutputTrace: []json.RawMessage{json.RawMessage(`{"conversation_id":"producer","agent":"main","message":"later","due_at":"2026-10-07T00:00:00Z"}`)}}
+	schedule := &harness.SessionEntry{Version: 1, Type: "producer_schedule", Timestamp: entry.Timestamp, OutputTrace: []json.RawMessage{json.RawMessage(`{"conversation_id":"producer","agent":"main","message":"later","due_at":"2026-10-07T00:00:00Z"}`)}}
 	for _, id := range []string{"external_mcp:private", "cron:one", "exec:one", "slack-thread:C1:1", "web:stored", "unrecorded"} {
 		_, err := service.AppendEntryID(t.Context(), id, entry)
 		require.NoError(t, err)
@@ -491,7 +491,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  rocketclaw:\n    "+tc.rules+"\n---\nPrompt\n")
 			service := newTestSessionServiceAt(t, workspace)
 
-			entries := []rocketcode.SessionEntry{
+			entries := []harness.SessionEntry{
 				*testSessionEntry("secret user", "secret answer"),
 				{Version: 1, Type: "compaction", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"compaction","id":"cmp_1","encrypted_content":"sealed"}`)}},
 				*testSessionEntry("after compaction", "recent answer"),
@@ -610,9 +610,9 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 			bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "external_mcp:private", SessionService: service, RequestReload: &runtimeReloaderMock{ReloadFunc: testNoopRestart}}, log: slog.New(slog.DiscardHandler)}
 			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil, currentSessionIDTool(bridge.config.ConversationID), sessionsWriteTool(bridge, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", bridge.config.ConversationID, agents))
-			runtimeConfig.Journal = rocketcode.InertJournal{}
-			runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
-			runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+			runtimeConfig.Journal = harness.InertJournal{}
+			runtimeConfig.ChildSessions = harness.InertChildSessions{}
+			runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
 			require.NoError(t, err)
 
 			list, hasList := runtime.CodeModeHosts[sessionsListToolName]
@@ -635,8 +635,8 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 				require.True(t, current.Definition.Strict.Value)
 			}
 
-			input := make(chan rocketcode.PromptInput, 1)
-			input <- rocketcode.PromptInput{Texts: []string{"inspect"}, Responses: make(chan rocketcode.ChatResponse, 100)}
+			input := make(chan harness.PromptInput, 1)
+			input <- harness.PromptInput{Texts: []string{"inspect"}, Responses: make(chan harness.ChatResponse, 100)}
 
 			close(input)
 
@@ -706,7 +706,7 @@ func TestSessionsGetURLTool(t *testing.T) {
 // R7, R9: the write tool offers steer, enqueue, and stop, and tells the model its reply arrives later
 // as a note, so it neither waits nor writes again.
 func TestSessionsWriteToolDescription(t *testing.T) {
-	write := sessionsWriteTool(new(Bridge), new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:sender", rocketcode.Agents{})
+	write := sessionsWriteTool(new(Bridge), new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:sender", harness.Agents{})
 
 	assert.Equal(t, "Create a top-level RocketClaw Web session, or write prompt to an existing one, without waiting for its turn. Supply every field. "+
 		"With an empty session_id, create a session named title, run by agent (empty for this turn's agent), whose first turn runs prompt; mode is ignored. The new session cannot see this conversation, so prompt must carry all the context it needs. "+
@@ -731,14 +731,14 @@ func TestSessionsWriteStopWithoutPrompt(t *testing.T) {
 	bridge := runningTestBridge(t, store, manager, "web:target")
 	require.NoError(t, store.BeginGoal("web:target", &GoalState{Objective: "ship it", MaxTurns: 5}))
 
-	write := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:sender", SessionService: store}, threads: manager}, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:sender", rocketcode.Agents{})
+	write := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:sender", SessionService: store}, threads: manager}, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:sender", harness.Agents{})
 	require.False(t, write.Resumable, "a write cut off by a restart is reported interrupted, not run again")
 
 	_, err := store.db.ExecContext(t.Context(), `CREATE FUNCTION reject_goal_stop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'goal stop failed'; END $$;
 CREATE TRIGGER reject_goal_stop BEFORE UPDATE OF goal_status ON conversations FOR EACH STATEMENT EXECUTE FUNCTION reject_goal_stop()`)
 	require.NoError(t, err)
 
-	failed := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:failed", SessionService: store}, threads: manager}, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:failed", rocketcode.Agents{})
+	failed := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:failed", SessionService: store}, threads: manager}, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:failed", harness.Agents{})
 	_, err = failed.Call(t.Context(), json.RawMessage(`{"session_id":"web:target","mode":"stop","prompt":"","title":"","agent":""}`), nil)
 	require.ErrorContains(t, err, "goal stop failed")
 	_, err = store.db.ExecContext(t.Context(), `DROP TRIGGER reject_goal_stop ON conversations; DROP FUNCTION reject_goal_stop()`)
@@ -790,7 +790,7 @@ func TestSessionsWriteStopLineFollowsStoppedTurn(t *testing.T) {
 	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
 	nt.request(t)
 
-	write := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:sender", SessionService: nt.service}, threads: manager}, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:sender", rocketcode.Agents{})
+	write := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:sender", SessionService: nt.service}, threads: manager}, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:sender", harness.Agents{})
 	output, err := write.Call(t.Context(), json.RawMessage(`{"session_id":"`+nt.conversationID+`","mode":"stop","prompt":"","title":"","agent":""}`), nil)
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"outcome":"stopped","session_id":"`+nt.conversationID+`","url":"https://rc.example/s/`+base64.RawURLEncoding.EncodeToString([]byte(nt.conversationID))+`","queue_item_id":"web:sender/","turn_was_running":true}`, output.Output)
@@ -913,13 +913,13 @@ func TestSessionsWriteRecipients(t *testing.T) {
 		// Every sender acts for a top-level turn of main, as a helper under Main does.
 		caller := &Bridge{runtime: config.NewLockedConfig(&senderCfg), config: Config{ConversationID: "web:caller-" + sender, SessionService: store}, threads: manager, log: slog.New(slog.DiscardHandler)}
 		runtimeConfig := caller.rocketcodeConfig(workspace, nil, sessionsWriteTool(caller, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", caller.config.ConversationID, agents))
-		runtimeConfig.Journal = rocketcode.InertJournal{}
-		runtimeConfig.ChildSessions = rocketcode.InertChildSessions{}
-		runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, sender, io.Discard)
+		runtimeConfig.Journal = harness.InertJournal{}
+		runtimeConfig.ChildSessions = harness.InertChildSessions{}
+		runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, sender, io.Discard)
 		require.NoError(t, err)
 
-		input := make(chan rocketcode.PromptInput, 1)
-		input <- rocketcode.PromptInput{Texts: []string{"write"}, Responses: make(chan rocketcode.ChatResponse, 100)}
+		input := make(chan harness.PromptInput, 1)
+		input <- harness.PromptInput{Texts: []string{"write"}, Responses: make(chan harness.ChatResponse, 100)}
 
 		close(input)
 
@@ -1280,7 +1280,7 @@ func TestSessionWriteReplyWakesHiddenRun(t *testing.T) {
 	msg := seedCronRun(t, nt.service, "cron:daily")
 	outbound := protocol.NewOutboundMessage("cron:daily", "Report started.")
 	outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
-	_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("job prompt", "Report started.")}, outbound: outbound})
+	_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started.")}, outbound: outbound})
 	require.NoError(t, err)
 	require.NoError(t, manager.StartActiveTurns(t.Context()))
 	readFinalFor(t, nt.finals, "cron:daily")
@@ -1291,7 +1291,7 @@ func TestSessionWriteReplyWakesHiddenRun(t *testing.T) {
 	nt.waitIdle(t, manager, report)
 
 	run := nt.bridge(t, manager, "cron:daily")
-	_, err = sessionsWriteTool(run, msg, msg, "main", "cron:daily", rocketcode.Agents{}).Call(t.Context(), json.RawMessage(`{"session_id":"`+nt.conversationID+`","mode":"enqueue","prompt":"summarize billing","title":"","agent":""}`), nil)
+	_, err = sessionsWriteTool(run, msg, msg, "main", "cron:daily", harness.Agents{}).Call(t.Context(), json.RawMessage(`{"session_id":"`+nt.conversationID+`","mode":"enqueue","prompt":"summarize billing","title":"","agent":""}`), nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "Billing is fine.", readFinalFor(t, nt.finals, report).Text, "the run's wake reports in its chat")
@@ -1329,7 +1329,7 @@ func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 		manager, shutdown := nt.run(t, ignoreOutbound)
 		caller := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "go", true)
 		caller.ConversationID = "web:caller"
-		_, err := sessionsWriteTool(nt.bridge(t, manager, "web:caller"), caller, caller, "main", "web:caller", rocketcode.Agents{}).Call(t.Context(), json.RawMessage(`{"session_id":"`+nt.conversationID+`","mode":"enqueue","prompt":"summarize billing","title":"","agent":""}`), nil)
+		_, err := sessionsWriteTool(nt.bridge(t, manager, "web:caller"), caller, caller, "main", "web:caller", harness.Agents{}).Call(t.Context(), json.RawMessage(`{"session_id":"`+nt.conversationID+`","mode":"enqueue","prompt":"summarize billing","title":"","agent":""}`), nil)
 		require.NoError(t, err)
 		nt.request(t)
 		require.NoError(t, shutdown())
@@ -1359,7 +1359,7 @@ func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "summarize billing", false)
 		inbound.Metadata = map[string]string{"web_message_id": reply.jobID}
 		require.NoError(t, startTurnDB(t.Context(), nt.service.db, "turn-2", nt.conversationID, inbound))
-		_, err := nt.service.finishTurn(t.Context(), "turn-2", &turnFinish{store: newSessionStore(nt.conversationID, nt.service), entries: []rocketcode.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage(nt.conversationID, "billing is fine")})
+		_, err := nt.service.finishTurn(t.Context(), "turn-2", &turnFinish{store: newSessionStore(nt.conversationID, nt.service), entries: []harness.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage(nt.conversationID, "billing is fine")})
 		require.NoError(t, err)
 		require.NoError(t, nt.service.closeTurn(t.Context(), "turn-2"))
 
@@ -1387,7 +1387,7 @@ func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 		reply.label, reply.runnerID, reply.origin = string(sessionWriteStop), "turn-closed", &protocol.InboundMessage{ConversationID: "web:caller", Source: protocol.SourceWeb}
 		createTestBackgroundJob(t, nt.service, reply)
 
-		line, err := json.Marshal(&rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: replayInputForMessage("developer", "Stopped by session web:caller (agent main)")})
+		line, err := json.Marshal(&harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: replayInputForMessage("developer", "Stopped by session web:caller (agent main)")})
 		require.NoError(t, err)
 		require.NoError(t, nt.service.SaveTurnStep(t.Context(), "web:ops", stopLineStep+reply.jobID, line))
 
@@ -1557,8 +1557,8 @@ func TestChildConversationsKeepSlackChannel(t *testing.T) {
 	thread := protocol.SlackThreadConversationID("C1", "1.1")
 	recordTestConversations(t, store, "main", map[string]ConversationKind{thread: KindSlackThread})
 
-	require.NoError(t, store.startSubagent(t.Context(), thread, rocketcode.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "helper", true))
-	require.NoError(t, (&Bridge{config: Config{ConversationID: thread + "/call-1", SessionService: store}}).AppendChildEntry(t.Context(), rocketcode.ChildKey{Path: "/call-2-review-0a1b2c3d", Turn: "turn-2", Call: "call-2"}, testSessionEntry("review", "allowed")))
+	require.NoError(t, store.startSubagent(t.Context(), thread, harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "helper", true))
+	require.NoError(t, (&Bridge{config: Config{ConversationID: thread + "/call-1", SessionService: store}}).AppendChildEntry(t.Context(), harness.ChildKey{Path: "/call-2-review-0a1b2c3d", Turn: "turn-2", Call: "call-2"}, testSessionEntry("review", "allowed")))
 
 	for _, child := range []string{thread + "/call-1", thread + "/call-1/call-2-review-0a1b2c3d"} {
 		channel, slackThread, err := store.SlackThread(t.Context(), child)
@@ -1589,7 +1589,7 @@ func TestSessionToolSummaryReadsBackToLastMessages(t *testing.T) {
 
 	_, err := service.AppendEntryID(ctx, "chat", testSessionEntryAt(at, "asked"))
 	require.NoError(t, err)
-	_, err = service.AppendEntryID(ctx, "chat", &rocketcode.SessionEntry{Type: "turn", Timestamp: at.Add(time.Hour), ReplayInput: replayInputForMessage("assistant", "later reply")})
+	_, err = service.AppendEntryID(ctx, "chat", &harness.SessionEntry{Type: "turn", Timestamp: at.Add(time.Hour), ReplayInput: replayInputForMessage("assistant", "later reply")})
 	require.NoError(t, err)
 
 	summaries, err := service.sessionToolSummaries(ctx, []string{"chat", "none"}, true)

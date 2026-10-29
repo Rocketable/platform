@@ -116,9 +116,9 @@ func TestRunOAILoginUpdatesOnlySelectedProvider(t *testing.T) {
 	require.NoError(t, err)
 	var raw map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(data, &raw))
-	assert.JSONEq(t, `{"rocketcode_auth":"api_key","api_key":"openai-key"}`, string(raw["openai"]))
-	assert.JSONEq(t, `{"rocketcode_auth":"chatgpt","api_key":"work-key","future_provider_field":true}`, providerJSON(t, raw, "work"))
-	assert.JSONEq(t, `{"rocketcode_auth":"api_key","api_key":"alpha-key"}`, providerJSON(t, raw, "alpha"))
+	assert.JSONEq(t, `{"auth":"api_key","api_key":"openai-key"}`, string(raw["openai"]))
+	assert.JSONEq(t, `{"auth":"chatgpt","api_key":"work-key","future_provider_field":true}`, providerJSON(t, raw, "work"))
+	assert.JSONEq(t, `{"auth":"api_key","api_key":"alpha-key"}`, providerJSON(t, raw, "alpha"))
 	assert.JSONEq(t, `{"enabled":true}`, string(raw["future_root_field"]))
 	assert.Contains(t, string(data), `"workspace": "../runtime"`)
 	assert.Contains(t, string(data), `"database_url": "postgres://localhost/rocketclaw_test?sslmode=disable"`)
@@ -137,9 +137,9 @@ func TestSaveOAILoginRejectsConfigChangedDuringOAuth(t *testing.T) {
 		data string
 		want string
 	}{
-		{name: "missing provider", data: `{"openai":{"rocketcode_auth":"api_key"},"providers":{}}`, want: "provider"},
-		{name: "malformed providers", data: `{"openai":{"rocketcode_auth":"api_key"},"providers":[]}`, want: "provider"},
-		{name: "malformed provider", data: `{"openai":{"rocketcode_auth":"api_key"},"providers":{"work":[]}}`, want: "provider"},
+		{name: "missing provider", data: `{"openai":{"auth":"api_key"},"providers":{}}`, want: "provider"},
+		{name: "malformed providers", data: `{"openai":{"auth":"api_key"},"providers":[]}`, want: "provider"},
+		{name: "malformed provider", data: `{"openai":{"auth":"api_key"},"providers":{"work":[]}}`, want: "provider"},
 		{name: "malformed JSON", data: `{`, want: "parse config JSON"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -231,7 +231,7 @@ func TestSaveOAILoginDoesNotRollbackCommittedToken(t *testing.T) {
 	assert.Equal(t, intended, stored)
 	data, err := os.ReadFile(defaultConfigPath)
 	require.NoError(t, err)
-	assert.Contains(t, providerJSON(t, mustRawConfig(t, data), "work"), `"rocketcode_auth": "chatgpt"`)
+	assert.Contains(t, providerJSON(t, mustRawConfig(t, data), "work"), `"auth": "chatgpt"`)
 }
 
 func TestRunOAILoginSerializesDifferentProviderConfigChanges(t *testing.T) {
@@ -266,8 +266,8 @@ func TestRunOAILoginSerializesDifferentProviderConfigChanges(t *testing.T) {
 	require.NoError(t, err)
 	var raw map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(data, &raw))
-	assert.Contains(t, string(raw["openai"]), `"rocketcode_auth": "chatgpt"`)
-	assert.Contains(t, providerJSON(t, raw, "work"), `"rocketcode_auth": "chatgpt"`)
+	assert.Contains(t, string(raw["openai"]), `"auth": "chatgpt"`)
+	assert.Contains(t, providerJSON(t, raw, "work"), `"auth": "chatgpt"`)
 	for _, provider := range []string{"openai", "work"} {
 		token, err := oai.LoadTokenIn(workspace, config.DefaultRuntimeDir, provider)
 		require.NoError(t, err)
@@ -364,11 +364,11 @@ func prepareOAIConfig(t *testing.T) string {
 	t.Chdir(configDir)
 	data := `{
   "workspace": "../runtime", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
-  "openai": {"rocketcode_auth":"api_key","api_key":"openai-key"},
+  "openai": {"auth":"api_key","api_key":"openai-key"},
   "providers": {
     "work": {"rocketcode_auth":"api_key","api_key":"work-key","future_provider_field":true},
-    "alpha": {"rocketcode_auth":"api_key","api_key":"alpha-key"},
-    "help": {"rocketcode_auth":"api_key","api_key":"help-key"}
+    "alpha": {"auth":"api_key","api_key":"alpha-key"},
+    "help": {"auth":"api_key","api_key":"help-key"}
   },
 	"slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
   "future_root_field": {"enabled":true},

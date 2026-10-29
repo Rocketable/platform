@@ -13,7 +13,7 @@ root_cause: missing_workflow_step
 resolution_type: code_fix
 severity: high
 related_components:
-  - internal/rocketcode
+  - internal/rocketclaw/harness
 tags:
   - background-job
   - subagent

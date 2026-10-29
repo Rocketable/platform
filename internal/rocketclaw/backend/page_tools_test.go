@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 )
 
 func TestPageTools(t *testing.T) {
@@ -25,13 +25,13 @@ func TestPageTools(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.WriteFile("chart.js", []byte("draw()"), 0o644))
 
-	call := func(tools []rocketcode.Tool, name string, input any) (string, error) {
+	call := func(tools []harness.Tool, name string, input any) (string, error) {
 		t.Helper()
 
 		raw, err := json.Marshal(input)
 		require.NoError(t, err)
 
-		i := slices.IndexFunc(tools, func(tool rocketcode.Tool) bool { return tool.Name == name })
+		i := slices.IndexFunc(tools, func(tool harness.Tool) bool { return tool.Name == name })
 		require.GreaterOrEqual(t, i, 0, name)
 
 		result, err := tools[i].Call(t.Context(), raw, nil)
@@ -41,7 +41,7 @@ func TestPageTools(t *testing.T) {
 
 		return result.Output, nil
 	}
-	must := func(tools []rocketcode.Tool, name string, input any) string {
+	must := func(tools []harness.Tool, name string, input any) string {
 		t.Helper()
 
 		out, err := call(tools, name, input)

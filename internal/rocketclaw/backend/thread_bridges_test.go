@@ -19,9 +19,9 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
-	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 func TestRunRejectsUnresolvedAgentModelAtStartup(t *testing.T) {
@@ -277,7 +277,7 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	entry := testSessionEntry("first", "answer")
 	entry.TurnID = request.turnID
 	entry.ReplayInput[0] = json.RawMessage(`{"type":"message","role":"user","input_id":"slack:D123:111.222","content":"first"}`)
-	_, err = store.finishTurn(t.Context(), request.turnID, &turnFinish{store: newSessionStore(conversationID, store), entries: []rocketcode.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(conversationID, "answer")})
+	_, err = store.finishTurn(t.Context(), request.turnID, &turnFinish{store: newSessionStore(conversationID, store), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(conversationID, "answer")})
 	require.NoError(t, err)
 	require.NoError(t, store.closeTurn(t.Context(), request.turnID))
 	require.False(t, submit("first", "111.222"), "a redelivery after its turn finished")
@@ -509,7 +509,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 
 	caller := &Bridge{config: Config{ConversationID: "web:caller", SessionService: store}, threads: manager}
 	origin := &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}
-	write := sessionsWriteTool(caller, origin, origin, "main", caller.config.ConversationID, rocketcode.Agents{})
+	write := sessionsWriteTool(caller, origin, origin, "main", caller.config.ConversationID, harness.Agents{})
 
 	output, err := write.Call(t.Context(), []byte(`{"session_id":"","mode":"steer","title":" Child ","prompt":" literal $(date) ","agent":""}`), nil)
 	require.NoError(t, err)
@@ -595,7 +595,7 @@ func TestSessionsWriteRejectsUnavailableAgents(t *testing.T) {
 	write := func(origin *protocol.InboundMessage, agentName, agent, want string) {
 		t.Helper()
 
-		_, err := sessionsWriteTool(&Bridge{config: Config{ConversationID: "caller", SessionService: store}, threads: manager}, origin, origin, agentName, "caller", rocketcode.Agents{}).Call(t.Context(), fmt.Appendf(nil, `{"session_id":"","mode":"enqueue","title":"Nightly","prompt":"run suite","agent":%q}`, agent), nil)
+		_, err := sessionsWriteTool(&Bridge{config: Config{ConversationID: "caller", SessionService: store}, threads: manager}, origin, origin, agentName, "caller", harness.Agents{}).Call(t.Context(), fmt.Appendf(nil, `{"session_id":"","mode":"enqueue","title":"Nightly","prompt":"run suite","agent":%q}`, agent), nil)
 		require.ErrorContains(t, err, want)
 	}
 
@@ -762,7 +762,7 @@ func TestPromotedAgentQueueItemStaysNonHuman(t *testing.T) {
 		require.Len(t, bridge.steers, 1)
 		assert.False(t, bridge.steers[0].inbound.Human)
 
-		inputs, err := bridge.Drain(t.Context(), "resp-1", rocketcode.TurnPhaseToolLoop, nil)
+		inputs, err := bridge.Drain(t.Context(), "resp-1", harness.TurnPhaseToolLoop, nil)
 		require.NoError(t, err)
 		require.Len(t, inputs, 1)
 		assert.Nil(t, inputs[0].DirectSkill)
@@ -855,7 +855,7 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 				require.Len(t, bridge.steers, 1, "later work does not admit the steer's row again")
 				assert.Empty(t, bridge.requestCh)
 
-				inputs, err := bridge.Drain(t.Context(), "resp-1", rocketcode.TurnPhaseToolLoop, nil)
+				inputs, err := bridge.Drain(t.Context(), "resp-1", harness.TurnPhaseToolLoop, nil)
 				require.NoError(t, err)
 				require.Len(t, inputs, 1)
 				assert.True(t, strings.HasPrefix(inputs[0].Header, `[System sender="steer from session web:sender (agent planner); your final answer returns to that session automatically, so do not write back to it"`), inputs[0].Header)

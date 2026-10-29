@@ -1,5 +1,5 @@
-# generate rewrites vendor/ and the rocketcode mocks, so it finishes before
-# the rocketclaw tests overlap with the rocketcode and funneld checks.
+# generate rewrites vendor/ and the mocks, so it finishes before
+# the rocketclaw tests overlap with the funneld checks.
 test:
 	cd internal/rocketclaw; $(MAKE) generate lint
 	$(MAKE) -j 2 test-rocketclaw test-others
@@ -8,12 +8,10 @@ test-rocketclaw:
 	cd internal/rocketclaw; $(MAKE) check-code-metrics
 
 test-others:
-	cd internal/rocketcode; $(MAKE) test
 	cd internal/funneld; $(MAKE) test
 
 lint:
 	cd internal/rocketclaw; $(MAKE) lint
-	cd internal/rocketcode; $(MAKE) lint
 	cd internal/funneld; $(MAKE) lint
 
 build:
@@ -22,14 +20,12 @@ build:
 
 cloc:
 	cd internal/rocketclaw; $(MAKE) cloc
-	cd internal/rocketcode; $(MAKE) cloc
 	cd internal/funneld; $(MAKE) cloc
 	cd internal/rocketclaw/web; $(MAKE) cloc
 	cd internal/rocketclaw/oc; $(MAKE) cloc
 
 check-cloc-budget:
 	cd internal/rocketclaw; $(MAKE) check-cloc-budget
-	cd internal/rocketcode; $(MAKE) check-cloc-budget
 	cd internal/funneld; $(MAKE) check-cloc-budget
 	cd internal/rocketclaw/web; $(MAKE) check-cloc-budget
 

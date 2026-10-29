@@ -43,7 +43,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	  "web": {"auto_settle_after": "1h"}
 	}`)
 
-	assert.Equal(t, "api_key", cfg.OpenAI.RocketCodeAuth)
+	assert.Equal(t, "api_key", cfg.OpenAI.Auth)
 	assert.Empty(t, cfg.AutoApproverModel)
 	assert.Empty(t, cfg.WebUsers)
 	assert.Equal(t, "0.0.0.0:3000", cfg.Web.ListenAddress)
@@ -213,7 +213,8 @@ func TestLoadPreservesNamedProviders(t *testing.T) {
 	  "openai": {"api_key": "default-key"},
 	  "providers": {
 	    "work": {"api_key": "work-key", "api_base_url": "https://work.example/v1"},
-	    "chat": {"rocketcode_auth": " chatgpt "}
+	    "chat": {"rocketcode_auth": " chatgpt "},
+	    "renamed": {"auth": "chatgpt", "rocketcode_auth": "api_key"}
 	  },
 	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}
 	}`)
@@ -221,18 +222,22 @@ func TestLoadPreservesNamedProviders(t *testing.T) {
 	provider, ok := cfg.Provider("openai")
 	require.True(t, ok)
 	assert.Equal(t, "default-key", provider.APIKey)
-	assert.Equal(t, "api_key", provider.RocketCodeAuth)
+	assert.Equal(t, "api_key", provider.Auth)
 
 	provider, ok = cfg.Provider("work")
 	require.True(t, ok)
-	assert.Equal(t, OpenAIConfig{APIKey: "work-key", APIBaseURL: "https://work.example/v1", RocketCodeAuth: "api_key"}, provider)
+	assert.Equal(t, OpenAIConfig{APIKey: "work-key", APIBaseURL: "https://work.example/v1", Auth: "api_key"}, provider)
 
 	assert.Zero(t, cfg.OpenAI.AutocompactionThreshold)
 	assert.Zero(t, provider.AutocompactionThreshold)
 
 	provider, ok = cfg.Provider("chat")
 	require.True(t, ok)
-	assert.Equal(t, "chatgpt", provider.RocketCodeAuth)
+	assert.Equal(t, "chatgpt", provider.Auth)
+
+	provider, ok = cfg.Provider("renamed")
+	require.True(t, ok)
+	assert.Equal(t, OpenAIConfig{Auth: "chatgpt"}, provider)
 
 	_, ok = cfg.Provider("missing")
 	assert.False(t, ok)
@@ -276,15 +281,15 @@ func TestValidateReportsNamedProviderFieldErrors(t *testing.T) {
 		{
 			name: "auth",
 			providers: map[string]OpenAIConfig{
-				"zulu":  {RocketCodeAuth: "browser"},
-				"alpha": {RocketCodeAuth: "session"},
+				"zulu":  {Auth: "browser"},
+				"alpha": {Auth: "session"},
 			},
-			wantErr: `providers["alpha"].rocketcode_auth must be api_key or chatgpt`,
+			wantErr: `providers["alpha"].auth must be api_key or chatgpt`,
 		},
 		{
 			name:      "API key",
 			providers: map[string]OpenAIConfig{"work": {}},
-			wantErr:   `providers["work"].api_key is required when providers["work"].rocketcode_auth is api_key`,
+			wantErr:   `providers["work"].api_key is required when providers["work"].auth is api_key`,
 		},
 		{
 			name:      "autocompaction threshold",
@@ -869,7 +874,7 @@ func TestValidateRejectsAPIKeyAuthWithoutAPIKey(t *testing.T) {
 
 	err := cfg.Validate()
 
-	require.ErrorContains(t, err, "openai.api_key is required when openai.rocketcode_auth is api_key")
+	require.ErrorContains(t, err, "openai.api_key is required when openai.auth is api_key")
 }
 
 func loadTestConfig(t *testing.T, content string) *Config {

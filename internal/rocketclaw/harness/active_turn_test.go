@@ -1,0 +1,158 @@
+package harness
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+	"testing/synctest"
+
+	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
+)
+
+func TestTurnObservationsPersistPublicProgress(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		journal := recordingJournal()
+		owner := turnObservations{journal: journal, turnID: "turn-1"}
+
+		var workers errgroup.Group
+		for _, id := range []string{"item-a", "item-b"} {
+			workers.Go(func() error {
+				return owner.observe(t.Context(), &PublicProgress{ID: id, Kind: PublicProgressText, State: PublicProgressWorking, Text: id, Agent: "main", Model: "model"})
+			})
+		}
+
+		synctest.Wait()
+		require.NoError(t, workers.Wait())
+		require.Len(t, journal.SaveTraceCalls(), 2)
+		require.Equal(t, "turn-1", journal.SaveTraceCalls()[1].TurnID)
+		require.Len(t, PublicProgressFromTrace(journal.SaveTraceCalls()[1].Trace), 2, "concurrent workers both land in the trace")
+
+		require.NoError(t, owner.observe(t.Context(), &PublicProgress{ID: "item-a", Kind: PublicProgressText, State: PublicProgressWorking, Text: "item-a", Agent: "main", Model: "model"}))
+		require.Len(t, journal.SaveTraceCalls(), 2, "identical public state must not write")
+
+		replacement := PublicProgress{ID: "item-a", Kind: PublicProgressText, State: PublicProgressCompleted, Agent: "main", Model: "model"}
+		require.NoError(t, owner.observe(t.Context(), &replacement))
+		require.Contains(t, PublicProgressFromTrace(journal.SaveTraceCalls()[2].Trace), replacement, "empty text replaces rather than appends to the previous text")
+
+		replacement.Agent = ""
+		require.NoError(t, owner.finishCall(t.Context(), &replacement, PublicProgressCompleted))
+		require.Empty(t, replacement.Agent, "completion must not mutate the worker's snapshot")
+		require.Equal(t, "main", PublicProgressFromTrace(journal.SaveTraceCalls()[2].Trace)[0].Agent, "later caller mutations must not alter stored attribution")
+
+		require.NoError(t, owner.replaceResponse(t.Context(), "", nil))
+		require.Empty(t, PublicProgressFromTrace(journal.SaveTraceCalls()[3].Trace), "removing the attempt drops its text")
+
+		owner.close()
+		require.NoError(t, owner.observe(t.Context(), &PublicProgress{ID: "late", Kind: PublicProgressText, State: PublicProgressWorking, Text: "too late"}))
+		require.Len(t, journal.SaveTraceCalls(), 4, "a closed turn ignores late workers")
+	})
+}
+
+func TestTurnObservationPersistenceFailure(t *testing.T) {
+	errPersist := errors.New("storage unavailable")
+	journal := recordingJournal()
+	journal.SaveTraceFunc = func(context.Context, string, []json.RawMessage) error { return errPersist }
+	owner := turnObservations{journal: journal, turnID: "turn-1"}
+
+	progress := PublicProgress{ID: "item-1", Kind: PublicProgressText, State: PublicProgressWorking, Text: "hello"}
+	err := owner.observe(t.Context(), &progress)
+	require.ErrorIs(t, err, errPersist)
+	_, ok := errors.AsType[progressPersistenceError](err)
+	require.True(t, ok, "persistence failure must be distinguishable from provider/tool errors")
+	require.ErrorIs(t, owner.observe(t.Context(), &progress), errPersist)
+
+	owner.close()
+	require.NoError(t, owner.observe(t.Context(), &progress), "closed lifetime ignores late workers even after a write failure")
+
+	owner = turnObservations{journal: journal, turnID: "turn-2"}
+	err = owner.replaceResponse(t.Context(), "", []PublicProgress{progress})
+	require.ErrorIs(t, err, errPersist)
+	_, ok = errors.AsType[progressPersistenceError](err)
+	require.True(t, ok)
+	require.Empty(t, owner.trace, "a failed save must not commit the replacement in memory")
+	require.ErrorIs(t, owner.replaceResponse(t.Context(), "", []PublicProgress{progress}), errPersist)
+	require.Len(t, journal.SaveTraceCalls(), 2)
+	require.NoError(t, journal.SaveTraceCalls()[1].Ctx.Err())
+	require.Equal(t, "turn-2", journal.SaveTraceCalls()[1].TurnID)
+	require.Equal(t, []PublicProgress{progress}, PublicProgressFromTrace(journal.SaveTraceCalls()[1].Trace))
+}
+
+func TestTurnObservationsPersistAfterChildCancellation(t *testing.T) {
+	journal := recordingJournal()
+	journal.SaveTraceFunc = func(ctx context.Context, _ string, _ []json.RawMessage) error {
+		return ctx.Err()
+	}
+	journal.SaveCodeModeCallFunc = func(ctx context.Context, _, _ string, _ json.RawMessage) error {
+		return ctx.Err()
+	}
+	owner := turnObservations{journal: journal, turnID: "turn-1"}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	progress := PublicProgress{ID: "execute-1", Kind: PublicProgressTool, State: PublicProgressWorking}
+	require.NoError(t, owner.observe(ctx, &progress))
+	require.NoError(t, owner.finishCall(t.Context(), &progress, PublicProgressCompleted))
+	require.NoError(t, owner.replaceResponse(t.Context(), "", []PublicProgress{{ID: "answer-1", Kind: PublicProgressText, State: PublicProgressCompleted, Text: "done"}}))
+	require.NoError(t, owner.recordCodeModeCall(ctx, &CodeModeCall{Type: codeModeCallTraceType, ParentCallID: "execute-1", Key: "turn-1/call/execute-1/host/0", Name: "bash", Status: codeModeCallRunning}, false))
+
+	require.NoError(t, t.Context().Err(), "child cancellation must not cancel the turn")
+	require.Len(t, journal.SaveTraceCalls(), 3)
+	require.Len(t, owner.trace, 2, "tool completion and answer remain stored")
+	require.Equal(t, PublicProgressCompleted, PublicProgressFromTrace(owner.trace)[0].State)
+
+	// The script call record is saved on its own, never with a trace save.
+	saved := journal.SaveCodeModeCallCalls()
+	require.Len(t, saved, 1)
+	require.Equal(t, "turn-1/call/execute-1/host/0", saved[0].Key)
+	require.Equal(t, owner.calls, CodeModeCallsFromTrace([]json.RawMessage{saved[0].Record}))
+
+	for _, call := range journal.SaveTraceCalls() {
+		require.Empty(t, CodeModeCallsFromTrace(call.Trace))
+	}
+}
+
+func TestCodeModeCallString(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		record CodeModeCall
+		want   string
+	}{
+		{
+			name:   "running call",
+			record: CodeModeCall{ParentCallID: "exec-1", Name: "bash", Arguments: `{"command":"ls"}`, Status: codeModeCallRunning},
+			want:   `[exec-1] bash {"command":"ls"} -> running`,
+		},
+		{
+			name:   "failed call without review",
+			record: CodeModeCall{ParentCallID: "exec-2", Name: "read", Arguments: `{"path":"go.mod"}`, Status: codeModeCallError, Summary: "file not found"},
+			want:   `[exec-2] read {"path":"go.mod"} -> error: file not found`,
+		},
+		{
+			name:   "whole-script review",
+			record: CodeModeCall{ParentCallID: "exec-3", Arguments: `{"path":"secret"}`, Status: codeModeCallDenied, Summary: "not a call", Outcome: permissionReviewOutcomeDeny, Reason: "outside workspace"},
+			want:   "[exec-3] (approver deny: outside workspace)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, tc.record.String())
+		})
+	}
+}
+
+func TestPublicProgressTraceAllowlist(t *testing.T) {
+	traces := []json.RawMessage{
+		json.RawMessage(`{"type":"reasoning","text":"PRIVATE"}`),
+		json.RawMessage(`{"type":"unknown","text":"PRIVATE"}`),
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"unknown-kind","kind":"reasoning","state":"working","text":"PRIVATE"}}`),
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"unknown-state","kind":"text","state":"private","text":"PRIVATE"}}`),
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"item-1","kind":"text","state":"working","text":"hello","agent":"main","model":"model"}}`),
+	}
+	require.Equal(t, []PublicProgress{{ID: "item-1", Kind: PublicProgressText, State: PublicProgressWorking, Text: "hello", Agent: "main", Model: "model"}}, PublicProgressFromTrace(traces))
+
+	journal := recordingJournal()
+	owner := turnObservations{journal: journal, turnID: "resumed", trace: traces}
+	require.NoError(t, owner.observe(t.Context(), new(PublicProgressFromTrace(traces)[0])))
+	require.Empty(t, journal.SaveTraceCalls(), "a restored trace recognizes equivalent public JSON without rewriting it")
+}

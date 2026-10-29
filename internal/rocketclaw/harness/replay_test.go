@@ -1,0 +1,179 @@
+package harness
+
+import (
+	"encoding/json"
+	"errors"
+	"testing"
+
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/stretchr/testify/require"
+)
+
+func TestResponseOutputReplayText(t *testing.T) {
+	for _, tt := range []struct {
+		name, input, want, wantCompacted string
+	}{
+		{
+			name:          "message parts",
+			input:         `{"type":"message","id":"msg","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":" first\n"},{"type":"refusal","refusal":"refused"},{"type":"output_text","text":"世界 "}]}`,
+			want:          `{"type":"message","id":"msg","role":"assistant","phase":"final_answer","content":" first\n世界 "}`,
+			wantCompacted: `{"type":"message","role":"assistant","phase":"final_answer","content":" first\n世界 "}`,
+		},
+		{
+			name:          "empty message",
+			input:         `{"type":"message","id":"msg"}`,
+			want:          `{"type":"message","id":"msg","role":"assistant","content":""}`,
+			wantCompacted: `{"type":"message","role":"user","content":""}`,
+		},
+		{
+			name:          "reasoning uses first summary",
+			input:         `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":" first\n"},{"text":"later"}],"content":[{"type":"output_text","text":"ignored"}]}`,
+			want:          `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":" first\n","type":"summary_text"}]}`,
+			wantCompacted: `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":" first\n","type":"summary_text"}]}`,
+		},
+		{
+			name:          "empty reasoning does not use content",
+			input:         `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","content":[{"type":"output_text","text":"ignored"}]}`,
+			want:          `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":"","type":"summary_text"}]}`,
+			wantCompacted: `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":"","type":"summary_text"}]}`,
+		},
+		{
+			name:          "compaction content",
+			input:         `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":[{"type":"output_text","text":" first\n"},{"type":"refusal","refusal":"refused"},{"type":"output_text","text":"世界 "}]}`,
+			want:          `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":" first\n世界 "}`,
+			wantCompacted: `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":" first\n世界 "}`,
+		},
+		{
+			name:          "empty summary uses content",
+			input:         `{"type":"compaction_summary","id":"cmp","encrypted_content":"sealed","summary":[{"text":""}],"content":[{"type":"output_text","text":"fallback"}]}`,
+			want:          `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"fallback"}`,
+			wantCompacted: `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"fallback"}`,
+		},
+		{
+			name:          "summary takes precedence",
+			input:         `{"type":"compaction","id":"cmp","encrypted_content":"sealed","summary":[{"text":"summary"},{"text":"later"}],"content":[{"type":"output_text","text":"fallback"}]}`,
+			want:          `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"summary"}`,
+			wantCompacted: `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":"fallback"}`,
+		},
+		{
+			name:          "refusal-only compaction",
+			input:         `{"type":"compaction","id":"cmp","encrypted_content":"sealed","content":[{"type":"refusal","refusal":"refused"}]}`,
+			want:          `{"type":"compaction","id":"cmp","encrypted_content":"sealed"}`,
+			wantCompacted: `{"type":"compaction","id":"cmp","encrypted_content":"sealed"}`,
+		},
+		{
+			name:          "empty compaction",
+			input:         `{"type":"compaction","id":"cmp","encrypted_content":"sealed"}`,
+			want:          `{"type":"compaction","id":"cmp","encrypted_content":"sealed"}`,
+			wantCompacted: `{"type":"compaction","id":"cmp","encrypted_content":"sealed"}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var item responses.ResponseOutputItemUnion
+			require.NoError(t, json.Unmarshal([]byte(tt.input), &item))
+			got, ok := responseOutputToReplayInput(&item)
+			require.True(t, ok)
+			require.JSONEq(t, tt.want, marshalReplayJSON(t, got))
+
+			compacted, err := compactedOutputToReplayParams([]responses.ResponseOutputItemUnion{item})
+			require.NoError(t, err)
+			require.Len(t, compacted, 1)
+			require.JSONEq(t, tt.wantCompacted, marshalReplayJSON(t, compacted[0]))
+		})
+	}
+}
+
+func TestReplayInputPreservesCompactionPayload(t *testing.T) {
+	raw := []json.RawMessage{json.RawMessage(`{"content":"summary","summary":{"text":"summary"},"recent":[{"id":"msg-1"}],"encrypted_content":"encrypted","id":"cmp-1","type":"compaction"}`)}
+
+	params, err := ReplayInputToParams(raw)
+	require.NoError(t, err)
+
+	got, err := ReplayInputFromParams(params)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.JSONEq(t, string(raw[0]), string(got[0]))
+}
+
+func TestReplayInputDecodeErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name, raw, kind, operation string
+	}{
+		{"malformed JSON", `{`, "", "unmarshal SDK replay input"},
+		{"message metadata", `{"type":"message","role":"user","content":"body","prompt_header":123}`, "message", "decode replay message metadata"},
+		{"compaction content", `{"type":"compaction","encrypted_content":"sealed","content":123}`, "compaction", "decode compaction replay extras"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			items, err := ReplayInputToParams([]json.RawMessage{
+				json.RawMessage(`{"type":"message","role":"user","content":"valid"}`),
+				json.RawMessage(tt.raw),
+			})
+			require.Nil(t, items, "invalid replay must not return a partial history")
+
+			errReplay, ok := errors.AsType[*ReplayDecodeError](err)
+			require.True(t, ok, "expected ReplayDecodeError, got %v", err)
+			require.Equal(t, -1, errReplay.EntryIndex)
+			require.Equal(t, 1, errReplay.ItemIndex)
+			require.Equal(t, tt.kind, errReplay.Kind)
+			require.ErrorContains(t, err, tt.operation)
+			require.Same(t, errReplay.Cause, errors.Unwrap(errReplay))
+		})
+	}
+}
+
+func TestReplayInputEncodeError(t *testing.T) {
+	message := responses.EasyInputMessageParam{Role: "user", Type: "message"}
+	message.SetExtraFields(map[string]any{"broken": json.RawMessage(`{`)})
+	raw, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		{OfMessage: &responses.EasyInputMessageParam{Role: "user", Type: "message"}},
+		{OfMessage: &message},
+	})
+	require.Nil(t, raw, "invalid replay must not return a partial history")
+
+	errReplay, ok := errors.AsType[*ReplayDecodeError](err)
+	require.True(t, ok, "expected ReplayDecodeError, got %v", err)
+	require.Equal(t, -1, errReplay.EntryIndex)
+	require.Equal(t, 1, errReplay.ItemIndex)
+	require.Equal(t, "message", errReplay.Kind)
+	require.ErrorContains(t, err, "marshal SDK replay input")
+	require.Same(t, errReplay.Cause, errors.Unwrap(errReplay))
+}
+
+func TestReplayInputPreservesMessageHeaderLocally(t *testing.T) {
+	const header = `[Slack principal="alice"]`
+
+	raw := []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","input_id":"input-1","prompt_header":"[Slack principal=\"alice\"]","content":"[Slack principal=\"alice\"]\n\n[literal]\n\nbody"}`),
+		json.RawMessage(`{"type":"message","role":"user","input_id":"input-2","content":"body"}`),
+		json.RawMessage(`{"type":"message","id":"provider-item","role":"assistant","phase":"final_answer","content":"answer"}`),
+	}
+	items, err := ReplayInputToParams(raw)
+	require.NoError(t, err)
+	require.Equal(t, header, items[0].OfMessage.ExtraFields()["prompt_header"])
+	require.Equal(t, "input-1", items[0].OfMessage.ExtraFields()["input_id"])
+	stored, err := ReplayInputFromParams(items)
+	require.NoError(t, err)
+	require.JSONEq(t, string(raw[0]), string(stored[0]))
+	require.JSONEq(t, string(raw[1]), string(stored[1]))
+	require.JSONEq(t, string(raw[2]), string(stored[2]))
+
+	projected, err := ReplayInputFromParams(projectReplayForOpenAI(items))
+	require.NoError(t, err)
+	require.NotContains(t, string(projected[0]), "prompt_header")
+	require.NotContains(t, string(projected[0]), "input_id")
+	require.JSONEq(t, `{"type":"message","role":"user","content":"body"}`, string(projected[1]))
+	require.JSONEq(t, `{"type":"message","role":"assistant","phase":"final_answer","content":"answer"}`, string(projected[2]), "item identity stays local without changing provider message shape")
+	require.Equal(t, header+"\n\n[literal]\n\nbody", items[0].OfMessage.Content.OfString.Value)
+	require.Equal(t, header, items[0].OfMessage.ExtraFields()["prompt_header"])
+	require.Equal(t, "input-1", items[0].OfMessage.ExtraFields()["input_id"])
+	require.Equal(t, "input-2", items[1].OfMessage.ExtraFields()["input_id"])
+}
+
+func marshalReplayJSON(t *testing.T, value any) string {
+	t.Helper()
+
+	data, err := json.Marshal(value)
+	require.NoError(t, err)
+
+	return string(data)
+}

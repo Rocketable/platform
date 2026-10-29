@@ -24,8 +24,8 @@ See [LICENSE](LICENSE) for the full license terms.
 
 ## Main parts
 
-- `internal/rocketcode` (RocketCode): the agent engine. It builds model requests from the workspace, runs tools, checks permissions, and saves a replayable record of each session.
-- `internal/rocketclaw` (RocketClaw): the long-running service around RocketCode. It connects the web page, Slack, MCP, scheduled jobs, attachments, and the database. Its program is `cmd/rocketclaw`.
+- `internal/rocketclaw` (RocketClaw): the long-running service. It connects the web page, Slack, MCP, scheduled jobs, attachments, and the database. Its program is `cmd/rocketclaw`.
+- `internal/rocketclaw/harness`: RocketClaw's agent engine. It builds model requests from the workspace, runs tools, checks permissions, and saves a replayable record of each session.
 - `cmd/funneld`: a small HTTPS proxy that forwards public paths to internal URLs listed in `funneld.json`.
 
 ## Getting started
@@ -50,8 +50,8 @@ The Voice page (`/voice`) and the voice button in each session's composer let yo
 
 Voice has no settings of its own. Every agent uses the default `openai` provider for audio, independently of the provider running its model. Hand-offs still run on the conversation's selected agent and model:
 
-- `rocketcode_auth: api_key`: the public GPT-Live API, model `gpt-live-1`. It costs about $0.05 per minute, silence included. An `api_base_url` must use HTTPS unless its host is `localhost` or a loopback IP; otherwise voice refuses to send the API key.
-- `rocketcode_auth: chatgpt`: Codex's internal voice route, model `gpt-live-1-codex`, with the provider's ChatGPT login. This route is unofficial and may stop working at any time. The ChatGPT account's data settings apply.
+- `auth: api_key`: the public GPT-Live API, model `gpt-live-1`. It costs about $0.05 per minute, silence included. An `api_base_url` must use HTTPS unless its host is `localhost` or a loopback IP; otherwise voice refuses to send the API key.
+- `auth: chatgpt`: Codex's internal voice route, model `gpt-live-1-codex`, with the provider's ChatGPT login. This route is unofficial and may stop working at any time. The ChatGPT account's data settings apply.
 
 On both routes, a redirect to another scheme, host, or port drops the voice credentials.
 
@@ -143,8 +143,8 @@ Retention cleanup deletes every chat, in Web or Slack and pinned or not, 90 days
 ## How a request runs
 
 1. A request arrives from the web page (including a `$workflow` command), a Slack mention, MCP, a cron job, or a scheduled message.
-2. RocketClaw passes it to RocketCode with the chosen agent.
-3. RocketCode calls the model and runs tools, within the agent's permissions.
+2. RocketClaw passes it to its agent harness with the chosen agent.
+3. The harness calls the model and runs tools, within the agent's permissions.
 4. RocketClaw saves each finished step and sends the reply back where the request came from.
 
 On shutdown, tool calls already running finish and are saved, and background jobs are stopped. After a restart, each conversation continues from its last saved step.
@@ -161,7 +161,7 @@ permission:
     load_agents_md: false
 ```
 
-For the `bash` tool, RocketCode checks every command in a script on its own, and each command must be allowed. When several rules match, the last one wins. Scripts it cannot parse are refused, even with `bash: allow`.
+For the `bash` tool, RocketClaw checks every command in a script on its own, and each command must be allowed. When several rules match, the last one wins. Scripts it cannot parse are refused, even with `bash: allow`.
 
 Bash rules match command text, not everything a program can do. An executable-path wildcard such as `./scripts/*` does not match executable paths containing `..`; name such an executable explicitly if it is intended. This check is not a shell sandbox: an approved script can still launch other programs or follow symlinks. To put a sandbox in front of one agent's shell commands, set `shell` in that agent's frontmatter to the absolute path of a wrapper program; see the [cheatsheet](cmd/rocketclaw/CHEATSHEET.md#agent-frontmatter-and-permissions) for what the wrapper must do. To run them in a bash emulator instead, set `shell: emulated`; see [Emulated shell](#emulated-shell).
 
@@ -326,8 +326,8 @@ The top-level `openai` object is the default model provider. Add more under `pro
 
 ```json
 {
-  "openai": {"rocketcode_auth": "chatgpt"},
-  "providers": {"work": {"rocketcode_auth": "chatgpt"}},
+  "openai": {"auth": "chatgpt"},
+  "providers": {"work": {"auth": "chatgpt"}},
   "models": {"coding-high": "work/gpt-6.1-sol"}
 }
 ```
@@ -339,6 +339,8 @@ model: '{{ model "coding-high" }}'
 `work/gpt-6.1-sol` uses the `work` provider, and a bare `gpt-6.1-sol` uses `openai`. RocketClaw never switches to another provider on its own. Each provider compacts conversation history at 200000 tokens unless you set `autocompaction_threshold`.
 
 Set `prompt_cache_markers_relative_position` (a negative number) only on a provider that accepts Anthropic `cache_control` markers, such as CLIProxyAPI in front of Claude. RocketClaw then marks one text piece of the last request message, counted from the end: `-2` marks the piece before the last. Automatic permission reviews send the planned action as the last piece, so `-2` lets the next review reuse the cached transcript. Leave it unset for OpenAI and other providers that reject unknown fields.
+
+`auth` sets how a provider signs in: `api_key` (the default) uses `api_key`, and `chatgpt` uses a ChatGPT login. The older name `rocketcode_auth` still works; `auth` wins when both are set.
 
 Sign in per provider with `rocketclaw oai login [provider] [--headless]`. Use `rocketclaw oai list` to see sign-ins and `rocketclaw oai logout [provider]` to remove one. Credentials are normally saved in `.rocketclaw/auth.json`.
 
@@ -398,8 +400,7 @@ Traces carry the text of prompts, replies, and tool calls unless `instrumentatio
 ## Repository layout
 
 - `cmd/`: runnable programs.
-- `internal/rocketcode/`: the agent engine.
-- `internal/rocketclaw/`: the service around RocketCode.
+- `internal/rocketclaw/`: the service, with its agent engine in `internal/rocketclaw/harness/`.
 - `internal/funneld/`: the HTTPS proxy and its config loading.
 - `vendor/`: copies of Go dependencies.
 

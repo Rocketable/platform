@@ -2,7 +2,7 @@
 title: Permission Review Reasons Were Read From a Transport-Specific Trace
 date: 2026-10-17
 category: docs/solutions/logic-errors/
-module: internal/rocketcode
+module: internal/rocketclaw/harness
 problem_type: logic_error
 component: execute
 symptoms:
@@ -24,7 +24,7 @@ tags:
 # Permission Review Reasons Were Read From a Transport-Specific Trace
 
 ## Problem
-The Web showed no approver reason for any permission review on wallace, which reaches models over HTTPS. The old reader (`PermissionReviewRationale`) only accepted a reason backed by a `rocketcode_public_progress` text record in the review entry's `OutputTrace`. Only the Responses WebSocket transport writes those records (`responseObservations` in `internal/rocketcode/responses_websocket.go`), so HTTP reviews never had one.
+The Web showed no approver reason for any permission review on wallace, which reaches models over HTTPS. The old reader (`PermissionReviewRationale`) only accepted a reason backed by a `rocketcode_public_progress` text record in the review entry's `OutputTrace`. Only the Responses WebSocket transport writes those records (`responseObservations` in `internal/rocketclaw/harness/responses_websocket.go`), so HTTP reviews never had one.
 
 ## Symptoms
 - All 110 saved reviews in wallace chat `AHWNE3GO6MMDBJ3V7OGHZDRH2S` had a final answer such as `{"outcome":"allow","rationale":"..."}` in `ReplayInput`, and none had a progress record.
@@ -34,7 +34,7 @@ The Web showed no approver reason for any permission review on wallace, which re
 - Reading the reason from progress records. Their presence depends on how the model was reached, not on whether a review happened.
 
 ## Solution
-Read the decision the way `reviewPermission` makes it. `(*SessionEntry).PermissionReviewDecision` in `internal/rocketcode/permission_review.go` scans `ReplayInput` from the end. It takes the last assistant message outside the commentary phase whose content decodes as an allow or deny decision. It never runs the SDK replay decode.
+Read the decision the way `reviewPermission` makes it. `(*SessionEntry).PermissionReviewDecision` in `internal/rocketclaw/harness/permission_review.go` scans `ReplayInput` from the end. It takes the last assistant message outside the commentary phase whose content decodes as an allow or deny decision. It never runs the SDK replay decode.
 
 Reading the reviewed action for older chats has a second trap. The review prompt's first message can be hundreds of kilobytes of transcript, followed by the planned action that `permissionReviewPrompt` writes between `Planned action JSON:\n` and `\n>>> APPROVAL REQUEST END`. `(PermissionReview).CodeModeCall` finds the last JSON-escaped `Planned action JSON:\n` in the raw item with `bytes.LastIndex`. It decodes only the tail from there, so History does not pay for decoding the whole transcript. A transcript line that tries to forge the delimiter is escaped once more by JSON, so it never matches the raw search.
 

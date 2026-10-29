@@ -15,7 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 )
 
 // openCodeMCPInstructions tell OpenCode agents the bridge's rules, which no tool description states.
@@ -120,7 +120,7 @@ func (r *Runtime) callOpenCodeTool(ctx context.Context, name string, server conf
 
 	tools := r.openCodeTools(conversation, space)
 
-	result, err := tools[slices.IndexFunc(tools, func(candidate rocketcode.Tool) bool { return candidate.Name == tool })].Call(ctx, request.Params.Arguments, nil)
+	result, err := tools[slices.IndexFunc(tools, func(candidate harness.Tool) bool { return candidate.Name == tool })].Call(ctx, request.Params.Arguments, nil)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", strings.TrimPrefix(tool, "rocketclaw_"), err)
 	}
@@ -128,30 +128,30 @@ func (r *Runtime) callOpenCodeTool(ctx context.Context, name string, server conf
 	return result.Output, nil
 }
 
-func (r *Runtime) openCodeTools(conversation, space string) []rocketcode.Tool {
-	reply := func(tags []string, err error) (rocketcode.ToolResult, error) {
+func (r *Runtime) openCodeTools(conversation, space string) []harness.Tool {
+	reply := func(tags []string, err error) (harness.ToolResult, error) {
 		data, _ := json.Marshal(struct {
 			Tags []string `json:"tags"`
 		}{tags}) // Encoding a string slice cannot fail.
 
-		return rocketcode.TextToolResult(string(data)), err
+		return harness.TextToolResult(string(data)), err
 	}
 
 	return append(pageTools(r.Sessions, nil, r.threads, conversation, space, conversation),
-		rocketcode.Tool{Name: "get_tags", Description: `Return this session's RocketClaw tags as {"tags":[...]}.`, Parameters: map[string]any{"properties": map[string]any{}}, Call: func(ctx context.Context, _ json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+		harness.Tool{Name: "get_tags", Description: `Return this session's RocketClaw tags as {"tags":[...]}.`, Parameters: map[string]any{"properties": map[string]any{}}, Call: func(ctx context.Context, _ json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 			return reply(sessionTags(ctx, r.Sessions.db, conversation))
 		}},
-		rocketcode.Tool{Name: "toggle_tag", Description: `Add tag to this session's RocketClaw tags, or remove it when present, and return them as {"tags":[...]}. Any tag is allowed.`, Parameters: map[string]any{"properties": map[string]any{"tag": map[string]any{"type": "string"}}, "required": []string{"tag"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+		harness.Tool{Name: "toggle_tag", Description: `Add tag to this session's RocketClaw tags, or remove it when present, and return them as {"tags":[...]}. Any tag is allowed.`, Parameters: map[string]any{"properties": map[string]any{"tag": map[string]any{"type": "string"}}, "required": []string{"tag"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 			var input struct {
 				Tag string `json:"tag"`
 			}
 			if err := json.Unmarshal(raw, &input); err != nil {
-				return rocketcode.ToolResult{}, fmt.Errorf("parse toggle_tag: %w", err)
+				return harness.ToolResult{}, fmt.Errorf("parse toggle_tag: %w", err)
 			}
 
 			tag := strings.TrimSpace(input.Tag)
 			if tag == "" || strings.ContainsRune(tag, 0) {
-				return rocketcode.ToolResult{}, errors.New("a tag cannot be blank or contain a null character")
+				return harness.ToolResult{}, errors.New("a tag cannot be blank or contain a null character")
 			}
 
 			return reply(r.Sessions.toggleSessionTag(ctx, conversation, tag, []string{tag}))

@@ -26,7 +26,7 @@ Usage:
   rocketclaw oai logout [provider]
 
 Commands:
-  login   Authenticate a provider with ChatGPT for RocketCode model requests.
+  login   Authenticate a provider with ChatGPT for model requests.
   list    List provider auth modes and local credential presence.
   logout  Remove one provider's local ChatGPT OAuth token.
 `
@@ -140,7 +140,7 @@ func runOAIList(args []string) error {
 		}
 		marker := map[string]string{"openai": " (default)"}[name]
 		credentials := map[bool]string{false: "missing", true: "present"}[present]
-		fmt.Fprintf(&output, "%s%s\t%s\t%s\n", name, marker, providers[name].RocketCodeAuth, credentials)
+		fmt.Fprintf(&output, "%s%s\t%s\t%s\n", name, marker, providers[name].Auth, credentials)
 	}
 	return printStdout(output.String(), "oai list")
 }
@@ -210,9 +210,12 @@ func saveOAILogin(configPath, workspace, runtimeDir, provider string, token oai.
 	if err := json.Unmarshal(section, &target); err != nil || target == nil {
 		return "", "", fmt.Errorf("parse provider %q object", provider)
 	}
-	var previous string
-	_ = json.Unmarshal(target["rocketcode_auth"], &previous)
-	target["rocketcode_auth"] = json.RawMessage(`"chatgpt"`)
+	var auth, legacyAuth string
+	_ = json.Unmarshal(target["auth"], &auth)
+	_ = json.Unmarshal(target["rocketcode_auth"], &legacyAuth)
+	previous := cmp.Or(auth, legacyAuth)
+	target["auth"] = json.RawMessage(`"chatgpt"`)
+	delete(target, "rocketcode_auth")
 	section, _ = json.Marshal(target)
 	container[key] = section
 	if provider != "openai" {

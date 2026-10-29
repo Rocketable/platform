@@ -113,7 +113,7 @@ type TimelineGroup<T> = { kind: "group"; key: string; label: string; members: { 
 // OpenCode's timelineCategory sends shell, execute and bash to Shell; RocketClaw's task and skill tools have their own categories.
 const categoryByTool: Partial<Record<string, TimelineCategory>> = { execute: "execute", bash: "execute", task: "subagents", skill: "skills" };
 const categoryByRole: Partial<Record<string, TimelineCategory>> = { thinking: "thinking", developer: "notices" };
-// In-band failures from internal/rocketcode looper.go and replay.go; "tool call rejected" is the repeat guard.
+// In-band failures from internal/rocketclaw/harness looper.go and replay.go; "tool call rejected" is the repeat guard.
 export const timelineFailure = /^(tool call (failed|denied|aborted)|subagent task aborted)/;
 
 // Placement follows OpenCode 7440ff784408a8a095b58ef908de3fc6ee66ca66, packages/session-ui/src/timeline/projection.ts

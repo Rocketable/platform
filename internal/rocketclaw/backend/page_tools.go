@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 )
 
 type pageToolInput struct {
@@ -45,7 +45,7 @@ Pages only read data; they cannot write it or read another agent's.`
 
 // pageTools builds the Hosted Page tools acting on agent's files and Page Data, linked under its space.
 // Pages they store belong to conversation when it is set, so they go with that session.
-func pageTools(sessions *SessionService, root *os.Root, threads *threadBridgeManager, agent, space, conversation string) []rocketcode.Tool {
+func pageTools(sessions *SessionService, root *os.Root, threads *threadBridgeManager, agent, space, conversation string) []harness.Tool {
 	pageURL := func(ctx context.Context, name string) (string, error) {
 		origin, err := threads.webOrigin(ctx)
 		if err != nil {
@@ -80,23 +80,23 @@ func pageTools(sessions *SessionService, root *os.Root, threads *threadBridgeMan
 		return page, err
 	}
 	str := map[string]any{"type": "string"}
-	tool := func(name, description string, properties map[string]any, call func(context.Context, *pageToolInput) (string, error)) rocketcode.Tool {
-		return rocketcode.Tool{Name: name, Description: description, Permission: "rocketclaw", VisibilitySubjects: []string{name}, Subjects: func(json.RawMessage) ([]string, error) { return []string{name}, nil }, Parameters: map[string]any{"properties": properties}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	tool := func(name, description string, properties map[string]any, call func(context.Context, *pageToolInput) (string, error)) harness.Tool {
+		return harness.Tool{Name: name, Description: description, Permission: "rocketclaw", VisibilitySubjects: []string{name}, Subjects: func(json.RawMessage) ([]string, error) { return []string{name}, nil }, Parameters: map[string]any{"properties": properties}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 			var input pageToolInput
 			if err := json.Unmarshal(raw, &input); err != nil {
-				return rocketcode.ToolResult{}, fmt.Errorf("parse %s: %w", name, err)
+				return harness.ToolResult{}, fmt.Errorf("parse %s: %w", name, err)
 			}
 
 			out, err := call(ctx, &input)
 			if err != nil {
-				return rocketcode.ToolResult{}, err
+				return harness.ToolResult{}, err
 			}
 
-			return rocketcode.TextToolResult(out), nil
+			return harness.TextToolResult(out), nil
 		}}
 	}
 
-	return []rocketcode.Tool{
+	return []harness.Tool{
 		tool("rocketclaw_store", pageStoreDescription, map[string]any{"path": str, "content": str, "content_base64": str, "source": str, "content_type": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
 			file, err := outboundAttachment(root, &outboundAttachmentInput{Path: input.Source, Name: input.Path, MIMEType: input.ContentType, Content: input.Content, ContentBase64: input.ContentBase64})
 			if err != nil {

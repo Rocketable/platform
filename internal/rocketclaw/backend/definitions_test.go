@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -67,10 +67,10 @@ func TestSessionTagDefinitions(t *testing.T) {
 					require.True(t, matched)
 
 					if tags == "" || tags == "[]" {
-						require.Equal(t, rocketcode.PermissionDeny, action)
+						require.Equal(t, harness.PermissionDeny, action)
 						require.NotContains(t, agent.Prompt, name)
 					} else {
-						require.Equal(t, rocketcode.PermissionAllow, action)
+						require.Equal(t, harness.PermissionAllow, action)
 
 						if mode != toolModeWorkflow {
 							require.Contains(t, agent.Prompt, name)
@@ -109,10 +109,10 @@ func TestLoadRocketCodeDefinitionsSudo(t *testing.T) {
 	tagged, untagged := agents.Items["tagged"], agents.Items["untagged"]
 
 	// Conversation helpers skip review; every other RocketClaw tool is reviewed.
-	for subject, want := range map[string]rocketcode.PermissionAction{
-		reloadToolName: rocketcode.PermissionAllow, scheduleMessageToolName: rocketcode.PermissionAllow, attachFilesToolName: rocketcode.PermissionAllow,
-		updateGoalToolName: rocketcode.PermissionAllow, askUserQuestionToolName: rocketcode.PermissionAllow,
-		restartToolName: rocketcode.PermissionAuto, sessionsWriteToolName: rocketcode.PermissionAuto, sessionsListToolName: rocketcode.PermissionAuto,
+	for subject, want := range map[string]harness.PermissionAction{
+		reloadToolName: harness.PermissionAllow, scheduleMessageToolName: harness.PermissionAllow, attachFilesToolName: harness.PermissionAllow,
+		updateGoalToolName: harness.PermissionAllow, askUserQuestionToolName: harness.PermissionAllow,
+		restartToolName: harness.PermissionAuto, sessionsWriteToolName: harness.PermissionAuto, sessionsListToolName: harness.PermissionAuto,
 	} {
 		action, _ := tagged.Permission.Evaluate("rocketclaw", subject)
 		require.Equal(t, want, action, subject)
@@ -122,11 +122,11 @@ func TestLoadRocketCodeDefinitionsSudo(t *testing.T) {
 
 	for _, name := range []string{setTagToolName, getTagsToolName} {
 		action, _ := tagged.Permission.Evaluate("rocketclaw_tags", name)
-		require.Equal(t, rocketcode.PermissionAuto, action, name)
+		require.Equal(t, harness.PermissionAuto, action, name)
 		require.Contains(t, tagged.Prompt, name)
 
 		action, _ = untagged.Permission.Evaluate("rocketclaw_tags", name)
-		require.Equal(t, rocketcode.PermissionDeny, action, name)
+		require.Equal(t, harness.PermissionDeny, action, name)
 		require.NotContains(t, untagged.Prompt, name)
 	}
 }
@@ -176,7 +176,7 @@ func TestSessionTagsExistingPermissions(t *testing.T) {
 				if strings.Contains(permission, "load_agents_md") {
 					action, matched := agent.Permission.Evaluate("rocketclaw", "load_agents_md")
 					require.True(t, matched)
-					require.Equal(t, rocketcode.PermissionDeny, action)
+					require.Equal(t, harness.PermissionDeny, action)
 				}
 
 				return
@@ -187,20 +187,20 @@ func TestSessionTagsExistingPermissions(t *testing.T) {
 			for _, bucket := range []string{"webfetch", "websearch", "glob", "grep", "read", "edit", "skill"} {
 				action, matched := agent.Permission.Evaluate(bucket, "*")
 				require.True(t, matched)
-				require.Equal(t, rocketcode.PermissionAllow, action)
+				require.Equal(t, harness.PermissionAllow, action)
 			}
 
 			for _, tc := range []struct {
 				bucket, subject string
-				want            rocketcode.PermissionAction
+				want            harness.PermissionAction
 			}{
-				{"bash", "echo ok", rocketcode.PermissionAuto},
-				{"task", "helper", rocketcode.PermissionAllow},
-				{"task", "main", rocketcode.PermissionDeny},
-				{"task", "cron", rocketcode.PermissionDeny},
-				{"mcp", "context7.query", rocketcode.PermissionAllow},
-				{"rocketclaw_tags", setTagToolName, rocketcode.PermissionAllow},
-				{"rocketclaw_tags", getTagsToolName, rocketcode.PermissionAllow},
+				{"bash", "echo ok", harness.PermissionAuto},
+				{"task", "helper", harness.PermissionAllow},
+				{"task", "main", harness.PermissionDeny},
+				{"task", "cron", harness.PermissionDeny},
+				{"mcp", "context7.query", harness.PermissionAllow},
+				{"rocketclaw_tags", setTagToolName, harness.PermissionAllow},
+				{"rocketclaw_tags", getTagsToolName, harness.PermissionAllow},
 			} {
 				action, matched := agent.Permission.Evaluate(tc.bucket, tc.subject)
 				require.True(t, matched)
@@ -245,7 +245,7 @@ func TestSessionRecipientDefinitions(t *testing.T) {
 	}
 }
 
-func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode, models ...map[string]string) (rocketcode.Agents, rocketcode.Skills, error) {
+func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode, models ...map[string]string) (harness.Agents, harness.Skills, error) {
 	cfg := &config.Config{Workspace: workspace}
 	if len(models) > 0 {
 		cfg.Models = models[0]
@@ -271,7 +271,7 @@ func TestLoadRocketCodeDefinitionsKeepsBackgroundExact(t *testing.T) {
 		require.NoError(t, err)
 
 		action, _ := agents.Items["background"].Permission.Evaluate("rocketclaw", "allow_background")
-		require.Equal(t, rocketcode.PermissionAllow, action)
+		require.Equal(t, harness.PermissionAllow, action)
 	}
 
 	writeAgent(t, workspace, "background", "---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    allow_background: auto\n---\nPrompt\n")
@@ -286,13 +286,13 @@ func TestLoadRocketCodeDefinitionsSessions(t *testing.T) {
 	workspace := t.TempDir()
 	cases := []struct {
 		name, rule string
-		want       rocketcode.PermissionAction
+		want       harness.PermissionAction
 	}{
-		{"missing", "", rocketcode.PermissionDeny},
-		{"deny", "rocketclaw_sessions: deny", rocketcode.PermissionDeny},
-		{"auto", "rocketclaw_sessions: auto", rocketcode.PermissionAuto},
-		{"reviewed", "rocketclaw_sessions: auto(guardian)", rocketcode.PermissionAuto},
-		{"allow", "rocketclaw_sessions: allow", rocketcode.PermissionAllow},
+		{"missing", "", harness.PermissionDeny},
+		{"deny", "rocketclaw_sessions: deny", harness.PermissionDeny},
+		{"auto", "rocketclaw_sessions: auto", harness.PermissionAuto},
+		{"reviewed", "rocketclaw_sessions: auto(guardian)", harness.PermissionAuto},
+		{"allow", "rocketclaw_sessions: allow", harness.PermissionAllow},
 	}
 
 	for _, tc := range cases {
@@ -356,23 +356,23 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	require.Equal(t, "gpt-5.4", primary.Model)
 	require.Equal(t, "gpt-6.1-sol", helper.Model)
 	require.True(t, permissionSetAllows(primary.Permission, "bash", "gh *"))
-	require.Equal(t, rocketcode.PermissionRule{Pattern: "code_mode_approve", Action: rocketcode.PermissionAuto, Reviewer: "release-reviewer"}, primary.Permission.Buckets[1].Rules[0])
+	require.Equal(t, harness.PermissionRule{Pattern: "code_mode_approve", Action: harness.PermissionAuto, Reviewer: "release-reviewer"}, primary.Permission.Buckets[1].Rules[0])
 	require.False(t, permissionSetAllows(primary.Permission, "task", "*"))
 	require.False(t, permissionSetAllows(helper.Permission, "task", "*"))
 	require.True(t, permissionSetAllows(restricted.Permission, "task", "go-reviewer"))
 	require.False(t, permissionSetAllows(restricted.Permission, "task", "*"))
 	requireNoRocketClawPermissionMatch(t, primary.Permission, restartToolName)
-	requireRocketClawPermissionAction(t, primary.Permission, reloadToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, primary.Permission, scheduleMessageToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, primary.Permission, resetScheduledMessagesToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, primary.Permission, attachFilesToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, primary.Permission, updateGoalToolName, rocketcode.PermissionAllow)
+	requireRocketClawPermissionAction(t, primary.Permission, reloadToolName, harness.PermissionAllow)
+	requireRocketClawPermissionAction(t, primary.Permission, scheduleMessageToolName, harness.PermissionAllow)
+	requireRocketClawPermissionAction(t, primary.Permission, resetScheduledMessagesToolName, harness.PermissionAllow)
+	requireRocketClawPermissionAction(t, primary.Permission, attachFilesToolName, harness.PermissionAllow)
+	requireRocketClawPermissionAction(t, primary.Permission, updateGoalToolName, harness.PermissionAllow)
 	requireNoRocketClawPermissionMatch(t, helper.Permission, restartToolName)
-	requireRocketClawPermissionAction(t, helper.Permission, reloadToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, helper.Permission, scheduleMessageToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, helper.Permission, resetScheduledMessagesToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, helper.Permission, attachFilesToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, helper.Permission, updateGoalToolName, rocketcode.PermissionAllow)
+	requireRocketClawPermissionAction(t, helper.Permission, reloadToolName, harness.PermissionAllow)
+	requireRocketClawPermissionAction(t, helper.Permission, scheduleMessageToolName, harness.PermissionAllow)
+	requireRocketClawPermissionAction(t, helper.Permission, resetScheduledMessagesToolName, harness.PermissionAllow)
+	requireRocketClawPermissionAction(t, helper.Permission, attachFilesToolName, harness.PermissionAllow)
+	requireRocketClawPermissionAction(t, helper.Permission, updateGoalToolName, harness.PermissionAllow)
 
 	for _, mode := range []toolMode{toolModePersistent, toolModeWorkflow} {
 		prepared, _, err := loadRocketCodeDefinitions(root, workspace, mode)
@@ -435,7 +435,7 @@ func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
 	require.Equal(t, "low", guardrail.Verbosity)
 	action, matched := guardrail.Permission.Evaluate("read", "docs/a.md")
 	require.True(t, matched)
-	require.Equal(t, rocketcode.PermissionAllow, action)
+	require.Equal(t, harness.PermissionAllow, action)
 }
 
 func TestLoadRocketCodeDefinitionsReportsInvalidTypedFrontmatter(t *testing.T) {
@@ -607,7 +607,7 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 		mode           toolMode
 		permission     string
 		wantTool       string
-		wantAction     rocketcode.PermissionAction
+		wantAction     harness.PermissionAction
 		wantAllowTools []string
 	}{
 		{
@@ -615,7 +615,7 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 			mode:           toolModePersistent,
 			permission:     "permission:\n  rocketclaw:\n    rocketclaw_restart: allow\n",
 			wantTool:       restartToolName,
-			wantAction:     rocketcode.PermissionAllow,
+			wantAction:     harness.PermissionAllow,
 			wantAllowTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 		{
@@ -623,7 +623,7 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 			mode:           toolModePersistent,
 			permission:     "permission:\n  rocketclaw:\n    rocketclaw_restart: auto\n",
 			wantTool:       restartToolName,
-			wantAction:     rocketcode.PermissionAuto,
+			wantAction:     harness.PermissionAuto,
 			wantAllowTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 		{
@@ -631,7 +631,7 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 			mode:           toolModePersistent,
 			permission:     "permission:\n  rocketclaw:\n    rocketclaw_restart: deny\n",
 			wantTool:       restartToolName,
-			wantAction:     rocketcode.PermissionDeny,
+			wantAction:     harness.PermissionDeny,
 			wantAllowTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 		{
@@ -639,7 +639,7 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 			mode:           toolModePersistent,
 			permission:     "permission:\n  rocketclaw:\n    rocketclaw_reload: deny\n",
 			wantTool:       reloadToolName,
-			wantAction:     rocketcode.PermissionDeny,
+			wantAction:     harness.PermissionDeny,
 			wantAllowTools: []string{scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 	}
@@ -661,7 +661,7 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 			requireRocketClawPermissionAction(t, agents.Items["main"].Permission, tt.wantTool, tt.wantAction)
 
 			for _, tool := range tt.wantAllowTools {
-				requireRocketClawPermissionAction(t, agents.Items["main"].Permission, tool, rocketcode.PermissionAllow)
+				requireRocketClawPermissionAction(t, agents.Items["main"].Permission, tool, harness.PermissionAllow)
 			}
 		})
 	}
@@ -724,11 +724,11 @@ func TestRocketCodeReadsAllowedSkillFilesFromConfiguredRuntimeDirectory(t *testi
 			require.NoError(t, err)
 
 			client := openai.NewClient()
-			runtime, err := rocketcode.NewWithProviders(rocketcode.Providers{OpenAI: &client}, &rocketcode.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand{}}, root, agents, skills, "main", nil)
+			runtime, err := harness.NewWithProviders(harness.Providers{OpenAI: &client}, &harness.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, ShellCommand: harness.DefaultShellCommand{}}, root, agents, skills, "main", nil)
 			require.NoError(t, err)
 
 			action, _ := runtime.Permissions.Evaluate("read", filepath.ToSlash(filepath.Join(skillDir, "asset.txt")))
-			require.Equal(t, rocketcode.PermissionAllow, action)
+			require.Equal(t, harness.PermissionAllow, action)
 		})
 	}
 }
@@ -751,13 +751,13 @@ func TestRocketCodeInterpolatesPermissionPatternsFromShellEnv(t *testing.T) {
 	require.Equal(t, ".tmp/${ROCKETCLAW_METADATA_FRUIT}/note.txt", agents.Items["main"].Permission.Buckets[0].Rules[1].Pattern)
 
 	client := openai.NewClient()
-	runtime, err := rocketcode.NewWithProviders(rocketcode.Providers{OpenAI: &client}, &rocketcode.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, ShellCommand: rocketcode.DefaultShellCommand{}, ShellEnv: map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}}, root, agents, skills, "main", nil)
+	runtime, err := harness.NewWithProviders(harness.Providers{OpenAI: &client}, &harness.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, ShellCommand: harness.DefaultShellCommand{}, ShellEnv: map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}}, root, agents, skills, "main", nil)
 	require.NoError(t, err)
 
 	action, _ := runtime.Permissions.Evaluate("edit", ".tmp/banana/note.txt")
-	require.Equal(t, rocketcode.PermissionAllow, action)
+	require.Equal(t, harness.PermissionAllow, action)
 	action, _ = runtime.Permissions.Evaluate("edit", ".tmp/apple/note.txt")
-	require.Equal(t, rocketcode.PermissionDeny, action)
+	require.Equal(t, harness.PermissionDeny, action)
 	require.Contains(t, runtime.SystemPrompt, ".tmp/banana/note.txt")
 }
 
@@ -808,7 +808,7 @@ func writeAgent(t *testing.T, workspace, name, content string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name+".md"), []byte(content), 0o644))
 }
 
-func requireRocketClawPermissionAction(t *testing.T, set rocketcode.PermissionSet, subject string, want rocketcode.PermissionAction) {
+func requireRocketClawPermissionAction(t *testing.T, set harness.PermissionSet, subject string, want harness.PermissionAction) {
 	t.Helper()
 
 	action, matched := set.Evaluate("rocketclaw", subject)
@@ -816,21 +816,21 @@ func requireRocketClawPermissionAction(t *testing.T, set rocketcode.PermissionSe
 	require.Equal(t, want, action)
 }
 
-func requireNoRocketClawPermissionMatch(t *testing.T, set rocketcode.PermissionSet, subject string) {
+func requireNoRocketClawPermissionMatch(t *testing.T, set harness.PermissionSet, subject string) {
 	t.Helper()
 
 	_, matched := set.Evaluate("rocketclaw", subject)
 	require.False(t, matched)
 }
 
-func permissionSetAllows(set rocketcode.PermissionSet, bucket, pattern string) bool {
+func permissionSetAllows(set harness.PermissionSet, bucket, pattern string) bool {
 	for _, candidate := range set.Buckets {
 		if candidate.Name != bucket {
 			continue
 		}
 
 		for _, rule := range candidate.Rules {
-			if rule.Pattern == pattern && rule.Action == rocketcode.PermissionAllow {
+			if rule.Pattern == pattern && rule.Action == harness.PermissionAllow {
 				return true
 			}
 		}

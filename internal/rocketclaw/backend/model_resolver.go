@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -32,12 +32,12 @@ func newModelResolver(cfg *config.Config, logger *slog.Logger) *modelResolver {
 	return &modelResolver{providers: providers, workspace: cfg.Workspace, runtimeDir: cfg.RuntimeDirName(), log: logger}
 }
 
-func (r *modelResolver) Resolve(model string) (*openai.Client, rocketcode.ProviderOrigin, error) {
+func (r *modelResolver) Resolve(model string) (*openai.Client, harness.ProviderOrigin, error) {
 	rawModel := model
 
 	model = strings.TrimSpace(model)
 	if model == "" {
-		return nil, rocketcode.ProviderOrigin{}, errors.New("model is required")
+		return nil, harness.ProviderOrigin{}, errors.New("model is required")
 	}
 
 	provider := "openai"
@@ -46,34 +46,34 @@ func (r *modelResolver) Resolve(model string) (*openai.Client, rocketcode.Provid
 	if before, after, ok := strings.Cut(rawModel, "/"); ok {
 		provider, apiModel = before, after
 		if provider != strings.TrimSpace(provider) || apiModel != strings.TrimSpace(apiModel) {
-			return nil, rocketcode.ProviderOrigin{}, fmt.Errorf("invalid model %q: provider and model components must not contain whitespace", rawModel)
+			return nil, harness.ProviderOrigin{}, fmt.Errorf("invalid model %q: provider and model components must not contain whitespace", rawModel)
 		}
 
 		if provider == "" {
-			return nil, rocketcode.ProviderOrigin{}, fmt.Errorf("invalid model %q: provider is required", model)
+			return nil, harness.ProviderOrigin{}, fmt.Errorf("invalid model %q: provider is required", model)
 		}
 
 		if apiModel == "" {
-			return nil, rocketcode.ProviderOrigin{}, fmt.Errorf("invalid model %q: model is required", model)
+			return nil, harness.ProviderOrigin{}, fmt.Errorf("invalid model %q: model is required", model)
 		}
 
 		if strings.Contains(model, "//") || strings.HasSuffix(apiModel, "/") {
-			return nil, rocketcode.ProviderOrigin{}, fmt.Errorf("invalid model %q: expected provider/model", model)
+			return nil, harness.ProviderOrigin{}, fmt.Errorf("invalid model %q: expected provider/model", model)
 		}
 	}
 
 	providerConfig, ok := r.providers[provider]
 	if !ok {
-		return nil, rocketcode.ProviderOrigin{}, fmt.Errorf("unknown provider %q", provider)
+		return nil, harness.ProviderOrigin{}, fmt.Errorf("unknown provider %q", provider)
 	}
 
-	origin := rocketcode.ProviderOrigin{Provider: provider, Model: apiModel, CompactThreshold: providerConfig.AutocompactionThreshold, PromptCacheMarkersRelativePosition: providerConfig.PromptCacheMarkersRelativePosition}
+	origin := harness.ProviderOrigin{Provider: provider, Model: apiModel, CompactThreshold: providerConfig.AutocompactionThreshold, PromptCacheMarkersRelativePosition: providerConfig.PromptCacheMarkersRelativePosition}
 
 	options := r.options(origin)
-	if providerConfig.RocketCodeAuth == "chatgpt" {
+	if providerConfig.Auth == "chatgpt" {
 		client, err := oai.NewChatGPTClientIn(r.workspace, r.runtimeDir, provider, r.log.With("provider", provider, "model", apiModel), options...)
 		if err != nil {
-			return nil, rocketcode.ProviderOrigin{}, fmt.Errorf("create ChatGPT OAuth client for provider %q: %w", provider, err)
+			return nil, harness.ProviderOrigin{}, fmt.Errorf("create ChatGPT OAuth client for provider %q: %w", provider, err)
 		}
 
 		return client, origin, nil
@@ -90,7 +90,7 @@ func (r *modelResolver) Resolve(model string) (*openai.Client, rocketcode.Provid
 	return &client, origin, nil
 }
 
-func (r *modelResolver) options(origin rocketcode.ProviderOrigin) []option.RequestOption {
+func (r *modelResolver) options(origin harness.ProviderOrigin) []option.RequestOption {
 	if !r.log.Enabled(context.Background(), slog.LevelInfo) && !r.log.Enabled(context.Background(), slog.LevelError) {
 		return nil
 	}
@@ -105,7 +105,7 @@ func (r *modelResolver) options(origin rocketcode.ProviderOrigin) []option.Reque
 		}
 
 		boundary := "http_headers"
-		if r.providers[origin.Provider].RocketCodeAuth == "chatgpt" {
+		if r.providers[origin.Provider].Auth == "chatgpt" {
 			// Codex adapts streams and performs physical retries below SDK middleware.
 			boundary = "sdk_return"
 		}

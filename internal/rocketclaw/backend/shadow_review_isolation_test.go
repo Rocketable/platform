@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -110,7 +110,7 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 				require.NoError(t, err)
 				_, err = store.db.ExecContext(t.Context(), `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json) VALUES ($1, 'parent', 'bound-work', $2)`, broken, inbound)
 				require.NoError(t, err)
-				require.NoError(t, store.captureTurnInputs(t.Context(), "parent", "bound-work", &turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "saved", Texts: []string{"saved input"}}}, Closed: true}))
+				require.NoError(t, store.captureTurnInputs(t.Context(), "parent", "bound-work", &turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "saved", Texts: []string{"saved input"}}}, Closed: true}))
 				require.NoError(t, manager.PickLaterWork(t.Context(), broken))
 				require.Eventually(t, func() bool {
 					var failed bool

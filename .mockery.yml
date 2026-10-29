@@ -129,7 +129,7 @@ packages:
         config:
           filename: agentrunner_mocks_test.go
           structname: agentRunnerMock
-  github.com/Rocketable/platform/internal/rocketcode:
+  github.com/Rocketable/platform/internal/rocketclaw/harness:
     interfaces:
       sessionWriter:
         config:
@@ -164,7 +164,7 @@ packages:
       responsesAPI:
         config:
           structname: mockResponsesAPI
-  github.com/Rocketable/platform/internal/rocketcode/codemode:
+  github.com/Rocketable/platform/internal/rocketclaw/codemode:
     interfaces:
       ToolCallObserver:
         config:

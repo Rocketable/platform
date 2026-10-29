@@ -2,7 +2,7 @@ COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
 COVERAGE_REQUIRED ?= 91.7
 GOTESTRUN ?= .
-GO_SOURCE_CLOC_BUDGET ?= 26750
+GO_SOURCE_CLOC_BUDGET ?= 39250
 GO_SOURCE_CLOC_HAZARD_ZONE ?= 500
 
 run:
@@ -117,3 +117,6 @@ deploy:
 go-mod-update:
 	go get -u ./...
 	$(MAKE) vendor
+
+sync-opencode-testdata:
+	bash ./harness/scripts/sync-opencode-testdata.sh

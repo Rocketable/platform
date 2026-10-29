@@ -21,8 +21,8 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 func TestRuntimeSubscribeIsLiveAndWaitsForDelivery(t *testing.T) {
@@ -132,7 +132,7 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 			require.NoError(t, err)
 
 			replay := replayInputForMessage("user", id+" history")
-			_, err = store.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay, Agent: id, Model: "work/" + id, ReasoningEffort: new("high")})
+			_, err = store.AppendEntryID(ctx, id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay, Agent: id, Model: "work/" + id, ReasoningEffort: new("high")})
 			require.NoError(t, err)
 		}
 
@@ -510,25 +510,25 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 	}
 
 	drain := bridge
-	inputs := testDrainInputs(t, drain, rocketcode.TurnPhaseFinalAnswer)
+	inputs := testDrainInputs(t, drain, harness.TurnPhaseFinalAnswer)
 	require.Len(t, inputs, 2)
 
 	for i, text := range []string{"first", "second"} {
-		require.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: text}, inputs[i].DirectSkill)
+		require.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: text}, inputs[i].DirectSkill)
 		require.Contains(t, inputs[i].Texts[0], "attachment text")
 		require.Contains(t, inputs[i].Texts[0], text)
 		require.Contains(t, inputs[i].Texts[0], "U1")
-		require.Equal(t, []rocketcode.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"Zmlyc3Q=", "c2Vjb25k"}[i]}}, inputs[i].Attachments)
+		require.Equal(t, []harness.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"Zmlyc3Q=", "c2Vjb25k"}[i]}}, inputs[i].Attachments)
 	}
 
 	require.True(t, bridge.inputOpen, "injected input reopens provider work")
-	require.Empty(t, testDrainInputs(t, drain, rocketcode.TurnPhaseFinalAnswer))
+	require.Empty(t, testDrainInputs(t, drain, harness.TurnPhaseFinalAnswer))
 	require.False(t, bridge.inputOpen)
 
 	late := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, &protocol.InboundContent{Text: "late", Attachments: []protocol.InboundAttachment{{Name: "late.png", MIMEType: "image/png", Data: []byte("late")}}}, true)
 	late.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "U2"}
 	require.NoError(t, bridge.Submit(t.Context(), late))
-	require.Empty(t, testDrainInputs(t, drain, rocketcode.TurnPhaseFinalAnswer))
+	require.Empty(t, testDrainInputs(t, drain, harness.TurnPhaseFinalAnswer))
 	require.Same(t, late, (<-bridge.requestCh).inbound, "cutoff steer keeps its full input for the next turn")
 }
 
@@ -581,12 +581,12 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	default:
 	}
 
-	inputs := testDrainInputs(t, bridge, rocketcode.TurnPhaseToolLoop)
+	inputs := testDrainInputs(t, bridge, harness.TurnPhaseToolLoop)
 	require.Len(t, inputs, 2)
 
 	for i, text := range []string{"first", "last"} {
 		require.Contains(t, inputs[i].Texts[0], text+" author")
-		require.Equal(t, []rocketcode.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"Zmlyc3Q=", "bGFzdA=="}[i]}}, inputs[i].Attachments)
+		require.Equal(t, []harness.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"Zmlyc3Q=", "bGFzdA=="}[i]}}, inputs[i].Attachments)
 	}
 
 	itemsAfter, err := manager.queueItems(conversationID)
@@ -634,12 +634,12 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	require.Equal(t, queued.Source, promoted.Source)
 	require.Equal(t, queued.Text, promoted.Text)
 	require.Equal(t, queued.SlackReply, promoted.SlackReply)
-	inputs = testDrainInputs(t, bridge, rocketcode.TurnPhaseToolLoop)
+	inputs = testDrainInputs(t, bridge, harness.TurnPhaseToolLoop)
 	require.Len(t, inputs, 1)
-	require.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "stop", Arguments: "\"typed args\"  Next"}, inputs[0].DirectSkill)
+	require.Equal(t, &harness.PromptInputDirectSkill{Name: "stop", Arguments: "\"typed args\"  Next"}, inputs[0].DirectSkill)
 	require.Contains(t, inputs[0].Texts[0], "original author")
 	require.Contains(t, inputs[0].Texts[0], "acquired text file\n\nacquired forwarded thread")
-	require.Equal(t, []rocketcode.Attachment{{MIME: "image/png", Filename: "original.png", URL: "data:image/png;base64,b3JpZ2luYWw="}}, inputs[0].Attachments)
+	require.Equal(t, []harness.Attachment{{MIME: "image/png", Filename: "original.png", URL: "data:image/png;base64,b3JpZ2luYWw="}}, inputs[0].Attachments)
 	_, claimed, err := (stateDAO{db: store.db}).claimThreadQueueItem(t.Context(), conversationID, "q1")
 	require.NoError(t, err)
 	require.False(t, claimed, "normal consumption cannot claim the promoted enqueue")
@@ -675,7 +675,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		require.True(t, promoted)
 
 		if inputOpen {
-			inputs := testDrainInputs(t, bridge, rocketcode.TurnPhaseToolLoop)
+			inputs := testDrainInputs(t, bridge, harness.TurnPhaseToolLoop)
 			require.Len(t, inputs, 1)
 			require.Nil(t, inputs[0].DirectSkill)
 			require.Contains(t, inputs[0].Texts[0], "goal_continuation")
@@ -1460,9 +1460,9 @@ func TestMoveAsCallFinishes(t *testing.T) {
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
 	finished := &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (string, error) { return "done", nil }, DetachFunc: func() bool { return true }}
 
-	result, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindExecute}, finished)
+	result, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/a", Kind: harness.BackgroundKindExecute}, finished)
 	require.NoError(t, err)
-	require.Equal(t, rocketcode.BackgroundResult{Output: "done"}, result)
+	require.Equal(t, harness.BackgroundResult{Output: "done"}, result)
 	require.Empty(t, registry.move("main"), "a finished call has nothing left to move")
 
 	for i := range 20 {
@@ -1471,7 +1471,7 @@ func TestMoveAsCallFinishes(t *testing.T) {
 
 		var call errgroup.Group
 		call.Go(func() (err error) {
-			result, err = turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: jobID, Kind: rocketcode.BackgroundKindExecute}, blockedWork(started, finish))
+			result, err = turn.Run(t.Context(), &harness.BackgroundJob{ID: jobID, Kind: harness.BackgroundKindExecute}, blockedWork(started, finish))
 			return err
 		})
 		<-started
@@ -1506,7 +1506,7 @@ func TestRuntimeListsAndStopsBackgroundJobs(t *testing.T) {
 
 	reportTestRun(t, store, "cron:daily", "reports")
 	cron := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "cron:daily", origin: &protocol.InboundMessage{SyncDestination: "reports"}}
-	_, err := cron.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/loop", Kind: rocketcode.BackgroundKindTask, Label: "loop", CallID: "loop", SubagentKey: "/loop", Detached: true}, blockedWork(started, release))
+	_, err := cron.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/loop", Kind: harness.BackgroundKindTask, Label: "loop", CallID: "loop", SubagentKey: "/loop", Detached: true}, blockedWork(started, release))
 	require.NoError(t, err)
 	<-started
 
@@ -1597,7 +1597,7 @@ func TestMovableChangeWakesWebViews(t *testing.T) {
 
 	var call errgroup.Group
 	call.Go(func() error {
-		_, err := turn.Run(t.Context(), &rocketcode.BackgroundJob{ID: "turn-1/call/a", Kind: rocketcode.BackgroundKindExecute}, blockedWork(started, release))
+		_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/a", Kind: harness.BackgroundKindExecute}, blockedWork(started, release))
 		return err
 	})
 	<-started

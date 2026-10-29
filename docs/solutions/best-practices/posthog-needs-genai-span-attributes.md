@@ -8,7 +8,7 @@ problem_type: best_practice
 component: observability
 severity: medium
 applies_when:
-  - Changing span attributes in internal/rocketcode/observability.go, internal/rocketcode/looper.go, or Bridge.runTurn in internal/rocketclaw/backend/bridge.go
+  - Changing span attributes in internal/rocketclaw/harness/observability.go, internal/rocketclaw/harness/looper.go, or Bridge.runTurn in internal/rocketclaw/backend/bridge.go
   - Removing attributes that look like duplicates of the OpenInference ones
   - Adding a span, or a turn source that starts agent turns
   - Traces reach PostHog without errors but its AI Observability view stays empty or shows a random person
@@ -19,7 +19,7 @@ symptoms:
 retire_when: "PostHog/posthog#66614 (OpenInference support in AI Observability) is closed as done; check with `gh issue view 66614 -R PostHog/posthog`"
 related_components:
   - internal/rocketclaw/backend/instrumentation.go
-  - internal/rocketcode/observability.go
+  - internal/rocketclaw/harness/observability.go
 tags:
   - posthog
   - opentelemetry
@@ -50,10 +50,10 @@ Every span RocketClaw sends carries the OpenTelemetry GenAI attributes next to t
 | Span | GenAI attributes PostHog needs | Where |
 | --- | --- | --- |
 | `rocketclaw.turn` (the trace root) | `gen_ai.operation.name=invoke_agent`, `gen_ai.agent.name`, `gen_ai.conversation.id` | `Bridge.runTurn`, `internal/rocketclaw/backend/bridge.go:2131-2136` |
-| `rocketcode.turn` / `rocketcode.provider` / `rocketcode.tool.*` | `gen_ai.operation.name` by span kind (`invoke_agent`, `chat`, `execute_tool`) | `ObservabilityConfig.startSpan`, `internal/rocketcode/observability.go:31-36` |
-| `rocketcode.turn` | `gen_ai.agent.name` | `internal/rocketcode/looper.go:805` |
-| `rocketcode.provider` | `gen_ai.request.model`, `gen_ai.provider.name`, `gen_ai.response.id`, `gen_ai.output.messages`, `gen_ai.usage.input_tokens` / `output_tokens` | `looper.newProviderResponse` (`internal/rocketcode/looper.go:1324-1333`) and `TokenUsage.attributes` (`internal/rocketcode/looper.go:569-570`) |
-| `rocketcode.tool.*` | `gen_ai.tool.name`, `gen_ai.tool.call.id` | `startToolSpan`, `internal/rocketcode/observability.go:110-111` |
+| `rocketcode.turn` / `rocketcode.provider` / `rocketcode.tool.*` | `gen_ai.operation.name` by span kind (`invoke_agent`, `chat`, `execute_tool`) | `ObservabilityConfig.startSpan`, `internal/rocketclaw/harness/observability.go:31-36` |
+| `rocketcode.turn` | `gen_ai.agent.name` | `internal/rocketclaw/harness/looper.go:805` |
+| `rocketcode.provider` | `gen_ai.request.model`, `gen_ai.provider.name`, `gen_ai.response.id`, `gen_ai.output.messages`, `gen_ai.usage.input_tokens` / `output_tokens` | `looper.newProviderResponse` (`internal/rocketclaw/harness/looper.go:1324-1333`) and `TokenUsage.attributes` (`internal/rocketclaw/harness/looper.go:569-570`) |
+| `rocketcode.tool.*` | `gen_ai.tool.name`, `gen_ai.tool.call.id` | `startToolSpan`, `internal/rocketclaw/harness/observability.go:110-111` |
 
 `gen_ai.output.messages` holds the reply masked by `hide_outputs`, like `output.value`. Token counts of zero are left off the span.
 
@@ -71,7 +71,7 @@ The request messages of each model call (`gen_ai.input.messages`) are deliberate
 
 ## Why This Matters
 
-The GenAI attributes look like a redundant copy of the OpenInference ones, so a cleanup could remove them. Phoenix would keep working. PostHog's AI view would go empty with no export error, which is the failure PostHog/posthog#66614 describes. Two tests guard these attributes and would fail: `TestObservabilityEmitsAgentProviderAndToolSpans` (`internal/rocketcode/observability_test.go:70`) checks the GenAI attributes on RocketCode spans. `TestRunTurnSpanPreservesMaskingAndFailure` (`internal/rocketclaw/backend/observability_test.go:22`) checks `user.id` on every span of the turn, plus `$ai_input_state` and the GenAI attributes on `rocketclaw.turn`. Nothing at runtime would report the loss.
+The GenAI attributes look like a redundant copy of the OpenInference ones, so a cleanup could remove them. Phoenix would keep working. PostHog's AI view would go empty with no export error, which is the failure PostHog/posthog#66614 describes. Two tests guard these attributes and would fail: `TestObservabilityEmitsAgentProviderAndToolSpans` (`internal/rocketclaw/harness/observability_test.go:70`) checks the GenAI attributes on RocketCode spans. `TestRunTurnSpanPreservesMaskingAndFailure` (`internal/rocketclaw/backend/observability_test.go:22`) checks `user.id` on every span of the turn, plus `$ai_input_state` and the GenAI attributes on `rocketclaw.turn`. Nothing at runtime would report the loss.
 
 Looking up these attributes in PostHog does not help when debugging. After mapping, its ingestion removes `gen_ai.operation.name`, `user.id`, and `posthog.distinct_id` from the event properties (per the ingestion source read in this session). So a working span does not show them in PostHog either. Check the span RocketClaw sends, for example in Phoenix or a test, instead of the PostHog event.
 

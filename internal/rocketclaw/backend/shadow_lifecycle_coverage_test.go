@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 )
 
@@ -133,7 +133,7 @@ func TestShadowLifecycleCaptureFailureAndRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, admitted)
 
-	snapshot := turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "initial", Texts: []string{"prepared"}}}, Closed: true}
+	snapshot := turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "initial", Texts: []string{"prepared"}}}, Closed: true}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
@@ -143,7 +143,7 @@ func TestShadowLifecycleCaptureFailureAndRetry(t *testing.T) {
 	require.True(t, matched)
 	require.Contains(t, persistence.Error(), "persist consumed input")
 
-	snapshot.ContextEntries = []rocketcode.SessionEntry{{ReplayInput: []json.RawMessage{json.RawMessage(`{`)}}}
+	snapshot.ContextEntries = []harness.SessionEntry{{ReplayInput: []json.RawMessage{json.RawMessage(`{`)}}}
 	err = store.captureTurnInputs(t.Context(), "parent", request.turnID, &snapshot)
 	require.ErrorContains(t, err, "encode canonical input")
 
@@ -179,7 +179,7 @@ func TestShadowLifecycleCaptureFailureAndRetry(t *testing.T) {
 		require.NoError(t, err)
 
 		bridge := &Bridge{shadow: true, config: Config{ConversationID: child, SessionService: store}, activeTurnID: turn.id}
-		_, err = bridge.Drain(t.Context(), "resp-1", rocketcode.TurnPhaseFinalAnswer, nil)
+		_, err = bridge.Drain(t.Context(), "resp-1", harness.TurnPhaseFinalAnswer, nil)
 		require.ErrorContains(t, err, "decode mirrored input")
 		require.Nil(t, bridge.shadowInputWake, "failed durable read unregisters the waiter")
 	}
@@ -396,7 +396,7 @@ func TestShadowLifecycleUnavailableStateDoesNotStartWork(t *testing.T) {
 			case "capture":
 				err = store.captureTurnInputs(t.Context(), "parent", request.turnID, &turnInputSnapshot{})
 			case "drain":
-				_, err = child.Drain(t.Context(), "resp-1", rocketcode.TurnPhaseFinalAnswer, nil)
+				_, err = child.Drain(t.Context(), "resp-1", harness.TurnPhaseFinalAnswer, nil)
 				require.Nil(t, child.shadowInputWake)
 			case "wake":
 				err = parent.startShadowWorkers(t.Context(), request.turnID)
@@ -428,7 +428,7 @@ func TestShadowLifecycleDeferredCommitFailureAndRetry(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, admitted)
 
-			snapshot := turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "initial", Texts: []string{"prepared"}}}}
+			snapshot := turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "initial", Texts: []string{"prepared"}}}}
 			require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &snapshot))
 
 			entry := testSessionEntry("start", "answer")
@@ -498,12 +498,12 @@ func TestShadowLifecycleFinishRollback(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, admitted)
 
-			snapshot := turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "initial", Texts: []string{"start"}}}}
+			snapshot := turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "initial", Texts: []string{"start"}}}}
 			require.NoError(t, store.captureTurnInputs(ctx, "parent", request.turnID, &snapshot))
 
 			entry := testSessionEntry("start", "answer")
 			entry.TurnID = request.turnID
-			finish := &turnFinish{store: newSessionStore("parent", store), entries: []rocketcode.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage("parent", "answer")}
+			finish := &turnFinish{store: newSessionStore("parent", store), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage("parent", "answer")}
 			rejectShadowLifecycleWrite(t, store, step.table, step.event)
 
 			outbound, err := store.finishTurn(ctx, request.turnID, finish)
@@ -557,7 +557,7 @@ func TestShadowTurnNamesParentPerson(t *testing.T) {
 	admitted, err := parent.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
 	require.True(t, admitted)
-	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "initial", Texts: []string{"start"}}}}))
+	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "initial", Texts: []string{"start"}}}}))
 
 	var childID string
 
@@ -579,7 +579,7 @@ func TestShadowLifecycleStopNotificationCancelsOwningTurn(t *testing.T) {
 	admitted, err := parent.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
 	require.True(t, admitted)
-	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &turnInputSnapshot{Inputs: []rocketcode.PromptInput{{ID: "initial", Texts: []string{"start"}}}}))
+	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "initial", Texts: []string{"start"}}}}))
 
 	var childID string
 

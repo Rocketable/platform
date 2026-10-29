@@ -13,10 +13,10 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -24,8 +24,8 @@ import (
 var ErrRestartRequested = errors.New("restart requested")
 
 // errShutdown stops conversation work: bridges leave it for the next start, and
-// RocketCode turns stop once their running calls finish.
-var errShutdown = fmt.Errorf("%w: %w", protocol.ErrBridgeStopped, rocketcode.ErrShutdown)
+// harness turns stop once their running calls finish.
+var errShutdown = fmt.Errorf("%w: %w", protocol.ErrBridgeStopped, harness.ErrShutdown)
 
 const (
 	stateRetention = 90 * 24 * time.Hour

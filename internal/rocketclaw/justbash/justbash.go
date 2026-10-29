@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 )
 
 var (
@@ -24,14 +24,14 @@ var (
 
 // Shell returns the customShell of an agent whose frontmatter sets shell: emulated, running from dir, the
 // install directory inside runtimeDir. It reports false for other agents.
-func Shell(frontmatter map[string]any, workspace, runtimeDir, dir string) (rocketcode.CustomShell, bool, error) {
+func Shell(frontmatter map[string]any, workspace, runtimeDir, dir string) (harness.CustomShell, bool, error) {
 	if frontmatter["shell"] != "emulated" {
-		return rocketcode.CustomShell{}, false, nil
+		return harness.CustomShell{}, false, nil
 	}
 
 	// just-bash always works on top of a working directory.
 	if dir, ok := frontmatter["workingDirectory"].(string); !ok || strings.TrimSpace(dir) == "" {
-		return rocketcode.CustomShell{}, false, errors.New("workingDirectory: required with shell: emulated")
+		return harness.CustomShell{}, false, errors.New("workingDirectory: required with shell: emulated")
 	}
 
 	config := map[string]any{"workspace": workspace, "runtimeDir": runtimeDir}
@@ -44,10 +44,10 @@ func Shell(frontmatter map[string]any, workspace, runtimeDir, dir string) (rocke
 
 	setup, err := json.Marshal(config)
 	if err != nil {
-		return rocketcode.CustomShell{}, false, fmt.Errorf("just-bash settings: %w", err)
+		return harness.CustomShell{}, false, fmt.Errorf("just-bash settings: %w", err)
 	}
 
-	return rocketcode.CustomShell{Path: filepath.Join(dir, "wrapper.ts"), Setup: setup, Emulated: true}, true, nil
+	return harness.CustomShell{Path: filepath.Join(dir, "wrapper.ts"), Setup: setup, Emulated: true}, true, nil
 }
 
 // Install writes the wrapper into dir and installs its pinned just-bash with npm unless that version is

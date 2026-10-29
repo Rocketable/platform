@@ -17,9 +17,9 @@ import (
 
 	instrumentation "github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/openai/openai-go/v3/responses"
 	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
@@ -37,12 +37,12 @@ type workflowAgentRunner struct {
 	definition    *workflow.Definition
 	cfg           *config.Config
 	agent, parent string
-	journal       rocketcode.Journal
+	journal       harness.Journal
 	root          *os.Root
-	agents        rocketcode.Agents
-	skills        rocketcode.Skills
+	agents        harness.Agents
+	skills        harness.Skills
 	resolver      *modelResolver
-	customTools   []rocketcode.Tool
+	customTools   []harness.Tool
 	// shellEnv is the environment of the turn the workflow runs for (Bridge.turnShellEnv).
 	shellEnv map[string]string
 }
@@ -54,7 +54,7 @@ type workflowWorkerStep struct {
 	Result json.RawMessage `json:"result"`
 }
 
-func newWorkflowAgentRunner(locked *config.LockedConfig, agent string, journal rocketcode.Journal, logger *slog.Logger, customTools ...rocketcode.Tool) (*workflowAgentRunner, error) {
+func newWorkflowAgentRunner(locked *config.LockedConfig, agent string, journal harness.Journal, logger *slog.Logger, customTools ...harness.Tool) (*workflowAgentRunner, error) {
 	root, agents, skills, resolver, err := prepareRocketCode(locked, agent, logger, toolModeWorkflow)
 	if err != nil {
 		return nil, err
@@ -103,7 +103,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 		}
 	}
 
-	callAgents := rocketcode.Agents{Items: maps.Clone(r.agents.Items)}
+	callAgents := harness.Agents{Items: maps.Clone(r.agents.Items)}
 
 	active := callAgents.Items[r.agent]
 	if request.Worker.Name != "" {
@@ -137,11 +137,11 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 		}
 	}()
 
-	runtimeConfig := rocketcode.Config{AutoApproverModel: r.cfg.AutoApproverModel, ShellTempDir: filepath.Join(r.cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(r.cfg), RetainedResultDir: filepath.Join("retained", "unused"), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: r.cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.cfg.Instrumentation.HideInputs, HideOutputs: r.cfg.Instrumentation.HideOutputs}}, ChildSessions: rocketcode.InertChildSessions{}, Journal: r.journal, BackgroundJobs: rocketcode.InertBackgroundJobs{}, ShellCommand: rocketcode.DefaultShellCommand{}}
+	runtimeConfig := harness.Config{AutoApproverModel: r.cfg.AutoApproverModel, ShellTempDir: filepath.Join(r.cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(r.cfg), RetainedResultDir: filepath.Join("retained", "unused"), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: harness.ObservabilityConfig{Enabled: r.cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.cfg.Instrumentation.HideInputs, HideOutputs: r.cfg.Instrumentation.HideOutputs}}, ChildSessions: harness.InertChildSessions{}, Journal: r.journal, BackgroundJobs: harness.InertBackgroundJobs{}, ShellCommand: harness.DefaultShellCommand{}}
 	runtimeConfig.CustomTools = r.customTools
 	runtimeConfig.ShellEnv = r.shellEnv
 
-	runtime, err := rocketcode.NewWithModelResolver(r.resolver, &runtimeConfig, r.root, callAgents, r.skills, r.agent, io.Discard)
+	runtime, err := harness.NewWithModelResolver(r.resolver, &runtimeConfig, r.root, callAgents, r.skills, r.agent, io.Discard)
 	if err != nil {
 		return nil, fmt.Errorf("prepare workflow rocketcode run: %w", err)
 	}
@@ -155,7 +155,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	// Strip task and names that live inside execute; permissions still govern those.
 	tools = slices.DeleteFunc(tools, func(name string) bool {
 		_, nested := runtime.CodeModeHosts[name]
-		return name == "task" || nested || rocketcode.CodeModeOnlyHostTool(name)
+		return name == "task" || nested || harness.CodeModeOnlyHostTool(name)
 	})
 
 	if _, available := runtime.Tools["find_skills"]; available && slices.Contains(tools, "skill") && !slices.Contains(tools, "find_skills") {
@@ -176,10 +176,10 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	}
 
 	memory := new(memoryStore)
-	input := make(chan rocketcode.PromptInput, 1)
+	input := make(chan harness.PromptInput, 1)
 
-	output := make(chan rocketcode.ChatResponse, 128)
-	input <- rocketcode.PromptInput{TurnID: request.Key + "/" + want.Hash, Role: rocketcode.PromptInputRoleUser, Texts: []string{request.Prompt}, Responses: output}
+	output := make(chan harness.ChatResponse, 128)
+	input <- harness.PromptInput{TurnID: request.Key + "/" + want.Hash, Role: harness.PromptInputRoleUser, Texts: []string{request.Prompt}, Responses: output}
 
 	close(input)
 
@@ -189,7 +189,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	last := ""
 
 	for item := range output {
-		if item.Kind == rocketcode.ChatResponseAssistantMessage {
+		if item.Kind == harness.ChatResponseAssistantMessage {
 			if request.Schema != nil {
 				last = item.Text
 			} else {
@@ -221,7 +221,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 }
 
 // prepareWorkflowTags keeps worker limits and caller guidance local to one run.
-func prepareWorkflowTags(agents rocketcode.Agents, worker string, tools []string) error {
+func prepareWorkflowTags(agents harness.Agents, worker string, tools []string) error {
 	agent := agents.Items[worker]
 
 	agent.Permission.Buckets = slices.Clone(agent.Permission.Buckets)
@@ -230,7 +230,7 @@ func prepareWorkflowTags(agents rocketcode.Agents, worker string, tools []string
 			agent.Permission.Buckets[i].Rules = slices.Clone(bucket.Rules)
 			for j, rule := range bucket.Rules {
 				if tools != nil && !slices.Contains(tools, rule.Pattern) {
-					agent.Permission.Buckets[i].Rules[j].Action = rocketcode.PermissionDeny
+					agent.Permission.Buckets[i].Rules[j].Action = harness.PermissionDeny
 				}
 			}
 		}
@@ -253,18 +253,18 @@ func prepareWorkflowTags(agents rocketcode.Agents, worker string, tools []string
 	return nil
 }
 
-func prepareRocketCode(locked *config.LockedConfig, agent string, logger *slog.Logger, mode toolMode) (*os.Root, rocketcode.Agents, rocketcode.Skills, *modelResolver, error) {
+func prepareRocketCode(locked *config.LockedConfig, agent string, logger *slog.Logger, mode toolMode) (*os.Root, harness.Agents, harness.Skills, *modelResolver, error) {
 	cfg := locked.Clone()
 
 	root, err := os.OpenRoot(cfg.Workspace)
 	if err != nil {
-		return nil, rocketcode.Agents{}, rocketcode.Skills{}, nil, fmt.Errorf("open workspace root: %w", err)
+		return nil, harness.Agents{}, harness.Skills{}, nil, fmt.Errorf("open workspace root: %w", err)
 	}
 
 	agents, skills, err := loadRocketCodeDefinitionsIn(root, locked, cfg.RuntimeDirName(), mode)
 	if err != nil {
 		_ = root.Close()
-		return nil, rocketcode.Agents{}, rocketcode.Skills{}, nil, fmt.Errorf("open workspace agent and skills: %w", err)
+		return nil, harness.Agents{}, harness.Skills{}, nil, fmt.Errorf("open workspace agent and skills: %w", err)
 	}
 
 	appendOverlayPromptToAgent(agents, agent, cfg)

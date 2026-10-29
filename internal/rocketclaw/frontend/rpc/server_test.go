@@ -31,8 +31,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/assert"
@@ -506,7 +506,7 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 
 	const id = "tag-search"
 	require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
-	_, err = sessions.AppendEntryID(t.Context(), id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+	_, err = sessions.AppendEntryID(t.Context(), id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","content":"ping <!subteam^S0BA868QQ90>"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"unrelated reply"}`),
 		json.RawMessage(`{"type":"message","role":"user","content":"hi <@U05MD4PEVHN>"}`),
@@ -656,7 +656,7 @@ func TestSearchSessionsUnreadPerCaller(t *testing.T) {
 
 	for _, id := range []string{"slack-thread:C1:1.1", "web-session:alice", "web-session:bob"} {
 		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
-		_, err := sessions.AppendEntryID(t.Context(), id, &rocketcode.SessionEntry{})
+		_, err := sessions.AppendEntryID(t.Context(), id, &harness.SessionEntry{})
 		require.NoError(t, err)
 	}
 
@@ -720,7 +720,7 @@ func TestSearchSessionsResponse(t *testing.T) {
 
 	for _, chat := range []struct{ id, user string }{{"slack-thread:C1:1.1", "ping <@U7> about billing"}, {"web-session:desk", "hello"}, {"web-session:lower", "billing question"}} {
 		require.NoError(t, sessions.UpsertThread(chat.id, backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
-		entries[chat.id], err = sessions.AppendEntryID(ctx, chat.id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		entries[chat.id], err = sessions.AppendEntryID(ctx, chat.id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(fmt.Sprintf(`{"type":"message","role":"user","content":%q}`, chat.user)),
 			json.RawMessage(`{"type":"message","role":"assistant","content":"done"}`),
 		}})
@@ -794,7 +794,7 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 
 	require.NoError(t, sessions.UpsertThread("source", backend.ThreadState{Agent: "main", CreatedBy: "alice"}))
 	require.NoError(t, sessions.SaveAttachment(ctx, "source", "", &protocol.OutboundAttachment{ID: "parity-file", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}, true))
-	_, err = sessions.AppendEntryID(ctx, "source", &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+	_, err = sessions.AppendEntryID(ctx, "source", &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\nheader request"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"plain answer"}`),
 		json.RawMessage(`{"type":"message","role":"user","content":"attached request\n\nattachment:parity-file \"notes.txt\" (workspace path \"artifacts/uploads/parity-file/notes.txt\")"}`),
@@ -1222,7 +1222,7 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, exists)
 
-	entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC().Add(-8 * 24 * time.Hour)}
+	entry := harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC().Add(-8 * 24 * time.Hour)}
 	first, err := sessions.AppendEntryID(ctx, id, &entry)
 	require.NoError(t, err)
 	second, err := sessions.AppendEntryID(ctx, id, &entry)
@@ -1246,7 +1246,7 @@ func TestSessionEntries(t *testing.T) {
 	for i, row := range loaded.Entries {
 		require.Equal(t, listed.Entries[i].Id, row.Id)
 
-		var got rocketcode.SessionEntry
+		var got harness.SessionEntry
 		require.NoError(t, json.Unmarshal([]byte(row.Json), &got))
 		require.Equal(t, entry, got)
 	}
@@ -1642,7 +1642,7 @@ func TestSessionEntries(t *testing.T) {
 	require.True(t, loading.UpstreamSuccess)
 	require.Empty(t, loading.Sessions)
 
-	_, err = sessions.AppendEntryID(ctx, "empty-web", &rocketcode.SessionEntry{Timestamp: time.Now().UTC()})
+	_, err = sessions.AppendEntryID(ctx, "empty-web", &harness.SessionEntry{Timestamp: time.Now().UTC()})
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `UPDATE conversations c SET tags = v.tags::jsonb FROM (VALUES ('empty-web', '["customer","triage"]'), ('private-X', '["private"]')) v(id, tags)
 WHERE c.conversation_id = v.id`)
@@ -1783,7 +1783,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
 	}
 
-	historyEntry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: entry.Timestamp, ReplayInput: []json.RawMessage{
+	historyEntry := harness.SessionEntry{Version: 1, Type: "turn", Timestamp: entry.Timestamp, ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"developer","content":"private instructions"}`),
 		json.RawMessage(`{"type":"message","role":"user","content":"human one"}`),
 		json.RawMessage(`{"type":"reasoning","summary":[{"type":"summary_text","text":"**Planning the answer**"}]}`),
@@ -1801,7 +1801,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 		json.RawMessage(`{"type":"function_call_output","call_id":"script/host/1","parent_call_id":"script","output":"{\"tags\":[\"customer\"]}"}`),
 	}}
 	historyEntry.Agent, historyEntry.Model, historyEntry.ReasoningEffort = "planner", "work/model-a", new("")
-	historyEntry.ReplayAttribution = []rocketcode.ReplayAttribution{{Start: 0, End: 6, Model: "legacy-model"}}
+	historyEntry.ReplayAttribution = []harness.ReplayAttribution{{Start: 0, End: 6, Model: "legacy-model"}}
 	_, err = sessions.AppendEntryID(ctx, "empty-web", &historyEntry)
 	require.NoError(t, err)
 	history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "empty-web"})
@@ -1921,7 +1921,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	cfg.Models = map[string]string{"zeta": "gpt-6.1-sol", "alpha": "gpt-5.4"}
 	cfg.Logging.Level, cfg.AutoApproverModel = "info", "gpt-6.1-sol"
 	cfg.MCPExternal.Enabled, cfg.Instrumentation.Enabled = true, true
-	cfg.OpenAI.APIKey, cfg.OpenAI.RocketCodeAuth = "secret-provider-key", "secret-auth-path"
+	cfg.OpenAI.APIKey, cfg.OpenAI.Auth = "secret-provider-key", "secret-auth-path"
 	cfg.Slack.BotToken, cfg.Slack.AppToken = "secret-bot-token", "secret-app-token"
 	cfg.Instrumentation.APIKey = "secret-telemetry-key"
 	cfg.Environment = []string{"TOKEN=secret-environment"}
@@ -2017,12 +2017,12 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 			message.OfMessage.SetExtraFields(map[string]any{"prompt_header": tc.header})
 		}
 
-		replay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		replay, err := harness.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
 			message,
 			{OfMessage: &responses.EasyInputMessageParam{Role: "assistant", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(webHeader + "assistant unchanged")}, Type: "message"}},
 		})
 		require.NoError(t, err)
-		_, err = sessions.AppendEntryID(ctx, "empty-web", &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: entry.Timestamp.Add(time.Duration(i+1) * time.Second), ReplayInput: replay})
+		_, err = sessions.AppendEntryID(ctx, "empty-web", &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: entry.Timestamp.Add(time.Duration(i+1) * time.Second), ReplayInput: replay})
 		require.NoError(t, err)
 		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "empty-web"})
 		require.NoError(t, err)
@@ -2101,7 +2101,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	}
 
 	for id := range births {
-		_, err = sessions.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
+		_, err = sessions.AppendEntryID(ctx, id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
 		require.NoError(t, err)
 	}
 
@@ -2167,7 +2167,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 
 	for _, extra := range []string{"slack-thread:C1:2.2", "slack-thread:C2:3.3"} {
 		seeded.RecordSlackThread(t, sessions, extra, backend.ThreadState{Agent: "main"})
-		_, err := sessions.AppendEntryID(ctx, extra, &rocketcode.SessionEntry{})
+		_, err := sessions.AppendEntryID(ctx, extra, &harness.SessionEntry{})
 		require.NoError(t, err)
 	}
 
@@ -2265,14 +2265,14 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.Equal(t, "producer", private.Agent)
 
 	largePreview := strings.Repeat("x", (2<<20)+1)
-	largeReplay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+	largeReplay, err := harness.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
 		{OfMessage: &responses.EasyInputMessageParam{Role: "user", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(largePreview)}, Type: "message"}},
 	})
 	require.NoError(t, err)
 
 	for _, conversationID := range []string{"large-a", "large-b"} {
 		require.NoError(t, sessions.UpsertThread(conversationID, backend.ThreadState{Agent: "selected"}))
-		_, err = sessions.AppendEntryID(ctx, conversationID, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: entry.Timestamp.Add(time.Hour), ReplayInput: largeReplay})
+		_, err = sessions.AppendEntryID(ctx, conversationID, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: entry.Timestamp.Add(time.Hour), ReplayInput: largeReplay})
 		require.NoError(t, err)
 	}
 
@@ -2378,7 +2378,7 @@ UPDATE entries e SET entry_json = jsonb_set(e.entry_json::jsonb, '{replay_input}
 	// checkpoints, even when their unreadable detail survives in the journal.
 	corrupt := "cron:corrupt-delegations"
 	require.NoError(t, sessions.UpsertThread(corrupt, backend.ThreadState{Agent: "main"}))
-	_, err = sessions.AppendEntryID(ctx, corrupt, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "corrupt-turn", Timestamp: time.Now()})
+	_, err = sessions.AppendEntryID(ctx, corrupt, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "corrupt-turn", Timestamp: time.Now()})
 	require.NoError(t, err)
 	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "corrupt-turn", ConversationKey: corrupt, Agent: "main"}))
 	_, err = db.ExecContext(ctx, `INSERT INTO steps (conversation_id, key, value) VALUES ($1, 'corrupt-turn/replay_input/0000000000', '7')`, corrupt)
@@ -2562,7 +2562,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, err)
 		schedule, err := json.Marshal(protocol.ScheduledMessageState{ConversationID: undelivered, Agent: "producer", Message: "later", DueAt: time.Now().Add(time.Hour)})
 		require.NoError(t, err)
-		_, err = sessions.AppendEntryID(ctx, undelivered, &rocketcode.SessionEntry{Version: 1, Type: "producer_schedule", Timestamp: entry.Timestamp, OutputTrace: []json.RawMessage{schedule}})
+		_, err = sessions.AppendEntryID(ctx, undelivered, &harness.SessionEntry{Version: 1, Type: "producer_schedule", Timestamp: entry.Timestamp, OutputTrace: []json.RawMessage{schedule}})
 		require.NoError(t, err)
 
 		path := filepath.Join(cfg.RuntimeDirName(), "cron", "silent.md")
@@ -2634,7 +2634,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $2 WHERE conversation_id = $1`, undelivered, id)
 		require.NoError(t, err)
 
-		_, err = sessions.AppendEntryID(ctx, webID, &rocketcode.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"later"}`)}})
+		_, err = sessions.AppendEntryID(ctx, webID, &harness.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"later"}`)}})
 		require.NoError(t, err)
 		latest, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: webID, Limit: 1})
 		require.NoError(t, err)
@@ -2782,7 +2782,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	require.NotEmpty(t, failed.Id)
 
 	// A Run cron session is born in the cron's space, else its agent's: alpha inherits planner's Billing.
-	_, err = sessions.AppendEntryID(ctx, failed.Id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
+	_, err = sessions.AppendEntryID(ctx, failed.Id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
 	require.NoError(t, err)
 	runRows, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
@@ -3001,7 +3001,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		const attachmentHeader = `[Web principal="Bob Smith" additional_instructions="Reply plainly."]`
 
-		_, err = sessions.AppendEntryID(ctx, conversation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(fmt.Sprintf(`{"type":"message","role":"user","content":%q,"prompt_header":%q}`, turns[len(turns)-1].Text, attachmentHeader)),
 		}})
 		require.NoError(t, err)
@@ -3075,7 +3075,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			{"literal\n\n" + queue[0].Content.TextAttachments[0] + "\nkeep this", "literal\n\n" + queue[0].Content.TextAttachments[0] + "\nkeep this"},
 			{queue[0].Content.TextAttachments[1], ""},
 		} {
-			_, err = sessions.AppendEntryID(ctx, conversation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+			_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 				json.RawMessage(fmt.Sprintf(`{"type":"message","role":"user","content":%q}`, test.text)),
 			}})
 			require.NoError(t, err)
@@ -3092,7 +3092,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 			raw := turns[len(turns)-1].Text
 			require.Contains(t, raw, upload.Name)
-			_, err = sessions.AppendEntryID(ctx, conversation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+			_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 				json.RawMessage(fmt.Sprintf(`{"type":"message","role":"user","content":%q}`, raw)),
 			}})
 			require.NoError(t, err)
@@ -3231,7 +3231,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			json.RawMessage(`{"type":"function_call","call_id":"legacy","name":"rocketclaw_attach_files_to_response","arguments":"{\"attachments\":[{\"path\":\"artifacts/memes/old.png\"},{\"path\":\"escape\"},{\"path\":\"missing\"}]}"}`),
 			json.RawMessage(`{"type":"function_call_output","call_id":"legacy","output":"queued attachments for final response"}`),
 		}
-		_, err = sessions.AppendEntryID(ctx, conversation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: legacy})
+		_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: legacy})
 		require.NoError(t, err)
 		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
 		require.NoError(t, err)
@@ -3251,7 +3251,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		// A file attached from inside an execute script shows on its turn's final reply.
 		nestedFile := protocol.OutboundAttachment{ID: "nested-generated", Name: "nested.png", MIMEType: "image/png", Data: []byte("nested image")}
 		require.NoError(t, sessions.SaveAttachment(ctx, conversation, "attaching-turn", &nestedFile, false))
-		_, err = sessions.AppendEntryID(ctx, conversation, &rocketcode.SessionEntry{Version: 1, Type: "turn", TurnID: "attaching-turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "attaching-turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call","call_id":"script","name":"execute","arguments":"{\"code\":\"attach\"}"}`),
 			json.RawMessage(`{"type":"function_call_output","call_id":"script","output":"attached"}`),
 			json.RawMessage(`{"type":"message","role":"assistant","content":"here it is"}`),
@@ -3268,14 +3268,14 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		// A delivered copy authorizes only the original producer's referenced object.
 		producerFile := protocol.OutboundAttachment{ID: "private-generated", Name: "generated.png", MIMEType: "image/png", Data: []byte("private original")}
 		require.NoError(t, sessions.SaveAttachment(ctx, "private-X", "", &producerFile, false))
-		sourceID, err := sessions.AppendEntryID(ctx, "private-X", &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		sourceID, err := sessions.AppendEntryID(ctx, "private-X", &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call","call_id":"private-file","name":"rocketclaw_attach_files_to_response","arguments":"{}"}`),
 			json.RawMessage(`{"type":"function_call_output","call_id":"private-file","output":"queued attachments for final response: private-generated"}`),
 		}})
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id))::json, entry_timestamp FROM entries WHERE id=$2`, conversation, sourceID)
 		require.NoError(t, err)
-		_, err = sessions.AppendEntryID(ctx, conversation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call","call_id":"own","name":"task","arguments":"{}"}`),
 		}})
 		require.NoError(t, err)
@@ -3285,7 +3285,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		}
 
 		for _, delegation := range []string{conversation + "/own", conversation + "/own/nested", conversation + "/unshown", "private-X/private-file", "private-X/unmirrored", "private-Xother/decoy"} {
-			_, err = sessions.AppendEntryID(ctx, delegation, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
+			_, err = sessions.AppendEntryID(ctx, delegation, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
 			require.NoError(t, err)
 		}
 
@@ -3371,7 +3371,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		file := protocol.OutboundAttachment{ID: "handoff-notes", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("verified notes")}
 		require.NoError(t, sessions.SaveAttachment(ctx, source, "", &file, true))
 
-		entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		entry := harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"user","content":"unique handoff request attachment:handoff-notes"}`),
 			json.RawMessage(`{"type":"message","role":"assistant","content":"verified result"}`),
 			json.RawMessage(`{"type":"message","role":"user","content":"next handoff step"}`),
@@ -3553,7 +3553,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	t.Run("shared message search", func(t *testing.T) {
 		const id = "shared-search"
 		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
-		entryID, err := sessions.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		entryID, err := sessions.AppendEntryID(ctx, id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"user","content":"unique shared search text"}`),
 		}})
 		require.NoError(t, err)
@@ -3743,7 +3743,7 @@ func TestContinueCronRun(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			runEntry, err := sessions.AppendEntryID(ctx, run, &rocketcode.SessionEntry{Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: []json.RawMessage{
+			runEntry, err := sessions.AppendEntryID(ctx, run, &harness.SessionEntry{Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: []json.RawMessage{
 				json.RawMessage(`{"type":"message","role":"user","content":"daily prompt"}`), json.RawMessage(`{"type":"message","role":"assistant","content":"daily report"}`),
 			}})
 			require.NoError(t, err)
@@ -3782,7 +3782,7 @@ func TestContinueCronRun(t *testing.T) {
 
 			require.True(t, listed, "the chat is listed with the run's last message")
 
-			_, err = sessions.AppendEntryID(ctx, "web:"+run, &rocketcode.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"follow-up"}`)}})
+			_, err = sessions.AppendEntryID(ctx, "web:"+run, &harness.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"follow-up"}`)}})
 			require.NoError(t, err)
 
 			agent, err := sessions.ObserveEntries(ctx, "web:"+run)
@@ -3922,7 +3922,7 @@ func TestBackgroundJobRPCs(t *testing.T) {
 		Content string `json:"content"`
 	}
 
-	entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC()}
+	entry := harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC()}
 
 	for _, item := range []input{
 		{"message", "user", "turn-1/call/a", "[System]", "[System]\n\n" + note},

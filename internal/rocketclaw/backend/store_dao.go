@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -942,7 +942,7 @@ type turnFinish struct {
 	retry int
 }
 
-// conversationJournal stores one conversation's RocketCode turn steps.
+// conversationJournal stores one conversation's harness turn steps.
 type conversationJournal struct {
 	store          *SessionService
 	conversationID string

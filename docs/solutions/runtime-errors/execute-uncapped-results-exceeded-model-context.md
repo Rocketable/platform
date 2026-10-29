@@ -3,7 +3,7 @@ title: Uncapped Execute Results Exceeded Model Context
 date: 2026-08-24
 last_updated: 2026-10-06
 category: docs/solutions/runtime-errors/
-module: internal/rocketcode
+module: internal/rocketclaw/harness
 problem_type: runtime_error
 component: execute
 symptoms:
@@ -49,7 +49,7 @@ Filesystem recovery and wrapper-path reuse were replaced, not retained as a comp
 
 ## Solution
 
-`callExecute` clips after `codemode.Run` (`internal/rocketcode/mcp_tools.go`). `clipExecuteHead` preserves the 2000-line / 50 KiB head limit. Small results return unchanged and register nothing. Oversized results write full bytes through `*os.Root`, then register a random ID in the executing looper's `spillResults` map (`internal/rocketcode/execute_results.go`). Storage remains `<spillRel>/<turn-id>/<result-id>.txt`; `Config.SpillDir` placement is unchanged.
+`callExecute` clips after `codemode.Run` (`internal/rocketclaw/harness/mcp_tools.go`). `clipExecuteHead` preserves the 2000-line / 50 KiB head limit. Small results return unchanged and register nothing. Oversized results write full bytes through `*os.Root`, then register a random ID in the executing looper's `spillResults` map (`internal/rocketclaw/harness/execute_results.go`). Storage remains `<spillRel>/<turn-id>/<result-id>.txt`; `Config.SpillDir` placement is unchanged.
 
 The footer names the ID and top-level loader, not the storage path. `mcpToolsFor` assembles `load_execute_result` alongside Execute; it is absent from `CodeModeHosts` and in-script search. Its handler resolves the executing looper from tool-call context. Permission dispatch only decodes the parameters and grants nothing: the loader itself accepts a registered current-turn ID or a retained background ID, and answers anything else with `unknown or expired execute result`. There is no new permission bucket, filesystem grant, or automatic reviewer.
 
@@ -57,11 +57,11 @@ The loader opens each stored path component relative to the workspace root with 
 
 Loader inputs are `result_id`, `start_line`, `limit`, and `line_numbers`. Lines are 1-based; zero start means 1, zero limit means 2000, positive limits cap at 2000, and negatives fail. Pages preserve blank lines, CRLF, and missing final newlines. Responses stay within 50 KiB including numbering and footer, with 1 KiB reserved for markers. Follow `[next_start_line=N]` until `[EOF]`. A line too large for a fresh page returns a UTF-8-safe prefix, explicitly marks omitted bytes, drains the rest, and advances; its omitted tail cannot be fetched through this line-only API. Stored bytes remain unchanged.
 
-`runTurn` begins the result book and defers cleanup (`internal/rocketcode/looper.go`). Registration, rooted file opening, streaming page reads, and cleanup share `spillMu`. Buffered fragments observe cancellation while scanning or draining. Reads deliberately serialize and scan the prefix; indexing or shorter lock scope is a future option only if measured demand requires it. Cleanup invalidates IDs before deleting the turn directory on success, ordinary error, and interrupt. Cancellation of the outer context leaves the journaled turn resumable, as in the existing restart flow. On resume, `restoreTurnExecuteResults` rebuilds only that turn's ID registry from its regular `.txt` files; the loader still rejects symlink components. It never restores read grants or binds a recovery filesystem tool.
+`runTurn` begins the result book and defers cleanup (`internal/rocketclaw/harness/looper.go`). Registration, rooted file opening, streaming page reads, and cleanup share `spillMu`. Buffered fragments observe cancellation while scanning or draining. Reads deliberately serialize and scan the prefix; indexing or shorter lock scope is a future option only if measured demand requires it. Cleanup invalidates IDs before deleting the turn directory on success, ordinary error, and interrupt. Cancellation of the outer context leaves the journaled turn resumable, as in the existing restart flow. On resume, `restoreTurnExecuteResults` rebuilds only that turn's ID registry from its regular `.txt` files; the loader still rejects symlink components. It never restores read grants or binds a recovery filesystem tool.
 
 ## Background Jobs
 
-A script that finishes after leaving its turn (started with `background: true`, or moved by the Web) has no turn to own its spill. Filing it under whichever turn happens to be current would delete it at that turn's end. `callExecute` therefore asks `backgroundDetached(ctx)` when the script finishes, and a detached script's oversized output goes to `retainExecuteResult` instead (`internal/rocketcode/execute_results.go`):
+A script that finishes after leaving its turn (started with `background: true`, or moved by the Web) has no turn to own its spill. Filing it under whichever turn happens to be current would delete it at that turn's end. `callExecute` therefore asks `backgroundDetached(ctx)` when the script finishes, and a detached script's oversized output goes to `retainExecuteResult` instead (`internal/rocketclaw/harness/execute_results.go`):
 
 - Storage is `Config.RetainedResultDir`, a path relative to `SpillDir`, so the spill-tree denials above cover it. RocketClaw sets it per conversation to `retained/<sha256(conversation ID)>`; workflow and handoff runs use an unused directory.
 - The ID is a UUID naming `<id>.txt` directly in that directory, so an ID from another conversation is simply not found.
@@ -87,4 +87,4 @@ The clipping gate is at the boundary that protects model context, while scripts 
 
 ## Related Issues
 
-The earlier execute-output-spill plan remains historical evidence. The replacement contract is `internal/rocketcode/docs/plans/2026-10-05-0854-feat-load-execute-result-plan.md`.
+The earlier execute-output-spill plan remains historical evidence. The replacement contract is `docs/plans/2026-10-05-0854-feat-load-execute-result-plan.md`.

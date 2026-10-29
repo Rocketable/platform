@@ -45,7 +45,7 @@ func TestShell(t *testing.T) {
 	require.JSONEq(t, `{"workspace":"/ws","runtimeDir":"/ws/.rocketclaw","workingDirectory":"data","commands":{"hello":"printf hi"},"allowedNetworkTargets":["api.stripe.com"]}`, string(shell.Setup))
 }
 
-// TestJustBash installs just-bash with npm and runs commands through the wrapper as RocketCode does.
+// TestJustBash installs just-bash with npm and runs commands through the wrapper as the harness does.
 func TestJustBash(t *testing.T) {
 	t.Parallel()
 
@@ -95,7 +95,7 @@ func TestJustBash(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, ok)
 
-			// RocketCode starts the wrapper with no arguments and writes the setup line, then the command.
+			// The harness starts the wrapper with no arguments and writes the setup line, then the command.
 			env := map[string]string{}
 
 			for _, kv := range append(os.Environ(), "ROCKETCLAW_CONVERSATION_ID=c1", "CUST=cus_host", "TMPDIR="+tmp) {

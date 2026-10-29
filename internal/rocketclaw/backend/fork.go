@@ -12,8 +12,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 // ForkConversation copies a recorded prefix and returns the excluded user prompt.
@@ -29,7 +29,7 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 		return "", err
 	}
 
-	var entries []rocketcode.SessionEntry
+	var entries []harness.SessionEntry
 
 	producers := []string{source}
 	prompt, found := "", before == ""
@@ -49,7 +49,7 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 					continue
 				}
 
-				items, err := rocketcode.ReplayInputToParams([]json.RawMessage{raw})
+				items, err := harness.ReplayInputToParams([]json.RawMessage{raw})
 				if err != nil {
 					return "", fmt.Errorf("decode fork boundary: %w", err)
 				}
@@ -119,7 +119,7 @@ INSERT INTO conversations (conversation_id, agent, created_by, forked_from, spac
 
 // copySessionPrefix copies replay and referenced ownership, never live jobs or
 // producer routing. Both a fork and a newly attached shadow use this seed path.
-func (s *SessionService) copySessionPrefix(ctx context.Context, db stateStoreDB, destination string, entries []rocketcode.SessionEntry, producers []string, prompt string) (string, error) {
+func (s *SessionService) copySessionPrefix(ctx context.Context, db stateStoreDB, destination string, entries []harness.SessionEntry, producers []string, prompt string) (string, error) {
 	payload, err := json.Marshal(entries)
 	if err != nil {
 		return "", fmt.Errorf("encode fork history: %w", err)

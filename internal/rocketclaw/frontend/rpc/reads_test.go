@@ -13,7 +13,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -38,7 +38,7 @@ func TestSessionReads(t *testing.T) {
 
 	for _, id := range []string{"x", "y"} {
 		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
-		_, err := sessions.AppendEntryID(t.Context(), id, &rocketcode.SessionEntry{})
+		_, err := sessions.AppendEntryID(t.Context(), id, &harness.SessionEntry{})
 		require.NoError(t, err)
 	}
 

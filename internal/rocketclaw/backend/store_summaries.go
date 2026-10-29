@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	harness "github.com/Rocketable/platform/internal/rocketcode"
 )
 
 // lockSessionHistory serializes a conversation's history and the facts its row derives from it.

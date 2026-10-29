@@ -15,8 +15,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -74,7 +74,7 @@ WHERE conversation_id IN ($1, $2)`, cronSlack, plainSlack)
 
 	// entry appends a turn; a source attributes it by entry ID, as copies made before 049 do, or by name.
 	entry := func(id, source string, byEntryID bool) {
-		entryID, err := sessions.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Type: "turn"})
+		entryID, err := sessions.AppendEntryID(ctx, id, &harness.SessionEntry{Type: "turn"})
 		require.NoError(t, err)
 
 		provenance := `jsonb_build_object('sync_source_conversation_id', $2::text)`

@@ -2,7 +2,7 @@
 title: Every Path That Delivers a Prompt to a Subagent Must Run Its Guardrails
 date: 2026-10-13
 category: docs/solutions/logic-errors/
-module: internal/rocketcode
+module: internal/rocketclaw/harness
 problem_type: logic_error
 component: assistant
 symptoms:
@@ -26,7 +26,7 @@ tags:
 # Every Path That Delivers a Prompt to a Subagent Must Run Its Guardrails
 
 ## Problem
-An agent type with a `guardrail` is promised that every delegation prompt is reviewed before it runs and every answer is reviewed before the parent sees it. Those checks lived only inside `runTask` (`internal/rocketcode/tasks.go`). When `task`'s `continue` gained steer, enqueue, and stop modes for a busy subagent, the new paths delivered prompts without ever calling `runTask`, so the guardrail silently stopped applying.
+An agent type with a `guardrail` is promised that every delegation prompt is reviewed before it runs and every answer is reviewed before the parent sees it. Those checks lived only inside `runTask` (`internal/rocketclaw/harness/tasks.go`). When `task`'s `continue` gained steer, enqueue, and stop modes for a busy subagent, the new paths delivered prompts without ever calling `runTask`, so the guardrail silently stopped applying.
 
 ## Symptoms
 - A parent could get an unreviewed prompt into a guardrailed subagent just by continuing it while it ran.
@@ -37,7 +37,7 @@ An agent type with a `guardrail` is promised that every delegation prompt is rev
 - Relying on `runTask` as the single choke point. Before this change a busy continue was refused, so `runTask` really was the only delivery path. The new modes made the Background Job registry (`internal/rocketclaw/backend/background.go`, `backgroundTurn.Run` → `queueFollowUp`; `queueFollowUp` is gone, continue modes are now Subagent Session writes, and `backgroundTurn.Run` now only runs jobs) a second delivery path that returns before the wrapped tool call runs.
 
 ## Solution
-- The delegation and response reviews share `toolFactory.guardTask` (`internal/rocketcode/tasks.go`). A new subagent's prompt is reviewed in `runTask`, and a continue's prompt in `backgroundTool` (`internal/rocketcode/background.go`), each right before `ChildSessions.WriteSubagent` delivers it into the subagent's session. A rejected prompt is never queued or steered, and the caller gets the usual `delegation blocked` result.
+- The delegation and response reviews share `toolFactory.guardTask` (`internal/rocketclaw/harness/tasks.go`). A new subagent's prompt is reviewed in `runTask`, and a continue's prompt in `backgroundTool` (`internal/rocketclaw/harness/background.go`), each right before `ChildSessions.WriteSubagent` delivers it into the subagent's session. A rejected prompt is never queued or steered, and the caller gets the usual `delegation blocked` result.
 - Every answer leaves through `toolFactory.awaitTask`, which waits for the subagent session's turn (`ChildSessions.AwaitSubagent`) and runs the response review and the `<task_result>` wrapping. A background job resumed after a restart answers through `Runtime.AwaitTask`, the same code; the job's `turns` row keeps the prompt (`turns.message`) the review quotes.
 
 ## Why This Works

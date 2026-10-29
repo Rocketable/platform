@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -37,9 +37,9 @@ func GenerateHandoff(ctx context.Context, locked *config.LockedConfig, agent, tr
 
 	defer func() { err = errors.Join(err, root.RemoveAll(scratch)) }()
 
-	runtimeConfig := rocketcode.Config{ShellTempDir: filepath.Join(cfg.Workspace, scratch), SpillDir: rocketcodeSpillDir(cfg), RetainedResultDir: filepath.Join("retained", "unused"), ChildSessions: rocketcode.InertChildSessions{}, Journal: rocketcode.InertJournal{}, BackgroundJobs: rocketcode.InertBackgroundJobs{}, ShellCommand: rocketcode.DefaultShellCommand{}}
+	runtimeConfig := harness.Config{ShellTempDir: filepath.Join(cfg.Workspace, scratch), SpillDir: rocketcodeSpillDir(cfg), RetainedResultDir: filepath.Join("retained", "unused"), ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, BackgroundJobs: harness.InertBackgroundJobs{}, ShellCommand: harness.DefaultShellCommand{}}
 
-	runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, agent, io.Discard)
+	runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, agent, io.Discard)
 	if err != nil {
 		return "", fmt.Errorf("prepare handoff: %w", err)
 	}
@@ -49,10 +49,10 @@ func GenerateHandoff(ctx context.Context, locked *config.LockedConfig, agent, tr
 	}
 
 	memory := new(memoryStore)
-	input := make(chan rocketcode.PromptInput, 1)
+	input := make(chan harness.PromptInput, 1)
 
-	output := make(chan rocketcode.ChatResponse)
-	input <- rocketcode.PromptInput{Role: rocketcode.PromptInputRoleUser, Texts: []string{transcript}, Responses: output}
+	output := make(chan harness.ChatResponse)
+	input <- harness.PromptInput{Role: harness.PromptInputRoleUser, Texts: []string{transcript}, Responses: output}
 
 	close(input)
 
@@ -62,7 +62,7 @@ func GenerateHandoff(ctx context.Context, locked *config.LockedConfig, agent, tr
 	var text strings.Builder
 
 	for response := range output {
-		if response.Kind == rocketcode.ChatResponseAssistantMessage {
+		if response.Kind == harness.ChatResponseAssistantMessage {
 			text.WriteString(response.Text)
 		}
 	}
