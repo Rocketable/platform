@@ -5090,7 +5090,6 @@ function VoiceOrb({ state, ...props }: { state: VoiceState } & ComponentProps<"b
   return <button ref={orb} type="button" data-state={state} className="voice-orb" {...props}><span aria-hidden className="voice-orb-core" /><span aria-hidden className="voice-orb-rings" /></button>;
 }
 
-// VoicePicker chooses among the voices an agent's provider offers.
 function VoicePicker({ voices, value, disabled, onPick }: { voices: string[]; value: string; disabled: boolean; onPick: (voice: string) => void }) {
   const items = voices.map((name) => ({ value: name, label: name.charAt(0).toUpperCase() + name.slice(1) }));
   return <Select items={items} value={value} disabled={disabled} onValueChange={(name) => { if (typeof name === "string") onPick(name); }}>
@@ -5200,8 +5199,7 @@ function VoiceCall({ username }: { username: string }) {
     sidebar.invalidateQueries();
     if (left.current) return;
     setCallId(next.conversationId);
-    // Another device's conversation may run an agent whose provider lacks this voice; its default is safe.
-    void startVoice(next.conversationId, next.conversationId === id || next.agent === selected ? speaker : "");
+    void startVoice(next.conversationId, speaker);
   } });
   const pick = useMutation({ mutationFn: async (name: string) => {
     await update.mutateAsync({ agent: name });

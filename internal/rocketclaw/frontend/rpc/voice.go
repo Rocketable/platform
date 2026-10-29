@@ -66,16 +66,6 @@ type voiceSnapshot struct {
 // voiceLongReply is what the voice model hears instead of a reply too long to speak.
 const voiceLongReply = "That answer is too long to read aloud. It is shown on the screen."
 
-// voiceProvider names the provider an agent's model runs on; unprefixed models run on openai.
-func voiceProvider(model string) string {
-	name, _, named := strings.Cut(model, "/")
-	if !named {
-		return "openai"
-	}
-
-	return name
-}
-
 // voiceSettings reads or changes the caller's voice settings and returns them.
 func (s *Server) voiceSettings(ctx context.Context, request *VoiceSettingsRequest) (*VoiceSettingsResponse, error) {
 	username, _, err := s.principal(ctx)
@@ -145,13 +135,9 @@ func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 		return fmt.Errorf("web voice: %w", status.Error(codes.NotFound, "conversation is not recorded"))
 	}
 
-	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, cfg.RuntimeDirName())
-	if err != nil {
-		return fmt.Errorf("load voice agent: %w", err)
-	}
+	const name = "openai"
 
-	name := voiceProvider(agents.Items[thread.Agent].Model)
-	provider, _ := cfg.Provider(name)
+	provider := cfg.OpenAI
 
 	credentials := voiceCredentials{bearer: provider.APIKey}
 	if provider.RocketCodeAuth == "chatgpt" {

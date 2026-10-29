@@ -165,13 +165,13 @@ The session's first turn records the pairs, together with the conversation's ide
 
 A live spoken call between a person on the Web and OpenAI's voice model, attached to one conversation.
 
-Audio flows between the browser and OpenAI; RocketClaw creates the call with the conversation agent's Provider credentials and holds its control connection while the browser's request stays open. The call ends when that request ends, or earlier when RocketClaw or OpenAI ends it, and records why; it has no idle or no-speech timers. With a ChatGPT sign-in RocketClaw reconnects a dropped control connection; with an API key a drop ends the call as lost. A person has at most one live Voice Session: starting another, on any conversation or device, ends their older one, while other people's sessions, even on the same conversation, keep running. Ending a Voice Session never stops the conversation's turns.
+Audio flows between the browser and OpenAI; RocketClaw creates the call with the default `openai` Provider credentials, independently of the conversation agent's Provider, and holds its control connection while the browser's request stays open. The call ends when that request ends, or earlier when RocketClaw or OpenAI ends it, and records why; it has no idle or no-speech timers. With a ChatGPT sign-in RocketClaw reconnects a dropped control connection; with an API key a drop ends the call as lost. A person has at most one live Voice Session: starting another, on any conversation or device, ends their older one, while other people's sessions, even on the same conversation, keep running. Ending a Voice Session never stops the conversation's turns.
 
 ### Voice Settings
 
 One person's Web voice state, kept by the server and the same on every device: their current voice conversation for the Voice page, the agent for their next one, their voice, and whether the Voice page shows the transcript.
 
-Two people never share Voice Settings, even in one browser. Retention cleanup never deletes a person's current voice conversation, even with no messages; Reset forgets it, and ordinary cleanup applies after that. A call uses the person's voice when the conversation agent's provider offers it, and that provider's default otherwise.
+Two people never share Voice Settings, even in one browser. Retention cleanup never deletes a person's current voice conversation, even with no messages; Reset forgets it, and ordinary cleanup applies after that. A call uses the person's voice when the default `openai` Provider offers it, and that Provider's default voice otherwise.
 
 ### Voice Hand-off
 
