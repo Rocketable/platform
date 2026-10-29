@@ -551,7 +551,8 @@ export const SessionQuestionDockExperimental: Component<{ request: FormInfo; onS
 
   const sending = createMemo(() => replyMutation.isPending || rejectMutation.isPending)
   const submitShortcut = () => (IS_MAC ? "⌘⏎" : `${language.t("common.key.ctrl")}+⏎`)
-  const backShortcut = () => (IS_MAC ? "⌘[" : `${language.t("common.key.alt")}+←`)
+  // rocketclaw: Back is Alt+← on every platform; ⌘[ is RocketClaw's (upstream packages/app/src/session/requests/session-question-dock-experimental.tsx)
+  const backShortcut = () => `${language.t("common.key.alt")}+←`
 
   const reply = (answer: FormAnswer) => {
     if (sending()) return
@@ -654,7 +655,8 @@ export const SessionQuestionDockExperimental: Component<{ request: FormInfo; onS
   const nav = (event: KeyboardEvent) => {
     if (event.defaultPrevented) return
 
-    const intent = questionKey(event, { mac: IS_MAC, zone: zone(event.target), count: count() })
+    // rocketclaw: Back is Alt+Left on every platform; mod+[ belongs to RocketClaw (upstream packages/app/src/session/requests/session-question-dock-experimental.tsx)
+    const intent = questionKey(event, { mac: false, zone: zone(event.target), count: count() })
 
     if (intent.type === "none") return
 
@@ -1034,7 +1036,8 @@ export const SessionQuestionDockExperimental: Component<{ request: FormInfo; onS
     {
       id: "session.question.back",
       title: language.t("ui.common.back"),
-      keybind: IS_MAC ? "mod+[" : "alt+arrowleft",
+      // rocketclaw: Alt+← on every platform; mod+[ is RocketClaw's (upstream packages/app/src/session/requests/session-question-dock-experimental.tsx)
+      keybind: "alt+arrowleft",
       hidden: true,
       // Stay registered while sending so the shortcut does not fall through to history navigation.
       disabled: store.tab <= 0,
@@ -1184,7 +1187,8 @@ export const SessionQuestionDockExperimental: Component<{ request: FormInfo; onS
                     size="large"
                     disabled={sending()}
                     onClick={back}
-                    aria-keyshortcuts={IS_MAC ? "Meta+[" : "Alt+ArrowLeft"}
+                    // rocketclaw: Alt+← on every platform (upstream packages/app/src/session/requests/session-question-dock-experimental.tsx)
+                    aria-keyshortcuts="Alt+ArrowLeft"
                   >
                     {language.t("ui.common.back")}
                   </Button>
