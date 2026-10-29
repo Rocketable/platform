@@ -1316,6 +1316,11 @@ function TabNotifications() {
       notification.onclick = () => { focus(); navigate(path); notification.close(); };
     }
   }, [rows, enumerationComplete, owner, state.tabs, state.active, shared, mutes]);
+  // The window title counts the open, unmuted tabs whose session waits on this person, as "(2) RocketClaw".
+  // An OpenCode view's own titles come after index.html's, so they never show.
+  const open = new Set([...state.tabs, ...shared].map((tab) => tab.path));
+  const asking = rows.filter((row) => row.asking && open.has(rowPath(row)) && !muteOf(mutes, rowPath(row))).length;
+  useEffect(() => { document.title = asking ? `(${asking}) RocketClaw` : "RocketClaw"; }, [asking]);
   // Notifications are on by default: the browser asks for its permission on the first click or key press, the
   // earliest a browser lets a page ask.
   useEffect(() => {
@@ -1437,8 +1442,10 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
       {shown.flatMap((tab, index) => {
         const group = groups.find((item) => item.id === tab.group);
         const openEditor = () => setEditor({ id: group!.id, open: true }), chosen = tab.path !== pathname && selection.has(tab.path);
-        // A collapsed group's name goes bold, like an unread tab's title, while any of its tabs is unread.
-        const unread = group?.collapsed && shown.some((item) => item.group === group.id && rows.some((row) => row.id === pathSession(item.path) && row.unreadAt));
+        // A collapsed group's name goes bold, like an unread tab's title, while any of its tabs is unread, and it
+        // says it needs you while any of their sessions waits on this person.
+        const hidden = group?.collapsed ? rows.filter((row) => shown.some((item) => item.group === group.id && row.id === pathSession(item.path))) : [];
+        const unread = hidden.some((row) => row.unreadAt), asking = hidden.some((row) => row.asking);
         return [
           group && shown[index - 1]?.group !== group.id ? <div key={group.id} data-group={group.id} draggable className="flex shrink-0 items-center pt-1" onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
             <button type="button" aria-expanded={!group.collapsed} aria-label={groupName(group)} className="flex h-7 min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => edit(group.id, { collapsed: !group.collapsed })}
@@ -1454,6 +1461,7 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
               }}>
               <span className={cn("rounded-full", group.name ? cn("max-w-48 truncate px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium") : "size-3", groupColors[group.color])}>{group.name}</span>
             </button>
+            {asking ? needsYou : null}
             <button type="button" aria-label={`Edit ${groupName(group)}`} className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={openEditor}><Ellipsis className="size-3.5" /></button>
           </div> : null,
           // A collapsed group still shows its active tab.
@@ -1495,8 +1503,10 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
 // everyone, and dragging a row onto another or Shift+Arrow reorders it for this person alone.
 function SharedTabs({ tabs: { state, here, shared, pathname, promote, toggleShared, moveShared }, space, editing, endEdit, openMenu }: { tabs: ReturnType<typeof useTabs>; space?: string; editing?: string; endEdit: () => void; openMenu: (path: string, anchor: MenuAnchor) => void }) {
   const collapsed = state.groups.some((group) => group.id === "shared" && group.collapsed), stop = here.includes(pathname) ? pathname : here[0];
-  // Like a collapsed group, collapsed Shared goes bold while any of its tabs is unread for this person.
-  const { rows } = useContext(Sidebar), unread = collapsed && here.some((path) => rows.some((row) => row.id === pathSession(path) && row.unreadAt));
+  // Like a collapsed group, collapsed Shared goes bold while any of its tabs is unread for this person, and says it
+  // needs you while any of their sessions waits on this person.
+  const { rows } = useContext(Sidebar), hidden = collapsed ? rows.filter((row) => here.some((path) => pathSession(path) === row.id)) : [];
+  const unread = hidden.some((row) => row.unreadAt), asking = hidden.some((row) => row.asking);
   const inert = () => undefined, pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   if (!here.length) return null;
   return <>
@@ -1505,6 +1515,7 @@ function SharedTabs({ tabs: { state, here, shared, pathname, promote, toggleShar
         <button type="button" aria-expanded={!collapsed} className="flex h-7 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={toggleShared}>
           <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium", groupColors.Grey)}><Users aria-hidden="true" className="size-3" />Shared</span>
         </button>
+        {asking ? needsYou : null}
       </div>
       <div role="tablist" aria-label="Shared tabs" aria-orientation="vertical" className="flex flex-col gap-0.5" onKeyDown={(event) => tabKeys(event, pathname, openMenu, moveShared)}
         onDragStart={(event) => event.dataTransfer.setData(sharedDrag, pathOf(event)!)}
@@ -1546,30 +1557,34 @@ function SpaceMenu({ tabs: { state, pending, enter, addSpace, renameSpace, delet
   </DropdownMenu>;
 }
 
-// A running turn wins over background work, which can wake the session after its turn.
+// Marks a session waiting on this person's answer, in its tab, its collapsed group, and its session row.
+const needsYou = <span className="ml-auto shrink-0 rounded-full bg-amber-200 px-1.5 text-[10.5px]/4 font-semibold whitespace-nowrap text-amber-900 dark:bg-amber-800 dark:text-amber-50">Needs you</span>;
+
+// Waiting on this person's answer wins over the running turn that asks, which wins over background work, which
+// can wake the session after its turn. Only a turn not waiting on this person is working, so its title shimmers.
 function tabActivity(session: Session) {
-  const [activity, Icon] = session.running ? ["Turn running", MessageSquare] as const : session.background ? ["Background work running", Hourglass] as const : ["", MessageSquare] as const;
-  return [[activity, session.unreadAt && "Unread"].filter(Boolean).join(", "), Icon] as const;
+  const [activity, Icon] = session.asking ? ["Needs your answer", MessageSquare] as const : session.running ? ["Turn running", MessageSquare] as const : session.background ? ["Background work running", Hourglass] as const : ["", MessageSquare] as const;
+  return [[activity, session.unreadAt && "Unread"].filter(Boolean).join(", "), Icon, session.running && !session.asking] as const;
 }
 
 function TabItem({ tab, description, chosen, rule, active, stop, shared, editing, endEdit, promote, close, openMenu }: { tab: Tab; description: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: MenuAnchor) => void }) {
   const sidebar = useContext(Sidebar);
   const id = pathSession(tab.path);
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
-  const [activity, SessionIcon] = tabActivity(session);
+  const [activity, SessionIcon, working] = tabActivity(session);
   const [label, Icon] = isSearch(tab.path) ? [searchTitle(tab.search), Search] : pageTab(tab.path) ?? [sessionTitle(session), SessionIcon];
   const title = useCleanText(label), mute = muteOf(useContext(TabActions).mutes, tab.path);
   const quiet = mute && (mute.until ? `Snoozed until ${new Date(mute.until).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}` : "Muted");
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
-  return <div data-tab={tab.path} data-running={session.running} data-unread={!!session.unreadAt} draggable={!editing} className={cn("group flex shrink-0 items-center rounded-md", active ? "bg-sidebar-row-active" : "hover:bg-accent", { "bg-accent": chosen })}
+  return <div data-tab={tab.path} data-running={working} data-asking={!!session.asking} data-unread={!!session.unreadAt} draggable={!editing} className={cn("group flex shrink-0 items-center rounded-md", active ? "bg-sidebar-row-active" : "hover:bg-accent", { "bg-accent": chosen })}
     onContextMenu={(event) => { event.preventDefault(); openMenu({ getBoundingClientRect: () => DOMRect.fromRect({ x: event.clientX, y: event.clientY }) }); }}>
     {rule && <span className={cn("pointer-events-none my-1.5 ml-1 w-0.5 shrink-0 self-stretch", groupColors[rule])} />}
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className="flex min-w-0 flex-1" />}>
       <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={[description, activity, quiet].filter(Boolean).join(", ")} tabIndex={stop ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
         <Icon aria-hidden="true" className="size-4 shrink-0" />
-        {editing ? <TabRename session={session} tab={tab} shared={shared} placeholder={title} endEdit={endEdit} /> : <span className="truncate group-data-[unread=true]:font-bold motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>}
+        {editing ? <TabRename session={session} tab={tab} shared={shared} placeholder={title} endEdit={endEdit} /> : <><span className="truncate group-data-[unread=true]:font-bold group-data-[asking=true]:font-semibold group-data-[asking=true]:text-amber-600 dark:group-data-[asking=true]:text-amber-300 motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>{session.asking ? needsYou : null}</>}
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{title}</TooltipContent></Tooltip>
     {quiet ? <span title={quiet} className="flex size-6 shrink-0 items-center justify-center text-muted-foreground"><BellOff aria-hidden="true" className="size-3.5" /></span> : null}
@@ -2355,8 +2370,8 @@ const SessionRowContent = memo(function SessionRowContent({ session, age = relat
   const meta = [channel, session.server, session.offline ? "offline" : "", session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
   const updated = session.updatedAt ? `Updated ${updatedFormat.format(new Date(session.updatedAt))}` : "";
   return <span className={cn("flex min-w-0 w-full flex-1 flex-col gap-0.5", session.offline && "opacity-60")}>
-    <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className="truncate" title={clean}><InlineText text={shown} needle={needle || undefined} /></span></span>
-    <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"><span className="min-w-0 flex-1 truncate" title={meta}>{meta}</span>{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 shrink-0 animate-spin motion-reduce:animate-none" /> : null}{age ? <Tooltip><TooltipTrigger render={<time dateTime={session.updatedAt} />} aria-label={updated} className="shrink-0"><span className="tabular-nums">{age}</span></TooltipTrigger><TooltipContent>{updated}</TooltipContent></Tooltip> : null}</span>
+    <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className={cn("truncate", session.asking && "font-semibold text-amber-600 dark:text-amber-300")} title={clean}><InlineText text={shown} needle={needle || undefined} /></span></span>
+    <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"><span className="min-w-0 flex-1 truncate" title={meta}>{meta}</span>{session.asking ? needsYou : session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 shrink-0 animate-spin motion-reduce:animate-none" /> : null}{age ? <Tooltip><TooltipTrigger render={<time dateTime={session.updatedAt} />} aria-label={updated} className="shrink-0"><span className="tabular-nums">{age}</span></TooltipTrigger><TooltipContent>{updated}</TooltipContent></Tooltip> : null}</span>
   </span>;
 });
 

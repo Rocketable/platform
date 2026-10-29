@@ -2,4 +2,4 @@
 
 package rpc
 
-const protoSHA256 = "9ccf96efca21791ed25b023992bcd74af08224c714b0c044666c7d440c8c42a5"
+const protoSHA256 = "a6cc3458d56e13644de08f8eda73686ce30b900f776c821745f0af1874784df9"

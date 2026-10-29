@@ -39,6 +39,10 @@ type fakeOpenCode struct {
 	events    chan string
 	messages  map[string][]openCodeTestMessage
 	reads     []string
+
+	// pending maps a list path, /api/form or /api/permission/request, to each location's pending
+	// requests' sessions; a location missing from it fails its list.
+	pending map[string]map[string][]string
 }
 
 type openCodeTestMessage struct {
@@ -83,6 +87,19 @@ func (f *fakeOpenCode) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": shells})
+	case "GET /api/form", "GET /api/permission/request":
+		sessions, ok := f.pending[r.URL.Path][r.URL.Query().Get("location[directory]")]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		requests := []map[string]string{}
+		for _, session := range sessions {
+			requests = append(requests, map[string]string{"sessionID": session})
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": requests})
 	case "GET /api/event":
 		_, _ = fmt.Fprint(w, "data: {\"type\":\"server.connected\",\"data\":{}}\n\n: heartbeat\n\n")
 		w.(http.Flusher).Flush()
@@ -516,6 +533,44 @@ func TestSyncOpenCodeMarksBackgroundWork(t *testing.T) {
 
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 	assert.False(t, slices.ContainsFunc(remoteSidebar(t, s), func(row SidebarSession) bool { return row.Background }))
+}
+
+// A root asks while it or a session under it has a pending form or permission request. A form owned
+// by no session, and a location whose list fails, mark nothing.
+func TestSyncOpenCodeMarksSessionsWaitingOnAPerson(t *testing.T) {
+	s := newOpenCodeTestService(t, "box")
+	ctx := t.Context()
+	fake := &fakeOpenCode{
+		sessions:  []openCodeSession{openCodeTestSession("ses_a", "", "/srv/app", 3000), openCodeTestSession("ses_b", "", "/srv/app", 2000), openCodeTestSession("ses_c", "", "/srv/api", 1000)},
+		parents:   map[string]string{"ses_c_child": "ses_c"},
+		locations: []string{"/srv/app", "/srv/api", "/srv/broken"},
+		pending: map[string]map[string][]string{
+			"/api/form":               {"/srv/app": {"ses_a", "global"}, "/srv/api": {}},
+			"/api/permission/request": {"/srv/app": {}, "/srv/api": {"ses_c_child"}},
+		},
+	}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
+	asking := func() []bool {
+		require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+
+		rows := remoteSidebar(t, s)
+
+		asking := make([]bool, 0, len(rows))
+		for _, row := range rows {
+			asking = append(asking, row.Asking)
+		}
+
+		return asking
+	}
+
+	assert.Equal(t, []bool{true, false, true}, asking())
+
+	fake.pending = nil
+
+	assert.Equal(t, []bool{false, false, false}, asking())
 }
 
 // An OpenCode turn end marks the people whose stamped prompts it ran, once each (R13, R14, AE7).

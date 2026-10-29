@@ -294,30 +294,20 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	shells.mu.Unlock()
 
 	// A walk that fails or leaves the listed roots marks a session no row reads.
-	background := map[string]bool{}
+	background, asking := map[string]bool{}, map[string]bool{}
 
 	for id := range owners {
-		for id != "" && !roots[id] {
-			var parent struct {
-				Data struct {
-					ParentID string `json:"parentID"`
-				} `json:"data"`
-			}
+		background[openCodeRoot(ctx, name, server, roots, id)] = true
+	}
 
-			if openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(id), nil, &parent) != nil {
-				break
-			}
-
-			id = parent.Data.ParentID
-		}
-
-		background[id] = true
+	for id := range openCodeWaiting(ctx, name, server) {
+		asking[openCodeRoot(ctx, name, server, roots, id)] = true
 	}
 
 	var (
 		ids, titles, directories, agents, models, remotes []string
 		updated                                           []time.Time
-		running, backgrounds                              []bool
+		running, backgrounds, askings                     []bool
 		replies                                           []*string
 		oldest                                            time.Time
 		cursors                                           []*int64
@@ -397,6 +387,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		ids, titles, directories, agents, models = append(ids, id), append(titles, session.Title), append(directories, session.Location.Directory), append(agents, session.Agent), append(models, session.model())
 		updated, running, replies = append(updated, oldest), append(running, busy), append(replies, reply)
 		backgrounds, remotes, cursors = append(backgrounds, background[session.ID]), append(remotes, session.ID), append(cursors, cursor)
+		askings = append(askings, asking[session.ID])
 	}
 
 	// A fetch below the limit is the whole root set, so every missing row was deleted; a full
@@ -408,14 +399,14 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	// Session.Info.title is also the shared name, including when cleared (OpenCode v2
 	// https://opencode.ai/v2/openapi.json#/paths/~1api~1session/get).
 	_, err := execState(ctx, s.db, "sync opencode sessions", `WITH incoming AS (
-    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::text[], $16::bigint[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, remote_session, read_through)
+    SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::text[], $16::bigint[], $19::boolean[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, remote_session, read_through, asking)
 ), upserted AS (
-    INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session, name, read_through)
-    SELECT conversation_id, agent, '', $14, FALSE, 'remote', $1, title, directory, updated_at, running, now(), reply, background, model, remote_session, title, read_through FROM incoming
+    INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, reply, background, model, remote_session, name, read_through, asking)
+    SELECT conversation_id, agent, '', $14, FALSE, 'remote', $1, title, directory, updated_at, running, now(), reply, background, model, remote_session, title, read_through, asking FROM incoming
     ON CONFLICT (conversation_id) DO UPDATE SET
         title = CASE WHEN conversations.synced_at > $9 THEN conversations.title ELSE excluded.title END,
         name = CASE WHEN conversations.synced_at > $9 THEN conversations.name ELSE excluded.name END, directory = excluded.directory,
-        last_updated = excluded.last_updated, running = excluded.running, background = excluded.background, synced_at = excluded.synced_at,
+        last_updated = excluded.last_updated, running = excluded.running, background = excluded.background, asking = excluded.asking, synced_at = excluded.synced_at,
         reply = COALESCE(excluded.reply, conversations.reply), agent = excluded.agent, model = excluded.model,
         read_through = GREATEST(excluded.read_through, conversations.read_through)
 ), ended AS (
@@ -432,11 +423,62 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 ), removed AS (
     DELETE FROM conversations WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $9 AND ($7 OR last_updated >= $8)
 )
-UPDATE conversations SET synced_at = now(), running = FALSE, background = FALSE
+UPDATE conversations SET synced_at = now(), running = FALSE, background = FALSE, asking = FALSE
 WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7 OR last_updated >= $8))`,
-		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds, agents, models, KindRemote, remotes, cursors, markedIDs, markedUsers)
+		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds, agents, models, KindRemote, remotes, cursors, markedIDs, markedUsers, askings)
 
 	return err
+}
+
+// openCodeRoot walks id's parents up to one of roots, stopping early at a parent it cannot read.
+func openCodeRoot(ctx context.Context, name string, server config.OpenCodeConfig, roots map[string]bool, id string) string {
+	for id != "" && !roots[id] {
+		var parent struct {
+			Data struct {
+				ParentID string `json:"parentID"`
+			} `json:"data"`
+		}
+
+		if openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(id), nil, &parent) != nil {
+			break
+		}
+
+		id = parent.Data.ParentID
+	}
+
+	return id
+}
+
+// openCodeWaiting lists the sessions of name waiting on a person: those with a pending form, such as
+// a question, or a pending permission request. Only loaded locations are listed, which never makes
+// the server load one; a list that fails marks nothing.
+func openCodeWaiting(ctx context.Context, name string, server config.OpenCodeConfig) map[string]bool {
+	waiting := map[string]bool{}
+
+	var locations []struct {
+		Directory string `json:"directory"`
+	}
+	if openCodeCall(ctx, name, server, http.MethodGet, "/api/debug/location", nil, &locations) != nil {
+		return waiting
+	}
+
+	for _, location := range locations {
+		for _, path := range []string{"/api/form?", "/api/permission/request?"} {
+			var pending struct {
+				Data []struct {
+					SessionID string `json:"sessionID"`
+				} `json:"data"`
+			}
+
+			if openCodeCall(ctx, name, server, http.MethodGet, path+url.Values{"location[directory]": {location.Directory}}.Encode(), nil, &pending) == nil {
+				for _, request := range pending.Data {
+					waiting[request.SessionID] = true
+				}
+			}
+		}
+	}
+
+	return waiting
 }
 
 // pushOpenCodeNames moves names stored before names synced with OpenCode, which differ from their

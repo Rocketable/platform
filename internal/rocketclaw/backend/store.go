@@ -1043,6 +1043,9 @@ type SidebarSession struct {
 	// its own or a hidden run's reporting to it, a running turn of a hidden run reporting to it, or
 	// a remote OpenCode session's running child session or shell command.
 	Background bool
+	// Asking reports a session waiting on a person: a running turn's unanswered Web question, or a
+	// remote OpenCode session's pending form or permission request, its own or a child session's.
+	Asking     bool
 	Pinned     bool
 	Name       string
 	ForkedFrom string
@@ -1292,6 +1295,11 @@ running AS (
     SELECT c.reports_to FROM jobs j JOIN conversations c USING (conversation_id) WHERE c.reports_to IS NOT NULL
     UNION
     SELECT c.reports_to FROM running r JOIN conversations c USING (conversation_id) WHERE c.reports_to IS NOT NULL
+), asking AS (
+    SELECT DISTINCT q.conversation_id FROM running r
+    JOIN steps q ON q.conversation_id = r.conversation_id AND q.key LIKE '%`+webQuestionStep+`'
+    LEFT JOIN steps a ON a.conversation_id = q.conversation_id AND a.key = left(q.key, -length('`+webQuestionStep+`')) || '/answer'
+    WHERE a.key IS NULL
 ), reads AS (
     SELECT conversation_id, unread_at FROM web_tabs WHERE username = $6 AND conversation_id IS NOT NULL
 ), local AS (
@@ -1303,6 +1311,7 @@ SELECT
     CASE WHEN c.found THEN c.last_updated ELSE r.started_at END AS updated,
     c.running,
     b.conversation_id IS NOT NULL AS background,
+    k.conversation_id IS NOT NULL AS asking,
     c.pinned,
     c.name,
     c.forked_from,
@@ -1324,9 +1333,10 @@ LEFT JOIN reads u ON u.conversation_id = c.conversation_id
 LEFT JOIN conversations run ON run.conversation_id = c.cron_run
 LEFT JOIN running r ON r.conversation_id = c.conversation_id
 LEFT JOIN background b ON b.conversation_id = c.conversation_id
+LEFT JOIN asking k ON k.conversation_id = c.conversation_id
 WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY($5))
 ), remote AS (
-SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.pinned, o.name, '', COALESCE(o.tags, '[]'::jsonb),
+SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.pinned, o.name, '', COALESCE(o.tags, '[]'::jsonb),
     o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at,
     '', '', '', 'null'::jsonb, '', '', '', NULL::bigint, FALSE
 FROM conversations o
@@ -1352,12 +1362,12 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			unread   sql.NullTime
 		)
 
-		dest := make([]any, 0, 31)
+		dest := make([]any, 0, 32)
 
 		for rows.Next() {
 			var row SidebarSession
 
-			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread)
+			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread)
 			if err := scanChatOrigin(rows, &row.Origin, dest...); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
