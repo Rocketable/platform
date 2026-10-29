@@ -34,6 +34,48 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	shellTemp := testShellTempConfig(t, root, outputDir)
 	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand{})
 
+	t.Run("rejects invalid commands before execution", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			command BashCommand
+			want    string
+		}{
+			{"blank command", BashCommand{Command: " \t\n"}, "command is required"},
+			{"negative timeout", BashCommand{Command: "touch rejected-command", TimeoutMillisecond: -1}, "Invalid timeout_ms value: -1. timeout_ms must be a positive number."},
+			{"missing workdir", BashCommand{Command: "touch rejected-command", Workdir: "missing"}, `resolve workdir "missing":`},
+			{"file workdir", BashCommand{Command: "touch rejected-command", Workdir: "root.txt"}, `resolve workdir "root.txt": not a directory`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				got, err := RunBash(t.Context(), root, outputDir, nil, "", tc.command)
+				require.NoError(t, err)
+				require.False(t, got.Success)
+				require.Equal(t, "error", got.ErrorCode)
+				require.Contains(t, got.Output, tc.want)
+
+				_, err = root.Stat("rejected-command")
+				require.ErrorIs(t, err, fs.ErrNotExist)
+			})
+		}
+	})
+	t.Run("rejects invalid configuration before execution", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, tempDir string
+			env           map[string]string
+			want          string
+		}{
+			{"missing temp directory", filepath.Join(dir, "missing-tmp"), nil, "resolve shell temp dir"},
+			{"invalid environment", outputDir, map[string]string{"BAD=KEY": "value"}, `shell env key "BAD=KEY" must not contain =`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				got, err := RunBash(t.Context(), root, tc.tempDir, tc.env, "", BashCommand{Command: "touch rejected-command"})
+				require.ErrorContains(t, err, tc.want)
+				require.Equal(t, BashResult{}, got)
+
+				_, err = root.Stat("rejected-command")
+				require.ErrorIs(t, err, fs.ErrNotExist)
+			})
+		}
+	})
 	t.Run("shell environment cannot reinterpret checked commands", func(t *testing.T) {
 		require.NoError(t, root.WriteFile("sh", []byte("#!/bin/sh\nprintf unexpected"), 0o755))
 		require.NoError(t, root.WriteFile("startup.sh", []byte("printf unexpected"), 0o644))
