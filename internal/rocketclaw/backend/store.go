@@ -90,11 +90,6 @@ type GoalState struct {
 	PrincipalEmail string `json:"principal_email,omitempty"`
 }
 
-type sessionStore struct {
-	conversationID string
-	service        *SessionService
-}
-
 // SessionService owns runtime PostgreSQL session and state access inside one rocketclaw process.
 type SessionService struct {
 	db          *sql.DB
@@ -168,10 +163,6 @@ func execRows(ctx context.Context, db stateStoreDB, execOp, countOp, query strin
 	}
 
 	return n, nil
-}
-
-func newSessionStore(conversationID string, service *SessionService) sessionStore {
-	return sessionStore{conversationID: strings.TrimSpace(conversationID), service: service}
 }
 
 // NewSessionServiceIn starts a runtime-owned PostgreSQL session service.

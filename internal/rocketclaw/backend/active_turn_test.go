@@ -227,7 +227,7 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	outbound.ReplyState = json.RawMessage(`{"ChannelID":"C456","MessageTS":"777.2"}`)
 
 	require.NoError(t, service.SaveTurnStep(t.Context(), conversationID, protocol.ReplyStepKey("turn-finished"), []byte(`{"ChannelID":"C123","MessageTS":"555.1"}`)))
-	_, err := service.finishTurn(t.Context(), "turn-finished", &turnFinish{store: newSessionStore(conversationID, service), accountGoal: true, outbound: outbound})
+	_, err := service.finishTurn(t.Context(), "turn-finished", &turnFinish{conversationID: strings.TrimSpace(conversationID), accountGoal: true, outbound: outbound})
 	require.NoError(t, err)
 
 	var persisted string
@@ -235,7 +235,7 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	assert.NotContains(t, persisted, base64.StdEncoding.EncodeToString(outbound.Attachments[0].Data), "a finished turn keeps only attachment IDs, so large files fit")
 
 	late := []harness.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), TurnID: "turn-finished"}}
-	stored, err := service.finishTurn(t.Context(), "turn-finished", &turnFinish{store: newSessionStore(conversationID, service), accountGoal: true, entries: late, outbound: crashed.newOutboundMessage(msg, "turn-finished", "late answer", true)})
+	stored, err := service.finishTurn(t.Context(), "turn-finished", &turnFinish{conversationID: strings.TrimSpace(conversationID), accountGoal: true, entries: late, outbound: crashed.newOutboundMessage(msg, "turn-finished", "late answer", true)})
 	require.NoError(t, err)
 	assert.Equal(t, "finished answer", stored.Text, "a second finish returns the stored outbound")
 	assert.Equal(t, outbound.Attachments, stored.Attachments)
@@ -280,7 +280,7 @@ func TestLateRunnerLeavesStoppedTurn(t *testing.T) {
 	}
 	finish := func(terminal protocol.Terminal, text string) {
 		outbound := &protocol.OutboundMessage{ConversationID: "chat", TurnID: "turn-1", Text: text, Terminal: terminal}
-		_, err := service.finishTurn(ctx, "turn-1", &turnFinish{store: newSessionStore("chat", service), outbound: outbound, terminal: terminal})
+		_, err := service.finishTurn(ctx, "turn-1", &turnFinish{conversationID: strings.TrimSpace("chat"), outbound: outbound, terminal: terminal})
 		require.NoError(t, err)
 	}
 	observe := func() string {
@@ -320,7 +320,7 @@ func TestFinishTurnKeepsLargeAttachment(t *testing.T) {
 
 	require.NoError(t, service.SaveTurnStep(t.Context(), inbound.ConversationID, protocol.ReplyStepKey("attachment-turn"), []byte(`{"ChannelID":"C789","MessageTS":"888.3"}`)))
 
-	_, err := service.finishTurn(t.Context(), "attachment-turn", &turnFinish{store: newSessionStore(inbound.ConversationID, service), outbound: outbound})
+	_, err := service.finishTurn(t.Context(), "attachment-turn", &turnFinish{conversationID: strings.TrimSpace(inbound.ConversationID), outbound: outbound})
 	require.NoError(t, err)
 	stored, found, err := service.headTurn(t.Context(), inbound.ConversationID)
 	require.NoError(t, err)
@@ -628,7 +628,7 @@ func TestSilentCronRunOpensNoReportChat(t *testing.T) {
 	writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nRun the job.\n")
 
 	crashed := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:quiet", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
-	_, err := service.finishTurn(t.Context(), "turn-quiet", &turnFinish{store: newSessionStore("cron:quiet", service), entries: []harness.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replayInputForMessage("user", "job prompt")}}, outbound: crashed.newOutboundMessage(msg, "turn-quiet", "", true)})
+	_, err := service.finishTurn(t.Context(), "turn-quiet", &turnFinish{conversationID: strings.TrimSpace("cron:quiet"), entries: []harness.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replayInputForMessage("user", "job prompt")}}, outbound: crashed.newOutboundMessage(msg, "turn-quiet", "", true)})
 	require.NoError(t, err)
 
 	require.NoError(t, manager.StartActiveTurns(t.Context()))
@@ -656,7 +656,7 @@ func TestResumedCronRowOpensReportChat(t *testing.T) {
 
 	crashed := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
 	replay := replayInputForMessage("user", "job prompt")
-	_, err := service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", service), entries: []harness.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay}}, outbound: crashed.newOutboundMessage(msg, "turn-cron", "exact report", true)})
+	_, err := service.finishTurn(t.Context(), "turn-cron", &turnFinish{conversationID: strings.TrimSpace("cron:daily"), entries: []harness.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay}}, outbound: crashed.newOutboundMessage(msg, "turn-cron", "exact report", true)})
 	require.NoError(t, err)
 
 	require.NoError(t, manager.StartActiveTurns(t.Context()))
@@ -945,7 +945,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 
 			seedProducerEffects(t, store, "cron:pending", "pending", effects...)
 
-			delivery, err := store.finishTurn(t.Context(), "pending", &turnFinish{store: newSessionStore("cron:pending", store), entries: []harness.SessionEntry{*testSessionEntry("original job", "private answer")}, outbound: protocol.NewOutboundMessage("cron:pending", "")})
+			delivery, err := store.finishTurn(t.Context(), "pending", &turnFinish{conversationID: strings.TrimSpace("cron:pending"), entries: []harness.SessionEntry{*testSessionEntry("original job", "private answer")}, outbound: protocol.NewOutboundMessage("cron:pending", "")})
 			require.NoError(t, err)
 
 			if !strings.HasPrefix(state, "live ") {
@@ -1100,7 +1100,7 @@ func TestFailedCronRunOpensNoReportChat(t *testing.T) {
 
 	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.threads = manager
-	require.NoError(t, bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{store: newSessionStore("cron:daily", service)}, &runResult{turnID: "turn-cron", text: internalErrorResponse}, protocol.TerminalFailed))
+	require.NoError(t, bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{conversationID: strings.TrimSpace("cron:daily")}, &runResult{turnID: "turn-cron", text: internalErrorResponse}, protocol.TerminalFailed))
 
 	final := readFinal(t, finals)
 	assert.Equal(t, internalErrorResponse, final.Text)
@@ -1122,7 +1122,7 @@ func TestCronReportFailsWhenAgentsDoNotLoad(t *testing.T) {
 
 	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.threads = manager
-	err := bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{store: newSessionStore("cron:daily", service)}, &runResult{turnID: "turn-cron", text: "report"}, "")
+	err := bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{conversationID: strings.TrimSpace("cron:daily")}, &runResult{turnID: "turn-cron", text: "report"}, "")
 	require.ErrorContains(t, err, "load cron agents")
 
 	_, recorded, err := service.Thread("web:cron:daily")
@@ -1147,7 +1147,7 @@ func TestCronReportKeepsBoundDestination(t *testing.T) {
 
 	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.threads = manager
-	require.NoError(t, bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{store: newSessionStore("cron:daily", service)}, &runResult{turnID: "turn-cron", text: "report"}, ""))
+	require.NoError(t, bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{conversationID: strings.TrimSpace("cron:daily")}, &runResult{turnID: "turn-cron", text: "report"}, ""))
 
 	assert.Equal(t, "report", readFinal(t, finals).Text)
 	assert.Empty(t, runningTestTurns(t, service), "the turn closes")
@@ -1200,7 +1200,7 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 					return
 				}
 
-				_, err := service.finishTurn(t.Context(), "turn-private", &turnFinish{store: newSessionStore(privateID, service), entries: []harness.SessionEntry{*testSessionEntry("support ticket", "original answer")}, outbound: protocol.NewOutboundMessage(privateID, "original answer")})
+				_, err := service.finishTurn(t.Context(), "turn-private", &turnFinish{conversationID: strings.TrimSpace(privateID), entries: []harness.SessionEntry{*testSessionEntry("support ticket", "original answer")}, outbound: protocol.NewOutboundMessage(privateID, "original answer")})
 				require.NoError(t, err)
 				require.NoError(t, service.closeTurn(t.Context(), "turn-private"))
 				require.Empty(t, runningTestTurns(t, service), "startup must recover without an unfinished producer row")
@@ -1901,7 +1901,7 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 
 	outbound := protocol.NewOutboundMessage("cron:nightly", "Report started")
 	outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
-	_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:nightly", nt.service), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
+	_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{conversationID: strings.TrimSpace("cron:nightly"), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
 	require.NoError(t, err)
 	require.NoError(t, first.StartActiveTurns(t.Context()))
 	assert.Equal(t, "Report started", readFinalFor(t, nt.finals, "cron:nightly").Text)
@@ -2243,7 +2243,7 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 				inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 				inbound.Metadata = map[string]string{backgroundNotesMetadataKey: "turn-0/call/x"}
 				require.NoError(t, startTurnDB(t.Context(), nt.service.db, "turn-1", helper, inbound))
-				_, err := nt.service.finishTurn(t.Context(), "turn-1", &turnFinish{store: newSessionStore(helper, nt.service), entries: []harness.SessionEntry{*testSessionEntry("notes", "found it")}, outbound: protocol.NewOutboundMessage(helper, "found it"), report: "<task_result>\nfound it\n</task_result>"})
+				_, err := nt.service.finishTurn(t.Context(), "turn-1", &turnFinish{conversationID: strings.TrimSpace(helper), entries: []harness.SessionEntry{*testSessionEntry("notes", "found it")}, outbound: protocol.NewOutboundMessage(helper, "found it"), report: "<task_result>\nfound it\n</task_result>"})
 				require.NoError(t, err)
 				require.NoError(t, nt.service.closeTurn(t.Context(), "turn-1"))
 

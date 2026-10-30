@@ -277,7 +277,7 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	entry := testSessionEntry("first", "answer")
 	entry.TurnID = request.turnID
 	entry.ReplayInput[0] = json.RawMessage(`{"type":"message","role":"user","input_id":"slack:D123:111.222","content":"first"}`)
-	_, err = store.finishTurn(t.Context(), request.turnID, &turnFinish{store: newSessionStore(conversationID, store), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(conversationID, "answer")})
+	_, err = store.finishTurn(t.Context(), request.turnID, &turnFinish{conversationID: strings.TrimSpace(conversationID), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(conversationID, "answer")})
 	require.NoError(t, err)
 	require.NoError(t, store.closeTurn(t.Context(), request.turnID))
 	require.False(t, submit("first", "111.222"), "a redelivery after its turn finished")

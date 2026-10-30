@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -332,7 +333,7 @@ func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, claimed, 1)
 
-			finish := &turnFinish{store: newSessionStore("main", store), outbound: protocol.NewOutboundMessage("main", ""), terminal: tt.terminal}
+			finish := &turnFinish{conversationID: strings.TrimSpace("main"), outbound: protocol.NewOutboundMessage("main", ""), terminal: tt.terminal}
 			if tt.saved {
 				entry := testSessionEntry("note", "answer")
 				entry.Type = workflowRunEntryType
@@ -387,7 +388,7 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, claimed, 1)
 
-			_, err = store.finishTurn(ctx, turnID, &turnFinish{store: newSessionStore("main", store), outbound: protocol.NewOutboundMessage("main", ""), terminal: protocol.TerminalFailed, hidden: true})
+			_, err = store.finishTurn(ctx, turnID, &turnFinish{conversationID: strings.TrimSpace("main"), outbound: protocol.NewOutboundMessage("main", ""), terminal: protocol.TerminalFailed, hidden: true})
 			require.NoError(t, err)
 
 			notes, err := queryStrings(ctx, store.db, `SELECT j.note || ' ' || j.wake::text || ' ' || j.claimed_by || ' ' || j.wake_attempts || ' ' || j.run_at_unix_ns`+testJobsSQL, "background notes")
@@ -416,7 +417,7 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, claimed, 2, "a running turn takes the notes before their delay")
 
-		_, err = store.finishTurn(ctx, "running", &turnFinish{store: newSessionStore("main", store), entries: []harness.SessionEntry{*testSessionEntry("note", "answer")}, outbound: protocol.NewOutboundMessage("main", ""), hidden: true})
+		_, err = store.finishTurn(ctx, "running", &turnFinish{conversationID: strings.TrimSpace("main"), entries: []harness.SessionEntry{*testSessionEntry("note", "answer")}, outbound: protocol.NewOutboundMessage("main", ""), hidden: true})
 		require.NoError(t, err)
 
 		notes, err := queryStrings(ctx, store.db, `SELECT j.note`+testJobsSQL, "background notes")
@@ -469,7 +470,7 @@ func TestFinishTurnSettlesSessionReplies(t *testing.T) {
 			}
 
 			require.NoError(t, startTurnDB(ctx, store.db, "turn-2", tc.conversation, inbound))
-			_, err := store.finishTurn(ctx, "turn-2", &turnFinish{store: newSessionStore(tc.conversation, store), entries: []harness.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage(tc.conversation, "billing is fine"), terminal: tc.terminal})
+			_, err := store.finishTurn(ctx, "turn-2", &turnFinish{conversationID: strings.TrimSpace(tc.conversation), entries: []harness.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage(tc.conversation, "billing is fine"), terminal: tc.terminal})
 			require.NoError(t, err)
 
 			rows, err := queryStrings(ctx, store.db, `SELECT `+testJobStatusSQL+` || ' ' || j.note || ' ' || j.wake::text || ' ' || j.result`+testJobsSQL, "replies")
@@ -537,7 +538,7 @@ func TestFinishTurnReportsSubagentWakeUp(t *testing.T) {
 			}
 
 			require.NoError(t, startTurnDB(ctx, store.db, "turn-1", "main/a", inbound))
-			_, err := store.finishTurn(ctx, "turn-1", &turnFinish{store: newSessionStore("main/a", store), entries: []harness.SessionEntry{*testSessionEntry("notes", "billing noted")}, outbound: protocol.NewOutboundMessage("main/a", "turn failed"), terminal: tc.terminal, report: "<task_result>\nbilling noted\n</task_result>"})
+			_, err := store.finishTurn(ctx, "turn-1", &turnFinish{conversationID: strings.TrimSpace("main/a"), entries: []harness.SessionEntry{*testSessionEntry("notes", "billing noted")}, outbound: protocol.NewOutboundMessage("main/a", "turn failed"), terminal: tc.terminal, report: "<task_result>\nbilling noted\n</task_result>"})
 			require.NoError(t, err)
 
 			reports, err := store.notedBackgroundJobs(ctx, "main", []string{"turn-1"})
@@ -596,7 +597,7 @@ func TestTurnCleanupKeepsBackgroundJournal(t *testing.T) {
 		require.NoError(t, store.SaveTurnStep(ctx, "main", key, json.RawMessage(`{}`)))
 	}
 
-	_, err := store.finishTurn(ctx, "turn-1", &turnFinish{store: newSessionStore("main", store), outbound: protocol.NewOutboundMessage("main", "")})
+	_, err := store.finishTurn(ctx, "turn-1", &turnFinish{conversationID: strings.TrimSpace("main"), outbound: protocol.NewOutboundMessage("main", "")})
 	require.NoError(t, err)
 	require.Equal(t, []string{"turn-1/call/a/task"}, testTurnStepKeys(t, store, "main"))
 

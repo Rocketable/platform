@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,7 +48,7 @@ func TestShadowReviewClearProducerHistory(t *testing.T) {
 			entry := testSessionEntry("prepared", "child answer")
 			entry.TurnID = turn.id
 
-			_, err = store.finishTurn(t.Context(), turn.id, &turnFinish{store: newSessionStore(child, store), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(child, "answer")})
+			_, err = store.finishTurn(t.Context(), turn.id, &turnFinish{conversationID: strings.TrimSpace(child), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(child, "answer")})
 			require.NoError(t, err)
 			require.NoError(t, store.closeTurn(t.Context(), turn.id))
 			require.NoError(t, store.SaveAttachment(t.Context(), child, "", &protocol.OutboundAttachment{ID: child, Name: "result", Data: []byte("bytes")}, false))
@@ -173,13 +174,13 @@ func TestShadowReviewPayloadRelease(t *testing.T) {
 				terminal = protocol.TerminalStopped
 			}
 
-			finish := &turnFinish{store: newSessionStore(child, store), entries: []harness.SessionEntry{*entry}, terminal: terminal, outbound: protocol.NewOutboundMessage(child, "answer")}
+			finish := &turnFinish{conversationID: strings.TrimSpace(child), entries: []harness.SessionEntry{*entry}, terminal: terminal, outbound: protocol.NewOutboundMessage(child, "answer")}
 
 			if order == "concurrent" {
 				var group errgroup.Group
 
 				group.Go(func() error {
-					_, err := store.finishTurn(t.Context(), request.turnID, &turnFinish{store: newSessionStore("parent", store), outbound: protocol.NewOutboundMessage("parent", "answer")})
+					_, err := store.finishTurn(t.Context(), request.turnID, &turnFinish{conversationID: strings.TrimSpace("parent"), outbound: protocol.NewOutboundMessage("parent", "answer")})
 
 					return err
 				})

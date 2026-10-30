@@ -1280,7 +1280,7 @@ func TestSessionWriteReplyWakesHiddenRun(t *testing.T) {
 	msg := seedCronRun(t, nt.service, "cron:daily")
 	outbound := protocol.NewOutboundMessage("cron:daily", "Report started.")
 	outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
-	_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started.")}, outbound: outbound})
+	_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{conversationID: strings.TrimSpace("cron:daily"), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started.")}, outbound: outbound})
 	require.NoError(t, err)
 	require.NoError(t, manager.StartActiveTurns(t.Context()))
 	readFinalFor(t, nt.finals, "cron:daily")
@@ -1359,7 +1359,7 @@ func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "summarize billing", false)
 		inbound.Metadata = map[string]string{"web_message_id": reply.jobID}
 		require.NoError(t, startTurnDB(t.Context(), nt.service.db, "turn-2", nt.conversationID, inbound))
-		_, err := nt.service.finishTurn(t.Context(), "turn-2", &turnFinish{store: newSessionStore(nt.conversationID, nt.service), entries: []harness.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage(nt.conversationID, "billing is fine")})
+		_, err := nt.service.finishTurn(t.Context(), "turn-2", &turnFinish{conversationID: strings.TrimSpace(nt.conversationID), entries: []harness.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage(nt.conversationID, "billing is fine")})
 		require.NoError(t, err)
 		require.NoError(t, nt.service.closeTurn(t.Context(), "turn-2"))
 

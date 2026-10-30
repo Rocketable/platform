@@ -826,7 +826,7 @@ func TestRevertGoalIdentityAndPrompt(t *testing.T) {
 	replay := testSessionEntry("objective with generated goal instructions", "answer")
 	replay.TurnID = "goal-turn"
 	replay.ReplayInput[0] = json.RawMessage(`{"type":"message","role":"user","input_id":"goal","content":"objective with generated goal instructions"}`)
-	_, err := s.finishTurn(t.Context(), "goal-turn", &turnFinish{store: newSessionStore("main", s), entries: []harness.SessionEntry{*replay}, outbound: &protocol.OutboundMessage{ConversationID: "main"}})
+	_, err := s.finishTurn(t.Context(), "goal-turn", &turnFinish{conversationID: strings.TrimSpace("main"), entries: []harness.SessionEntry{*replay}, outbound: &protocol.OutboundMessage{ConversationID: "main"}})
 	require.NoError(t, err)
 	require.NoError(t, s.closeTurn(t.Context(), "goal-turn"))
 	_, prompt, err := stageRevertDB(t.Context(), s.db, "main", "")
@@ -878,7 +878,7 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 	entry.TurnID = "drained-turn"
 	entry.ReplayInput[0] = json.RawMessage(`{"type":"message","role":"user","input_id":"waiting","content":"waiting"}`)
 	require.NoError(t, startTurnDB(ctx, s.db, entry.TurnID, "main", inbound))
-	_, err = s.finishTurn(ctx, entry.TurnID, &turnFinish{store: newSessionStore("main", s), entries: []harness.SessionEntry{*entry}, outbound: &protocol.OutboundMessage{ConversationID: "main"}})
+	_, err = s.finishTurn(ctx, entry.TurnID, &turnFinish{conversationID: strings.TrimSpace("main"), entries: []harness.SessionEntry{*entry}, outbound: &protocol.OutboundMessage{ConversationID: "main"}})
 	require.NoError(t, err)
 	require.NoError(t, s.closeTurn(ctx, entry.TurnID))
 	entries, err := s.ObserveEntries(ctx, "main")
@@ -1344,7 +1344,7 @@ func TestRevertStageFailurePreservesHistory(t *testing.T) {
 			case "settled delivery":
 				err = startTurnDB(ctx, s.db, "delivering", "main", protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "running", true))
 				require.NoError(t, err)
-				_, err = s.finishTurn(ctx, "delivering", &turnFinish{store: newSessionStore("main", s), outbound: &protocol.OutboundMessage{ConversationID: "main"}})
+				_, err = s.finishTurn(ctx, "delivering", &turnFinish{conversationID: strings.TrimSpace("main"), outbound: &protocol.OutboundMessage{ConversationID: "main"}})
 			default:
 				_, err = s.db.ExecContext(ctx, "ALTER TABLE "+unavailable+" RENAME TO unavailable_stage_table")
 			}

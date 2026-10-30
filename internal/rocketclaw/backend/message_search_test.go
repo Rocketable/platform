@@ -386,7 +386,7 @@ func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
 	_, err = s.AppendEntryID(ctx, "cron:daily", prompt("Cron"))
 	require.NoError(t, err)
 	seedActiveTurn(t, s, "chat", "stopped", prompt("Bob"))
-	_, err = s.finishTurn(ctx, "stopped", &turnFinish{store: newSessionStore("chat", s), outbound: protocol.NewOutboundMessage("chat", ""), terminal: protocol.TerminalStopped})
+	_, err = s.finishTurn(ctx, "stopped", &turnFinish{conversationID: strings.TrimSpace("chat"), outbound: protocol.NewOutboundMessage("chat", ""), terminal: protocol.TerminalStopped})
 	require.NoError(t, err)
 
 	saved := testReplayEntry(`{"type":"message","role":"user","content":"saved"}`)
@@ -403,7 +403,7 @@ func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
 		{"hide turn text", "turns", "search_text", hideTurn},
 		{"end turn", "conversations", "principals", func() error {
 			seedActiveTurn(t, s, "chat", "failed", prompt("Eve"))
-			_, err := s.finishTurn(ctx, "failed", &turnFinish{store: newSessionStore("chat", s), outbound: protocol.NewOutboundMessage("chat", ""), terminal: protocol.TerminalFailed})
+			_, err := s.finishTurn(ctx, "failed", &turnFinish{conversationID: strings.TrimSpace("chat"), outbound: protocol.NewOutboundMessage("chat", ""), terminal: protocol.TerminalFailed})
 
 			return err
 		}},
@@ -427,7 +427,7 @@ func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
 	seedActiveTurn(t, s, "chat", "attached", testReplayEntry(`{"type":"message","role":"user","content":"see attachment:file"}`))
 	_, err = s.db.ExecContext(ctx, `ALTER TABLE attachments RENAME TO unavailable_attachments`)
 	require.NoError(t, err)
-	_, err = s.finishTurn(ctx, "attached", &turnFinish{store: newSessionStore("chat", s), outbound: protocol.NewOutboundMessage("chat", ""), terminal: protocol.TerminalStopped})
+	_, err = s.finishTurn(ctx, "attached", &turnFinish{conversationID: strings.TrimSpace("chat"), outbound: protocol.NewOutboundMessage("chat", ""), terminal: protocol.TerminalStopped})
 	require.ErrorContains(t, err, `relation "attachments" does not exist`)
 	_, err = s.db.ExecContext(ctx, `ALTER TABLE unavailable_attachments RENAME TO attachments`)
 	require.NoError(t, err)
@@ -571,7 +571,7 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 	// A runner arriving after the stop changes nothing search finds.
 	turn.ReplayInput = append(turn.ReplayInput, json.RawMessage(`{"type":"message","role":"assistant","content":"Late answer"}`))
 	require.NoError(t, upsertTestTurn(ctx, s, turn))
-	_, err = s.finishTurn(ctx, "turn-1", &turnFinish{store: newSessionStore("web-chat", s), outbound: protocol.NewOutboundMessage("web-chat", "late")})
+	_, err = s.finishTurn(ctx, "turn-1", &turnFinish{conversationID: strings.TrimSpace("web-chat"), outbound: protocol.NewOutboundMessage("web-chat", "late")})
 	require.NoError(t, err)
 	require.Equal(t, []messageSearchTestRow{
 		{0, 0, 0, "user", "stopped question", "stopped question"},
@@ -656,7 +656,7 @@ func TestFinishTurnLocksHistoryBeforeTurnRow(t *testing.T) {
 
 	var group errgroup.Group
 	group.Go(func() error {
-		_, err := s.finishTurn(ctx, "turn-1", &turnFinish{store: newSessionStore("web-chat", s), outbound: protocol.NewOutboundMessage("web-chat", ""), terminal: protocol.TerminalStopped})
+		_, err := s.finishTurn(ctx, "turn-1", &turnFinish{conversationID: strings.TrimSpace("web-chat"), outbound: protocol.NewOutboundMessage("web-chat", ""), terminal: protocol.TerminalStopped})
 		return err
 	})
 	require.Eventually(t, func() bool {

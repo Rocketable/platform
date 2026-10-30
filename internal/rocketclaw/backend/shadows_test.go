@@ -349,7 +349,7 @@ func TestShadowClaimHead(t *testing.T) {
 
 	entry := testSessionEntry("canonical input", "first independent answer")
 	entry.TurnID = first.id
-	_, err = store.finishTurn(t.Context(), first.id, &turnFinish{store: newSessionStore(child, store), outbound: protocol.NewOutboundMessage(child, "answer"), entries: []harness.SessionEntry{*entry}})
+	_, err = store.finishTurn(t.Context(), first.id, &turnFinish{conversationID: strings.TrimSpace(child), outbound: protocol.NewOutboundMessage(child, "answer"), entries: []harness.SessionEntry{*entry}})
 	require.NoError(t, err)
 	_, claimed, err = store.claimShadowTurn(t.Context(), child)
 	require.NoError(t, err)
@@ -447,7 +447,7 @@ func TestShadowExecutionOwnerEntrypoints(t *testing.T) {
 				publisher := &outboundPublisherMock{PublishOutboundFunc: func(context.Context, *protocol.OutboundMessage) error { return errors.New("connector unavailable") }}
 				child := &Bridge{shadow: true, config: Config{ConversationID: id, Agent: "main/a", SessionService: store}, bus: publisher}
 				child.publishConsumed(t.Context(), inbound, "parent header")
-				require.NoError(t, child.finish(t.Context(), &bridgeRequest{inbound: turn.inbound, turnID: turn.id}, &turnFinish{store: newSessionStore(id, store)}, &runResult{turnID: turn.id, text: "local only"}, ""))
+				require.NoError(t, child.finish(t.Context(), &bridgeRequest{inbound: turn.inbound, turnID: turn.id}, &turnFinish{conversationID: strings.TrimSpace(id)}, &runResult{turnID: turn.id, text: "local only"}, ""))
 				require.Empty(t, publisher.PublishOutboundCalls(), "connector failures cannot affect local child completion")
 				active, err := store.HasActiveTurn(t.Context(), id)
 				require.NoError(t, err)
@@ -649,7 +649,7 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 
 	entry := harness.SessionEntry{Version: 1, Type: "turn", TurnID: request.turnID, ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"compaction","id":"cmp","encrypted_content":"summary"}`)}}
 	require.NoError(t, saveTestTurn(t.Context(), store, "parent", request.turnID, []string{"s1"}, &entry))
-	_, err = store.finishTurn(t.Context(), request.turnID, &turnFinish{store: newSessionStore("parent", store), outbound: protocol.NewOutboundMessage("parent", "answer"), entries: []harness.SessionEntry{entry}})
+	_, err = store.finishTurn(t.Context(), request.turnID, &turnFinish{conversationID: strings.TrimSpace("parent"), outbound: protocol.NewOutboundMessage("parent", "answer"), entries: []harness.SessionEntry{entry}})
 	require.NoError(t, err)
 	waiting, err := store.ThreadQueueForConversation("parent")
 	require.NoError(t, err)
@@ -1490,7 +1490,7 @@ func TestShadowTerminalClosure(t *testing.T) {
 			}
 
 			if scenario == "stop" {
-				err = parent.finish(t.Context(), &request, &turnFinish{store: newSessionStore("parent", store)}, &runResult{turnID: request.turnID}, terminal)
+				err = parent.finish(t.Context(), &request, &turnFinish{conversationID: strings.TrimSpace("parent")}, &runResult{turnID: request.turnID}, terminal)
 			} else {
 				err = parent.handleInbound(t.Context(), &request)
 			}

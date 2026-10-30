@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -676,7 +677,7 @@ func (b *Bridge) finishStoppedShadow(ctx context.Context, request *bridgeRequest
 		return false, nil
 	}
 
-	return true, b.finish(ctx, request, &turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService)}, &runResult{turnID: request.turnID}, protocol.TerminalStopped)
+	return true, b.finish(ctx, request, &turnFinish{conversationID: strings.TrimSpace(b.config.ConversationID)}, &runResult{turnID: request.turnID}, protocol.TerminalStopped)
 }
 
 func (b *Bridge) startShadowWorkers(ctx context.Context, turn string) error {

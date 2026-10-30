@@ -688,7 +688,7 @@ func TestTranscriptObservationReportsUnavailableStorage(t *testing.T) {
 	require.ErrorContains(t, journal.Save(t.Context(), "turn", json.RawMessage(`{}`)), "save turn step")
 	_, _, err = journal.Load(t.Context(), "turn")
 	require.ErrorContains(t, err, "load turn step")
-	_, err = s.finishTurn(t.Context(), "turn", &turnFinish{store: newSessionStore("main", s), outbound: protocol.NewOutboundMessage("main", "")})
+	_, err = s.finishTurn(t.Context(), "turn", &turnFinish{conversationID: strings.TrimSpace("main"), outbound: protocol.NewOutboundMessage("main", "")})
 	require.ErrorContains(t, err, "begin turn finish")
 
 	count := 0
@@ -971,7 +971,7 @@ func terminateTestTurn(ctx context.Context, s *SessionService, turnID string, te
 		return fmt.Errorf("seed test turn: %w", err)
 	}
 
-	if _, err := s.finishTurn(ctx, turnID, &turnFinish{store: newSessionStore(conversationID, s), outbound: protocol.NewOutboundMessage(conversationID, ""), terminal: terminal}); err != nil {
+	if _, err := s.finishTurn(ctx, turnID, &turnFinish{conversationID: strings.TrimSpace(conversationID), outbound: protocol.NewOutboundMessage(conversationID, ""), terminal: terminal}); err != nil {
 		return fmt.Errorf("seed test turn: %w", err)
 	}
 
@@ -1048,7 +1048,7 @@ func finishTestRunTurn(t *testing.T, s *SessionService, run, chat, turnID string
 	inbound := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "work", true)
 	inbound.ConversationID, inbound.SyncDestination = run, chat
 	require.NoError(t, startTurnDB(t.Context(), s.db, turnID, run, inbound))
-	_, err := s.finishTurn(t.Context(), turnID, &turnFinish{store: newSessionStore(run, s), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(run, "")})
+	_, err := s.finishTurn(t.Context(), turnID, &turnFinish{conversationID: strings.TrimSpace(run), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage(run, "")})
 	require.NoError(t, err)
 	require.NoError(t, s.closeTurn(t.Context(), turnID))
 }

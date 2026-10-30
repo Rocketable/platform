@@ -1121,7 +1121,7 @@ func TestSessionServiceConcurrentGoalTurnsPreserveAccounting(t *testing.T) {
 		turnID := fmt.Sprintf("turn-%d", i)
 		seedActiveTurn(t, service, "thread", turnID, nil)
 		group.Go(func() {
-			_, err := service.finishTurn(t.Context(), turnID, &turnFinish{store: newSessionStore("thread", service), accountGoal: true, outbound: protocol.NewOutboundMessage("thread", "")})
+			_, err := service.finishTurn(t.Context(), turnID, &turnFinish{conversationID: strings.TrimSpace("thread"), accountGoal: true, outbound: protocol.NewOutboundMessage("thread", "")})
 			errCh <- err
 		})
 	}
@@ -2144,7 +2144,7 @@ func seedActiveTurn(t *testing.T, service *SessionService, conversationID, turnI
 func endTestTurn(t *testing.T, service *SessionService, conversationID, turnID string, terminal protocol.Terminal) {
 	t.Helper()
 
-	_, err := service.finishTurn(t.Context(), turnID, &turnFinish{store: newSessionStore(conversationID, service), outbound: protocol.NewOutboundMessage(conversationID, ""), terminal: terminal})
+	_, err := service.finishTurn(t.Context(), turnID, &turnFinish{conversationID: strings.TrimSpace(conversationID), outbound: protocol.NewOutboundMessage(conversationID, ""), terminal: terminal})
 	require.NoError(t, err)
 	require.NoError(t, service.closeTurn(t.Context(), turnID))
 }
