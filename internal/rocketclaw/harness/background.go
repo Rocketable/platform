@@ -75,8 +75,6 @@ type BackgroundJob struct {
 	CallID      string
 	// Detached reports that the call asked to start in the background.
 	Detached bool
-	// Prompt is a task call's prompt.
-	Prompt string
 }
 
 // BackgroundResult is how a Background Job call ended for its turn.
@@ -253,7 +251,7 @@ func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *lo
 			return ToolResult{}, err
 		}
 
-		job := BackgroundJob{ID: ToolCallKey(ctx), Kind: kind, Label: params.Description, Agent: agent.Name, CallID: metadata.callID, Detached: params.Background, Prompt: params.Prompt}
+		job := BackgroundJob{ID: ToolCallKey(ctx), Kind: kind, Label: params.Description, Agent: agent.Name, CallID: metadata.callID, Detached: params.Background}
 		continueLine, subagent := "", ""
 
 		if kind == BackgroundKindTask {
@@ -269,18 +267,10 @@ func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *lo
 				subagent = "/" + name
 				key := ChildKey{Path: subagent, Turn: metadata.observations.turnID, Call: metadata.callID}.under(f.childKey.Path)
 
-				// The named type takes the subagent over (OpenCode packages/core/src/tool/plugin/subagent.ts). A busy
-				// subagent takes the prompt without its task call, so the type's guardrail reviews it here.
+				// The named type takes the subagent over (OpenCode packages/core/src/tool/plugin/subagent.ts).
 				child, ok := f.agents.Items[params.SubagentType]
 				if !ok {
 					return ToolResult{}, fmt.Errorf(unknownAgentType, params.SubagentType)
-				}
-
-				progress := *metadata.progress
-				progress.Kind, progress.Agent, progress.Model, progress.SubagentKey = PublicProgressDelegation, child.Name, "", subagent
-
-				if blocked, err := f.guardTask(ctx, &child, key, ChildRunStageDelegation, agent.Name, params.Prompt, "", &progress, metadata, output); err != nil || blocked != "" {
-					return TextToolResult(fmt.Sprintf(taskContinueID, id) + blocked), err
 				}
 
 				steered, err := f.childSessions.WriteSubagent(ctx, &SubagentWrite{Key: key, CallKey: job.ID, Agent: child.Name, Delegator: agent.Name, Prompt: params.Prompt, Mode: params.Continue.Mode})

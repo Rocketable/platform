@@ -1178,13 +1178,12 @@ func TestBridgeEnqueueReturnsContextOrStopErrors(t *testing.T) {
 	require.ErrorIs(t, err, protocol.ErrBridgeStopped)
 }
 
-func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
+func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"main\" }}'\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
-	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: '{{ model \"helper\" }}'\nguardrail: guardrail\n---\nHelper prompt\n")
-	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: '{{ model \"guardrail\" }}'\n---\nGuard delegated work\n")
+	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: '{{ model \"helper\" }}'\n---\nHelper prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	requests := 0
@@ -1214,34 +1213,16 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 				assert.Equal(t, "main-model", body["model"])
 				writeRawRunFunctionCall(t, w, "resp_1", "task", map[string]string{"description": "delegate", "prompt": "delegated prompt", "subagent_type": "helper"})
 			case 2:
-				assert.Equal(t, "guard", provider)
-				assert.Equal(t, "guardrail-model", body["model"])
-				assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated work")
-				assert.Contains(t, fmt.Sprint(body), "Current Action: delegation")
-				assert.Contains(t, fmt.Sprint(body), "The agent main wants to delegate to helper")
-				assert.Contains(t, fmt.Sprint(body), "delegated prompt")
-				assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
-				writeRawRunMessage(t, w, "resp_2", "msg_2", `{"approved":true,"reason":""}`)
-			case 3:
 				assert.Equal(t, "child", provider)
 				assert.Equal(t, "helper-model", body["model"])
 				assert.Contains(t, fmt.Sprint(body["instructions"]), "Helper prompt")
 				assert.Contains(t, fmt.Sprint(body), "delegated prompt")
-				writeRawRunMessage(t, w, "resp_3", "msg_3", "child response")
-			case 4:
-				assert.Equal(t, "guard", provider)
-				assert.Equal(t, "guardrail-model", body["model"])
-				assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated work")
-				assert.Contains(t, fmt.Sprint(body), "Current Action: response")
-				assert.Contains(t, fmt.Sprint(body), "And the response from helper to main")
-				assert.Contains(t, fmt.Sprint(body), "child response")
-				assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
-				writeRawRunMessage(t, w, "resp_4", "msg_4", `{"approved":true,"reason":""}`)
-			case 5:
+				writeRawRunMessage(t, w, "resp_2", "msg_2", "child response")
+			case 3:
 				assert.Equal(t, "openai", provider)
 				assert.Equal(t, "main-model", body["model"])
 				assert.Contains(t, fmt.Sprint(body), "<task_result>\nchild response\n</task_result>")
-				writeRawRunMessage(t, w, "resp_5", "msg_5", "persistent done")
+				writeRawRunMessage(t, w, "resp_3", "msg_3", "persistent done")
 			default:
 				t.Fatalf("unexpected response request %d", requests)
 			}
@@ -1252,9 +1233,6 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 
 	childServer := newServer("child")
 	t.Cleanup(childServer.Close)
-
-	guardServer := newServer("guard")
-	t.Cleanup(guardServer.Close)
 
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
@@ -1267,7 +1245,7 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 
 	var logs lockedBuffer
 
-	locked := config.NewLockedConfig(&config.Config{Workspace: workspace, Models: map[string]string{"main": "main-model", "helper": "child/helper-model", "guardrail": "guard/guardrail-model"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Providers: map[string]config.OpenAIConfig{"child": {APIBaseURL: childServer.URL}, "guard": {APIBaseURL: guardServer.URL}}})
+	locked := config.NewLockedConfig(&config.Config{Workspace: workspace, Models: map[string]string{"main": "main-model", "helper": "child/helper-model"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Providers: map[string]config.OpenAIConfig{"child": {APIBaseURL: childServer.URL}}})
 
 	var (
 		manager  *threadBridgeManager
@@ -1332,7 +1310,7 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	assert.Contains(t, logs.String(), `"event":"first_assistant_text"`)
 	assert.Contains(t, logs.String(), `"event":"operation_snapshot"`)
 	assert.NotContains(t, logs.String(), "delegated prompt")
-	require.Equal(t, 5, requests)
+	require.Equal(t, 3, requests)
 
 	entries, err := service.ObserveEntries(context.Background(), conversationID)
 	require.NoError(t, err)

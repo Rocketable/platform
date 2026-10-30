@@ -985,18 +985,14 @@ func TestHistoryPublicProgress(t *testing.T) {
 	require.Equal(t, entry.ReplayInput, stored[0].Entry.ReplayInput, "projection never changes canonical reviewer-bearing replay")
 	require.Equal(t, entry.OutputTrace, stored[0].Entry.OutputTrace, "unknown/private traces remain stored without being rendered")
 
-	for _, outcome := range []harness.PublicProgressState{harness.PublicProgressBlocked, harness.PublicProgressFailed, harness.PublicProgressStopped, harness.PublicProgressCompleted} {
+	for _, outcome := range []harness.PublicProgressState{harness.PublicProgressFailed, harness.PublicProgressStopped, harness.PublicProgressCompleted} {
 		t.Run("delegation="+string(outcome), func(t *testing.T) {
 			id := "delegation-" + string(outcome)
 			require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
 			progress, err := json.Marshal(harness.PublicProgress{ID: "child", ParentID: "turn/response", Kind: harness.PublicProgressDelegation, State: outcome, Agent: "child", Model: "child/model"})
 			require.NoError(t, err)
 
-			result := "<task_result>delegation response blocked: inter-agent guardrail failed: REVIEWER_PRIVATE_SENTINEL CHILD_FAILURE_PRIVATE_SENTINEL</task_result>"
-			if outcome == harness.PublicProgressFailed {
-				result = "<task_result>delegation failed: CHILD_FAILURE_PRIVATE_SENTINEL</task_result>"
-			}
-
+			result := "<task_result>delegation failed: CHILD_FAILURE_PRIVATE_SENTINEL</task_result>"
 			if outcome == harness.PublicProgressCompleted {
 				result = "<task_result>approved child result</task_result>"
 			}
@@ -1026,7 +1022,6 @@ func TestHistoryPublicProgress(t *testing.T) {
 				require.NoError(t, err)
 				encoded, err := json.Marshal(view)
 				require.NoError(t, err)
-				require.NotContains(t, string(encoded), "REVIEWER_PRIVATE_SENTINEL", stage)
 				require.NotContains(t, string(encoded), "CHILD_FAILURE_PRIVATE_SENTINEL", stage)
 				require.Len(t, view.Messages, 2, stage)
 				require.Equal(t, string(outcome), view.Messages[1].State, stage)

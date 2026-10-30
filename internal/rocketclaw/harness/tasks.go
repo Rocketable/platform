@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,13 +12,9 @@ import (
 	"slices"
 	"strings"
 
-	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"golang.org/x/sync/errgroup"
 )
-
-// guardrailEntryType marks the guardrail runs saved in a subagent session, which its turns do not read.
-const guardrailEntryType = "guardrail"
 
 type taskParams struct {
 	Description  string `json:"description"`
@@ -28,11 +23,6 @@ type taskParams struct {
 	Command      string `json:"command"`
 	// Continue names a saved subagent; backgroundTool checks it is a direct child.
 	Continue taskContinue `json:"continue"`
-}
-
-type guardrailDecision struct {
-	Approved bool   `json:"approved"`
-	Reason   string `json:"reason"`
 }
 
 func (f *toolFactory) taskTool() looperTool {
@@ -53,13 +43,13 @@ func (f *toolFactory) taskTool() looperTool {
 
 			return []string{params.SubagentType}, nil
 		},
-		Call: func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse, metadata toolCallMetadata) (ToolResult, error) {
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, metadata toolCallMetadata) (ToolResult, error) {
 			var params taskParams
 			if err := json.Unmarshal(raw, &params); err != nil {
 				return ToolResult{}, fmt.Errorf("parse task params: %w", err)
 			}
 
-			result, err := f.runTask(ctx, &params, metadata, output)
+			result, err := f.runTask(ctx, &params, metadata)
 			if err != nil {
 				return ToolResult{}, err
 			}
@@ -164,7 +154,7 @@ func (f *toolFactory) availableSubagentsDescription() string {
 	return strings.Join(lines, "\n")
 }
 
-// childSystemPrompt puts the instructions a guardrail agent may load ahead of its prompt; a session's
+// childSystemPrompt puts the instructions a permission review agent may load ahead of its prompt; a session's
 // agent has its prompt first instead (sessionSystemPrompt).
 func (f *toolFactory) childSystemPrompt(agent *Agent) string {
 	rootInstructions := ""
@@ -190,7 +180,7 @@ func (f *toolFactory) sessionSystemPrompt(ctx context.Context, agent *Agent) str
 
 // runTask delegates params to a subagent session: a new one, which it writes the prompt to, or the
 // continued one backgroundTool already wrote it to. It answers once that session's turn ends.
-func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (string, error) {
+func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata toolCallMetadata) (string, error) {
 	if f.recursionRemaining != nil && *f.recursionRemaining == 0 {
 		return "", errors.New("maxRecursion limit reached: task delegation is unavailable")
 	}
@@ -212,21 +202,12 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 	progress.SubagentKey = key.Path
 	key = key.under(f.childKey.Path)
 
-	progress.State = PublicProgressReview
-	if err := metadata.observations.observe(ctx, &progress); err != nil {
-		return "", err
-	}
-
 	originatingAgent := ""
 	if f.agent != nil {
 		originatingAgent = f.agent.Name
 	}
 
 	if params.Continue.SessionID == "" {
-		if blocked, err := f.guardTask(ctx, &agent, key, ChildRunStageDelegation, originatingAgent, params.Prompt, "", &progress, metadata, parentOutput); err != nil || blocked != "" {
-			return blocked, err
-		}
-
 		if _, err := f.childSessions.WriteSubagent(ctx, &SubagentWrite{Key: key, CallKey: ToolCallKey(ctx), Agent: agent.Name, Delegator: originatingAgent, Prompt: params.Prompt}); err != nil {
 			return "", fmt.Errorf("write subagent: %w", err)
 		}
@@ -237,74 +218,23 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 		return "", err
 	}
 
-	return f.awaitTask(ctx, originatingAgent, params.Prompt, ToolCallKey(ctx), key.Path, &progress, metadata, parentOutput)
-}
-
-// awaitTask answers the task call callKey by which originatingAgent delegated prompt to the subagent
-// session at key, once that session's turn running it ends and the response guardrail of the
-// type the turn ended as, which a steer may have switched it to, approves its answer.
-func (f *toolFactory) awaitTask(ctx context.Context, originatingAgent, prompt, callKey, key string, progress *PublicProgress, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (string, error) {
-	last, final, err := f.childSessions.AwaitSubagent(ctx, key, callKey)
+	last, final, err := f.childSessions.AwaitSubagent(ctx, key.Path, ToolCallKey(ctx))
 	if err != nil {
 		return "", fmt.Errorf("await subagent: %w", err)
 	}
 
+	// The row names the type the turn ended as, which a steer may have switched it to.
 	progress.Agent, progress.Model = final.Agent, final.Model
-	if err := metadata.observations.observe(ctx, progress); err != nil {
+	if err := metadata.observations.observe(ctx, &progress); err != nil {
 		return "", err
 	}
 
-	agent := f.agents.Items[final.Agent]
-
-	return f.taskResult(ctx, &agent, ChildKey{Path: key}, originatingAgent, prompt, last, progress, metadata, parentOutput)
+	return TaskResult(last), nil
 }
 
-// taskResult is the task result of last, the answer of agent's subagent session at key to originatingAgent's
-// prompt, once agent's response guardrail approves it, or the blocked result.
-func (f *toolFactory) taskResult(ctx context.Context, agent *Agent, key ChildKey, originatingAgent, prompt, last string, progress *PublicProgress, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (string, error) {
-	if blocked, err := f.guardTask(ctx, agent, key, ChildRunStageResponse, originatingAgent, prompt, last, progress, metadata, parentOutput); err != nil || blocked != "" {
-		return blocked, err
-	}
-
-	return strings.Join([]string{"<task_result>", last, "</task_result>"}, "\n"), nil
-}
-
-// guardTask runs agent's guardrail, if any, at stage of the task by which originatingAgent delegated
-// prompt to the subagent progress names, reviewing at the response stage the subagent's answer last
-// too, and returns the blocked task result when the guardrail rejects it.
-func (f *toolFactory) guardTask(ctx context.Context, agent *Agent, key ChildKey, stage ChildRunStage, originatingAgent, prompt, last string, progress *PublicProgress, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (blocked string, err error) {
-	if agent.Guardrail == "" || f.inGuardrailRun {
-		return "", nil
-	}
-
-	progress.State = PublicProgressReview
-	if err := metadata.observations.observe(ctx, progress); err != nil {
-		return "", err
-	}
-
-	lines, outcome := []string{"Current Action: " + string(stage), fmt.Sprintf("The agent %s wants to delegate to %s:", originatingAgent, agent.Name), prompt}, "delegation blocked: "
-	if stage == ChildRunStageResponse {
-		lines, outcome = append(lines, "", fmt.Sprintf("And the response from %s to %s:", agent.Name, originatingAgent), last), "delegation response blocked: "
-	}
-
-	guardrailAgent := f.agents.Items[agent.Guardrail]
-
-	decision := f.runGuardrail(ctx, &guardrailAgent, stage, strings.Join(lines, "\n"), agent.Name, key, metadata, parentOutput)
-	if decision.Approved {
-		return "", nil
-	}
-
-	// Cancellation retains the canonical result; the parent records stopped.
-	if ctx.Err() == nil {
-		progress.State = PublicProgressBlocked
-		if err := metadata.observations.observe(ctx, progress); err != nil {
-			return "", err
-		}
-	}
-
-	reason := cmp.Or(strings.TrimSpace(decision.Reason), "rejected by inter-agent guardrail")
-
-	return strings.Join([]string{"<task_result>", outcome + reason, "</task_result>"}, "\n"), nil
+// TaskResult is the task call result of answer, a subagent session's answer.
+func TaskResult(answer string) string {
+	return strings.Join([]string{"<task_result>", answer, "</task_result>"}, "\n")
 }
 
 // delegationName is the child-session key segment of a Delegation History a call starts: the
@@ -387,22 +317,6 @@ func (l *looper) asRecordAgent(ctx context.Context, record *SessionEntry, histor
 	return next, nil
 }
 
-// AwaitTask answers, after a restart, the background task call jobID by which delegator delegated prompt
-// to the subagent session at subagentKey, once that session's turn running it ends.
-func (r *Runtime) AwaitTask(ctx context.Context, jobID, subagentKey, delegator, prompt string) (string, error) {
-	// NewWithModelResolver installs its tool factory as the reviewer.
-	return r.PermissionReviewer.(*toolFactory).awaitTask(ctx, delegator, prompt, jobID, subagentKey, &PublicProgress{}, toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}}, nil)
-}
-
-// ReviewTask returns, as a task call would, the task result of answer, the final answer of a turn of r's
-// subagent session that ran prompt and that no task call awaits, for delegator, its parent session's agent:
-// once the response guardrail of r's agent, which saves its run in r's session, approves it.
-func (r *Runtime) ReviewTask(ctx context.Context, delegator, prompt, answer string) (string, error) {
-	f := r.PermissionReviewer.(*toolFactory)
-
-	return f.taskResult(ctx, f.agent, ChildKey{}, delegator, prompt, answer, &PublicProgress{}, toolCallMetadata{observations: &turnObservations{journal: InertJournal{}}}, nil)
-}
-
 func (f *toolFactory) childSession(yield func(SessionEntry, error) bool) {
 	for i := range f.childContext {
 		if !yield(f.childContext[i], nil) {
@@ -450,118 +364,17 @@ func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, s
 	return last, err
 }
 
-// childSessionWriter saves a hidden run under its factory's childKey, as entryType when not empty.
+// childSessionWriter saves a hidden run under its factory's childKey.
 type childSessionWriter struct {
-	factory   *toolFactory
-	entryType string
+	factory *toolFactory
 }
 
 func (w childSessionWriter) Append(ctx context.Context, entry *SessionEntry) error {
-	saved := *entry
-
-	saved.Type = cmp.Or(w.entryType, saved.Type)
-	if err := w.factory.childSessions.AppendChildEntry(ctx, w.factory.childKey, &saved); err != nil {
+	if err := w.factory.childSessions.AppendChildEntry(ctx, w.factory.childKey, entry); err != nil {
 		return fmt.Errorf("append child session entry: %w", err)
 	}
 
 	return nil
-}
-
-// runGuardrail saves its run under subagentKey, the key of the subagent the task call runs.
-func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage ChildRunStage, message, guardedAgent string, subagentKey ChildKey, metadata toolCallMetadata, parentOutput chan<- ChatResponse) guardrailDecision {
-	agent := *guardrail
-	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
-	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
-
-	childFactory := *f
-	childFactory.inGuardrailRun = true
-	childFactory.childKey = subagentKey
-
-	child, err := childFactory.newLooper(&agent, childFactory.childSystemPrompt(&agent))
-	if err != nil {
-		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
-	}
-
-	child.ResponseFormat = guardrailResponseFormat()
-
-	var observer chatObserver = inertChatObserver{}
-	if f.diagnostics {
-		observer = &guardrailDiagnostics{output: parentOutput, guardedAgent: guardedAgent, guardrailAgent: agent.Name, stage: stage, metadata: metadata}
-	}
-
-	last, err := child.runPrompt(ctx, "", []string{message}, f.childSession, childSessionWriter{factory: &childFactory, entryType: guardrailEntryType}, observer)
-	if err != nil {
-		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
-	}
-
-	var decision guardrailDecision
-	if err := json.Unmarshal([]byte(last), &decision); err != nil {
-		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail returned invalid JSON"}
-	}
-
-	if f.diagnostics {
-		emitGuardrailResult(parentOutput, guardedAgent, agent.Name, stage, metadata, decision)
-	}
-
-	return decision
-}
-
-// guardrailDiagnostics streams a guardrail run's output items to output as diagnostics of the
-// agent it guards.
-type guardrailDiagnostics struct {
-	output                       chan<- ChatResponse
-	guardedAgent, guardrailAgent string
-	stage                        ChildRunStage
-	metadata                     toolCallMetadata
-}
-
-func (d *guardrailDiagnostics) observe(item ChatResponse) {
-	if item.Kind == ChatResponseAssistantMessage {
-		return
-	}
-
-	emitSubagentDiagnostic(d.output, &SubagentDiagnostic{
-		Name:  d.guardedAgent,
-		Index: d.metadata.subagentIndex,
-		Total: d.metadata.subagentTotal,
-		Subagent: &SubagentDiagnostic{
-			Name:  d.guardrailAgent,
-			Label: "guardrail(" + string(d.stage) + ")",
-			Subagent: &SubagentDiagnostic{
-				Label:    nestedDiagnosticLabel(item),
-				Text:     item.Text,
-				Tool:     item.Tool,
-				Subagent: item.Subagent,
-				Provider: item.Provider,
-			},
-		},
-	})
-}
-
-func emitGuardrailResult(output chan<- ChatResponse, guardedAgent, guardrailAgent string, stage ChildRunStage, metadata toolCallMetadata, decision guardrailDecision) {
-	action := "reject"
-	if decision.Approved {
-		action = "approve"
-	}
-
-	text := action
-	if reason := strings.TrimSpace(decision.Reason); reason != "" {
-		text += ": " + reason
-	}
-
-	emitSubagentDiagnostic(output, &SubagentDiagnostic{
-		Name:  guardedAgent,
-		Index: metadata.subagentIndex,
-		Total: metadata.subagentTotal,
-		Subagent: &SubagentDiagnostic{
-			Name:  guardrailAgent,
-			Label: "guardrail(" + string(stage) + ")",
-			Text:  text,
-			Subagent: &SubagentDiagnostic{
-				Label: "result",
-			},
-		},
-	})
 }
 
 func nestedDiagnosticLabel(item ChatResponse) string {
@@ -574,21 +387,6 @@ func nestedDiagnosticLabel(item ChatResponse) string {
 
 func emitSubagentDiagnostic(output chan<- ChatResponse, diagnostic *SubagentDiagnostic) {
 	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Subagent: diagnostic})
-}
-
-func guardrailResponseFormat() responses.ResponseFormatTextConfigUnionParam {
-	format := responses.ResponseFormatTextConfigParamOfJSONSchema("guardrail_decision", map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"approved": map[string]any{"type": "boolean"},
-			"reason":   map[string]any{"type": "string"},
-		},
-		"required":             []string{"approved", "reason"},
-		"additionalProperties": false,
-	})
-	format.OfJSONSchema.Strict = openai.Bool(true)
-
-	return format
 }
 
 func subagentResponseLabel(kind string) string {

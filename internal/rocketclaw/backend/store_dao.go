@@ -931,7 +931,7 @@ type turnFinish struct {
 	outbound       *protocol.OutboundMessage
 	terminal       protocol.Terminal
 	hidden         bool // The turn is a hidden run's (hiddenRun).
-	// report is a subagent session's wake turn's answer as its parent gets it (Runtime.ReviewTask).
+	// report is a subagent session's wake turn's answer as its parent gets it (harness.TaskResult).
 	report string
 	// target and schedules are set by finishTurn: where a hidden run's schedule changes took
 	// effect, and the scheduled messages to arm there.
@@ -1613,8 +1613,7 @@ type backgroundJob struct {
 	finishedAt    time.Time
 	// result is the job's output, or its error when it failed.
 	result string
-	// input is a task's prompt, which its subagent's answer is reviewed with after a restart, or a
-	// reply's target URL. A reply's label is its write's mode, and its agent the target's.
+	// input is a reply's target URL. A reply's label is its write's mode, and its agent the target's.
 	input string
 	// target is a reply's target session.
 	target string

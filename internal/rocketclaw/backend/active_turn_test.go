@@ -2158,9 +2158,8 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 
 // R14: a helper woken by its own late Background Job after its task call returned reports its new answer to
 // its parent, level by level up to the top-level session, as a note that continues it. A busy parent takes
-// the note into its running turn; an idle one wakes once, also when a restart came before it heard. A
-// guarded helper type's rejected answer reaches the parent as the blocked result. A wake turn that took a
-// task's steer answers that task call instead, whose review is the answer's only one.
+// the note into its running turn; an idle one wakes once, also when a restart came before it heard. A wake
+// turn that took a task's steer answers that task call instead.
 func TestSubagentWakeReportsUp(t *testing.T) {
 	t.Parallel()
 
@@ -2169,20 +2168,18 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name, woken, want         string
-		busy, guarded, steer, cut bool
+		name, woken, want string
+		busy, steer, cut  bool
 	}{
 		{name: "two levels", woken: "/a/b", want: report("/a", "relayed")},
 		{name: "busy parent", woken: "/a", want: report("/a", "found it"), busy: true},
-		{name: "guardrail rejects", woken: "/a", want: report("/a", "delegation response blocked: leaks secrets"), guarded: true},
 		{name: "wake turn took a task steer", woken: "/a", steer: true},
-		{name: "guarded wake turn took a task steer", woken: "/a", guarded: true, steer: true},
 		{name: "restart before the parent heard", woken: "/a", want: report("/a", "found it"), cut: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			hold, release, relayed, noted, reviews := make(chan struct{}, 1), make(chan struct{}), make(chan string, 1), make(chan string, 2), make(chan struct{}, 4)
+			hold, release, relayed, noted := make(chan struct{}, 1), make(chan struct{}), make(chan string, 1), make(chan string, 2)
 			if tc.busy || tc.steer {
 				hold <- struct{}{}
 			}
@@ -2202,10 +2199,6 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 				research, text := strings.Contains(body, `"instructions":"Research`), "found it"
 
 				switch {
-				case strings.Contains(body, "Current Action: "):
-					reviews <- struct{}{}
-
-					text = `{"approved":false,"reason":"leaks secrets"}`
 				case research && strings.Contains(body, "<subagent id="):
 					relayed <- lastRequestMessage(t, body)
 
@@ -2222,10 +2215,6 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 
 				writeRawRunMessage(t, w, "resp", "msg", text)
 			})
-			if tc.guarded {
-				writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\nguardrail: guard\npermission: {}\n---\nResearch\n")
-				writeAgent(t, nt.cfg.Workspace, "guard", "---\ndescription: Guard\nmode: subagent\nmodel: gpt-6.1-sol\npermission: {}\n---\nGuard\n")
-			}
 
 			require.NoError(t, nt.service.startSubagent(t.Context(), nt.conversationID, harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "a"}, "researcher", true))
 			require.NoError(t, nt.service.startSubagent(t.Context(), nt.conversationID+"/a", harness.ChildKey{Path: "/b", Turn: "turn-0", Call: "b"}, "researcher", true))
@@ -2260,11 +2249,10 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 				require.True(t, steered, "the steer joins the helper's wake turn")
 				close(release)
 
-				// The task call's wait, as a restart resumes it, reviews the answer as the call would.
-				answer, err := manager.continueSubagent(t.Context(), &backgroundJob{conversationID: nt.conversationID, jobID: "turn-2/call/s", subagentKey: "/a", agent: "main", input: "also the logs"})
+				// The task call's wait, as a restart resumes it, answers as the call would.
+				answer, err := manager.continueSubagent(t.Context(), &backgroundJob{conversationID: nt.conversationID, jobID: "turn-2/call/s", subagentKey: "/a"})
 				require.NoError(t, err)
-				assert.Equal(t, "<task_result>\n"+map[bool]string{false: "found it\nlogs fine", true: "delegation response blocked: leaks secrets"}[tc.guarded]+"\n</task_result>", answer, "the task call gets the wake turn's answer")
-				assert.Len(t, reviews, map[bool]int{true: 1}[tc.guarded], "the wake turn leaves the review to the task call")
+				assert.Equal(t, "<task_result>\nfound it\nlogs fine\n</task_result>", answer, "the task call gets the wake turn's answer")
 				nt.waitIdle(t, manager, helper)
 				assert.Empty(t, noted, "the parent is not woken")
 				assert.Equal(t, []string{"turn-0/call/x consumed true"}, noteStates(t, nt.service), "the parent gets no note")
@@ -2408,24 +2396,24 @@ func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 		t.Run(fmt.Sprintf("%s/background=%t/nested=%t", tc.tool, background, tc.nested), func(t *testing.T) {
 			t.Parallel()
 
-			// The task's delegation guardrail holds a background subagent's turn until its top-level turn ended;
-			// a foreground subagent's top-level turn waits for it. Nested, the background subagent, a lead,
-			// starts the researcher in the foreground.
+			// A background subagent's first model request waits until its top-level turn ended; a foreground
+			// subagent's top-level turn waits for it. Nested, the background subagent, a lead, starts the
+			// researcher in the foreground.
 			rootDone, results := make(chan struct{}), make(chan string, 1)
 			if !background {
 				close(rootDone)
 			}
 
 			nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
-				switch {
-				case strings.Contains(body, "Current Action: "):
+				if (strings.Contains(body, `"instructions":"Research`) || strings.Contains(body, `"instructions":"Lead`)) && !strings.Contains(body, "function_call_output") {
 					select {
 					case <-rootDone:
 					case <-r.Context().Done():
 						return
 					}
+				}
 
-					writeRawRunMessage(t, w, "gate", "msg", `{"approved":true,"reason":""}`)
+				switch {
 				case strings.Contains(body, `"instructions":"Research`) && strings.Contains(body, "function_call_output"):
 					results <- body
 
@@ -2445,16 +2433,18 @@ func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 				}
 			})
 			writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw: {allow_background: allow}\n---\nPrompt\n")
-			writeAgent(t, nt.cfg.Workspace, "lead", "---\ndescription: Lead\nmode: subagent\nmodel: gpt-6.1-sol\nguardrail: guard\npermission:\n  task: allow\n---\nLead\n")
-			writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\nguardrail: guard\npermission:\n  rocketclaw: {rocketclaw_restart: allow, rocketclaw_attach_files_to_response: allow}\n---\nResearch\n")
-			writeAgent(t, nt.cfg.Workspace, "guard", "---\ndescription: Guard\nmode: subagent\nmodel: gpt-6.1-sol\npermission: {}\n---\nGuard\n")
+			writeAgent(t, nt.cfg.Workspace, "lead", "---\ndescription: Lead\nmode: subagent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n---\nLead\n")
+			writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_restart: allow, rocketclaw_attach_files_to_response: allow}\n---\nResearch\n")
 
 			manager, _ := nt.run(t, ignoreOutbound)
 			require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)))
 
 			final := readFinalFor(t, nt.finals, nt.conversationID)
 			if background {
-				nt.waitIdle(t, manager, nt.conversationID)
+				require.Eventually(t, func() bool {
+					running, err := queryStrings(context.Background(), nt.service.db, `SELECT id FROM turns WHERE conversation_id = $1 AND phase NOT IN ($2, $3) AND takes_lane`, "top-level turns", nt.conversationID, turnWaiting, turnDone)
+					return err == nil && len(running) == 0
+				}, 10*time.Second, 10*time.Millisecond, "the top-level turn ends")
 				close(rootDone)
 			}
 

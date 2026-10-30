@@ -97,90 +97,6 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	require.Contains(t, diagnostics.String(), "remember workspace memory\n\n<current-workspace>\nWorkspace root: "+dir+"\n</current-workspace>")
 }
 
-// After a restart the embedder answers a background task job once its subagent session's turn ends,
-// through the response guardrail of the type that turn ended as.
-func TestRuntimeAwaitTask(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	agents := LoadAgents(fstest.MapFS{
-		"main.md":       {Data: []byte("---\nmodel: gpt-5.4\n---\nPARENT PROMPT")},
-		"researcher.md": {Data: []byte("---\nmodel: gpt-5.4\n---\nCHILD PROMPT")},
-		"guarded.md":    {Data: []byte("---\nmodel: gpt-5.4\nguardrail: researcher\n---\nGUARDED PROMPT")},
-	}, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
-	require.Empty(t, agents.Errors)
-
-	sessions := &mockChildSessions{
-		AppendChildEntryFunc: func(context.Context, ChildKey, *SessionEntry) error { return nil },
-		AwaitSubagentFunc: func(_ context.Context, key, _ string) (string, ReplayAttribution, error) {
-			if key == "/call-1" {
-				return "found it", ReplayAttribution{Agent: "researcher"}, nil
-			}
-
-			return "secret answer", ReplayAttribution{Agent: "guarded"}, nil
-		},
-	}
-	config := testConfig(dir)
-	config.ChildSessions = sessions
-	mock := mockResponses(responseWithMessage("reject", `{"approved":false,"reason":"do not share"}`))
-	loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), config, root, agents.Agents, Skills{Items: map[string]Skill{}}, "main", nil)
-	require.NoError(t, err)
-
-	got, err := loop.AwaitTask(t.Context(), "turn-1/call/call-1", "/call-1", "main", "research the flaky test")
-	require.NoError(t, err)
-	require.Equal(t, "<task_result>\nfound it\n</task_result>", got)
-	require.Equal(t, "turn-1/call/call-1", sessions.AwaitSubagentCalls()[0].CallKey)
-
-	got, err = loop.AwaitTask(t.Context(), "turn-1/call/call-2", "/call-2", "main", "research the flaky test")
-	require.NoError(t, err)
-	require.Equal(t, "<task_result>\ndelegation response blocked: do not share\n</task_result>", got)
-	require.Contains(t, marshalJSON(t, newParams(mock)[0].Input), `Current Action: response\nThe agent main wants to delegate to guarded:\nresearch the flaky test\n\nAnd the response from guarded to main:\nsecret answer`)
-}
-
-// A subagent session's turn that no task call awaits answers its parent as a task would: through the
-// response guardrail of the session's own type, whose review the session saves in its own history.
-func TestRuntimeReviewTask(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	agents := LoadAgents(fstest.MapFS{
-		"researcher.md": {Data: []byte("---\nmodel: gpt-5.4\n---\nCHILD PROMPT")},
-		"guarded.md":    {Data: []byte("---\nmodel: gpt-5.4\nguardrail: researcher\n---\nGUARDED PROMPT")},
-	}, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
-	require.Empty(t, agents.Errors)
-
-	for _, tc := range []struct {
-		agent, decision, want string
-	}{
-		{"researcher", "", "<task_result>\nfound it\n</task_result>"},
-		{"guarded", `{"approved":true,"reason":""}`, "<task_result>\nfound it\n</task_result>"},
-		{"guarded", `{"approved":false,"reason":"do not share"}`, "<task_result>\ndelegation response blocked: do not share\n</task_result>"},
-	} {
-		sessions := &mockChildSessions{AppendChildEntryFunc: func(context.Context, ChildKey, *SessionEntry) error { return nil }}
-		config := testConfig(dir)
-		config.ChildSessions = sessions
-		mock := mockResponses(responseWithMessage("review", tc.decision))
-		loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), config, root, agents.Agents, Skills{Items: map[string]Skill{}}, tc.agent, nil)
-		require.NoError(t, err)
-
-		got, err := loop.ReviewTask(t.Context(), "main", "the wake notes", "found it")
-		require.NoError(t, err)
-		require.Equal(t, tc.want, got)
-
-		if tc.decision == "" {
-			require.Empty(t, newParams(mock), "an unguarded type is not reviewed")
-			continue
-		}
-
-		require.Contains(t, marshalJSON(t, newParams(mock)[0].Input), `Current Action: response\nThe agent main wants to delegate to guarded:\nthe wake notes\n\nAnd the response from guarded to main:\nfound it`)
-		require.Equal(t, ChildKey{}, sessions.AppendChildEntryCalls()[0].Key, "the review is saved in the session's own history")
-	}
-}
-
 func TestNewRequiresShellTempDir(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
@@ -350,9 +266,9 @@ func TestNewBindsBashToEachAgentCustomShell(t *testing.T) {
 				require.Equal(t, strings.Contains(run(t, bash), "custom:"), strings.Contains(bash.Definition.Description.Value, shell), "the bash description names the program only when one is used")
 			}
 
-			// runGuardrail and permission reviews bind tools through the same assembleTools.
-			_, guardrailHosts := factory.assembleTools(&other)
-			require.Equal(t, tc.otherWant, run(t, guardrailHosts["bash"]), "a guardrail uses its own shell")
+			// Permission reviews bind tools through the same assembleTools.
+			_, reviewerHosts := factory.assembleTools(&other)
+			require.Equal(t, tc.otherWant, run(t, reviewerHosts["bash"]), "a permission reviewer uses its own shell")
 
 			require.Equal(t, "plain", run(t, factory.baseTools["bash"]), "the shared tool keeps default bash")
 			require.Equal(t, tc.rootWant, run(t, loop.CodeModeHosts["bash"]))
@@ -847,22 +763,6 @@ func TestNewRequiresParsedAgentsAndSkills(t *testing.T) {
 
 	_, err = NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
 	require.EqualError(t, err, `missing required default agent "main"`)
-}
-
-func TestNewRejectsMissingGuardrailAgent(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	client := openai.NewClient()
-	config := testWorkspaceConfig(t, dir)
-	agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Guardrail: "safety"}}}
-	skills := Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
-
-	_, err = NewWithProviders(Providers{OpenAI: &client}, config, root, agents, skills, "main", nil)
-
-	require.EqualError(t, err, `agent "main" references missing guardrail agent "safety"`)
 }
 
 func TestNewValidatesAutoPermissionReviewers(t *testing.T) {

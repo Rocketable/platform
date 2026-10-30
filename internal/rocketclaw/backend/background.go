@@ -245,7 +245,7 @@ func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, wor
 		kind = turnScript
 	}
 
-	run := &backgroundRun{row: &backgroundJob{conversationID: key.conversationID, jobID: job.ID, kind: kind, agent: job.Agent, label: job.Label, callID: job.CallID, subagentKey: job.SubagentKey, origin: t.origin, runnerID: r.runnerID, input: job.Prompt}, cancel: cancel, recorded: make(chan struct{}), done: make(chan struct{}), attached: !job.Detached}
+	run := &backgroundRun{row: &backgroundJob{conversationID: key.conversationID, jobID: job.ID, kind: kind, agent: job.Agent, label: job.Label, callID: job.CallID, subagentKey: job.SubagentKey, origin: t.origin, runnerID: r.runnerID}, cancel: cancel, recorded: make(chan struct{}), done: make(chan struct{}), attached: !job.Detached}
 
 	r.mu.Lock()
 	flipped := run.attached && !r.attachedLocked(key.conversationID)

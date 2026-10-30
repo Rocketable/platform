@@ -498,7 +498,7 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 		})
 		if identity.Type == "function_call_output" && callProgress >= 0 && (progress[callProgress].State == harness.PublicProgressBlocked ||
 			progress[callProgress].Kind == harness.PublicProgressDelegation && slices.Contains([]harness.PublicProgressState{harness.PublicProgressFailed, harness.PublicProgressStopped}, progress[callProgress].State)) {
-			continue // Unapproved delegation/reviewer replay stays stored, never projected (including attachments).
+			continue // A blocked call's, or a failed or stopped delegation's, replay stays stored, never projected (including attachments).
 		}
 
 		attachments, err := s.sessions.ReplayAttachments(ctx, producer, root, entry.Entry.ReplayInput[i], calls)

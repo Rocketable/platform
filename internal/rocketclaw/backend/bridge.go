@@ -266,7 +266,7 @@ func NewConversation(cfg *config.LockedConfig, publisher protocol.OutboundPublis
 	return &Bridge{log: logger.With("component", "rocketcode"), config: normalized, runtime: cfg, bus: publisher, requestCh: make(chan bridgeRequest, defaultQueueSize), stopCh: make(chan struct{})}
 }
 
-// AppendChildEntry saves a guardrail or permission review turn under b's conversation ID plus key,
+// AppendChildEntry saves a permission review turn under b's conversation ID plus key,
 // a hidden review history of its parent. It is no record: under a Slack thread, cron run, or
 // External MCP run it expires as a private history does, and otherwise only with its family.
 func (b *Bridge) AppendChildEntry(ctx context.Context, key harness.ChildKey, entry *harness.SessionEntry) error {
@@ -2497,8 +2497,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	// A subagent session's wake turn, which no task call awaits, answers its parent as a task call would
-	// (finishTurn). One that took a queued input, a task's, reports nothing, since that task call reviews
-	// the answer. A resumed turn reviews its answer again.
+	// (finishTurn). One that took a queued input, a task's, reports nothing, since that task call gets
+	// the answer.
 	if b.parent != "" && msg.Metadata[backgroundNotesMetadataKey] != "" {
 		var taken bool
 		if err := queryScalar(ctx, b.config.SessionService.db, "read wake turn's queued inputs", `SELECT count(*) > 0 FROM turns q
@@ -2508,14 +2508,7 @@ WHERE q.conversation_id = $1 AND q.phase = 'waiting'`, &taken, b.config.Conversa
 		}
 
 		if !taken {
-			var parent ThreadState
-			if parent, _, err = b.config.SessionService.Thread(b.parent); err != nil {
-				return result, err
-			}
-
-			if finish.report, err = looper.ReviewTask(ctx, parent.Agent, strings.Join(prepared.Texts, "\n\n"), result.text); err != nil {
-				return result, fmt.Errorf("review subagent answer: %w", err)
-			}
+			finish.report = harness.TaskResult(result.text)
 		}
 	}
 

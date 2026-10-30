@@ -146,7 +146,7 @@ A Harness Turn is not a conversation's running turn. A conversation's turn usual
 
 ### Delegation History
 
-A session history of work one tool call delegated: its Permission Reviews, made before the call runs and during it, or its Task subagent with the subagent's Guardrail checks.
+A session history of work one tool call delegated: its Permission Reviews, made before the call runs and during it, or its Task subagent.
 
 Its conversation ID extends the producing conversation's ID with a segment derived from the tool call, so it stays unique when a provider reuses call IDs and stays the same when a turn resumes; a delegation inside it adds another segment. A Task subagent's Delegation History is a Subagent Session, which a later Task call can continue. Review histories have no Managed Slack Thread or Web chat of their own. All of them are deleted and forked with their producing conversation; that, not the shape of the ID, is what sets them apart, since other conversation IDs can contain the same separator.
 
@@ -154,10 +154,6 @@ Its conversation ID extends the producing conversation's ID with a segment deriv
 
 An automatic check, by a reviewer agent, of a tool call or a whole Execute script that an agent's permissions mark for review, made before it runs. It allows or denies with a reason; a denial, an unreadable answer, or a failed review blocks the call. Its decision is read from the reviewer's final answer, whichever way the model was reached.
 *Avoid:* approval, approver check
-
-### Guardrail
-
-An agent that an agent type names to check every Task delegation to that type: each prompt before the subagent receives it, and each answer before the parent sees it. A Guardrail approves or rejects and never rewrites the prompt or the answer; a rejected prompt never reaches the subagent. Not a Permission Review, which judges tool calls rather than delegations.
 
 ### Task
 
@@ -167,9 +163,9 @@ The model-facing tool through which an agent delegates a prompt to another agent
 
 A Task subagent run as a session like any other, with the same Thread Queue, restart recovery, and history saving as top-level sessions, that records its parent session, is not listed in the sidebar or message search, and cannot be written to by other sessions' agents.
 
-A Task call writes its prompt into the session's Thread Queue and answers with the turn that runs it; the subagent's guardrail checks are saved in the session's history but never read back by its turns. It acts for its top-level session's running turn: session tags and session writes land on that session, though replies to its writes come back to the subagent and the recipient check uses the subagent's own agent; sessions it creates keep that turn's agent, creator, and agent limits, files it attaches go out with that turn's reply, and its delegation depth counts from that session's agent. It cannot schedule messages. Stopping a session's turn while its foreground Task call waits stops the subagent's current turn too, unless a Background Job waits for that turn; the prompt the call sent, if still queued, is held in the subagent's Thread Queue until the next message sent there, or a goal, releases it to run just before that message or goal, and no note reaches the stopped session.
+A Task call writes its prompt into the session's Thread Queue and answers with the turn that runs it. It acts for its top-level session's running turn: session tags and session writes land on that session, though replies to its writes come back to the subagent and the recipient check uses the subagent's own agent; sessions it creates keep that turn's agent, creator, and agent limits, files it attaches go out with that turn's reply, and its delegation depth counts from that session's agent. It cannot schedule messages. Stopping a session's turn while its foreground Task call waits stops the subagent's current turn too, unless a Background Job waits for that turn; the prompt the call sent, if still queued, is held in the subagent's Thread Queue until the next message sent there, or a goal, releases it to run just before that message or goal, and no note reaches the stopped session.
 
-A Completion Note can wake a subagent after its Task call already returned. When that wake turn ends, its answer goes to the parent as a Task Completion Note, reviewed by the subagent type's response guardrail when it has one; a parent that is itself a subagent reports its own wake turn the same way, so the answer climbs to the top-level session. A stopped wake turn, or one that took a Task call's prompt, reports nothing.
+A Completion Note can wake a subagent after its Task call already returned. When that wake turn ends, its answer goes to the parent as a Task Completion Note; a parent that is itself a subagent reports its own wake turn the same way, so the answer climbs to the top-level session. A stopped wake turn, or one that took a Task call's prompt, reports nothing.
 
 ### Background Job
 
@@ -185,7 +181,7 @@ The system message that tells a Background Job's owner how the job ended, consum
 
 It enters a running turn of the owner at its next step, or wakes the owner with a new turn. A note for a script killed by a restart waits for the owner's next turn instead, unless the owner is a Private Producer Conversation. A turn that fails or stops before saving leaves the notes it read for the owner's next turn without waking it again, unless the owner is a Private Producer Conversation, which may have no next turn: its notes wake it again at growing intervals until a wake saves, and only the first failure reaches its destination, saying the wake retries.
 
-A reply note answers one session write. It goes to the exact session that wrote, a Subagent Session or Private Producer Conversation included, and carries the write's queue item ID, the other session, its agent, the write mode, and how the other session's turn ended, with that turn's final answer framed as another session's answer rather than the user's instructions. A write that only stopped a running turn gets a note once that turn is over; a write a person removed, or a reply someone stopped, gets a note saying so, and a stopped reply's note waits for the owner's next turn without waking it. No guardrail reviews reply notes.
+A reply note answers one session write. It goes to the exact session that wrote, a Subagent Session or Private Producer Conversation included, and carries the write's queue item ID, the other session, its agent, the write mode, and how the other session's turn ended, with that turn's final answer framed as another session's answer rather than the user's instructions. A write that only stopped a running turn gets a note once that turn is over; a write a person removed, or a reply someone stopped, gets a note saying so, and a stopped reply's note waits for the owner's next turn without waking it.
 
 ### Shadow Agent
 

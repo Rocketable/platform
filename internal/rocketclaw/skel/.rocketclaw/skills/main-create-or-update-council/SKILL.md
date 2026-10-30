@@ -48,7 +48,7 @@ Start each agent with an explicit permission set and add only required capabilit
 
 3. **Member capabilities:** Give each member its own `model`, instructions, and tools. Use `read`/`glob`/`grep` for analysts, narrow `edit` paths for editors, exact `bash` commands for test runners, and named `task` targets for further delegation.
 
-Exact task rules keep the graph auditable. Wildcard rules widen the graph to every matching loaded agent. Follow `main-create-or-update-agent` for permission buckets, write/execute separation, web-content trust, guardrails, and lint.
+Exact task rules keep the graph auditable. Wildcard rules widen the graph to every matching loaded agent. Follow `main-create-or-update-agent` for permission buckets, write/execute separation, web-content trust, and lint.
 
 ## Coordinator Behavior
 
