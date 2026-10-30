@@ -72,37 +72,41 @@ def main(args):
 		},
 	}
 
+	root := workflowRoot(t)
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root := workflowRoot(t)
-			writeWorkflow(t, root, tt.file, tt.source)
+		writeWorkflow(t, root, tt.file, tt.source)
+	}
 
-			definitions, err := Load(root, "runtime")
-			if err != nil {
-				t.Fatalf("Load() error = %v", err)
-			}
+	definitions, err := Load(root, "runtime")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
 
-			definition := definitions[tt.name]
-			if definition == nil {
-				t.Fatalf("Load()[%q] = nil", tt.name)
-			}
+	if len(definitions) != len(tests) {
+		t.Fatalf("Load() returned %d definitions, want %d", len(definitions), len(tests))
+	}
 
-			if definition.Name != tt.name || definition.Description != tt.description {
-				t.Errorf("Load()[%q] metadata = (%q, %q), want (%q, %q)", tt.name, definition.Name, definition.Description, tt.name, tt.description)
-			}
+	for _, tt := range tests {
+		definition := definitions[tt.name]
+		if definition == nil {
+			t.Fatalf("Load()[%q] = nil", tt.name)
+		}
 
-			if !slices.Equal(definition.Phases, tt.phases) {
-				t.Errorf("Load()[%q].Phases = %v, want %v", tt.name, definition.Phases, tt.phases)
-			}
+		if definition.Name != tt.name || definition.Description != tt.description {
+			t.Errorf("Load()[%q] metadata = (%q, %q), want (%q, %q)", tt.name, definition.Name, definition.Description, tt.name, tt.description)
+		}
 
-			if !slices.Equal(definition.WorkerModels, tt.workerModels) {
-				t.Errorf("Load()[%q].WorkerModels = %v, want %v", tt.name, definition.WorkerModels, tt.workerModels)
-			}
+		if !slices.Equal(definition.Phases, tt.phases) {
+			t.Errorf("Load()[%q].Phases = %v, want %v", tt.name, definition.Phases, tt.phases)
+		}
 
-			if definition.program == nil {
-				t.Errorf("Load()[%q].program = nil", tt.name)
-			}
-		})
+		if !slices.Equal(definition.WorkerModels, tt.workerModels) {
+			t.Errorf("Load()[%q].WorkerModels = %v, want %v", tt.name, definition.WorkerModels, tt.workerModels)
+		}
+
+		if definition.program == nil {
+			t.Errorf("Load()[%q].program = nil", tt.name)
+		}
 	}
 }
 
@@ -141,24 +145,6 @@ def main(args): return args
 
 		if _, err := Load(root, "runtime"); err == nil {
 			t.Fatal("Load() error = nil, want workflows subtree escape rejection")
-		}
-	})
-
-	t.Run("multiple files", func(t *testing.T) {
-		root := workflowRoot(t)
-		for _, name := range []string{"second", "first"} {
-			writeWorkflow(t, root, name+".star", `meta = {"name": "`+name+`", "description": "`+name+`"}
-def main(args): return args
-`)
-		}
-
-		definitions, err := Load(root, "runtime")
-		if err != nil {
-			t.Fatalf("Load() error = %v", err)
-		}
-
-		if len(definitions) != 2 || definitions["first"] == nil || definitions["second"] == nil {
-			t.Fatalf("Load() definitions = %v, want first and second", definitions)
 		}
 	})
 
