@@ -1,6 +1,7 @@
 ---
 title: RocketCode strings that must survive the harness rename
 date: 2026-10-29
+last_updated: 2026-10-29
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/harness
 problem_type: best_practice
@@ -9,7 +10,6 @@ severity: high
 applies_when:
   - Finishing the RocketCode-to-harness rename, or any grep-and-replace of `rocketcode`
   - Renaming a string literal that looks like a name but is written to the database, disk, telemetry, or a model prompt
-  - Changing `internal/rocketclaw/backend/equivalence_test.go` or its `testdata/equivalence` fixtures
 tags:
   - rocketcode
   - harness
@@ -17,7 +17,6 @@ tags:
   - persisted-strings
   - trace-types
   - span-names
-  - equivalence-harness
 related_components:
   - database
   - observability
@@ -43,10 +42,6 @@ Before renaming a `rocketcode` string, decide which group it belongs to.
 - **MCP client name** `rocketcode-mcp-client` (`internal/rocketclaw/mcpclient/registry.go:24`), which outbound MCP servers receive and may log or allowlist.
 - **Model-facing text**: the compaction checkpoint ("compacted by RocketCode", `internal/rocketclaw/harness/looper.go:2560`), the automatic permission reviewer's prompt (`internal/rocketclaw/harness/permission_review.go:211`, `:216`), and the shipped agent-writing skill (`internal/rocketclaw/skel/.rocketclaw/skills/main-create-or-update-agent/SKILL.md`). Changing them is a prompt change and needs the same care as one, not a rename.
 
-**Move together with the code it is compiled against:**
-
-- `internal/rocketclaw/backend/testdata/equivalence/equivalence_fixture_test.go.txt` is not historical text. `run.sh` copies it, together with the part of the *current* `equivalence_test.go` above `// ---- Tree adapter:`, into a checkout of the base revision and builds them there (`internal/rocketclaw/backend/testdata/equivalence/run.sh:70-89`; "The base tree must build them."). That shared part imports `internal/rocketclaw/harness`, so a base from before the dissolution cannot build it, and a fixture that still imports `internal/rocketcode` cannot build against a base from after. As of this writing the fixture keeps the old import (line 20) and also sets `config.OpenCodeConfig.Port`, a field removed before the dissolution, so it builds against no current base whatever its import says. Before the next equivalence run, adapt the fixture to the chosen base as a whole, including the switch to `harness`, rather than fixing only the import.
-
 **Safe to rename:** Go identifiers and test names (`prepareRocketCode`, `rocketcodeConfig`, `rocketcodeRetainedDir`, `loadRocketCodeDefinitions`, ...), comments, and current docs. These are code, so the compiler and tests catch mistakes.
 
 If a stored or external name really has to change, treat it as a migration: keep reading the old value (as `config.go` does for `rocketcode_auth`), or rewrite the stored data, and tell the people who own the dashboards.
@@ -59,7 +54,6 @@ The broken cases fail quietly. After a repo-wide sweep, a renamed trace type sti
 
 - A follow-up "finish the RocketCode rename" or "remove leftover rocketcode" task.
 - Any repo-wide string replacement that touches `internal/rocketclaw/harness`, `internal/rocketclaw/backend`, or `internal/rocketclaw/mcpclient`.
-- Running the State Store equivalence tool against a base revision from before the harness move.
 
 ## Examples
 
@@ -69,7 +63,7 @@ Find every candidate first, then sort them into the groups above rather than rep
 grep -rni 'rocketcode' cmd internal --exclude-dir=node_modules
 ```
 
-This is case-insensitive and has no file-type filter on purpose: it also finds `RocketCode` in prompts and identifiers, and `.go.txt` fixtures.
+This is case-insensitive and has no file-type filter on purpose: it also finds `RocketCode` in prompts and identifiers, and in non-Go files.
 
 Safe (identifier):
 
