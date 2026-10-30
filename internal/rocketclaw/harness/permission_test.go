@@ -436,7 +436,8 @@ func parseYAMLNode(t *testing.T, text string) *yaml.Node {
 func TestBashExecutablePatternMatchConcurrent(t *testing.T) {
 	// Code Mode checks parallel bash calls at once; the match must not share expansion state.
 	subject, pattern := `./"scripts"/build.sh --fast`, `./"scripts"/*.sh *`
-	want := bashExecutablePatternMatch(subject, pattern)
+
+	const want = true
 
 	var group errgroup.Group
 	for range 16 {
