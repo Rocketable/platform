@@ -63,6 +63,11 @@ const sessions = () =>
     [linked, session(linked)],
   ])
 
+const terminal = (sessionID: string) => ({
+  id: "pty_1", sessionID, title: "Terminal 1", command: "sh", args: [], cwd: directory, status: "running", pid: 1,
+  userTitle: null, foregroundProcess: null, size: { cols: 80, rows: 24 }, output: { head: 0, tail: 0 },
+})
+
 export const server = {
   version: tag.slice(1),
   state: "up" as "up" | "unauthorized" | "down",
@@ -70,6 +75,7 @@ export const server = {
   requests: [] as string[],
   streams: 0,
   extraText: "",
+  terminals: [] as ReturnType<typeof terminal>[],
 }
 
 /** Puts the server back as it starts: up, on the copy's version, with its sessions. */
@@ -78,6 +84,7 @@ export function reset() {
   server.state = "up"
   server.extraText = ""
   server.sessions = sessions()
+  server.terminals = []
 }
 
 const json = (body: unknown, status = 200) => Response.json(body, { status })
@@ -120,15 +127,29 @@ function route(method: string, path: string, query: URLSearchParams) {
 
   if (path === "/session/active") return json({ data: {} })
 
-  // A terminal: created, read, resized, and connected through a ticket; its socket is the caller's to serve.
-  const pty = /^\/pty\/([^/]+)(\/connect-token)?$/.exec(path)
-  const terminal = { id: "pty_1", title: "Terminal 1", command: "sh", args: [], cwd: directory, status: "running", pid: 1 }
+  // v2.2.4 lists terminals per session and restores a server snapshot before attaching through a ticket.
+  const terminalSession = /^\/experimental\/session\/([^/]+)\/terminal$/.exec(path)
+  const pty = /^\/experimental\/persistent-pty\/([^/]+)(\/(connect-token|snapshot))?$/.exec(path)
 
-  if (path === "/pty" && method === "POST") return json({ location, data: terminal })
+  if (terminalSession) {
+    if (method === "POST") {
+      const created = terminal(terminalSession[1])
+      server.terminals.push(created)
+      return json({ data: created })
+    }
+    return json({ data: server.terminals.filter((item) => item.sessionID === terminalSession[1]) })
+  }
 
-  if (pty?.[2]) return json({ location, data: { ticket: "ticket", expires_in: 60 } })
+  if (pty?.[3] === "connect-token") return json({ data: { ticket: "ticket", expires_in: 60 } })
 
-  if (pty) return json({ location, data: terminal })
+  if (pty) {
+    const info = server.terminals.find((item) => item.id === pty[1])
+    if (method === "DELETE") {
+      server.terminals = server.terminals.filter((item) => item.id !== pty[1])
+      return new Response(null, { status: 204 })
+    }
+    return json({ data: pty[3] === "snapshot" ? { info, text: "", checkpoint: "", cursor: { x: 0, y: 0 } } : info })
+  }
 
   if (path === "/session") {
     const parent = query.get("parentID")
