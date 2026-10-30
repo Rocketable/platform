@@ -898,7 +898,6 @@ func TestSessionEntries(t *testing.T) {
 		SubscribeFunc:            rt.Subscribe,
 		CreateConversationFunc:   rt.CreateConversation,
 		ContinueRunFunc:          rt.ContinueRun,
-		ListConversationsFunc:    rt.ListConversations,
 		RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
 			turns = append(turns, inbound)
 			if inbound.Kind == protocol.InboundKindCancel {
@@ -2603,19 +2602,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, backend.ThreadState{Agent: "main", CreatedBy: "alice"}, thread, "a continued run starts with the first loaded agent")
-
-		conversations, err := rt.ListConversations(ctx)
-		require.NoError(t, err)
-
-		count := 0
-
-		for _, conversation := range conversations {
-			if conversation.ID == webID {
-				count++
-			}
-		}
-
-		require.Equal(t, 1, count)
 
 		var owner string
 

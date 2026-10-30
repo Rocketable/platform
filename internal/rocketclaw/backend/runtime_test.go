@@ -70,9 +70,10 @@ func TestRuntimeRecordsExplicitConversationsWithoutResettingSelection(t *testing
 	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "opaque", Agent: "selected", CreatedBy: "cron"}))
 	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "opaque", Agent: "new-default"}))
 	require.NoError(t, store.UpsertExternalMCPSession("external", &ExternalMCPSessionState{PrivateConversationID: "unrecorded-X", ManagedConversationID: "opaque", Agent: "producer"}))
-	conversations, err := rt.ListConversations(t.Context())
+	thread, found, err := store.Thread("opaque")
 	require.NoError(t, err)
-	require.Equal(t, []protocol.Conversation{{ID: "opaque", Agent: "selected", CreatedBy: "cron"}}, conversations)
+	require.True(t, found)
+	require.Equal(t, ThreadState{Agent: "selected", CreatedBy: "cron"}, thread)
 }
 
 // A hidden run reports to its destination: its tag tools act there, its reply reaches the

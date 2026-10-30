@@ -479,9 +479,10 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, updated, string(live))
 
-	conversations, err := rt.ListConversations(ctx)
-	require.NoError(t, err)
-	require.Empty(t, conversations, "reload starts no agent turn or conversation")
+	var conversations int
+
+	require.NoError(t, openTestTurns(t, dsn).db.QueryRowContext(ctx, `SELECT count(*) FROM conversations WHERE kind <> 'remote'`).Scan(&conversations))
+	require.Zero(t, conversations, "reload starts no agent turn or conversation")
 	require.NoError(t, rt.RunCtx.Err(), "reload does not request process shutdown")
 }
 

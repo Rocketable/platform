@@ -23,7 +23,7 @@ func TestSessionOperationsRejectCanceledContext(t *testing.T) {
 
 	for _, operation := range []string{
 		"append", "rename", "attachment", "voice", "tabs", "save tabs", "channel",
-		"history", "active turn", "Slack thread", "conversations", "background jobs",
+		"history", "active turn", "Slack thread", "background jobs",
 		"completion notes", "page", "continue run", "external MCP metadata",
 	} {
 		t.Run(operation, func(t *testing.T) {
@@ -53,8 +53,6 @@ func TestSessionOperationsRejectCanceledContext(t *testing.T) {
 				_, err = store.HasActiveTurn(ctx, "chat")
 			case "Slack thread":
 				_, _, err = store.SlackThread(ctx, "chat")
-			case "conversations":
-				_, err = runtime.ListConversations(ctx)
 			case "background jobs":
 				_, _, err = runtime.BackgroundJobs(ctx, "chat")
 			case "completion notes":
