@@ -808,21 +808,21 @@ func finishTestGoalTurn(t *testing.T, b *Bridge, msg *protocol.InboundMessage) {
 
 	turnID := "turn-" + rand.Text()
 	require.NoError(t, startTurnDB(t.Context(), b.config.SessionService.db, turnID, b.config.ConversationID, msg))
-	_, err := b.config.SessionService.finishTurn(t.Context(), turnID, &turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService), accountGoal: msg.GoalAction != protocol.GoalActionNone, outbound: protocol.NewOutboundMessage(b.config.ConversationID, "")})
+	_, err := b.config.SessionService.finishTurn(t.Context(), turnID, &turnFinish{conversationID: strings.TrimSpace(b.config.ConversationID), accountGoal: msg.GoalAction != protocol.GoalActionNone, outbound: protocol.NewOutboundMessage(b.config.ConversationID, "")})
 	require.NoError(t, err)
 	require.NoError(t, b.finishGoalTurn(t.Context(), &bridgeRequest{inbound: msg}))
 }
 
 // runTestTurn runs one turn and appends its staged history as a request finish does.
 func runTestTurn(ctx context.Context, b *Bridge, msg *protocol.InboundMessage, turnID string) (runResult, error) {
-	finish := turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService)}
+	finish := turnFinish{conversationID: strings.TrimSpace(b.config.ConversationID)}
 	b.mu.Lock()
 	b.activeTurnID = turnID
 	b.mu.Unlock()
 	result, err := b.runTurn(ctx, msg, turnID, turnID, &finish)
 
 	for i := range finish.entries {
-		if _, errAppend := appendSessionEntryDB(context.WithoutCancel(ctx), b.config.SessionService.db, finish.store.conversationID, &finish.entries[i]); errAppend != nil {
+		if _, errAppend := appendSessionEntryDB(context.WithoutCancel(ctx), b.config.SessionService.db, finish.conversationID, &finish.entries[i]); errAppend != nil {
 			return result, errAppend
 		}
 	}
@@ -859,7 +859,7 @@ func publishTestFinal(ctx context.Context, b *Bridge, inbound *protocol.InboundM
 		return err
 	}
 
-	return b.finish(ctx, &bridgeRequest{inbound: inbound, turnID: result.turnID}, &turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService)}, result, "")
+	return b.finish(ctx, &bridgeRequest{inbound: inbound, turnID: result.turnID}, &turnFinish{conversationID: strings.TrimSpace(b.config.ConversationID)}, result, "")
 }
 
 func workflowSummaryPayloadFromEntry(t *testing.T, entry *harness.SessionEntry) string {
@@ -2300,7 +2300,7 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: privateConversationID, Agent: "planner", SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.activeTurnID = "producer" // The producer turn is running.
 	require.NoError(t, bridge.ScheduleMessage(inbound, 100*time.Millisecond, "later", false))
-	_, err = service.finishTurn(t.Context(), "producer", &turnFinish{store: newSessionStore(privateConversationID, service), entries: []harness.SessionEntry{*testSessionEntry("producer context", "producer answer")}, outbound: protocol.NewOutboundMessage(privateConversationID, "")})
+	_, err = service.finishTurn(t.Context(), "producer", &turnFinish{conversationID: strings.TrimSpace(privateConversationID), entries: []harness.SessionEntry{*testSessionEntry("producer context", "producer answer")}, outbound: protocol.NewOutboundMessage(privateConversationID, "")})
 	require.NoError(t, err)
 	require.NoError(t, service.closeTurn(t.Context(), "producer"))
 
@@ -4277,7 +4277,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	inbound.GoalAction = protocol.GoalActionContinue
 
 	seedActiveTurn(t, store, "thread-1", "turn-2", nil)
-	_, err := store.finishTurn(t.Context(), "turn-2", &turnFinish{store: newSessionStore("thread-1", store), accountGoal: true, outbound: outbound})
+	_, err := store.finishTurn(t.Context(), "turn-2", &turnFinish{conversationID: strings.TrimSpace("thread-1"), accountGoal: true, outbound: outbound})
 	require.NoError(t, err)
 
 	outbound = bridge.newOutboundMessage(inbound, "turn-3", "reply", false)
@@ -4296,7 +4296,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	inbound.GoalAction = protocol.GoalActionContinue
 
 	seedActiveTurn(t, store, "thread-1", "turn-3", nil)
-	_, err = store.finishTurn(t.Context(), "turn-3", &turnFinish{store: newSessionStore("thread-1", store), accountGoal: true, outbound: outbound})
+	_, err = store.finishTurn(t.Context(), "turn-3", &turnFinish{conversationID: strings.TrimSpace("thread-1"), accountGoal: true, outbound: outbound})
 	require.NoError(t, err)
 
 	outbound = bridge.newOutboundMessage(inbound, "turn-4b", "reply", false)
@@ -5012,7 +5012,7 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 
 		outbound := protocol.NewOutboundMessage("cron:daily", "Report started")
 		outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
-		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
+		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{conversationID: strings.TrimSpace("cron:daily"), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
 		require.NoError(t, err)
 		require.NoError(t, manager.StartActiveTurns(t.Context()))
 		readFinalFor(t, nt.finals, "cron:daily")
@@ -5043,7 +5043,7 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 
 		outbound := protocol.NewOutboundMessage("cron:daily", "Report started")
 		outbound.TurnID, outbound.Complete, outbound.Cronjob = "turn-cron", true, msg.Cronjob
-		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{store: newSessionStore("cron:daily", nt.service), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
+		_, err := nt.service.finishTurn(t.Context(), "turn-cron", &turnFinish{conversationID: strings.TrimSpace("cron:daily"), entries: []harness.SessionEntry{*testSessionEntry("job prompt", "Report started")}, outbound: outbound})
 		require.NoError(t, err)
 		require.NoError(t, manager.StartActiveTurns(t.Context()))
 		readFinalFor(t, nt.finals, "cron:daily")

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -454,7 +455,7 @@ CREATE CONSTRAINT TRIGGER reject_shadow_commit AFTER UPDATE ON shadow_turns DEFE
 				case "clear":
 					_, err = store.DeleteSession(t.Context(), "parent")
 				case "finish":
-					_, err = store.finishTurn(t.Context(), request.turnID, &turnFinish{store: newSessionStore("parent", store), outbound: protocol.NewOutboundMessage("parent", "answer")})
+					_, err = store.finishTurn(t.Context(), request.turnID, &turnFinish{conversationID: strings.TrimSpace("parent"), outbound: protocol.NewOutboundMessage("parent", "answer")})
 				case "revert":
 					var workers []*Bridge
 
@@ -503,7 +504,8 @@ func TestShadowLifecycleFinishRollback(t *testing.T) {
 
 			entry := testSessionEntry("start", "answer")
 			entry.TurnID = request.turnID
-			finish := &turnFinish{store: newSessionStore("parent", store), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage("parent", "answer")}
+			finish := &turnFinish{conversationID: strings.TrimSpace("parent"), entries: []harness.SessionEntry{*entry}, outbound: protocol.NewOutboundMessage("parent", "answer")}
+
 			rejectShadowLifecycleWrite(t, store, step.table, step.event)
 
 			outbound, err := store.finishTurn(ctx, request.turnID, finish)

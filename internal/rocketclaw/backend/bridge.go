@@ -621,7 +621,7 @@ func (b *Bridge) stopIdleTurn() *protocol.InboundMessage {
 	outbound := b.newOutboundMessage(turn.inbound, turn.id, "", true)
 	outbound.Terminal = protocol.TerminalStopped
 
-	finish := turnFinish{store: newSessionStore(turn.conversationID, b.config.SessionService), outbound: outbound, terminal: protocol.TerminalStopped, hidden: hiddenRun(turn.inbound)}
+	finish := turnFinish{conversationID: strings.TrimSpace(turn.conversationID), outbound: outbound, terminal: protocol.TerminalStopped, hidden: hiddenRun(turn.inbound)}
 
 	outbound, err = b.config.SessionService.finishTurn(ctx, turn.id, &finish)
 	if err == nil {
@@ -1582,7 +1582,7 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 	turnID := request.turnID
 	started := time.Now()
 	result := runResult{turnID: turnID}
-	finish := turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService)}
+	finish := turnFinish{conversationID: strings.TrimSpace(b.config.ConversationID)}
 	prepare := !captured && !b.shadow
 
 	var errLog, errTurn error
@@ -1683,7 +1683,7 @@ func (b *Bridge) skipObsoleteGoal(ctx context.Context, request *bridgeRequest) (
 	}
 
 	outbound := protocol.NewOutboundMessage(b.config.ConversationID, "")
-	if _, err := b.config.SessionService.finishTurn(ctx, request.turnID, &turnFinish{store: newSessionStore(b.config.ConversationID, b.config.SessionService), outbound: outbound}); err != nil {
+	if _, err := b.config.SessionService.finishTurn(ctx, request.turnID, &turnFinish{conversationID: strings.TrimSpace(b.config.ConversationID), outbound: outbound}); err != nil {
 		return true, err
 	}
 
@@ -2199,7 +2199,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		return runResult{}, fmt.Errorf("create rocketcode shell temp dir: %w", err)
 	}
 
-	shellTempDir, store := filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), newSessionStore(b.config.ConversationID, b.config.SessionService)
+	shellTempDir, conversationID := filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), strings.TrimSpace(b.config.ConversationID)
 
 	var (
 		shellEnv     map[string]string
@@ -2485,7 +2485,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	interrupted := b.activeTurnInterrupted
 	b.mu.Unlock()
 
-	finish.store = store
+	finish.conversationID = conversationID
 	finish.entries = append(finish.entries, staged.entries...)
 
 	b.log.Info("rocketcode looper returned", "event", "generation_finished", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(looperStarted).Milliseconds(), "interrupted", interrupted, "failed", err != nil, "error_type", fmt.Sprintf("%T", err))

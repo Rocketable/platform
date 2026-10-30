@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -325,7 +326,7 @@ func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "summarize billing", false)
 			inbound.Metadata = map[string]string{"web_message_id": replies[0].jobID}
 			require.NoError(t, startTurnDB(t.Context(), store.db, "turn-ops", "web:ops", inbound))
-			_, err = store.finishTurn(t.Context(), "turn-ops", &turnFinish{store: newSessionStore("web:ops", store), entries: []harness.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage("web:ops", "billing is fine")})
+			_, err = store.finishTurn(t.Context(), "turn-ops", &turnFinish{conversationID: strings.TrimSpace("web:ops"), entries: []harness.SessionEntry{*testSessionEntry("summarize billing", "billing is fine")}, outbound: protocol.NewOutboundMessage("web:ops", "billing is fine")})
 			require.NoError(t, err)
 			require.Len(t, notes.noteReadyCalls(), map[bool]int{false: 1, true: 0}[tc.held])
 		})

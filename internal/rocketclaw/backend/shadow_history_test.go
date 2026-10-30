@@ -3,6 +3,7 @@ package backend
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
@@ -149,7 +150,7 @@ ON b.shadow_parent = v.parent ORDER BY v.parent, v.turn_id, b.shadow_agent`)
 		outbound := protocol.NewOutboundMessage(child, "")
 		outbound.Terminal = terminal
 
-		finish := turnFinish{store: newSessionStore(child, store), outbound: outbound}
+		finish := turnFinish{conversationID: strings.TrimSpace(child), outbound: outbound}
 		if terminal != protocol.TerminalComplete {
 			finish.terminal = terminal
 		}

@@ -393,7 +393,7 @@ func TestSidebarSessionsListFirstTurnBeforeHistory(t *testing.T) {
 	require.Equal(t, "seed", row.Summary.LastMessage)
 	require.WithinDuration(t, time.Now(), row.Summary.LastUpdated, time.Minute)
 
-	_, err = service.finishTurn(ctx, "first-turn", &turnFinish{store: newSessionStore("new", service), outbound: protocol.NewOutboundMessage("new", ""), entries: []harness.SessionEntry{*testSessionEntry("question", "answer")}})
+	_, err = service.finishTurn(ctx, "first-turn", &turnFinish{conversationID: strings.TrimSpace("new"), outbound: protocol.NewOutboundMessage("new", ""), entries: []harness.SessionEntry{*testSessionEntry("question", "answer")}})
 	require.NoError(t, err)
 	require.Equal(t, "answer", only().Summary.LastMessage)
 	require.NoError(t, service.closeTurn(ctx, "first-turn"))
@@ -436,7 +436,7 @@ func TestSidebarSessionsMarkUnansweredQuestions(t *testing.T) {
 	require.NoError(t, questions.change(ctx, saveWebQuestionStep, "asking", "turn-1/call/c1/answer", "{}"))
 	require.False(t, asking())
 
-	_, err := service.finishTurn(ctx, "turn-1", &turnFinish{store: newSessionStore("asking", service), outbound: protocol.NewOutboundMessage("asking", ""), entries: []harness.SessionEntry{*testSessionEntry("question", "answer")}})
+	_, err := service.finishTurn(ctx, "turn-1", &turnFinish{conversationID: strings.TrimSpace("asking"), outbound: protocol.NewOutboundMessage("asking", ""), entries: []harness.SessionEntry{*testSessionEntry("question", "answer")}})
 	require.NoError(t, err)
 	require.NoError(t, service.closeTurn(ctx, "turn-1"))
 	require.NoError(t, questions.change(ctx, saveWebQuestionStep, "asking", "turn-0/call/c2"+webQuestionStep, "{}"))

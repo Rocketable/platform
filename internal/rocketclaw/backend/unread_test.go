@@ -3,6 +3,7 @@ package backend
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 
 	finish := func(conversationID, turnID string, terminal protocol.Terminal) {
 		outbound := &protocol.OutboundMessage{ConversationID: conversationID, TurnID: turnID, Text: "done", Terminal: terminal}
-		_, err := service.finishTurn(ctx, turnID, &turnFinish{store: newSessionStore(conversationID, service), outbound: outbound, terminal: terminal})
+		_, err := service.finishTurn(ctx, turnID, &turnFinish{conversationID: strings.TrimSpace(conversationID), outbound: outbound, terminal: terminal})
 		require.NoError(t, err)
 	}
 

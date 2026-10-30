@@ -925,12 +925,12 @@ type activeTurn struct {
 
 // turnFinish is everything a bridge request writes when it moves to delivering.
 type turnFinish struct {
-	store       sessionStore
-	entries     []harness.SessionEntry
-	accountGoal bool
-	outbound    *protocol.OutboundMessage
-	terminal    protocol.Terminal
-	hidden      bool // The turn is a hidden run's (hiddenRun).
+	conversationID string
+	entries        []harness.SessionEntry
+	accountGoal    bool
+	outbound       *protocol.OutboundMessage
+	terminal       protocol.Terminal
+	hidden         bool // The turn is a hidden run's (hiddenRun).
 	// report is a subagent session's wake turn's answer as its parent gets it (Runtime.ReviewTask).
 	report string
 	// target and schedules are set by finishTurn: where a hidden run's schedule changes took
@@ -1191,13 +1191,13 @@ func (s *SessionService) finishTurn(ctx context.Context, turnID string, finish *
 	defer func() { _ = tx.Rollback() }()
 
 	// commitRevertDB also takes the history lock before the turn row.
-	if _, err := lockRunHistories(ctx, tx, finish.store.conversationID); err != nil {
+	if _, err := lockRunHistories(ctx, tx, finish.conversationID); err != nil {
 		return nil, err
 	}
 
 	// Serialize child saving with parent closure before changing execution phase,
 	// so neither settlement can miss the other's uncommitted payload ownership.
-	if _, err := tx.ExecContext(ctx, `SELECT id FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = $2 FOR UPDATE`, finish.store.conversationID, turnID); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT id FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = $2 FOR UPDATE`, finish.conversationID, turnID); err != nil {
 		return nil, fmt.Errorf("lock comparison settlement: %w", err)
 	}
 
@@ -1205,7 +1205,7 @@ func (s *SessionService) finishTurn(ctx context.Context, turnID string, finish *
 	// and stop. Unprepared turns remain terminal-only.
 	if _, err := tx.ExecContext(ctx, `UPDATE shadow_turns SET input_closed = TRUE,
 terminal = CASE WHEN terminal <> '' THEN terminal WHEN (child_turn_id = '' AND jsonb_array_length(inputs) = 0) OR $3 = 'stopped' THEN $3 ELSE terminal END
-WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2`, finish.store.conversationID, turnID, cmp.Or(finish.outbound.Terminal, protocol.TerminalComplete)); err != nil {
+WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2`, finish.conversationID, turnID, cmp.Or(finish.outbound.Terminal, protocol.TerminalComplete)); err != nil {
 		return nil, inputPersistenceError{cause: fmt.Errorf("close mirrored input: %w", err)}
 	}
 
@@ -1215,7 +1215,7 @@ WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2`, finish.store.
     SELECT json_object_agg(key, COALESCE(r.value, p.value)) AS outbound FROM json_each($3::json) p FULL JOIN reply r USING (key)
 )
 UPDATE turns SET phase = $2, terminal = $4, updated_at_unix_ns = $5, outbound_json = f.outbound FROM final f
-WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntryNUL(outbound)), finish.terminal, timeUnixNano(time.Now()), turnRunning, finish.store.conversationID, protocol.ReplyStepKey(turnID))
+WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntryNUL(outbound)), finish.terminal, timeUnixNano(time.Now()), turnRunning, finish.conversationID, protocol.ReplyStepKey(turnID))
 	if err != nil {
 		return nil, err
 	}
@@ -1246,7 +1246,7 @@ WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntry
     JOIN steps i ON i.conversation_id = $1 AND starts_with(i.key, $2 || '/replay_input/') WHERE a.id = $2 AND a.terminal <> ''
 )
 UPDATE turns a SET replay = r.replay, record = CASE WHEN a.terminal <> '' THEN (`+turnRecordSQL+`)::json END, applied_input_ids = s.value::jsonb->'applied_input_ids'
-FROM steps s, replay r WHERE a.id = $2 AND s.conversation_id = $1 AND s.key = $2`, finish.store.conversationID, turnID); err != nil {
+FROM steps s, replay r WHERE a.id = $2 AND s.conversation_id = $1 AND s.key = $2`, finish.conversationID, turnID); err != nil {
 		return nil, fmt.Errorf("move turn record: %w", err)
 	}
 
@@ -1270,7 +1270,7 @@ INSERT INTO web_tabs (username, path, conversation_id, unread_at)
 SELECT s.username, `+tabPathSQL+`, c.conversation_id, now() FROM readers s JOIN conversations c ON c.conversation_id = $1
 LEFT JOIN web_tab_states p ON p.username = s.username AND p.viewing = $1 AND p.viewed_at >= now() - interval '10 seconds'
 WHERE p.username IS NULL
-ON CONFLICT (username, path) DO UPDATE SET unread_at = now(), conversation_id = excluded.conversation_id`, finish.store.conversationID, turnID, protocol.InboundPrincipalEmailMetadataKey, protocol.SourceWeb); err != nil {
+ON CONFLICT (username, path) DO UPDATE SET unread_at = now(), conversation_id = excluded.conversation_id`, finish.conversationID, turnID, protocol.InboundPrincipalEmailMetadataKey, protocol.SourceWeb); err != nil {
 		return nil, fmt.Errorf("mark turn senders unread: %w", err)
 	}
 
@@ -1288,7 +1288,7 @@ FROM shadow_turns t WHERE a.id = $1 AND t.child_turn_id = $1 AND $2 = 'stopped' 
 	}
 
 	for i := range finish.entries {
-		if _, err := appendSessionEntryDB(ctx, tx, finish.store.conversationID, &finish.entries[i]); err != nil {
+		if _, err := appendSessionEntryDB(ctx, tx, finish.conversationID, &finish.entries[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -1298,7 +1298,7 @@ FROM shadow_turns t WHERE a.id = $1 AND t.child_turn_id = $1 AND $2 = 'stopped' 
 	}
 
 	if finish.terminal != "" {
-		if err := s.indexTurnMessages(ctx, tx, finish.store.conversationID, turnID); err != nil {
+		if err := s.indexTurnMessages(ctx, tx, finish.conversationID, turnID); err != nil {
 			return nil, err
 		}
 	}
@@ -1309,7 +1309,7 @@ FROM shadow_turns t WHERE a.id = $1 AND t.child_turn_id = $1 AND $2 = 'stopped' 
 	}
 
 	if finish.accountGoal {
-		if _, err := tx.ExecContext(ctx, `UPDATE conversations SET goal_turns_used = goal_turns_used + 1, goal_status = CASE WHEN goal_max_turns > 0 AND goal_turns_used + 1 >= goal_max_turns THEN $1 ELSE $2 END, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (goal_status = '' OR goal_status = $2)`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(time.Now()), finish.store.conversationID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE conversations SET goal_turns_used = goal_turns_used + 1, goal_status = CASE WHEN goal_max_turns > 0 AND goal_turns_used + 1 >= goal_max_turns THEN $1 ELSE $2 END, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (goal_status = '' OR goal_status = $2)`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(time.Now()), finish.conversationID); err != nil {
 			return nil, fmt.Errorf("account goal turn: %w", err)
 		}
 	}
@@ -1323,24 +1323,24 @@ FROM shadow_turns t WHERE a.id = $1 AND t.child_turn_id = $1 AND $2 = 'stopped' 
 
 	switch {
 	case len(finish.entries) > 0:
-		_, errSettle = tx.ExecContext(ctx, `UPDATE turns SET note = $3 WHERE conversation_id = $1 AND claimed_by = $2 AND note = 'pending'`, finish.store.conversationID, turnID, noteConsumed)
+		_, errSettle = tx.ExecContext(ctx, `UPDATE turns SET note = $3 WHERE conversation_id = $1 AND claimed_by = $2 AND note = 'pending'`, finish.conversationID, turnID, noteConsumed)
 	case finish.hidden:
 		errSettle = tx.QueryRowContext(ctx, `WITH released AS (UPDATE turns SET claimed_by = '', wake = TRUE, wake_attempts = wake_attempts + 1,
 run_at_unix_ns = $4 + ($5::bigint[])[LEAST(wake_attempts + 1, 3)] WHERE conversation_id = $1 AND claimed_by = $2 AND note = $3 RETURNING wake_attempts)
-SELECT COALESCE(MIN(wake_attempts), 0) FROM released`, finish.store.conversationID, turnID, notePending, timeUnixNano(time.Now()), []int64{int64(time.Minute), int64(5 * time.Minute), int64(30 * time.Minute)}).Scan(&finish.retry)
+SELECT COALESCE(MIN(wake_attempts), 0) FROM released`, finish.conversationID, turnID, notePending, timeUnixNano(time.Now()), []int64{int64(time.Minute), int64(5 * time.Minute), int64(30 * time.Minute)}).Scan(&finish.retry)
 	default:
-		_, errSettle = tx.ExecContext(ctx, `UPDATE turns SET claimed_by = '', wake = FALSE WHERE conversation_id = $1 AND claimed_by = $2 AND note = $3`, finish.store.conversationID, turnID, notePending)
+		_, errSettle = tx.ExecContext(ctx, `UPDATE turns SET claimed_by = '', wake = FALSE WHERE conversation_id = $1 AND claimed_by = $2 AND note = $3`, finish.conversationID, turnID, notePending)
 	}
 
 	if errSettle != nil {
 		return nil, fmt.Errorf("settle background note claims: %w", errSettle)
 	}
 
-	if _, err := tx.ExecContext(ctx, deleteUnownedStepsSQL+`t.conversation_id = $1 AND (t.key = $2 OR starts_with(t.key, $2 || '/'))`, finish.store.conversationID, turnID); err != nil {
+	if _, err := tx.ExecContext(ctx, deleteUnownedStepsSQL+`t.conversation_id = $1 AND (t.key = $2 OR starts_with(t.key, $2 || '/'))`, finish.conversationID, turnID); err != nil {
 		return nil, fmt.Errorf("clear turn steps: %w", err)
 	}
 
-	if err := releaseShadowPayloads(ctx, tx, finish.store.conversationID, turnID); err != nil {
+	if err := releaseShadowPayloads(ctx, tx, finish.conversationID, turnID); err != nil {
 		return nil, err
 	}
 
@@ -1364,7 +1364,7 @@ func (f *turnFinish) settleInputs(ctx context.Context, tx stateStoreDB, turnID s
     CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item WHERE item->>'input_id' = q.input_id
     UNION ALL SELECT q.input_id FROM queued q JOIN turns a ON a.id = $2 AND a.applied_input_ids ? q.input_id
 )
-DELETE FROM turns q USING recorded r WHERE q.conversation_id = $1 AND q.phase = 'waiting' AND q.input_id = r.input_id`, f.store.conversationID, turnID)
+DELETE FROM turns q USING recorded r WHERE q.conversation_id = $1 AND q.phase = 'waiting' AND q.input_id = r.input_id`, f.conversationID, turnID)
 	if err != nil {
 		return nil, err
 	}
@@ -1433,7 +1433,7 @@ func (f *turnFinish) applyEffects(ctx context.Context, tx stateStoreDB, turnID s
 
 	var raw json.RawMessage
 
-	err := tx.QueryRowContext(ctx, `SELECT value FROM steps WHERE conversation_id = $1 AND key = $2`, f.store.conversationID, turnID+producerEffectsStep).Scan(&raw)
+	err := tx.QueryRowContext(ctx, `SELECT value FROM steps WHERE conversation_id = $1 AND key = $2`, f.conversationID, turnID+producerEffectsStep).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -1447,7 +1447,7 @@ func (f *turnFinish) applyEffects(ctx context.Context, tx stateStoreDB, turnID s
 		return fmt.Errorf("load producer effects: %w", err)
 	}
 
-	f.target, f.schedules, err = (stateDAO{db: tx}).applyProducerEffects(ctx, f.store.conversationID, effects)
+	f.target, f.schedules, err = (stateDAO{db: tx}).applyProducerEffects(ctx, f.conversationID, effects)
 
 	return err
 }
@@ -1459,7 +1459,7 @@ func (f *turnFinish) preserveStoppedInput(ctx context.Context, db stateStoreDB, 
 		return nil
 	}
 
-	_, err := appendQueriedEntries(ctx, db, f.store.conversationID, "stopped input", `SELECT `+turnEntrySQL+` FROM turns a
+	_, err := appendQueriedEntries(ctx, db, f.conversationID, "stopped input", `SELECT `+turnEntrySQL+` FROM turns a
 LEFT JOIN shadow_turns t ON t.child_conversation_id = a.conversation_id AND t.child_turn_id = a.id
 WHERE a.id = $1 AND COALESCE(a.record->>'response_id', '') = '' AND COALESCE(t.inbound_json, a.inbound_json)->>'Human' = 'true'
     AND jsonb_array_length(a.applied_input_ids) > 0`, turnID)
