@@ -6,12 +6,16 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,16 +104,28 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 }
 
 func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/auth.test", r.URL.Path)
+		assert.Equal(t, "xoxb", r.FormValue("token"))
+		w.Header().Set("Content-Type", "application/json")
+		_, err := io.WriteString(w, `{"ok":false,"error":"invalid_auth"}`)
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("ROCKETCLAW_SLACK_API_URL", server.URL+"/")
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	configData := fmt.Sprintf(
-		`{"workspace":%q,"database_url":"postgres://localhost/rocketclaw_test?sslmode=disable","slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
-		workspace,
+		`{"workspace":%q,"database_url":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
+		workspace, dsn,
 	)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))
 
-	err := runServe([]string{"--pprof=false"})
-	require.ErrorContains(t, err, "run rocketclaw")
+	err = runServe([]string{"--pprof=false"})
+	require.EqualError(t, err, "run rocketclaw: assemble frontends: start Slack connector: slack auth test failed: invalid_auth")
 }
 
 func TestBuildIdentityUsesOnlyAvailableBinaryMetadata(t *testing.T) {
