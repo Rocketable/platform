@@ -54,7 +54,7 @@ What was tried and why it was dropped:
 
 Two related limits are already written down in the tree. Leave them alone unless you are fixing them on purpose:
 
-- **Binary written straight to stdout comes back garbled.** just-bash's `exec()` turns stdout into text, so after that `café` and raw bytes look alike. Binary that goes to files or through pipes keeps its exact bytes, because the wrapper hands host-command output to just-bash as bytes (`bytesOutput`). The session tried four workarounds, and none of them worked or kept text correct: a group redirect, `exec >file`, `ctx.exec()`, and guessing the encoding. Exact stdout bytes need an upstream change (`wrapper.ts:103-105`, README "Emulated shell").
+- **Binary written straight to stdout comes back garbled.** just-bash's `exec()` turns stdout into text, so after that `café` and raw bytes look alike. Binary that goes to files or through pipes keeps its exact bytes, because the wrapper hands host-command output to just-bash as bytes (`bytesOutput`). The session tried four workarounds, and none of them worked or kept text correct: a group redirect, `exec >file`, `ctx.exec()`, and guessing the encoding. Exact stdout bytes need an upstream change (`wrapper.ts:105-106`, README "Emulated shell").
 - **`Emulated` fails closed.** An empty `CustomShell` means host bash. So `shell: emulated` sets `Emulated: true`, and a code path that never received the wrapper fails ("shell command path is required", `internal/rocketcode/shell.go:167`) rather than quietly running on the host (`internal/rocketcode/rocketcode.go:37-50`).
 
 ## Why This Matters
@@ -96,5 +96,5 @@ On a plain `npm install` all three exit 0 in roughly 30-120 ms. If `python3` exi
 
 ## Related
 
-- PR #755: Rocketable/platform "internal/rocketclaw: run shell: emulated agents in just-bash" (open as of this writing)
+- PR #755: Rocketable/platform "internal/rocketclaw: run shell: emulated agents in just-bash" (merged)
 - README "Emulated shell" section and `cmd/rocketclaw/CHEATSHEET.md` (`shell` frontmatter key)
