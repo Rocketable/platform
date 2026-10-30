@@ -583,7 +583,8 @@ func (s *SessionService) ForkOpenCodeSession(ctx context.Context, name string, s
 }
 
 // recordOpenCodeSession lists session in its Birth Space: the existing space spaceID names, or the
-// source conversation's. A sync may have listed it first, so a space fills a missing one.
+// source conversation's, which a fork also records as its origin. A sync may have listed it first,
+// so a space fills a missing one.
 func (s *SessionService) recordOpenCodeSession(ctx context.Context, name string, session *openCodeSession, spaceID, source string) (string, error) {
 	id := "opencode:" + name + ":" + session.ID
 
@@ -591,9 +592,9 @@ func (s *SessionService) recordOpenCodeSession(ctx context.Context, name string,
     SELECT id FROM web_spaces WHERE id = $10
     UNION ALL SELECT space_id FROM conversations WHERE conversation_id = $11
 )
-INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, model, remote_session, space_id)
-SELECT $1, $7, '', $6, FALSE, 'remote', $2, $3, $4, $5, FALSE, now(), $8, $9, max(id) FROM space
-ON CONFLICT (conversation_id) DO UPDATE SET space_id = excluded.space_id WHERE conversations.space_id IS NULL`, id, name, session.Title, session.Location.Directory, time.UnixMilli(session.Time.Updated).UTC(), KindRemote, session.Agent, session.model(), session.ID, spaceID, source)
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, model, remote_session, space_id, forked_from)
+SELECT $1, $7, '', $6, FALSE, 'remote', $2, $3, $4, $5, FALSE, now(), $8, $9, max(id), $11 FROM space
+ON CONFLICT (conversation_id) DO UPDATE SET space_id = COALESCE(conversations.space_id, excluded.space_id), forked_from = excluded.forked_from`, id, name, session.Title, session.Location.Directory, time.UnixMilli(session.Time.Updated).UTC(), KindRemote, session.Agent, session.model(), session.ID, spaceID, source)
 
 	return id, err
 }

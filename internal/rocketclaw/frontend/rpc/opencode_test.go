@@ -155,6 +155,17 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	require.NoError(t, openTestTurns(t, dsn).db.QueryRowContext(t.Context(), `SELECT space_id FROM conversations WHERE conversation_id = $1`, forked.Id).Scan(&forkSpace))
 	assert.Equal(t, spaces[0].ID, forkSpace, "a fork is born in its source's space")
 
+	forkedFrom := map[string]string{}
+
+	require.NoError(t, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
+		for _, row := range message.(*ListSessionsResponse).Sessions {
+			forkedFrom[row.GetId()] = row.GetForkedFrom()
+		}
+
+		return nil
+	}}))
+	assert.Equal(t, map[string]string{created.Id: "", forked.Id: created.Id}, forkedFrom, "the Web lists a fork with its source")
+
 	path := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte(forked.Id))
 	saved, err := sessions.SaveTabState(t.Context(), "alice", &backend.TabState{Space: spaces[0].ID, Tabs: []backend.Tab{{Path: path, Space: spaces[0].ID}}}, 0)
 	require.NoError(t, err)

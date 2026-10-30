@@ -1572,9 +1572,11 @@ const needsYou = <span className="ml-auto shrink-0 rounded-full bg-amber-200 px-
 
 // Waiting on this person's answer wins over the running turn that asks, which wins over background work, which
 // can wake the session after its turn. Only a turn not waiting on this person is working, so its title shimmers.
+// A forked session shows a fork glyph in place of the chat icon.
 function tabActivity(session: Session) {
-  const [activity, Icon] = session.asking ? ["Needs your answer", MessageSquare] as const : session.running ? ["Turn running", MessageSquare] as const : session.background ? ["Background work running", Hourglass] as const : ["", MessageSquare] as const;
-  return [[activity, session.unreadAt && "Unread"].filter(Boolean).join(", "), Icon, session.running && !session.asking] as const;
+  const Chat = session.forkedFrom ? GitFork : MessageSquare;
+  const [activity, Icon] = session.asking ? ["Needs your answer", Chat] as const : session.running ? ["Turn running", Chat] as const : session.background ? ["Background work running", Hourglass] as const : ["", Chat] as const;
+  return [[session.forkedFrom && "Forked session", activity, session.unreadAt && "Unread"].filter(Boolean).join(", "), Icon, session.running && !session.asking] as const;
 }
 
 function TabItem({ tab, description, chosen, rule, active, stop, shared, editing, endEdit, promote, close, openMenu }: { tab: Tab; description: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: MenuAnchor) => void }) {
@@ -2515,7 +2517,7 @@ function useSessionActions(session: Session | undefined, onSuccess?: () => void)
   // People tag remote OpenCode sessions freely and RocketClaw sessions only as their agent allows.
   const choices = session?.server ? [...tags] : agentTags[session?.agent ?? ""] ?? [];
   const items = session ? [
-    ...(session.forkedFrom ? [{ key: "origin", label: "Open original conversation", run: () => navigate(sessionPath(session.forkedFrom!)) }] : []),
+    ...(session.forkedFrom ? [{ key: "origin", label: "Open original conversation", run: () => navigate(rowPath({ id: session.forkedFrom!, kind: session.kind })) }] : []),
     { key: "name", label: "Name session", run: () => setCommand({ mode: "name", source: id }) },
     { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
     ...choices.map((tag) => ({ key: `tag-${tag}`, label: `${tags.has(tag) ? "Remove" : "Add"} tag ${tag}`, keep: true, run: () => update.mutate({ id, tag }) })),
