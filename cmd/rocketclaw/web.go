@@ -73,7 +73,7 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 			return listener.DialContext(ctx)
 		}))
 	handler := http.NewServeMux()
-	handler.Handle("/", rpc.NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, serverName(cfg)))
+	handler.Handle("/", rpc.NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, serverName(cfg), cfg.RocketClaws))
 	handler.Handle("/opencode/{name}/mcp", http.NewCrossOriginProtection().Handler(rt.OpenCodeMCP()))
 	httpServer := &http.Server{Handler: handler, TLSConfig: &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}}
 	server := grpc.NewServer()

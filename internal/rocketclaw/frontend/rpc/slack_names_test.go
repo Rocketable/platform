@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strings"
 	"testing"
 
@@ -33,7 +32,7 @@ func TestSlackNames(t *testing.T) {
 
 		return names
 	}}
-	cfg := &config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"}}
+	cfg := &config.Config{}
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
@@ -58,7 +57,7 @@ func TestSlackNames(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 	response := httptest.NewRecorder()
-	NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "").ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/SlackNames", strings.NewReader(`{"ids":["U1","S1","C1","Umissing"]}`)))
+	NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/SlackNames", strings.NewReader(`{"ids":["U1","S1","C1","Umissing"]}`)))
 	require.Equal(t, http.StatusOK, response.Code)
 
 	var body struct {

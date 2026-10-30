@@ -1,13 +1,15 @@
 import { captureException } from "@sentry/react";
-import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TranscriptEvent, VoiceSettings, Workflow } from "./types";
+import { hashKey, type QueryKey } from "@tanstack/react-query";
+import { server, serverURL } from "./navigation";
+import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TranscriptEvent, VoiceSettings, Workflow } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
 }
 
-export async function rpc<T>(method: string, input: object = {}, signal?: AbortSignal): Promise<T> {
+export async function rpc<T>(method: string, input: object = {}, signal?: AbortSignal, name = server()): Promise<T> {
   try {
-    const response = await fetch(`/api/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal });
+    const response = await fetch(`${serverURL(name)}/api/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal });
     const body = await response.json();
     if (!response.ok) throw new RPCError(body.message, body.code);
     return body;
@@ -66,11 +68,25 @@ export async function* sse<T>(url: string, init: RequestInit): AsyncGenerator<T>
   }
 }
 
+// Queries belong to the page's server unless their key starts with the server they belong to.
+export const queryKeyHash = (key: QueryKey) => hashKey(typeof key[0] === "object" ? key : [server(), ...key]);
+
+// SearchSessions on every server, each match tagged with its server. A remote that fails drops out; the local
+// server's failure fails the search.
+export async function searchAll(servers: string[], input: object, signal: AbortSignal): Promise<SearchSessionsResponse> {
+  // A remote gets 10 seconds, so one that is unreachable never holds up the others.
+  const replies = await Promise.all(servers.map((name) => rpc<SearchSessionsResponse>("SearchSessions", input, name ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : signal, name).then(
+    (reply) => ({ ...reply, matches: reply.matches.map((match) => ({ ...match, rocketclaw: name })), messages: reply.messages.map((match) => ({ ...match, rocketclaw: name })) }),
+    (error: Error) => { if (name) return undefined; throw error; })));
+  const found = replies.filter((reply) => reply !== undefined);
+  return { ...found[0], matches: found.flatMap((reply) => reply.matches), messages: found.flatMap((reply) => reply.messages), mentionIds: [...new Set(found.flatMap((reply) => reply.mentionIds))], principals: [...new Set(found.flatMap((reply) => reply.principals ?? []))] };
+}
+
 export const queries = {
   searchMessages: (query: string) => ({ queryKey: ["searchMessages", query], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<SearchMessagesResponse>("SearchMessages", { query }, signal)).matches }),
   slackName: (id: string) => ({ queryKey: ["slackName", id], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<SlackNamesResponse>("SlackNames", { ids: [id] }, signal)).names?.[id], retry: false, staleTime: (query: { state: { data: string | undefined } }) => query.state.data ? 8 * 60 * 60 * 1000 : 60_000 }),
-  protocol: () => ({ queryKey: ["protocol"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ protoSha256: string }>("Protocol", {}, signal)).protoSha256 }),
-  identity: () => ({ queryKey: ["identity"], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ username: string; principal?: string; justBashError?: string }>("Identity", {}, signal) }),
+  protocol: (name = server()) => ({ queryKey: [{ server: name }, "protocol"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ protoSha256: string }>("Protocol", {}, signal, name)).protoSha256 }),
+  identity: (name = server()) => ({ queryKey: [{ server: name }, "identity"], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ username: string; principal?: string; justBashError?: string }>("Identity", {}, signal, name) }),
   agents: (input?: { conversationId: string }) => ({ queryKey: ["agents", input], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<AgentChoices>("ListAgents", input, signal) }),
   skills: (input?: { agent: string }) => ({ queryKey: ["skills", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ skills: Skill[] }>("ListSkills", input, signal)).skills }),
   workflows: () => ({ queryKey: ["workflows"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ workflows: Workflow[] }>("ListWorkflows", {}, signal)).workflows }),
@@ -84,7 +100,7 @@ export const queries = {
   queue: (input: { id: string }) => ({ queryKey: ["queue", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ items: QueueItem[] }>("ListQueue", input, signal)).items }),
   // The server answers for the signed-in person; the username keeps one person's settings out of another's cache.
   voiceSettings: (username: string) => ({ queryKey: ["voiceSettings", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<VoiceSettings>("VoiceSettings", {}, signal) }),
-  tabs: (username: string) => ({ queryKey: ["tabs", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<SavedTabs>("Tabs", {}, signal) }),
+  tabs: (username: string, name = server()) => ({ queryKey: [{ server: name }, "tabs", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<SavedTabs>("Tabs", {}, signal, name) }),
 };
 
 export const mutations = {
@@ -104,5 +120,5 @@ export const mutations = {
   stopBackgroundJob: (input: { conversationId: string; jobId: string }) => rpc("StopBackgroundJob", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
   voiceSettings: (input: { action: "START" | "RESET" | "UPDATE"; conversationId?: string; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
-  tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; mute?: SavedTabs["mutes"][number]; unmute?: string }) => rpc<SavedTabs>("Tabs", input),
+  tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; mute?: SavedTabs["mutes"][number]; unmute?: string }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),
 };

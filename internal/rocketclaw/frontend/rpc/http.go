@@ -33,10 +33,10 @@ import (
 
 // NewHTTPHandler bridges the browser API to the local Web service, and each remote OpenCode
 // server's API to the browsers the Web admits under /oc/{server}/api/. serverName prefixes the page title.
-func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, posthog config.PostHogConfig, servers map[string]config.OpenCodeConfig, serverName string) http.Handler {
+func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, posthog config.PostHogConfig, servers map[string]config.OpenCodeConfig, serverName string, remotes map[string]config.RemoteRocketClawConfig) http.Handler {
 	mux := http.NewServeMux()
 	protection := http.NewCrossOriginProtection()
-	app := web.Handler(sentry, posthog, serverName)
+	app := web.Handler(sentry, posthog, serverName, remotes)
 
 	var gzipWriters sync.Pool
 
@@ -221,12 +221,23 @@ type tailnetWhoIs interface {
 
 // NewTailnetHandler signs each request in by its tailnet connection and refuses tagged or unknown callers,
 // except at coding servers' MCP endpoints, which check their callers' passwords themselves.
-// next must serve NewHTTPHandler, which appends the IP principal to this identity.
-func NewTailnetHandler(client tailnetWhoIs, next http.Handler) http.Handler {
+// A RocketClaw page served from this tailnet may call across sites: it gets CORS answers, and its
+// request reaches next as same-origin, so next's own origin checks hold for it. suffix is the
+// tailnet's MagicDNS suffix. next must serve NewHTTPHandler, which appends the IP principal to this identity.
+func NewTailnetHandler(client tailnetWhoIs, suffix string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if bridge, _ := path.Match("/opencode/*/mcp", r.URL.Path); bridge {
 			next.ServeHTTP(w, r)
 			return
+		}
+
+		// A tailnet page reads every answer, so a refusal reaches it as one rather than as an unreachable server.
+		origin := r.Header.Get("Origin")
+
+		page := tailnetPage(r, client, suffix, origin)
+		if page {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
 		}
 
 		who, err := client.WhoIs(r.Context(), r.RemoteAddr)
@@ -236,8 +247,46 @@ func NewTailnetHandler(client tailnetWhoIs, next http.Handler) http.Handler {
 		}
 
 		// Names may be non-ASCII, which only -bin metadata carries.
-		next.ServeHTTP(w, r.WithContext(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-tailnet-login-bin", who.UserProfile.LoginName, "rocketclaw-tailnet-name-bin", who.UserProfile.DisplayName)))
+		r = r.Clone(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-tailnet-login-bin", who.UserProfile.LoginName, "rocketclaw-tailnet-name-bin", who.UserProfile.DisplayName))
+
+		if page {
+			if r.Method == http.MethodOptions {
+				// The OpenCode view also sends PUT, PATCH and DELETE with its own headers.
+				w.Header().Set("Access-Control-Allow-Methods", r.Header.Get("Access-Control-Request-Method"))
+				w.Header().Set("Access-Control-Allow-Headers", r.Header.Get("Access-Control-Request-Headers"))
+				w.Header().Set("Access-Control-Max-Age", "7200")
+				w.WriteHeader(http.StatusNoContent)
+
+				return
+			}
+
+			r.Header.Set("Origin", "https://"+r.Host)
+			r.Header.Set("Sec-Fetch-Site", "same-origin")
+		}
+
+		next.ServeHTTP(w, r)
 	})
+}
+
+// tailnetPage reports whether origin is another page on this tailnet: https, and either under the
+// MagicDNS suffix or a Tailscale IP of a node here. An unknown suffix trusts no name.
+func tailnetPage(r *http.Request, client tailnetWhoIs, suffix, origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == r.Host {
+		return false
+	}
+
+	host := parsed.Hostname()
+	if suffix != "" && strings.HasSuffix(host, "."+suffix) {
+		return true
+	}
+
+	if addr, err := netip.ParseAddr(host); err == nil {
+		_, err = client.WhoIs(r.Context(), addr.String())
+		return err == nil
+	}
+
+	return false
 }
 
 // httpJSON writes a JSON body, gzip-compressed when the client accepts it.

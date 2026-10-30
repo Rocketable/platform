@@ -16,7 +16,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,7 +38,7 @@ func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := rpc.NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "")
+	handler := rpc.NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)
 
 	for _, prefix := range []string{"/debug/pprof/", "/s/debug/pprof/"} {
 		for _, path := range []string{"", "heap", "allocs", "goroutine", "profile?seconds=1", "trace?seconds=0.01", "cmdline", "symbol", "block", "mutex", "unknown"} {
@@ -107,7 +106,18 @@ func TestWebRPCTailnetNode(t *testing.T) {
 	require.FileExists(t, filepath.Join(configDir, "rocketclaw", "tsnet-rocketclaw-test", "tailscaled.state"))
 }
 
+// fakeTailscaleWhois puts a tailscale CLI first on PATH that names the loopback caller alice.
+func fakeTailscaleWhois(t *testing.T) {
+	t.Helper()
+
+	bin := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "tailscale"), []byte("#!/bin/sh\n[ \"$*\" = \"whois --json 127.0.0.1\" ] || exit 1\necho '{\"UserProfile\":{\"LoginName\":\"alice\"}}'\n"), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestWebRPC(t *testing.T) {
+	fakeTailscaleWhois(t)
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
@@ -116,7 +126,7 @@ func TestWebRPC(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-	rt := &backend.Runtime{Sessions: sessions, Cfg: config.NewLockedConfig(&config.Config{Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}), Log: logger}
+	rt := &backend.Runtime{Sessions: sessions, Cfg: config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), Log: logger}
 
 	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -164,6 +174,8 @@ func TestWebRPC(t *testing.T) {
 }
 
 func TestWebRPCProxiesAndSyncsOpenCode(t *testing.T) {
+	fakeTailscaleWhois(t)
+
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if user, password, ok := r.BasicAuth(); !ok || user != "opencode" || password != "pw" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -194,7 +206,7 @@ func TestWebRPCProxiesAndSyncsOpenCode(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{ListenAddress: address}, WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenCode: servers}
+	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{ListenAddress: address}, OpenCode: servers}
 	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Sessions: sessions}
 	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)

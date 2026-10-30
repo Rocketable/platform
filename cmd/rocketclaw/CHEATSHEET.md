@@ -138,7 +138,7 @@ Mentions in `#ops` start conversations with agent `main`. Switch a conversation 
 }
 ```
 
-`opencode` lists remote OpenCode servers whose root sessions appear in the Web session list. Names follow the `mcp_servers` rule. Each entry needs `url` (the server's `opencode serve` address), and `password` (a pairing token: `opencode pair`, then open the `/auth/connect/<code>` link with `Accept: application/json`). The Web reaches each server's API under `/oc/<name>/api/` on its own listeners and adds the password itself; the browser never holds it. That route admits only callers the Web admits (`web_users` or a Tailscale user), and each of them gets full control of that OpenCode server, including its shell. Changing `opencode` requires restart.
+`opencode` lists remote OpenCode servers whose root sessions appear in the Web session list. Names follow the `mcp_servers` rule. Each entry needs `url` (the server's `opencode serve` address), and `password` (a pairing token: `opencode pair`, then open the `/auth/connect/<code>` link with `Accept: application/json`). The Web reaches each server's API under `/oc/<name>/api/` on its own listeners and adds the password itself; the browser never holds it. That route admits only callers the Web admits (Tailscale users), and each of them gets full control of that OpenCode server, including its shell. Changing `opencode` requires restart.
 
 ```json
 "opencode": {
@@ -182,7 +182,7 @@ Attachment originals use the top-level `attachments` setting: `{"driver":"filesy
 
 ## Web Voice
 
-Voice has no config fields. Every agent uses the default `openai` provider for audio, independently of its model: `api_key` uses the public GPT-Live API (`gpt-live-1`, about $0.05 per minute including silence); `chatgpt` uses its `rocketclaw oai login` credential on Codex's unofficial route (`gpt-live-1-codex`). The microphone needs HTTPS, or a browser on the RocketClaw machine at `http://127.0.0.1:3000` (with the local mapping below). For a phone or another device, RocketClaw runs its own Tailscale node (tsnet):
+Voice has no config fields. Every agent uses the default `openai` provider for audio, independently of its model: `api_key` uses the public GPT-Live API (`gpt-live-1`, about $0.05 per minute including silence); `chatgpt` uses its `rocketclaw oai login` credential on Codex's unofficial route (`gpt-live-1-codex`). The microphone needs HTTPS. For a phone or another device, RocketClaw runs its own Tailscale node (tsnet):
 
 | Step | Setting |
 | --- | --- |
@@ -193,7 +193,7 @@ Voice has no config fields. Every agent uses the default `openai` provider for a
 | Phone | `https://<hostname>.<tailnet>.ts.net/voice`, signed in as the phone's Tailscale user. Tagged devices are refused. |
 | Tailnet rule | Recommended: tag the node and admit only named users to it, with nothing outbound. An untagged node acts as its owner. Untagged node keys expire after 180 days. |
 | State | `rocketclaw/tsnet-<hostname>` under the OS user config directory, outside the workspace. Tailscale log upload is off. Never `tailscale funnel`. |
-| Local browser | `"web_users": {"127.0.0.1": "<your Tailscale login>"}` for `https://127.0.0.1:3000`. The `listen_address` listener serves HTTPS (`web.tls_cert_file` and `web.tls_key_file`, or a self-signed certificate made at each start), uses `web_users`, then `tailscale whois`, and never trusts `Tailscale-User-*` headers. |
+| Local browser | Open this machine's Tailscale address, `https://<tailscale-ip>:3000`; `127.0.0.1` has no Tailscale user. The `listen_address` listener serves HTTPS (`web.tls_cert_file` and `web.tls_key_file`, or a self-signed certificate made at each start), identifies browsers with `tailscale whois`, and never trusts `Tailscale-User-*` headers. |
 
 Local processes, agent tools included, can still act as the owner through the `listen_address` listener or this machine's own Tailscale address.
 

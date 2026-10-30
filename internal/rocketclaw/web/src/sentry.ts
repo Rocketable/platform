@@ -27,8 +27,10 @@ if (sentryConfig) {
     integrations: [globalHandlersIntegration(), linkedErrorsIntegration(), dedupeIntegration(), captureConsoleIntegration({ levels: ["error"] }), browserTracingIntegration({
       shouldCreateSpanForRequest: (url) => !refreshed.has(new URL(url, location.href).pathname),
       beforeStartSpan: (options) => {
-        const prefix = ["/s/", "/oc/", "/search/"].find((start) => path.startsWith(start));
-        return { ...options, name: prefix ? `${prefix}:id` : path };
+        // A remote's page under /r/<name> is named as that page.
+        const page = path.replace(/^\/r\/[^/]+(?=\/)/, "");
+        const prefix = ["/s/", "/oc/", "/search/"].find((start) => page.startsWith(start));
+        return { ...options, name: prefix ? `${prefix}:id` : page };
       },
     }), interactionsIntegration()],
     tracePropagationTargets: [],

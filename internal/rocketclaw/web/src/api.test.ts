@@ -1,5 +1,6 @@
 import { expect, test, spyOn } from "bun:test";
-import { listSessions, mutations, queries, rpc } from "./api";
+import { listSessions, mutations, queries, queryKeyHash, rpc } from "./api";
+import { at, pagePath } from "./navigation";
 import { readSessionEnumeration, shouldCommitSnapshot } from "./session-list";
 import type { HistoryView, SessionBatch } from "./types";
 
@@ -151,4 +152,25 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
     fetchMock.mockImplementation(Object.assign(async () => Response.json({ code: 16, message: "denied" }, { status: 401 }), { preconnect: fetch.preconnect }));
     await expect(queries.identity().queryFn({ signal })).rejects.toMatchObject({ code: 16, message: "denied" });
   } finally { fetchMock.mockRestore(); }
+});
+
+test("a page under /r/<name> calls that remote and keeps its own caches", async () => {
+  const requests: string[] = [];
+  const fetchMock = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (url: URL | RequestInfo) => {
+    requests.push(String(url));
+    return Response.json({ protoSha256: "hash" });
+  }, { preconnect: fetch.preconnect }));
+  const local = queryKeyHash(["history", { id: "visible" }]);
+  Object.assign(globalThis, { location: new URL("http://localhost/r/work/s/visible"), document: { getElementById: () => ({ textContent: JSON.stringify([{ name: "work", url: "https://work.example" }]) }) } });
+  try {
+    await rpc("History", { id: "visible" });
+    await queries.protocol("").queryFn({ signal: new AbortController().signal });
+    expect(requests).toEqual(["https://work.example/api/History", "/api/Protocol"]);
+    expect([pagePath(), at("/agents"), at("/agents", "")]).toEqual(["/s/visible", "/r/work/agents", "/agents"]);
+    expect(queryKeyHash(["history", { id: "visible" }])).not.toBe(local);
+    expect(queryKeyHash(queries.identity("").queryKey)).toBe(queryKeyHash([{ server: "" }, "identity"]));
+  } finally {
+    Object.assign(globalThis, { location: new URL("http://localhost/") });
+    fetchMock.mockRestore();
+  }
 });

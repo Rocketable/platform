@@ -18,7 +18,7 @@ const javascript = new Bun.Transpiler({ loader: "tsx" }).transformSync(`
 const { tabsCall, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 
 test("personal save replies retain intervening Shared edits and mutes, including refused saves", async () => {
-  const key = ["tabs", "tester"];
+  const key = [{ server: "" }, "tabs", "tester"];
   const initial: SavedTabs = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "1", shared: [], mutes: [] };
   for (const state of [true, false]) for (const stale of [false, true]) for (const changed of ["neither", "shared", "mutes"] as const) {
     queryClient.clear();
@@ -28,7 +28,7 @@ test("personal save replies retain intervening Shared edits and mutes, including
     const reply: SavedTabs = { ...initial, revision: "2", stale, state: { ...initial.state, last: { main: "/voice" } }, shared: [{ space: "main", path: "/voice" }], mutes: [{ path: "/s/old", until: "" }] };
     const current: SavedTabs = { ...initial, shared: changed === "shared" ? [{ space: "main", path: "/search/new" }] : initial.shared, mutes: changed === "mutes" ? [{ path: "/s/new", until: "" }] : initial.mutes };
     try {
-      const pending = tabsCall(state ? { state: initial.state, revision: 1 } : { mute: { path: "/s/old", until: "" } });
+      const pending = tabsCall("", state ? { state: initial.state, revision: 1 } : { mute: { path: "/s/old", until: "" } });
       queryClient.setQueryData(key, current);
       response.resolve(Response.json(reply));
       expect(await pending).toEqual(reply);

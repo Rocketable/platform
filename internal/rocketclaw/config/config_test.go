@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +44,6 @@ func TestLoadAppliesDefaults(t *testing.T) {
 
 	assert.Equal(t, "api_key", cfg.OpenAI.Auth)
 	assert.Empty(t, cfg.AutoApproverModel)
-	assert.Empty(t, cfg.WebUsers)
 	assert.Equal(t, "0.0.0.0:3000", cfg.Web.ListenAddress)
 	cfg.Web.ListenAddress = "127.0.0.1:8080"
 	require.NoError(t, cfg.Validate())
@@ -171,40 +169,6 @@ func TestLoadPreservesModelConfig(t *testing.T) {
 
 	assert.Equal(t, "gpt-6.1-sol", cfg.AutoApproverModel)
 	assert.Equal(t, map[string]string{"coding-high": "software-development-sol", "review-fast": "gpt-5.6-luna"}, cfg.Models)
-}
-
-func TestLoadWebUsers(t *testing.T) {
-	for _, tt := range []struct {
-		name, users, wantErr string
-	}{
-		{name: "mapped", users: `{"192.0.2.1":"alice","2001:db8::1":"bob"}`},
-		{name: "empty", users: `{}`},
-		{name: "invalid IP", users: `{"alice":"alice"}`, wantErr: "parse config JSON"},
-		{name: "empty IP", users: `{"":"alice"}`, wantErr: "web_users"},
-		{name: "empty username", users: `{"192.0.2.1":""}`, wantErr: "web_users"},
-		{name: "untrimmed username", users: `{"192.0.2.1":" alice "}`, wantErr: "web_users"},
-		{name: "nonstring username", users: `{"192.0.2.1":123}`, wantErr: "parse config JSON"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "rocketclaw.json")
-			content := fmt.Sprintf(`{"database_url":"postgres://localhost/rocketclaw_test", "openai":{"api_key":"test"}, "slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}, "web_users":%s}`, tt.users)
-			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-
-			cfg, err := Load(path, "", AWSFetcher{})
-			if tt.wantErr != "" {
-				require.ErrorContains(t, err, tt.wantErr)
-				return
-			}
-
-			require.NoError(t, err)
-
-			if tt.name == "mapped" {
-				require.Equal(t, map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice", netip.MustParseAddr("2001:db8::1"): "bob"}, cfg.WebUsers)
-			} else {
-				require.Empty(t, cfg.WebUsers)
-			}
-		})
-	}
 }
 
 func TestLoadPreservesNamedProviders(t *testing.T) {
@@ -623,6 +587,36 @@ func TestValidateOpenCode(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, cfg.OpenCode, clone(cfg).OpenCode)
+		})
+	}
+}
+
+func TestValidateRocketClaws(t *testing.T) {
+	for _, tt := range []struct {
+		name, key, url string
+		wantErr        bool
+	}{
+		{name: "valid", key: "work-2", url: "https://rocketclaw.tail1234.ts.net"},
+		{name: "valid port", key: "work", url: "https://rocketclaw.tail1234.ts.net:8443"},
+		{name: "uppercase name", key: "Work", url: "https://rocketclaw.tail1234.ts.net", wantErr: true},
+		{name: "slash name", key: "a/b", url: "https://rocketclaw.tail1234.ts.net", wantErr: true},
+		{name: "http", key: "work", url: "http://rocketclaw.tail1234.ts.net", wantErr: true},
+		{name: "path", key: "work", url: "https://rocketclaw.tail1234.ts.net/", wantErr: true},
+		{name: "empty query", key: "work", url: "https://rocketclaw.tail1234.ts.net?", wantErr: true},
+		{name: "empty fragment", key: "work", url: "https://rocketclaw.tail1234.ts.net#", wantErr: true},
+		{name: "no host", key: "work", url: "https://", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.RocketClaws = map[string]RemoteRocketClawConfig{tt.key: {URL: tt.url}}
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				require.ErrorContains(t, err, fmt.Sprintf("rocketclaws[%q]", tt.key))
+				return
+			}
+
+			require.NoError(t, err)
 		})
 	}
 }

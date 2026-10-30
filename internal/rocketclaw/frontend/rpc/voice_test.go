@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,7 +171,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	t.Cleanup(openai.Close)
 
 	cfg := &config.Config{
-		DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"},
+		DatabaseURL: dsn, Workspace: t.TempDir(),
 		OpenAI:    config.OpenAIConfig{APIKey: voiceSecret, APIBaseURL: openai.URL + "/v1"},
 		Providers: map[string]config.OpenAIConfig{"nokey": {APIBaseURL: openai.URL + "/v1"}, "chat": {Auth: "chatgpt"}, "stale": {Auth: "chatgpt"}, "worker": {APIKey: "worker-key", APIBaseURL: openai.URL + "/worker"}},
 	}
@@ -214,7 +213,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 	h.conn = connection
-	web := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, ""))
+	web := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "", nil))
 	t.Cleanup(web.Close)
 	h.url = web.URL
 

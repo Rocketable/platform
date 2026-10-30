@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -30,7 +29,7 @@ import (
 func TestPages(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
@@ -87,11 +86,11 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "")
+	handler := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)
 	app := httptest.NewRecorder()
 	handler.ServeHTTP(app, httptest.NewRequest(http.MethodGet, "/", http.NoBody))
 
-	const admitted, denied = "127.0.0.1:1234", "192.0.2.1:1234"
+	const admitted, denied = "127.0.0.1:1234", "192.0.2.99:1234"
 	for _, tc := range []struct {
 		path, address string
 		code          int
@@ -163,7 +162,7 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 		{Agent: "reporter/review", Space: "Ops Team", Path: "a b/c.html"},
 	}}, listed), "unexpected pages: %v", listed)
 
-	deniedCtx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+	deniedCtx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.99"))
 	_, err = invoke[Page](deniedCtx, connection, "GetPage", &PageRequest{Agent: "reporter", Path: "x.html"})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 	_, err = invoke[ListPagesResponse](deniedCtx, connection, "ListPages", &ListPagesRequest{})
@@ -183,7 +182,7 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 func TestPagesRealBrowser(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -224,7 +223,7 @@ func TestPagesRealBrowser(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 	// Pages have an opaque origin, so their requests carry Origin: null; their POSTs' answers are recorded.
-	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "")
+	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "", nil)
 
 	var (
 		mu      sync.Mutex

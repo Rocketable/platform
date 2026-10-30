@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,7 +89,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 			assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"resp","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"`+text+`","annotations":[]}]}]}}`)))
 		}))
 		t.Cleanup(provider.Close)
-		cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
+		cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
 		root, err := os.OpenRoot(cfg.Workspace)
 
 		require.NoError(t, err)
@@ -171,7 +170,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		require.NoError(t, err)
 
 		html = regexp.MustCompile(`<script type="module" src="[^"]+"></script>`).ReplaceAll(html, []byte(`<script type="module" src="/current.js"></script>`))
-		handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "")
+		handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "", nil)
 		httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.URL.Path == "/current.js":
@@ -271,7 +270,7 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 	}}
 	require.NoError(t, seeded.UpsertActiveTurn(t.Context(), checkpoint))
 
-	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	view, err := server.history(ctx, &HistoryRequest{Id: "chat"})
 	require.NoError(t, err)
@@ -372,7 +371,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 	require.NoError(t, err)
 
 	engine := &mockBackend{JustBashInstallErrorFunc: noJustBashError}
-	server := &Server{sessions: sessions, cfg: config.NewLockedConfig(cfg), backend: engine, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{sessions: sessions, cfg: config.NewLockedConfig(cfg), backend: engine}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	initial, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1})
 	require.NoError(t, err)
@@ -423,7 +422,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 func TestReloadRealBackendBrowser(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -460,9 +459,9 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "")
+	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "", nil)
 	request := httptest.NewRequest(http.MethodPost, "/api/Reload", strings.NewReader(`{"reason":"updated assets"}`))
-	request.RemoteAddr = "192.0.2.1:1234"
+	request.RemoteAddr = "192.0.2.99:1234"
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	require.Equal(t, http.StatusUnauthorized, response.Code)
@@ -508,7 +507,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 		assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"branch","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"reply","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"branch reply","annotations":[]}]}]}}`)))
 	}))
 	t.Cleanup(provider.Close)
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -561,7 +560,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	httpServer := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, ""))
+	httpServer := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "", nil))
 	t.Cleanup(httpServer.Close)
 	runWebTest(t, "src/revert-transport.test.ts", "ROCKETCLAW_REVERT_TEST_URL="+httpServer.URL)
 
@@ -595,7 +594,7 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
-	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
 	var keys []string
@@ -705,7 +704,7 @@ func TestHistoryFollowsHiddenRun(t *testing.T) {
 	_, err = db.ExecContext(t.Context(), `UPDATE conversations SET reports_to = 'chat' WHERE conversation_id = 'external_mcp:main:run'`)
 	require.NoError(t, err)
 
-	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
 	_, err = sessions.AppendEntryID(ctx, "chat", &harness.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"person"}`)}})
@@ -755,7 +754,7 @@ func TestHistoryLinksBackgroundTaskSubagent(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
-	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
 	_, err = sessions.AppendEntryID(ctx, "chat", &harness.SessionEntry{Type: "turn", TurnID: "turn", ResponseID: "response", ReplayInput: []json.RawMessage{
@@ -796,7 +795,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("public", backend.ThreadState{Agent: "main"}))
-	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	checkpoint := &testCheckpoint{TurnID: "turn", ConversationKey: "public", Agent: "main", DisplayModel: "root/model", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","input_id":"input","content":"ask"}`),
@@ -1176,7 +1175,7 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
-	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
 	review := func(callID string, entries ...*harness.SessionEntry) {
@@ -1304,7 +1303,7 @@ func BenchmarkHistoryReviewedScripts(b *testing.B) {
 	require.NoError(b, err)
 	b.Cleanup(func() { require.NoError(b, sessions.Stop()) })
 	require.NoError(b, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
-	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg), usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
 	ctx := metadata.NewIncomingContext(b.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	transcript := strings.Repeat("An earlier turn of the reviewed conversation.\n", 300<<10/46)
 

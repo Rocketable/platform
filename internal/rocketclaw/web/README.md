@@ -137,7 +137,7 @@ CSS, and a self-hosted Inter font. `cmd/rocketclaw` embeds and serves that direc
 alongside the Go HTTP API. Production needs no Bun, Node, or Next server.
 
 See [Web conversation transport](../frontend/rpc/README.md)
-for startup commands, browser IP mappings and the transport contract. The Go
+for startup commands, browser identity and the transport contract. The Go
 handler takes identity from the browser connection; forwarded headers cannot
 select a user. Serve it directly to browsers rather than through another HTTP
 reverse proxy. Phones reach it over HTTPS through RocketClaw's own Tailscale node;
@@ -362,15 +362,14 @@ The Config page shows the configured Web username and the connected device's
 Tailscale user login. RocketClaw runs `tailscale whois --json` on the browser's
 connection IP; the `tailscale` executable must be on its PATH and able to reach
 the local Tailscale service. Missing or unsuccessful lookups display
-"Unavailable". Explicit `web_users` mappings take precedence for admission and
-message attribution; unmapped browsers are admitted by their Tailscale login.
+"Unavailable". Browsers are admitted by their Tailscale login.
 New messages use `UserProfile.DisplayName`, falling back to the admitted login
 when the display name is missing or blank. Ownership, routing, and Config's
 Tailscale display remain login-based. Failed lookups, missing logins, and tagged
-devices without a manual mapping are denied. Successful WHOIS results are cached
+devices are denied. Successful WHOIS results are cached
 for five minutes. These IP rules apply to the `web.listen_address` listener. On the
 `web.tsnet` listener the Tailscale node identifies each connection itself: it
-refuses tagged or unknown devices, never consults `web_users` or the CLI, and the
+refuses tagged or unknown devices, never consults the CLI, and the
 Config page shows the connection's login.
 
 Oxlint runs `@shadcn/lint` with `no-restyle` enabled, including inside the UI
@@ -388,6 +387,32 @@ tests fail unless their Go test servers are running. `go test` in
 `rocketclaw` job in `.github/workflows/test.yml` runs them. Use the isolated
 PostgreSQL and browser-test instructions in the transport README to exercise
 those paths. Keep temporary test artifacts under the repository's `.tmp/`.
+
+## Remote RocketClaws
+
+The page lists the remotes the local config names (see the
+[top-level README](../../../README.md#remote-rocketclaws)) from a `rocketclaws`
+script tag in `index.html`. A remote's views live under `/r/<name>/`, followed by
+that server's own path, so `/r/work/s/<id>` is chat `<id>` on `work`.
+`navigation.tsx` owns the rule: `usePathname` returns the path without the
+prefix, and `navigate` and `Link` keep the page's server unless told another.
+Under a remote, every RPC, the session stream, uploads, downloads, Voice, hosted
+page frames and the OpenCode view use that remote's origin, and the remote
+signs the browser in itself. Query keys belong to the page's server unless they
+start with `{ server }`.
+
+The session list polls each server on its own schedule and merges their rows by
+recency; a row is its chat on its server. `viewing` goes only to the page's
+server. A remote that stops answering keeps its rows, greyed and offline; only a
+refusal clears them. Search fans out to every server, and a failing remote drops
+out. Notifications check each row against its own server's tabs and mutes: the
+live ones for the page's server, the saved ones for others. The space picker
+lists each server with its spaces, and choosing another server's space opens
+that server's view in that space.
+
+The local server's protocol change reloads the page. A remote that never
+answered shows why it is unavailable, one that stopped answering shows it is
+offline, and one on another protocol keeps working with a notice.
 
 ## Tabs
 

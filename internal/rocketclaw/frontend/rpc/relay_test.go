@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strings"
 	"testing"
 
@@ -42,6 +41,7 @@ func (u *proxyUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Set-Cookie", "opencode_session=secret")
+	w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin")) // OpenCode answers its own CORS.
 
 	switch r.URL.Path {
 	case "/api/event":
@@ -68,7 +68,7 @@ func (u *proxyUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func startProxyTestRPC(t *testing.T, upstream string) http.Handler {
 	t.Helper()
 
-	cfg := &config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("192.0.2.10"): "alice", netip.MustParseAddr("127.0.0.1"): "alice"}}
+	cfg := &config.Config{}
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
@@ -92,7 +92,7 @@ func startProxyTestRPC(t *testing.T, upstream string) http.Handler {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	return NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, map[string]config.OpenCodeConfig{"box": {URL: upstream, Password: "pw"}}, "")
+	return NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, map[string]config.OpenCodeConfig{"box": {URL: upstream, Password: "pw"}}, "", nil)
 }
 
 func TestOpenCodeProxy(t *testing.T) {
@@ -197,7 +197,7 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 
 		return &apitype.WhoIsResponse{Node: node, UserProfile: &tailcfg.UserProfile{LoginName: "zoe@example.com"}}, nil
 	}}
-	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, startProxyTestRPC(t, upstream.URL)))
+	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, "tail1234.ts.net", startProxyTestRPC(t, upstream.URL)))
 	t.Cleanup(tailnet.Close)
 
 	for _, listener := range []*httptest.Server{web, tailnet} {
@@ -233,6 +233,19 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 	_ = response.Body.Close()
 
 	assert.Equal(t, http.StatusOK, response.StatusCode, "a same-origin request over TLS")
+
+	// A RocketClaw page elsewhere on the tailnet reaches OpenCode, with only RocketClaw's CORS answer.
+	request, err = http.NewRequestWithContext(t.Context(), http.MethodDelete, tailnet.URL+"/oc/box/api/session/ses_a", http.NoBody)
+	require.NoError(t, err)
+	request.Header.Set("Origin", "https://local.tail1234.ts.net")
+
+	response, err = tailnet.Client().Do(request)
+	require.NoError(t, err)
+
+	_ = response.Body.Close()
+
+	assert.Equal(t, http.StatusOK, response.StatusCode, "a tailnet page passes the relay's origin check")
+	assert.Equal(t, []string{"https://local.tail1234.ts.net"}, response.Header.Values("Access-Control-Allow-Origin"))
 
 	tagged = true
 	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, tailnet.URL+"/oc/box/api/session", http.NoBody)

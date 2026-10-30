@@ -11,6 +11,7 @@ import (
 	"html"
 	"io"
 	"io/fs"
+	"maps"
 	"mime"
 	"net/http"
 	"path"
@@ -46,7 +47,8 @@ func release(build *debug.BuildInfo) string {
 
 // Handler serves application routes and compiled assets without a frontend runtime.
 // A non-empty serverName prefixes the page title so browser tabs tell servers apart.
-func Handler(sentry config.SentryConfig, posthog config.PostHogConfig, serverName string) http.Handler {
+// The page lists remotes by name and origin; their views live under /r/{name}/.
+func Handler(sentry config.SentryConfig, posthog config.PostHogConfig, serverName string, remotes map[string]config.RemoteRocketClawConfig) http.Handler {
 	files, _ := fs.Sub(assets, "dist")
 	ocFiles, _ := fs.Sub(assets, "oc-dist")
 
@@ -70,6 +72,21 @@ func Handler(sentry config.SentryConfig, posthog config.PostHogConfig, serverNam
 		index = strings.Replace(index, "</head>", `<script id="posthog-config" type="application/json">`+string(data)+`</script></head>`, 1)
 	}
 
+	if len(remotes) > 0 {
+		type remote struct {
+			Name string `json:"name"`
+			URL  string `json:"url"`
+		}
+
+		list := make([]remote, 0, len(remotes))
+		for _, name := range slices.Sorted(maps.Keys(remotes)) {
+			list = append(list, remote{name, remotes[name].URL})
+		}
+
+		data, _ := json.Marshal(list)
+		index = strings.Replace(index, "</head>", `<script id="rocketclaws" type="application/json">`+string(data)+`</script></head>`, 1)
+	}
+
 	page = []byte(index)
 
 	var gzipWriters sync.Pool
@@ -77,7 +94,7 @@ func Handler(sentry config.SentryConfig, posthog config.PostHogConfig, serverNam
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 
-		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/search", "/voice", "/pages", "/shortcuts"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/search/") || strings.HasPrefix(r.URL.Path, "/s/") || strings.HasPrefix(r.URL.Path, "/oc/") || strings.HasPrefix(r.URL.Path, "/skills/") || strings.HasPrefix(r.URL.Path, "/pages/") || strings.HasPrefix(r.URL.Path, "/cron/") {
+		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/search", "/voice", "/pages", "/shortcuts"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/search/") || strings.HasPrefix(r.URL.Path, "/s/") || strings.HasPrefix(r.URL.Path, "/r/") || strings.HasPrefix(r.URL.Path, "/oc/") || strings.HasPrefix(r.URL.Path, "/skills/") || strings.HasPrefix(r.URL.Path, "/pages/") || strings.HasPrefix(r.URL.Path, "/cron/") {
 			serveFile(w, r, "index.html", page, "assets", &gzipWriters)
 
 			return

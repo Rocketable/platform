@@ -13,12 +13,12 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } fro
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
-import { queries, mutations, listSessions, rpc, RPCError } from "./api";
+import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCError } from "./api";
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
 import { BellOff, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, Hourglass, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
-import Link, { usePathname, useSearch, navigate } from "./navigation";
+import Link, { usePathname, useSearch, useServer, navigate, pagePath, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { flushSync } from "react-dom";
@@ -56,6 +56,7 @@ import {
 } from "@/session-list";
 
 const queryClient = new QueryClient({
+  defaultOptions: { queries: { queryKeyHashFn: queryKeyHash } },
   queryCache: new QueryCache({ onError: (error) => { captureException(error); } }),
   mutationCache: new MutationCache({ onError: (error) => { captureException(error); } }),
 });
@@ -69,6 +70,17 @@ function sessionPath(id: string) {
 // A remote OpenCode session opens at /oc/, so its path says what it is before the session list arrives.
 function rowPath(session: { id: string; kind?: ConversationKind }) {
   return session.kind === "REMOTE_OPENCODE" ? `/oc/${encodeSessionId(session.id)}` : sessionPath(session.id);
+}
+
+// A row is its chat on its server; a local row keeps its bare ID.
+function rowKey(id: string, server?: string) {
+  return server ? `${server}/${id}` : id;
+}
+
+// A row of this server opens in a tab here; another server's opens on that server, whose tab rules pick its space.
+function openRow(tabs: { open: (path: string) => void }, row: Session) {
+  if ((row.rocketclaw ?? "") === server()) tabs.open(rowPath(row));
+  else navigate(rowPath(row), false, row.rocketclaw ?? "");
 }
 
 // pathSession is the session a /s/ or /oc/ path opens, else "".
@@ -90,7 +102,7 @@ function panelHref(id?: string, panel: "delegation" | "skill" | "shadow" = "dele
   if (id) params.set(panel, id);
   if (reason !== undefined) params.set("reason", reason);
   if (turn) params.set("answer", turn);
-  return `${location.pathname}${params.size ? `?${params}` : ""}`;
+  return `${pagePath()}${params.size ? `?${params}` : ""}`;
 }
 
 function useMedia(query: string) {
@@ -154,22 +166,14 @@ const dollarCommands = [
 ];
 
 function dollarMatches(text: string, skills: { name: string; description?: string }[], workflows: { name: string; description?: string }[]) {
-  const workflowQuery = /^\$workflow(?:[\t ]+([^\s]*))?$/i.exec(text);
-  if (workflowQuery) {
-    return workflows.flatMap((workflow) => workflow.name.toLowerCase().startsWith((workflowQuery[1] ?? "").toLowerCase()) ? [{
-      name: workflow.name,
+  const named = /^\$(workflow|skill)(?:[\t ]+([^\s]*))?$/i.exec(text);
+  if (named) {
+    const kind = named[1].toLowerCase();
+    return (kind === "skill" ? skills : workflows).flatMap((item) => item.name.toLowerCase().startsWith((named[2] ?? "").toLowerCase()) ? [{
+      name: item.name,
       hint: "[args]",
-      desc: workflow.description ?? "",
-      invocation: `$workflow ${workflow.name} `,
-    }] : []);
-  }
-  const skillQuery = /^\$skill(?:[\t ]+([^\s]*))?$/i.exec(text);
-  if (skillQuery) {
-    return skills.flatMap((skill) => skill.name.toLowerCase().startsWith((skillQuery[1] ?? "").toLowerCase()) ? [{
-      name: skill.name,
-      hint: "[args]",
-      desc: skill.description ?? "",
-      invocation: `$skill ${skill.name} `,
+      desc: item.description ?? "",
+      invocation: `$${kind} ${item.name} `,
     }] : []);
   }
   if (!text.startsWith("$") || text.includes("\n") || text.includes(" ")) {
@@ -429,37 +433,22 @@ function sessionTitle(session: Session) {
 
 function useRoute() {
   const pathname = usePathname() || "/";
-  const cron = pathname === "/cron";
-  const timeline = pathname.startsWith("/cron/") ? decodeSessionId(pathname.slice("/cron/".length)) : "";
-  const agents = pathname === "/agents";
-  const skills = pathname === "/skills";
-  // Skill names are lowercase letters, digits and hyphens (internal/rocketclaw/harness skills.go), so paths hold them as-is.
-  const skill = pathname.startsWith("/skills/") ? pathname.slice("/skills/".length) : "";
-  const config = pathname === "/config";
-  const search = isSearch(pathname);
-  const voice = pathname === "/voice";
-  const pages = pathname === "/pages";
-  const shortcuts = pathname === "/shortcuts";
-  // A page path keeps its escaped agent and file path after the space segment.
-  const page = pathname.startsWith("/pages/") ? pathname.split("/").slice(3).join("/") : "";
-  const id = pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "";
-  const remote = pathname.startsWith("/oc/") ? decodeSessionId(pathname.slice(4)) : "";
   return {
-    cron,
-    timeline,
-    agents,
-    skills,
-    skill,
-    config,
-    search,
-    voice,
-    pages,
-    shortcuts,
-    page,
-    id,
-    remote,
-    goHome: () => navigate("/"),
-    goCron: () => navigate("/cron"),
+    cron: pathname === "/cron",
+    timeline: pathname.startsWith("/cron/") ? decodeSessionId(pathname.slice("/cron/".length)) : "",
+    agents: pathname === "/agents",
+    skills: pathname === "/skills",
+    // Skill names are lowercase letters, digits and hyphens (internal/rocketclaw/harness skills.go), so paths hold them as-is.
+    skill: pathname.startsWith("/skills/") ? pathname.slice("/skills/".length) : "",
+    config: pathname === "/config",
+    search: isSearch(pathname),
+    voice: pathname === "/voice",
+    pages: pathname === "/pages",
+    shortcuts: pathname === "/shortcuts",
+    // A page path keeps its escaped agent and file path after the space segment.
+    page: pathname.startsWith("/pages/") ? pathname.split("/").slice(3).join("/") : "",
+    id: pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "",
+    remote: pathname.startsWith("/oc/") ? decodeSessionId(pathname.slice(4)) : "",
     goSession: (sessionId: string) => navigate(sessionPath(sessionId)),
   };
 }
@@ -488,46 +477,38 @@ const WarmTabs = memo(function WarmTabs({ cron, agents, skills, config }: { cron
       () => setWarm({ cron: true, agents: true, skills: true, config: true }),
     );
   }, []);
-  return (
-    <>
-      {warm.cron ? (
-        <TabPane show={cron}>
-          <CronPage />
-        </TabPane>
-      ) : null}
-      {warm.agents ? (
-        <TabPane show={agents}>
-          <AgentsPage />
-        </TabPane>
-      ) : null}
-      {warm.skills ? (
-        <TabPane show={skills}>
-          <SkillsPage />
-        </TabPane>
-      ) : null}
-      {warm.config ? (
-        <TabPane show={config}>
-          <ConfigPage />
-        </TabPane>
-      ) : null}
-    </>
-  );
+  const shown = { cron, agents, skills, config };
+  return (["cron", "agents", "skills", "config"] as const).map((name) => {
+    const Page = { cron: CronPage, agents: AgentsPage, skills: SkillsPage, config: ConfigPage }[name];
+    return warm[name] ? <TabPane key={name} show={shown[name]}><Page /></TabPane> : null;
+  });
 });
 
+// A remote that never answered since load is unavailable, one that stopped answering is offline, and one on another
+// protocol keeps working with a notice. The local server's own protocol change reloads the page instead.
+function useRemoteStatus(name: string) {
+  const local = useQuery(queries.protocol("")).data;
+  const proto = useQuery({ ...queries.protocol(name), refetchInterval: 2000, retry: false, enabled: !!name });
+  if (!name || !proto.isError && proto.data === undefined) return { text: "", block: false };
+  if (proto.data === undefined) return { text: `${name} is unavailable: it needs an HTTPS address this browser trusts, such as its tsnet name, and a RocketClaw version with remote RocketClaws. Address: ${serverURL(name)}`, block: true };
+  if (proto.isError) return { text: `${name} is offline; this page reopens when it is reachable.`, block: true };
+  return { text: proto.data === local ? "" : `${name} runs a different RocketClaw version; some actions may fail.`, block: false };
+}
+
+function ServerGate({ children }: { children: ReactNode }) {
+  const status = useRemoteStatus(useServer());
+  return <>{status.text ? <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{status.text}</p> : null}{status.block ? null : children}</>;
+}
+
 function ProtocolGuard() {
-  const proto = useQuery({ ...queries.protocol(), refetchInterval: 2000 });
+  const proto = useQuery({ ...queries.protocol(""), refetchInterval: 2000 });
   const seen = useRef("");
   useEffect(() => {
     const hash = proto.data ?? "";
-    if (hash === "") {
-      return;
-    }
-    if (seen.current === "") {
-      seen.current = hash;
-      return;
-    }
-    if (hash !== seen.current) {
+    if (seen.current && hash && hash !== seen.current) {
       window.location.reload();
+    } else {
+      seen.current ||= hash;
     }
   }, [proto.data]);
   return null;
@@ -557,12 +538,20 @@ type SidebarView = {
   remote?: Remote;
 };
 
+// One server's listing, with its saved tabs while the page is on another server.
+type ServerView = SidebarView & { invalidate: () => void; tabs?: SavedTabs };
+
+// rows, refreshing and invalidation are the page's server's; all holds every server's rows, newest first.
 type SidebarState = SidebarView & {
   invalidateQueries: () => void;
+  all: Session[];
+  servers: Record<string, ServerView>;
 };
 
 const Sidebar = createContext<SidebarState>({
   rows: [],
+  all: [],
+  servers: {},
   refreshing: false,
   enumerationComplete: false,
   invalidateQueries: () => {},
@@ -585,11 +574,41 @@ function delay(ms: number, signal: AbortSignal) {
   });
 }
 
+// Each server's view, gathered by nesting one ServerSessions per server around the merged list.
+const ServerViews = createContext<Record<string, ServerView>>({});
+const ServerName = createContext("");
+
 function SidebarOwner({ children }: { children: ReactNode }) {
-  const identity = useQuery({ ...queries.identity(), refetchInterval: 2000, retry: false });
-  const protocol = useQuery({ ...queries.protocol(), retry: false });
-  const owner = identity.isSuccess ? identity.data.username : undefined;
-  const identityRejected = identity.isError;
+  return ["", ...rocketclaws().map((remote) => remote.name)].reduceRight<ReactNode>((inner, name) => <ServerName.Provider key={name} value={name}><ServerSessions>{inner}</ServerSessions></ServerName.Provider>, <SidebarMerge>{children}</SidebarMerge>);
+}
+
+function SidebarMerge({ children }: { children: ReactNode }) {
+  const name = useServer(), servers = useContext(ServerViews);
+  const value = useMemo(() => {
+    const here = servers[name] ?? { rows: [], refreshing: false, enumerationComplete: false, invalidate: () => {} };
+    const all = Object.keys(servers).length > 1 ? Object.values(servers).flatMap((view) => view.rows).toSorted((a, b) => (Date.parse(b.updatedAt ?? "") || 0) - (Date.parse(a.updatedAt ?? "") || 0)) : here.rows;
+    return { ...here, all, servers, invalidateQueries: here.invalidate };
+  }, [servers, name]);
+  return (
+    <SidebarInvalidation.Provider value={value.invalidateQueries}>
+      <Sidebar.Provider value={value}>{children}</Sidebar.Provider>
+    </SidebarInvalidation.Provider>
+  );
+}
+
+// A server's session list. A remote that stops answering keeps its last rows, offline; only a refusal clears them.
+function ServerSessions({ children }: { children: ReactNode }) {
+  const name = useContext(ServerName);
+  const here = useServer() === name;
+  const identity = useQuery({ ...queries.identity(name), refetchInterval: 2000, retry: false });
+  // A remote that has not answered yet is asked again until it does.
+  const protocol = useQuery({ ...queries.protocol(name), retry: false, refetchInterval: (query) => query.state.data === undefined && 2000 });
+  // A remote's saved rows keep apart from the local server's, whose cache key stays as it was.
+  const scope = protocol.data === undefined || !name ? protocol.data : JSON.stringify([name, protocol.data]);
+  const identityRejected = identity.isError && (!name || identity.error instanceof RPCError);
+  const unreachable = identity.isError && !identityRejected;
+  const owner = identity.isSuccess || unreachable ? identity.data?.username : undefined;
+  const tabs = useQuery({ ...queries.tabs(owner ?? "", name), refetchInterval: 2000, enabled: owner !== undefined && !here });
   const [identityGeneration, setIdentityGeneration] = useState(0);
   const [generation, setGeneration] = useState(0);
   const [view, setView] = useState<SidebarView>({ rows: [], refreshing: false, enumerationComplete: false });
@@ -599,7 +618,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
   // The last complete listing's version and rows; the next poll asks for only what changed since.
   const listing = useRef<{ version: string; rows: Session[] }>({ version: "", rows: [] });
   const ownerRef = useRef(owner);
-  const protocolRef = useRef(protocol.data);
+  const protocolRef = useRef(scope);
   const bump = useCallback(() => {
     gen.current += 1;
     setGeneration((value) => value + 1);
@@ -616,19 +635,19 @@ function SidebarOwner({ children }: { children: ReactNode }) {
     const prev = ownerRef.current;
     const prevProtocol = protocolRef.current;
     ownerRef.current = owner;
-    protocolRef.current = protocol.data;
-    if (!identityRejected && prev === owner && prevProtocol === protocol.data) {
+    protocolRef.current = scope;
+    if (!identityRejected && prev === owner && prevProtocol === scope) {
       return;
     }
     reset();
-  }, [owner, protocol.data, identityRejected, identityGeneration, reset]);
+  }, [owner, scope, identityRejected, identityGeneration, reset]);
   useEffect(() => {
-    if (owner === undefined || protocol.data === undefined || identityRejected) {
+    if (owner === undefined || scope === undefined || identityRejected) {
       return;
     }
     const captured = gen.current;
     const currentOwner = owner;
-    const currentProtocol = protocol.data;
+    const currentProtocol = scope;
     let stopped = false;
     void loadSavedSessions(currentOwner, currentProtocol).then((saved) => {
       if (stopped || captured !== gen.current || ownerRef.current !== currentOwner || committed.current || saved === undefined) {
@@ -639,23 +658,23 @@ function SidebarOwner({ children }: { children: ReactNode }) {
       setView((current) => ({ ...current, rows: merged }));
     }, () => {});
     return () => { stopped = true; };
-  }, [owner, protocol.data, identityRejected, identityGeneration]);
+  }, [owner, scope, identityRejected, identityGeneration]);
   useEffect(() => {
-    if (owner === undefined || protocol.data === undefined || identityRejected) {
+    if (owner === undefined || scope === undefined || identityRejected) {
       return;
     }
     const captured = gen.current;
     const currentOwner = owner;
-    const currentProtocol = protocol.data;
+    const currentProtocol = scope;
     const ac = new AbortController();
     const tick = async () => {
       if (ac.signal.aborted || captured !== gen.current) return;
       setView((current) => ({ ...current, refreshing: true, enumerationComplete: false }));
       const snapshotGeneration = await loadSnapshotGeneration(currentOwner, currentProtocol).catch(() => undefined);
       if (ac.signal.aborted || captured !== gen.current) return;
-      const viewing = document.hasFocus() ? pathSession(location.pathname) : "";
+      const viewing = document.hasFocus() && server() === name ? pathSession(pagePath()) : "";
       const held = listing.current;
-      readSessionEnumeration(currentOwner, Promise.resolve(listSessions(ac.signal, `/api/ListSessions?${new URLSearchParams({ viewing, since: held.version })}`)), () => rowsRef.current, (merged) => {
+      readSessionEnumeration(currentOwner, Promise.resolve(listSessions(ac.signal, `${serverURL(name)}/api/ListSessions?${new URLSearchParams({ viewing, since: held.version })}`)), () => rowsRef.current, (merged) => {
         // Only changed rows arrive since a held version; they show in place once the listing completes.
         if (ac.signal.aborted || captured !== gen.current || held.version) {
           return;
@@ -671,7 +690,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
           reset();
           ownerRef.current = undefined;
           // A fast same-owner refetch can hide the intermediate pending state.
-          void queryClient.resetQueries({ queryKey: ["identity"] }).then(() => setIdentityGeneration((value) => value + 1));
+          void queryClient.resetQueries({ queryKey: [{ server: name }, "identity"] }).then(() => setIdentityGeneration((value) => value + 1));
         } else if (rows) {
           listing.current = { version: result.version ?? "", rows };
           committed.current = true;
@@ -692,31 +711,31 @@ function SidebarOwner({ children }: { children: ReactNode }) {
       ac.abort();
       invalidatePendingSaves(currentOwner, currentProtocol);
     };
-  }, [owner, protocol.data, identityRejected, identityGeneration, generation, reset]);
+  }, [name, owner, scope, identityRejected, identityGeneration, generation, reset]);
   const forgetHistory = useCallback((id: string) => {
-    if (owner === undefined || protocol.data === undefined) return;
-    if (ownerRef.current !== owner || protocolRef.current !== protocol.data) return;
-    invalidatePendingSaves(owner, protocol.data);
+    if (owner === undefined || scope === undefined) return;
+    if (ownerRef.current !== owner || protocolRef.current !== scope) return;
+    invalidatePendingSaves(owner, scope);
     bump();
     committed.current = false;
     listing.current = { version: "", rows: [] };
     rowsRef.current = stripSessionHistory(rowsRef.current, id);
     setView((current) => ({ ...current, rows: rowsRef.current }));
-  }, [owner, protocol.data, bump]);
+  }, [owner, scope, bump]);
   useEffect(() => {
     const channel = new BroadcastChannel(SESSION_HISTORY_CHANNEL);
     channel.onmessage = ({ data }: MessageEvent<{ owner: string; protocol: string; id: string }>) => {
-      if (data.owner === owner && data.protocol === protocol.data) forgetHistory(data.id);
+      if (data.owner === owner && data.protocol === scope) forgetHistory(data.id);
     };
     return () => channel.close();
-  }, [owner, protocol.data, forgetHistory]);
-  const visible = owner !== undefined && ownerRef.current === owner && protocolRef.current === protocol.data;
-  const value = useMemo(() => ({ ...view, rows: visible ? view.rows : [], enumerationComplete: visible && view.enumerationComplete, invalidateQueries: bump }), [view, visible, bump]);
-  return (
-    <SidebarInvalidation.Provider value={bump}>
-      <Sidebar.Provider value={value}>{children}</Sidebar.Provider>
-    </SidebarInvalidation.Provider>
-  );
+  }, [owner, scope, forgetHistory]);
+  const visible = owner !== undefined && ownerRef.current === owner && protocolRef.current === scope;
+  const parent = useContext(ServerViews);
+  const views = useMemo(() => ({ ...parent, [name]: {
+    ...view, invalidate: bump, tabs: here ? undefined : tabs.data, enumerationComplete: visible && view.enumerationComplete,
+    rows: !visible ? [] : name ? view.rows.map((row) => ({ ...row, rocketclaw: name, offline: row.offline || unreachable })) : view.rows,
+  } }), [parent, name, view, visible, unreachable, here, tabs.data, bump]);
+  return <ServerViews.Provider value={views}>{children}</ServerViews.Provider>;
 }
 
 type PendingFile = { id: string; file: File };
@@ -992,9 +1011,15 @@ function savedTabs(owner?: string, saved?: Pick<SavedTabs, "spaces" | "state">):
   return { owner, tabs: arrange(tabs), active: "", groups, spaces, space: known(saved?.state.space) ? saved!.state.space : spaces[0].id, last: saved?.state.last ?? {}, sharedOrder: saved?.state.sharedOrder ?? [] };
 }
 
+// A space chosen on another server's branch of the space tree, which its first load enters.
+let arriving = "";
+
 // The URL is the active tab, so a reload keeps it and any other URL not shared in the space opens as a permanent tab.
 function loadTabs(path: string, owner?: string, saved?: SavedTabs, shared: SavedTabs["shared"] = []): TabState {
   const state = savedTabs(owner, saved);
+  // Only the load with the server's saved tabs knows the spaces, so it alone enters, and clears, the arriving space.
+  if (saved && state.spaces.some((space) => space.id === arriving)) state.space = arriving;
+  if (saved) arriving = "";
   const [link, target] = pageSpace(state, path);
   const tabs = state.tabs.some((tab) => tab.path === link) || isShared(shared, state.space, link) ? state.tabs : arrange([...state.tabs, { path: link, space: target, unplaced: pathSession(link) !== "" || undefined }]);
   return openTab({ ...state, tabs, active: link }, link, shared);
@@ -1014,10 +1039,11 @@ const muteOf = (mutes: SavedTabs["mutes"], path: string) => mutes.find((mute) =>
 
 // Every Tabs reply carries every space's Shared tabs and this person's mutes, which replace the cached ones when they
 // changed, unless a personal save raced a cache change; this person's tabs are left to the revision merge in useTabs.
-// received sees the reply before the cache takes it.
-async function tabsCall(input: Parameters<typeof mutations.tabs>[0], received?: (reply: SavedTabs) => void) {
-  const cached = queryClient.getQueriesData<SavedTabs>({ queryKey: ["tabs"] });
-  const reply = await mutations.tabs(input);
+// received sees the reply before the cache takes it. name is the server the tabs belong to, which a reply arriving
+// after the page moved to another server still updates.
+async function tabsCall(name: string, input: Parameters<typeof mutations.tabs>[0], received?: (reply: SavedTabs) => void) {
+  const cached = queryClient.getQueriesData<SavedTabs>({ queryKey: [{ server: name }, "tabs"] });
+  const reply = await mutations.tabs(input, name);
   received?.(reply);
   for (const [key, before] of cached) queryClient.setQueryData<SavedTabs>(key, (old) => {
     if (!old) return;
@@ -1056,9 +1082,10 @@ function mergeTabs(base: SavedTabs["state"], local: SavedTabs["state"], server: 
 }
 
 function useTabs() {
+  const name = useServer();
   const identity = useQuery(queries.identity());
   const owner = identity.data?.username;
-  const saved = useQuery({ ...queries.tabs(owner ?? ""), enabled: owner !== undefined });
+  const saved = useQuery({ ...queries.tabs(owner ?? "", name), enabled: owner !== undefined });
   const shared = saved.data?.shared ?? noShared, mutes = saved.data?.mutes ?? noMutes;
   const pathname = usePathname() || "/";
   const [state, setState] = useState(() => loadTabs(pathname));
@@ -1069,14 +1096,14 @@ function useTabs() {
   // The tab whose notifications Pick date & time snoozes.
   const [snoozing, setSnoozing] = useState<string>();
   // base is the saved state this window last saved or took in, at revision; at stamps the read last taken in.
-  const sync = useRef<{ saving: boolean; dirty: boolean; next?: TabState; applied?: TabState; base?: SavedTabs["state"]; revision: number; at?: number }>({ saving: false, dirty: false, revision: 0 });
-  const spaceChange = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[0]) => tabsCall(input), onSuccess: (view) => setState((current) => ({ ...current, spaces: view.spaces })), onError: () => queryClient.invalidateQueries({ queryKey: ["tabs"] }) });
-  const sharing = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[0]) => tabsCall(input), onError: () => queryClient.invalidateQueries({ queryKey: ["tabs"] }) });
+  const sync = useRef<{ saving: boolean; dirty: boolean; next?: TabState; applied?: TabState; base?: SavedTabs["state"]; revision: number; at?: number; server: string }>({ saving: false, dirty: false, revision: 0, server: name });
+  const spaceChange = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onSuccess: (view) => setState((current) => ({ ...current, spaces: view.spaces })), onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
+  const sharing = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
   if (state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname, shared));
   // A page link whose space segment was rewritten shows the rewritten path, once the owner's spaces are known.
   useEffect(() => {
     if (state.owner === undefined || state.active === pathname) return;
-    history.replaceState(history.state, "", state.active + location.search);
+    history.replaceState(history.state, "", serverPath(state.active) + location.search);
     dispatchEvent(new PopStateEvent("popstate"));
   }, [state.owner, state.active, pathname]);
   // The query refetches when the page becomes visible; a window that stayed visible reloads when it regains focus.
@@ -1119,7 +1146,7 @@ function useTabs() {
     const queue = sync.current, sent = savedState(queue.next!);
     queue.saving = true;
     queue.next = undefined;
-    void tabsCall({ state: sent, revision: queue.revision }).then((reply) => {
+    void tabsCall(queue.server, { state: sent, revision: queue.revision }).then((reply) => {
       if (reply.stale) return;
       [queue.base, queue.revision] = [sent, Number(reply.revision)];
       if (!queue.next) queue.dirty = false;
@@ -1145,7 +1172,7 @@ function useTabs() {
       const birth = rows.find((row) => rowPath(row) === tab.path)?.spaceId;
       if (birth === undefined) continue;
       if (birth && !state.spaces.some((space) => space.id === birth)) {
-        void tabsCall({}).then((view) => setState((current) => view.spaces.some((space) => space.id === birth) ? { ...current, spaces: view.spaces } : current));
+        void tabsCall(name, {}).then((view) => setState((current) => view.spaces.some((space) => space.id === birth) ? { ...current, spaces: view.spaces } : current));
         return;
       }
       if (birth && birth !== tab.space) moveTo(new Set([tab.path]), birth);
@@ -1179,7 +1206,7 @@ function useTabs() {
   const saveShared = (space: string, path: string, base: SearchPageState | undefined, page: SearchPageState) => sharing.mutate({ editShared: { space, path, base, search: page } }, { onSuccess: (reply) => {
     const theirs = sharedTab(reply.shared, space, path)?.search;
     if (!reply.stale) return;
-    queryClient.setQueriesData<SavedTabs>({ queryKey: ["tabs"] }, (old) => old && { ...old, shared: reply.shared });
+    queryClient.setQueriesData<SavedTabs>({ queryKey: [{ server: name }, "tabs"] }, (old) => old && { ...old, shared: reply.shared });
     if (theirs) saveShared(space, path, theirs, rebase(base, page, theirs));
   } });
   // The tab is opened with the navigation, in one render, so the URL never shows it as a preview first.
@@ -1224,7 +1251,7 @@ function useTabs() {
       const merge = <T extends { path: string; search?: SearchPageState }>(tab: T) => tab.path === path ? { ...tab, search: { searches: [], active: "", ...tab.search, ...change } } : tab;
       if (!inShared) return setState((current) => ({ ...current, tabs: current.tabs.map(merge) }));
       const next = shared.map((tab) => tab.space === state.space ? merge(tab) : tab);
-      queryClient.setQueriesData<SavedTabs>({ queryKey: ["tabs"] }, (old) => old && { ...old, shared: next });
+      queryClient.setQueriesData<SavedTabs>({ queryKey: [{ server: name }, "tabs"] }, (old) => old && { ...old, shared: next });
       saveShared(state.space, path, sharedTab(shared, state.space, path)?.search, sharedTab(next, state.space, path)!.search!);
     },
     // A moved tab takes the group of the tab it lands on.
@@ -1249,7 +1276,7 @@ function useTabs() {
       const keep = ({ unshared: page }: SavedTabs) => page && setState((current) => ({ ...current, tabs: current.tabs.some((item) => item.path === path)
         ? current.tabs.map((item) => item.path === path ? { ...item, search: { ...page, searches: [...page.searches, ...item.search?.searches.filter((own) => !page.searches.some((other) => other.id === own.id)) ?? []] } } : item)
         : [...current.tabs, { path, space: state.space, search: page }] }));
-      const share = here.includes(path) ? [{ key: "unshare", label: "Remove from Shared", run: () => void tabsCall({ unshare: { space: state.space, path } }, keep).catch(() => queryClient.invalidateQueries({ queryKey: ["tabs"] })) }]
+      const share = here.includes(path) ? [{ key: "unshare", label: "Remove from Shared", run: () => void tabsCall(name, { unshare: { space: state.space, path } }, keep).catch(() => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] })) }]
         : path === "/" ? [] : [{ key: "share", label: "Add to Shared", run: () => sharing.mutate({ share: { space: state.space, path, search: tab?.search } }) }];
       const source = sharedTab(shared, state.space, path)?.search ?? tab?.search;
       const copy = isSearch(path) ? [{ key: "duplicate", label: "Duplicate", run: () => addSearch({ ...source!, name: `${searchTitle(source)} copy` }, here.includes(path)) }] : [];
@@ -1312,32 +1339,40 @@ function TabSettling() {
 // server push would fix it. Every window that saw the mark notifies under the session's tag, so the system shows
 // one notification, even while another window has the tab in view.
 function TabNotifications() {
-  const { rows, enumerationComplete } = useContext(Sidebar), { state, shared, mutes } = useContext(TabActions);
-  const owner = useQuery(queries.identity()).data?.username;
-  const seen = useRef<{ owner?: string; unread?: Map<string, string> }>({});
+  const { all, servers } = useContext(Sidebar), { state, shared, mutes } = useContext(TabActions);
+  const name = useServer();
+  const owner = useQuery(queries.identity("")).data?.username;
+  const seen = useRef<{ owner?: string; unread: Map<string, string>; servers: Set<string> }>({ unread: new Map(), servers: new Set() });
+  // Each row is checked against its own server's open tabs and mutes: the live ones here, the saved ones elsewhere.
+  const tabsOf = (row: Session) => {
+    const saved = servers[row.rocketclaw ?? ""]?.tabs, live = (row.rocketclaw ?? "") === name;
+    return { open: live ? [...state.tabs, ...shared] : [...saved?.state.tabs ?? [], ...saved?.shared ?? []], mutes: live ? mutes : saved?.mutes ?? [], active: live ? state.active : "" };
+  };
   useEffect(() => {
-    if (!enumerationComplete) return;
-    const last = seen.current.owner === owner ? seen.current.unread : undefined;
-    seen.current = { owner, unread: new Map(rows.map((row) => [row.id, row.unreadAt ?? ""])) };
+    // A server's rows count once it listed them all, and its first full listing raises nothing.
+    const complete = new Set(Object.keys(servers).filter((server) => servers[server].enumerationComplete));
+    if (!complete.size) return;
+    const rows = all.filter((row) => complete.has(row.rocketclaw ?? ""));
+    const last = seen.current.owner === owner ? seen.current : undefined;
+    seen.current = { owner, unread: new Map([...last?.unread ?? [], ...rows.map((row) => [rowKey(row.id, row.rocketclaw), row.unreadAt ?? ""] as const)]), servers: new Set([...last?.servers ?? [], ...complete]) };
     if (!last || !("Notification" in window) || Notification.permission !== "granted") return;
     for (const row of rows) {
-      if (!row.unreadAt || row.unreadAt === last.get(row.id)) continue;
-      const path = rowPath(row);
-      if (![...state.tabs, ...shared].some((tab) => tab.path === path) || muteOf(mutes, path) || (document.hasFocus() && state.active === path)) continue;
+      if (!last.servers.has(row.rocketclaw ?? "") || !row.unreadAt || row.unreadAt === last.unread.get(rowKey(row.id, row.rocketclaw))) continue;
+      const path = rowPath(row), tabs = tabsOf(row);
+      if (!tabs.open.some((tab) => tab.path === path) || muteOf(tabs.mutes, path) || (document.hasFocus() && tabs.active === path)) continue;
       // A notification replacing one with its tag alerts again in Chromium only with renotify, which TypeScript's DOM types omit.
       const reply = cleanText((row.server ? row.reply : row.preview) ?? "", {}).replace(/\s+/g, " ").trim();
-      const options = { body: reply.length > 200 ? `${reply.slice(0, 199)}…` : reply || "Finished answering", tag: row.id, renotify: true };
+      const options = { body: reply.length > 200 ? `${reply.slice(0, 199)}…` : reply || "Finished answering", tag: rowKey(row.id, row.rocketclaw), renotify: true };
       const title = row.server || !row.agent ? sessionTitle(row) : row.name || row.agent;
       let notification: Notification;
       // Android Chrome shows notifications only from a service worker, which this app lacks: its constructor throws.
       try { notification = new Notification(cleanText(title, {}), options); } catch { return; }
-      notification.onclick = () => { focus(); navigate(path); notification.close(); };
+      notification.onclick = () => { focus(); navigate(path, false, row.rocketclaw ?? ""); notification.close(); };
     }
-  }, [rows, enumerationComplete, owner, state.tabs, state.active, shared, mutes]);
+  });
   // The window title counts the open, unmuted tabs whose session waits on this person, as "(2) lab - RocketClaw",
   // keeping the server's name from index.html. An OpenCode view's own titles come after index.html's, so they never show.
-  const open = new Set([...state.tabs, ...shared].map((tab) => tab.path));
-  const asking = rows.filter((row) => row.asking && open.has(rowPath(row)) && !muteOf(mutes, rowPath(row))).length;
+  const asking = all.filter((row) => row.asking && tabsOf(row).open.some((tab) => tab.path === rowPath(row)) && !muteOf(tabsOf(row).mutes, rowPath(row))).length;
   useEffect(() => { document.title = (asking ? `(${asking}) ` : "") + document.title.replace(/^\(\d+\) /, ""); }, [asking]);
   // Notifications are on by default: the browser asks for its permission on the first click or key press, the
   // earliest a browser lets a page ask.
@@ -1356,9 +1391,10 @@ function BoardNotifications() {
   const { board: { data }, boards } = useBoard();
   const notify = useEffectEvent(() => {
     if (!data || !("Notification" in window) || Notification.permission !== "granted") return;
+    const name = server();
     for (const [path, lanes] of boards) for (const lane of lanes) for (const row of lane.notify && data.get(lane.key)?.fresh || []) {
       // As in TabNotifications: renotify is missing from TypeScript's DOM types, and Android Chrome's constructor throws.
-      try { new Notification(`${lane.dashboard}: ${lane.name}`, { body: cleanText(sessionTitle(row), {}), tag: `${path}:${row.id}`, renotify: true } as NotificationOptions).onclick = function () { focus(); navigate(rowPath(row)); this.close(); }; } catch { return; }
+      try { new Notification(`${lane.dashboard}: ${lane.name}`, { body: cleanText(sessionTitle(row), {}), tag: `${path}:${row.id}`, renotify: true } as NotificationOptions).onclick = function () { focus(); navigate(rowPath(row), false, name); this.close(); }; } catch { return; }
     }
   });
   useEffect(() => notify(), [data]);
@@ -1563,6 +1599,8 @@ function SharedTabs({ tabs: { state, here, shared, pathname, promote, toggleShar
 // The space button opens the space menu; renaming edits the name in place of the button, as Base UI's Menu takes printable keys.
 function SpaceMenu({ tabs: { state, pending, enter, addSpace, renameSpace, deleteSpace }, name }: { tabs: ReturnType<typeof useTabs>; name?: string }) {
   const [renaming, setRenaming] = useState(false);
+  // With remote RocketClaws the picker is a tree: each server, local first, with its spaces.
+  const here = useServer(), servers = rocketclaws().length ? ["", ...rocketclaws().map((remote) => remote.name)] : [here];
   const box = "m-1 mb-0 flex shrink-0 items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium";
   const item = "flex cursor-default items-center rounded-md px-1.5 py-1 text-sm outline-none focus:bg-accent focus:text-accent-foreground";
   return <DropdownMenu>
@@ -1574,11 +1612,14 @@ function SpaceMenu({ tabs: { state, pending, enter, addSpace, renameSpace, delet
         if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
       }}
       onBlur={(event) => { const value = event.currentTarget.value.trim(); if (value) renameSpace(value); setRenaming(false); }} />
-      : <Menu.Trigger aria-label={`Space: ${name}`} disabled={state.owner === undefined} className={cn(box, "cursor-pointer hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring")}><Layers aria-hidden="true" className="size-4" /><span className="max-w-32 truncate">{name}</span><ChevronDown aria-hidden="true" className="size-3.5 text-muted-foreground" /></Menu.Trigger>}
+      : <Menu.Trigger aria-label={`Space: ${here ? `${here} / ${name}` : name}`} disabled={state.owner === undefined && !here} className={cn(box, "cursor-pointer hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring")}><Layers aria-hidden="true" className="size-4" /><span className="max-w-32 truncate">{here ? `${here} / ${name}` : name}</span><ChevronDown aria-hidden="true" className="size-3.5 text-muted-foreground" /></Menu.Trigger>}
     <DropdownMenuContent finalFocus={!renaming} onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="w-auto min-w-44">
-      <DropdownMenuRadioGroup value={state.space} onValueChange={(id: string) => enter(id)}>
-        {state.spaces.map((space) => <DropdownMenuRadioItem key={space.id} value={space.id} closeOnClick>{space.name}</DropdownMenuRadioItem>)}
-      </DropdownMenuRadioGroup>
+      {servers.map((server) => server === here ? <Menu.Group key={server}>
+        {servers.length > 1 ? <Menu.GroupLabel className="px-1.5 py-1 text-xs text-muted-foreground">{server || "Local"}</Menu.GroupLabel> : null}
+        <DropdownMenuRadioGroup value={state.space} onValueChange={(id: string) => enter(id)}>
+          {state.spaces.map((space) => <DropdownMenuRadioItem key={space.id} value={space.id} closeOnClick>{space.name}</DropdownMenuRadioItem>)}
+        </DropdownMenuRadioGroup>
+      </Menu.Group> : <ServerSpaces key={server} name={server} item={item} />)}
       <Menu.Group className="mt-1 border-t pt-1">
         <Menu.Item className={item} disabled={pending} onClick={() => void addSpace().then(() => setRenaming(true))}>New space</Menu.Item>
         <Menu.Item className={item} onClick={() => setRenaming(true)}>Rename space</Menu.Item>
@@ -1586,6 +1627,17 @@ function SpaceMenu({ tabs: { state, pending, enter, addSpace, renameSpace, delet
       </Menu.Group>
     </DropdownMenuContent>
   </DropdownMenu>;
+}
+
+// Another server's spaces, from its saved tabs; choosing one enters it on that server.
+function ServerSpaces({ name, item }: { name: string; item: string }) {
+  const saved = useContext(Sidebar).servers[name]?.tabs, status = useRemoteStatus(name);
+  return <Menu.Group className="mt-1 border-t pt-1">
+    <Menu.GroupLabel className="px-1.5 py-1 text-xs text-muted-foreground">{name || "Local"}</Menu.GroupLabel>
+    {status.text ? <p className="max-w-72 px-1.5 py-1 text-xs text-muted-foreground">{status.text}</p> : null}
+    {saved ? saved.spaces.map((space) => <Menu.Item key={space.id} className={item} onClick={() => { arriving = space.id; navigate(entry(savedTabs(undefined, saved), space.id, saved.shared), false, name); }}>{space.name}</Menu.Item>)
+      : status.block ? null : <Menu.Item disabled className={item}>Loading…</Menu.Item>}
+  </Menu.Group>;
 }
 
 // Marks a session waiting on this person's answer, in its tab, its collapsed group, and its session row.
@@ -1659,10 +1711,11 @@ function persistComposerDraft(draft: ComposerDraft) {
 }
 
 export function App() {
+  const name = useServer();
   const identity = useQuery(queries.identity(), queryClient), config = useQuery(queries.config(), queryClient);
-  const scope = identity.isSuccess && config.isSuccess ? JSON.stringify(["authenticated-username", location.origin, identity.data.username, config.data.workspace ?? ""]) : undefined;
+  const scope = identity.isSuccess && config.isSuccess ? JSON.stringify(["authenticated-username", location.origin + serverPath(""), identity.data.username, config.data.workspace ?? ""]) : undefined;
   return <QueryClientProvider client={queryClient}><TooltipProvider><ProtocolGuard /><div className="flex h-dvh flex-col"><WebAppUpdate /><SidebarOwner>
-    <SessionApp scope={scope} scopeError={identity.error?.message ?? config.error?.message} />
+    <SessionApp key={name} scope={scope} scopeError={identity.error?.message ?? config.error?.message} />
   </SidebarOwner></div></TooltipProvider></QueryClientProvider>;
 }
 
@@ -1718,29 +1771,16 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
       event.stopPropagation(); // Keep hard refresh native, ahead of embedded shortcuts and terminal input.
       return;
     }
-    if ((event.metaKey || event.ctrlKey) && !event.altKey && event.code === "KeyP") {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!event.repeat) openPalette(event.shiftKey ? "commands" : "sessions");
-      return;
-    }
-    if (sidebar.medium && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.code === "KeyB") {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!event.repeat) sidebar.toggle();
-      return;
-    }
-    if ((event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey && event.code === "KeyN") {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!event.repeat) newChat();
-      return;
-    }
-    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && (event.code === "BracketLeft" || event.code === "BracketRight")) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!event.repeat) tabs.step(event.code === "BracketLeft");
-    }
+    const mod = event.metaKey || event.ctrlKey, plain = mod && !event.altKey && !event.shiftKey;
+    const action = mod && !event.altKey && event.code === "KeyP" ? () => openPalette(event.shiftKey ? "commands" : "sessions")
+      : sidebar.medium && plain && event.code === "KeyB" ? sidebar.toggle
+      : mod && event.altKey && !event.shiftKey && event.code === "KeyN" ? newChat
+      : plain && (event.code === "BracketLeft" || event.code === "BracketRight") ? () => tabs.step(event.code === "BracketLeft")
+      : undefined;
+    if (!action) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) action();
   });
 
   const onEscape = useEffectEvent((event: KeyboardEvent) => {
@@ -1748,7 +1788,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape" || route.remote || route.search) return;
     if (document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [role="tooltip"]')) return;
     event.preventDefault();
-    closeTab([location.pathname]);
+    closeTab([pagePath()]);
   });
   useEffect(() => {
     const key = (event: KeyboardEvent) => onKey(event);
@@ -1775,15 +1815,11 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} />
               <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
                 <div className="flex w-max items-center gap-[var(--navigation-gap)]">
-                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="New session" onClick={newChat}>
-                    <SquarePen className="size-[var(--navigation-icon)]" />
-                  </TooltipTrigger><TooltipContent side="top">New session</TooltipContent></Tooltip>
-                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions and commands" onClick={() => openPalette("sessions")}>
-                    <Search className="size-[var(--navigation-icon)]" />
-                  </TooltipTrigger><TooltipContent side="top">Search sessions and commands</TooltipContent></Tooltip>
-                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Voice" onClick={() => navigate("/voice")}>
-                    <Mic className="size-[var(--navigation-icon)]" />
-                  </TooltipTrigger><TooltipContent side="top">Voice</TooltipContent></Tooltip>
+                  {([["New session", SquarePen, newChat], ["Search sessions and commands", Search, () => openPalette("sessions")], ["Voice", Mic, () => navigate("/voice")]] as const).map(([label, Icon, onClick]) => (
+                    <Tooltip key={label}><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label={label} onClick={onClick}>
+                      <Icon className="size-[var(--navigation-icon)]" />
+                    </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>
+                  ))}
                   <CopyPageLink />
                 </div>
               </div>
@@ -1792,7 +1828,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
           <TabDrawer {...sidebar}><TabStrip tabs={tabs} newChat={newChat} /></TabDrawer>
           <div className="flex min-h-0 min-w-0 flex-1">
             {sidebar.medium ? <ResizableAside side="tabs" id="tab-sidebar" className={cn("border-r", !sidebar.open && "hidden")}><TabStrip tabs={tabs} newChat={newChat} /></ResizableAside> : null}
-            <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}>
+            <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col md:min-w-[26rem]", command?.target && "pt-[min(75dvh,30rem)]")}><ServerGate>
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.search ? <SearchPage /> : null}
               {route.timeline ? <CronTimeline key={route.timeline} stem={route.timeline} /> : null}
@@ -1807,7 +1843,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
                   <Transcript id={conversation.id} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => { tabs.create(id); setConversation((current) => ({ ...current, created: id })); }} />
                 </MessageScrollerProvider>
               </TabPane>
-             </main>
+             </ServerGate></main>
              {showChat ? <><DelegationPanel id={route.id} /><SkillPanel /></> : null}
            </div>
           </div>
@@ -1960,7 +1996,7 @@ async function forkDraft(source: string, message?: TranscriptEvent): Promise<Com
 
 async function restoreFiles(attachments: AttachmentMeta[]): Promise<PendingFile[]> {
   return Promise.all(attachments.map(async (file) => {
-    const response = await fetch(`/api/DownloadAttachment?${new URLSearchParams({ conversationId: file.conversationId, id: file.id })}`);
+    const response = await fetch(`${serverURL()}/api/DownloadAttachment?${new URLSearchParams({ conversationId: file.conversationId, id: file.id })}`);
     if (!response.ok) throw new Error(`Could not restore ${file.name}`);
     return { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), file: new File([await response.blob()], file.name, { type: file.mimeType }) };
   }));
@@ -2038,7 +2074,7 @@ function paletteRows(
     const found = pages.find((tab) => tab.space === origin.id && tab.search?.searches.some((item) => item.query === query));
     tabs.open(found?.path ?? freshSearch(), `?${new URLSearchParams({ q: query })}`, origin.id);
   };
-  return mode === "commands" ? commands : [...commands, ...searches, ...rows.map((session) => ({ key: session.id, session, run: () => tabs.open(rowPath(session)) })),
+  return mode === "commands" ? commands : [...commands, ...searches, ...rows.map((session) => ({ key: rowKey(session.id, session.rocketclaw), session, run: () => openRow(tabs, session) })),
     ...typed ? [{ key: searchInSpaceKey, label: `Search in this space for '${typed}'`, run: () => search(`space:${termValue(origin.name)} ${typed}`) },
       { key: searchEverywhereKey, label: `Search everywhere for '${typed}'`, run: () => search(typed) }] : []];
 }
@@ -2052,8 +2088,8 @@ const searchPages = ({ state, shared }: ReturnType<typeof useTabs>) => [...state
 // The server reads and matches the query. While typing, an unfinished last word is left out; Enter sends everything.
 // Requests start after a 250 ms pause (and by 1 s with messages), a newer one aborts the older, and they rerun when sidebar chats change.
 function useSessionSearch(query: string, scope: "messages" | "filters", entered: boolean) {
-  const { rows } = useContext(Sidebar);
-  const ids = useMemo(() => rows.map(({ id }) => id).toSorted().join(" "), [rows]);
+  const { all: rows } = useContext(Sidebar);
+  const ids = useMemo(() => rows.map((row) => rowKey(row.id, row.rocketclaw)).toSorted().join(" "), [rows]);
   const { word, unfinished } = typingWord(query);
   const sent = (entered || !unfinished ? query : query.slice(0, query.length - word.length)).trimEnd();
   const principalChoices = !sent && /^principal:/i.test(word);
@@ -2071,7 +2107,7 @@ function useSessionSearch(query: string, scope: "messages" | "filters", entered:
     request.current.controller?.abort();
     const controller = new AbortController(), version = request.current.version + 1;
     const current = () => request.current.version === version;
-    const pending = text || principalChoices ? rpc<SearchSessionsResponse>("SearchSessions", { query: text, [scope]: true }, controller.signal).then((response) => {
+    const pending = text || principalChoices ? searchAll(["", ...rocketclaws().map((remote) => remote.name)], { query: text, [scope]: true }, controller.signal).then((response) => {
       if (!current()) return undefined;
       setResult({ query: text, response });
       return response;
@@ -2113,16 +2149,16 @@ function useSessionSearch(query: string, scope: "messages" | "filters", entered:
 
 // Server matches in server order with their sidebar rows; missing reports a match the sidebar has not loaded yet.
 function matchedRows(response: SearchSessionsResponse | undefined, rows: Session[]) {
-  const byId = new Map(rows.map((row) => [row.id, row]));
+  const byId = new Map(rows.map((row) => [rowKey(row.id, row.rocketclaw), row]));
   const matches = response?.matches ?? [];
-  const found = matches.flatMap((match) => byId.has(match.conversationId) ? [{ match, session: byId.get(match.conversationId)! }] : []);
+  const found = matches.flatMap((match) => byId.has(rowKey(match.conversationId, match.rocketclaw)) ? [{ match, session: byId.get(rowKey(match.conversationId, match.rocketclaw))! }] : []);
   return { found, missing: found.length < matches.length };
 }
 
 // Text matches shown titles here, as rows show them: markdown and Slack tags read as their text. Plain text
 // matches at once; a filter asks the server, whose passing rows, matched the same way, replace these once they arrive.
 function usePaletteSessions(query: string, sessions: boolean, entered: boolean) {
-  const { rows } = useContext(Sidebar);
+  const { all: rows } = useContext(Sidebar);
   const free = query.replace(new RegExp(`(?:^|\\s)(?:${filterKeys}):(?:"(?:[^"\\\\]|\\\\.)*"?|\\S*)`, "gi"), " ").trim().toLowerCase();
   const filtered = sessions && free !== query.trim().toLowerCase();
   const search = useSessionSearch(filtered ? query : "", "filters", entered);
@@ -2130,8 +2166,8 @@ function usePaletteSessions(query: string, sessions: boolean, entered: boolean) 
   const names = useSlackNames(useMemo(() => [...new Set(raw.flatMap(mentionIds))], [raw]));
   // Titles are cleaned and lowered once per list or name change, so a keystroke only scans them.
   const titles = useMemo(() => raw.map((title) => cleanText(title, names).toLowerCase()), [raw, names]);
-  const byId = useMemo(() => new Map(rows.map((row, i) => [row.id, titles[i] ?? ""])), [rows, titles]);
-  const matches = useCallback((row: Session) => !free || !!byId.get(row.id)?.includes(free), [byId, free]);
+  const byId = useMemo(() => new Map(rows.map((row, i) => [rowKey(row.id, row.rocketclaw), titles[i] ?? ""])), [rows, titles]);
+  const matches = useCallback((row: Session) => !free || !!byId.get(rowKey(row.id, row.rocketclaw))?.includes(free), [byId, free]);
   const titled = useMemo(() => sessions ? rows.filter(matches) : rows, [rows, sessions, matches]);
   const passed = useMemo(() => search.rows.filter(matches), [search.rows, matches]);
   // A failed filtered search lists nothing rather than title matches that never passed its filters.
@@ -2168,6 +2204,15 @@ function useRemoteCreation(query: string, close: () => void, restart: () => void
   };
 }
 
+// A ref for the last list row that grows the list once the row nears its scroll root.
+function loadMore(root: (node: HTMLElement) => Element | null, grow: () => void) {
+  return (node: HTMLElement | null) => {
+    const observer = new IntersectionObserver(([entry]) => { if (entry.isIntersecting) grow(); }, { root: root(node!), rootMargin: "0px 0px 100% 0px" });
+    observer.observe(node!);
+    return () => observer.disconnect();
+  };
+}
+
 // Paging bounds initial/edit work; deep browsing or wrapping to the last row still mounts it all. Window rows if that becomes costly.
 function usePalettePage<T extends { key: string }>(items: T[], pick: string, key: string) {
   const [budget, setBudget] = useState({ key, rows: 50 });
@@ -2179,13 +2224,7 @@ function usePalettePage<T extends { key: string }>(items: T[], pick: string, key
   return {
     selected, handoffsOnly,
     shown: items.slice(0, drawn),
-    next: drawn < items.length ? <li aria-hidden ref={(node) => {
-      const observer = new IntersectionObserver(([entry]) => {
-        if (entry.isIntersecting) setBudget({ key, rows: drawn + 50 });
-      }, { root: node!.parentElement, rootMargin: "0px 0px 100% 0px" });
-      observer.observe(node!);
-      return () => observer.disconnect();
-    }} /> : null,
+    next: drawn < items.length ? <li aria-hidden ref={loadMore((node) => node.parentElement, () => setBudget({ key, rows: drawn + 50 }))} /> : null,
   };
 }
 
@@ -2195,15 +2234,15 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
   // Arrowing onto a session shows it in the preview tab. The palette remounts per opening and keeps acting on the
   // location it opened at, returning there when dismissed and before running a choice. Typing, or pressing a
   // command, returns there first, so commands render, and run, with that location's state.
-  const at = () => location.pathname + location.search + location.hash;
+  const at = () => pagePath() + location.search + location.hash;
   const tabs = useContext(TabActions);
-  const [origin] = useState(() => ({ path: location.pathname, href: at(), space: tabs.state.spaces.find((space) => space.id === tabs.state.space)! }));
+  const [origin] = useState(() => ({ path: pagePath(), href: at(), space: tabs.state.spaces.find((space) => space.id === tabs.state.space)! }));
   const id = pathSession(origin.path);
   const back = () => { if (at() !== origin.href) flushSync(() => navigate(origin.href, true)); };
   // Only a session that opens in this space is shown, so browsing never switches spaces.
   const peek = (session?: Session) => {
     const path = session ? rowPath(session) : "", tab = tabs.state.tabs.find((item) => item.path === path);
-    const here = session && (tab ? tab.space === tabs.state.space : !session.spaceId || session.spaceId === tabs.state.space);
+    const here = session && (session.rocketclaw ?? "") === server() && (tab ? tab.space === tabs.state.space : !session.spaceId || session.spaceId === tabs.state.space);
     const target = here ? path : origin.href;
     if (target !== at()) navigate(target, true);
   };
@@ -2287,7 +2326,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
       // In session search, Enter runs a command containing the typed text or one picked with the arrows; a fuzzy one on top yields to the sessions, then to Search for plain text.
       if (item && !item.session && (mode !== "sessions" || item.key === pick || item.key !== searchEverywhereKey && item.key !== searchInSpaceKey && item.label!.toLowerCase().includes(query.trim().toLowerCase()))) return choose(item);
       setEntered(true);
-      search.enter(() => { const row = item?.session ? item : items.find(({ session }) => session) ?? items.find(({ key }) => !filtered && key === searchEverywhereKey); if (row) choose(row); }, (sessions) => { const session = sessions.find(matches); if (session) choose({ key: session.id, session, run: () => tabs.open(rowPath(session)) }); });
+      search.enter(() => { const row = item?.session ? item : items.find(({ session }) => session) ?? items.find(({ key }) => !filtered && key === searchEverywhereKey); if (row) choose(row); }, (sessions) => { const session = sessions.find(matches); if (session) choose({ key: rowKey(session.id, session.rocketclaw), session, run: () => openRow(tabs, session) }); });
     });
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       setPick(items[next % items.length]?.key ?? "");
@@ -2299,7 +2338,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
       <DialogContent initialFocus={input} showCloseButton={false} className="top-[20%] flex max-h-[75vh] translate-y-0 flex-col overflow-hidden sm:max-w-lg [@media(pointer:coarse)]:top-[var(--search-top,1rem)] [@media(pointer:coarse)]:max-h-[var(--search-height,75vh)]">
         <DialogTitle className="sr-only">{copy.title}</DialogTitle>
         <DialogDescription className="sr-only">{copy.desc}</DialogDescription>
-        {mode === "sessions" ? <SessionSearch rows={sidebar.rows} catalog={agents.data?.agents ?? []} query={query} setQuery={(update) => { setPick(""); setEntered(false); setQuery(update); peek(); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
+        {mode === "sessions" ? <SessionSearch rows={sidebar.all} catalog={agents.data?.agents ?? []} query={query} setQuery={(update) => { setPick(""); setEntered(false); setQuery(update); peek(); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
           ref={input}
           value={query}
           onChange={(event) => { setPick(""); setQuery(event.target.value); }}
@@ -2401,7 +2440,7 @@ const SessionRowContent = memo(function SessionRowContent({ session, age = relat
   const at = needle ? clean.toLowerCase().indexOf(needle) : -1;
   const shown = at > 24 ? "…" + clean.slice(clean.lastIndexOf(" ", at - 16) + 1) : title;
   const channel = slackSession(session) ? (session.title ?? "") : "";
-  const meta = [channel, session.server, session.offline ? "offline" : "", session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
+  const meta = [session.rocketclaw, channel, session.server, session.offline ? "offline" : "", session.agent, ...(session.tags ?? [])].filter(Boolean).join(" · ");
   const updated = session.updatedAt ? `Updated ${updatedFormat.format(new Date(session.updatedAt))}` : "";
   return <span className={cn("flex min-w-0 w-full flex-1 flex-col gap-0.5", session.offline && "opacity-60")}>
     <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className={cn("truncate", session.asking && "font-semibold text-amber-600 dark:text-amber-300")} title={clean}><InlineText text={shown} needle={needle || undefined} /></span></span>
@@ -2464,7 +2503,7 @@ function RemoteSession({ id }: { id: string }) {
     let view: Mounted | undefined, gone = false;
     void (import(/* @vite-ignore */ retries ? `${ocEntry}?retry=${retries}` : ocEntry) as Promise<OcModule>).then(({ mount }) => {
       if (gone) return;
-      view = mount(container.current!, { server, url: `${location.origin}/oc/${server}`, sessionID, navigation: { openSession, newSession, forkSession, closeTab, reportSession } });
+      view = mount(container.current!, { server, url: `${serverURL() || location.origin}/oc/${server}`, sessionID, navigation: { openSession, newSession, forkSession, closeTab, reportSession } });
       Object.assign(remoteView, { route: id, shown: sessionID, openPalette: view.openPalette });
     }, (error: Error) => setFailed(error.message));
     return () => {
@@ -2501,7 +2540,7 @@ function HostedPage({ page }: { page: string }) {
     return () => removeEventListener("message", read);
   }, [agent, token]);
   if (!page) return null;
-  return <iframe ref={frame} title={pageLabel(page)} sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads" className="min-h-0 w-full flex-1 border-0" src={`/pages-raw/${page}#rc=${token}`} />;
+  return <iframe ref={frame} title={pageLabel(page)} sandbox="allow-scripts allow-popups allow-forms allow-modals allow-downloads" className="min-h-0 w-full flex-1 border-0" src={`${serverURL()}/pages-raw/${page}#rc=${token}`} />;
 }
 
 // The current space's pages and spaceless agents' pages, which the server lists by agent and path. Each links
@@ -2678,7 +2717,7 @@ function SearchTabs({ path, owner, inShared, page, link, consumeLink }: { path: 
   // A link to the page with ?q= while it is open, like Cmd/Ctrl+P's hand-off, opens that query as at mount; replaceState sends no popstate.
   const opened = useEffectEvent(() => {
     const query = new URLSearchParams(location.search).get("q");
-    if (location.pathname === path && query) update(withQuery(savedRef.current, query));
+    if (pagePath() === path && query) update(withQuery(savedRef.current, query));
   });
   useEffect(() => {
     const listener = () => opened();
@@ -2696,7 +2735,7 @@ function SearchTabs({ path, owner, inShared, page, link, consumeLink }: { path: 
   const search = useSearch();
   useEffect(() => {
     const params = new URLSearchParams(tab.query ? { q: tab.query } : {});
-    history.replaceState(history.state, "", `${path}${params.size ? `?${params}` : ""}`);
+    history.replaceState(history.state, "", `${serverPath(path)}${params.size ? `?${params}` : ""}`);
   }, [tab, search, path]);
   useLayoutEffect(() => {
     if (rename !== null) { activeTab.current!.focus(); window.getSelection()?.selectAllChildren(activeTab.current!); }
@@ -2765,7 +2804,7 @@ function SearchTabs({ path, owner, inShared, page, link, consumeLink }: { path: 
       <Select items={boardChoices} value={page?.board ?? ""} onValueChange={(board) => tabs.editSearch(path, { board: board as string }, inShared)}><SelectTrigger aria-label="Board style" className="shrink-0"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{boardChoices.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent></Select>
       {page?.board ? <Button variant={tab.notify ? "default" : "outline"} size="icon" aria-label="Notify" title="Notify when a session enters this lane" aria-pressed={!!tab.notify} onClick={() => edit(() => ({ notify: !tab.notify }))}><BellRing className="size-4" /></Button> : null}
     </div>
-    <SearchResults key={tab.id} tab={tab} rows={sidebar.rows} catalog={agents.data?.agents ?? []} edit={edit} input={input} board={page?.board} />
+    <SearchResults key={tab.id} tab={tab} rows={sidebar.all} catalog={agents.data?.agents ?? []} edit={edit} input={input} board={page?.board} />
     {page?.board ? <Board style={page.board} /> : null}
   </section>;
 }
@@ -2794,9 +2833,9 @@ function SearchResultGroup({ session, hits, text, field, needle, tagIds, drawn }
   const count = hits.length + Number(!!field);
   const label = sessionTitle(session);
   const clean = useCleanText(label);
-  const row = (href: string, kind: string, body: string, key?: string) => <li key={key}><Link href={href} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><span className="w-16 shrink-0 text-xs text-muted-foreground">{kind}</span><div className="min-w-0"><TranscriptText text={windowed(body, needle, tagIds)} needle={needle} interactive={false} /></div></Link></li>;
+  const row = (href: string, kind: string, body: string, key?: string) => <li key={key}><Link href={href} server={session.rocketclaw ?? ""} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><span className="w-16 shrink-0 text-xs text-muted-foreground">{kind}</span><div className="min-w-0"><TranscriptText text={windowed(body, needle, tagIds)} needle={needle} interactive={false} /></div></Link></li>;
   return <li role="group" aria-label={clean} className="min-w-0">
-    <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={rowPath(session)} title={clean} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring"><InlineText text={label} /></Link><span className="shrink-0 text-muted-foreground">({count})</span>{session.pinned ? <Pin aria-label="Pinned" className="size-3 shrink-0" /> : null}</h2>
+    <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={rowPath(session)} server={session.rocketclaw ?? ""} title={clean} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring"><InlineText text={label} /></Link><span className="shrink-0 text-muted-foreground">({count})</span>{session.pinned ? <Pin aria-label="Pinned" className="size-3 shrink-0" /> : null}</h2>
     <ul className="mt-1 border-l pl-2 text-sm leading-5">
       {field ? row(rowPath(session), field, text) : null}
       {hits.slice(0, drawn - Number(!!field)).map((match, i) => row(sessionPath(session.id) + (match.message.messageId ? `?message=${encodeURIComponent(match.message.messageId)}` : ""), match.message.role === "user" ? "You" : "Assistant", match.message.text, match.message.messageId || String(i)))}
@@ -2826,13 +2865,13 @@ function SearchResults({ tab, rows, catalog, edit, input, board }: { tab: SavedS
   const [budget, setBudget] = useState({ response, rows: searchPage });
   const rowsDrawn = budget.response === response ? budget.rows : searchPage;
   const { groups, more } = useMemo(() => {
-    const hits = Map.groupBy(response?.messages ?? [], (match) => match.conversationId);
+    const hits = Map.groupBy(response?.messages ?? [], (match) => rowKey(match.conversationId, match.rocketclaw));
     let left = rowsDrawn;
     const groups = [];
     for (const { match, session } of search.found) {
       if (left <= 0) break;
-      const own = hits.get(session.id) ?? [];
-      groups.push(<SearchResultGroup key={session.id} session={session} hits={own} text={match.text} field={match.field} needle={response!.needle} tagIds={response!.mentionIds} drawn={left} />);
+      const own = hits.get(rowKey(session.id, session.rocketclaw)) ?? [];
+      groups.push(<SearchResultGroup key={rowKey(session.id, session.rocketclaw)} session={session} hits={own} text={match.text} field={match.field} needle={response!.needle} tagIds={response!.mentionIds} drawn={left} />);
       left -= own.length + Number(!!match.field);
     }
     return { groups, more: left < 0 || groups.length < search.found.length };
@@ -2845,13 +2884,7 @@ function SearchResults({ tab, rows, catalog, edit, input, board }: { tab: SavedS
       <SearchStatus search={search} empty={!!search.sent && !search.pending && !search.error && search.found.length === 0} incomplete={!searchIsAuthoritative(sidebar) || search.missing} />
       {search.sent ? <ul data-pending={search.pending} className="flex min-w-0 flex-col gap-4 data-[pending=true]:opacity-50">
         {groups}
-        {more ? <li aria-hidden ref={(node) => {
-          const observer = new IntersectionObserver(([entry]) => {
-            if (entry.isIntersecting) setBudget((last) => ({ response, rows: (last.response === response ? last.rows : searchPage) + searchPage }));
-          }, { root: node!.closest('[aria-label="Search results"]'), rootMargin: "0px 0px 100% 0px" });
-          observer.observe(node!);
-          return () => observer.disconnect();
-        }} /> : null}
+        {more ? <li aria-hidden ref={loadMore((node) => node.closest('[aria-label="Search results"]'), () => setBudget((last) => ({ response, rows: (last.response === response ? last.rows : searchPage) + searchPage })))} /> : null}
       </ul> : <p className="text-muted-foreground">Type to search messages and conversations.</p>}
     </div>}
   </>;
@@ -3152,7 +3185,7 @@ function MessageAttachment({ file, conversationId }: { file: NonNullable<Line["a
     setPreview(url);
     return () => URL.revokeObjectURL(url);
   }, [file.file]);
-  const url = file.file ? preview : `/api/DownloadAttachment?${new URLSearchParams({ conversationId, id: file.id })}`;
+  const url = file.file ? preview : `${serverURL()}/api/DownloadAttachment?${new URLSearchParams({ conversationId, id: file.id })}`;
   const image = /^image\/(png|jpeg|gif|webp|avif)$/.test(file.mimeType);
   return <Attachment orientation={image ? "vertical" : "horizontal"}>
     <AttachmentMedia variant={image ? "image" : "icon"}>{image ? <img src={url} alt={file.name} loading="lazy" /> : <FileIcon />}</AttachmentMedia>
@@ -3454,7 +3487,7 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Tur
   const { scrollToMessage } = useMessageScroller();
   const target = useContext(SessionCommands).command?.target;
   const search = useSearch();
-  const messageId = conversationId && location.pathname === sessionPath(conversationId) ? new URLSearchParams(search).get("message") : null;
+  const messageId = conversationId && pagePath() === sessionPath(conversationId) ? new URLSearchParams(search).get("message") : null;
   const targetId = messageId ?? (target?.conversationId === conversationId ? target.message.messageId : null);
   const targetTurn = targetId ? turns.findIndex((turn) => turn.user.some((line) => line.messageId === targetId) || turn.items.some((line) => line.role === "assistant" && line.messageId === targetId)) : -1;
   const targetKey = targetTurn < 0 ? undefined : turnKey(turns[targetTurn]);
@@ -3932,7 +3965,7 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
   const setLines = useCallback((update: (current: Line[]) => Line[]) => { draft.lines = update(draft.lines); onDraftChange(); }, [draft, onDraftChange]);
   useEffect(() => {
     if (!id || !scope) return;
-    const stream = new EventSource(`/stream?${new URLSearchParams({ id })}`);
+    const stream = new EventSource(`${serverURL()}/stream?${new URLSearchParams({ id })}`);
     void refreshHistory();
     stream.onopen = () => { void refreshHistory(); };
     stream.onmessage = (event) => {
@@ -4014,14 +4047,14 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   const route = useRoute();
   // This Transcript stays mounted, hidden, on other pages; a created chat opens once the new-chat page shows again.
   useLayoutEffect(() => {
-    if (location.pathname === "/" && id === "" && draft.sessionId !== "" && drafts.get("") === draft) {
+    if (pagePath() === "/" && id === "" && draft.sessionId !== "" && drafts.get("") === draft) {
       drafts.delete("");
       onCreated(draft.sessionId);
       route.goSession(draft.sessionId);
     }
   });
   const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, shadows, more, start, loadEarlier, movable, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
-  const messageId = location.pathname === sessionPath(id) ? new URLSearchParams(search).get("message") : null;
+  const messageId = pagePath() === sessionPath(id) ? new URLSearchParams(search).get("message") : null;
   const matchedOrigin = (previewLines ?? lines).find((line) => line.messageId === messageId)?.origin;
   // A linked message older than the loaded entries loads every entry from it onward.
   const linkedEntry = messageId?.split(":")[0];
@@ -4221,7 +4254,7 @@ async function sendComposer(input: {
       input.onDraftChange();
     } else if (!enqueue) input.setLines((current) => [...current, optimistic]);
     const attachments: AttachmentMeta[] = await Promise.all(input.files.map(async ({ file }) => {
-      const response = await fetch(`/api/UploadAttachment?${new URLSearchParams({ conversationId: sessionId, name: file.name })}`, { method: "POST", body: file });
+      const response = await fetch(`${serverURL()}/api/UploadAttachment?${new URLSearchParams({ conversationId: sessionId, name: file.name })}`, { method: "POST", body: file });
       if (!response.ok) throw new Error(`Upload failed: ${file.name}`);
       return response.json();
     }));
@@ -5116,17 +5149,10 @@ function CronPage() {
             <span className="flex w-36 shrink-0 items-center gap-1 text-xs">{job ? run.button(stem) : <span className="size-6 shrink-0" />}<Link href={cronPath(stem)} className="truncate hover:underline">{stem}</Link></span>
             <div className="relative h-4 min-w-0 flex-1 rounded-sm bg-muted">
               <button type="button" className="absolute inset-0 rounded-sm focus-visible:outline-2" aria-label={`Preview latest run of ${stem}`} disabled={jobRuns.length === 0} onClick={() => setPreview(jobRuns[0] ?? null)} />
-              {(job?.upcoming ?? []).map((at) => {
+              {[...(job?.upcoming ?? []).map((at) => ({ key: at, at, label: `Expected ${stem} at ${cronWhen(at)} UTC`, tooltip: `Expected ${stem} at ${cronWhen(at)} UTC`, item: undefined })),
+                ...jobRuns.map((item) => ({ key: item.origin, at: item.lastRun, label: `Preview ${item.stem} at ${cronWhen(item.lastRun)} UTC`, tooltip: `Ran ${cronWhen(item.lastRun)} UTC`, item }))].map(({ key, at, label, tooltip, item }) => {
                 const pct = ((Date.parse(at) - start) / (36 * 3_600_000)) * 100;
-                if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
-                  return null;
-                }
-                return <CronMarker key={at} label={`Expected ${stem} at ${cronWhen(at)} UTC`} tooltip={`Expected ${stem} at ${cronWhen(at)} UTC`} pct={pct} ran={false} />;
-              })}
-              {jobRuns.map((item) => {
-                const pct = ((Date.parse(item.lastRun) - start) / (36 * 3_600_000)) * 100;
-                if (!Number.isFinite(pct) || pct < 0 || pct > 100) return null;
-                return <CronMarker key={item.origin} label={`Preview ${item.stem} at ${cronWhen(item.lastRun)} UTC`} tooltip={`Ran ${cronWhen(item.lastRun)} UTC`} pct={pct} ran onClick={() => setPreview(item)} />;
+                return Number.isFinite(pct) && pct >= 0 && pct <= 100 ? <CronMarker key={key} label={label} tooltip={tooltip} pct={pct} ran={!!item} onClick={item && (() => setPreview(item))} /> : null;
               })}
             </div>
           </div>
@@ -5378,24 +5404,12 @@ function AgentsPage() {
           </button>
           {open === agent.name ? (
             <div className="mt-3 flex flex-col gap-3">
-              {agent.customShell ? (
-                <div>
-                  <h3 className="text-xs font-medium text-muted-foreground">Shell</h3>
-                  <pre className="mt-1 whitespace-pre-wrap text-xs">{agent.customShell}</pre>
+              {([["Shell", agent.customShell], ["Permissions", agent.permissions], ["Prompt", agent.prompt]] as const).map(([title, text]) => text ? (
+                <div key={title}>
+                  <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
+                  <pre className={cn("mt-1 whitespace-pre-wrap text-xs", title === "Prompt" && "leading-relaxed")}>{text}</pre>
                 </div>
-              ) : null}
-              {agent.permissions ? (
-                <div>
-                  <h3 className="text-xs font-medium text-muted-foreground">Permissions</h3>
-                  <pre className="mt-1 whitespace-pre-wrap text-xs">{agent.permissions}</pre>
-                </div>
-              ) : null}
-              {agent.prompt ? (
-                <div>
-                  <h3 className="text-xs font-medium text-muted-foreground">Prompt</h3>
-                  <pre className="mt-1 whitespace-pre-wrap text-xs leading-relaxed">{agent.prompt}</pre>
-                </div>
-              ) : null}
+              ) : null)}
             </div>
           ) : null}
         </section>

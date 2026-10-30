@@ -6,10 +6,8 @@ export type TranscriptEvent = { text: string; role: string; complete: boolean; t
 export type CodeModeCall = { name: string; arguments?: string; status?: "running" | "ok" | "error" | "denied"; outcome?: "allow" | "deny"; reason?: string; reviewTurn?: string };
 export type BackgroundJob = { jobId: string; kind: string; state: string; label: string; toolCallId: string; subagentKey: string; stoppedBy: string; hidden: boolean; note: string };
 export type PendingQuestion = { id: string; question: string; details: string; options: { label: string; value: string; description: string }[]; multiple: boolean };
-export type SessionEntryMeta = { id: string; type?: string; timestamp?: string };
-export type SessionEntryData = { id: string; json?: string };
 export type QueueItem = { id: string; text: string; editText?: string; attachments?: Attachment[]; delivery?: PromptDelivery; principal?: string };
-export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; running?: boolean; background?: boolean; pinned?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean; spaceId?: string; reply?: string; model?: string; kind?: ConversationKind; remoteSessionId?: string; label?: string; unreadAt?: string; asking?: boolean; workState?: "IDLE" | "NEEDS_YOU" | "RUNNING" | "QUEUED"; stateSince?: string; external?: boolean; arrivedAt?: string };
+export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; running?: boolean; background?: boolean; pinned?: boolean; name?: string; forkedFrom?: string; tags?: string[]; cron?: boolean; cronName?: string; server?: string; directory?: string; offline?: boolean; spaceId?: string; reply?: string; model?: string; kind?: ConversationKind; remoteSessionId?: string; label?: string; unreadAt?: string; asking?: boolean; workState?: "IDLE" | "NEEDS_YOU" | "RUNNING" | "QUEUED"; stateSince?: string; external?: boolean; arrivedAt?: string; rocketclaw?: string };
 export type ConversationKind = "WEB_CHAT" | "SLACK_THREAD" | "CRON_RUN" | "ONE_OFF_CRON_RUN" | "EXTERNAL_MCP_RUN" | "SUBAGENT" | "REVIEW" | "SHADOW" | "REMOTE_OPENCODE";
 // Remote OpenCode servers with their origins, and the tags people may set on their sessions.
 export type Remote = { servers: Record<string, string>; agentTags: Record<string, string[]> };
@@ -18,10 +16,10 @@ export type ChatOrigin = { kind: string; sourcePath?: string; stem?: string; run
 export type ShadowTurn = { parentSourceConversationId: string; parentTurnId: string; childTurnId: string; order: string; running: boolean; terminal: string; revision: string };
 export type ShadowBinding = { parentConversationId: string; parentAgent: string; shadowAgent: string; childConversationId: string; turns: ShadowTurn[] };
 export type HistoryView = { messages: TranscriptEvent[]; origin?: ChatOrigin; delegations: string[]; reviewRationales?: Record<string, string>; revision: string; reset: boolean; replacedKeys: string[]; removedKeys: string[]; entryKeys: string[]; running: boolean; terminal: string; start: string; more: boolean; revertEligible?: boolean; revertMessageId?: string; revertFloor?: string; canUndo?: boolean; movable: boolean; backgroundJobs: BackgroundJob[]; pendingQuestions?: PendingQuestion[]; shadows?: ShadowBinding[]; lineage?: { id: string; kind?: ConversationKind; agent?: string }[] };
-export type MessageMatch = { conversationId: string; message: TranscriptEvent };
+export type MessageMatch = { conversationId: string; message: TranscriptEvent; rocketclaw?: string };
 export type SearchMessagesResponse = { matches?: MessageMatch[]; tagIds?: string[] };
 // Term offsets are UTF-16 positions in the sent query; an empty match field means only message text matched.
-export type SearchSessionsResponse = { terms: { key: string; text: string; start: number; end: number }[]; text: string; needle: string; matches: { conversationId: string; field: string; text: string }[]; messages: MessageMatch[]; mentionIds: string[]; principals?: string[] };
+export type SearchSessionsResponse = { terms: { key: string; text: string; start: number; end: number }[]; text: string; needle: string; matches: { conversationId: string; field: string; text: string; rocketclaw?: string }[]; messages: MessageMatch[]; mentionIds: string[]; principals?: string[] };
 export type SessionBatch = { sessions: Session[]; owner: string; upstreamSuccess: boolean; opencodeServers?: Remote["servers"]; agentTags?: Record<string, { tags?: string[] }>; version?: string; order?: string[] };
 export type AgentChoices = { agents: Agent[]; currentAgent: string };
 export type CronJob = { stem: string; status: string; lastRun: string; nextRun: string; schedule?: string; body?: string; agent?: string; upcoming?: string[]; origin?: string; space?: string };

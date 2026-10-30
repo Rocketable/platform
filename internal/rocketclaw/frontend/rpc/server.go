@@ -42,12 +42,11 @@ import (
 
 // Server supplies concrete Web handlers. The host owns transport registration.
 type Server struct {
-	backend   frontend.Backend
-	sessions  *backend.SessionService
-	usernames map[netip.Addr]string
-	cfg       *config.LockedConfig
-	channels  ChannelAgentChoices
-	cronjobs  CronJobs
+	backend  frontend.Backend
+	sessions *backend.SessionService
+	cfg      *config.LockedConfig
+	channels ChannelAgentChoices
+	cronjobs CronJobs
 
 	tailscaleMu    sync.Mutex
 	tailscaleUsers map[netip.Addr]tailscaleUser
@@ -102,11 +101,10 @@ type CronJobs interface {
 	RunOneOffCronjob(context.Context, *protocol.OneOffCronjob) (protocol.CronRunResult, error)
 }
 
-// New snapshots WebUsers from the validated startup configuration.
-// The host must restrict RPC access to the trusted Web proxy: the metadata
-// carries the browser IP, not an independently authenticated network peer.
+// New builds the Web handlers. The host must restrict RPC access to the trusted Web proxy:
+// the metadata carries the browser IP, not an independently authenticated network peer.
 func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, usernames: cfg.Clone().WebUsers, cfg: cfg, channels: channels, cronjobs: cronjobs, voiceCalls: map[string]*context.CancelCauseFunc{}, listings: map[string][]sessionListing{}}
+	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, voiceCalls: map[string]*context.CancelCauseFunc{}, listings: map[string][]sessionListing{}}
 }
 
 // ListSessionEntries returns ordered entry identifiers and metadata.
@@ -1900,10 +1898,6 @@ func (s *Server) principal(ctx context.Context) (username, principal string, err
 	ip, err := netip.ParseAddr(values[0])
 	if err != nil {
 		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "invalid browser IP"))
-	}
-
-	if username := s.usernames[ip]; username != "" {
-		return username, username, nil
 	}
 
 	return s.tailscaleUsername(ctx, ip)

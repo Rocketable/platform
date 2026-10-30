@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { RPCError, sse } from "./api";
+import { serverURL } from "./navigation";
 import type { Agent, VoiceEndReason, VoiceEvent, VoiceRoute } from "./types";
 
 export type VoiceState = "idle" | "connecting" | "reconnecting" | "live" | "ending" | "error";
@@ -182,7 +183,7 @@ export async function startVoice(conversationId: string, voice = "") {
       const init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationId, sdp: pc.localDescription!.sdp, voice }), signal };
       try {
         error = lost;
-        for await (const event of sse<VoiceEvent>("/api/Voice", init)) {
+        for await (const event of sse<VoiceEvent>(`${serverURL()}/api/Voice`, init)) {
           if (event.answer) {
             names = captionEvents[event.answer.route];
             await pc.setRemoteDescription({ type: "answer", sdp: event.answer.sdp });
