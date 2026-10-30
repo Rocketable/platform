@@ -439,10 +439,7 @@ func NewWithModelResolver(
 
 	maps.Copy(baseTools, customTools)
 
-	mcpRegistry, err := newMCPRegistry(config.MCPWorkspace, config.MCPServers)
-	if err != nil {
-		return nil, err
-	}
+	mcpRegistry := mcpclient.New(config.MCPWorkspace, config.MCPServers)
 
 	factory := &toolFactory{
 		resolver:                   resolver,

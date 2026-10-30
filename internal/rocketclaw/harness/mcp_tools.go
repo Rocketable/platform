@@ -31,19 +31,6 @@ const (
 	codeModeRawStringRule   = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in "...". Inside that string, bash(command=...) takes r'''...''' only, not Starlark "..." or '...'. r"..." is raw but single-line; a real newline needs r'''...'''. Example execute argument: {"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
 )
 
-func newMCPRegistry(workspace string, servers map[string]mcpclient.ServerConfig) (*mcpclient.Registry, error) {
-	if len(servers) == 0 {
-		return nil, nil
-	}
-
-	registry, err := mcpclient.New(workspace, servers)
-	if err != nil {
-		return nil, fmt.Errorf("create mcp registry: %w", err)
-	}
-
-	return registry, nil
-}
-
 func ruleMatchesMCPServer(pattern, server string) bool {
 	pattern = strings.TrimSpace(pattern)
 	if pattern == "" || pattern == "*" {
@@ -179,10 +166,7 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 		return nil
 	}
 
-	var servers []string
-	if f.mcpRegistry != nil {
-		servers = visibleMCPServers(agent.Permission, f.mcpRegistry.Names())
-	}
+	servers := visibleMCPServers(agent.Permission, f.mcpRegistry.Names())
 
 	if len(servers) == 0 && len(codeHosts) == 0 {
 		return nil
@@ -300,7 +284,7 @@ func listAllowedTools(ctx context.Context, session *mcpclient.Session, permissio
 	return tools, notes, nil
 }
 
-func callExecute(ctx context.Context, registry *mcpclient.Registry, permissions PermissionSet, visibleServers []string, retainedRel string, raw json.RawMessage) (result ToolResult, err error) {
+func callExecute(ctx context.Context, registry mcpclient.Registry, permissions PermissionSet, visibleServers []string, retainedRel string, raw json.RawMessage) (result ToolResult, err error) {
 	var params executeParams
 	if err := decodeToolParams(raw, &params); err != nil {
 		return ToolResult{}, fmt.Errorf("parse execute params: %w", err)
@@ -320,7 +304,7 @@ func callExecute(ctx context.Context, registry *mcpclient.Registry, permissions 
 		notes    []string
 	)
 
-	if registry != nil && len(visibleServers) > 0 {
+	if len(visibleServers) > 0 {
 		session := registry.Open()
 		defer func() {
 			// Close failures must not discard a successful script result.

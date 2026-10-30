@@ -62,10 +62,9 @@ func TestCodeModeHostInputSchemaRequiredFields(t *testing.T) {
 func TestMCPToolsOmitsWithoutAllow(t *testing.T) {
 	t.Parallel()
 
-	reg, err := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
+	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
 		"demo": {URL: "http://127.0.0.1:9"},
 	})
-	require.NoError(t, err)
 
 	factory := &toolFactory{mcpRegistry: reg, baseTools: makeSandboxedTools(nil, nil)}
 	assert.Nil(t, factory.mcpToolsFor(&Agent{}, nil))
@@ -642,11 +641,10 @@ func TestExecuteNestedToolDiagnosticNotDroppedWhenOutputFull(t *testing.T) {
 func TestMCPServerVisibility(t *testing.T) {
 	t.Parallel()
 
-	reg, err := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
+	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
 		"demo": {URL: "http://127.0.0.1:9"},
 		"acme": {URL: "http://127.0.0.1:9"},
 	})
-	require.NoError(t, err)
 
 	for _, tc := range []struct {
 		name, rules string
@@ -681,10 +679,9 @@ func TestMCPServerVisibility(t *testing.T) {
 func TestExecuteExactToolGrant(t *testing.T) {
 	t.Parallel()
 
-	reg, err := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
+	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
 		"github": {URL: "http://127.0.0.1:9"},
 	})
-	require.NoError(t, err)
 
 	var permissions PermissionSet
 	require.NoError(t, permissions.Allow("mcp", "github.create_issue"))
@@ -715,8 +712,7 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: full}}}, nil, nil
 		})
 	})
-	reg, err := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
-	require.NoError(t, err)
+	reg := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
 	permissions := parsePermissionYAML(t, "mcp: {'demo.*': allow}")
 	factory := &toolFactory{mcpRegistry: reg, baseTools: makeSandboxedTools(&sandboxedFileSystem{root: root}, nil), spillRel: defaultSpillRel, promptExpansion: promptExpansionEnvironment{root: root}}
 	loop := testLooper(mockResponses())
@@ -908,8 +904,7 @@ func TestExecuteSearchAndRun(t *testing.T) {
 		})
 	})
 
-	reg, err := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
-	require.NoError(t, err)
+	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
 
 	var permissions PermissionSet
 	require.NoError(t, permissions.Allow("mcp", "demo.*"))
@@ -994,10 +989,9 @@ func TestCodeModeSearchOpenCodeShape(t *testing.T) {
 func TestToolsForIncludesExecuteWhenConfigured(t *testing.T) {
 	t.Parallel()
 
-	reg, err := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
+	reg := mcpclient.New(t.TempDir(), map[string]mcpclient.ServerConfig{
 		"demo": {URL: "http://127.0.0.1:9"},
 	})
-	require.NoError(t, err)
 
 	var permissions PermissionSet
 	require.NoError(t, permissions.Allow("mcp", "demo.*"))
@@ -1206,8 +1200,7 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 			})
 		}
 	})
-	reg, err := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
-	require.NoError(t, err)
+	reg := mcpclient.New(root.Name(), map[string]mcpclient.ServerConfig{"demo": {URL: url}})
 
 	loop := testLooper(mockResponses())
 	outputs := map[string]string{"long": "x" + strings.Repeat("é", 150), "nul": "a\x00" + strings.Repeat("b", 2000), "invalid": "\xff" + strings.Repeat("c", 1024)}

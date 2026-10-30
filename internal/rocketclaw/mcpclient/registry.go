@@ -44,7 +44,7 @@ type Registry struct {
 }
 
 // New builds a registry. servers is copied; later mutation is ignored.
-func New(workspace string, servers map[string]ServerConfig) (*Registry, error) {
+func New(workspace string, servers map[string]ServerConfig) Registry {
 	cloned := make(map[string]ServerConfig, len(servers))
 	for name, cfg := range servers {
 		cfg.Args = slices.Clone(cfg.Args)
@@ -53,16 +53,16 @@ func New(workspace string, servers map[string]ServerConfig) (*Registry, error) {
 		cloned[name] = cfg
 	}
 
-	return &Registry{workspace: workspace, servers: cloned}, nil
+	return Registry{workspace: workspace, servers: cloned}
 }
 
 // Names returns configured server names in sorted order.
-func (r *Registry) Names() []string {
+func (r Registry) Names() []string {
 	return slices.Sorted(maps.Keys(r.servers))
 }
 
 // Open starts a session that connects servers lazily and closes them on Close.
-func (r *Registry) Open() *Session {
+func (r Registry) Open() *Session {
 	return &Session{reg: r, conns: make(map[string]*mcp.ClientSession)}
 }
 
@@ -76,7 +76,7 @@ type ToolInfo struct {
 
 // Session is one execute tool-call lifetime.
 type Session struct {
-	reg    *Registry
+	reg    Registry
 	mu     sync.Mutex
 	conns  map[string]*mcp.ClientSession
 	closed bool
