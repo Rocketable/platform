@@ -73,12 +73,9 @@ func TestJustBash(t *testing.T) {
 		name, settings, command, output string
 		success                         bool
 	}{
-		{"writes land in the folder", wd, "echo hi > f.txt; cat f.txt; pwd", "hi\n" + folder + "\n", true},
+		{"writes land in the folder, TMPDIR stays in memory and interpreters run", wd, `echo hi > f.txt && cat f.txt && pwd && f=$(mktemp) && echo t > $f && cat $f && echo $TMPDIR && python3 -c "print(6*7)" && js-exec -c "console.log(6*7)"`, "hi\n" + folder + "\nt\n/tmp\n42\n42\n", true},
 		{"files outside the folder are invisible", wd, "cat " + filepath.Join(workspace, "outside.txt"), "No such file or directory", false},
 		{"the host TMPDIR is invisible", wd, "ls " + tmp, "No such file or directory", false},
-		{"TMPDIR stays in memory", wd, "f=$(mktemp) && echo t > $f && cat $f && echo $TMPDIR", "t\n/tmp\n", true},
-		{"python", wd, `python3 -c "print(6*7)"`, "42\n", true},
-		{"javascript", wd, `js-exec -c "console.log(6*7)"`, "42\n", true},
 		{"host commands get only the host env", wd + "commands: {show: \"printf '%s,%s' \\\"$CUST\\\" \\\"$NEW\\\"\"}\n", "CUST=evil NEW=1 show", "cus_host,", true},
 		{"host commands may ignore their input", wd + "commands: {quick: \"true\"}\n", "yes | head -c 1048576 | quick; echo rc=$?", "rc=0", true},
 		{"host command bytes survive", wd + "commands: {bin: \"printf '\\\\377\\\\000\\\\001'\"}\n", "bin > bin.dat && base64 bin.dat", "/wAB\n", true},
