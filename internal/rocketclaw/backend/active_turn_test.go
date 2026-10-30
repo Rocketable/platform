@@ -1877,6 +1877,57 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 	assert.Empty(t, nt.requests, "a second start replays nothing")
 }
 
+// A crash while a foreground task call waits on its subagent writes nothing, so both turns stay running.
+// The next start runs the subagent's prompt once, and the parent's replayed call delivers nothing again and
+// answers with that run.
+func TestCrashDuringForegroundTaskRunsSubagentOnce(t *testing.T) {
+	t.Parallel()
+
+	cut := make(chan struct{}, 1)
+	cut <- struct{}{}
+
+	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
+		switch {
+		case strings.Contains(body, `"instructions":"Research`):
+			select {
+			case <-cut:
+				<-r.Context().Done() // The crash freezes the subagent's first run.
+				return
+			default:
+			}
+
+			writeRawRunMessage(t, w, "resp", "msg", "found it")
+		case !strings.Contains(body, "function_call_output"):
+			writeRawRunFunctionCall(t, w, "resp", "task", map[string]string{"description": "research", "prompt": "research the flaky test", "subagent_type": "researcher"})
+		default:
+			answerNoteTest(w, r, n, body)
+		}
+	})
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n---\nPrompt\n")
+
+	// A crash runs no shutdown: the first process's bridges stay frozen while a new one starts on the same State Store.
+	first, _ := nt.run(t, ignoreOutbound)
+	require.NoError(t, nt.bridge(t, first, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
+	nt.request(t)
+	assert.Contains(t, nt.request(t), "research the flaky test", "the subagent's run is under way at the crash")
+	require.Len(t, runningTestTurns(t, nt.service), 2, "the parent's turn and its subagent's are both running")
+
+	manager, _ := nt.restart(t)
+	assert.Contains(t, nt.request(t), "research the flaky test", "the subagent session resumes its turn")
+	assert.Contains(t, nt.request(t), `<task_result>\nfound it\n</task_result>`, "the parent's replayed call answers with that turn")
+	assert.Equal(t, "answer", readFinal(t, nt.finals).Text)
+	nt.waitIdle(t, manager, nt.conversationID)
+	assert.Empty(t, nt.requests, "nothing runs twice")
+
+	subagents, err := queryStrings(t.Context(), nt.service.db, `SELECT conversation_id FROM conversations WHERE parent_conversation_id = $1`, "subagent sessions", nt.conversationID)
+	require.NoError(t, err)
+	require.Len(t, subagents, 1)
+	inputs, err := queryStrings(t.Context(), nt.service.db, `WITH items AS (SELECT jsonb_array_elements(entry_json::jsonb->'replay_input') AS item FROM entries WHERE conversation_id = $1)
+SELECT item->>'input_id' FROM items WHERE item->>'input_id' <> ''`, "subagent inputs", subagents[0])
+	require.NoError(t, err)
+	assert.Len(t, inputs, 1, "the subagent took its prompt once")
+}
+
 // The killed note wakes the hidden cron run, and its follow-up is posted in the thread the run posted.
 func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 	t.Parallel()

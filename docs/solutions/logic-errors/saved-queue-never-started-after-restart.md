@@ -43,7 +43,7 @@ Keep queued conversations through retention, then discover the distinct conversa
 
 Since 2026-10-05 (step-journal change) there is no separate recovery phase. An interrupted turn is a lane-taking `turns` row that is neither `waiting` nor `done`; each worker runs its oldest such row, its own or that of a hidden run that reports to it, before anything else (`headTurn`), and `StartActiveTurns` wakes those workers before `StartQueuedConversations`. A turn that failed or was stopped is kept with phase `done` for the transcript, so it never holds back later queue rows.
 
-```1872:1875:internal/rocketclaw/backend/store.go
+```1863:1866:internal/rocketclaw/backend/store.go
 	pending, err := conversationHasPendingWork(ctx, db, conversationID)
 	if err != nil || pending {
 		return false, err
@@ -52,7 +52,7 @@ Since 2026-10-05 (step-journal change) there is no separate recovery phase. An i
 
 `conversationHasPendingWork` counts, among other work, `SELECT 1 FROM turns WHERE conversation_id = $1 AND phase = 'waiting'`.
 
-```406:419:internal/rocketclaw/backend/thread_bridges.go
+```400:414:internal/rocketclaw/backend/thread_bridges.go
 func (m *threadBridgeManager) StartQueuedConversations(ctx context.Context) error {
 	conversationIDs, err := queryStrings(ctx, m.store.db, `SELECT conversation_id FROM turns WHERE phase = 'waiting' AND reason <> $1
 UNION SELECT conversation_id FROM steps WHERE starts_with(key, $2) ORDER BY conversation_id`, "queued conversation IDs", waitScheduled, stopLineStep)

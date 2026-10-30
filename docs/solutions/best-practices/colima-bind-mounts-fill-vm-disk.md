@@ -51,7 +51,7 @@ colima ssh -- sudo sh -c 'du -xh -d4 /Users | sort -h | tail'
 
 Delete stale data only from inside the VM. Removing the matching folder on the Mac frees nothing, and on the Mac those folders usually do not exist. Before deleting, confirm no container mounts the path (`docker ps -a --format '{{.Names}} {{.Mounts}}'`), and leave recent folders alone, since another loop may still be using them.
 
-For container data that should not outlive the run, prefer the container's own storage, as `make test` does: its PostgreSQL has no bind mount, and its container is removed on exit. `make test` removes it without `-v`, so the image's anonymous volume stays on the VM disk until `docker volume prune`. Data bind-mounted under `.tmp/` is not removed when the repo's `.tmp/` is cleaned on the Mac.
+For container data that should not outlive the run, prefer the container's own storage, as `make test` does: its PostgreSQL has no bind mount, and its container is removed on exit together with the image's anonymous volume (`docker rm -f -v`). Data bind-mounted under `.tmp/` is not removed when the repo's `.tmp/` is cleaned on the Mac.
 
 ## Why This Matters
 

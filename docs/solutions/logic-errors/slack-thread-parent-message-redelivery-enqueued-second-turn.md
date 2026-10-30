@@ -48,9 +48,9 @@ All of this is history. The connector code it names has been removed.
 
 Slack intake is now mention-only, and duplicates are refused at one durable point.
 
-1. The connector handles only channel renames, `AppMentionEvent` and `AgentSessionStoppedEvent` (`internal/rocketclaw/frontend/slack/connector.go:1013-1022`). Plain messages, including the parent `message` redelivery, never reach the router. Nothing else in Slack drives an agent.
-2. `handleAppMentionEvent` (`internal/rocketclaw/frontend/slack/connector.go:1076-1164`) builds the inbound message and calls `threadRouter.SubmitMention` (line 1148). It adds the robot reaction only when the mention is accepted (lines 1160-1163). A refused redelivery returns `false, nil`, so it gets no reaction and no failure reply.
-3. `threadBridgeManager.SubmitMention` (`internal/rocketclaw/backend/thread_bridges.go:323-379`) makes the Thread Queue item ID `"slack:" + channel + ":" + message ts` (line 325). Inside one State Store transaction, holding the session history lock, it checks for that ID in two places: any model turn row (`turns` with `takes_lane`, whether waiting, running or finished) and saved history (`entries` whose `replay_input` carries that `input_id`) (SQL at lines 343-350). If it finds the ID, it returns `false, nil` (lines 354-355) and writes nothing.
+1. The connector handles only channel renames, `AppMentionEvent` and `AgentSessionStoppedEvent` (`internal/rocketclaw/frontend/slack/connector.go:1011-1020`). Plain messages, including the parent `message` redelivery, never reach the router. Nothing else in Slack drives an agent.
+2. `handleAppMentionEvent` (`internal/rocketclaw/frontend/slack/connector.go:1074-1162`) builds the inbound message and calls `threadRouter.SubmitMention` (line 1146). It adds the robot reaction only when the mention is accepted (lines 1158-1161). A refused redelivery returns `false, nil`, so it gets no reaction and no failure reply.
+3. `threadBridgeManager.SubmitMention` (`internal/rocketclaw/backend/thread_bridges.go:317-373`) makes the Thread Queue item ID `"slack:" + channel + ":" + message ts` (line 319). Inside one State Store transaction, holding the session history lock, it checks for that ID in two places: any model turn row (`turns` with `takes_lane`, whether waiting, running or finished) and saved history (`entries` whose `replay_input` carries that `input_id`) (SQL at lines 337-344). If it finds the ID, it returns `false, nil` (lines 348-349) and writes nothing.
 
 Tests that pin this behavior:
 

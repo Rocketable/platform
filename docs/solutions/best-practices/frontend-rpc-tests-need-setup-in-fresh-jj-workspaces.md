@@ -47,7 +47,7 @@ A plain `go test ./...`, which `AGENTS.md` requires, runs the `internal/rocketcl
 
 ### Web packages and Playwright
 
-Seven Go tests in `internal/rocketclaw/frontend/rpc` start a real backend and then run a Bun test file against it through `runWebTest` (`internal/rocketclaw/frontend/rpc/server_test.go:3855`). That helper runs `bun test <file>` in `internal/rocketclaw/web` with the parent's environment plus the test's URLs (`server_test.go:3872`–`3875`). It does not skip anything. Six of the seven Bun files open real Chromium. They are `TestSessionEntries`, `TestPagesRealBrowser`, `TestPublicProgressRealBrowser`, `TestReloadRealBackendBrowser`, `TestRevertRealBackendBrowser` and `TestShadowsRealBackendBrowser`. The seventh, `TestSidebarHTTPStreamsBeforeGoTailAndCancels`, needs only the web packages.
+Seven Go tests in `internal/rocketclaw/frontend/rpc` start a real backend and then run a Bun test file against it through `runWebTest` (`internal/rocketclaw/frontend/rpc/server_test.go:3839`). That helper runs `bun test <file>` in `internal/rocketclaw/web` with the parent's environment plus the test's URLs (`server_test.go:3842`–`3845`). It does not skip anything. Six of the seven Bun files open real Chromium. They are `TestSessionEntries`, `TestPagesRealBrowser`, `TestPublicProgressRealBrowser`, `TestReloadRealBackendBrowser`, `TestRevertRealBackendBrowser` and `TestShadowsRealBackendBrowser`. The seventh, `TestSidebarHTTPStreamsBeforeGoTailAndCancels`, needs only the web packages.
 
 1. **The web packages in `internal/rocketclaw/web/node_modules`.** A new JJ workspace has none, because `internal/rocketclaw/web/.gitignore` ignores `node_modules` and each workspace is its own checkout. Without them, Bun cannot load `internal/rocketclaw/web/src/api.ts`, which starts with `import { captureException } from "@sentry/react"`. The tests fail with `Could not resolve "@sentry/react"`.
 2. **`ROCKETCLAW_PLAYWRIGHT_MODULE` and `ROCKETCLAW_CHROMIUM`.** `playwright-core` is not in `internal/rocketclaw/web/package.json`. The test files load it from the path in the variable, for example `await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!)` (`internal/rocketclaw/web/src/pages-transport.test.ts:5`). When the variable is unset, Bun is asked to import `undefined` and prints `Cannot find package 'undefined'`. Neither the error nor the stack names the variable. Running `await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!)` with the variable unset reproduces the exact message on Bun 1.4.4. The standalone `src/*.browser.test.ts` files do the same: run without the variables, they fail with this message rather than skip.
@@ -62,7 +62,7 @@ While building session write replies (PR #765), this cost three misdiagnoses in 
 
 The repository requires every temporary file to live under `<repo-root>/.tmp/`, so tests run with `TMPDIR` set there. Agent runs work in JJ workspaces nested inside that same directory, at `<main-checkout>/.tmp/workspaces/<date>-<slug>/`. Setting `TMPDIR` to that workspace's own `.tmp/` follows the rule, but on macOS it breaks the `frontend/rpc` tests.
 
-Many of those tests start real gRPC servers on Unix sockets. Each one gets its socket path from `testSocketPath` (`internal/rocketclaw/frontend/rpc/server_test.go:3881`):
+Many of those tests start real gRPC servers on Unix sockets. Each one gets its socket path from `testSocketPath` (`internal/rocketclaw/frontend/rpc/server_test.go:3851`):
 
 ```go
 dir, err := os.MkdirTemp(os.Getenv("TMPDIR"), "rpc-")
@@ -101,7 +101,7 @@ main=${PWD%%/.tmp/workspaces/*}
 mkdir -p .tmp "$main/.tmp/t"
 export TMPDIR="$main/.tmp/t"
 
-# 2. Web packages for this workspace (make test does this too; go test ./... does not).
+# 2. Web packages for this workspace (root make test does this too; go test ./... and make test in internal/rocketclaw/web do not).
 (cd internal/rocketclaw/web && bun install --frozen-lockfile)
 
 # 3. playwright-core and Chromium, shared by every workspace, at the version CI pins
@@ -120,7 +120,7 @@ EOF
 go test ./internal/rocketclaw/frontend/rpc/ -count=1
 ```
 
-Source `.tmp/test-env.sh` before every `go test ./...` and `make test`. Add `ROCKETCLAW_TEST_DATABASE_URL` to it when you run against a long-lived database. When a coordinator hands work to subagents, put the `. .tmp/test-env.sh` line in the worker rules. Each worker starts a fresh shell and will not inherit the variables.
+Source `.tmp/test-env.sh` before every `go test ./...` and `make test`. Add `ROCKETCLAW_TEST_DATABASE_URL` to it for plain `go test ./...` and for `make test` in `internal/rocketclaw/web`, which starts no database; only root `make test` starts its own PostgreSQL when the variable is unset (`internal/rocketclaw/Makefile:82`–`101`). When a coordinator hands work to subagents, put the `. .tmp/test-env.sh` line in the worker rules. Each worker starts a fresh shell and will not inherit the variables.
 
 `$main/.tmp/t` stays inside `<repo-root>/.tmp/` as the temporary-directory rule requires. Before a long run, check the budget: `printf %s "$TMPDIR" | wc -c` must print 86 or less. Do not use `$PWD/.tmp` or `$PWD/.tmp/test-tmp` from a workspace, and do not fall back to `/tmp`, which breaks the repository's temporary-directory rule.
 
