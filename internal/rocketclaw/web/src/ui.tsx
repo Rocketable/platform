@@ -1445,8 +1445,8 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
         const group = groups.find((item) => item.id === tab.group);
         const openEditor = () => setEditor({ id: group!.id, open: true }), chosen = tab.path !== pathname && selection.has(tab.path);
         // A collapsed group's name goes bold, like an unread tab's title, while any of its tabs is unread, and it
-        // says it needs you while any of their sessions waits on this person.
-        const hidden = group?.collapsed ? rows.filter((row) => shown.some((item) => item.group === group.id && row.id === pathSession(item.path))) : [];
+        // says it needs you while any of their sessions waits on this person. Only its header uses these badges.
+        const hidden = group?.collapsed && shown[index - 1]?.group !== group.id ? rows.filter((row) => shown.some((item) => item.group === group.id && row.id === pathSession(item.path))) : [];
         const unread = hidden.some((row) => row.unreadAt), asking = hidden.some((row) => row.asking);
         return [
           group && shown[index - 1]?.group !== group.id ? <div key={group.id} data-group={group.id} draggable className="flex shrink-0 items-center pt-1" onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>

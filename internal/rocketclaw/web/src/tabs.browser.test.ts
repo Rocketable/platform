@@ -750,6 +750,32 @@ test("with reduced motion a running tab's title shows a still gradient", () => w
   expect(await gradient("Alpha")).toBe("none");
 }), 60_000);
 
+test("collapsed group badges do not rescan sessions for each hidden tab", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const sessions = Array.from({ length: 200 }, (_, index) => ({ id: `group-row-${index}`, name: `Row ${index}`, agent: "main", unreadAt: index === 79 ? "2026-01-01T00:00:00Z" : "", asking: index === 79 }));
+  const tabs = sessions.slice(0, 80).map(({ id }) => ({ path: href(id), group: "work", space: "main" }));
+  saved.state = { ...saved.state, space: "main", tabs, groups: [{ id: "work", name: "Work", color: "Blue" }] };
+  await page.route("**/api/ListSessions*", (route: any) => route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n` }));
+  await page.goto(origin + tabs[0].path);
+  await strip(page).getByRole("tab", { name: "Row 79", exact: true }).waitFor();
+  await until(() => saved.revision > 0);
+  await page.evaluate(() => {
+    const original = window.atob, counts = window as unknown as { groupReads: number };
+    counts.groupReads = 0;
+    window.atob = (value) => {
+      const decoded = original(value);
+      if (decoded.startsWith("group-row-")) counts.groupReads++;
+      return decoded;
+    };
+  });
+  await strip(page).getByRole("button", { name: "Work", exact: true }).click();
+  const header = strip(page).locator('[data-group="work"]');
+  await header.getByText("Needs you", { exact: true }).waitFor();
+  expect(await names(page)).toEqual(["Row 0"]);
+  expect(await header.locator("button span").first().evaluate((node: HTMLElement) => getComputedStyle(node).fontWeight)).toBe("700");
+  // Count decoding work, not elapsed time; allow several renders, but not a scan per hidden tab.
+  expect(await page.evaluate(() => (window as unknown as { groupReads: number }).groupReads)).toBeLessThan(sessions.length * tabs.length * 8);
+}), 30_000);
+
 test("an unread tab shows a bold title", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const weight = (name: string) => tab(name).locator("span").evaluate((title: HTMLElement) => getComputedStyle(title).fontWeight);
