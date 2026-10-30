@@ -399,13 +399,10 @@ type responseFailureError struct {
 }
 
 type providerRateLimitError struct {
-	provider   string
 	code       string
 	typeName   string
 	message    string
 	retryAfter time.Duration
-	responseID string
-	requestID  string
 	cause      error
 }
 
@@ -430,19 +427,14 @@ func (e *providerRateLimitError) Unwrap() error {
 }
 
 type providerRetryLimitError struct {
-	provider   string
 	httpStatus int
 	requestID  string
 	cause      error
 }
 
 type providerUsageLimitError struct {
-	provider  string
-	code      string
-	typeName  string
-	message   string
-	requestID string
-	cause     error
+	message string
+	cause   error
 }
 
 func (e *providerUsageLimitError) Error() string {
@@ -458,12 +450,8 @@ func (e *providerUsageLimitError) Unwrap() error {
 }
 
 type providerUsageNotIncludedError struct {
-	provider  string
-	code      string
-	typeName  string
-	message   string
-	requestID string
-	cause     error
+	message string
+	cause   error
 }
 
 func (e *providerUsageNotIncludedError) Error() string {
@@ -1345,7 +1333,6 @@ func (l *looper) newProviderResponse(
 
 func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, observer responseObserver, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
 	attempt := 0
-	provider := l.ProviderOrigin.Provider
 
 	for {
 		var raw *http.Response
@@ -1371,7 +1358,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 					if errAPI.StatusCode == http.StatusTooManyRequests && (errAPI.Code == "too_many_requests" || errAPI.Type == "too_many_requests") {
 						attempt++
 						wait := providerRetryDelay(errAPI.Response, attempt)
-						errRateLimit := &providerRateLimitError{provider: provider, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, retryAfter: wait, requestID: providerRequestID(errAPI.Response), cause: err}
+						errRateLimit := &providerRateLimitError{code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, retryAfter: wait, cause: err}
 
 						if attempt > providerRateLimitMaxRetries {
 							diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: http.StatusTooManyRequests, Code: errRateLimit.code, Type: errRateLimit.typeName, Message: errRateLimit.message, RetryAfter: errRateLimit.retryAfter.String(), Headers: providerDiagnosticHeaders(errAPI.Response)}
@@ -1393,11 +1380,11 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 					if errAPI.StatusCode == http.StatusTooManyRequests {
 						switch {
 						case errAPI.Code == "usage_limit_reached" || errAPI.Type == "usage_limit_reached":
-							errReturn = &providerUsageLimitError{provider: provider, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, requestID: providerRequestID(errAPI.Response), cause: err}
+							errReturn = &providerUsageLimitError{message: errAPI.Message, cause: err}
 						case errAPI.Code == "usage_not_included" || errAPI.Type == "usage_not_included":
-							errReturn = &providerUsageNotIncludedError{provider: provider, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, requestID: providerRequestID(errAPI.Response), cause: err}
+							errReturn = &providerUsageNotIncludedError{message: errAPI.Message, cause: err}
 						default:
-							errReturn = &providerRetryLimitError{provider: provider, httpStatus: errAPI.StatusCode, requestID: providerRequestID(errAPI.Response), cause: err}
+							errReturn = &providerRetryLimitError{httpStatus: errAPI.StatusCode, requestID: providerRequestID(errAPI.Response), cause: err}
 						}
 					}
 
@@ -1448,7 +1435,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 
 		attempt++
 		wait := providerRetryDelay(raw, attempt)
-		err = &providerRateLimitError{provider: provider, code: string(resp.Error.Code), message: resp.Error.Message, retryAfter: wait, responseID: resp.ID, requestID: providerRequestID(raw), cause: err}
+		err = &providerRateLimitError{code: string(resp.Error.Code), message: resp.Error.Message, retryAfter: wait, cause: err}
 
 		if attempt > providerRateLimitMaxRetries {
 			diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0, raw)
