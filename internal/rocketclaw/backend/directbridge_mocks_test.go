@@ -30,7 +30,7 @@ var _ directBridge = &directBridgeMock{}
 //			RunFunc: func(ctx context.Context) error {
 //				panic("mock out the Run method")
 //			},
-//			StopFunc: func() error {
+//			StopFunc: func()  {
 //				panic("mock out the Stop method")
 //			},
 //			SubmitFunc: func(ctx context.Context, msg *protocol.InboundMessage) error {
@@ -56,7 +56,7 @@ type directBridgeMock struct {
 	RunFunc func(ctx context.Context) error
 
 	// StopFunc mocks the Stop method.
-	StopFunc func() error
+	StopFunc func()
 
 	// SubmitFunc mocks the Submit method.
 	SubmitFunc func(ctx context.Context, msg *protocol.InboundMessage) error
@@ -195,7 +195,7 @@ func (mock *directBridgeMock) RunCalls() []struct {
 }
 
 // Stop calls StopFunc.
-func (mock *directBridgeMock) Stop() error {
+func (mock *directBridgeMock) Stop() {
 	if mock.StopFunc == nil {
 		panic("directBridgeMock.StopFunc: method is nil but directBridge.Stop was just called")
 	}
@@ -204,7 +204,7 @@ func (mock *directBridgeMock) Stop() error {
 	mock.lockStop.Lock()
 	mock.calls.Stop = append(mock.calls.Stop, callInfo)
 	mock.lockStop.Unlock()
-	return mock.StopFunc()
+	mock.StopFunc()
 }
 
 // StopCalls gets all the calls that were made to Stop.

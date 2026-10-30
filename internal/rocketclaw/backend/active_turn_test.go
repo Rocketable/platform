@@ -547,7 +547,7 @@ func seedProducerEffects(t *testing.T, store *SessionService, conversationID, tu
 
 // newTestBridgeManager returns a running manager of real bridges that publish to
 // finals, and the shutdown that stops its loops.
-func newTestBridgeManager(t *testing.T, cfg *config.LockedConfig, service *SessionService, finals chan *protocol.OutboundMessage) (manager *threadBridgeManager, shutdown func() error) {
+func newTestBridgeManager(t *testing.T, cfg *config.LockedConfig, service *SessionService, finals chan *protocol.OutboundMessage) (manager *threadBridgeManager, shutdown func()) {
 	t.Helper()
 
 	manager = newThreadBridgeManager(cfg, service, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(bridgeCfg *Config) directBridge {
@@ -578,7 +578,7 @@ func TestOverdueScheduledTurnRunsOnceAfterRestart(t *testing.T) {
 
 		return len(messages) == 0 && len(runningTestTurns(t, service)) == 0
 	}, 5*time.Second, 10*time.Millisecond)
-	require.NoError(t, shutdown())
+	shutdown()
 
 	manager, _ = newTestBridgeManager(t, cfg, service, finals)
 	require.NoError(t, manager.StartQueuedConversations(t.Context()))
@@ -883,7 +883,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 		assert.True(t, message.DueAt.Equal(recurringEffect.DueAt), "handoff preserves the recurring due time")
 	}
 
-	require.NoError(t, shutdown())
+	shutdown()
 
 	for id, message := range pending {
 		message.Agent, message.DueAt = "job", time.Now().Add(-time.Second)
@@ -968,7 +968,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 				bridge := newBridge()
 				bridge.config.ConversationID, bridge.threads = "cron:pending", manager
 
-				t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+				t.Cleanup(bridge.Stop)
 				// Fail metadata reads only after delivery closes the original turn.
 				// A sequence proves the failed attempt even when its query rolls back.
 				// STABLE lets reads that select no producer routing, as notify triggers do, skip it.
@@ -1020,7 +1020,7 @@ SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(prod
 					bridge := newBridge()
 					bridge.config.ConversationID, bridge.threads = "cron:pending", manager
 
-					t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+					t.Cleanup(bridge.Stop)
 					bridge.handle(t.Context(), &bridgeRequest{inbound: inbound, turnID: "pending", delivery: delivery})
 					require.Empty(t, runningTestTurns(t, store))
 				} else {
@@ -1033,7 +1033,8 @@ SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(prod
 
 				if !strings.HasPrefix(state, "live ") {
 					// Lose the failed process: recovery uses only retained routing and effects.
-					require.NoError(t, shutdown())
+					shutdown()
+
 					manager, _ = newTestBridgeManager(t, runtime, store, outbounds)
 				}
 			}
@@ -1547,7 +1548,7 @@ func TestShutdownReleasesCronRunnerWait(t *testing.T) {
 	template := newBridge()
 	rt := &Runtime{Sessions: service, Cfg: template.runtime, Log: slog.New(slog.DiscardHandler)}
 
-	var shutdown func() error
+	var shutdown func()
 
 	rt.threads, shutdown = newTestBridgeManager(t, template.runtime, service, finals)
 	require.NoError(t, service.UpsertThread("cron:daily", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
@@ -1560,7 +1561,7 @@ func TestShutdownReleasesCronRunnerWait(t *testing.T) {
 	go func() { done <- rt.RunTurn(t.Context(), inbound) }()
 
 	<-requests
-	require.NoError(t, shutdown())
+	shutdown()
 
 	select {
 	case err := <-done:
@@ -1783,7 +1784,7 @@ def main(args):
 
 // restart starts nt's bridges the way a new process does, settling the Background Jobs a stopped
 // one left running before any turn resumes.
-func (nt *noteTest) restart(t *testing.T) (manager *threadBridgeManager, shutdown func() error) {
+func (nt *noteTest) restart(t *testing.T) (manager *threadBridgeManager, shutdown func()) {
 	t.Helper()
 
 	manager, shutdown = nt.run(t, ignoreOutbound)
@@ -1859,7 +1860,7 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 
 	parent := nt.bridge(t, first, nt.conversationID)
 	require.Eventually(t, func() bool { return !parent.handlingSnapshot() && len(parent.requestCh) == 0 }, 10*time.Second, 10*time.Millisecond)
-	require.NoError(t, shutdown())
+	shutdown()
 	registry.shutdown()
 
 	jobs, err := queryStrings(t.Context(), nt.service.db, `SELECT j.input_id`+testJobsSQL+` AND j.kind = 'note' AND j.phase = 'running'`, "running tasks")
@@ -1875,7 +1876,7 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 	readFinal(t, nt.finals)
 	nt.waitIdle(t, manager, nt.conversationID)
 	assert.Equal(t, []string{jobs[0] + " consumed true"}, noteStates(t, nt.service))
-	require.NoError(t, shutdown())
+	shutdown()
 
 	manager, _ = nt.restart(t)
 	nt.waitIdle(t, manager, nt.conversationID)
@@ -1909,7 +1910,7 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 		return err == nil && slices.Equal(destinations, []string{report})
 	}, 10*time.Second, 10*time.Millisecond)
 	nt.waitIdle(t, first, report)
-	require.NoError(t, shutdown())
+	shutdown()
 
 	manager, _ := nt.restart(t)
 	assert.Equal(t, "Report finished.", readFinalFor(t, nt.finals, report).Text, "the follow-up is posted in the report thread")
@@ -1929,7 +1930,7 @@ func TestRestartWakesUndeliveredNote(t *testing.T) {
 	assert.Equal(t, systemPromptHeader()+"\n\n"+testExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)))
 	readFinal(t, nt.finals)
 	nt.waitIdle(t, manager, nt.conversationID)
-	require.NoError(t, shutdown())
+	shutdown()
 
 	manager, _ = nt.restart(t)
 	nt.waitIdle(t, manager, nt.conversationID)
@@ -2134,7 +2135,8 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 	}
 	assert.Equal(t, []any{"parent work", protocol.InboundKindHeld}, queued(), "Web lists the parent's prompt as held")
 
-	require.NoError(t, shutdown())
+	shutdown()
+
 	manager, _ = nt.restart(t)
 	require.NoError(t, manager.StartQueuedConversations(t.Context()))
 	nt.waitIdle(t, manager, subagent)

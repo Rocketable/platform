@@ -735,7 +735,7 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 		return NewConversation(cfg, publisher, bridgeCfg, slog.New(slog.DiscardHandler))
 	}})
 	shutdown := runTestManager(t, manager)
-	t.Cleanup(func() { require.NoError(t, shutdown()) })
+	t.Cleanup(shutdown)
 	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
 
 	parent, err := manager.recordedBridge(t.Context(), "parent")
@@ -865,7 +865,7 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 
 			finals := make(chan *protocol.OutboundMessage, 8)
 			manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
-			t.Cleanup(func() { require.NoError(t, shutdown()) })
+			t.Cleanup(shutdown)
 			parent, err := manager.recordedBridge(t.Context(), "parent")
 			require.NoError(t, err)
 
@@ -1083,7 +1083,7 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 
 			finals := make(chan *protocol.OutboundMessage, 8)
 			manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
-			t.Cleanup(func() { require.NoError(t, shutdown()) })
+			t.Cleanup(shutdown)
 
 			store.historyWorkers = manager
 			parent, err := manager.recordedBridge(t.Context(), parentID)
@@ -1140,8 +1140,9 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 					require.Empty(t, final.Attachments)
 				}
 
-				require.NoError(t, shutdown())
-				manager, shutdown = newTestBridgeManager(t, cfg, store, finals)
+				shutdown()
+
+				manager, _ = newTestBridgeManager(t, cfg, store, finals)
 				store.historyWorkers = manager
 				require.NoError(t, manager.StartActiveTurns(t.Context()))
 				require.Empty(t, requests, "removed producers and children must not restart")
@@ -1174,8 +1175,9 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 				require.NoError(t, rt.ClearRevert(t.Context(), "parent"))
 			}
 
-			require.NoError(t, shutdown())
-			manager, shutdown = newTestBridgeManager(t, cfg, store, finals)
+			shutdown()
+
+			manager, _ = newTestBridgeManager(t, cfg, store, finals)
 			store.historyWorkers = manager
 			require.NoError(t, manager.StartActiveTurns(t.Context()))
 			require.Empty(t, requests, "redo and restart must not repeat stopped work")
@@ -1231,7 +1233,7 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 	store.definitions = cfg
 	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
 	manager, shutdown := newTestBridgeManager(t, cfg, store, make(chan *protocol.OutboundMessage, 8))
-	t.Cleanup(func() { require.NoError(t, shutdown()) })
+	t.Cleanup(shutdown)
 
 	bridge, err := manager.recordedBridge(t.Context(), "parent")
 	require.NoError(t, err)
@@ -1286,7 +1288,7 @@ func TestShadowSiblingFailureIsIndependent(t *testing.T) {
 
 	finals := make(chan *protocol.OutboundMessage, 8)
 	manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
-	t.Cleanup(func() { require.NoError(t, shutdown()) })
+	t.Cleanup(shutdown)
 
 	parent, err := manager.recordedBridge(t.Context(), "parent")
 	require.NoError(t, err)
@@ -1429,7 +1431,7 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	_, err = store.PruneStateBefore(t.Context(), time.Now().Add(time.Hour), 0)
 	require.NoError(t, err)
 	restarted, shutdown := newTestBridgeManager(t, cfg, store, finals)
-	t.Cleanup(func() { require.NoError(t, shutdown()) })
+	t.Cleanup(shutdown)
 	require.NoError(t, restarted.StartActiveTurns(t.Context()))
 
 	var childInput []json.RawMessage
@@ -1450,7 +1452,8 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL`).Scan(&childID))
 	require.Eventually(t, func() bool { active, err := store.HasActiveTurn(t.Context(), childID); return err == nil && !active }, 3*time.Second, time.Millisecond)
 	require.Len(t, finals, 1, "only parent completion was externally published")
-	require.NoError(t, shutdown())
+	shutdown()
+
 	_, err = store.PruneStateBefore(t.Context(), time.Now().Add(time.Hour), 0)
 	require.NoError(t, err)
 	_, found, err = store.Thread(childID)

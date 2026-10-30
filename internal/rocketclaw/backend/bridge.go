@@ -414,18 +414,16 @@ func (b *Bridge) ResetScheduledMessages(origin *protocol.InboundMessage) error {
 // Stop cancels bridge activity. It leaves an active turn to the cancellation of the bridge's context, which every
 // caller with a running turn has already started: canceling the turn here could get there first and replace that
 // cause, turning a shutdown that lets running calls finish into an interrupt that kills them.
-func (b *Bridge) Stop() error {
+func (b *Bridge) Stop() {
 	b.mu.Lock()
 	if b.stopped {
 		b.mu.Unlock()
-		return nil
+		return
 	}
 
 	close(b.stopCh)
 	b.stopped = true
 	b.mu.Unlock()
-
-	return nil
 }
 
 // Submit enqueues one inbound message for this conversation.
@@ -845,7 +843,7 @@ func (b *Bridge) loop(ctx context.Context) {
 		}
 	}
 
-	_ = b.Stop()
+	b.Stop()
 }
 
 // storeQueued keeps requests still waiting for this stopped loop for the next start.

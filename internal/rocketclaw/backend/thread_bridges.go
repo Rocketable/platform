@@ -40,7 +40,7 @@ func (subagentPublisher) PublishOutbound(_ context.Context, message *protocol.Ou
 
 type directBridge interface {
 	Run(ctx context.Context) error
-	Stop() error
+	Stop()
 	Submit(ctx context.Context, msg *protocol.InboundMessage) error
 	InterruptActiveTurn() *protocol.InboundMessage
 	SwitchAgent(agent string)
@@ -105,7 +105,7 @@ func newThreadBridgeManager(runtime *config.LockedConfig, store *SessionService,
 // loop when its bridge is created. Once ctx is done no loop starts: Run stops
 // every bridge, so later submissions are stored durably, and returns when every
 // loop has returned.
-func (m *threadBridgeManager) Run(ctx context.Context) error {
+func (m *threadBridgeManager) Run(ctx context.Context) {
 	var loops errgroup.Group
 
 	for stopping := false; !stopping; {
@@ -136,9 +136,8 @@ func (m *threadBridgeManager) Run(ctx context.Context) error {
 	bridges := slices.Collect(maps.Values(m.bridges))
 	m.mu.Unlock()
 
-	var errStop error
 	for _, bridge := range bridges {
-		errStop = errors.Join(errStop, bridge.Stop())
+		bridge.Stop()
 	}
 
 	started, stopLog := time.Now(), make(chan struct{})
@@ -164,11 +163,9 @@ func (m *threadBridgeManager) Run(ctx context.Context) error {
 		}
 	}()
 
-	errStop = errors.Join(errStop, loops.Wait())
+	_ = loops.Wait()
 
 	close(stopLog)
-
-	return errStop
 }
 
 // StartActiveTurns starts every conversation worker that owns an unfinished
@@ -523,7 +520,7 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 		delete(m.bridges, start.conversationID)
 		m.mu.Unlock()
 
-		_ = managed.Stop()
+		managed.Stop()
 
 		return "", fmt.Errorf("persist new Web session: %w", err)
 	}
@@ -1027,9 +1024,7 @@ JOIN conversations b ON b.conversation_id = a.conversation_id WHERE b.shadow_par
 	m.bridges[conversationID] = managed
 
 	if m.stopping {
-		if err := managed.Stop(); err != nil {
-			return nil, fmt.Errorf("stop text thread bridge during shutdown: %w", err)
-		}
+		managed.Stop()
 
 		return managed, nil
 	}
