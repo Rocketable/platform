@@ -1,1 +1,0 @@
-import{t as e}from"./file-CjqvRzvR.js";export{e as File};
