@@ -1120,8 +1120,8 @@ The shared app layout keeps the session list in memory during navigation.
 Late storage reads merge with newer live rows; superseded saves cannot overwrite
 newer snapshots, and post-deletion saves wait for the history clear to finish.
 
-The saved-list tests use real Chromium and IndexedDB. Enable them by supplying
-the installed Playwright module and Chromium executable after `bun run build`:
+The saved-list tests use real Chromium and IndexedDB. Run them after
+`bun run build`, with the installed Playwright module and Chromium executable:
 
 ```sh
 export ROCKETCLAW_PLAYWRIGHT_MODULE='/absolute/path/to/playwright-core/index.mjs'
@@ -1133,6 +1133,12 @@ They check a 17 MiB snapshot across reload, user/protocol isolation, transaction
 abort after request success, deletion winning over a delayed save, delayed
 hydration, owner switches, and actual-App restore/merge/identity
 behavior, including a connection cut after terminal metadata and protocol changes.
+
+No browser test skips without these variables: the `src/*.browser.test.ts` files
+and the Go-driven browser tests in `internal/rocketclaw/frontend/rpc` all fail
+with `Cannot find package 'undefined'`.
+See [Frontend RPC Tests Need Setup in Every Fresh JJ Workspace](../../../docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md)
+for the setup.
 
 ## Attachment HTTP contract
 

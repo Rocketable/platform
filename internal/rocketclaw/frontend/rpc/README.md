@@ -531,19 +531,28 @@ Use a dedicated test PostgreSQL database, never a production database. Each run
 creates an isolated schema via the existing test helper.
 
 ```sh
-mkdir -p "$PWD/.tmp/test-tmp"
-export TMPDIR="$PWD/.tmp/test-tmp"
+main=${PWD%%/.tmp/workspaces/*}  # the main checkout, even when run from a JJ workspace
+mkdir -p "$main/.tmp/t"
+export TMPDIR="$main/.tmp/t"
 export ROCKETCLAW_TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:55435/rocketclaw_test?sslmode=disable'
 go test -race -count=1 -run '^(TestWebRPC|TestSessionEntries)$' \
   ./cmd/rocketclaw ./internal/rocketclaw/frontend/rpc
 ```
 
+The tests bind Unix sockets under `TMPDIR`, and on macOS a socket path must stay
+under 104 bytes, so `TMPDIR` can be at most 86 bytes. A JJ workspace under
+`.tmp/workspaces/` uses most of that before its own `.tmp/` is added, so no
+directory there fits reliably; use the main checkout's `.tmp/`. See
+[Frontend RPC Tests Need Setup in Every Fresh JJ Workspace](../../../../docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md)
+for the full workspace setup, including the browser-test variables below.
+
 `TestSessionEntries` starts real Unix gRPC and the Go HTTP adapter, uses Bun as its
 HTTP test client, and verifies PostgreSQL results. It checks spoofed forwarding headers,
 unmapped IPv6 connections, ordering, empty results, and preservation of unrelated
 entries and conversation/goal records. Bun must be installed and `web` dependencies
-must already be installed. The TypeScript integration test skips when run alone;
-Go provides its isolated storage fixture.
+must already be installed. The TypeScript integration test needs the URL and
+conversation ID that Go passes it with its isolated storage fixture, so it fails
+when run alone.
 
 For real desktop/mobile transcript gestures, build Web first and provide an
 installed Playwright module and Chromium executable:
