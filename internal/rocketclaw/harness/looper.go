@@ -317,11 +317,6 @@ type dispatchedToolOutput struct {
 	ReplayInput []responses.ResponseInputItemUnionParam
 }
 
-type compactionBlock struct {
-	end      int
-	complete bool
-}
-
 type doomLoopTrap struct {
 	recent []toolCallSignature
 }
@@ -1466,7 +1461,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 	errLast := errOriginal
 
 	for compactedBlocks := chunk; compactedBlocks <= eligible; compactedBlocks += chunk {
-		end := blocks[compactedBlocks-1].end
+		end := blocks[compactedBlocks-1]
 
 		compactParams := responses.ResponseCompactParams{
 			Model:        responses.ResponseCompactParamsModel(params.Model),
@@ -1544,11 +1539,11 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 	return nil, errLast
 }
 
-func compactionBlocks(items []responses.ResponseInputItemUnionParam) []compactionBlock {
-	blocks := make([]compactionBlock, 0, len(items))
+func compactionBlocks(items []responses.ResponseInputItemUnionParam) []int {
+	blocks := make([]int, 0, len(items))
 	for i := 0; i < len(items); {
 		if items[i].OfFunctionCall == nil {
-			blocks = append(blocks, compactionBlock{end: i + 1, complete: true})
+			blocks = append(blocks, i+1)
 			i++
 
 			continue
@@ -1557,7 +1552,6 @@ func compactionBlocks(items []responses.ResponseInputItemUnionParam) []compactio
 		pending := map[string]bool{}
 
 		end := len(items)
-		complete := false
 
 		for j := i; j < len(items); j++ {
 			if call := items[j].OfFunctionCall; call != nil {
@@ -1570,13 +1564,12 @@ func compactionBlocks(items []responses.ResponseInputItemUnionParam) []compactio
 
 			if j > i && len(pending) == 0 {
 				end = j + 1
-				complete = true
 
 				break
 			}
 		}
 
-		blocks = append(blocks, compactionBlock{end: end, complete: complete})
+		blocks = append(blocks, end)
 		i = end
 	}
 
