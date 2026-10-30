@@ -23,7 +23,7 @@ tags:
 
 ## Context
 
-The Web browser tests do not compile `src/`. Each one serves the prebuilt bundle in `internal/rocketclaw/internal/web/dist` (for example `src/tabs.browser.test.ts:7` and `src/search-page.browser.test.ts:6`: `const dist = path.resolve(import.meta.dir, "../../internal/web/dist")`). The Go transport tests serve the same directory.
+The Web browser tests do not compile `src/`. Each one serves the prebuilt bundle in `internal/rocketclaw/internal/web/dist` (for example `src/tabs.browser.test.ts:7` and `src/search-page.browser.test.ts:6`: `const dist = path.resolve(import.meta.dir, "../../internal/web/dist")`). The Go transport tests serve the same directory as embedded into the test binary (`internal/rocketclaw/internal/web/assets.go`: `//go:embed dist`), except `TestPublicProgressRealBrowser`, which bundles `src/main.tsx` itself with `bun build` (no `tsc`) and reuses only `dist/index.html` (`internal/rocketclaw/frontend/rpc/live_test.go`).
 
 That bundle is written by `bun run build`, which is `tsc --noEmit && bun build.ts` (`package.json:12`). `build.ts` empties `dist` and writes the new bundle (`build.ts:7`, ending with `Built SPA: ...` at `build.ts:38`), but only after `tsc` passes. When `tsc` fails, `build.ts` never runs, `dist` keeps the previous bundle, and the only sign is `error: script "build" exited with code 1`.
 
@@ -31,10 +31,10 @@ That bundle is written by `bun run build`, which is `tsc --noEmit && bun build.t
 
 While building the many-Search-pages change (PR #695), this trap fooled two checks in a row:
 
-- **A mutation check that "survived".** To prove a test guarded a refresh, the guard was broken with `if (seen.current === shown || true) return;`. TypeScript rejects the always-true condition, the build stopped, and the test passed against the old, correct bundle. The test looked useless, but it was fine.
+- **A mutation check that "survived".** To prove a test guarded a refresh, the guard was broken with `if (lastPageSeen.current === shown || true) return;`. TypeScript rejects the always-true condition, the build stopped, and the test passed against the old, correct bundle. The test looked useless, but it was fine.
 - **Debug output that "never appeared".** Temporary instrumentation (`(window as any).mounts = ...`, and `console.log`) did not type-check, so the browser ran the old bundle without it. That looked like the production build stripping `console.log`, which it does not.
 
-A second mutation, `seen.current = shown; return;`, failed too, with "unreachable code". Only a mutation that type-checks, `if (shown || typing.current || ...)`, produced a real build, and the test then failed as it should.
+A second mutation, `lastPageSeen.current = shown; return;`, failed too, with "unreachable code". Only a mutation that type-checks, `if (shown || typing.current || ...)`, produced a real build, and the test then failed as it should.
 
 ## Guidance
 
@@ -49,7 +49,7 @@ A stale bundle turns verification into false confidence in both directions. A mu
 
 ## When to Apply
 
-- Any hand-run `bun test` of `src/*.browser.test.ts` or `src/*-transport.test.ts` after editing `src/`.
+- Any hand-run `bun test` of `src/*.browser.test.ts`, or `go test ./frontend/rpc` run of `src/*-transport.test.ts`, after editing `src/`.
 - Mutation checks that prove a new browser test fails without the fix.
 - Temporary instrumentation in `ui.tsx` to watch what a browser test sees.
 
@@ -71,7 +71,7 @@ A mutation that type-checks and therefore reaches the browser:
 
 ```ts
 // Rejected by tsc: never built, so the test runs the old bundle.
-if (seen.current === shown || true) return;
+if (lastPageSeen.current === shown || true) return;
 // Type-checks: built, and the guarded test fails as it should.
 if (shown || typing.current || !page?.searches.length) return;
 ```

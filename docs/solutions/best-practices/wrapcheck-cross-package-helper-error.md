@@ -43,7 +43,7 @@ The same boundary shows up wherever backend returns another package's error. `ho
 
 `fmt.Errorf("%w", err)` adds no prefix. `Error()` stays the same as the wrapped error; `errors.Is` / `errors.As` still work. wrapcheck fails on an unwrapped cross-package `return err`. The repo wrapping convention is `%w`, not a wrapcheck check for the `%w` verb itself.
 
-wrapcheck is enabled for RocketClaw (`internal/rocketclaw/.golangci.yml:49`). Default wrapcheck does not report same-package returns. It does report errors returned from another package. Do not add `//nolint` or disable wrapcheck without human approval (`AGENTS.md`).
+wrapcheck is enabled for `internal/rocketclaw/...` (`internal/rocketclaw/.golangci.yml:49`; `internal/rocketclaw/Makefile:25` lints `./...`, which excludes `cmd/rocketclaw`). Default wrapcheck does not report same-package returns. It does report errors returned from another package. Do not add `//nolint` or disable wrapcheck without human approval (`AGENTS.md`).
 
 `runServe` calls `loadRuntimeConfig` (`cmd/rocketclaw/serve.go:33`), which already lives in package `main` (`cmd/rocketclaw/main.go:82`), and wraps with a real prefix: `fmt.Errorf("load config: %w", err)`.
 
@@ -69,7 +69,7 @@ Keeping one copy at the lowest layer avoids two copies drifting apart. Callers i
 - Deduplicating an unexported helper by exporting it from a lower package.
 - Returning an error from `internal/rocketclaw/protocol`, a library such as pglock, or any other package out of `internal/rocketclaw/backend`.
 - Reviewing a `fmt.Errorf("%w", err)` with no prefix in a wrapcheck-enabled module.
-- Deduplicating identical functions in `cmd/rocketclaw` or `internal/rocketclaw`.
+- Deduplicating identical functions in `internal/rocketclaw`. (`make lint` lints `./...` from `internal/rocketclaw`, so `cmd/rocketclaw` is not wrapcheck-checked today.)
 
 Do not apply this to same-package returns. Do not treat it as a reason to copy `loadRuntimeConfig` into `serve.go`.
 

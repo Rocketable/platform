@@ -13,8 +13,8 @@ applies_when:
   - Judging whether a branch made migrations or queries slower
 symptoms:
   - The internal/rocketclaw/backend package takes several times longer than before, on old and new code alike
-  - TestBridgeDeletes* and other tests that wait about a second for a turn fail under a full run and pass alone
-  - CREATE OR REPLACE FUNCTION and CREATE TRIGGER statements in migrations take tens of milliseconds each
+  - Tests that wait about a second for a turn fail under a full run and pass alone
+  - CREATE TRIGGER statements in migrations take tens of milliseconds each
 related_components:
   - internal/rocketclaw/backend/harnessbridgetest
   - internal/rocketclaw/Makefile
@@ -35,7 +35,7 @@ Every backend test gets a fresh schema on the database at `ROCKETCLAW_TEST_DATAB
 
 While building the State Store consolidation (PR #526), the backend package went from 92 s to 464 s over a day of runs against one long-lived container, and three tests that wait about a second for a turn started failing. It looked like the branch's new migrations or queries were slow. Measured, they were not: the unchanged base commit, run against the same database, took 414 s and failed the same tests, while both trees passed in 80 to 97 s on a fresh database. The database held about 42,000 leftover schemas, 6.5 million `pg_class` rows, and 57 GB.
 
-The cost lands on statements that look objects up by name across schemas. Replacing a function with body checking on, or creating a trigger, read one `pg_proc` row per schema that defines a function with that name: about 40,000 rows, 70 to 130 ms per statement instead of under 10 ms. Every test schema runs every migration, so migrations full of notify functions slow every test, and a turn that waits on such work misses a one-second deadline.
+The cost lands on statements that look objects up by name across schemas. Replacing a function with body checking on, or creating a trigger, read one `pg_proc` row per schema that defines a function with that name: about 40,000 rows, 70 to 130 ms per statement instead of under 10 ms. Every test schema runs every migration, and the baseline (`internal/rocketclaw/backend/migrations/001_baseline.sql`) creates 13 triggers on its notify functions, so this slows every test, and a turn that waits on such work misses a one-second deadline.
 
 ## Guidance
 
@@ -44,7 +44,7 @@ The cost lands on statements that look objects up by name across schemas. Replac
 - Do not raise test timeouts or retry timing tests to get past this.
 - `make test` without `ROCKETCLAW_TEST_DATABASE_URL` starts a fresh container per run and does not hit this.
 
-The lasting fix is for `IsolatedTestDatabaseURL` to take a `testing.TB` and drop its schema in `t.Cleanup`; its 58 callers make that a change of its own.
+The lasting fix is for `IsolatedTestDatabaseURL` to take a `testing.TB` and drop its schema in `t.Cleanup`; its 57 call sites make that a change of its own.
 
 ## When to Apply
 
