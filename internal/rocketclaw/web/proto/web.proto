@@ -524,11 +524,6 @@ message AnswerQuestionRequest {
 
 message AnswerQuestionResponse {}
 
-message ConfigModel {
-  string name = 1;
-  string model = 2;
-}
-
 message ConfigChannel {
   string channel = 1;
   repeated string agents = 2;
@@ -537,7 +532,7 @@ message ConfigChannel {
 message ConfigView {
   string workspace = 1;
   repeated string overlays = 2;
-  repeated ConfigModel models = 3;
+  reserved 3;
   repeated ConfigChannel slack_channels = 4;
   repeated string mcp_servers = 5;
   string logging_level = 6;

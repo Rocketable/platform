@@ -137,9 +137,6 @@ packages:
       shellCommander:
         config:
           structname: mockShellCommander
-      agentModelRenderer:
-        config:
-          structname: mockAgentModelRenderer
       SteerDrain:
         config:
           structname: mockSteerDrain

@@ -87,7 +87,7 @@ func TestBackgroundSchemasFollowPermission(t *testing.T) {
 func TestSudoAgentSeesEveryTool(t *testing.T) {
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child")}})
 	factory.backgroundJobs = enabledBackgroundJobs()
-	result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\nmodel: gpt-5.4\nsudo: yes\n---\nPrompt\n")}, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
+	result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\nmodel: gpt-5.4\nsudo: yes\n---\nPrompt\n")})
 	require.Empty(t, result.Errors)
 
 	agent := result.Agents.Items["main"]
@@ -418,7 +418,7 @@ func TestSteerSwitchesRunningSessionType(t *testing.T) {
 			agents := LoadAgents(fstest.MapFS{
 				"child.md":    {Data: []byte("---\nmodel: gpt-5.4\npermission: {probe: allow}\n---\nCHILD PROMPT")},
 				"reviewer.md": {Data: []byte("---\nmodel: gpt-6.1-sol\npermission: {probe: deny}\n---\nREVIEWER PROMPT")},
-			}, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
+			})
 			require.Empty(t, agents.Errors)
 
 			steers := []PromptInput{{ID: "steer-1", Role: PromptInputRoleUser, Texts: []string{"review it instead"}, Agent: tc.steer}}

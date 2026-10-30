@@ -29,7 +29,7 @@ import (
 
 func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"active\" }}'\npermission:\n  read: {\"*\": allow}\n  edit: allow\n  glob: allow\n  grep: allow\n  bash: {\"*\": allow}\n  webfetch: {\"*\": allow}\n  websearch: allow\n  skill: {\"demo\": allow}\n  task: {\"*\": allow}\n  rocketclaw: {\"rocketclaw_reload\": allow}\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: active-model\npermission:\n  read: {\"*\": allow}\n  edit: allow\n  glob: allow\n  grep: allow\n  bash: {\"*\": allow}\n  webfetch: {\"*\": allow}\n  websearch: allow\n  skill: {\"demo\": allow}\n  task: {\"*\": allow}\n  rocketclaw: {\"rocketclaw_reload\": allow}\n---\nMain prompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -80,7 +80,7 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 		require.NoError(t, provider.Shutdown(context.Background()))
 	})
 
-	cfg := &config.Config{Workspace: workspace, Models: map[string]string{"active": "active-model", "fast": "fast-model", "nested": `{{ model "fast" }}`}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Instrumentation: config.InstrumentationConfig{Enabled: true, HideInputs: true, HideOutputs: true}}
+	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Instrumentation: config.InstrumentationConfig{Enabled: true, HideInputs: true, HideOutputs: true}}
 	run, err := newWorkflowAgentRunner(config.NewLockedConfig(cfg), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
@@ -93,7 +93,7 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `"first"`, string(result))
 
-	result, err = run.Run(t.Context(), &workflow.AgentRequest{Prompt: "structured", Worker: workflow.Worker{Name: "reviewer", Instructions: "Worker !`printf unsafe`", Model: "nested", Tools: []string{"skill"}}, Schema: map[string]any{"type": "object", "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}, "required": []string{"ok"}}})
+	result, err = run.Run(t.Context(), &workflow.AgentRequest{Prompt: "structured", Worker: workflow.Worker{Name: "reviewer", Instructions: "Worker !`printf unsafe`", Model: "fast-model", Tools: []string{"skill"}}, Schema: map[string]any{"type": "object", "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}, "required": []string{"ok"}}})
 	require.NoError(t, err)
 	require.JSONEq(t, `{"ok":true}`, string(result))
 
@@ -394,7 +394,6 @@ func TestWorkflowAgentRunnerResolvesNamedProviderModel(t *testing.T) {
 
 	cfg := &config.Config{
 		Workspace: workspace,
-		Models:    map[string]string{"worker": "work/worker-api-model"},
 		OpenAI:    config.OpenAIConfig{APIBaseURL: defaultServer.URL},
 		Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: workServer.URL}},
 	}
@@ -404,10 +403,10 @@ func TestWorkflowAgentRunnerResolvesNamedProviderModel(t *testing.T) {
 
 	cfg.Providers["work"] = config.OpenAIConfig{APIBaseURL: "http://127.0.0.1:1"}
 
-	result, err := run.Run(t.Context(), &workflow.AgentRequest{Prompt: "run", Worker: workflow.Worker{Name: "worker", Model: "worker"}})
+	result, err := run.Run(t.Context(), &workflow.AgentRequest{Prompt: "run", Worker: workflow.Worker{Name: "worker", Model: "work/gpt-6.1-sol"}})
 	require.NoError(t, err)
 	require.JSONEq(t, `"done"`, string(result))
-	assert.Equal(t, "worker-api-model", <-models)
+	assert.Equal(t, "gpt-6.1-sol", <-models)
 
 	select {
 	case <-defaultRequests:
@@ -583,16 +582,11 @@ func TestWorkflowAgentRunnerRejectsInvalidOverridesAndStructuredOutput(t *testin
 	}))
 	t.Cleanup(server.Close)
 
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, Models: map[string]string{"known": "gpt-6.1-sol", "broken": `{{ model "missing" }}`, "unavailable": "unknown/model"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
-	_, err = run.Run(t.Context(), &workflow.AgentRequest{Worker: workflow.Worker{Name: "worker", Instructions: "prompt", Model: "missing"}, Prompt: "model"})
-	require.ErrorContains(t, err, `workflow worker model "missing" is not configured`)
-	_, err = run.Run(t.Context(), &workflow.AgentRequest{Worker: workflow.Worker{Name: "worker", Instructions: "prompt", Model: "broken"}, Prompt: "model"})
-	require.ErrorContains(t, err, `render workflow worker model "broken"`)
-	require.ErrorContains(t, err, `model "missing" is not configured`)
-	_, err = run.Run(t.Context(), &workflow.AgentRequest{Worker: workflow.Worker{Model: "unavailable"}, Prompt: "model"})
+	_, err = run.Run(t.Context(), &workflow.AgentRequest{Worker: workflow.Worker{Model: "unknown/model"}, Prompt: "model"})
 	require.ErrorContains(t, err, "prepare workflow rocketcode run")
 	require.ErrorContains(t, err, `unknown provider "unknown"`)
 	_, err = run.Run(t.Context(), &workflow.AgentRequest{Worker: workflow.Worker{Name: "worker", Instructions: "prompt", Tools: []string{"missing"}}, Prompt: "tools"})

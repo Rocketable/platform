@@ -61,7 +61,7 @@ func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 		return Result{}, fmt.Errorf("stat skills: %w", err)
 	}
 
-	infos, findings, err := loadRuntimeAgentInfos(runtimeRoot, cfg)
+	infos, findings, err := loadRuntimeAgentInfos(runtimeRoot)
 	if err != nil {
 		return Result{}, err
 	}
@@ -129,8 +129,8 @@ func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 }
 
 // AgentGraphDOT returns a deterministic Graphviz/DOT task delegation graph for the effective agents under runtimeRoot.
-func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
-	infos, _, err := loadRuntimeAgentInfos(runtimeRoot, cfg)
+func AgentGraphDOT(runtimeRoot string) (string, error) {
+	infos, _, err := loadRuntimeAgentInfos(runtimeRoot)
 	if err != nil {
 		return "", err
 	}
@@ -173,10 +173,10 @@ func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
 	return b.String(), nil
 }
 
-func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*agentInfo, []Finding, error) {
+func loadRuntimeAgentInfos(runtimeRoot string) (map[string]*agentInfo, []Finding, error) {
 	agentsRoot := filepath.Join(runtimeRoot, "agents")
 
-	agentLoad := harness.LoadAgents(os.DirFS(agentsRoot), cfg)
+	agentLoad := harness.LoadAgents(os.DirFS(agentsRoot))
 	if len(agentLoad.Errors) > 0 {
 		return nil, nil, fmt.Errorf("load agents: %w", agentLoad.Errors[0])
 	}

@@ -24,19 +24,19 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 )
 
-func TestRunRejectsUnresolvedAgentModelAtStartup(t *testing.T) {
+func TestRunRejectsInvalidAgentAtStartup(t *testing.T) {
 	t.Parallel()
 
 	workspace := shortTempDir(t)
 	agentsRoot := filepath.Join(workspace, "agents")
 	require.NoError(t, os.MkdirAll(agentsRoot, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(agentsRoot, "main.md"), []byte("---\ndescription: Main\nmodel: '{{ model \"missing\" }}'\n---\nPrompt\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsRoot, "main.md"), []byte("---\ndescription: Main\n---\nPrompt\n"), 0o600))
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), nil)
 	require.ErrorContains(t, err, "validate rocketcode definitions")
-	require.ErrorContains(t, err, `model "missing" is not configured`)
+	require.ErrorContains(t, err, "model: required non-empty string")
 }
 
 func TestRunRejectsInvalidWorkflowAtStartup(t *testing.T) {
@@ -46,13 +46,13 @@ func TestRunRejectsInvalidWorkflowAtStartup(t *testing.T) {
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 	require.NoError(t, root.Mkdir("workflows", 0o755))
-	require.NoError(t, root.WriteFile("workflows/bad.star", []byte("meta = {\"name\": \"bad\", \"description\": \"Bad\"}\nw = worker(name=\"w\", instructions=\"work\", model=\"missing\")\ndef main(args): return None\n"), 0o600))
+	require.NoError(t, root.WriteFile("workflows/bad.star", []byte("meta = {\"name\": \"bad\", \"description\": \"Bad\"}\nw = worker(name=\"w\", instructions=\"work\", model=\"\")\ndef main(args): return None\n"), 0o600))
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	dsn, errDSN := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, errDSN)
 	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), nil)
-	require.ErrorContains(t, err, `workflow worker model "missing" is not configured`)
+	require.ErrorContains(t, err, "worker model must be a non-empty literal string or None")
 }
 
 func TestRuntimeWorkflowDescriptionsListsSavedWorkflows(t *testing.T) {
@@ -78,7 +78,6 @@ func TestWorkflowValidationKeepsLiveAssetsOnInvalidReload(t *testing.T) {
 
 	for _, tt := range []struct{ name, source, want string }{
 		{name: "invalid syntax", source: "not valid starlark", want: "validate workflow definitions"},
-		{name: "unknown worker model", source: "meta = {\"name\": \"bad\", \"description\": \"Bad\"}\nw = worker(name=\"w\", instructions=\"work\", model=\"missing\")\ndef main(args): return None\n", want: `workflow worker model "missing" is not configured`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()

@@ -315,7 +315,7 @@ permission:
 hub
 `)
 
-	dot, err := AgentGraphDOT(runtimeRoot, new(config.Config))
+	dot, err := AgentGraphDOT(runtimeRoot)
 	require.NoError(t, err)
 	assert.Equal(t, `digraph agent_graph {
   "alpha" [label="alpha\nmaxRecursion=0\nshell=emulated"];
@@ -345,21 +345,6 @@ func TestTaskEdgesSortsDestinations(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestLintResolvesModelTemplate(t *testing.T) {
-	runtimeRoot := t.TempDir()
-	writeAgent(t, runtimeRoot, "main.md", "---\n---\nmain\n", `{{ model "coding-high" }}`)
-
-	_, err := Lint(runtimeRoot, &config.Config{Models: map[string]string{"coding-high": "software-development-sol"}})
-	require.NoError(t, err)
-
-	_, err = Lint(runtimeRoot, new(config.Config))
-	require.ErrorContains(t, err, `model "coding-high" is not configured`)
-
-	dot, err := AgentGraphDOT(runtimeRoot, new(config.Config))
-	require.ErrorContains(t, err, `model "coding-high" is not configured`)
-	assert.Empty(t, dot)
 }
 
 func writeAgent(t *testing.T, runtimeRoot, name, content string, models ...string) {
