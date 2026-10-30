@@ -21,7 +21,7 @@ require (
 	github.com/posthog/posthog-go v1.39.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rubenv/sql-migrate v1.8.1
-	github.com/slack-go/slack v0.32.0
+	github.com/slack-go/slack v0.33.0
 	github.com/stretchr/testify v1.12.1
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.47.0

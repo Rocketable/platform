@@ -251,8 +251,8 @@ github.com/segmentio/encoding v0.5.4 h1:OW1VRern8Nw6ITAtwSZ7Idrl3MXCFwXHPgqESYfv
 github.com/segmentio/encoding v0.5.4/go.mod h1:HS1ZKa3kSN32ZHVZ7ZLPLXWvOVIiZtyJnO1gPH1sKt0=
 github.com/sergi/go-diff v1.4.0 h1:n/SP9D5ad1fORl+llWyN+D6qoUETXNZARKjyY2/KVCw=
 github.com/sergi/go-diff v1.4.0/go.mod h1:A0bzQcvG0E7Rwjx0REVgAGH58e96+X0MeOfepqsbeW4=
-github.com/slack-go/slack v0.32.0 h1:N9zo22Hoz5Hx+rXwtRZSdkJP/3FrQ24eBGSf3A5S3EE=
-github.com/slack-go/slack v0.32.0/go.mod h1:ph5iUlM1bUhqOeRynzryiWfkv6vVElt5JbhXbhtApsI=
+github.com/slack-go/slack v0.33.0 h1:9pEEf1KbdlydQKuro3pyUcq6mVR6Ozwy1dOOn/GgK2I=
+github.com/slack-go/slack v0.33.0/go.mod h1:ph5iUlM1bUhqOeRynzryiWfkv6vVElt5JbhXbhtApsI=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
