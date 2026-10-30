@@ -234,12 +234,36 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     expect(terminals.input.join("")).toBe("x");
 
     // Native append carries the stored panes property when the last terminal is reopened.
-    await view.locator('[data-pane-tab^="terminal:"]').getByRole("button", { name: "Close tab", exact: true }).click();
-    await until(() => terminals.open === 0);
-    await view.locator("[data-component=composer] [contenteditable=true]").click();
-    await page.keyboard.press("Control+Backquote");
-    await view.locator('[data-pane-content="bottom"] [data-component="terminal"]').waitFor();
-    await until(() => terminals.open === 1);
+    for (const close of ["command", "tab"]) {
+      const terminalList = Promise.withResolvers<void>();
+      const releaseList = Promise.withResolvers<void>();
+      await page.route("**/oc/box/api/experimental/session/ses_a/terminal", async (route: { request(): { method(): string }; continue(): Promise<void> }) => {
+        if (route.request().method() === "GET") {
+          terminalList.resolve();
+          await releaseList.promise;
+        }
+        await route.continue();
+      }, { times: 1 });
+      if (close === "command") {
+        // While Mod+W's close is pending, toggle still hides a visible terminal without waiting.
+        await view.locator('[data-component="terminal"]').click();
+        await page.keyboard.press("ControlOrMeta+w");
+        await terminalList.promise;
+        expect(await view.locator('[data-component="terminal"]').isVisible()).toBe(true);
+        await page.keyboard.press("Control+Backquote");
+        await until(async () => !await view.locator('[data-component="terminal"]').isVisible());
+        releaseList.resolve();
+      } else {
+        await view.locator('[data-pane-tab^="terminal:"]').getByRole("button", { name: "Close tab", exact: true }).click();
+      }
+      await until(() => terminals.open === 0);
+      await terminalList.promise;
+      await view.locator("[data-component=composer] [contenteditable=true]").click();
+      await page.keyboard.press("Control+Backquote");
+      releaseList.resolve();
+      await view.locator('[data-pane-content="bottom"] [data-component="terminal"]').waitFor();
+      await until(() => terminals.open === 1);
+    }
 
     // Moving the terminal uses OpenCode's real drag state; the host must keep that choice after remounting.
     await view.locator('[data-slot="session-review-toggle"]').click();

@@ -82,12 +82,24 @@ const setup: Plugin.Setup<typeof Terminal> = (ctx) => {
       slash: { name: "terminal", after: "open" },
       editable: true,
       enabled: enabled(),
-      run() {
+      async run() {
         const target = current()
 
         if (!target) return
 
-        const id = target.terminal.active()
+        // rocketclaw: A closed strip tab can still be in the model until its list commits;
+        // visible terminals still hide immediately, and mobile has no strip to reopen
+        // (upstream packages/gui-plugins/src/terminal/renderer.tsx).
+        let id = target.terminal.active()
+        let closing = !layout.narrow() && id !== undefined && layout.state(key(id), target.session) !== "visible"
+          ? target.terminal.closing()
+          : undefined
+        while (closing) {
+          await closing
+          if (ctx.signal.aborted || sessions.current()?.key !== target.session.key) return
+          id = target.terminal.active()
+          closing = target.terminal.closing()
+        }
 
         if (!id) return create(target.session, target.terminal)
 
