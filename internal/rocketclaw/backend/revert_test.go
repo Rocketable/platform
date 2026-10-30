@@ -172,19 +172,11 @@ func TestRevertWaitsForDeliverySettlement(t *testing.T) {
 			id, err := s.AppendEntryID(t.Context(), "main", testSessionEntry("old", "answer"))
 			require.NoError(t, err)
 
-			finals := make(chan *protocol.OutboundMessage, 1)
-			b.bus = &outboundPublisherMock{PublishOutboundFunc: func(_ context.Context, message *protocol.OutboundMessage) error {
-				if message.Complete {
-					finals <- message
-				} else {
-					message.MarkDelivered(nil)
-				}
-
-				return nil
-			}}
 			manager := newThreadBridgeManager(b.runtime, s, b.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return b }})
 			manager.bridges["main"] = b
 			rt := &Runtime{Sessions: s, threads: manager, Cfg: b.runtime}
+			b.bus = rt
+			events := rt.Subscribe(t.Context())
 			runTestBridge(t, b)
 
 			inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "new", true)
@@ -193,18 +185,26 @@ func TestRevertWaitsForDeliverySettlement(t *testing.T) {
 			turnDone, staged := make(chan error, 1), make(chan error, 1)
 			go func() { turnDone <- rt.RunTurn(t.Context(), inbound) }()
 
-			final := readFinal(t, finals)
-			go func() { _, _, err := rt.StageRevert(t.Context(), "main", fmt.Sprintf("%d:0", id)); staged <- err }()
+			for event := range events {
+				if !event.Message.Complete {
+					event.Acknowledgement <- nil
+					continue
+				}
 
-			require.Eventually(t, func() bool { b.mu.Lock(); defer b.mu.Unlock(); return b.historyMutation }, time.Second, time.Millisecond)
+				go func() { _, _, err := rt.StageRevert(t.Context(), "main", fmt.Sprintf("%d:0", id)); staged <- err }()
 
-			select {
-			case err := <-staged:
-				t.Fatal("staged before delivery settled", err)
-			default:
+				require.Eventually(t, func() bool { b.mu.Lock(); defer b.mu.Unlock(); return b.historyMutation }, time.Second, time.Millisecond)
+
+				select {
+				case err := <-staged:
+					t.Fatal("staged before delivery settled", err)
+				default:
+				}
+
+				event.Acknowledgement <- errDelivery
+
+				break
 			}
-
-			final.MarkDelivered(errDelivery)
 
 			errTurn, errStage := <-turnDone, <-staged
 			marker, _, _, err := s.RevertState(t.Context(), "main")

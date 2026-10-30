@@ -59,7 +59,6 @@ func TestRuntimeSubscribeIsLiveAndWaitsForDelivery(t *testing.T) {
 		synctest.Wait()
 		require.True(t, finished)
 		require.NoError(t, group.Wait())
-		require.NoError(t, message.WaitDelivered(t.Context()))
 	})
 }
 

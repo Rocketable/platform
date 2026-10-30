@@ -41,8 +41,7 @@ import (
 type discardPublisher struct{}
 
 // PublishOutbound completes delivery at once, as Runtime.PublishOutbound does with no consumers.
-func (discardPublisher) PublishOutbound(_ context.Context, message *protocol.OutboundMessage) error {
-	message.MarkDelivered(nil)
+func (discardPublisher) PublishOutbound(context.Context, *protocol.OutboundMessage) error {
 	return nil
 }
 
@@ -913,7 +912,6 @@ func TestPublishFinalPreservesTurnID(t *testing.T) {
 	assert.True(t, final.Complete)
 	assert.Equal(t, protocol.TerminalComplete, final.Terminal)
 	assert.Equal(t, protocol.SourceSlack, final.Source, "the final names the source that started its turn")
-	final.MarkDelivered(nil)
 	require.NoError(t, group.Wait())
 }
 
@@ -922,7 +920,6 @@ func TestPublishFinalMarksCurrentGoalCompletion(t *testing.T) {
 
 	bus := &outboundPublisherMock{PublishOutboundFunc: func(_ context.Context, outbound *protocol.OutboundMessage) error {
 		assert.True(t, outbound.GoalComplete)
-		outbound.MarkDelivered(nil)
 
 		return nil
 	}}
@@ -944,7 +941,6 @@ func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
 
 	bus := &outboundPublisherMock{PublishOutboundFunc: func(_ context.Context, outbound *protocol.OutboundMessage) error {
 		assert.False(t, outbound.GoalComplete)
-		outbound.MarkDelivered(nil)
 
 		return nil
 	}}
@@ -970,17 +966,16 @@ func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
 func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 	t.Parallel()
 
-	bus := newTestBus()
-	defer bus.Close()
-
 	bridge := new(Bridge)
-	bridge.bus = bus
 	bridge.log = slog.New(slog.DiscardHandler)
 	bridge.config = Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, SessionService: newTestSessionService(t)}
 	result := runResult{turnID: "turn-1", attachments: []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}}
 
 	for _, errDelivery := range []error{nil, errors.New("delivery failed")} {
 		synctest.Test(t, func(t *testing.T) {
+			rt := new(Runtime)
+			bridge.bus = rt
+			events := rt.Subscribe(t.Context())
 			inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 			inbound.ConversationID = bridge.config.ConversationID
 			resultCh := inbound.EnableResponseWait()
@@ -991,20 +986,29 @@ func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 
 			group.Go(func() error { return publishTestFinal(t.Context(), bridge, inbound, &result) })
 
-			outbound := readRocketCodeOutbound(t, bus)
-			assert.True(t, outbound.Complete)
-			assert.Empty(t, outbound.Text)
-			assert.Equal(t, result.attachments, outbound.Attachments)
-			synctest.Wait()
-			assert.Empty(t, resultCh, "caller must wait for final delivery")
-			assert.False(t, bridge.inputOpen, "late steer must not join during final delivery")
+			for event := range events {
+				assert.True(t, event.Message.Complete)
+				assert.Empty(t, event.Message.Text)
+				assert.Equal(t, result.attachments, event.Message.Attachments)
+				synctest.Wait()
+				assert.Empty(t, resultCh, "caller must wait for final delivery")
+				assert.False(t, bridge.inputOpen, "late steer must not join during final delivery")
 
-			outbound.MarkDelivered(errDelivery)
+				event.Acknowledgement <- errDelivery
+
+				break
+			}
+
 			require.ErrorIs(t, group.Wait(), errDelivery)
 
 			response := <-resultCh
 			require.ErrorIs(t, response.Err, errDelivery)
-			assert.Equal(t, result.attachments, response.Attachments)
+
+			if errDelivery == nil {
+				assert.Equal(t, result.attachments, response.Attachments)
+			} else {
+				assert.Empty(t, response.Attachments)
+			}
 		})
 	}
 }
@@ -1051,7 +1055,6 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 	assert.True(t, outbound.Complete)
 	assert.Contains(t, outbound.Text, internalErrorResponse)
 	assert.Contains(t, outbound.Text, `missing required default agent "main"`)
-	outbound.MarkDelivered(nil)
 	require.ErrorContains(t, group.Wait(), `prepare rocketcode turn: missing required default agent "main"`)
 
 	response := <-inbound.EnableResponseWait()
@@ -1302,8 +1305,6 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	var outbound *protocol.OutboundMessage
 
 	for msg := range bus.Outbound(ctx) {
-		msg.MarkDelivered(nil)
-
 		if msg.Complete {
 			outbound = msg
 
@@ -1614,7 +1615,6 @@ func TestAttachmentFallbackAndImageAttachments(t *testing.T) {
 	require.Empty(t, consumed.ConsumedHeader, "no model prompt was generated")
 	final := readRocketCodeOutbound(t, bus)
 	require.Equal(t, unsupportedFileFallback, final.Text)
-	final.MarkDelivered(nil)
 	require.NoError(t, group.Wait())
 }
 
@@ -2407,8 +2407,6 @@ func TestBridgeSuccessfulWorkflowPersistsRunSummary(t *testing.T) {
 					assert.Empty(t, outbound.Terminal)
 				}
 
-				outbound.MarkDelivered(nil)
-
 				if outbound.Complete {
 					assert.Equal(t, "finished", outbound.Text)
 					close(delivered)
@@ -2477,8 +2475,6 @@ func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
 
 		go func() {
 			for outbound := range bus.Outbound(t.Context()) {
-				outbound.MarkDelivered(nil)
-
 				if outbound.Complete {
 					close(delivered)
 					return
@@ -2538,8 +2534,6 @@ func TestBridgeFailedWorkerErrorIsNotPersisted(t *testing.T) {
 
 	go func() {
 		for outbound := range bus.Outbound(t.Context()) {
-			outbound.MarkDelivered(nil)
-
 			if outbound.Complete {
 				close(delivered)
 				return
@@ -2601,8 +2595,6 @@ func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
 
 	go func() {
 		for outbound := range bus.Outbound(t.Context()) {
-			outbound.MarkDelivered(nil)
-
 			if outbound.Complete {
 				close(delivered)
 				return
@@ -2693,8 +2685,6 @@ func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
 
 	go func() {
 		for outbound := range bus.Outbound(t.Context()) {
-			outbound.MarkDelivered(nil)
-
 			if outbound.Complete {
 				completed <- outbound.Text
 			}
@@ -2892,7 +2882,6 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 
 		outbound := readRocketCodeOutbound(t, bus)
 		assert.Equal(t, unsupportedFileFallback, outbound.Text)
-		outbound.MarkDelivered(nil)
 
 		select {
 		case response := <-responseCh:
@@ -3701,7 +3690,6 @@ Request: $ARGUMENTS
 	final := readRocketCodeOutbound(t, bus)
 	require.True(t, final.Complete)
 	require.Equal(t, result.text, final.Text)
-	final.MarkDelivered(nil)
 	require.NoError(t, delivery.Wait())
 
 	msg.Text = "next request"
@@ -4008,7 +3996,6 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 		}
 
 		final = message.Complete
-		message.MarkDelivered(nil)
 	}
 
 	require.True(t, consumedSteer)
@@ -4586,7 +4573,6 @@ func (nt *noteTest) run(t *testing.T, observe func(*protocol.OutboundMessage)) (
 
 	publisher := &outboundPublisherMock{PublishOutboundFunc: func(_ context.Context, message *protocol.OutboundMessage) error {
 		observe(message)
-		message.MarkDelivered(nil)
 
 		if message.Complete {
 			nt.finals <- message

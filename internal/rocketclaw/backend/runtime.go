@@ -154,8 +154,6 @@ func (r *Runtime) PublishOutbound(ctx context.Context, message *protocol.Outboun
 		}
 	}
 
-	message.MarkDelivered(errDelivery)
-
 	return errDelivery
 }
 

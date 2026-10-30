@@ -722,8 +722,6 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 			return errors.New("connector refuses child output")
 		}
 
-		message.MarkDelivered(nil)
-
 		if message.Complete {
 			finals <- message
 		}
