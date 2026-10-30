@@ -332,18 +332,42 @@ describe("terminal model", () => {
   })
 
   test("closes a terminal on the server and drops it once the server no longer lists it", async () => {
-    const server = fakeServer()
-    server.terminals.set("ses_1", [info("pty_1", "Terminal 1"), info("pty_2", "Terminal 2")])
-    const { model, session } = setup(server)
-    const terminal = model.load(session)
-    await flush()
-    terminal.select("pty_1")
+    // rocketclaw: A removed event can supersede either a successful or failed close-list read
+    // (upstream packages/gui-plugins/src/terminal/model.test.ts).
+    for (const failed of [false, true]) {
+      const server = fakeServer()
+      server.terminals.set("ses_1", [info("pty_1", "Terminal 1"), info("pty_2", "Terminal 2")])
+      const { model, session } = setup(server)
+      const terminal = model.load(session)
+      await flush()
+      terminal.select("pty_1")
 
-    await terminal.close("pty_1")
+      const first = Promise.withResolvers<void>()
+      const latest = Promise.withResolvers<void>()
+      server.state.list = first.promise
+      let closed = false
+      const close = terminal.close("pty_1").then(() => { closed = true })
+      await flush()
+      server.state.list = latest.promise
+      server.emit("persistent-pty.removed")
+      server.state.listError = failed ? new Error("superseded list failed") : undefined
+      first.resolve()
+      await flush()
 
-    expect(server.calls.remove).toEqual(["pty_1"])
-    expect(terminal.all().map((item) => item.id)).toEqual(["pty_2"])
-    expect(terminal.active()).toBe("pty_2")
+      expect(closed).toBe(false)
+      expect(terminal.all().map((item) => item.id)).toEqual(["pty_1", "pty_2"])
+      expect(terminal.active()).toBe("pty_1")
+
+      server.state.listError = undefined
+      latest.resolve()
+      await close
+
+      expect(server.calls.remove).toEqual(["pty_1"])
+      expect(terminal.all().map((item) => item.id)).toEqual(["pty_2"])
+      expect(terminal.active()).toBe("pty_2")
+      expect(terminal.closing()).toBeUndefined()
+      model.dispose()
+    }
   })
 
   test("labels follow another client's rename from the updated event", async () => {

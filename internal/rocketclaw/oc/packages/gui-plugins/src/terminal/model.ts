@@ -60,7 +60,9 @@ export function createTerminalModel(input: {
   const sessions = new Map<string, SessionRef>()
   const handles = new Map<string, ReturnType<typeof handle>>()
   const selected = new Map<string, Persisted<typeof Selected.Type>>()
-  const sequence = new Map<string, number>()
+  // rocketclaw: Superseded reads settle with the winning list, not the stale cache
+  // (upstream packages/gui-plugins/src/terminal/model.ts).
+  const refreshing = new Map<string, Promise<void>>()
   const watched = new Map<string, { data: ServerRef["data"]; stop: VoidFunction }>()
   const cleared = new Set<string>()
   const cleanups: VoidFunction[] = []
@@ -73,22 +75,28 @@ export function createTerminalModel(input: {
     return state.capabilities[server.id] !== false
   }
 
-  const refresh = async (session: SessionRef) => {
-    const next = (sequence.get(session.key) ?? 0) + 1
+  // rocketclaw: A newer refresh's answer still wins, but callers wait for it to commit
+  // (upstream packages/gui-plugins/src/terminal/model.ts).
+  const refresh = (session: SessionRef): Promise<void> => {
+    const pending: Promise<void> = session.server.client.experimental.persistentPty.list({ sessionID: session.id })
+      .then((list) => {
+        if (refreshing.get(session.key) !== pending) return refreshing.get(session.key)
+        setLists((draft) => void (draft.sessions[session.key] = list))
+        dropLegacy(session)
+        // The strip shows only stored tabs, so terminals another client created join it at the end.
+        const stored = new Set(input.layout.stored(session))
 
-    sequence.set(session.key, next)
-    const list = await session.server.client.experimental.persistentPty.list({ sessionID: session.id })
+        list.forEach((info) => {
+          if (!stored.has(info.id)) input.layout.open(input.tab(info.id), session, { tab: "append" })
+        })
+      })
+      .catch((error) => {
+        if (refreshing.get(session.key) !== pending) return refreshing.get(session.key)
+        throw error
+      })
 
-    // A newer refresh started meanwhile; its answer wins.
-    if (sequence.get(session.key) !== next) return
-    setLists((draft) => void (draft.sessions[session.key] = list))
-    dropLegacy(session)
-    // The strip shows only stored tabs, so terminals another client created join it at the end.
-    const stored = new Set(input.layout.stored(session))
-
-    list.forEach((info) => {
-      if (!stored.has(info.id)) input.layout.open(input.tab(info.id), session, { tab: "append" })
-    })
+    refreshing.set(session.key, pending)
+    return pending
   }
 
   // Replaces a listed terminal's info; a terminal the list doesn't have yet arrives with the next refresh.
@@ -220,6 +228,9 @@ export function createTerminalModel(input: {
     const session = () => sessions.get(key) ?? initial
     const all = () => lists.sessions[key] ?? []
     const get = (id: string) => all().find((info) => info.id === id)
+    // rocketclaw: Only toggle waits; the list and mobile selection remain server-owned
+    // (upstream packages/gui-plugins/src/terminal/model.ts).
+    const closing = new Set<Promise<void>>()
 
     const focusRequested = (id?: string) => {
       if (!id || !state.focus || state.focus.pending || state.focus.key !== key) return false
@@ -303,11 +314,17 @@ export function createTerminalModel(input: {
       async close(id: string) {
         const target = session()
 
-        await target.server.client.experimental.persistentPty
+        // rocketclaw: Keep the close pending through the winning list refresh
+        // (upstream packages/gui-plugins/src/terminal/model.ts).
+        const pending = target.server.client.experimental.persistentPty
           .remove({ ptyID: id })
           .then(() => refresh(target))
           .catch((error) => console.error("Failed to close terminal", error))
+        closing.add(pending)
+        await pending
+        closing.delete(pending)
       },
+      closing: () => closing.size ? Promise.all(closing) : undefined,
       /**
        * Sets the terminal's title on the server; `null` clears it, so the shell's or the default title shows again.
        * The current title, or clearing a terminal never renamed, sends nothing.
@@ -392,7 +409,7 @@ export function createTerminalModel(input: {
         sessions.delete(key)
         handles.delete(key)
         selected.delete(key)
-        sequence.delete(key)
+        refreshing.delete(key)
       })
     },
     dispose() {
