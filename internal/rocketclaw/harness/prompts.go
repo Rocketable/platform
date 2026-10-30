@@ -58,7 +58,7 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 		env := append(os.Environ(), e.env...)
 		env = append(env, "TMPDIR="+e.shellTemp.tmpDir)
 
-		shell, args, stdin := withCustomShell(e.shellCommand, e.customShell, command, env)
+		shell, args, stdin := withCustomShell(e.shellCommand, &e.customShell, command, env)
 		cmd := exec.CommandContext(context.WithoutCancel(ctx), shell, args...)
 
 		cmd.Dir, cmd.Env = e.hostDir, env
@@ -81,9 +81,26 @@ func expandAgentPrompt(ctx context.Context, agent *Agent, enabled bool, env *pro
 		return
 	}
 
-	agentEnv := *env
-	agentEnv.customShell = agent.CustomShell
+	agentEnv := env.forAgent(agent)
 	agent.Prompt = agentEnv.expandShellCommands(ctx, agent.Prompt)
+}
+
+// forAgent returns e for agent's prompt and skills: expanding through agent's shell or, for an easy agent,
+// in host bash outside its emulator, with its secrets (R33).
+func (e *promptExpansionEnvironment) forAgent(agent *Agent) promptExpansionEnvironment {
+	scoped := *e
+	scoped.customShell = agent.CustomShell
+
+	if agent.Mode == AgentModeEasy {
+		scoped.customShell = CustomShell{}
+		scoped.env = slices.Clone(e.env)
+
+		for name, value := range agent.CustomShell.Secrets {
+			scoped.env = append(scoped.env, name+"="+value)
+		}
+	}
+
+	return scoped
 }
 
 // DefaultShellCommand uses Bash to match the permission parser's grammar.

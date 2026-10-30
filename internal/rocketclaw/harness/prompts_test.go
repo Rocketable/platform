@@ -2,9 +2,12 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/require"
 )
@@ -95,6 +98,19 @@ func TestExpandAgentPrompt(t *testing.T) {
 		require.Equal(t, "review  done", got.Prompt)
 	})
 
+	t.Run("an easy agent expands in host bash with its secrets, an advanced emulated one in its shell", func(t *testing.T) {
+		env := testPromptExpansionEnvironment(t)
+		shell := CustomShell{Path: writeCustomShell(t, env.root), Emulated: true, Secrets: map[string]string{"SECRET_KEY": "s3cr3t"}}
+		easy := Agent{Mode: AgentModeEasy, Prompt: "key !`printf %s \"$SECRET_KEY\"`", CustomShell: shell}
+		advanced := Agent{Mode: AgentModeAdvanced, Prompt: "review !`echo hi`", CustomShell: CustomShell{Path: shell.Path, Emulated: true}}
+
+		expandAgentPrompt(t.Context(), &easy, true, &env)
+		expandAgentPrompt(t.Context(), &advanced, true, &env)
+
+		require.Equal(t, "key s3cr3t", easy.Prompt)
+		require.Equal(t, "review custom:1:echo hi", advanced.Prompt)
+	})
+
 	t.Run("emulated shell without a program expands to empty text", func(t *testing.T) {
 		env := testPromptExpansionEnvironment(t)
 		got := Agent{Name: "review", Prompt: "review !`echo hi` done", CustomShell: CustomShell{Emulated: true}}
@@ -103,6 +119,29 @@ func TestExpandAgentPrompt(t *testing.T) {
 
 		require.Equal(t, "review  done", got.Prompt)
 	})
+}
+
+// An easy agent's SKILL.md lines run in host bash from the workspace, with its secrets, before the model's
+// arguments go in, so argument text never runs (A2).
+func TestEasySkillExpandsInHostBash(t *testing.T) {
+	loaded := LoadSkills(fstest.MapFS{"easy-skill/SKILL.md": mapFile("---\nname: easy-skill\ndescription: Expands in host bash\n---\n\nRun: !`pwd`\nKey: !`printf %s \"$SECRET_KEY\"`\n")}, "/virtual/skills").Skills
+	factory := testSkillFactory(t, loaded, nil)
+	factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
+
+	agent := agentWithSkillPermission()
+	agent.Mode = AgentModeEasy
+	agent.CustomShell = CustomShell{Path: writeCustomShell(t, factory.promptExpansion.root), Emulated: true, Secrets: map[string]string{"SECRET_KEY": "s3cr3t"}}
+
+	model, _ := factory.assembleTools(agent)
+	got, err := model["skill"].Call(t.Context(), json.RawMessage(`{"name":"easy-skill","arguments":"!`+"`printf x > pwned`"+`","direct":true}`), nil, toolCallMetadata{})
+	require.NoError(t, err)
+
+	workspace, err := filepath.EvalSymlinks(factory.promptExpansion.hostDir)
+	require.NoError(t, err)
+	require.Contains(t, got.Output, "Run: "+workspace+"\n\nKey: s3cr3t\n\n!`printf x > pwned`\n\nBase directory")
+
+	_, err = factory.promptExpansion.root.Stat("pwned")
+	require.ErrorIs(t, err, fs.ErrNotExist)
 }
 
 func TestPromptExpansionEnvironmentRunsCommandsInRoot(t *testing.T) {

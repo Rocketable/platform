@@ -206,6 +206,23 @@ editor
 	}, result.Findings)
 }
 
+// An easy agent writes its workingDirectory, so RC010 reports one that holds an agent file.
+func TestLintEasyWorkingDirectory(t *testing.T) {
+	t.Setenv("ROCKETCLAW_CONVERSATION_ID", "")
+
+	runtimeRoot, workspace := t.TempDir(), t.TempDir()
+	writeAgent(t, runtimeRoot, "inside.md", "---\nmode: easy\nspace: Ops\nworkingDirectory: "+filepath.Join(workspace, "agents", "$ROCKETCLAW_CONVERSATION_ID")+"\n---\ninside\n")
+	writeAgent(t, runtimeRoot, "outside.md", "---\nmode: easy\nspace: Ops\nworkingDirectory: "+filepath.Join(workspace, "sessions", "$ROCKETCLAW_CONVERSATION_ID")+"\n---\noutside\n")
+
+	result, err := Lint(runtimeRoot, &config.Config{Workspace: workspace})
+	require.NoError(t, err)
+
+	assert.Equal(t, []Finding{
+		{Code: rc010, Severity: "error", Path: "agents/inside.md", Message: "inside can edit agents/inside.md, which defines inside and its shell", keys: []string{"workingDirectory", "agents"}},
+		{Code: rc010, Severity: "error", Path: "agents/inside.md", Message: "inside can edit agents/outside.md, which defines outside and its shell", keys: []string{"workingDirectory", "agents"}},
+	}, result.Findings)
+}
+
 func TestLintSudo(t *testing.T) {
 	runtimeRoot := t.TempDir()
 	writeAgent(t, runtimeRoot, "tagged.md", "---\ndescription: tagged\nsudo: yes\nmaxRecursion: 2\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[red, green]]\n---\ntagged\n")
@@ -314,12 +331,15 @@ permission:
 ---
 hub
 `)
+	// task never runs an easy agent, and an easy agent's own task edges are models, not agents.
+	writeAgent(t, runtimeRoot, "easy.md", "---\nmode: easy\nspace: Ops\nworkingDirectory: data\n---\neasy\n")
 
-	dot, err := AgentGraphDOT(runtimeRoot, new(config.Config))
+	dot, err := AgentGraphDOT(runtimeRoot, &config.Config{})
 	require.NoError(t, err)
 	assert.Equal(t, `digraph agent_graph {
   "alpha" [label="alpha\nmaxRecursion=0\nshell=emulated"];
   "beta" [label="beta\nmaxRecursion=2\nshell=/usr/local/bin/agent-sandbox"];
+  "easy" [label="easy\nmaxRecursion=1\nshell=emulated"];
   "hub" [label="hub\nmaxRecursion=unbounded"];
   "alpha" -> "hub" [color="red", label="cycle"];
   "beta" -> "alpha";
@@ -345,21 +365,6 @@ func TestTaskEdgesSortsDestinations(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestLintResolvesModelTemplate(t *testing.T) {
-	runtimeRoot := t.TempDir()
-	writeAgent(t, runtimeRoot, "main.md", "---\n---\nmain\n", `{{ model "coding-high" }}`)
-
-	_, err := Lint(runtimeRoot, &config.Config{Models: map[string]string{"coding-high": "software-development-sol"}})
-	require.NoError(t, err)
-
-	_, err = Lint(runtimeRoot, new(config.Config))
-	require.ErrorContains(t, err, `model "coding-high" is not configured`)
-
-	dot, err := AgentGraphDOT(runtimeRoot, new(config.Config))
-	require.ErrorContains(t, err, `model "coding-high" is not configured`)
-	assert.Empty(t, dot)
 }
 
 func writeAgent(t *testing.T, runtimeRoot, name, content string, models ...string) {

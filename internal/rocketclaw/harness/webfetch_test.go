@@ -2,9 +2,13 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,7 +32,7 @@ func TestWebFetchRequestAcceptHeader(t *testing.T) {
 		{"", "*/*"},
 	} {
 		t.Run(tt.format, func(t *testing.T) {
-			resp, err := doWebFetchRequest(t.Context(), server.URL, tt.format, false)
+			resp, err := doWebFetchRequest(t.Context(), http.DefaultClient, server.URL, tt.format, false)
 			require.NoError(t, err)
 
 			defer func() { _ = resp.Body.Close() }()
@@ -52,19 +56,19 @@ func TestWebFetchFormatsHTML(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	markdown, err := webFetch(context.Background(), testWebFetchParams(server.URL+"/pages/index.html", "markdown"))
+	markdown, err := webFetch(context.Background(), http.DefaultClient, testWebFetchParams(server.URL+"/pages/index.html", "markdown"))
 	require.NoError(t, err)
 	require.Contains(t, markdown.Output, "# Title")
 	require.Contains(t, markdown.Output, "**world**")
 	require.Contains(t, markdown.Output, "[Guide]("+server.URL+"/guide)")
 
-	text, err := webFetch(context.Background(), testWebFetchParams(server.URL, "text"))
+	text, err := webFetch(context.Background(), http.DefaultClient, testWebFetchParams(server.URL, "text"))
 	require.NoError(t, err)
 	require.Contains(t, text.Output, "Title")
 	require.Contains(t, text.Output, "Hello")
 	require.NotContains(t, text.Output, "hidden")
 
-	fallback, err := webFetch(t.Context(), testWebFetchParams(server.URL+"/without-type", "markdown"))
+	fallback, err := webFetch(t.Context(), http.DefaultClient, testWebFetchParams(server.URL+"/without-type", "markdown"))
 	require.NoError(t, err)
 	require.Equal(t, "# Title\n\nHello **world**.\n\n[Guide](guide)", fallback.Output)
 }
@@ -93,7 +97,7 @@ func TestWebFetchReturnsImageAndPDFAttachments(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 
-			got, err := webFetch(context.Background(), testWebFetchParams(server.URL, "markdown"))
+			got, err := webFetch(context.Background(), http.DefaultClient, testWebFetchParams(server.URL, "markdown"))
 
 			require.NoError(t, err)
 			require.Equal(t, tt.wantOutput, got.Output)
@@ -105,7 +109,7 @@ func TestWebFetchReturnsImageAndPDFAttachments(t *testing.T) {
 }
 
 func TestWebFetchRejectsInvalidURL(t *testing.T) {
-	_, err := webFetch(context.Background(), testWebFetchParams("file:///tmp/image.png", ""))
+	_, err := webFetch(context.Background(), http.DefaultClient, testWebFetchParams("file:///tmp/image.png", ""))
 
 	require.EqualError(t, err, "URL must start with http:// or https://")
 }
@@ -135,7 +139,7 @@ func TestWebFetchChallengeRetry(t *testing.T) {
 				_, _ = io.WriteString(w, "retried content")
 			}))
 
-			got, err := webFetch(t.Context(), testWebFetchParams(server.URL, "text"))
+			got, err := webFetch(t.Context(), http.DefaultClient, testWebFetchParams(server.URL, "text"))
 			server.Close()
 
 			require.Len(t, agents, 2)
@@ -164,7 +168,7 @@ func TestWebFetchBodyLimit(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 
-			got, err := webFetch(t.Context(), testWebFetchParams(server.URL, "text"))
+			got, err := webFetch(t.Context(), http.DefaultClient, testWebFetchParams(server.URL, "text"))
 			if size > maxAttachmentBytes {
 				require.EqualError(t, err, "response too large (exceeds 5MB limit)")
 				require.Empty(t, got.Output)
@@ -174,6 +178,75 @@ func TestWebFetchBodyLimit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An easy agent's webfetch refuses exactly what its emulated shell's curl refuses, by the table both tests
+// share; an advanced agent's is unchanged.
+func TestEasyWebFetchNetworkTargets(t *testing.T) {
+	unlisted := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("unlisted")) }))
+	t.Cleanup(unlisted.Close)
+
+	listed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirect" {
+			http.Redirect(w, r, unlisted.URL+"/", http.StatusFound)
+
+			return
+		}
+
+		_, _ = w.Write([]byte("listed"))
+	}))
+	t.Cleanup(listed.Close)
+
+	data, err := os.ReadFile(filepath.Join("..", "justbash", "testdata", "network_targets.json"))
+	require.NoError(t, err)
+
+	var rows []struct {
+		Targets json.RawMessage
+		URL     string
+		Allow   bool
+	}
+
+	hosts := strings.NewReplacer("{listed}", strings.TrimPrefix(listed.URL, "http://"), "{unlisted}", strings.TrimPrefix(unlisted.URL, "http://"))
+	require.NoError(t, json.Unmarshal([]byte(hosts.Replace(string(data))), &rows))
+
+	factory := &toolFactory{baseTools: makeSandboxedTools(&sandboxedFileSystem{}, nil)}
+	permission := parsePermissionYAML(t, "webfetch: allow")
+	fetch := func(agent *Agent, url string) (ToolResult, error) {
+		_, hosts := factory.assembleTools(agent)
+		return hosts["webfetch"].Call(t.Context(), json.RawMessage(`{"url":"`+url+`"}`), nil, toolCallMetadata{})
+	}
+
+	for _, row := range rows {
+		t.Run(string(row.Targets)+" "+row.URL, func(t *testing.T) {
+			agent := &Agent{Mode: AgentModeEasy, Permission: permission}
+			if string(row.Targets) != `"auto"` {
+				require.NoError(t, json.Unmarshal(row.Targets, &agent.NetworkTargets))
+			}
+
+			_, err := fetch(agent, row.URL)
+			require.Equal(t, !row.Allow, err != nil && strings.Contains(err.Error(), "not in allowedNetworkTargets"), err)
+		})
+	}
+
+	got, err := fetch(&Agent{Permission: permission}, listed.URL+"/redirect")
+	require.NoError(t, err)
+	require.Equal(t, TextToolResult("unlisted"), got, "an advanced agent fetches as before")
+
+	// Only the test stands a public address in for its server's loopback one.
+	client := easyWebFetchClient(nil)
+	client.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		if err := publicAddressOnly(network, "93.184.215.14:80", nil); err != nil {
+			return nil, err
+		}
+
+		var dialer net.Dialer
+
+		return dialer.DialContext(ctx, network, listed.Listener.Addr().String())
+	}
+
+	got, err = webFetch(t.Context(), client, testWebFetchParams("http://public.example/", "text"))
+	require.NoError(t, err)
+	require.Equal(t, TextToolResult("listed"), got, "auto reaches a public address")
 }
 
 func testWebFetchParams(url, format string) webFetchToolParams {

@@ -188,11 +188,17 @@ WHERE a.id = $1 AND a.upload AND EXISTS (SELECT 1 FROM shadow_turns t
 	}
 
 	for _, file := range slices.Backward(attachments) {
-		reference := fmt.Sprintf("attachment:%s %q (workspace path %q)", file.ID, file.Name, filepath.Join("artifacts", "uploads", file.ID, file.Name))
-		if text == reference {
-			text = ""
-		} else {
-			text = strings.TrimSuffix(text, "\n\n"+reference)
+		before, reference := "", text
+		if i := strings.LastIndex(text, "\n\n"); i >= 0 {
+			before, reference = text[:i], text[i+2:]
+		}
+
+		// An upload is referenced by its workspace path, or in an easy agent's chat by its host path, which
+		// ends in its ID and name.
+		host, easy := strings.CutPrefix(reference, fmt.Sprintf("attachment:%s %q (path \"", file.ID, file.Name))
+		if reference == fmt.Sprintf("attachment:%s %q (workspace path %q)", file.ID, file.Name, filepath.Join("artifacts", "uploads", file.ID, file.Name)) ||
+			easy && strings.HasSuffix(host, strings.TrimPrefix(fmt.Sprintf("%q)", "/"+file.ID+"/"+file.Name), `"`)) {
+			text = before
 		}
 	}
 
@@ -280,7 +286,7 @@ func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID s
 
 		attachment, err := s.AttachmentMetadata(ctx, conversationID, id, false)
 		if errors.Is(err, sql.ErrNoRows) {
-			attachment, err = outboundAttachment(root, &input.Attachments[i])
+			attachment, err = outboundAttachment(root, &harness.CustomShell{}, &input.Attachments[i])
 			if err != nil {
 				// Historical files may no longer exist or be reachable within the root.
 				continue

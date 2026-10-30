@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,18 +13,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunLintResolvesConfiguredModel(t *testing.T) {
+func TestRunLintTargets(t *testing.T) {
 	for _, target := range []string{"current", "next"} {
 		t.Run(target, func(t *testing.T) {
 			workspace := t.TempDir()
 			t.Chdir(workspace)
-			writeLintConfig(t, workspace, map[string]string{"coding-high": "software-development-sol"})
+			writeLintConfig(t, workspace)
 
 			root := workspace
 			if target == "current" {
 				root = filepath.Join(workspace, ".rocketclaw")
 			}
-			writeLintAgent(t, root, "main.md", "---\ndescription: main\n---\nmain\n", `{{ model "coding-high" }}`)
+			writeLintAgent(t, root, "main.md", "---\ndescription: main\n---\nmain\n")
 
 			output := captureStdout(t, func() error { return runLint([]string{target}) })
 			assert.Equal(t, "rocketclaw lint "+target+": OK\n", output)
@@ -54,29 +53,48 @@ bad
 	assert.Contains(t, output, "RC006 error agents/lint-bad.md")
 }
 
+// Lint loads easy agents as startup does, and checks their routines with the cron manager's own check.
+func TestRunLintEasyAgents(t *testing.T) {
+	easy := "---\nmode: easy\nspace: Ops\nworkingDirectory: data\n"
+	for _, tt := range []struct{ name, agent, err string }{
+		{"valid", easy + "routines: [30m]\n---\nmain\n", ""},
+		{"unknown key", easy + "description: main\n---\nmain\n", "load agents: main.md: description: not an easy-mode key"},
+		{"repeated routine", easy + "routines: [30m, 30m]\n---\nmain\n", `validate cron definitions: agents/main.md: routines: schedule "30m" is listed twice`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			t.Chdir(workspace)
+			writeLintConfig(t, workspace)
+			writeLintAgent(t, workspace, "main.md", tt.agent)
+
+			output, err := captureStdoutAndError(t, func() error { return runLint(nil) })
+			if tt.err != "" {
+				require.EqualError(t, err, tt.err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, "rocketclaw lint next: OK\n", output)
+		})
+	}
+}
+
 func TestRunLintRejectsUnknownTarget(t *testing.T) {
 	err := runLint([]string{"later"})
 	require.ErrorContains(t, err, "usage: rocketclaw lint [next|current]")
 }
 
-func writeLintConfig(t *testing.T, workspace string, models ...map[string]string) {
+func writeLintConfig(t *testing.T, workspace string) {
 	t.Helper()
 	data := config.Config{Workspace: workspace, DatabaseURL: "postgres://localhost/rocketclaw_test?sslmode=disable", Slack: config.SlackConfig{BotToken: "xoxb", AppToken: "xapp", Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U123"}}}}, OpenAI: config.OpenAIConfig{APIKey: "test"}}
-	if len(models) > 0 {
-		data.Models = models[0]
-	}
 	content, err := json.Marshal(data)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(defaultConfigPath, content, 0o600))
 }
 
-func writeLintAgent(t *testing.T, root, name, content string, models ...string) {
+func writeLintAgent(t *testing.T, root, name, content string) {
 	t.Helper()
-	model := "gpt-6.1-sol"
-	if len(models) > 0 {
-		model = models[0]
-	}
-	content = fmt.Sprintf("---\nmodel: %q\n", model) + content[len("---\n"):]
+	content = "---\nmodel: gpt-6.1-sol\n" + content[len("---\n"):]
 
 	agentsRoot := filepath.Join(root, "agents")
 	require.NoError(t, os.MkdirAll(agentsRoot, 0o755))

@@ -12,13 +12,13 @@ func justBashDir(cfg *config.Config) string {
 	return filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "justbash")
 }
 
-// installJustBash installs just-bash when an agent sets shell: emulated. It never fails startup or a
-// reload: the Web shows why it failed instead.
+// installJustBash installs just-bash when an agent is easy or sets shell: emulated. It never fails startup
+// or a reload: the Web shows why it failed instead.
 func (r *Runtime) installJustBash() {
 	agents, _, err := LoadRuntimeDefinitions(r.Cfg, r.Cfg.Clone().RuntimeDirName())
 	if err == nil {
 		for name := range agents.Items {
-			if agents.Items[name].CustomShell.Setup != nil {
+			if agents.Items[name].CustomShell.Emulated {
 				err = justbash.Install(justBashDir(r.Cfg.Clone()))
 
 				break

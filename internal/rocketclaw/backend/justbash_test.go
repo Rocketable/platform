@@ -42,9 +42,9 @@ func TestJustBashInstallErrorReachesWeb(t *testing.T) {
 
 	rt := &Runtime{Cfg: config.NewLockedConfig(&config.Config{Workspace: workspace}), Log: slog.New(slog.DiscardHandler)}
 	rt.installJustBash()
-	require.Empty(t, rt.JustBashInstallError(), "no shell: emulated agent, no install")
+	require.Empty(t, rt.JustBashInstallError(), "no emulated agent, no install")
 
-	writeAgent(t, workspace, "boxed", "---\ndescription: Boxed\nmodel: gpt-6.1-sol\nshell: emulated\nworkingDirectory: data\n---\nPrompt\n")
+	writeAgent(t, workspace, "boxed", "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\n---\nPrompt\n")
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "justbash"), nil, 0o600)) // A file blocks the install directory.
 	rt.installJustBash()
 	require.Contains(t, rt.JustBashInstallError(), "install just-bash")

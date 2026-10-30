@@ -18,7 +18,7 @@ func (processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []func(c
 	rt.Log.Info("starting Slack connector")
 
 	runner := &cronRunner{backend: rt}
-	cronjobs := cronfrontend.New(cfg.Workspace, cfg.RuntimeDirName(), rt.Sessions, runner, rt.Log)
+	cronjobs := cronfrontend.New(rt.Cfg, cfg.RuntimeDirName(), rt.Sessions, runner, rt.Log)
 	slack := slackconnector.New(&cfg.Slack, rt.TextRouter, rt.Sessions, rt.Log)
 
 	if err := slack.Authenticate(); err != nil {

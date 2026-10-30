@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,7 +16,7 @@ const testSecretsARN = "arn:aws:secretsmanager:us-east-1:123456789012:secret:fem
 
 type testSecrets map[string]string
 
-func (s testSecrets) SecretString(arn string) (string, error) {
+func (s testSecrets) SecretString(_ context.Context, arn string) (string, error) {
 	body, ok := s[arn]
 	if !ok {
 		return "", &config.SecretFetchError{ARN: arn}

@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"os"
 	"runtime/metrics"
-	"slices"
 	"sync"
 	"time"
 
@@ -211,7 +209,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 
 	questions := &webQuestions{store: rocketcodeSessions, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}
 
-	threadBridges = newThreadBridgeManager(rocketcodeSessions.definitions, rocketcodeSessions, logger, conversationFactory{rt: rt, restart: shutdown})
+	threadBridges = newThreadBridgeManager(rocketcodeSessions.definitions, rocketcodeSessions, logger, conversationFactory{rt: rt, restart: shutdown, secrets: &config.AWSFetcher{}})
 	background = newBackgroundRegistry(rocketcodeSessions, threadBridges, logger.With("component", "background_jobs"))
 	rocketcodeSessions.jobs = background
 	rocketcodeSessions.historyWorkers = threadBridges
@@ -330,6 +328,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 type conversationFactory struct {
 	rt      *Runtime
 	restart runtimeRestarter
+	secrets config.SecretFetcher
 }
 
 func (f conversationFactory) newBridge(cfg *Config) directBridge {
@@ -337,6 +336,7 @@ func (f conversationFactory) newBridge(cfg *Config) directBridge {
 	cfg.RequestReload = f.rt
 	cfg.UserQuestionAsker = f.rt.questions
 	cfg.SessionService = f.rt.Sessions
+	cfg.Secrets = f.secrets
 
 	bridge := NewConversation(f.rt.Cfg, f.rt, cfg, f.rt.Log)
 	bridge.background = f.rt.background
@@ -359,17 +359,8 @@ func validateWorkflowDefinitions(cfg *config.Config, runtimeDir string) (err err
 	}
 	defer func() { err = errors.Join(err, root.Close()) }()
 
-	definitions, err := workflow.Load(root, runtimeDir)
-	if err != nil {
+	if _, err = workflow.Load(root, runtimeDir); err != nil {
 		return fmt.Errorf("validate workflow definitions: %w", err)
-	}
-
-	for _, name := range slices.Sorted(maps.Keys(definitions)) {
-		for _, model := range definitions[name].WorkerModels {
-			if _, ok := cfg.Models[model]; !ok {
-				return fmt.Errorf("validate workflow definitions: workflow worker model %q is not configured", model)
-			}
-		}
 	}
 
 	return nil

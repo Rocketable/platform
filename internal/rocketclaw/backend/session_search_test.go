@@ -144,7 +144,7 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("written-web", ThreadState{Agent: "main"}))
 	require.NoError(t, s.UpsertThread(searchChatW, ThreadState{Agent: "other", CreatedBy: ThreadCreator(`Writer "One"`)}))
-	require.NoError(t, s.startSubagent(ctx, "written-web", harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "main", true), "an unindexed subagent session leaves search complete")
+	require.NoError(t, s.startSubagent(ctx, "written-web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "main"}), "an unindexed subagent session leaves search complete")
 
 	var authored int64
 

@@ -13,12 +13,11 @@ import (
 
 func TestLoadValidDefinitions(t *testing.T) {
 	tests := []struct {
-		name         string
-		file         string
-		source       string
-		description  string
-		phases       []string
-		workerModels []string
+		name        string
+		file        string
+		source      string
+		description string
+		phases      []string
 	}{
 		{
 			name:        "minimal",
@@ -43,16 +42,15 @@ schema = {
 researcher = worker(
     name = "researcher",
     instructions = "Find evidence.",
-    model = "coding-low",
+    model = "gpt-6.1-sol",
     tools = ["read", "glob", "grep"],
 )
 
 def main(args):
     return phase("discover", lambda: agent(args, worker = researcher, schema = schema))
 `,
-			description:  "Full workflow",
-			phases:       []string{"discover", "verify"},
-			workerModels: []string{"coding-low"},
+			description: "Full workflow",
+			phases:      []string{"discover", "verify"},
 		},
 		{
 			name: "parenthesized-worker",
@@ -98,10 +96,6 @@ def main(args):
 
 		if !slices.Equal(definition.Phases, tt.phases) {
 			t.Errorf("Load()[%q].Phases = %v, want %v", tt.name, definition.Phases, tt.phases)
-		}
-
-		if !slices.Equal(definition.WorkerModels, tt.workerModels) {
-			t.Errorf("Load()[%q].WorkerModels = %v, want %v", tt.name, definition.WorkerModels, tt.workerModels)
 		}
 
 		if definition.program == nil {

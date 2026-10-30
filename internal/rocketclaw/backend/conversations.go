@@ -237,7 +237,7 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 		}
 	}
 
-	if err := r.Sessions.BeginGoal(inbound.ConversationID, &GoalState{Objective: goal.Objective, MaxTurns: goal.MaxTurns, PrincipalName: inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], PrincipalEmail: inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey]}); err != nil {
+	if err := r.Sessions.BeginGoal(inbound.ConversationID, &GoalState{Objective: goal.Objective, MaxTurns: goal.MaxTurns, PrincipalName: inbound.Metadata[protocol.InboundPrincipalNameMetadataKey], PrincipalEmail: inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey], Origin: reviewOriginHeader(inbound)}); err != nil {
 		return fmt.Errorf("persist goal: %w", err)
 	}
 

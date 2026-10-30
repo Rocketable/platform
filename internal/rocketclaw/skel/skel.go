@@ -597,6 +597,7 @@ func resetRuntimeDirectory(target string, logger *slog.Logger, preserveOverlays 
 		".rocketcode":    {},
 		"attachments":    {},
 		"justbash":       {},
+		"uploads":        {},
 		"auth.json":      {},
 		"auth.json.lock": {},
 	}

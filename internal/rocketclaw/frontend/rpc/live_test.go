@@ -96,7 +96,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 		require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Owned browser fixture\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Owned browser fixture\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
 
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
@@ -512,7 +512,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Revert fixture\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Revert fixture\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
 	require.NoError(t, root.WriteFile("external-effect.txt", []byte("already happened"), 0o600))
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan *backend.Runtime)

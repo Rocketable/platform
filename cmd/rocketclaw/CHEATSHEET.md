@@ -289,7 +289,7 @@ Known frontmatter fields:
 | Field | Meaning |
 | --- | --- |
 | `description` | Required short purpose shown when selecting agents. |
-| `model` | Required concrete model or `{{ model "name" }}` placeholder configured in `models`, with an optional `#effort` reasoning-effort suffix such as `gpt-6.1-sol#high`. Avoid `#xhigh`; `rocketclaw lint` reports it. |
+| `model` | Required model name, `model` or `provider/model`, with an optional `#effort` reasoning-effort suffix such as `gpt-6.1-sol#high`. Avoid `#xhigh`; `rocketclaw lint` reports it. |
 | `reasoningEffort` | Deprecated; use the `model` suffix. A `model` suffix wins over this field. |
 | `verbosity` | Optional model verbosity. |
 | `maxRecursion` | Optional task delegation depth for inferences started with this agent. Omitted or `-1` is unlimited, `0` disables `task`, and positive integers allow that many levels. |
@@ -314,20 +314,6 @@ When an agent sets `shell` to a program path, RocketClaw runs each shell command
 - ``!`…` `` expansion has no timeout and ignores errors. A missing wrapper produces empty text, and a hung wrapper blocks the turn.
 - The field applies only to the agent that declares it. A subagent or permission reviewer without its own `shell` runs default bash. Workflow workers use the root agent's `shell`.
 - File tools and MCP servers still run on the host. `shell` covers shell commands only.
-
-Deployment-specific model names can be kept out of shared agents:
-
-```json
-"models": {
-  "coding-high": "software-development-sol"
-}
-```
-
-```yaml
-model: '{{ model "coding-high" }}'
-```
-
-Changing `models` requires restart. Agent changes using an existing mapping can use reload.
 
 RocketClaw denies tools by default. `permission` grants are grouped by bucket, and each bucket maps subjects to actions. Later matching rules override earlier matching rules, so put broad allows before narrower denies when subtracting access.
 
@@ -386,7 +372,58 @@ permission:
     rocketclaw_sessions_recipient: [main]
 ```
 
-Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-execute risk, read-plus-execute leakage, task delegation cycles, delegation-chain escalation, external-content contamination, plural `permissions`, excessive reasoning effort, `edit` permissions that could change a sandboxed agent's file or wrapper, and `permission` entries beside `sudo`.
+Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-execute risk, read-plus-execute leakage, task delegation cycles, delegation-chain escalation, external-content contamination, plural `permissions`, excessive reasoning effort, `edit` permissions or easy agents' `workingDirectory` that could change a sandboxed agent's file or wrapper, and `permission` entries beside `sudo`. It also fails, as startup and reload do, on an agent file that does not load, a bad or repeated routine schedule, and a cron file that names an easy agent.
+
+## Easy Mode Agent Frontmatter
+
+`mode: easy` selects the easy format (see the [README](../../README.md#easy-mode-agents)). A section left out or set to `auto` turns on everything in it; a written section turns on only what it lists. Everything on is reviewed by the agent's approver, except `skill`, `find_skills`, `task`, hosted `websearch`, and the default-on RocketClaw tools (`rocketclaw_reload`, scheduled messages, `rocketclaw_attach_files_to_response`, `rocketclaw_update_goal`, `ask_user_question`). Each `execute` script is reviewed whole, and its calls one by one.
+
+| Key | Meaning | Left out |
+| --- | --- | --- |
+| `mode` | `easy`, or `advanced` for the format above. Any other value, such as `primary`, fails loading. | `advanced` |
+| `model` | `model` or `provider/model`, with an optional `#effort` suffix. The provider must be configured. | Required. |
+| `space` | Web space name, as for advanced agents. | Required. |
+| `workingDirectory` | The agent's folder, read-write for its shell and file tools. Relative to RocketClaw's working directory. `$VAR`s come from the turn, each escaped into one path segment, or from RocketClaw's environment; an unset one fails the turn. It may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills`, `cron`, `scripts` or `workflows`, wherever a link puts them. | Required. |
+| `subagents` | Models `task` may run this agent on, each like `model`; `[]` for none. | The agent's own `model`. |
+| `maxRecursion` | Subagent levels, 0 or more; `0` turns `task` off. | `1` |
+| `approver` | `model` replaces the review model and effort. `prompt` is added to the guardian's rules as tenant rules and never replaces them. | `guardian` on `auto_approver_model`. |
+| `secretsARN` | Secrets Manager ARNs, fetched each turn. Each secret is a JSON object of string values whose keys are environment variable names, each key in one secret only. Only `commands` programs and host-bash ``!`…` `` lines get them. A failure fails the turn and names the ARN and key. | No secrets. |
+| `commands` | Map from command name to host command line, run in host bash with RocketClaw's environment plus the secrets. Entries are trusted as written. | No commands. |
+| `mcp` | `{}` for none, or a map from server to `auto` or tool groups such as `[read]` or `[read, write]`. Groups come from `mcp_servers.<name>.tools.read` and `.tools.write` in `rocketclaw.json`, lists of tool-name patterns; a tool in both is a config error, and one in neither is reachable only through `auto`. An unknown server or group fails loading. | Every tool of every server. |
+| `rocketclaw` | `[]` for none, or a list of the groups below. | All six groups. |
+| `tags` | Tag groups as a list of lists, as in `permission.rocketclaw.rocketclaw_set_tag`. When `rocketclaw` is a list, `tags` and its `tags` group need each other. | No tag tools. |
+| `skills` | `[]` for none, or folders under `skills/`: every skill inside each, at any depth. A missing folder fails loading. | All skills. |
+| `allowedNetworkTargets` | Hosts, `host:port` entries and URL prefixes, with any HTTP method, for the shell's `curl`, `fetch` and `jb_http` and for `webfetch` alike. Wildcards, CIDR ranges and per-entry methods fail loading. | Public addresses only. |
+| `routines` | Schedules, each a string or a one-entry map from schedule to instruction (see below). | No routines. |
+| `delegatedFrom` | `true`, `false`, or the agent names that may start, message or stop this agent's chats, like advanced `rocketclaw_sessions_recipient`. | `true` |
+| `schema.output` | As for advanced agents. | No schema. |
+
+An unknown key fails loading, and so do `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo`, `guardrail` and `additionalInstructions`. Easy agents never load `AGENTS.md`, and RocketClaw adds no reply-style line.
+
+| `rocketclaw` group | Turns on |
+| --- | --- |
+| `sessions` | `rocketclaw_sessions` (list, get, current ID, URL, write) |
+| `pages` | `rocketclaw_store`, `rocketclaw_read`, `rocketclaw_delete`, `rocketclaw_list`, `rocketclaw_kv_store`, `rocketclaw_kv_read` |
+| `tags` | `rocketclaw_set_tag` and `rocketclaw_get_tags`, with the top-level `tags` |
+| `background` | Background scripts and subagents, and stopping and steering them |
+| `workflow` | `rocketclaw_dynamic_workflow`, for every workflow |
+| `restart` | `rocketclaw_restart` |
+
+`task` takes `model`, one of `subagents`, and `tools`, the names of the parent's tools the subagent gets, `null` for all of them. A `continue` must name a model still in the list. The subagent runs this agent's own file, folder, approver and secrets. Workflow workers must run on the agent's model or one of its `subagents`. No agent can `task` an easy agent; use `rocketclaw_sessions`.
+
+Routines:
+
+- A schedule uses the cron-file syntax: 5-field cron, a Go duration such as `30m`, an `@daily`-style shortcut, or a one-off RFC 3339 time. `@every` and phrases such as `every 30min` fail at startup and reload.
+- An entry with an instruction sends it as the prompt; a bare one sends `Scheduled run (<schedule>).` An empty reply reports nothing; any other opens a Web chat in the agent's `space`.
+- A routine is its agent plus its schedule text: editing the instruction keeps it, changing the schedule starts a new one, and the same schedule twice fails loading. Its runs are recorded as `agents/<agent>.md#<schedule>`, the Cron page lists it as `<agent> · <schedule>`, and `cron:<agent>` finds its runs, along with those of a cron file named `cron/<agent>.md`. Renaming the agent file leaves earlier runs under the old name.
+- A one-off time fires once; a run from the Run button does not count.
+- A cron file whose `agent` is an easy agent fails at startup and reload.
+
+Shadows:
+
+- A shadow must use its parent's `mode`; one that does not is dropped with a warning.
+- An easy shadow needs the same required keys; its `space` may differ from its parent's.
+- A shadow's own `routines` never run, and routine runs get no shadows.
 
 ## Subcommands
 

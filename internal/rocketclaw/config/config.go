@@ -3,6 +3,7 @@ package config
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"text/template"
 
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
 )
@@ -24,7 +24,6 @@ type Config struct {
 	Attachments       AttachmentsConfig                 `json:"attachments,omitzero"`
 	WorkDir           string                            `json:"-"`
 	Overlays          []string                          `json:"overlays,omitempty"`
-	Models            map[string]string                 `json:"models,omitempty"`
 	Web               WebConfig                         `json:"web,omitzero"`
 	ServerDisplayName string                            `json:"server_display_name,omitempty"`
 	Environment       []string                          `json:"environment,omitempty"`
@@ -170,6 +169,28 @@ type MCPServerConfig struct {
 	Cwd     string            `json:"cwd,omitempty"`
 	URL     string            `json:"url,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
+	Tools   MCPToolGroups     `json:"tools,omitzero"`
+}
+
+// MCPToolGroups lists one server's read and write tool-name patterns, the groups easy agents select.
+type MCPToolGroups struct {
+	Read  []string `json:"read,omitempty"`
+	Write []string `json:"write,omitempty"`
+}
+
+// MCPToolGroups returns every MCP server's tool groups keyed by group name.
+func (c *Config) MCPToolGroups() map[string]map[string][]string {
+	groups := make(map[string]map[string][]string, len(c.MCPServers))
+	for name := range c.MCPServers {
+		groups[name] = map[string][]string{"read": c.MCPServers[name].Tools.Read, "write": c.MCPServers[name].Tools.Write}
+	}
+
+	return groups
+}
+
+// ProviderNames returns every configured model provider name, openai included.
+func (c *Config) ProviderNames() []string {
+	return append(slices.Sorted(maps.Keys(c.Providers)), "openai")
 }
 
 // OpenCodeConfig names one remote OpenCode server the Web lists and proxies under /oc/{name}/.
@@ -272,7 +293,7 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 	}
 
 	if secretsARN != "" {
-		body, err := fetcher.SecretString(secretsARN)
+		body, err := fetcher.SecretString(context.Background(), secretsARN)
 		if err != nil {
 			return nil, fmt.Errorf("load secret: %w", err)
 		}
@@ -285,7 +306,7 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 		root = mergeJSON(root, secret).(map[string]any)
 	}
 
-	resolved, err := resolveAWS(root, fetcher)
+	resolved, err := resolveAWS(context.Background(), root, fetcher)
 	if err != nil {
 		return nil, err
 	}
@@ -396,12 +417,6 @@ func (c *Config) Validate() error {
 
 	c.Overlays = normalizeStrings(c.Overlays)
 
-	for name, model := range c.Models {
-		if strings.TrimSpace(name) == "" || strings.TrimSpace(model) == "" {
-			return errors.New("models keys and values must not be empty")
-		}
-	}
-
 	if err := normalizeOpenAIConfig("openai", &c.OpenAI); err != nil {
 		return err
 	}
@@ -447,43 +462,6 @@ func (c *Config) Validate() error {
 	}
 
 	return c.validateSlack()
-}
-
-// RenderAgentModel renders an agent model with the mappings from the loaded config.
-func (c *Config) RenderAgentModel(model string) (string, error) {
-	if literal := strings.TrimSpace(model); literal != "" && !strings.Contains(model, "{{") && !strings.Contains(model, "}}") {
-		return literal, nil
-	}
-
-	tmpl, err := template.New("model").Funcs(template.FuncMap{
-		"model": func(name string) (string, error) {
-			model, ok := c.Models[name]
-			if !ok {
-				return "", fmt.Errorf("model %q is not configured", name)
-			}
-
-			return model, nil
-		},
-	}).Parse(model)
-	if err != nil {
-		return "", fmt.Errorf("parse model template: %w", err)
-	}
-
-	var rendered strings.Builder
-	if err := tmpl.Execute(&rendered, nil); err != nil {
-		return "", fmt.Errorf("execute model template: %w", err)
-	}
-
-	resolved := strings.TrimSpace(rendered.String())
-	if resolved == "" {
-		return "", errors.New("model template returned an empty model")
-	}
-
-	if strings.Contains(resolved, "{{") || strings.Contains(resolved, "}}") {
-		return "", errors.New("model template returned another template")
-	}
-
-	return resolved, nil
 }
 
 func normalizeOpenAIModel(field, model string) (string, error) {
@@ -611,6 +589,19 @@ func (c *Config) validateMCPServers() error {
 			parsed, err := url.Parse(server.URL)
 			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 				return fmt.Errorf("mcp_servers[%q]: url must be an http or https URL", name)
+			}
+		}
+
+		for _, read := range server.Tools.Read {
+			for _, write := range server.Tools.Write {
+				// A shared pattern, or a pattern matching a literal name in the other group, puts a tool in both
+				// groups. filepath.Match agrees with permission wildcards on MCP tool names ([A-Za-z0-9_.-]).
+				readWrite, _ := filepath.Match(read, write)
+				writeRead, _ := filepath.Match(write, read)
+
+				if readWrite || writeRead {
+					return fmt.Errorf("mcp_servers[%q]: tools.read %q and tools.write %q match the same tool", name, read, write)
+				}
 			}
 		}
 
