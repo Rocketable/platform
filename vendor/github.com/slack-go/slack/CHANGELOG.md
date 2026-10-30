@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-30
+
+### Added
+
+- Arrange Block Kit content in rows and columns with `LayoutBlock`, including
+  item widths and alignment, grid borders, fallback content for older clients,
+  and decoding of nested child blocks. Run `go run ./examples/layout` to preview
+  an example or add `-channel C_CHANNEL` to post it.
+- Create, inspect, update, list, enable, disable, and delete Slackbot skills with
+  all seven `slackbot.skills.*` methods. Optional fields use variadic options,
+  including explicit empty values for clearing metadata and MCP declarations.
+  The new methods use the existing form transport with JSON-encoded array
+  fields. Existing endpoints' request formatting is unaffected.
+- Manage Enterprise skill inventory, catalog publication, and deployment with
+  all four `admin.slackbot.skills.*` methods. Batch failures and audience
+  validation details remain available alongside returned errors. All eleven
+  methods have `Context` variants.
+  Admin methods use the `AdminSlackbotSkillsList`, `AdminSlackbotSkillsPublish`,
+  `AdminSlackbotSkillsSetAutoEnabled`, and `AdminSlackbotSkillsUnpublish` names.
+- Run individual methods or verify complete groups with
+  [`examples/slackbot_skills`](examples/slackbot_skills/README.md) and
+  [`examples/admin_slackbot_skills`](examples/admin_slackbot_skills/README.md).
+  Group workflows create, verify, and clean up temporary skills.
+
 ## [0.32.0] - 2026-10-28
 
 ### Breaking changes
@@ -981,7 +1005,8 @@ for details.
 [#1196]: https://github.com/slack-go/slack/issues/1196
 [#1547]: https://github.com/slack-go/slack/pull/1547
 
-[Unreleased]: https://github.com/slack-go/slack/compare/v0.32.0...HEAD
+[Unreleased]: https://github.com/slack-go/slack/compare/v0.33.0...HEAD
+[0.33.0]: https://github.com/slack-go/slack/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/slack-go/slack/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/slack-go/slack/compare/v0.30.1...v0.31.0
 [0.30.1]: https://github.com/slack-go/slack/compare/v0.30.0...v0.30.1
