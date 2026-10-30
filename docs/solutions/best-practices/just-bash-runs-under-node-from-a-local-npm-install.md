@@ -32,7 +32,7 @@ retire_when: "Bun ships node:module registerHooks and just-bash reports level fu
 
 Agents that set `shell: emulated` run their shell commands in [just-bash](https://github.com/vercel-labs/just-bash), a bash emulator written in TypeScript. RocketClaw embeds a small TypeScript wrapper (`internal/rocketclaw/justbash/wrapper.ts`) and a `package.json` that pins `just-bash` to `3.6.0`. At startup and on each reload, when some agent uses the emulated shell, the server writes both into `<runtime dir>/justbash/` and runs `npm install` there (`internal/rocketclaw/justbash/justbash.go:55-90`, called from `internal/rocketclaw/backend/justbash.go:17-36`). Each shell command then runs `<runtime dir>/justbash/wrapper.ts` directly, and its `#!/usr/bin/env node` first line hands it to Node; it gets the setup and the command on stdin.
 
-The code and README say *what* happens. They do not say why the shorter-looking routes were dropped. The repo already uses Bun for the Web app, and the first request in this work was to "use bunx to run the embedded TypeScript wrapper". So the next person will reach for Bun, `npx`, or a bundle again. Each one was tried in the session that built PR #755 (open, unmerged as of this writing), and each one failed or lost something.
+The code and README say *what* happens. They do not say why the shorter-looking routes were dropped. The repo already uses Bun for the Web app, and the first request in this work was to "use bunx to run the embedded TypeScript wrapper". So the next person will reach for Bun, `npx`, or a bundle again. Each one was tried in the session that built PR #755 (merged), and each one failed or lost something.
 
 ## Guidance
 

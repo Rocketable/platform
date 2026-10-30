@@ -1,7 +1,7 @@
 ---
 title: Per-Provider Autocompaction Threshold
 date: 2026-08-24
-last_updated: 2026-10-29
+last_updated: 2026-10-30
 category: docs/solutions/architecture-patterns/
 module: internal/rocketclaw/config
 problem_type: architecture_pattern
@@ -52,7 +52,7 @@ The copy path is:
 
 The harness's built-in `openAIModelResolver`, which `NewWithProviders` installs and only tests use, does not copy a threshold (`internal/rocketclaw/harness/models.go:33-40`). It relies on `Config.CompactThreshold`, not provider JSON.
 
-ChatGPT / Codex cannot keep `context_management` on the wire. `cleanCodexRequest` reads `compact_threshold` out of that array, then deletes `context_management` (and `max_output_tokens`) (`internal/rocketclaw/oai/oauth.go:705-729`). After a successful `/responses` call, `codexCompaction` compares `usage.total_tokens` to the extracted threshold and, when usage is not strictly below the threshold and the output has no compaction item yet, prepends a Codex compact result (`internal/rocketclaw/oai/oauth.go:837-902`). Codex does not honor the OpenAI Responses compaction field directly; the transport reconstructs the same trigger.
+ChatGPT / Codex cannot keep `context_management` on the wire. `cleanCodexRequest` reads `compact_threshold` out of that array, then deletes `context_management` (and `max_output_tokens`) (`internal/rocketclaw/oai/oauth.go:701-725`). After a successful `/responses` call, `codexCompaction` compares `usage.total_tokens` to the extracted threshold and, when usage is not strictly below the threshold and the output has no compaction item yet, prepends the compaction item that `codexCompactItem` gets from a streamed `/responses` request whose input ends with `{"type":"compaction_trigger"}` (`internal/rocketclaw/oai/oauth.go:831-896`, `internal/rocketclaw/oai/oauth.go:939-1016`; see `docs/solutions/runtime-errors/chatgpt-codex-retired-responses-compact.md`). Codex does not honor the OpenAI Responses compaction field directly; the transport applies the same threshold check itself.
 
 When adding a new child looper, build it with `toolFactory.newLooper`. Do not hardcode a token count at the call site. Do not send `context_management` to Codex; extract then delete.
 
@@ -67,7 +67,7 @@ If a new looper bypasses `toolFactory.newLooper`, child turns silently use the f
 - Changing when or how conversation history is compacted.
 - Adding a provider, a child looper, or a new Responses/Codex client path.
 - Editing `OpenAIConfig`, `ProviderOrigin`, or `looper.CompactThreshold`.
-- Touching `cleanCodexRequest`, `codexCompaction`, or Codex `/responses` adaptation.
+- Touching `cleanCodexRequest`, `codexCompaction`, `codexCompactItem`, or Codex `/responses` adaptation.
 - Documenting or testing `autocompaction_threshold` in `rocketclaw.json` / `femtoclaw.json`.
 
 Do not apply this as a per-agent or per-model knob. The current contract is per provider. A child agent gets a different threshold only by resolving a different provider.
@@ -121,7 +121,7 @@ const defaultCompactThreshold int64 = 200000
 
 Codex extracts the threshold, then strips the field the API does not accept:
 
-```707:729:internal/rocketclaw/oai/oauth.go
+```703:725:internal/rocketclaw/oai/oauth.go
 	if raw, ok := body["context_management"]; ok {
 		var contextManagement []struct {
 			CompactThreshold *float64 `json:"compact_threshold"`

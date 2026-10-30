@@ -44,7 +44,7 @@ A Slack mention is accepted at most once per conversation, keyed by its Slack me
 
 The human actor a connector attributes to a human-originated prompt.
 
-Each connector chooses the string. The backend prints it in the model header, which Web also exposes through the message footer's info icon. Authorization uses connector identity, not this string.
+Each connector chooses the string. The backend prints it in the model header, and Web also shows it with the message. Authorization uses connector identity, not this string.
 
 ## Conversation Work
 
@@ -52,7 +52,19 @@ Each connector chooses the string. The backend prints it in the model header, wh
 
 An objective a person sets on a conversation from Web that keeps its agent taking turns toward it until the agent marks it complete, someone stops it, or its turn budget, when it has one, is spent.
 
-While a Goal continues, its next turn takes the conversation's next slot ahead of waiting Thread Queue items, and its turns carry the Principal of the person who set it. Stopping the conversation's running turn stops its Goal too.
+While a Goal continues, its next turn takes the conversation's next slot ahead of waiting Thread Queue items, and its turns act for the person who set it: their tools see that person's name and email, though the model header names no Principal, since a goal turn is not a person's prompt. Stopping the conversation's running turn stops its Goal too.
+
+### Steer
+
+Input sent into a conversation's running turn so the agent takes it into that turn instead of waiting for a turn of its own.
+
+A steer joins a running turn that still takes input, whoever sent it and whoever started the turn; otherwise it runs as the next turn. Workflow turns, and the hidden runs of cron and External MCP, always take a steer as their next turn. Steers come from Web and from agents; a Slack mention never steers.
+
+### Scheduled Message
+
+A message an agent schedules into its own conversation to arrive after a delay, once or repeating until the conversation's schedule is reset; when due it runs as a turn of that conversation.
+
+Thread Queue items placed after a Scheduled Message wait behind it until it runs or is cancelled.
 
 ### Workflow
 
@@ -62,7 +74,7 @@ A saved Starlark program that runs a task as agent calls made by named workers, 
 
 ### Overlay Clone
 
-The live checkout of one configured git overlay that reload last installed.
+The live checkout of one configured overlay, a git repository whose agents, skills, workflows, cron definitions, and scripts RocketClaw layers over its own, as Reload last installed it.
 
 ### Reload
 
@@ -80,22 +92,18 @@ Restart is not a substitute for Reload when only overlay file contents changed.
 
 ### Provider
 
-A named OpenAI-compatible credential and endpoint used to serve model requests. A model name without a Provider qualifier uses the default Provider; a qualified name selects that Provider.
+A named account that serves model requests: its sign-in and, for an API-key Provider, the OpenAI-compatible endpoint it calls. A model name without a Provider qualifier uses the default Provider; a qualified name selects that Provider.
 
 Root and child agents resolve their Provider independently. There is no implicit failover from one Provider to another.
 
-A Provider authenticates with either an API key or a ChatGPT sign-in. A ChatGPT sign-in Provider is served by ChatGPT's Codex backend, not the public API, so RocketClaw reshapes its requests for that backend, including how it asks for compaction.
+Each Provider can set its own Autocompaction Threshold, the token count at which a turn asks that Provider to compact conversation history; unset means the runtime default. A child turn uses a different threshold only when it resolves a different Provider.
 
-### Autocompaction Threshold
-
-The token count at which a turn asks its Provider to compact conversation history.
-
-Each Provider can set its own Autocompaction Threshold. Unset means the runtime default. A child turn uses a different threshold only when it resolves a different Provider.
+A Provider authenticates with either an API key or a ChatGPT sign-in. A ChatGPT sign-in Provider is served by ChatGPT's Codex backend, not the public API, so RocketClaw reshapes its requests for that backend. There, compaction is a separate request RocketClaw makes when a response reaches the Provider's Autocompaction Threshold or the backend reports the context is full.
 
 ## Harness
 
 RocketClaw's agent engine: it runs the model loop, tools, and permissions for every turn.
-*Avoid:* RocketCode, its former name from when it was a separate component; older plans and specs still use it.
+*Avoid:* RocketCode, its former name from when it was a separate component; older plans and specs, and some config and stored names, still use it.
 
 ### Code Mode
 
@@ -109,7 +117,7 @@ Host tools inside the script return full strings to the script. Only the string 
 
 ### Host Tool
 
-A sandbox capability the Code Mode script can call directly, as opposed to a model-facing tool such as Execute. Host tools include filesystem, shell, fetch, and embedder-custom tools.
+A sandbox capability the Code Mode script can call directly, as opposed to a model-facing tool such as Execute. Host tools include filesystem, shell, fetch, and RocketClaw's own tools.
 
 ### Emulated Shell
 
@@ -120,7 +128,7 @@ Each command runs in a fresh emulator process. Only the agent's declared working
 
 ### Script Call Record
 
-A small record of one Host Tool or MCP call a Code Mode script made, which Web lists under the script's Execute call.
+A small record of one Host Tool or MCP call a Code Mode script made, which Web lists under the script's Execute call and an agent reading the session also sees. When the whole script had a Permission Review, one more record holds only that decision.
 
 It holds the call's name, its clipped arguments, a status, a one-line summary of the output, and the outcome and reason of the call's Permission Review when it had one; it never holds the output. While its Harness Turn runs, each record is saved on its own when the call starts and when it finishes, so the turn's other saves never rewrite it; the finished turn keeps its records. An Execute call keeps a bounded number of records, and none are added after the turn ends.
 
@@ -128,13 +136,13 @@ It holds the call's name, its clipped arguments, a status, a one-line summary of
 
 A turn-scoped file that holds the full Execute result when that result is too large to send to the model.
 
-A Spill has an opaque result ID registered only with its owning Harness Turn. The model retrieves bounded pages through a dedicated top-level tool, without gaining filesystem read access. The ID expires and the file is deleted when the turn ends.
+A Spill has an opaque result ID registered only with its owning Harness Turn. The model retrieves bounded pages through a dedicated top-level tool, without gaining filesystem read access. The ID expires and the file is deleted when the turn ends; a turn cut off by a shutdown keeps its Spills, and resuming it brings them back.
 
 ### Harness Turn
 
 One model loop in the harness. It owns that loop's Spills.
 
-A Harness Turn is not the active-turn slot on a Managed Slack Thread. Slack occupancy often drives one Harness Turn, but the two lifetimes are not the same object.
+A Harness Turn is not a conversation's running turn. A conversation's turn usually drives one Harness Turn, but a workflow turn drives several, and the two lifetimes are not the same object.
 
 ### Delegation History
 
@@ -150,6 +158,10 @@ An automatic check, by a reviewer agent, of a tool call or a whole Execute scrip
 ### Guardrail
 
 An agent that an agent type names to check every Task delegation to that type: each prompt before the subagent receives it, and each answer before the parent sees it. A Guardrail approves or rejects and never rewrites the prompt or the answer; a rejected prompt never reaches the subagent. Not a Permission Review, which judges tool calls rather than delegations.
+
+### Task
+
+The model-facing tool through which an agent delegates a prompt to another agent type; the work runs as a Subagent Session, and its answer returns as the tool's result.
 
 ### Subagent Session
 
@@ -177,7 +189,7 @@ A reply note answers one session write. It goes to the exact session that wrote,
 
 ### Shadow Agent
 
-An alternative agent, defined in a directory named after its parent agent, that runs the parent's work for comparison. Each parent session owns a separate Shadow Session for each shadow. Shadows are not ordinary agent-picker choices and do not spawn more shadows.
+An alternative agent, declared under one parent agent, that runs the parent's work for comparison. Each parent session owns a separate Shadow Session for each shadow. Shadows are not ordinary agent-picker choices and do not spawn more shadows.
 
 ### Shadow Session
 
@@ -192,6 +204,10 @@ A hidden conversation that runs work for a human-visible destination conversatio
 It records that destination as the one it reports to. The destination's history shows the run's visible messages in place, live while a turn runs, without copying them; what only the run's own context needs stays out of the destination. Web lists only the destination, and session tags set during the turn land on the destination.
 *Avoid:* hidden run
 
+### External MCP Session
+
+A conversation an outside MCP client drives by sending prompts under its own conversation ID to a chosen agent. It shows as a Web chat, where people can continue it or switch its agent, while the client's turns run in a Private Producer Conversation that reports to that chat.
+
 ### External MCP Metadata
 
 The key-value pairs an External MCP caller attaches to its session, which the agent sees both as a message in its context and as environment variables for its tools.
@@ -204,13 +220,13 @@ The session's first turn records the pairs, together with the conversation's ide
 
 A live spoken call between a person on the Web and OpenAI's voice model, attached to one conversation.
 
-Audio flows between the browser and OpenAI; RocketClaw creates the call with the default `openai` Provider credentials, independently of the conversation agent's Provider, and holds its control connection while the browser's request stays open. The call ends when that request ends, or earlier when RocketClaw or OpenAI ends it, and records why; it has no idle or no-speech timers. With a ChatGPT sign-in RocketClaw reconnects a dropped control connection; with an API key a drop ends the call as lost. A person has at most one live Voice Session: starting another, on any conversation or device, ends their older one, while other people's sessions, even on the same conversation, keep running. Ending a Voice Session never stops the conversation's turns.
+Audio flows between the browser and OpenAI; RocketClaw creates the call with the default Provider's credentials, independently of the conversation agent's Provider, and holds its control connection while the browser's request stays open. The call ends when that request ends, or earlier when RocketClaw or OpenAI ends it, and records why; it has no idle or no-speech timers. With a ChatGPT sign-in RocketClaw reconnects a dropped control connection; with an API key a drop ends the call as lost. A person has at most one live Voice Session: starting another, on any conversation or device, ends their older one, while other people's sessions, even on the same conversation, keep running. Ending a Voice Session never stops the conversation's turns.
 
 ### Voice Settings
 
 One person's Web voice state, kept by the server and the same on every device: their current voice conversation for the Voice page, the agent for their next one, their voice, and whether the Voice page shows the transcript.
 
-Two people never share Voice Settings, even in one browser. Retention cleanup never deletes a person's current voice conversation, even with no messages; Reset forgets it, and ordinary cleanup applies after that. A call uses the person's voice when the default `openai` Provider offers it, and that Provider's default voice otherwise.
+Two people never share Voice Settings, even in one browser. Retention cleanup never deletes a person's current voice conversation, even with no messages; Reset forgets it, and ordinary cleanup applies after that. A call uses the person's voice when the default Provider offers it, and that Provider's default voice otherwise.
 
 ### Voice Hand-off
 
@@ -232,9 +248,13 @@ The one grey tab group named Shared that every space has, shown first in the Web
 
 ### Search Page
 
-A Web tab for searching sessions, one of as many as a person opens, each with its own address under `/search`.
+A Web tab for searching sessions, one of as many as a person opens, each with its own address.
 
-It holds its own searches, shown as tabs inside the page, and can be named; unnamed, it is titled by the query it shows. Its name and searches are the person's own and are saved with their tabs, so they follow the page into groups and other spaces and across devices. Added to a space's Shared Group, it becomes one page everyone in that space sees and edits, its searches and which one is shown included, while the person's own copy stays as it was; whoever takes it out of Shared keeps that one page as their own, together with any searches of their own copy. A Search page never opens as a preview tab, Escape does not close it, and closing its tab discards it. Cmd/Ctrl+P finds every space's Search pages by name or query once something is typed.
+It holds its own searches, shown as tabs inside the page, and can be named; unnamed, it is titled by the query it shows. Its name and searches are the person's own and are saved with their tabs, so they follow the page into groups and other spaces and across devices. Added to a space's Shared Group, it becomes one page everyone in that space sees and edits, its searches and which one is shown included, while the person's own copy stays as it was; whoever takes it out of Shared keeps that one page as their own, together with any searches of their own copy. A Search page never opens as a preview tab, Escape does not close it, and closing its tab discards it. The Web's session search palette finds every space's Search pages by name or query once something is typed.
+
+### Remote OpenCode Session
+
+A session on a configured OpenCode coding server that RocketClaw keeps a synced copy of, so the Web lists, opens, creates, and forks it beside RocketClaw's own sessions; its agent runs on that server, not in the Harness.
 
 ### Birth Space
 
@@ -244,7 +264,7 @@ It is its agent's space, or for a cron's sessions the cron's, else the cron agen
 
 ### Unread
 
-A session's per-person mark that a turn the person sent a Web message into has ended and they have not looked at it since. Other people's turns, and turns with no Web sender, mark no one, except in a session in some space's Shared group, where any turn's end marks every Web person. Having the session's tab active in a focused window clears the mark on all of that person's devices.
+A session's per-person mark that a turn the person sent a Web message into has ended and they have not looked at it since. Other people's turns, and turns with no Web sender, mark no one, except in a session in some space's Shared group, where any turn's end marks every Web person. Nobody who is viewing the session when the turn ends is marked. Having the session's tab active in a focused window clears the mark on all of that person's devices.
 
 ## Hosted Pages
 
@@ -268,7 +288,7 @@ The list of Hosted Pages a Web space shows: HTML pages of agents whose space mat
 
 ### Backend
 
-The one RocketClaw engine: conversation execution, the Thread Queue, cron, skills, agent definitions, Overlay Clones, Reload, and Restart.
+The one RocketClaw engine: conversation execution, the Thread Queue, skills, agent definitions, Overlay Clones, Reload, and Restart.
 
 ### Frontend
 
@@ -282,9 +302,9 @@ The shared language frontends and backend import. A frontend drops protocol mess
 
 ### State Store
 
-RocketClaw's durable database for sessions, Managed Slack Thread routing, goals, cron, scheduled messages, the Thread Queue, External MCP bindings, and the Step Journal.
+RocketClaw's durable database for sessions, Managed Slack Thread routing, goals, cron, Scheduled Messages, the Thread Queue, External MCP bindings, and the Step Journal.
 
-Each fact lives in one place. There is one record for every conversation of every kind, with what it is, whether Web lists it, where it reports to, and its facts: Slack thread, summary, tags, goal, External MCP binding, and shadow parent. Every turn is one record, whether waiting (Thread Queue items and one-time reminders), running, delivering, or done, Background Jobs included. Saved history, the Step Journal, and cron lines with recurring reminders each live in their own place, as do attachments, Slack channel facts, Voice Settings, Hosted Pages, Spaces and tabs, the run lock, and shadow comparison turns. Data a release retires is kept aside until a later release drops it.
+Each fact lives in one place. There is one record for every conversation of every kind, with what it is, whether Web lists it, where it reports to, and its facts: Slack thread, summary, tags, goal, External MCP binding, and shadow parent. Every turn is one record, whether waiting (Thread Queue items and one-time Scheduled Messages), running, delivering, or done, Background Jobs included. Saved history, the Step Journal, and cron lines with recurring Scheduled Messages each live in their own place, as do attachments, Slack channel facts, Voice Settings, Hosted Pages, Spaces and tabs, the run lock, and shadow comparison turns. Data a release retires is kept aside until a later release drops it.
 
 ### Step Journal
 
@@ -307,7 +327,7 @@ A running turn saves each item of its record once, as a step of its own, instead
 
 ## Flagged ambiguities
 
-- "'turn' had been used for both a Slack conversation occupancy slot and a harness model loop — these are distinct."
+- "'turn' is used for both a conversation's running turn and a harness model loop — these are distinct."
 
 ## Retired
 

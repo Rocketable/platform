@@ -30,7 +30,7 @@ tags:
 
 ## Problem
 
-In ChatGPT (OAuth) mode, RocketClaw compacted conversations by posting to `https://chatgpt.com/backend-api/codex/responses/compact`. The ChatGPT Codex backend no longer serves that route. The transport treats a non-200 compaction reply as "no compaction this time", so conversations stopped compacting and nothing reached the user. The fix is opened in #774, unmerged as of this writing.
+In ChatGPT (OAuth) mode, RocketClaw compacted conversations by posting to `https://chatgpt.com/backend-api/codex/responses/compact`. The ChatGPT Codex backend no longer serves that route. The transport treats a non-200 compaction reply as "no compaction this time", so conversations stopped compacting and nothing reached the user. The fix landed in #774.
 
 ## Symptoms
 
