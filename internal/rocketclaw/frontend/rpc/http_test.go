@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,7 +110,7 @@ func BenchmarkHTTPEventFraming(b *testing.B) {
 func startHTTPTestServer(t *testing.T, connection *grpc.ClientConn) *httptest.Server {
 	t.Helper()
 
-	server := httptest.NewServer(NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, ""))
+	server := httptest.NewServer(NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil))
 	t.Cleanup(server.Close)
 
 	return server
@@ -122,7 +121,7 @@ func TestHTTPBoundary(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "")
+	handler := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)
 
 	for _, tc := range []struct{ method, body, message string }{
 		{"RunCronJob", `{}`, "stem is required"},
@@ -193,7 +192,7 @@ func TestHTTPReload(t *testing.T) {
 		require.Equal(t, "updated assets", reason)
 		return "rocketclaw runtime assets reloaded", nil
 	}}
-	server := New(core, nil, config.NewLockedConfig(&config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}), &mockChannels{}, &mockCronJobs{})
+	server := New(core, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{})
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
@@ -211,13 +210,13 @@ func TestHTTPReload(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "")
+	handler := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)
 
 	for _, tc := range []struct {
 		address string
 		code    int
 	}{
-		{"192.0.2.1:1234", http.StatusUnauthorized},
+		{"192.0.2.99:1234", http.StatusUnauthorized},
 		{"127.0.0.1:1234", http.StatusOK},
 	} {
 		request := httptest.NewRequest(http.MethodPost, "/api/Reload", strings.NewReader(`{"reason":"updated assets"}`))
@@ -233,7 +232,7 @@ func TestHTTPReload(t *testing.T) {
 		}
 	}
 
-	for _, principal := range []string{"", "not-an-address", "192.0.2.1"} {
+	for _, principal := range []string{"", "not-an-address", "192.0.2.99"} {
 		ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", principal))
 		_, err := invoke[ReloadResponse](ctx, connection, "Reload", &ReloadRequest{Reason: "updated assets"})
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
@@ -437,14 +436,14 @@ func TestHTTPStreams(t *testing.T) {
 				request := httptest.NewRequest(http.MethodPost, "/api/UploadAttachment?conversationId=visible&name=original.bin", iotest.ErrReader(errors.New("broken body")))
 				request.RemoteAddr = "127.0.0.1:1234"
 				response := httptest.NewRecorder()
-				NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "").ServeHTTP(response, request)
+				NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil).ServeHTTP(response, request)
 				require.Equal(t, http.StatusBadRequest, response.Code)
 				require.JSONEq(t, `{"code":3,"message":"read upload body: rpc error: code = InvalidArgument desc = broken body"}`, response.Body.String())
 
 				return
 			}
 
-			server := httptest.NewServer(NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, ""))
+			server := httptest.NewServer(NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil))
 			t.Cleanup(server.Close)
 
 			path, method := "/api/ListSessions", http.MethodGet

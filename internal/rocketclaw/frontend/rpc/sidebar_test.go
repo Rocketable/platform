@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,7 +62,7 @@ func sidebarChoicesFixture(tb testing.TB, count int) (*Server, context.Context) 
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(tb, err)
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: tb.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: tb.TempDir()}
 	sessions, err := backend.NewSessionServiceIn(tb.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(tb, err)
 	tb.Cleanup(func() { require.NoError(tb, sessions.Stop()) })
@@ -115,7 +114,7 @@ func TestSidebarSendFailures(t *testing.T) {
 	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-	cfg := &config.Config{Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	cfg := &config.Config{Workspace: t.TempDir()}
 	root, err := os.OpenRoot(cfg.Workspace)
 
 	require.NoError(t, err)
@@ -184,7 +183,7 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-	cfg := &config.Config{Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	cfg := &config.Config{Workspace: t.TempDir()}
 	root, err := os.OpenRoot(cfg.Workspace)
 
 	require.NoError(t, err)

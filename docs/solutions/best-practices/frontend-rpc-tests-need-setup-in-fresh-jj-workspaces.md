@@ -1,7 +1,7 @@
 ---
 title: Frontend RPC Tests Need Setup in Every Fresh JJ Workspace
 date: 2026-10-29
-last_updated: 2026-10-29
+last_updated: 2026-10-30
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/frontend/rpc
 problem_type: developer_experience
@@ -13,10 +13,12 @@ applies_when:
   - Setting TMPDIR inside .tmp/ as the repository requires, from a workspace checkout on macOS
   - internal/rocketclaw/frontend/rpc tests fail inside a bun test step, or with bind invalid argument, while the rest of the suite passes
   - A worker or reviewer is about to call a frontend/rpc failure an unrelated environment problem
+  - Many backend and cmd tests fail at once with connection refused on the ROCKETCLAW_TEST_DATABASE_URL port
 symptoms:
   - "bun test output in frontend/rpc says Could not resolve \"@sentry/react\" (web packages not installed)"
   - "After installing them, the same tests fail with error: Cannot find package 'undefined' from '.../internal/rocketclaw/web/src/<name>-transport.test.ts'"
   - TestSessionEntries, TestPagesRealBrowser, TestPublicProgressRealBrowser and the other real-browser tests fail; backend packages pass
+  - "Dozens of tests across backend, frontend/rpc and cmd/rocketclaw fail with dial tcp 127.0.0.1:<port>: connect: connection refused, some in 0.00s"
   - "On macOS, about 22 frontend/rpc tests, such as TestHTTPStreams, TestPages and TestSessionReads, fail with listen unix <TMPDIR>/rpc-NNNNNNNNNN/s: bind: invalid argument"
 related_components:
   - internal/rocketclaw/web
@@ -120,21 +122,31 @@ EOF
 go test ./internal/rocketclaw/frontend/rpc/ -count=1
 ```
 
-Source `.tmp/test-env.sh` before every `go test ./...` and `make test`. Add `ROCKETCLAW_TEST_DATABASE_URL` to it for plain `go test ./...` and for `make test` in `internal/rocketclaw/web`, which starts no database; only root `make test` starts its own PostgreSQL when the variable is unset (`internal/rocketclaw/Makefile:82`–`101`). When a coordinator hands work to subagents, put the `. .tmp/test-env.sh` line in the worker rules. Each worker starts a fresh shell and will not inherit the variables.
+Source `.tmp/test-env.sh` before every `go test ./...` and `make test`. Add `ROCKETCLAW_TEST_DATABASE_URL` to it for plain `go test ./...` and for `make test` in `internal/rocketclaw/web`, which starts no database; only root `make test` starts its own PostgreSQL when the variable is unset (`internal/rocketclaw/Makefile:82`–`101`). Give that database its own container named for this workspace. Several agent sessions on one machine run their own test containers side by side; a URL that points at a container this workspace did not start can stop answering partway through a run. On the remote-RocketClaws run (2026-10-30), the container behind `127.0.0.1:32832` disappeared between two full runs. `docker ps -a` no longer listed it, while other sessions' containers kept running. Root `make test` then failed `internal/rocketclaw/backend`, and `go test ./...` failed many `cmd/rocketclaw` tests, all with `connection refused`, which read like a regression. Starting a workspace-owned container on the same port, with the shared memory `test-postgres-container-needs-larger-shm.md` asks for, made both `make test` and `go test ./...` pass again:
+
+```sh
+docker run -d --name "$(basename "$PWD")-pg" --shm-size=1g \
+  -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=rocketclaw_test \
+  -p 127.0.0.1:32832:5432 postgres:18
+echo 'export ROCKETCLAW_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:32832/rocketclaw_test?sslmode=disable' >> .tmp/test-env.sh
+```
+
+Pick a free port, and remove the container when the workspace is done. When a coordinator hands work to subagents, put the `. .tmp/test-env.sh` line in the worker rules. Each worker starts a fresh shell and will not inherit the variables.
 
 `$main/.tmp/t` stays inside `<repo-root>/.tmp/` as the temporary-directory rule requires. Before a long run, check the budget: `printf %s "$TMPDIR" | wc -c` must print 86 or less. Do not use `$PWD/.tmp` or `$PWD/.tmp/test-tmp` from a workspace, and do not fall back to `/tmp`, which breaks the repository's temporary-directory rule.
 
-Read the three messages this way:
+Read these messages this way:
 
 | Error inside `frontend/rpc` | Missing piece |
 |---|---|
 | `Could not resolve "@sentry/react"` (or any other web package) in a `bun test` step | `bun install --frozen-lockfile` in `internal/rocketclaw/web` |
 | `Cannot find package 'undefined'` in a `bun test` step | `ROCKETCLAW_PLAYWRIGHT_MODULE` unset in the environment `go test` ran with |
 | `listen unix <TMPDIR>/rpc-NNNNNNNNNN/s: bind: invalid argument` | `TMPDIR` longer than 86 bytes; count it before you debug the test |
+| `dial tcp 127.0.0.1:<port>: connect: connection refused` across many packages | The database container behind `ROCKETCLAW_TEST_DATABASE_URL` is gone; check `docker ps -a` and start a workspace-owned one |
 
 ## Why This Matters
 
-None of the three messages points at its cause. All of them show up in a package the change probably did not touch, and every agent run starts in a fresh workspace, so the failures come back every time. The socket error can also look random, because the path length depends on the random directory name, and that pushes an agent toward calling the suite flaky. The comment in `testSocketPath` says `TMPDIR` should be short, but it does not say what "short" means.
+None of these messages points at its cause. All of them show up in a package the change probably did not touch, and every agent run starts in a fresh workspace, so the failures come back every time. The socket error can also look random, because the path length depends on the random directory name, and that pushes an agent toward calling the suite flaky. The comment in `testSocketPath` says `TMPDIR` should be short, but it does not say what "short" means.
 
 "Environment, not this change" is literally true, which is why it keeps passing review. But it leaves tests unrun: a change that touches `TestSessionEntries` or the Web transport code gets no browser check at all, and the required `go test ./...` and `make test` are not actually green. Longer workspace slugs make the socket limit worse.
 

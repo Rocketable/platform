@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"log/slog"
-	"net/netip"
 	"testing"
 	"time"
 
@@ -33,7 +32,7 @@ func TestTabs(t *testing.T) {
 	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "a", Agent: "main"}))
 
 	db := openTestTurns(t, dsn).db
-	server := &Server{sessions: sessions, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"}}
+	server := &Server{sessions: sessions}
 	call := func(ip string, request *TabsRequest) (*TabsResponse, error) {
 		return server.tabs(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", ip)), request)
 	}

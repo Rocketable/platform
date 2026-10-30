@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,11 +62,7 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-	cfg := &config.Config{
-		Workspace: t.TempDir(),
-		WebUsers:  map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"},
-		OpenCode:  servers,
-	}
+	cfg := &config.Config{Workspace: t.TempDir(), OpenCode: servers}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })

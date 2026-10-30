@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,26 +19,26 @@ import (
 
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
-	Workspace         string                     `json:"workspace"`
-	DatabaseURL       string                     `json:"database_url"`
-	Attachments       AttachmentsConfig          `json:"attachments,omitzero"`
-	WorkDir           string                     `json:"-"`
-	Overlays          []string                   `json:"overlays,omitempty"`
-	Models            map[string]string          `json:"models,omitempty"`
-	WebUsers          map[netip.Addr]string      `json:"web_users,omitempty"`
-	Web               WebConfig                  `json:"web,omitzero"`
-	ServerDisplayName string                     `json:"server_display_name,omitempty"`
-	Environment       []string                   `json:"environment,omitempty"`
-	Logging           LoggingConfig              `json:"logging"`
-	MCPExternal       MCPExternalConfig          `json:"mcp_external"`
-	MCPServers        map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
-	OpenCode          map[string]OpenCodeConfig  `json:"opencode,omitempty"`
-	Slack             SlackConfig                `json:"slack"`
-	OpenAI            OpenAIConfig               `json:"openai"`
-	Providers         map[string]OpenAIConfig    `json:"providers,omitempty"`
-	AutoApproverModel string                     `json:"auto_approver_model"`
-	Instrumentation   InstrumentationConfig      `json:"instrumentation"`
-	PostHog           PostHogConfig              `json:"posthog,omitzero"`
+	Workspace         string                            `json:"workspace"`
+	DatabaseURL       string                            `json:"database_url"`
+	Attachments       AttachmentsConfig                 `json:"attachments,omitzero"`
+	WorkDir           string                            `json:"-"`
+	Overlays          []string                          `json:"overlays,omitempty"`
+	Models            map[string]string                 `json:"models,omitempty"`
+	Web               WebConfig                         `json:"web,omitzero"`
+	ServerDisplayName string                            `json:"server_display_name,omitempty"`
+	Environment       []string                          `json:"environment,omitempty"`
+	Logging           LoggingConfig                     `json:"logging"`
+	MCPExternal       MCPExternalConfig                 `json:"mcp_external"`
+	MCPServers        map[string]MCPServerConfig        `json:"mcp_servers,omitempty"`
+	OpenCode          map[string]OpenCodeConfig         `json:"opencode,omitempty"`
+	RocketClaws       map[string]RemoteRocketClawConfig `json:"rocketclaws,omitempty"`
+	Slack             SlackConfig                       `json:"slack"`
+	OpenAI            OpenAIConfig                      `json:"openai"`
+	Providers         map[string]OpenAIConfig           `json:"providers,omitempty"`
+	AutoApproverModel string                            `json:"auto_approver_model"`
+	Instrumentation   InstrumentationConfig             `json:"instrumentation"`
+	PostHog           PostHogConfig                     `json:"posthog,omitzero"`
 }
 
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
@@ -177,6 +176,12 @@ type MCPServerConfig struct {
 type OpenCodeConfig struct {
 	URL      string `json:"url"`
 	Password string `json:"password"`
+}
+
+// RemoteRocketClawConfig names another RocketClaw whose chats the Web page lists and operates.
+// URL is the remote's tsnet HTTPS origin, which the browser calls directly.
+type RemoteRocketClawConfig struct {
+	URL string `json:"url"`
 }
 
 // MCP server names follow the same character rules as MCP tool names in the
@@ -391,12 +396,6 @@ func (c *Config) Validate() error {
 
 	c.Overlays = normalizeStrings(c.Overlays)
 
-	for ip, username := range c.WebUsers {
-		if !ip.IsValid() || username == "" || username != strings.TrimSpace(username) {
-			return errors.New("web_users requires valid IP keys and non-empty, trimmed usernames")
-		}
-	}
-
 	for name, model := range c.Models {
 		if strings.TrimSpace(name) == "" || strings.TrimSpace(model) == "" {
 			return errors.New("models keys and values must not be empty")
@@ -440,6 +439,10 @@ func (c *Config) Validate() error {
 	}
 
 	if err := c.validateOpenCode(); err != nil {
+		return err
+	}
+
+	if err := c.validateRocketClaws(); err != nil {
 		return err
 	}
 
@@ -629,6 +632,18 @@ func (c *Config) validateInstrumentation() error {
 	c.PostHog.Host = strings.TrimRight(cmp.Or(c.PostHog.Host, "https://us.i.posthog.com"), "/")
 	if c.PostHog.ProjectToken != "" && !strings.HasPrefix(c.PostHog.ProjectToken, "phc_") {
 		return errors.New("posthog.project_token must be a public project token (phc_...), never a personal API key")
+	}
+
+	return nil
+}
+
+func (c *Config) validateRocketClaws() error {
+	for _, name := range slices.Sorted(maps.Keys(c.RocketClaws)) {
+		// Names appear in page URLs as /r/{name}/; the URL is a bare origin the browser calls.
+		parsed, errURL := url.Parse(c.RocketClaws[name].URL)
+		if name == "" || strings.Trim(name, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || errURL != nil || strings.ContainsAny(c.RocketClaws[name].URL, "?#") || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("rocketclaws[%q]: name must use a-z, 0-9 and -, and url must be an https origin with no path", name)
+		}
 	}
 
 	return nil

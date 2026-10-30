@@ -2,6 +2,9 @@
 // ends, timed out or not: bun skips a timed-out test's finally blocks, and a browser left open outlives bun.
 import { afterEach } from "bun:test";
 
+// Unit tests run page code without a page; it reads the local server's root page as its address.
+globalThis.location ??= new URL("http://localhost/") as unknown as Location;
+
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 if (playwright) {
   const { chromium } = await import(playwright);

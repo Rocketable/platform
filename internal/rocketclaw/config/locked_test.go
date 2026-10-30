@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net/netip"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,11 +13,12 @@ func TestLockedConfig(t *testing.T) {
 	rate := 0.5
 	want := &Config{
 		Workspace: "workspace", Overlays: []string{"overlay"}, Models: map[string]string{"main": "model"},
-		WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, Environment: []string{"KEY=value"},
-		Providers:  map[string]OpenAIConfig{"work": {APIKey: "invented"}},
-		MCPServers: map[string]MCPServerConfig{"tools": {Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}}},
-		Slack:      SlackConfig{Channels: []SlackChannelConfig{{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}}},
-		Web:        WebConfig{Sentry: SentryConfig{TracesSampleRate: &rate}, Tsnet: &TsnetConfig{Hostname: "rocketclaw", Tags: []string{"tag:rocketclaw"}, Origin: "https://rocketclaw.example.ts.net"}},
+		Environment: []string{"KEY=value"},
+		Providers:   map[string]OpenAIConfig{"work": {APIKey: "invented"}},
+		RocketClaws: map[string]RemoteRocketClawConfig{"work": {URL: "https://work.example.ts.net"}},
+		MCPServers:  map[string]MCPServerConfig{"tools": {Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}}},
+		Slack:       SlackConfig{Channels: []SlackChannelConfig{{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}}},
+		Web:         WebConfig{Sentry: SentryConfig{TracesSampleRate: &rate}, Tsnet: &TsnetConfig{Hostname: "rocketclaw", Tags: []string{"tag:rocketclaw"}, Origin: "https://rocketclaw.example.ts.net"}},
 	}
 
 	locked := NewLockedConfig(want)
@@ -26,9 +26,9 @@ func TestLockedConfig(t *testing.T) {
 		snapshot.Workspace = "changed"
 		snapshot.Overlays[0] = "changed"
 		snapshot.Models["main"] = "changed"
-		snapshot.WebUsers[netip.MustParseAddr("127.0.0.1")] = "changed"
 		snapshot.Environment[0] = "changed"
 		snapshot.Providers["work"] = OpenAIConfig{APIKey: "changed"}
+		snapshot.RocketClaws["work"] = RemoteRocketClawConfig{URL: "changed"}
 		server := snapshot.MCPServers["tools"]
 		server.Args[0], server.Env["KEY"], server.Headers["HEADER"] = "changed", "changed", "changed"
 		snapshot.Slack.Channels[0].Channel = "changed"
@@ -42,9 +42,9 @@ func TestLockedConfig(t *testing.T) {
 	require.Equal(t, "workspace", snapshot.Workspace)
 	require.Equal(t, []string{"overlay"}, snapshot.Overlays)
 	require.Equal(t, "model", snapshot.Models["main"])
-	require.Equal(t, "alice", snapshot.WebUsers[netip.MustParseAddr("127.0.0.1")])
 	require.Equal(t, []string{"KEY=value"}, snapshot.Environment)
 	require.Equal(t, "invented", snapshot.Providers["work"].APIKey)
+	require.Equal(t, "https://work.example.ts.net", snapshot.RocketClaws["work"].URL)
 	require.Equal(t, MCPServerConfig{Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}}, snapshot.MCPServers["tools"])
 	require.Equal(t, SlackChannelConfig{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}, snapshot.Slack.Channels[0])
 	require.InDelta(t, 0.5, *snapshot.Web.Sentry.TracesSampleRate, 0.001)

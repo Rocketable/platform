@@ -42,7 +42,7 @@ A workspace contains `AGENTS.md` and, optionally, `agents/`, `skills/`, `scripts
 
 The web page is the main way to work with RocketClaw. It is built into RocketClaw and serves HTTPS on `0.0.0.0:3000`; plain `http://` does not answer. To change the address, set `"web": {"listen_address": "127.0.0.1:3000"}`. To use your own certificate, set both `"tls_cert_file"` and `"tls_key_file"` under `web` to PEM files; without them RocketClaw makes a self-signed certificate at each start, which browsers warn about until you accept it. Over HTTPS, browsers carry every tab over one connection, so many open tabs never run out of connections. Links RocketClaw hands out use the tsnet node's HTTPS name once that node serves (see [Voice](#voice)), and this machine's Tailscale address otherwise. The browser tab reads `<name> - RocketClaw`, so several servers stay apart: `name` is `"server_display_name"` when set, else the Tailscale node name (`web.tsnet.hostname`, or this machine's node). Changing it requires restart.
 
-RocketClaw identifies each browser by IP address, using the `web_users` map (for example `"web_users": {"100.64.0.10": "alice"}`) or, failing that, a Tailscale lookup. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features and optional Sentry error tracking.
+RocketClaw identifies each browser by its Tailscale login, found with a Tailscale lookup of the browser's IP address. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features and optional Sentry error tracking.
 
 #### Voice
 
@@ -81,9 +81,26 @@ The microphone needs a secure page: HTTPS with a certificate the browser trusts.
 - The node keeps its state outside the workspace, in `rocketclaw/tsnet-<hostname>` under the OS user config directory (`~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or `~/.config` on Linux). Tailscale's log upload is off.
 - Never use `tailscale funnel`: it would put RocketClaw on the public internet.
 
-The `listen_address` listener keeps its IP rules: `web_users`, then a Tailscale lookup. It never trusts `Tailscale-User-*` headers. A browser on the RocketClaw machine can use `https://127.0.0.1:3000` after mapping `127.0.0.1` to yourself: `"web_users": {"127.0.0.1": "you@example.com"}` (`localhost` may connect from `::1`, which needs its own mapping). Tailscale logins and `web_users` names are separate, so one person may appear under two names.
+The `listen_address` listener identifies each browser with a Tailscale lookup of its IP address. It never trusts `Tailscale-User-*` headers. `127.0.0.1` has no Tailscale user, so a browser on the RocketClaw machine opens it at this machine's Tailscale address, or uses the tsnet name.
 
 Processes on this machine, including agent tools and MCP servers, can still act as the owner: through the `listen_address` listener, or through this machine's own Tailscale address. See the [transport README](internal/rocketclaw/frontend/rpc/README.md#identity-boundary) for the identity details.
+
+#### Remote RocketClaws
+
+One web page can operate several RocketClaws. Name each other RocketClaw and its tsnet HTTPS address in the local `rocketclaw.json`:
+
+```json
+"rocketclaws": {"work": {"url": "https://rocketclaw.tail1234.ts.net"}}
+```
+
+Nothing is set on the remote. Names use only `a-z`, `0-9`, and `-`, and each URL is an `https` origin with no path. Changes take effect on restart.
+
+- The session list, Cmd/Ctrl+P, desktop notifications, and Search pages cover every server. Remote chats show their server's name.
+- The space picker lists each server, local first, with its spaces. A remote space opens that server's view under `/r/<name>/`: its tabs, agents, cron, skills, settings, pages, voice, and new chats. Opening a remote chat goes to its server too.
+- The browser calls each remote directly, and the remote signs you in with your own Tailscale login, so you act as yourself with that remote's agents and accounts.
+- A remote must serve its tsnet name over HTTPS and run a RocketClaw version with this feature. Otherwise the page shows it as unavailable, with its address. A remote that stops answering keeps its chats listed, greyed out, until it answers again. A remote on another version keeps working with a notice, and some actions may fail.
+
+Each RocketClaw's tsnet listener accepts these calls from RocketClaw pages on machines in its own tailnet; the `listen_address` listener does not.
 
 ### Slack
 
@@ -171,7 +188,7 @@ A turn that a person starts from Web, voice, or Slack tells its shell commands w
 - `ROCKETCLAW_PRINCIPAL_EMAIL`: on Web, the Tailscale login; on Slack, the profile email.
 - `ROCKETCLAW_PRINCIPAL_ID`: the lowercase hex SHA-256 of the email after trimming spaces and lowercasing it, so `Alice@Example.com` and `alice@example.com` get the same ID.
 
-With a `web_users` mapping, Web uses the configured value as both name and email. When RocketClaw has no email, only the name is set. The same person's values reach the subagents and shadows of that turn, the later turns of a `$goal` they set, and their queued or stashed messages when those run. A steer into a running turn keeps the values that turn started with. Cron turns, External MCP turns, and messages one agent sends another get none of them. The workers of a workflow get the values of the turn that runs them. A name is a display name its owner can change, so use it for attribution only. Permission patterns that grant access per person should use `${ROCKETCLAW_PRINCIPAL_ID}` or `${ROCKETCLAW_PRINCIPAL_EMAIL}`. When a turn lacks a variable that a rule names, an `allow` or `auto` rule is skipped, and a `deny` rule matches as if the variable were `*`. Such a rule covers everything that runs with that person's values: steers and promoted queued messages that other people deliver into the person's running turn, the later turns of the person's `$goal`, and a background subagent that starts after the person's turn ended, which takes the values of whichever top-level turn runs then. Per-person rules keep people's work apart for convenience; they are not an authorization boundary between people. The values say who asked for the turn, not a credential: permission patterns read them from the turn, but a script sees whatever value the command that runs it sets.
+When RocketClaw has no email, only the name is set. The same person's values reach the subagents and shadows of that turn, the later turns of a `$goal` they set, and their queued or stashed messages when those run. A steer into a running turn keeps the values that turn started with. Cron turns, External MCP turns, and messages one agent sends another get none of them. The workers of a workflow get the values of the turn that runs them. A name is a display name its owner can change, so use it for attribution only. Permission patterns that grant access per person should use `${ROCKETCLAW_PRINCIPAL_ID}` or `${ROCKETCLAW_PRINCIPAL_EMAIL}`. When a turn lacks a variable that a rule names, an `allow` or `auto` rule is skipped, and a `deny` rule matches as if the variable were `*`. Such a rule covers everything that runs with that person's values: steers and promoted queued messages that other people deliver into the person's running turn, the later turns of the person's `$goal`, and a background subagent that starts after the person's turn ended, which takes the values of whichever top-level turn runs then. Per-person rules keep people's work apart for convenience; they are not an authorization boundary between people. The values say who asked for the turn, not a credential: permission patterns read them from the turn, but a script sees whatever value the command that runs it sets.
 
 Some features are off until you turn them on under `permission.rocketclaw`:
 

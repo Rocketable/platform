@@ -88,6 +88,8 @@ func openCodeProxy(server config.OpenCodeConfig) http.Handler {
 		ModifyResponse: func(response *http.Response) error {
 			response.Header.Del("Set-Cookie")
 			response.Header.Del("WWW-Authenticate")
+			// RocketClaw answers cross-site pages itself; OpenCode's answer would duplicate it.
+			response.Header.Del("Access-Control-Allow-Origin")
 			response.Header.Set("Content-Security-Policy", "sandbox")
 			response.Header.Set("X-Content-Type-Options", "nosniff")
 

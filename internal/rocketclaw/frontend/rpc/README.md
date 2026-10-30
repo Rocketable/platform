@@ -399,8 +399,7 @@ Web always starts. Its HTTP listener defaults to `0.0.0.0:3000`; set
 `web.listen_address` in `rocketclaw.json` or `femtoclaw.json` to change it.
 The HTTP adapter connects to gRPC entirely in memory inside the same process.
 No Web environment variables or filesystem sockets are needed. Browser identity
-on that listener still comes from the connecting IP, using `web_users` first and
-Tailscale WhoIs otherwise. When `web.tsnet` is set, RocketClaw also runs a
+on that listener comes from the connecting IP, through Tailscale WhoIs. When `web.tsnet` is set, RocketClaw also runs a
 `tailscale.com/tsnet` node that serves the same handler over HTTPS on port 443 of
 its tailnet name; see [Identity boundary](#identity-boundary).
 
@@ -483,9 +482,8 @@ root README for setup). There, a wrapping handler asks the node's `LocalClient()
 about the connection's remote address and refuses tagged or unknown callers. It
 passes the login and display name to gRPC as `-bin` metadata keys, because names
 may be non-ASCII. When those keys are present, `principal` and `ListConfig` use them
-and never consult `web_users` or `tailscale whois`. The `listen_address` listener
-never sets those keys and keeps the IP rules below. Tailscale logins and `web_users`
-names are separate namespaces, so one person may appear under two names. The node
+and never consult `tailscale whois`. The `listen_address` listener
+never sets those keys and keeps the IP rules below. The node
 stores its state under `os.UserConfigDir()/rocketclaw/tsnet-<hostname>`, outside the
 workspace. `rocketclaw ts login` logs it in, with `web.tsnet.auth_key` or a printed
 login link; the server never prints a link or waits for one. A logged-out node without
@@ -493,20 +491,30 @@ a key is closed at startup with one "Tailscale authentication unavailable" warni
 a node that loses its login later stops serving the same way. Tailscale's log upload is
 off. Never use `tailscale funnel`.
 
+The `web.tsnet` listener also serves RocketClaw pages from other machines on its
+tailnet, so one page can operate several RocketClaws. A request whose `Origin` is
+`https` and whose host ends with `.` plus the tailnet's MagicDNS suffix, or is a
+Tailscale IP that WhoIs knows, is such a page. The suffix comes from the node's HTTPS
+name once the node runs. For that page the handler answers the `OPTIONS` preflight
+with `204`, echoing the requested method and headers, and sets
+`Access-Control-Allow-Origin` and `Vary: Origin` on every answer. It then rewrites
+`Origin` to its own origin and `Sec-Fetch-Site` to `same-origin`, so
+`CrossOriginProtection`, the `ListSessions` `viewing` rule and the OpenCode relay's
+origin check treat the call as same-origin. The caller is still the person on the
+connection. The `listen_address` listener trusts no other origin. The OpenCode relay
+drops OpenCode's own `Access-Control-Allow-Origin`, which would otherwise duplicate
+this one.
+
 Local processes can still act as the owner. On an untagged host signed in to
 Tailscale as the owner, a connection from the host to its own Tailscale IP arrives
 from that IP, and `tailscale whois` names the host's own user (checked on macOS). A
 connection from the host to the tsnet name likewise arrives from the owner's device.
-A `127.0.0.1` mapping, for a browser on the host, adds the direct loopback path but
-no new local authority there. On a tagged host, where WhoIs rejects every local
-caller, it does add authority.
+On a tagged host, WhoIs rejects every local caller.
 
-Go snapshots configured `web_users` IP-to-username mappings at
-startup. An explicit mapping takes precedence; otherwise Go runs `tailscale whois
---json` for the browser IP and uses `UserProfile.LoginName` as its identity.
+Go runs `tailscale whois --json` for the browser IP and uses
+`UserProfile.LoginName` as its identity.
 New prompts instead record `UserProfile.DisplayName` as their principal, with the
-login as the fallback for a missing or blank display name. A manual mapping uses
-its configured name for both. Prompts also give their turn the principal as
+login as the fallback for a missing or blank display name. Prompts also give their turn the principal as
 `ROCKETCLAW_PRINCIPAL_NAME` and the login as `ROCKETCLAW_PRINCIPAL_EMAIL`.
 Admission, conversation ownership, inbound routing,
 and Config's Tailscale user stay login-based. `Identity.username` remains the login;
@@ -514,16 +522,15 @@ the separate `Identity.principal` is used only for new composer/handoff previews
 Successful lookups are cached per IP for five minutes and shared with the Config
 page. Concurrent misses are serialized; expired entries must be looked up again,
 and a failed refresh denies access rather than using the stale identity.
-Failed lookups, missing login names, and tagged devices without a manual mapping
-are rejected with `Unauthenticated` (HTTP 401). Mapping changes require restart.
+Failed lookups, missing login names, and tagged devices are rejected with
+`Unauthenticated` (HTTP 401).
 TypeScript does not read RocketClaw configuration or perform Tailscale WhoIs.
 For the Config page, Go runs `tailscale whois --json` with the authenticated
 browser connection IP and exposes only `UserProfile.LoginName` as `tailscale_user`.
-Lookup failures leave that display field empty; a manually mapped user can still
-access the Web interface. For Tailscale identification, the CLI must be available on the
+Lookup failures leave that display field empty. For Tailscale identification, the CLI must be available on the
 RocketClaw process's PATH and connected to its local service.
 `Protocol` exposes only the schema hash to the trusted local proxy and requires
-no browser identity, so startup does not require mapping localhost.
+no browser identity.
 
 ## Verify without a live Slack runtime
 

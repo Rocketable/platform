@@ -258,6 +258,10 @@ A Search Page shown as a board in one of several styles, whose searches are its 
 
 Each session in that space appears once, in the first lane it matches. A session without a Birth Space counts in its agent's space, or in every space when its agent has none. A new Dashboard starts in the space's Shared Group, and any Dashboard or Search Page can be duplicated. While a Dashboard is open in a person's current space, a session entering a lane marked for notification raises a desktop notification for that person.
 
+### Remote RocketClaw
+
+Another RocketClaw server declared in the local server's configuration, whose chats, spaces and pages the local Web page lists and operates beside its own; the browser talks to it directly, and it identifies each person by their own Tailscale login. Its spaces appear under it in the space picker and hold only its own chats. Not to be confused with a Remote OpenCode Session, which RocketClaw keeps a synced copy of.
+
 ### Birth Space
 
 The Space a session was born in.
