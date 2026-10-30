@@ -1,1 +1,0 @@
-import{a as e,i as t,n,o as r,r as i,t as a}from"./oc-2-DZlOqmEc.js";export{a as $schema,n as dark,r as default,i as id,t as light,e as name};
