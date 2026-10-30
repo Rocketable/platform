@@ -1,7 +1,7 @@
 ---
 title: RocketCode strings that must survive the harness rename
 date: 2026-10-29
-last_updated: 2026-10-29
+last_updated: 2026-10-30
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/harness
 problem_type: best_practice
@@ -38,9 +38,10 @@ Before renaming a `rocketcode` string, decide which group it belongs to.
 
 - **Turn trace types** stored in `turns.output_trace_json`: `rocketcode_public_progress`, `rocketcode_code_mode_call`, `rocketcode_code_mode_review` (`internal/rocketclaw/harness/public_progress.go:70`, `:99-100`). Readers match the type exactly (`public_progress.go:70`, `:128`), so renaming hides every progress line and Script Call Record already saved. The progress type is also written by raw SQL, not only by Go (`internal/rocketclaw/backend/store_dao.go:1279`), so a Go-only rename would also split new writes between two spellings.
 - **Runtime folders** under the runtime directory: `<runtimeDir>/.rocketcode/spill` (`internal/rocketclaw/backend/raw_run.go:276`; the harness's own fallback is `internal/rocketclaw/harness/execute_results.go:23`), `<runtimeDir>/.rocketcode/tmp/<conversation>` (`internal/rocketclaw/backend/bridge.go:2597-2612`), and the hand-off and raw-run scratch folders (`internal/rocketclaw/backend/handoff.go:33`, `internal/rocketclaw/backend/raw_run.go:65`). Existing spills and retained output live there, and resetting the runtime directory keeps `.rocketcode` by name (`internal/rocketclaw/skel/skel.go:597`). Permission rules a person wrote may also name these paths; the built-in shell-temp grant is derived from the configured path and moves with it.
-- **Telemetry names**: the tracer `rocketcode` (`internal/rocketclaw/backend/bridge.go:2736`, `internal/rocketclaw/backend/raw_run.go:140`), spans `rocketcode.turn`, `rocketcode.provider`, `rocketcode.tool.*`, and the `rocketcode.*` attributes (`internal/rocketclaw/harness/observability.go:119`; `internal/rocketclaw/harness/looper.go:803`, `:807`, `:1321`). PostHog and Phoenix views are keyed on them; see `docs/solutions/best-practices/posthog-needs-genai-span-attributes.md`.
+- **Telemetry names**: the tracer `rocketcode` (`internal/rocketclaw/backend/bridge.go:2736`, `internal/rocketclaw/backend/raw_run.go:140`), spans `rocketcode.turn`, `rocketcode.provider`, `rocketcode.tool.*`, the span event `rocketcode.provider.diagnostic` (`internal/rocketclaw/harness/observability.go:95`), and the `rocketcode.*` attributes (`internal/rocketclaw/harness/observability.go:119`; `internal/rocketclaw/harness/looper.go:803`, `:807`, `:1321`). PostHog and Phoenix views are keyed on them; see `docs/solutions/best-practices/posthog-needs-genai-span-attributes.md`.
 - **MCP client name** `rocketcode-mcp-client` (`internal/rocketclaw/mcpclient/registry.go:24`), which outbound MCP servers receive and may log or allowlist.
-- **Model-facing text**: the compaction checkpoint ("compacted by RocketCode", `internal/rocketclaw/harness/looper.go:2560`), the automatic permission reviewer's prompt (`internal/rocketclaw/harness/permission_review.go:211`, `:216`), and the shipped agent-writing skill (`internal/rocketclaw/skel/.rocketclaw/skills/main-create-or-update-agent/SKILL.md`). Changing them is a prompt change and needs the same care as one, not a rename.
+- **Config key** `rocketcode_auth`, the old name of a provider's `auth` (`internal/rocketclaw/config/config.go:217`; `cmd/rocketclaw/oai.go:215-218` reads it and rewrites it to `auth`). Existing `rocketclaw.json` files still use it.
+- **Model-facing text**: the compaction checkpoint ("compacted by RocketCode", `internal/rocketclaw/harness/looper.go:2560`), the automatic permission reviewer's prompt (`internal/rocketclaw/harness/permission_review.go:211`, `:216`), and the shipped skills that name it (`internal/rocketclaw/skel/.rocketclaw/skills/main-create-or-update-agent/SKILL.md`, `internal/rocketclaw/skel/.rocketclaw/skills/main-update-rocketclaw-json/SKILL.md:120`). Changing them is a prompt change and needs the same care as one, not a rename.
 
 **Safe to rename:** Go identifiers and test names (`prepareRocketCode`, `rocketcodeConfig`, `rocketcodeRetainedDir`, `loadRocketCodeDefinitions`, ...), comments, and current docs. These are code, so the compiler and tests catch mistakes.
 
@@ -53,7 +54,7 @@ The broken cases fail quietly. After a repo-wide sweep, a renamed trace type sti
 ## When to Apply
 
 - A follow-up "finish the RocketCode rename" or "remove leftover rocketcode" task.
-- Any repo-wide string replacement that touches `internal/rocketclaw/harness`, `internal/rocketclaw/backend`, or `internal/rocketclaw/mcpclient`.
+- Any repo-wide string replacement that touches `internal/rocketclaw/harness`, `internal/rocketclaw/backend`, `internal/rocketclaw/mcpclient`, `internal/rocketclaw/config`, `internal/rocketclaw/skel`, or `cmd/rocketclaw`.
 
 ## Examples
 

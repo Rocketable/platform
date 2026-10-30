@@ -1,6 +1,7 @@
 ---
 title: Every Path That Delivers a Prompt to a Subagent Must Run Its Guardrails
 date: 2026-10-13
+last_updated: 2026-10-30
 category: docs/solutions/logic-errors/
 module: internal/rocketclaw/harness
 problem_type: logic_error
@@ -38,16 +39,17 @@ An agent type with a `guardrail` is promised that every delegation prompt is rev
 
 ## Solution
 - The delegation and response reviews share `toolFactory.guardTask` (`internal/rocketclaw/harness/tasks.go`). A new subagent's prompt is reviewed in `runTask`, and a continue's prompt in `backgroundTool` (`internal/rocketclaw/harness/background.go`), each right before `ChildSessions.WriteSubagent` delivers it into the subagent's session. A rejected prompt is never queued or steered, and the caller gets the usual `delegation blocked` result.
-- Every answer leaves through `toolFactory.awaitTask`, which waits for the subagent session's turn (`ChildSessions.AwaitSubagent`) and runs the response review and the `<task_result>` wrapping. A background job resumed after a restart answers through `Runtime.AwaitTask`, the same code; the job's `turns` row keeps the prompt (`turns.message`) the review quotes.
+- Every answer leaves through `toolFactory.taskResult`, which runs the response review and the `<task_result>` wrapping. A task call reaches it through `toolFactory.awaitTask`, which waits for the subagent session's turn (`ChildSessions.AwaitSubagent`). A background job resumed after a restart answers through `Runtime.AwaitTask`, the same code; the job's `turns` row keeps the prompt (`turns.message`) the review quotes. A subagent wake turn that no task call awaits answers its parent through `Runtime.ReviewTask`, which the bridge calls when that turn ends (`internal/rocketclaw/backend/bridge.go`), with the parent's agent as the delegator and the wake text as the prompt.
 
 ## Why This Works
-The guardrail contract is about prompts reaching a subagent and answers leaving it. There are exactly two places where either happens, `WriteSubagent` and `AwaitSubagent`, and every task path goes through them, whether the subagent is idle, running, or busy with queued work.
+The guardrail contract is about prompts reaching a subagent and answers leaving it. Prompts reach a subagent only through `WriteSubagent`, and every task path goes through it, whether the subagent is idle, running, or busy with queued work. Answers leave only through `taskResult`: a task call's after `AwaitSubagent`, and an unawaited wake turn's through `Runtime.ReviewTask`.
 
 ## Prevention
-- When adding any new way to deliver text to a subagent, trace it to a delegation-stage `guardTask` call before `WriteSubagent` and to `awaitTask` before the parent sees the answer.
-- Test a guarded subagent type through each delivery mode (`TestTaskContinueGuardsDelivery`, `TestTaskWritesSubagentSession`).
+- When adding any new way to deliver text to a subagent, trace it to a delegation-stage `guardTask` call before `WriteSubagent` and to `taskResult` (through `awaitTask` or `Runtime.ReviewTask`) before the parent sees the answer.
+- Test a guarded subagent type through each delivery mode (`TestTaskContinueGuardsDelivery`, `TestTaskWritesSubagentSession`, and `TestRuntimeReviewTask` for an unawaited wake turn).
 - A continue's named `subagent_type` wins (OpenCode `packages/core/src/tool/plugin/subagent.ts` precedent): an unknown type is refused, the caller needs `task` permission for that type, and that type's guardrails review the prompt and the answer. The subagent session switches to it; a steer into a busy subagent carries the type on its `PromptInput.Agent`, and `appendSteers` switches the turn record from its next model step (`looper.asRecordAgent` rebuilds the looper as that type, for any session), while the step in progress keeps the old type. The answer is reviewed by the guardrail of the type the turn ended as, which `AwaitSubagent` reads from the saved turn (`TestSteerSwitchedSubagentAnswerGuardedByFinalType`). When the new type runs on another provider, the turn's items and the history before them are converted with `SessionEntry.forProvider`, the conversion `loadSession` and `openTurn` apply (`TestSteerSwitchConvertsTurnForProvider`).
 
 ## Related Issues
 - Plan: `docs/plans/2026-10-13-1309-feat-agent-session-control-plan.md` (KTD13–KTD16, superseded by REV5).
 - `docs/solutions/logic-errors/saved-queue-never-started-after-restart.md` (durable later work).
+- Plan: `docs/plans/2026-10-29-1208-feat-session-write-replies-and-recipients-plan.md` (KTD6: a wake turn's report-up passes the response guardrail).
