@@ -18,7 +18,7 @@ import (
 
 const (
 	rc000, rc001, rc002, rc003 = "RC000", "RC001", "RC002", "RC003"
-	rc004, rc005, rc006, rc007 = "RC004", "RC005", "RC006", "RC007"
+	rc004, rc005, rc006        = "RC004", "RC005", "RC006"
 	rc008, rc010, rc011        = "RC008", "RC010", "RC011"
 )
 
@@ -73,12 +73,6 @@ func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 	for name, info := range infos {
 		if reaches(edges, name, name, map[string]bool{}) && info.agent.MaxRecursion == nil {
 			findings = append(findings, Finding{Code: rc003, Severity: "error", Path: info.filePath, Message: name + " participates in a task delegation cycle without bounded maxRecursion", keys: []string{"maxRecursion", "task"}})
-		}
-
-		if guardrail := info.agent.Guardrail; guardrail != "" {
-			if _, ok := infos[guardrail]; !ok {
-				findings = append(findings, Finding{Code: rc007, Severity: "error", Path: info.filePath, Message: fmt.Sprintf("%s references missing guardrail agent %s", name, guardrail), keys: []string{"guardrail"}})
-			}
 		}
 
 		if info.agent.ReasoningEffort == "xhigh" {
@@ -174,17 +168,6 @@ func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
 		}
 	}
 
-	for _, from := range names {
-		guardrail := infos[from].agent.Guardrail
-		if guardrail == "" {
-			continue
-		}
-
-		if _, ok := infos[guardrail]; ok {
-			fmt.Fprintf(&b, "  %s -> %s [label=%s];\n", strconv.Quote(from), strconv.Quote(guardrail), strconv.Quote("guardrail"))
-		}
-	}
-
 	b.WriteString("}\n")
 
 	return b.String(), nil
@@ -261,7 +244,7 @@ func addSuppressionsFromNode(filePath, key string, node *yaml.Node, suppressions
 			continue
 		}
 
-		if code != "" && !slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008, rc010, rc011}, code) {
+		if code != "" && !slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc008, rc010, rc011}, code) {
 			*findings = append(*findings, Finding{Code: rc000, Severity: "error", Path: filePath, Message: "unknown #nolint code " + code})
 			continue
 		}

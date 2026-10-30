@@ -2636,8 +2636,6 @@ func TestConversationKindsAtCreation(t *testing.T) {
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "web:" + run, Agent: "main", CreatedBy: "alice"}))
 	require.NoError(t, runtime.ContinueRun(ctx, run, "web:"+run))
 	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "job", PrivateConversationID: "private", ManagedConversationID: "mcp-chat"}))
-	// A delegation's guardrail saves its review where the subagent session it approves then starts.
-	require.NoError(t, (&Bridge{config: Config{ConversationID: "web", SessionService: store}}).AppendChildEntry(ctx, harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, testSessionEntry("guard", "approved")))
 	require.NoError(t, store.startSubagent(ctx, "web", harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "helper", true))
 
 	for _, parent := range []string{"web", run} {

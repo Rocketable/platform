@@ -52,7 +52,7 @@ func (s *SessionService) checkTopLevelSession(ctx context.Context, id string) (s
 
 // startSubagent records the subagent session at key under conversation, run by agent, unless recorded. A
 // continue, unlike a new subagent, needs a session saved before: recorded, or a Delegation History older
-// than subagent sessions. The guardrail review its delegation saved there first becomes the session.
+// than subagent sessions.
 func (s *SessionService) startSubagent(ctx context.Context, conversation string, key harness.ChildKey, agent string, isNew bool) error {
 	conversationID, parent := conversation+key.Path, conversation+key.Parent
 

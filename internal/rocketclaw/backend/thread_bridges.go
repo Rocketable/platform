@@ -7,12 +7,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"maps"
 	"net"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -699,40 +697,17 @@ func (m *threadBridgeManager) noteReady(conversationID string) {
 // continueSubagent answers, after a restart, the task job awaiting a turn of its subagent session, once
 // that turn ends, as the job's task call would have.
 func (m *threadBridgeManager) continueSubagent(ctx context.Context, job *backgroundJob) (string, error) {
-	runtimeCfg := m.runtime.Clone()
-
 	bridge, err := m.recordedBridge(ctx, job.conversationID)
 	if err != nil {
 		return "", err
 	}
 
-	agentName := bridge.agentSnapshot()
-
-	root, agents, skills, resolver, err := prepareRocketCode(m.runtime, agentName, bridge.log, toolModePersistent)
-	if err != nil {
-		return "", err
-	}
-
-	defer func() { _ = root.Close() }()
-
-	shellTempRel := rocketcodeShellTempRel(runtimeCfg.RuntimeDirName(), job.conversationID)
-	if err := root.MkdirAll(shellTempRel, 0o700); err != nil {
-		return "", fmt.Errorf("create rocketcode shell temp dir: %w", err)
-	}
-
-	rocketcodeConfig := bridge.rocketcodeConfig(filepath.Join(runtimeCfg.Workspace, filepath.FromSlash(shellTempRel)), nil)
-
-	runtime, err := harness.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
-	if err != nil {
-		return "", fmt.Errorf("prepare task resume: %w", err)
-	}
-
-	output, err := runtime.AwaitTask(ctx, job.jobID, job.subagentKey, job.agent, job.input)
+	answer, _, err := bridge.AwaitSubagent(ctx, job.subagentKey, job.jobID)
 	if err != nil {
 		return "", fmt.Errorf("await subagent: %w", err)
 	}
 
-	return output, nil
+	return harness.TaskResult(answer), nil
 }
 
 func (m *threadBridgeManager) recordedBridge(ctx context.Context, conversationID string) (*Bridge, error) {

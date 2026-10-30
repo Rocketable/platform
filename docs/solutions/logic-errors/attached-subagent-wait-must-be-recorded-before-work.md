@@ -52,4 +52,3 @@ The prompt is written ahead of any work it starts, under a key the replaying cal
 ## Related Issues
 - Plan: `docs/plans/2026-10-13-1309-feat-agent-session-control-plan.md`, Review Revisions REV1a and REV5.
 - `docs/solutions/logic-errors/saved-queue-never-started-after-restart.md` (durable queued work must start after restart).
-- `docs/solutions/logic-errors/subagent-delivery-paths-must-run-guardrails.md` (every subagent delivery path must run its guardrails).

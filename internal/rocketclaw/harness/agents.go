@@ -26,7 +26,6 @@ type Agent struct {
 	ReasoningEffort string
 	Verbosity       string
 	MaxRecursion    *int
-	Guardrail       string
 	CustomShell     CustomShell
 	Space           string
 	Prompt          string
@@ -273,7 +272,6 @@ func loadAgent(fsys fs.FS, filePath string, models agentModelRenderer) (Agent, e
 		ReasoningEffort: cmp.Or(modelEffort, argString(frontmatter, "reasoningEffort")),
 		Verbosity:       argString(frontmatter, "verbosity"),
 		MaxRecursion:    maxRecursion,
-		Guardrail:       argString(frontmatter, "guardrail"),
 		CustomShell:     customShell,
 		Space:           space,
 		Prompt:          strings.TrimSpace(prompt),

@@ -90,12 +90,6 @@ permission:
 ---
 same
 `)
-	writeAgent(t, runtimeRoot, "guarded.md", `---
-description: guarded
-guardrail: missing-safety
----
-guarded
-`)
 	writeAgent(t, runtimeRoot, "expensive.md", `---
 description: expensive
 reasoningEffort: xhigh
@@ -118,7 +112,7 @@ browser
 `, external))
 			result, err := Lint(runtimeRoot, new(config.Config))
 			require.NoError(t, err)
-			assertFindingCodes(t, result.Findings, rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008)
+			assertFindingCodes(t, result.Findings, rc001, rc002, rc003, rc004, rc005, rc006, rc008)
 
 			var externalContent []Finding
 
@@ -163,7 +157,6 @@ same
 `)
 	writeAgent(t, runtimeRoot, "guarded.md", `---
 description: guarded
-guardrail: missing-safety #nolint: defined by pending overlay
 permission:
   task:
     "*": allow #nolint RC003: bounded by the caller
@@ -305,7 +298,6 @@ alpha
 	writeAgent(t, runtimeRoot, "beta.md", `---
 description: beta
 maxRecursion: 2
-guardrail: hub
 shell: /usr/local/bin/agent-sandbox
 permission:
   task:
@@ -333,7 +325,6 @@ hub
   "beta" -> "alpha";
   "hub" -> "alpha" [color="red", label="cycle"];
   "hub" -> "hub" [color="red", label="cycle"];
-  "beta" -> "hub" [label="guardrail"];
 }
 `, dot)
 }

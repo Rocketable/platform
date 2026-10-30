@@ -1165,23 +1165,14 @@ func TestSessionWriteReplyReachesCaller(t *testing.T) {
 }
 
 // AE5, R10, R13, R14: a helper's write is answered to the helper itself, never its top-level session: the
-// reply wakes the helper after its task call returned, and no guardrail reviews it. The helper's new answer
-// then reaches the top-level session as a note that continues the helper, once the response guardrail of
-// the helper's type approves it.
+// reply wakes the helper after its task call returned. The helper's new answer then reaches the top-level
+// session as a note that continues the helper.
 func TestSessionWriteReplyWakesHelper(t *testing.T) {
 	t.Parallel()
 
-	rootDone, answered, woke, reviewed, reported := make(chan struct{}), make(chan struct{}), make(chan string, 1), make(chan string, 2), make(chan string, 1)
+	rootDone, woke, reported := make(chan struct{}), make(chan string, 1), make(chan string, 1)
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		switch {
-		case strings.Contains(body, "Current Action: ") || strings.Contains(body, `"instructions":"Guard`):
-			select {
-			case <-answered:
-				reviewed <- lastRequestMessage(t, body)
-			default:
-			}
-
-			writeRawRunMessage(t, w, "gate", "msg", `{"approved":true,"reason":""}`)
 		case strings.Contains(body, "<subagent id="):
 			reported <- lastRequestMessage(t, body)
 
@@ -1203,7 +1194,6 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 				return
 			}
 
-			close(answered)
 			writeRawRunMessage(t, w, "resp", "msg", "billing is fine")
 		case !strings.Contains(body, "function_call_output"):
 			writeRawRunFunctionCall(t, w, "task", "task", map[string]string{"description": "ask ops", "prompt": "ask ops about billing", "subagent_type": "researcher"})
@@ -1212,8 +1202,7 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 		}
 	})
 	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n---\nPrompt\n")
-	writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\nguardrail: guard\npermission:\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nResearch\n")
-	writeAgent(t, nt.cfg.Workspace, "guard", "---\ndescription: Guard\nmode: subagent\nmodel: gpt-6.1-sol\npermission: {}\n---\nGuard\n")
+	writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nResearch\n")
 	nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 	require.NoError(t, nt.service.UpsertThread("web:ops", ThreadState{Agent: "main"}))
 
@@ -1237,11 +1226,6 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 	rows := replyQueueItems(t, nt.service)
 	require.Len(t, rows, 1)
 	assert.True(t, strings.HasPrefix(rows[0], helpers[0]+" ") && strings.HasSuffix(rows[0], " completed consumed true"), rows[0])
-
-	review := nextReplyBody(t, reviewed)
-	assert.Contains(t, review, "Current Action: response\nThe agent main wants to delegate to researcher:\n")
-	assert.True(t, strings.HasSuffix(review, "\n\nAnd the response from researcher to main:\nbilling noted"), review)
-	assert.Empty(t, reviewed, "only the helper's answer to the top-level session is reviewed, never the reply")
 
 	wakes, err := queryStrings(t.Context(), nt.service.db, `SELECT j.input_id`+testJobsSQL+` AND j.conversation_id = $1`, "helper wakes", nt.conversationID)
 	require.NoError(t, err)

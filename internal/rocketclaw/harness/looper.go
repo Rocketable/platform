@@ -2418,10 +2418,6 @@ func loadSession(entries iter.Seq2[SessionEntry, error], provider string) ([]res
 			return nil, nil, fmt.Errorf("load session entry %d: %w", entryNumber, err)
 		}
 
-		if turn.Type == guardrailEntryType {
-			continue
-		}
-
 		if err := turn.forProvider(provider); err != nil {
 			return nil, nil, fmt.Errorf("convert session entry %d for provider %s: %w", entryNumber, provider, err)
 		}

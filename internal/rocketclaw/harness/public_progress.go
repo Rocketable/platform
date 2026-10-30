@@ -232,7 +232,7 @@ func (o *turnObservations) observe(ctx context.Context, progress *PublicProgress
 	return o.observeLocked(ctx, progress)
 }
 
-// finishCall retains canonical child attribution and a guardrail's blocked outcome.
+// finishCall retains canonical child attribution.
 func (o *turnObservations) finishCall(ctx context.Context, progress *PublicProgress, state PublicProgressState) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -250,9 +250,7 @@ func (o *turnObservations) finishCall(ctx context.Context, progress *PublicProgr
 	// A task call can move before its subagent reports, so the row names the subagent itself.
 	snapshot.SubagentKey = cmp.Or(snapshot.SubagentKey, progress.SubagentKey)
 
-	if snapshot.State != PublicProgressBlocked {
-		snapshot.State = state
-	}
+	snapshot.State = state
 
 	return o.observeLocked(ctx, &snapshot)
 }

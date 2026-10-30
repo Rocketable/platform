@@ -51,9 +51,6 @@ type toolFactory struct {
 	backgroundJobs             BackgroundJobs
 	childKey                   ChildKey
 
-	// inGuardrailRun reports whether this factory is executing a guardrail agent.
-	// When false, task calls apply target-agent guardrails. When true, nested task calls skip guardrail checks.
-	inGuardrailRun     bool
 	inPermissionReview bool
 
 	mcpRegistry mcpclient.Registry

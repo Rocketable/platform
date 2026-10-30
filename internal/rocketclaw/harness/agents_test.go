@@ -164,7 +164,6 @@ model: gpt-6.1-sol
 reasoningEffort: high
 verbosity: low
 maxRecursion: 2
-guardrail: safety
 permission:
   edit: deny
 temperature: 0.1
@@ -202,7 +201,6 @@ ignored
 		require.Equal(t, "low", review.Verbosity)
 		require.NotNil(t, review.MaxRecursion)
 		require.Equal(t, 2, *review.MaxRecursion)
-		require.Equal(t, "safety", review.Guardrail)
 		require.Equal(t, "You are in review mode.", review.Prompt)
 		require.Equal(t, "review.md", review.Location)
 		require.Equal(t, fs.FileMode(0o640), review.FileMode.Perm())

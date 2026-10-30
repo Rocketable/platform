@@ -30,7 +30,7 @@ type HistorySnapshot struct {
 	Delegations []Delegation
 	// Lineage is the conversations it nests under, from its top-level conversation down, then itself.
 	Lineage []SidebarSession
-	// Reviews are the Delegations that are permission or guardrail reviews.
+	// Reviews are the Delegations that are permission reviews.
 	Reviews     []string
 	Shadows     []protocol.ShadowBinding
 	Eligible    bool

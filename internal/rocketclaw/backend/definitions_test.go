@@ -409,35 +409,6 @@ func TestLoadRocketCodeDefinitionsResolvesModelTemplate(t *testing.T) {
 	require.ErrorContains(t, err, `model "team/coding-high" is not configured`)
 }
 
-func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\nmode: primary\nguardrail: guardrail\n---\nPrompt\n")
-	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: gpt-6.1-sol\nreasoningEffort: low\nverbosity: low\npermission:\n  read:\n    \"docs/*\": allow\n---\nCheck delegated work\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-
-	defer func() { require.NoError(t, root.Close()) }()
-
-	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
-	require.NoError(t, err)
-
-	main := agents.Items["main"]
-	guardrail := agents.Items["guardrail"]
-
-	require.Equal(t, "guardrail", main.Guardrail)
-	require.Equal(t, "Check delegated work", guardrail.Prompt)
-	require.Equal(t, "gpt-6.1-sol", guardrail.Model)
-	require.Equal(t, "low", guardrail.ReasoningEffort)
-	require.Equal(t, "low", guardrail.Verbosity)
-	action, matched := guardrail.Permission.Evaluate("read", "docs/a.md")
-	require.True(t, matched)
-	require.Equal(t, harness.PermissionAllow, action)
-}
-
 func TestLoadRocketCodeDefinitionsReportsInvalidTypedFrontmatter(t *testing.T) {
 	t.Parallel()
 

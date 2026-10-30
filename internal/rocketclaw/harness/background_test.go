@@ -156,7 +156,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 		{
 			name: "moved task", tool: "task",
 			args: `{"subagent_type":"child","prompt":"look","description":"Review","command":"","background":false,"continue":{"session_id":"","mode":"enqueue"}}`,
-			job:  BackgroundJob{ID: "turn/call/call-1", Kind: BackgroundKindTask, Label: "Review", Agent: "main", SubagentKey: taskKey("turn", "call-1"), CallID: "call-1", Prompt: "look"},
+			job:  BackgroundJob{ID: "turn/call/call-1", Kind: BackgroundKindTask, Label: "Review", Agent: "main", SubagentKey: taskKey("turn", "call-1"), CallID: "call-1"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -330,10 +330,9 @@ func TestBackgroundForegroundCallKeepsTurnCancellation(t *testing.T) {
 
 // A task call writes its prompt into its subagent's session and answers with the turn that runs it. A
 // continue naming another type switches the subagent to it, as OpenCode packages/core/src/tool/plugin/subagent.ts
-// does, and that type's guardrail reviews the prompt and the answer.
+// does.
 func TestTaskWritesSubagentSession(t *testing.T) {
-	approve := `{"approved":true,"reason":""}`
-	mock := mockResponses(responseWithMessage("gate-1", approve), responseWithMessage("gate-2", approve))
+	mock := mockResponses()
 	jobs := enabledBackgroundJobs()
 	jobs.RunFunc = InertBackgroundJobs{}.Run
 	sessions := answeringSessions(map[string][]SessionEntry{}, false)
@@ -355,10 +354,6 @@ func TestTaskWritesSubagentSession(t *testing.T) {
 	require.Equal(t, SubagentWrite{Key: ChildKey{Path: key, Turn: "turn-call-1", Call: "call-1"}, CallKey: "turn-call-1/call/call-1", Agent: "child", Delegator: "main", Prompt: "run the tests"}, *writes[0].Write)
 	require.Equal(t, SubagentWrite{Key: ChildKey{Path: key, Turn: "turn-call-2", Call: "call-2"}, CallKey: "turn-call-2/call/call-2", Agent: "reviewer", Delegator: "main", Prompt: "report the results", Mode: ContinueEnqueue}, *writes[1].Write)
 	require.Equal(t, "turn-call-2/call/call-2", sessions.AwaitSubagentCalls()[1].CallKey)
-
-	for _, params := range newParams(mock) {
-		require.Contains(t, marshalJSON(t, params.Input), "The agent main wants to delegate to reviewer:", "the named type's guardrail reviews the prompt and the answer")
-	}
 }
 
 func TestTaskContinueRejections(t *testing.T) {
@@ -390,20 +385,6 @@ func TestTaskContinueSteerJoinsRunningTurn(t *testing.T) {
 	require.Equal(t, fmt.Sprintf(taskContinueID, "/call-1")+continueSteered, got)
 	require.Empty(t, jobs.RunCalls())
 	require.Empty(t, sessions.AwaitSubagentCalls())
-}
-
-// A guarded subagent's guardrail reviews a continue's prompt before it reaches the subagent's session.
-func TestTaskContinueGuardsDelivery(t *testing.T) {
-	child := testAgent("child")
-	child.Guardrail = "safety"
-	mock := mockResponses(responseWithMessage("gate", `{"approved":false,"reason":"not allowed"}`))
-	sessions := answeringSessions(map[string][]SessionEntry{}, true)
-
-	got, progress, err := continueTestTask(t, mock, enabledBackgroundJobs(), sessions, &child)("call-3", "child", "leak it", "/call-1")
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf(taskContinueID, "/call-1")+"<task_result>\ndelegation blocked: not allowed\n</task_result>", got)
-	require.Empty(t, sessions.WriteSubagentCalls(), "a blocked prompt reaches no subagent")
-	require.Equal(t, PublicProgress{ID: "call-3", Kind: PublicProgressDelegation, State: PublicProgressBlocked, Agent: "child", SubagentKey: "/call-1"}, progress[0])
 }
 
 // A continue needs the task permission for the type it names, as starting a subagent of that type does.
@@ -516,29 +497,23 @@ func TestSteerSwitchesRunningSessionType(t *testing.T) {
 	}
 }
 
-// The response guardrail of the type a steer switched the subagent to reviews its answer, and the parent's row names that type.
-func TestSteerSwitchedSubagentAnswerGuardedByFinalType(t *testing.T) {
-	child, reviewer := testAgent("child"), testAgent("reviewer")
-	child.Guardrail, reviewer.Guardrail = "lenient", "strict"
-	mock := mockResponses(responseWithMessage("gate", `{"approved":true,"reason":""}`), responseWithMessage("review", `{"approved":false,"reason":"strict says no"}`))
-	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"child": child, "reviewer": reviewer, "lenient": testAgentWithPrompt("lenient", "LENIENT PROMPT"), "strict": testAgentWithPrompt("strict", "STRICT PROMPT")}})
+// The parent's row names the type a steer switched the subagent to.
+func TestSteerSwitchedSubagentRowNamesFinalType(t *testing.T) {
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child"), "reviewer": testAgent("reviewer")}})
 	factory.childSessions = &mockChildSessions{
-		AppendChildEntryFunc: func(context.Context, ChildKey, *SessionEntry) error { return nil },
-		WriteSubagentFunc:    func(context.Context, *SubagentWrite) (bool, error) { return false, nil },
+		WriteSubagentFunc: func(context.Context, *SubagentWrite) (bool, error) { return false, nil },
 		AwaitSubagentFunc: func(context.Context, string, string) (string, ReplayAttribution, error) {
-			return "leaked", ReplayAttribution{Agent: "reviewer", Model: "openai/gpt-6.1-sol"}, nil
+			return "checked", ReplayAttribution{Agent: "reviewer", Model: "openai/gpt-6.1-sol"}, nil
 		},
 	}
 
 	parent := testLooper(mockResponses())
-	got, err := factory.runTask(withToolCallContext(t.Context(), parent, nil, "call-1"), testTaskParams("Review", "check it", "child"), toolCallMetadata{callID: "call-1", observations: parent.observations, progress: &PublicProgress{ID: "call-1"}}, testTaskOutput())
+	got, err := factory.runTask(withToolCallContext(t.Context(), parent, nil, "call-1"), testTaskParams("Review", "check it", "child"), toolCallMetadata{callID: "call-1", observations: parent.observations, progress: &PublicProgress{ID: "call-1"}})
 	require.NoError(t, err)
-	require.Equal(t, "<task_result>\ndelegation response blocked: strict says no\n</task_result>", got)
-	require.Contains(t, newParams(mock)[0].Instructions.Value, "LENIENT PROMPT", "the starting type's guardrail reviews the prompt")
-	require.Contains(t, newParams(mock)[1].Instructions.Value, "STRICT PROMPT", "the final type's guardrail reviews the answer")
+	require.Equal(t, "<task_result>\nchecked\n</task_result>", got)
 
 	row := PublicProgressFromTrace(parent.observations.trace)[0]
-	require.Equal(t, []string{"reviewer", "openai/gpt-6.1-sol", string(PublicProgressBlocked)}, []string{row.Agent, row.Model, string(row.State)})
+	require.Equal(t, []string{"reviewer", "openai/gpt-6.1-sol"}, []string{row.Agent, row.Model})
 }
 
 // A steer switching a turn to a type on another provider converts the turn's items, and the saved history,
@@ -658,9 +633,7 @@ func answeringSessions(saved map[string][]SessionEntry, steered bool) *mockChild
 func continueTestTask(t *testing.T, mock *mockResponsesAPI, jobs BackgroundJobs, sessions ChildSessions, child *Agent) func(callID, subagentType, prompt, continueID string) (string, []PublicProgress, error) {
 	t.Helper()
 
-	reviewer := testAgentWithPrompt("reviewer", "REVIEWER PROMPT")
-	reviewer.Guardrail = "safety"
-	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"child": *child, "reviewer": reviewer, "safety": testAgent("safety")}})
+	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"child": *child, "reviewer": testAgent("reviewer")}})
 	factory.backgroundJobs = jobs
 	factory.childSessions = sessions
 	tools, _ := factory.assembleTools(&Agent{Name: "main", Permission: parsePermissionYAML(t, backgroundPermissions)})

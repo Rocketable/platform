@@ -100,7 +100,7 @@ type Config struct {
 	BackgroundJobs         BackgroundJobs
 	CustomTools            []Tool
 	ShellEnv               map[string]string
-	// ChildContext supplies host messages to guardrails and permission reviewers.
+	// ChildContext supplies host messages to permission reviewers.
 	ChildContext []SessionEntry
 	// ShellCommand builds the executable used for bash tool (and prompt !`…`)
 	// commands. Required; pass DefaultShellCommand{} to match permission validation.
@@ -111,17 +111,7 @@ type Config struct {
 	MCPWorkspace string
 }
 
-// ChildRunStage identifies the operation being reviewed by a hidden child run.
-type ChildRunStage string
-
-const (
-	// ChildRunStageDelegation identifies guardrail review before delegation.
-	ChildRunStageDelegation ChildRunStage = "delegation"
-	// ChildRunStageResponse identifies guardrail review after a child response.
-	ChildRunStageResponse ChildRunStage = "response"
-)
-
-// ChildSessions stores finished guardrail and permission review turns, and runs Task subagents as
+// ChildSessions stores finished permission review turns, and runs Task subagents as
 // sessions of the embedder, on the turn runner its other sessions use.
 type ChildSessions interface {
 	AppendChildEntry(ctx context.Context, key ChildKey, entry *SessionEntry) error
@@ -193,7 +183,7 @@ type PromptShellCommandExpansion struct {
 	// PrimaryPrompts covers the agent prompt of every session, a Task subagent's included, since a
 	// subagent runs as a session of the embedder (ChildSessions).
 	PrimaryPrompts bool
-	// SubagentPrompts covers the prompts of guardrail and permission review agents.
+	// SubagentPrompts covers the prompts of permission review agents.
 	SubagentPrompts bool
 	SkillPrompts    bool
 	InputPrompts    bool
@@ -407,17 +397,6 @@ func NewWithModelResolver(
 	promptExpansion, err := newPromptExpansionEnvironment(root, shellTemp, shellEnv, config.ShellCommand)
 	if err != nil {
 		return nil, fmt.Errorf("initialize prompt expansion: %w", err)
-	}
-
-	for name := range agents.Items {
-		agent := agents.Items[name]
-		if agent.Guardrail == "" {
-			continue
-		}
-
-		if _, ok := agents.Items[agent.Guardrail]; !ok {
-			return nil, fmt.Errorf("agent %q references missing guardrail agent %q", name, agent.Guardrail)
-		}
 	}
 
 	rootInstructions, err := loadRootInstructions(root)

@@ -1075,8 +1075,8 @@ option, or check every option that applies for a multiple choice, then **Submit*
 composer's text as a custom answer instead of queueing it; Steer, Stash, and `$stop`
 work as usual. If someone else already answered or the turn ended, the card goes
 away and says so.
-A tool row whose call delegated work (an `auto` permission review, a guardrail
-check, or a Task subagent) shows **Open delegation**. A `task` row opens its
+A tool row whose call delegated work (an `auto` permission review or a Task
+subagent) shows **Open delegation**. A `task` row opens its
 subagent, and a row that continued a subagent opens that subagent. Rows saved
 before reviews had their own history open a review as **Open delegation**,
 except a `task` row's. A call the approver reviewed, before it ran or during it,
