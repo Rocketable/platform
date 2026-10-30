@@ -174,6 +174,19 @@ test("mounting a session renders its timeline from the server's proxy route", as
   expect(calls.reported.at(-1)).toBe("ses_a")
 })
 
+test("closing an image preview marks only its view's portal and cleans it on disposal", async () => {
+  server.extraText = "![preview](https://example.test/preview.png)"
+  const view = show()
+  await answered(view)
+  ;(await until(() => view.root.querySelector<HTMLElement>("img[alt=preview][role=button]"))).click()
+  const close = await until(() => view.portal.querySelector<HTMLElement>("[data-slot=image-preview-close]"))
+  close.click()
+  await until(() => view.portal.hasAttribute("data-image-preview-closing"))
+  expect(document.body.hasAttribute("data-image-preview-closing")).toBe(false)
+  view.dispose()
+  expect(view.portal.hasAttribute("data-image-preview-closing")).toBe(false)
+})
+
 test("mounting and disposing five times leaves nothing behind, and one palette opens after a sixth mount", async () => {
   const html = document.documentElement
   const before = [...html.attributes].map((attribute) => `${attribute.name}=${attribute.value}`)

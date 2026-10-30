@@ -52,6 +52,18 @@ describe("the CSS fence (KTD15)", () => {
     expect(css).toContain(`{ --font-family-sans: "oc Inter", ui-sans-serif; font-family: var(--x, "oc Inter", serif) }`)
     expect(css).toContain("{ font-family: Interstate }")
   })
+
+  test("shadow selection rules stay out of the document for both inherited and descendant highlights", () => {
+    const css = postcss([scopeCss()]).process(
+      "@supports selector(:host-context(*)) { :host::selection, .timeline::selection { color: red } }" +
+        " @supports not selector(:host-context(*)) { :host ::selection, .timeline ::selection { color: red } }",
+      { from: undefined },
+    ).css
+
+    expect(css).not.toMatch(/\[data-oc-view\]\s*::selection/)
+    expect(css).toContain(`.timeline${within}::selection`)
+    expect(css).toContain(`.timeline${within} ::selection`)
+  })
 })
 
 describe("the committed build", () => {
@@ -108,7 +120,7 @@ describe("the committed build", () => {
 
     expect(scripts.includes(".timeline-quote-highlight-relative {")).toBe(true)
     expect(scripts.includes(".timeline-quote-highlight-relative:where(")).toBe(false)
-    expect((await Promise.all(sheets)).join("\n").includes("[data-oc-view] ::selection")).toBe(false)
+    expect((await Promise.all(sheets)).join("\n")).not.toMatch(/\[data-oc-view\]\s*::selection/)
   })
 
   test("the session screen's column direction switches on the view's width", async () => {

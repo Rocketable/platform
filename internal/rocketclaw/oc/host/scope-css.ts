@@ -59,7 +59,7 @@ export const scopeCss: PluginCreator<void> = () => ({
         if (parent.type === "atrule" && /keyframes$/i.test((parent as { name: string }).name)) return
       }
       // The quote sheet's shadow-only selection must not become selection styling for the whole mounted view.
-      const selectors = rule.selectors.filter((selector) => selector !== ":host ::selection")
+      const selectors = rule.selectors.filter((selector) => !/^:host\s*::selection$/.test(selector))
       if (!selectors.length) return void rule.remove()
       rule.selectors = selectors.map(scopeSelector)
     })

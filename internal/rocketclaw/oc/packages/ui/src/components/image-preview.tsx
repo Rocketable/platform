@@ -1,7 +1,9 @@
 import { Dialog as Kobalte, useDialogContext } from "@kobalte/core/dialog"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
-import { createEffect, createMemo, createSignal, on, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, on, onCleanup, Show, useContext } from "solid-js"
+// rocketclaw: closing state belongs to this view's portal, not the host page (upstream packages/ui/src/components/image-preview.tsx)
+import { ViewContext } from "@rocketclaw/host/fences"
 import { useDialogLayer } from "../context/dialog"
 import { useI18n } from "../context/i18n"
 import { Button } from "@opencode/ui/button"
@@ -59,6 +61,8 @@ const CENTER = { x: 0, y: 0 }
 export function ImagePreview(props: ImagePreviewProps) {
   const i18n = useI18n()
   const dialog = useDialogContext()
+  // rocketclaw: see the import (upstream packages/ui/src/components/image-preview.tsx)
+  const portal = useContext(ViewContext).portal
   let root!: HTMLDivElement
   let scrim!: HTMLDivElement
   let content!: HTMLDivElement
@@ -405,7 +409,8 @@ export function ImagePreview(props: ImagePreviewProps) {
     settle()
     showOrigin()
     giveBack()
-    document.body.removeAttribute("data-image-preview-closing")
+    // rocketclaw: see the import (upstream packages/ui/src/components/image-preview.tsx)
+    portal.removeAttribute("data-image-preview-closing")
   })
 
   createEffect(
@@ -413,7 +418,8 @@ export function ImagePreview(props: ImagePreviewProps) {
       () => dialog.isOpen(),
       (open) => {
         // See image-preview.css: the body takes clicks again while the closing flight holds the dialog mounted.
-        document.body.toggleAttribute("data-image-preview-closing", !open)
+        // rocketclaw: see the import (upstream packages/ui/src/components/image-preview.tsx)
+        portal.toggleAttribute("data-image-preview-closing", !open)
 
         if (!open) dismiss()
       },

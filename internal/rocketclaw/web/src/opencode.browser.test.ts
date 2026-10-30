@@ -140,7 +140,7 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     for (const [service, empty] of [["mcp", "No MCP servers configured"], ["plugins", "No plugins configured"], ["skills", "No skills configured"], ["lsp", "No LSP servers configured"]]) {
       const pane = details.locator(`[data-service="${service}"]`);
       await pane.getByText(empty, { exact: true }).waitFor({ state: "attached" });
-      expect(await pane.getByRole("button", { name: "Configuration file", exact: true, includeHidden: true }).count()).toBe(1);
+      expect(await pane.getByRole("button", { name: "Copy configuration file path", exact: true, includeHidden: true }).count()).toBe(1);
     }
     expect(await details.getByRole("button", { name: /with OpenCode/, includeHidden: true }).count()).toBe(0);
     await page.keyboard.press("Escape");
