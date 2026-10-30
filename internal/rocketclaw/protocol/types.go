@@ -323,22 +323,6 @@ func CloneOutboundAttachments(attachments []OutboundAttachment) []OutboundAttach
 	return cloned
 }
 
-// AttachmentNamesSpeech returns a short spoken description of attachment names.
-func AttachmentNamesSpeech(attachments []OutboundAttachment) string {
-	names := make([]string, 0, len(attachments))
-	for i := range attachments {
-		if name := strings.TrimSpace(attachments[i].Name); name != "" {
-			names = append(names, name)
-		}
-	}
-
-	if len(names) == 0 {
-		return ""
-	}
-
-	return "Attached files: " + strings.Join(names, ", ") + "."
-}
-
 func (m *InboundMessage) responseChannel() chan InboundResponse {
 	m.responseInit.Do(func() {
 		m.responseCh = make(chan InboundResponse, 1)
