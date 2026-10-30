@@ -267,12 +267,15 @@ func TestHandlerProxiesMountedPath(t *testing.T) {
 			t.Fatalf("backend Host = %q; want target host", r.Host)
 		}
 
+		w.WriteHeader(http.StatusCreated)
 		_, _ = fmt.Fprint(w, "proxied")
 	}))
 	defer backend.Close()
 	backendHost = strings.TrimPrefix(backend.URL, "http://")
 
-	handler, err := newHandler(config{Routes: []routeConfig{{Path: "/public/webhook", Target: backend.URL + "/service/webhook"}}}, discardLogger())
+	logs := &recordHandler{}
+	logger := slog.New(logs)
+	handler, err := newHandler(config{Routes: []routeConfig{{Path: "/public/webhook", Target: backend.URL + "/service/webhook"}}}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,6 +297,49 @@ func TestHandlerProxiesMountedPath(t *testing.T) {
 
 	if string(data) != "proxied" {
 		t.Fatalf("response body = %q; want proxied", data)
+	}
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d; want %d", w.Code, http.StatusCreated)
+	}
+
+	if len(logs.records) != 1 {
+		t.Fatalf("log records = %d; want 1", len(logs.records))
+	}
+
+	record := logs.records[0]
+	if record.Message != "http request" {
+		t.Fatalf("log msg = %q; want http request", record.Message)
+	}
+
+	if got := attrValue(t, record, "method"); got.String() != http.MethodPost {
+		t.Fatalf("log method = %q; want %s", got.String(), http.MethodPost)
+	}
+
+	if got := attrValue(t, record, "path"); got.String() != "/public/webhook/events" {
+		t.Fatalf("log path = %q; want /public/webhook/events", got.String())
+	}
+
+	if got := attrValue(t, record, "query"); got.String() != "event=ping" {
+		t.Fatalf("log query = %q; want event=ping", got.String())
+	}
+
+	if got := attrValue(t, record, "status"); got.Int64() != http.StatusCreated {
+		t.Fatalf("log status = %d; want %d", got.Int64(), http.StatusCreated)
+	}
+
+	if got := attrValue(t, record, "bytes"); got.Int64() != int64(len("proxied")) {
+		t.Fatalf("log bytes = %d; want %d", got.Int64(), len("proxied"))
+	}
+
+	if got := attrValue(t, record, "duration"); got.Duration() <= 0 {
+		t.Fatalf("log duration = %s; want positive", got.Duration())
+	}
+
+	logRequests(logger, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "ok")
+	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	if got := attrValue(t, logs.records[1], "status"); got.Int64() != http.StatusOK {
+		t.Fatalf("implicit log status = %d; want %d", got.Int64(), http.StatusOK)
 	}
 }
 
@@ -335,64 +381,6 @@ func TestHandlerReturnsNotFoundForUnmappedPath(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d; want %d", w.Code, http.StatusNotFound)
-	}
-}
-
-func TestHandlerLogsRequestAndResponse(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		_, _ = fmt.Fprint(w, "created")
-	}))
-	defer backend.Close()
-
-	logs := &recordHandler{}
-	logger := slog.New(logs)
-	handler, err := newHandler(config{Routes: []routeConfig{{Path: "/public/webhook", Target: backend.URL + "/service/webhook"}}}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/public/webhook/events?event=ping", nil))
-
-	if len(logs.records) != 1 {
-		t.Fatalf("log records = %d; want 1", len(logs.records))
-	}
-
-	record := logs.records[0]
-	if record.Message != "http request" {
-		t.Fatalf("log msg = %q; want http request", record.Message)
-	}
-
-	if got := attrValue(t, record, "method"); got.String() != http.MethodPost {
-		t.Fatalf("log method = %q; want %s", got.String(), http.MethodPost)
-	}
-
-	if got := attrValue(t, record, "path"); got.String() != "/public/webhook/events" {
-		t.Fatalf("log path = %q; want /public/webhook/events", got.String())
-	}
-
-	if got := attrValue(t, record, "query"); got.String() != "event=ping" {
-		t.Fatalf("log query = %q; want event=ping", got.String())
-	}
-
-	if got := attrValue(t, record, "status"); got.Int64() != http.StatusCreated {
-		t.Fatalf("log status = %d; want %d", got.Int64(), http.StatusCreated)
-	}
-
-	if got := attrValue(t, record, "bytes"); got.Int64() != int64(len("created")) {
-		t.Fatalf("log bytes = %d; want %d", got.Int64(), len("created"))
-	}
-
-	if got := attrValue(t, record, "duration"); got.Duration() <= 0 {
-		t.Fatalf("log duration = %s; want positive", got.Duration())
-	}
-
-	logRequests(logger, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprint(w, "ok")
-	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
-	if got := attrValue(t, logs.records[1], "status"); got.Int64() != http.StatusOK {
-		t.Fatalf("implicit log status = %d; want %d", got.Int64(), http.StatusOK)
 	}
 }
 
