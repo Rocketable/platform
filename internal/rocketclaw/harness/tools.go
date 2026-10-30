@@ -56,7 +56,7 @@ type toolFactory struct {
 	inGuardrailRun     bool
 	inPermissionReview bool
 
-	mcpRegistry *mcpclient.Registry
+	mcpRegistry mcpclient.Registry
 }
 
 type readToolParams struct {
@@ -183,10 +183,7 @@ func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, err
 
 	modelTools, codeHosts := f.assembleTools(agent)
 
-	var mcpServers []string
-	if f.mcpRegistry != nil {
-		mcpServers = visibleMCPServers(agent.Permission, f.mcpRegistry.Names())
-	}
+	mcpServers := visibleMCPServers(agent.Permission, f.mcpRegistry.Names())
 
 	loop := &looper{
 		agent:                  *agent,

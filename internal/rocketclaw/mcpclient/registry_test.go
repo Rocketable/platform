@@ -113,8 +113,7 @@ func TestRegistrySnapshot(t *testing.T) {
 		"beta":  config,
 		"alpha": {Command: "echo"},
 	}
-	reg, err := New("/ws", servers)
-	require.NoError(t, err)
+	reg := New("/ws", servers)
 
 	config.Args[0] = "changed"
 	config.Env["LANG"] = "changed"
@@ -152,8 +151,7 @@ func TestSessionErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			reg, err := New(t.TempDir(), map[string]ServerConfig{"demo": tt.config})
-			require.NoError(t, err)
+			reg := New(t.TempDir(), map[string]ServerConfig{"demo": tt.config})
 
 			session := reg.Open()
 
@@ -181,11 +179,10 @@ func TestCloseIdempotent(t *testing.T) {
 		})
 	})
 
-	reg, err := New(t.TempDir(), map[string]ServerConfig{"demo": {URL: url}})
-	require.NoError(t, err)
+	reg := New(t.TempDir(), map[string]ServerConfig{"demo": {URL: url}})
 
 	session := reg.Open()
-	_, err = session.CallTool(t.Context(), "demo", "echo", map[string]any{"message": "x"})
+	_, err := session.CallTool(t.Context(), "demo", "echo", map[string]any{"message": "x"})
 	require.NoError(t, err)
 	require.NoError(t, session.Close())
 	require.NoError(t, session.Close())
@@ -216,8 +213,7 @@ func TestHTTPCallTool(t *testing.T) {
 		})
 	})
 
-	reg, err := New(t.TempDir(), map[string]ServerConfig{"demo": {URL: url}})
-	require.NoError(t, err)
+	reg := New(t.TempDir(), map[string]ServerConfig{"demo": {URL: url}})
 
 	session := reg.Open()
 
@@ -267,8 +263,7 @@ func TestListToolsError(t *testing.T) {
 			}
 		})
 	})
-	reg, err := New(t.TempDir(), map[string]ServerConfig{"demo": {URL: url}})
-	require.NoError(t, err)
+	reg := New(t.TempDir(), map[string]ServerConfig{"demo": {URL: url}})
 
 	session := reg.Open()
 
@@ -304,11 +299,10 @@ func TestHTTPHeaders(t *testing.T) {
 
 	url := "http://" + ln.Addr().String()
 
-	reg, err := New(t.TempDir(), map[string]ServerConfig{"demo": {
+	reg := New(t.TempDir(), map[string]ServerConfig{"demo": {
 		URL:     url,
 		Headers: map[string]string{"Authorization": "Bearer secret"},
 	}})
-	require.NoError(t, err)
 
 	session := reg.Open()
 
@@ -327,13 +321,12 @@ func TestStdioCallTool(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "marker"), []byte("ok"), 0o600))
 
-	reg, err := New(workspace, map[string]ServerConfig{
+	reg := New(workspace, map[string]ServerConfig{
 		"local": {
 			Command: helper,
 			Env:     map[string]string{"MCPCLIENT_MARKER": "from-env"},
 		},
 	})
-	require.NoError(t, err)
 
 	session := reg.Open()
 
@@ -473,11 +466,10 @@ func TestSessionConnectConcurrent(t *testing.T) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "b"}}}, nil, nil
 		})
 	})
-	reg, err := New(t.TempDir(), map[string]ServerConfig{
+	reg := New(t.TempDir(), map[string]ServerConfig{
 		"s1": {URL: url1},
 		"s2": {URL: url2},
 	})
-	require.NoError(t, err)
 
 	session := reg.Open()
 
