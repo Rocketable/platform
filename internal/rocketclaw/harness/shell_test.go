@@ -212,31 +212,21 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		}
 	})
 
-	t.Run("sets tmpdir to shell temp dir", func(t *testing.T) {
+	t.Run("environment precedence and private temp dir", func(t *testing.T) {
+		t.Setenv("ROCKETCLAW_CONVERSATION_ID", "old")
+
 		got := sss.Bash(context.Background(), CustomShell{}, bashParams{Command: `printf %s "$TMPDIR"`, TimeoutMillisecond: 0, Workdir: "", Description: "tmpdir"}).String()
 		require.Equal(t, outputDir, got)
 
-		info, err := os.Stat(outputDir)
+		info, err := root.Stat(filepath.Join(".tmp", "shell-tmp"))
 		require.NoError(t, err)
 		require.Equal(t, fs.FileMode(0o700), info.Mode().Perm())
-	})
 
-	t.Run("configured env overrides process env", func(t *testing.T) {
-		t.Setenv("ROCKETCLAW_CONVERSATION_ID", "old")
+		configured := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new", "TMPDIR=/not/rocketcode"}, DefaultShellCommand{})
 
-		sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new"}, DefaultShellCommand{})
-
-		got := sss.Bash(t.Context(), CustomShell{}, bashParams{Command: `printf %s "$ROCKETCLAW_CONVERSATION_ID"`, Description: "override env"})
-		require.True(t, got.Success, got.Output)
-		require.Equal(t, "new", got.String())
-	})
-
-	t.Run("tmpdir overrides configured env", func(t *testing.T) {
-		sss := newSandboxedShellSystem(root, &shellTemp, []string{"TMPDIR=/not/rocketcode"}, DefaultShellCommand{})
-
-		got := sss.Bash(context.Background(), CustomShell{}, bashParams{Command: `printf %s "$TMPDIR"`, TimeoutMillisecond: 0, Workdir: "", Description: "tmpdir precedence"})
-
-		require.Equal(t, outputDir, got.String())
+		result := configured.Bash(t.Context(), CustomShell{}, bashParams{Command: `printf '%s\n%s' "$ROCKETCLAW_CONVERSATION_ID" "$TMPDIR"`, Description: "env precedence"})
+		require.True(t, result.Success, result.Output)
+		require.Equal(t, "new\n"+outputDir, result.String())
 	})
 
 	t.Run("returns full multi-line output", func(t *testing.T) {
