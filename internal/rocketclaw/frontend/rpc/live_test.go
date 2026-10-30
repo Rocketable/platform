@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
@@ -531,7 +532,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 		require.NoError(t, rt.Sessions.SaveAttachment(ctx, "chat", "", &protocol.OutboundAttachment{ID: id, Name: id + ".txt", MIMEType: "text/plain", Data: []byte(id + " bytes")}, true))
 	}
 
-	_, err = rt.Sessions.AppendEntryID(ctx, "chat", &harness.SessionEntry{Type: "turn", TurnID: "old", ReplayInput: []json.RawMessage{
+	_, err = rt.Sessions.AppendEntryID(ctx, "chat", &harness.SessionEntry{Type: "turn", TurnID: "old", Timestamp: time.Now().UTC(), ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","content":"retained request\n\nattachment:retained-upload \"retained-upload.txt\" (workspace path \"artifacts/uploads/retained-upload/retained-upload.txt\")"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"retained answer"}`),
 		json.RawMessage(`{"type":"message","role":"user","content":"abandoned request\n\nattachment:boundary-upload \"boundary-upload.txt\" (workspace path \"artifacts/uploads/boundary-upload/boundary-upload.txt\")"}`),
@@ -541,6 +542,9 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 		json.RawMessage(`{"type":"message","role":"user","content":"later abandoned request\n\nattachment:hidden-upload \"hidden-upload.txt\" (workspace path \"artifacts/uploads/hidden-upload/hidden-upload.txt\")"}`),
 		json.RawMessage(`{"type":"compaction","content":"abandoned summary"}`),
 	}})
+	require.NoError(t, err)
+	// Run startup retention after seeding so an expired fixture cannot escape its first pass.
+	_, err = rt.Sessions.PruneStateBefore(ctx, time.Now().Add(-90*24*time.Hour), 0)
 	require.NoError(t, err)
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
