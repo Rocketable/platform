@@ -32,9 +32,16 @@ function start() {
   const creates = { hold: Promise.resolve() };
   // Loads of the view's entry left to fail, as a network blip or a deploy mid-load would.
   const entryFailures = { remaining: 0 };
-  const web = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, websocket: { open() { terminals.open++; }, close() { terminals.open--; }, message(_socket, message) { terminals.input.push(message.toString()); } }, async fetch(request, server) {
+  const web = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, websocket: { open(socket) {
+    terminals.open++;
+    socket.send(JSON.stringify({ type: "attached", inputProtocol: 1, info: { size: { cols: 80, rows: 24 } }, role: "controller" }));
+    socket.send(JSON.stringify({ type: "replay_complete" }));
+  }, close() { terminals.open--; }, message(_socket, message) {
+    // v2.2.4 sends binary frames: kind, two 16-bit dimensions, then input bytes; size-only frames aren't keystrokes.
+    if (typeof message !== "string" && message[0] === 1) terminals.input.push(message.subarray(5).toString());
+  } }, async fetch(request, server) {
     const url = new URL(request.url);
-    if (/^\/oc\/box\/api\/pty\/[^/]+\/connect$/.test(url.pathname)) return server.upgrade(request) ? undefined : new Response("not a WebSocket", { status: 400 });
+    if (/^\/oc\/box\/api\/experimental\/persistent-pty\/[^/]+\/connect$/.test(url.pathname)) return server.upgrade(request) ? undefined : new Response("not a WebSocket", { status: 400 });
     if (url.pathname.startsWith("/oc/box/api/")) return openCode(request);
     if (url.pathname.startsWith("/oc-ui/")) {
       if (url.pathname === "/oc-ui/_assets/index.js") {
