@@ -47,7 +47,7 @@ The prompt is written ahead of any work it starts, under a key the replaying cal
 
 ## Prevention
 - Deliver into a subagent only through its session (`WriteSubagent`), never by starting its turn directly.
-- Restart tests must cover graceful shutdown and hard crash: `TestRestartResumesBackgroundSubagent`, and `TestTaskRunsSubagentAsSession` for replayed writes and waits.
+- Restart tests must cover graceful shutdown and hard crash: `TestRestartResumesBackgroundSubagent` for a graceful shutdown, `TestCrashDuringForegroundTaskRunsSubagentOnce` for a crash during a foreground wait, and `TestTaskRunsSubagentAsSession` for replayed writes and waits.
 
 ## Related Issues
 - Plan: `docs/plans/2026-10-13-1309-feat-agent-session-control-plan.md`, Review Revisions REV1a and REV5.

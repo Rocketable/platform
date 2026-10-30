@@ -19,7 +19,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -3836,24 +3835,9 @@ func invoke[Response any](ctx context.Context, connection *grpc.ClientConn, meth
 	return response, nil
 }
 
-// runWebTest runs a Web test against this test's Go server. With ROCKETCLAW_WEB_TEST_SERVER_DIR set, CI runs
-// the whole Web suite itself: the test publishes its server variables there and serves until interrupted.
+// runWebTest runs a Web test against this test's Go server.
 func runWebTest(t *testing.T, file string, env ...string) {
 	t.Helper()
-
-	if dir := os.Getenv("ROCKETCLAW_WEB_TEST_SERVER_DIR"); dir != "" {
-		ctx, stop := signal.NotifyContext(t.Context(), os.Interrupt)
-		defer stop()
-
-		t.Parallel()
-
-		published := filepath.Join(dir, t.Name()+".env")
-		require.NoError(t, os.WriteFile(published+".tmp", []byte(strings.Join(env, "\n")+"\n"), 0o600))
-		require.NoError(t, os.Rename(published+".tmp", published))
-		<-ctx.Done()
-
-		return
-	}
 
 	web := exec.CommandContext(t.Context(), "bun", "test", file)
 	web.Dir = "../../web"

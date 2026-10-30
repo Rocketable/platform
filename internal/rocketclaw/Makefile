@@ -74,7 +74,7 @@ coverage-profile:
 	@set -eu; \
 	name=; \
 	cleanup() { \
-		if [ -n "$$name" ]; then docker rm -f "$$name" >/dev/null 2>&1 || true; fi; \
+		if [ -n "$$name" ]; then docker rm -f -v "$$name" >/dev/null 2>&1 || true; fi; \
 		pkill -P 1 -f 'ms-playwright/chromium' || true; \
 	}; \
 	pkill -P 1 -f 'ms-playwright/chromium' || true; \

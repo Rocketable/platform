@@ -32,7 +32,7 @@ This landed from [PR #27](https://github.com/Rocketable/platform/pull/27). That 
 
 The same boundary shows up wherever backend returns another package's error. `holdRunLock` returns the error from pglock's `Client.Do`, and wraps it with no prefix because the caller adds none:
 
-```2110:2115:internal/rocketclaw/backend/store.go
+```2101:2106:internal/rocketclaw/backend/store.go
 	err := client.Do(ctx, runLockName, func(lockCtx context.Context, _ *pglock.Lock) error {
 		return work.Run(lockCtx)
 	})

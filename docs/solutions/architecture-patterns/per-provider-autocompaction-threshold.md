@@ -46,9 +46,9 @@ The copy path is:
 1. Load and validate provider JSON. `Validate` runs `normalizeOpenAIConfig` on `openai` and every named provider (`internal/rocketclaw/config/config.go:406-421`).
 2. `modelResolver.Resolve` copies `providerConfig.AutocompactionThreshold` onto `ProviderOrigin.CompactThreshold` (`internal/rocketclaw/backend/model_resolver.go:70`).
 3. Every looper is built by `toolFactory.newLooper`, which uses `cmp.Or(origin.CompactThreshold, f.compactThreshold)` so a set provider value wins and a zero origin falls back (`internal/rocketclaw/harness/tools.go:194`). Root (`internal/rocketclaw/harness/rocketcode.go:453`, which also builds each Task Subagent Session's turn), steer agent-type switches (`asRecordAgent`, `internal/rocketclaw/harness/tasks.go:281`) and permission-review children (`internal/rocketclaw/harness/permission_review.go:109`) all call it.
-4. `looper.compactThreshold()` still treats `<= 0` as `defaultCompactThreshold` (`internal/rocketclaw/harness/looper.go:33`, `internal/rocketclaw/harness/looper.go:1930-1936`). `buildParams` sends that value as Responses `context_management[].compact_threshold` (`internal/rocketclaw/harness/looper.go:1882-1885`).
+4. `looper.compactThreshold()` still treats `<= 0` as `defaultCompactThreshold` (`internal/rocketclaw/harness/looper.go:33`, `internal/rocketclaw/harness/looper.go:1910-1916`). `buildParams` sends that value as Responses `context_management[].compact_threshold` (`internal/rocketclaw/harness/looper.go:1862-1865`).
 
-`normalizeConfig` also writes `defaultCompactThreshold` onto `Config.CompactThreshold` when the factory input is `0` (`internal/rocketclaw/harness/rocketcode.go:587-589`). RocketClaw `NewWithModelResolver` sites either pass `CompactThreshold: 0` or omit the field (same zero). The RocketClaw path depends on the resolver origin plus that default.
+`normalizeConfig` also writes `defaultCompactThreshold` onto `Config.CompactThreshold` when the factory input is `0` (`internal/rocketclaw/harness/rocketcode.go:563-565`). RocketClaw `NewWithModelResolver` sites either pass `CompactThreshold: 0` or omit the field (same zero). The RocketClaw path depends on the resolver origin plus that default.
 
 The harness's built-in `openAIModelResolver`, which `NewWithProviders` installs and only tests use, does not copy a threshold (`internal/rocketclaw/harness/models.go:33-40`). It relies on `Config.CompactThreshold`, not provider JSON.
 
@@ -102,7 +102,7 @@ Resolver copies the selected provider's field onto the origin:
 
 Origin wins over factory config:
 
-```200:200:internal/rocketclaw/harness/tools.go
+```194:194:internal/rocketclaw/harness/tools.go
 		CompactThreshold:       cmp.Or(origin.CompactThreshold, f.compactThreshold),
 ```
 
@@ -112,7 +112,7 @@ Default and request field:
 const defaultCompactThreshold int64 = 200000
 ```
 
-```1882:1885:internal/rocketclaw/harness/looper.go
+```1862:1865:internal/rocketclaw/harness/looper.go
 	params.ContextManagement = []responses.ResponseNewParamsContextManagement{{
 		Type:             "compaction",
 		CompactThreshold: openai.Int(l.compactThreshold()),

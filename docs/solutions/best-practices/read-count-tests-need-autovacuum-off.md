@@ -30,7 +30,7 @@ tags:
 
 ## Context
 
-`TestChatListingReadsScaleWithReportingRuns` (`internal/rocketclaw/backend/store_schema_test.go:123`) checks that the chat listing reads a number of rows that grows with chats and cron runs, never with entries. It loads 1,280 conversations and about 10,000 entries, runs `ANALYZE` (line 143), calls `saveEntryFacts` on 256 chats (line 151), then sums `pg_stat_get_tuples_returned` over the two tables and their indexes (line 155) and requires fewer than 4,096 (line 179).
+`TestChatListingReadsScaleWithReportingRuns` (`internal/rocketclaw/backend/store_schema_test.go:124`) checks that the chat listing reads a number of rows that grows with chats and cron runs, never with entries. It loads 1,280 conversations and about 10,000 entries, runs `ANALYZE` (lines 144-145), calls `saveEntryFacts` on 256 chats (line 152), then sums `pg_stat_get_tuples_returned` over the two tables and their indexes (line 156) and requires fewer than 4,096 (line 180).
 
 It usually reads 1,806 rows. Once in CI it read 4,864, which pushed a web-only PR (#661) out of the merge queue. Every local run passed, and the CI failure had nothing to do with that PR's change.
 
@@ -43,7 +43,7 @@ ALTER TABLE conversations SET (autovacuum_enabled = false);
 ALTER TABLE entries SET (autovacuum_enabled = false);
 ```
 
-Then set the planner's statistics yourself with `ANALYZE` at the point the test means them to apply. This is safe in the shared test database: each test runs in its own schema (`harnessbridgetest.IsolatedTestDatabaseURL`), so the setting reaches only that test's tables. PR #663 added it to this test (`store_schema_test.go:133-134`).
+Then set the planner's statistics yourself with `ANALYZE` at the point the test means them to apply. This is safe in the shared test database: each test runs in its own schema (`harnessbridgetest.IsolatedTestDatabaseURL`), so the setting reaches only that test's tables. PR #663 added it to this test (`store_schema_test.go:134-135`).
 
 To check whether a read-count test is exposed, run it under CI-like conditions on a throwaway test database:
 
