@@ -84,6 +84,8 @@ A named OpenAI-compatible credential and endpoint used to serve model requests. 
 
 Root and child agents resolve their Provider independently. There is no implicit failover from one Provider to another.
 
+A Provider authenticates with either an API key or a ChatGPT sign-in. A ChatGPT sign-in Provider is served by ChatGPT's Codex backend, not the public API, so RocketClaw reshapes its requests for that backend, including how it asks for compaction.
+
 ### Autocompaction Threshold
 
 The token count at which a turn asks its Provider to compact conversation history.

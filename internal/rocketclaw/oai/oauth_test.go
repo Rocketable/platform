@@ -1011,7 +1011,7 @@ func TestCodexStreamingResponseUsesCompletedResponseWithoutOutputItems(t *testin
 func TestStripInputIDsRemovesIDsWhenStoreFalse(t *testing.T) {
 	req := requestWithBody(`{"store":false,"context_management":[{"type":"compaction"}],"max_output_tokens":100,"input":[{"id":"item-1","type":"message"},{"id":"item-2","type":"function_call"},{"content":"summary","encrypted_content":"sealed","id":"cmp-1","recent":[{"id":"msg-1"}],"summary":{"text":"summary"},"type":"compaction"}]}`)
 
-	_, err := cleanCodexRequest(req, true)
+	_, err := cleanCodexRequest(req)
 	require.NoError(t, err)
 
 	data, err := io.ReadAll(req.Body)
@@ -1055,7 +1055,7 @@ func TestCleanCodexRequestPreservesUntouchedBodies(t *testing.T) {
 			req := requestWithBody(tt.body)
 			req.Header.Set("Content-Type", tt.contentType)
 
-			_, err := cleanCodexRequest(req, true)
+			_, err := cleanCodexRequest(req)
 			require.NoError(t, err)
 			data, err := io.ReadAll(req.Body)
 			require.NoError(t, err)
@@ -1069,7 +1069,7 @@ func TestCleanCodexRequestReportsBodyReadError(t *testing.T) {
 	req := requestWithBody("")
 	req.Body = io.NopCloser(iotest.ErrReader(errRead))
 
-	threshold, err := cleanCodexRequest(req, true)
+	threshold, err := cleanCodexRequest(req)
 	require.Nil(t, threshold)
 	require.ErrorIs(t, err, errRead)
 	require.ErrorContains(t, err, "read OpenAI request body")
@@ -1078,7 +1078,7 @@ func TestCleanCodexRequestReportsBodyReadError(t *testing.T) {
 func TestCleanCodexRequestSkipsNonObjectMetadataAndInputItems(t *testing.T) {
 	req := requestWithBody(`{"store":false,"context_management":["skip",{"compact_threshold":"many"}],"input":["skip",{"id":"item-1","type":"message"},null,{"type":123,"id":"keep"},[1,2]]}`)
 
-	threshold, err := cleanCodexRequest(req, false)
+	threshold, err := cleanCodexRequest(req)
 	require.NoError(t, err)
 	require.Nil(t, threshold)
 
@@ -1101,7 +1101,7 @@ func TestCleanCodexRequestNoopsForNonPostOrNilBody(t *testing.T) {
 	req := requestWithBody(`{"input":[]}`)
 	req.Method = http.MethodGet
 
-	threshold, err := cleanCodexRequest(req, true)
+	threshold, err := cleanCodexRequest(req)
 	require.NoError(t, err)
 	require.Nil(t, threshold)
 
@@ -1112,7 +1112,7 @@ func TestCleanCodexRequestNoopsForNonPostOrNilBody(t *testing.T) {
 	req = requestWithBody(`{"input":[]}`)
 	req.Body = nil
 
-	threshold, err = cleanCodexRequest(req, true)
+	threshold, err = cleanCodexRequest(req)
 	require.NoError(t, err)
 	require.Nil(t, threshold)
 }
@@ -1121,7 +1121,7 @@ func TestCleanCodexRequestExtractsCompactionThreshold(t *testing.T) {
 	req := requestWithBody(`{"context_management":[{"type":"compaction","compact_threshold":12.5}],"input":[{"type":"message"}]}`)
 	req.GetBody = func() (io.ReadCloser, error) { return nil, errors.New("unprepared getter must be replaced") }
 
-	threshold, err := cleanCodexRequest(req, false)
+	threshold, err := cleanCodexRequest(req)
 	require.NoError(t, err)
 	require.NotNil(t, threshold)
 	require.InDelta(t, 12.5, *threshold, 0)
@@ -1153,7 +1153,7 @@ func TestCleanCodexRequestExtractsCompactionThreshold(t *testing.T) {
 		{name: "invalid later value", body: `{"context_management":[{"compact_threshold":12.5},{"compact_threshold":"many"}]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			threshold, err := cleanCodexRequest(requestWithBody(tc.body), false)
+			threshold, err := cleanCodexRequest(requestWithBody(tc.body))
 			require.NoError(t, err)
 			require.Equal(t, tc.want, threshold)
 		})
@@ -1163,7 +1163,7 @@ func TestCleanCodexRequestExtractsCompactionThreshold(t *testing.T) {
 func TestStripInputIDsKeepsIDsWhenStoreTrue(t *testing.T) {
 	req := requestWithBody(`{"store":true,"input":[{"id":"item-1","type":"message"}]}`)
 
-	_, err := cleanCodexRequest(req, true)
+	_, err := cleanCodexRequest(req)
 	require.NoError(t, err)
 
 	var body map[string]any
@@ -1302,7 +1302,7 @@ func TestTransportPrefixesCompactionWhenUsageExceedsThreshold(t *testing.T) {
 			body, compactCalls := runAutoCompactTransportTest(t,
 				fmt.Sprintf(`{"model":"gpt-6.1-sol","instructions":"be brief","store":false,"context_management":[{"type":"compaction","compact_threshold":%g}],"input":[{"id":"item-1","type":"message"}]}`, threshold),
 				codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
-				`{"output":[{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}]}`,
+				codexStream(`{"id":"cmp_resp","output":[]}`, `{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`),
 			)
 
 			require.Equal(t, 1, compactCalls)
@@ -1324,23 +1324,21 @@ func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
 	var logs bytes.Buffer
 
 	transport := &transport{sessionID: "session-id", log: slog.New(slog.NewJSONHandler(&logs, nil)), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
-			compactCalls++
-			data, errRead := io.ReadAll(req.Body)
-			require.NoError(t, errRead)
-			require.NotContains(t, string(data), `context_management`)
-			require.NotContains(t, string(data), `"id"`)
-			require.Contains(t, string(data), `"input"`)
-			require.Contains(t, string(data), `"instructions":`)
-
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"output":[{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction_summary"}]}`)), Header: make(http.Header)}, nil
-		}
-
-		responseCalls++
 		data, errRead := io.ReadAll(req.Body)
 		require.NoError(t, errRead)
 		require.NotContains(t, string(data), `context_management`)
 		require.Contains(t, string(data), `"stream":true`)
+
+		if strings.Contains(string(data), `compaction_trigger`) {
+			compactCalls++
+
+			require.NotContains(t, string(data), `"id"`)
+			require.Contains(t, string(data), `"instructions":`)
+
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexStream(`{"id":"cmp_resp","output":[]}`, `{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction_summary"}`))), Header: make(http.Header)}, nil
+		}
+
+		responseCalls++
 
 		switch responseCalls {
 		case 1:
@@ -1408,9 +1406,9 @@ func TestTransportDoesNotRetryNonContextStreamFailure(t *testing.T) {
 
 	responseCalls := 0
 	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
-			t.Fatal("compact transport should not be called")
-		}
+		data, errRead := io.ReadAll(req.Body)
+		require.NoError(t, errRead)
+		require.NotContains(t, string(data), `compaction_trigger`, "compaction should not be requested")
 
 		responseCalls++
 
@@ -1438,10 +1436,13 @@ func TestTransportKeepsOriginalContextErrorWhenCompactReturnsNoItem(t *testing.T
 	responseCalls := 0
 	compactCalls := 0
 	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
+		data, errRead := io.ReadAll(req.Body)
+		require.NoError(t, errRead)
+
+		if strings.Contains(string(data), `compaction_trigger`) {
 			compactCalls++
 
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"output":[]}`)), Header: make(http.Header)}, nil
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexStream(`{"id":"cmp_resp","output":[]}`))), Header: make(http.Header)}, nil
 		}
 
 		responseCalls++
@@ -1470,7 +1471,7 @@ func TestTransportSkipsCompactionWithUnansweredFunctionCall(t *testing.T) {
 	body, compactCalls := runAutoCompactTransportTest(t,
 		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"function_call","call_id":"call_1"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
-		`{"output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`,
+		codexStream(`{"id":"cmp_resp","output":[]}`, `{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}`),
 	)
 
 	require.Equal(t, 0, compactCalls)
@@ -1485,7 +1486,7 @@ func TestTransportCompactsWithAnsweredFunctionCall(t *testing.T) {
 	_, compactCalls := runAutoCompactTransportTest(t,
 		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"function_call","call_id":"call_1"},{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
-		`{"output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`,
+		codexStream(`{"id":"cmp_resp","output":[]}`, `{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}`),
 	)
 
 	require.Equal(t, 1, compactCalls)
@@ -1495,7 +1496,7 @@ func TestTransportSkipsCompactionWhenResponseAlreadyHasCompaction(t *testing.T) 
 	_, compactCalls := runAutoCompactTransportTest(t,
 		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"cmp_existing","type":"compaction","encrypted_content":"sealed"}`),
-		`{"output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`,
+		codexStream(`{"id":"cmp_resp","output":[]}`, `{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}`),
 	)
 
 	require.Equal(t, 0, compactCalls)
@@ -1505,7 +1506,7 @@ func TestTransportSkipsCompactionBelowThreshold(t *testing.T) {
 	_, compactCalls := runAutoCompactTransportTest(t,
 		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":100}],"input":[{"type":"message"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":10},"output":[]}`, `{"id":"msg","type":"message"}`),
-		`{"output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`,
+		codexStream(`{"id":"cmp_resp","output":[]}`, `{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}`),
 	)
 
 	require.Equal(t, 0, compactCalls)
@@ -1515,7 +1516,7 @@ func TestTransportLeavesResponseWhenCompactResponseHasNoCompaction(t *testing.T)
 	body, compactCalls := runAutoCompactTransportTest(t,
 		`{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
-		`{"output":[{"id":"compact-msg","type":"message"},{},{"type":null},{"type":42},{"type":{}},{"type":[]}]}`,
+		codexStream(`{"id":"cmp_resp","output":[]}`, `{"id":"compact-msg","type":"message"}`, `{}`, `{"type":null}`, `{"type":42}`, `{"type":{}}`, `{"type":[]}`),
 	)
 
 	require.Equal(t, 1, compactCalls)
@@ -1529,7 +1530,7 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 	errCompactRead := errors.New("compact read failed")
 	responseBody := `{"usage":{"total_tokens":100},"output":[]}`
 	originalBody := `{"usage":{"total_tokens":100},"output":[{"id":"msg","type":"message"}]}`
-	requestBody := `{"model":"gpt-6.1-sol","instructions":"","input":[{"type":"message"}]}`
+	requestBody := `{"model":"gpt-6.1-sol","instructions":"","input":[{"type":"message"},{"type":"compaction_trigger"}],"store":false,"stream":true}`
 	compactBase := func(status int, compactBody io.Reader, errRoundTrip error) func(*testing.T, *int) http.RoundTripper {
 		return func(t *testing.T, compactCalls *int) http.RoundTripper {
 			t.Helper()
@@ -1537,7 +1538,7 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 			return roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				*compactCalls++
 
-				require.Equal(t, "/backend-api/codex/responses/compact", req.URL.Path)
+				require.Equal(t, "/backend-api/codex/responses", req.URL.Path, "ChatGPT Codex no longer serves /responses/compact")
 
 				data, errRead := io.ReadAll(req.Body)
 				require.NoError(t, errRead)
@@ -1601,16 +1602,23 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 			wantBody:     originalBody,
 		},
 		{
+			name:         "compact stream failed",
+			responseBody: strings.NewReader(originalBody),
+			base:         compactBase(http.StatusOK, strings.NewReader(codexFailedStream("context_length_exceeded", "too large")), nil),
+			wantCompact:  1,
+			wantBody:     originalBody,
+		},
+		{
 			name:            "malformed compact response",
 			responseBody:    strings.NewReader(responseBody),
-			base:            compactBase(http.StatusOK, strings.NewReader(`{not-json`), nil),
+			base:            compactBase(http.StatusOK, strings.NewReader(codexStream(`{"output":{}}`)), nil),
 			wantErrContains: "parse Codex compact response",
 			wantCompact:     1,
 		},
 		{
 			name:         "malformed compact item type",
 			responseBody: strings.NewReader(originalBody),
-			base:         compactBase(http.StatusOK, strings.NewReader(`{"output":[{"type":{}}]}`), nil),
+			base:         compactBase(http.StatusOK, strings.NewReader(codexStream(`{"id":"cmp_resp","output":[]}`, `{"type":{}}`)), nil),
 			wantCompact:  1,
 			wantBody:     originalBody,
 		},
@@ -1619,7 +1627,7 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-6.1-sol","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`)
-			threshold, err := cleanCodexRequest(req, true)
+			threshold, err := cleanCodexRequest(req)
 			require.NoError(t, err)
 			require.NotNil(t, threshold)
 
@@ -1895,13 +1903,16 @@ func TestTransportUsesRecoveredTokenForCompaction(t *testing.T) {
 	var logs bytes.Buffer
 
 	transport := &transport{sessionID: "session-id", log: slog.New(slog.NewJSONHandler(&logs, nil)), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
+		data, errRead := io.ReadAll(req.Body)
+		require.NoError(t, errRead)
+
+		if strings.Contains(string(data), `compaction_trigger`) {
 			compactCalls++
 
 			require.Equal(t, "Bearer next-access", req.Header.Get("Authorization"))
 			require.Equal(t, "acc-old", req.Header.Get("Chatgpt-Account-Id"))
 
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`)), Header: make(http.Header)}, nil
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexStream(`{"id":"cmp_resp","output":[]}`, `{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}`))), Header: make(http.Header)}, nil
 		}
 
 		responseCalls++
@@ -2058,39 +2069,6 @@ func TestTransportTreatsTrailingSlashResponsesPathAsStreaming(t *testing.T) {
 	require.JSONEq(t, `{"id":"resp","output":[]}`, string(data))
 }
 
-func TestTransportLeavesCompactRequestsAsJSON(t *testing.T) {
-	workspace := t.TempDir()
-	testAuthPath(t, workspace)
-	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"})
-
-	transport := &transport{sessionID: "session-id", log: slog.New(slog.DiscardHandler), workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		require.Equal(t, "/backend-api/codex/responses/compact", req.URL.Path)
-		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
-		require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
-
-		data, err := io.ReadAll(req.Body)
-		require.NoError(t, err)
-		require.NotContains(t, string(data), `"stream"`)
-		require.NotContains(t, string(data), `"instructions"`)
-		require.NotContains(t, string(data), "private-summary-value")
-		require.NotContains(t, string(data), "private-recent-id")
-
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"id":"resp_1","object":"response.compaction","output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`)), Header: make(http.Header)}, nil
-	})}
-
-	req := requestWithPathAndBody("/backend-api/codex/responses/compact", `{"model":"gpt-6.1-sol","input":[{"id":"item-1","type":"message"},{"content":"summary","encrypted_content":"sealed","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}]}`)
-	req.Header.Set("Authorization", "Bearer dummy")
-
-	resp, err := transport.RoundTrip(req)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Equal(t, "application/json", resp.Header.Get("Content-Type"))
-	data, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.JSONEq(t, `{"id":"resp_1","object":"response.compaction","output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`, string(data))
-}
-
 func TestTransportLeavesNonResponseRequestsAsJSON(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
@@ -2181,23 +2159,21 @@ func runAutoCompactTransportTest(t *testing.T, requestBody, streamBody, compactB
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
 
-		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
+		require.Equal(t, "/backend-api/codex/responses", req.URL.Path)
+
+		data, err := io.ReadAll(req.Body)
+		require.NoError(t, err)
+		require.NotContains(t, string(data), `context_management`)
+
+		if strings.Contains(string(data), `compaction_trigger`) {
 			compactCalls++
 
-			data, err := io.ReadAll(req.Body)
-			require.NoError(t, err)
 			require.Contains(t, string(data), `"model":"gpt-6.1-sol"`)
-			require.Contains(t, string(data), `"input"`)
-			require.NotContains(t, string(data), `context_management`)
 			require.NotContains(t, string(data), `"id"`)
 			require.Contains(t, string(data), `"instructions":`)
 
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(compactBody)), Header: make(http.Header)}, nil
 		}
-
-		data, err := io.ReadAll(req.Body)
-		require.NoError(t, err)
-		require.NotContains(t, string(data), `context_management`)
 
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(streamBody)), Header: make(http.Header)}, nil
 	})}
