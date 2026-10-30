@@ -33,8 +33,7 @@ const inboundAgentMetadataKey = "rocketclaw_agent"
 // subagentPublisher delivers nothing: a subagent session's turns reach its parent through its history.
 type subagentPublisher struct{}
 
-func (subagentPublisher) PublishOutbound(_ context.Context, message *protocol.OutboundMessage) error {
-	message.MarkDelivered(nil)
+func (subagentPublisher) PublishOutbound(context.Context, *protocol.OutboundMessage) error {
 	return nil
 }
 

@@ -1767,13 +1767,7 @@ func (b *Bridge) deliver(ctx context.Context, request *bridgeRequest, outbound *
 		return fmt.Errorf("publish final outbound message: %w", err)
 	}
 
-	errDelivered := outbound.WaitDelivered(ctx)
-	b.log.Info("final delivery acknowledgement returned", "event", "delivery_acknowledged", "boundary", "frontend_ack", "conversation_id", b.config.ConversationID, "turn_id", request.turnID, "acknowledged", errDelivered == nil, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", errDelivered))
-
-	if errDelivered != nil {
-		msg.CompleteResponseWithAttachments(outbound.Text, outbound.Attachments, errDelivered)
-		return fmt.Errorf("wait for final outbound delivery: %w", errDelivered)
-	}
+	b.log.Info("final delivery acknowledgement returned", "event", "delivery_acknowledged", "boundary", "frontend_ack", "conversation_id", b.config.ConversationID, "turn_id", request.turnID, "acknowledged", true, "duration_ms", time.Since(startedAt).Milliseconds(), "error_type", "<nil>")
 
 	// A cron run with a reply reports it in a new Web chat; an empty reply reports nothing.
 	if outbound.Cronjob != nil && msg.SyncDestination == "" && (strings.TrimSpace(outbound.Text) != "" || len(outbound.Attachments) > 0) {

@@ -35,8 +35,6 @@ type finalsPublisher struct {
 }
 
 func (p finalsPublisher) PublishOutbound(_ context.Context, message *protocol.OutboundMessage) error {
-	message.MarkDelivered(nil)
-
 	if message.Complete {
 		p.finals <- message
 	}
@@ -1456,8 +1454,6 @@ func TestResumedTurnFailurePostsInternalErrorFinal(t *testing.T) {
 	outbound := make(chan *protocol.OutboundMessage, 16)
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 	publisher := &outboundPublisherMock{PublishOutboundFunc: func(_ context.Context, message *protocol.OutboundMessage) error {
-		message.MarkDelivered(nil)
-
 		outbound <- message
 
 		return nil
@@ -1486,8 +1482,6 @@ func TestResumedTurnPostsConsumeCardOnce(t *testing.T) {
 
 	consumed, finals := make(chan string, 4), make(chan *protocol.OutboundMessage, 4)
 	publisher := &outboundPublisherMock{PublishOutboundFunc: func(_ context.Context, message *protocol.OutboundMessage) error {
-		message.MarkDelivered(nil)
-
 		if message.ConsumedID != "" {
 			consumed <- message.ConsumedID
 		}

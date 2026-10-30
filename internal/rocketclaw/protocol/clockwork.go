@@ -6,7 +6,7 @@ import (
 	"slices"
 )
 
-// OutboundPublisher sends one outbound message into connector delivery.
+// OutboundPublisher completes connector delivery of one outbound message.
 type OutboundPublisher interface {
 	PublishOutbound(context.Context, *OutboundMessage) error
 }

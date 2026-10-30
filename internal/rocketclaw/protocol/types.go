@@ -3,7 +3,6 @@ package protocol
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"mime"
 	"path/filepath"
 	"slices"
@@ -226,10 +225,6 @@ type OutboundMessage struct {
 	// from the turn's journal when the turn finishes, so a delivery after a restart
 	// edits the original placeholder.
 	ReplyState json.RawMessage `json:",omitempty"`
-
-	deliveryInit, deliveredOnce sync.Once
-	delivered                   chan struct{}
-	deliveryErr                 error
 }
 
 // NewInboundMessage constructs an unrouted inbound message.
@@ -342,41 +337,6 @@ func AttachmentNamesSpeech(attachments []OutboundAttachment) string {
 	}
 
 	return "Attached files: " + strings.Join(names, ", ") + "."
-}
-
-// WaitDelivered waits until outbound delivery for this message finishes.
-func (m *OutboundMessage) WaitDelivered(ctx context.Context) error {
-	ch := m.deliveryChannel()
-	select {
-	case <-ch:
-		return m.deliveryErr
-	default:
-	}
-
-	select {
-	case <-ch:
-		return m.deliveryErr
-	case <-ctx.Done():
-		return fmt.Errorf("wait for outbound delivery: %w", ctx.Err())
-	}
-}
-
-// MarkDelivered marks outbound delivery for this message complete.
-func (m *OutboundMessage) MarkDelivered(err error) {
-	ch := m.deliveryChannel()
-	m.deliveredOnce.Do(func() {
-		m.deliveryErr = err
-
-		close(ch)
-	})
-}
-
-func (m *OutboundMessage) deliveryChannel() chan struct{} {
-	m.deliveryInit.Do(func() {
-		m.delivered = make(chan struct{})
-	})
-
-	return m.delivered
 }
 
 func (m *InboundMessage) responseChannel() chan InboundResponse {
