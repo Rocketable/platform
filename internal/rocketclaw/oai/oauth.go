@@ -472,12 +472,10 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	codexResponse := strings.HasSuffix(codexPath, "/responses")
 
-	codexCompact := strings.HasSuffix(codexPath, "/responses/compact")
-
 	var threshold *float64
 
-	if codexResponse || codexCompact {
-		threshold, err = cleanCodexRequest(cloned, codexResponse)
+	if codexResponse {
+		threshold, err = cleanCodexRequest(cloned)
 		if err != nil {
 			return nil, err
 		}
@@ -559,8 +557,6 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			return nil, fmt.Errorf("compact Codex response: %w", err)
 		}
-	} else if codexCompact && resp.StatusCode == http.StatusOK && resp.Header.Get("Content-Type") == "" {
-		resp.Header.Set("Content-Type", "application/json")
 	}
 
 	return resp, nil
@@ -679,7 +675,7 @@ func FreshTokenIn(ctx context.Context, workspace, runtimeDir, provider string, r
 }
 
 // cleanCodexRequest returns the first decoded compaction threshold; nil denotes absence, not zero.
-func cleanCodexRequest(req *http.Request, streaming bool) (*float64, error) {
+func cleanCodexRequest(req *http.Request) (*float64, error) {
 	if req.Method != http.MethodPost || req.Body == nil {
 		return nil, nil
 	}
@@ -728,17 +724,15 @@ func cleanCodexRequest(req *http.Request, streaming bool) (*float64, error) {
 		}
 	}
 
-	if streaming {
-		if _, ok := body["instructions"]; !ok {
-			body["instructions"] = json.RawMessage(`""`)
-			changed = true
-		}
+	if _, ok := body["instructions"]; !ok {
+		body["instructions"] = json.RawMessage(`""`)
+		changed = true
+	}
 
-		var stream bool
-		if err := json.Unmarshal(body["stream"], &stream); err != nil || !stream {
-			body["stream"] = json.RawMessage("true")
-			changed = true
-		}
+	var stream bool
+	if err := json.Unmarshal(body["stream"], &stream); err != nil || !stream {
+		body["stream"] = json.RawMessage("true")
+		changed = true
 	}
 
 	var store bool
@@ -948,17 +942,25 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (it
 		return nil, false, nil
 	}
 
-	// Streaming request preparation always supplies instructions, even when empty.
+	var input []json.RawMessage
+	// RocketCode always sends input as an item list.
+	_ = json.Unmarshal(compactSource["input"], &input)
+
+	// ChatGPT Codex no longer serves /responses/compact. Like Codex since
+	// openai/codex#44255, request compaction as a streamed response whose input
+	// ends with a compaction trigger. Streaming preparation always supplies instructions.
+	compactInput, _ := json.Marshal(append(input, json.RawMessage(`{"type":"compaction_trigger"}`)))
 	compactRequest := map[string]json.RawMessage{
-		"input":        compactSource["input"],
+		"input":        compactInput,
 		"model":        compactSource["model"],
 		"instructions": compactSource["instructions"],
+		"store":        json.RawMessage("false"),
+		"stream":       json.RawMessage("true"),
 	}
 
 	data, _ := json.Marshal(compactRequest)
 
 	compactReq := req.Clone(ctx)
-	compactReq.URL.Path = strings.TrimRight(compactReq.URL.Path, "/") + "/compact"
 	setRequestBody(compactReq, data)
 
 	compactResp, err := t.roundTrip(compactReq, "compaction")
@@ -968,14 +970,23 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (it
 
 	defer func() { _ = compactResp.Body.Close() }()
 
-	data, err = io.ReadAll(compactResp.Body)
+	if compactResp.StatusCode != http.StatusOK {
+		return nil, false, nil
+	}
+
+	streamed, err := codexStreamingResponse(compactResp)
+	// A failed compaction stream is the provider declining, like a non-200 status.
+	if _, failed := errors.AsType[*codexStreamError](err); failed {
+		return nil, false, nil
+	}
+
 	if err != nil {
 		return nil, false, fmt.Errorf("read Codex compact response: %w", err)
 	}
 
-	if compactResp.StatusCode != http.StatusOK {
-		return nil, false, nil
-	}
+	// codexStreamingResponse buffers its JSON body in memory.
+	data, _ = io.ReadAll(streamed.Body)
+	_ = streamed.Body.Close()
 
 	var compactBody struct {
 		Output []map[string]json.RawMessage `json:"output"`
