@@ -76,15 +76,16 @@ func TestStartSessionPromptServerTrimsIDAndAgent(t *testing.T) {
 	assert.Equal(t, "plain text reply", content.Text)
 }
 
-func TestStartSessionPromptServerPassesAttachments(t *testing.T) {
+func TestStartSessionPromptServerAttachments(t *testing.T) {
 	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, _, _, input string, _ map[string]string, attachments []SessionAttachment) (SessionResult, error) {
 		assert.Equal(t, "look", input)
-		require.Len(t, attachments, 1)
-		assert.Equal(t, "scorecard.png", attachments[0].Name)
-		assert.Equal(t, "image/png", attachments[0].MIMEType)
-		assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("png")), attachments[0].DataBase64)
+		assert.Equal(t, []SessionAttachment{{Name: "scorecard.png", MIMEType: "image/png", DataBase64: base64.StdEncoding.EncodeToString([]byte("png"))}}, attachments)
 
-		return SessionResult{Answer: "plain text reply"}, nil
+		return SessionResult{ExternalConversationID: "test-conversation", Agent: "main", Answer: "plain text reply", Attachments: []SessionAttachment{
+			{Name: "chart.png", MIMEType: "image/png; charset=binary", DataBase64: base64.StdEncoding.EncodeToString([]byte("png"))},
+			{Name: "report.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("report"))},
+			{MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("unnamed"))},
+		}}, nil
 	})
 	require.NoError(t, err)
 
@@ -100,24 +101,6 @@ func TestStartSessionPromptServerPassesAttachments(t *testing.T) {
 			"data_base64": base64.StdEncoding.EncodeToString([]byte("png")),
 		}},
 	})
-	content, ok := result.Content[0].(*mcp.TextContent)
-	require.True(t, ok)
-	assert.Equal(t, "plain text reply", content.Text)
-}
-
-func TestStartSessionPromptServerReturnsAttachments(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error) {
-		return SessionResult{ExternalConversationID: "test-conversation", Agent: "main", Answer: "plain text reply", Attachments: []SessionAttachment{
-			{Name: "chart.png", MIMEType: "image/png; charset=binary", DataBase64: base64.StdEncoding.EncodeToString([]byte("png"))},
-			{Name: "report.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("report"))},
-			{MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("unnamed"))},
-		}}, nil
-	})
-	require.NoError(t, err)
-
-	defer func() { require.NoError(t, server.Close(context.Background())) }()
-
-	result := callSessionPrompt(t, server.url, "", "", "", "return attachments", nil)
 	require.Len(t, result.Content, 4)
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
