@@ -219,7 +219,7 @@ These are implementation gates, not checks executed while producing this plan.
 | Web lint | `internal/rocketclaw/web` | `make lint` passes, including TypeScript and react-doctor without suppression. |
 | Web tests and fresh assets | `internal/rocketclaw/web` | `make test` builds successfully before running browser tests and passes the Web source CLOC gate. |
 
-Use only repository `.tmp/` paths for temporary files, browser scratch, and tool temporary directories. A shared JJ workspace can exceed the Unix-socket path limit: use a short directory under the repository's approved `.tmp/`, not system temp, following `docs/solutions/best-practices/unix-socket-tests-need-short-tmpdir-in-jj-workspaces.md`.
+Use only repository `.tmp/` paths for temporary files, browser scratch, and tool temporary directories. A shared JJ workspace can exceed the Unix-socket path limit: use a short directory under the repository's approved `.tmp/`, not system temp, following `docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md`.
 
 No new timer, goroutine, synchronization, filesystem abstraction, cleanup, or iterator API is required. The Go bootstrap guidance therefore constrains style and existing context/store use, not new infrastructure. Keep Unix-only scope and existing abstractions. Do not alter CLOC budgets or hide source in excluded paths.
 
