@@ -851,7 +851,7 @@ test("newer search replaces an in-flight search and retries errors", async () =>
   }
 }, 30_000);
 
-test("typing reuses unchanged message results and new replies replace them", async () => {
+test("typing reuses message results and new replies preserve selected text", async () => {
   const { chromium: engine } = await import(playwright!);
   const text = "needle " + "fixture text ".repeat(2048);
   const rows = Array.from({ length: 64 }, (_, i) => ({ id: `result-${i}`, name: `Result ${i}`, agent: "main" }));
@@ -903,11 +903,14 @@ test("typing reuses unchanged message results and new replies replace them", asy
     await search.press("Enter");
     await started.promise;
     expect(await results.getByRole("group").count()).toBe(64);
+    await search.selectText();
     held.resolve();
     await results.getByRole("link", { name: "Assistant needle xyz replacement", exact: true }).waitFor();
     expect(await results.getByRole("group").count()).toBe(1);
     expect(await results.locator("mark").allTextContents()).toEqual(["needle xyz"]);
     expect(requests).toEqual([{ query: "needle", messages: true }, { query: "needle xyz", messages: true }]);
+    await page.keyboard.type("new");
+    expect(await search.inputValue()).toBe("new");
   } finally {
     held.resolve();
     await browser.close();
@@ -935,33 +938,6 @@ test("a broad search draws a page of rows and scrolling draws the rest", async (
     expect(await results.getByRole("group").count()).toBe(1000);
     expect(await results.getByRole("group", { name: "Wide 999", exact: true }).getByRole("heading").textContent()).toBe("Wide 999(3)");
   } finally {
-    await browser.close();
-    server.stop(true);
-  }
-}, 30_000);
-
-test("a search answer arriving keeps the selected search text, so typing replaces it", async () => {
-  const { chromium: engine } = await import(playwright!);
-  const started = Promise.withResolvers<void>();
-  const held = Promise.withResolvers<void>();
-  const { server, origin } = serve([], async ({ query }) => {
-    if (query === "old words") { started.resolve(); await held.promise; }
-    return response(query);
-  });
-  const browser = await engine.launch({ executablePath: chromium, headless: true });
-  try {
-    const page = await browser.newPage();
-    await page.goto(`${origin}/search`);
-    const search = page.getByRole("textbox", { name: "Search sessions" });
-    await search.fill("old words");
-    await started.promise;
-    await search.selectText();
-    held.resolve();
-    await page.getByRole("status").filter({ hasText: "Searching…" }).waitFor({ state: "hidden" });
-    await page.keyboard.type("new");
-    expect(await search.inputValue()).toBe("new");
-  } finally {
-    held.resolve();
     await browser.close();
     server.stop(true);
   }
