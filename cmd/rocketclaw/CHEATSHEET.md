@@ -309,12 +309,12 @@ When an agent sets `customShell`, RocketCode runs each shell command made on tha
 - A wrapper that is itself a bash script should start with `#!/bin/bash -p`, so an inherited `BASH_ENV` or exported functions cannot change it before it hands off the command.
 - The working directory and `TMPDIR` are set on the wrapper process. Carry both into the sandbox, and make the workspace available at the same path inside it.
 - The environment is the full RocketClaw process environment, which can include provider credentials. Forward only the variables commands need.
-- Goal checks and workflow workers get the RocketClaw env, such as `ROCKETCLAW_CONVERSATION_ID`, of the turn that runs them.
+- Workflow workers get the RocketClaw env, such as `ROCKETCLAW_CONVERSATION_ID`, of the turn that runs them.
 - Keep the wrapper, and any file it reads to configure the sandbox, outside the workspace and outside every path the agent can write. An agent that can modify its wrapper can turn it into plain host bash.
-- Do not let agents edit a sandboxed agent's file. Editing it can remove `customShell`, and goal checks reread the file each time they run. `rocketclaw lint` reports `edit` permissions that cover a sandboxed agent's file or a wrapper inside the workspace.
+- Do not let agents edit a sandboxed agent's file. Editing it can remove `customShell`. `rocketclaw lint` reports `edit` permissions that cover a sandboxed agent's file or a wrapper inside the workspace.
 - The wrapper gets the same timeout and termination signals bash would. At the timeout RocketCode stops the wrapper's process group, and a few seconds later the `bash` call ends even if a program outside that group still holds its output open. Stopping work inside the sandbox is the wrapper's job.
 - ``!`…` `` expansion has no timeout and ignores errors. A missing wrapper produces empty text, and a hung wrapper blocks the turn.
-- The field applies only to the agent that declares it. A subagent, guardrail, or permission reviewer without its own `customShell` runs default bash. Workflow workers and goal checks use the root agent's `customShell`.
+- The field applies only to the agent that declares it. A subagent, guardrail, or permission reviewer without its own `customShell` runs default bash. Workflow workers use the root agent's `customShell`.
 - File tools and MCP servers still run on the host. `customShell` covers shell commands only.
 
 Deployment-specific model names can be kept out of shared agents:

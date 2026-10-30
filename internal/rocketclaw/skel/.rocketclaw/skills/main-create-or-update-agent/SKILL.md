@@ -234,7 +234,7 @@ The optional `customShell` frontmatter field is an absolute path to a program th
 - never create or edit a `customShell` program inside the workspace
 - carry `customShell` over unchanged on updates and renames
 - never give an agent `edit` permission over a sandboxed agent's file or its wrapper program; editing either can remove the sandboxing, and `rocketclaw lint` reports it
-- the setting covers only the agent that declares it: task subagents, the guardrail, and permission reviewers without their own `customShell` run plain `/bin/bash`, and workflow workers and goal checks use the root agent's. When the human asks to sandbox an agent, list the agents it delegates to and its guardrail, and ask whether each needs `customShell` too
+- the setting covers only the agent that declares it: task subagents, the guardrail, and permission reviewers without their own `customShell` run plain `/bin/bash`, and workflow workers use the root agent's. When the human asks to sandbox an agent, list the agents it delegates to and its guardrail, and ask whether each needs `customShell` too
 
 A `customShell` program must:
 - take the whole command as its only argument (there is no `-c`) and run it with bash, for example `bash --noprofile --norc -p -c "$1"`, because permission checks parse every command as bash
