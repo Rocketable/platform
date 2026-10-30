@@ -221,15 +221,16 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 
 	var bridgeLoops errgroup.Group
 
-	bridgeLoops.Go(func() error { return threadBridges.Run(workCtx) })
+	bridgeLoops.Go(func() error {
+		threadBridges.Run(workCtx)
+		return nil
+	})
 
 	defer func() {
 		logger.Info("shutting down rocketclaw runtime")
 		shutdown.start("runtime cleanup", false)
 
-		if err := bridgeLoops.Wait(); err != nil {
-			logger.Warn("stop thread bridges", "error", err)
-		}
+		_ = bridgeLoops.Wait()
 
 		background.shutdown()
 		s.cancel()

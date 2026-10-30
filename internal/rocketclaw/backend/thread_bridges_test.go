@@ -116,7 +116,7 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 		require.NoError(t, store.UpsertThread(cfg.ConversationID, ThreadState{Agent: cfg.Agent}))
 		require.NoError(t, startTestBridge(t.Context(), bridge))
 		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), time.Hour, "later", false))
-		require.NoError(t, bridge.Stop())
+		bridge.Stop()
 	}
 
 	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("D123", "111.222"), ThreadState{Agent: "selected"}))
@@ -634,7 +634,7 @@ func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, shutdown())
+	shutdown()
 
 	require.Len(t, bridges, 2)
 	require.Len(t, bridges[0].StopCalls(), 1)
@@ -649,22 +649,25 @@ func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 
 // runTestManager runs manager's bridge loops the way app.go does and returns the
 // shutdown that cancels them and waits for every loop; test cleanup also runs it.
-func runTestManager(t *testing.T, manager *threadBridgeManager) func() error {
+func runTestManager(t *testing.T, manager *threadBridgeManager) func() {
 	t.Helper()
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 
 	var run errgroup.Group
 
-	run.Go(func() error { return manager.Run(ctx) })
-
-	shutdown := sync.OnceValue(func() error {
-		cancel(errShutdown)
-
-		return run.Wait()
+	run.Go(func() error {
+		manager.Run(ctx)
+		return nil
 	})
 
-	t.Cleanup(func() { assert.NoError(t, shutdown()) })
+	shutdown := sync.OnceFunc(func() {
+		cancel(errShutdown)
+
+		_ = run.Wait()
+	})
+
+	t.Cleanup(shutdown)
 
 	return shutdown
 }
@@ -676,7 +679,7 @@ func newDirectBridgeMock() *directBridgeMock {
 		<-ctx.Done()
 		return nil
 	}
-	mock.StopFunc = func() error { return nil }
+	mock.StopFunc = func() {}
 	mock.SubmitFunc = func(context.Context, *protocol.InboundMessage) error { return nil }
 	mock.InterruptActiveTurnFunc = func() *protocol.InboundMessage { return nil }
 	mock.SwitchAgentFunc = func(string) {}

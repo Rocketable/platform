@@ -257,7 +257,7 @@ func TestShadowReviewClearLiveProducer(t *testing.T) {
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{ManagedConversationID: "0visible", PrivateConversationID: "private", Agent: "main"}))
 	require.NoError(t, store.UpsertThread("private", ThreadState{Agent: "main"}))
 	manager, shutdown := newTestBridgeManager(t, cfg, store, make(chan *protocol.OutboundMessage, 4))
-	t.Cleanup(func() { require.NoError(t, shutdown()) })
+	t.Cleanup(shutdown)
 
 	store.historyWorkers = manager
 	parent, err := manager.recordedBridge(t.Context(), "0visible")

@@ -124,7 +124,7 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 		}})
 
 		shutdown := runTestManager(t, rt.threads)
-		defer func() { require.NoError(t, shutdown()) }()
+		defer shutdown()
 
 		for _, id := range []string{"Y", "X"} {
 			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
@@ -289,7 +289,7 @@ func TestRuntimePersistedEnqueueAndProducerArrivalOrder(t *testing.T) {
 				}})
 
 				shutdown := runTestManager(t, rt.threads)
-				defer func() { require.NoError(t, shutdown()) }()
+				defer shutdown()
 
 				target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
 				destination := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
@@ -411,7 +411,7 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 		}})
 
 		shutdown := runTestManager(t, rt.threads)
-		defer func() { require.NoError(t, shutdown()) }()
+		defer shutdown()
 
 		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "Y", Agent: "main"}))
 

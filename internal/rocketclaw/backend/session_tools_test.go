@@ -1332,7 +1332,7 @@ func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 		_, err := sessionsWriteTool(nt.bridge(t, manager, "web:caller"), caller, caller, "main", "web:caller", harness.Agents{}).Call(t.Context(), json.RawMessage(`{"session_id":"`+nt.conversationID+`","mode":"enqueue","prompt":"summarize billing","title":"","agent":""}`), nil)
 		require.NoError(t, err)
 		nt.request(t)
-		require.NoError(t, shutdown())
+		shutdown()
 		assert.Equal(t, []string{"web:caller web:caller/ running none false"}, replyQueueItems(t, nt.service), "a cut turn settles nothing")
 
 		manager, _ = nt.restart(t)

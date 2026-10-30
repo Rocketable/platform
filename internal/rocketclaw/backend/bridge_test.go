@@ -593,7 +593,7 @@ func TestStoppedBridgeLeavesDueScheduleUnclaimed(t *testing.T) {
 	now := time.Now().UTC()
 	scheduled := protocol.ScheduledMessageState{ConversationID: "thread-1", Agent: "main", Message: "hourly", DueAt: now, Recurring: true, Interval: time.Hour}
 	require.NoError(t, store.PutScheduledMessage("s1", &scheduled))
-	require.NoError(t, bridge.Stop())
+	bridge.Stop()
 
 	require.ErrorIs(t, bridge.submitDueScheduled(t.Context(), "s1", &scheduled, now), protocol.ErrBridgeStopped)
 
@@ -729,7 +729,7 @@ func TestBridgeStopDoesNotClassifyOrdinaryTurnAsInterrupted(t *testing.T) {
 		bridgeCtx, cancelBridge := context.WithCancelCause(t.Context())
 		turn, cancel := context.WithCancel(bridgeCtx)
 		bridge := &Bridge{stopCh: make(chan struct{}), activeReply: protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ordinary", true), activeTurnCancel: cancel}
-		require.NoError(t, bridge.Stop())
+		bridge.Stop()
 		cancelBridge(cause)
 		assert.False(t, bridge.activeTurnInterrupted)
 		assert.ErrorIs(t, context.Cause(turn), cause)
@@ -1120,7 +1120,7 @@ func TestBridgeSubmitAfterStopStoresRequestDurably(t *testing.T) {
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), bus, &Config{ConversationID: conversationID, Agent: "main", SessionService: service}, slog.New(slog.DiscardHandler))
 	require.NoError(t, startTestBridge(context.Background(), bridge))
-	require.NoError(t, bridge.Stop())
+	bridge.Stop()
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindSteer, "hello", true)
 	inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "U1"}
@@ -1357,7 +1357,7 @@ func TestBridgeStopAfterStartContextCanceledIsIdempotent(t *testing.T) {
 		t.Fatal("bridge did not stop after context cancellation")
 	}
 
-	require.NoError(t, bridge.Stop())
+	bridge.Stop()
 }
 
 func TestScheduleMessageToolValidatesAndPreservesMessage(t *testing.T) {
@@ -2388,7 +2388,7 @@ func TestBridgeSuccessfulWorkflowPersistsRunSummary(t *testing.T) {
 		t.Cleanup(bus.Close)
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), bus: bus, config: Config{ConversationID: pairID, Agent: "main", SessionService: service}}
 		require.NoError(t, startTestBridge(t.Context(), bridge))
-		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+		t.Cleanup(bridge.Stop)
 
 		delivered := make(chan struct{})
 		workflowTurnID := ""
@@ -2471,7 +2471,7 @@ func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
 		t.Cleanup(bus.Close)
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
 		require.NoError(t, startTestBridge(t.Context(), bridge))
-		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+		t.Cleanup(bridge.Stop)
 
 		delivered := make(chan struct{})
 
@@ -2532,7 +2532,7 @@ func TestBridgeFailedWorkerErrorIsNotPersisted(t *testing.T) {
 	t.Cleanup(bus.Close)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
 	require.NoError(t, startTestBridge(t.Context(), bridge))
-	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+	t.Cleanup(bridge.Stop)
 
 	delivered := make(chan struct{})
 
@@ -2595,7 +2595,7 @@ func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
 	t.Cleanup(bus.Close)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
 	require.NoError(t, startTestBridge(t.Context(), bridge))
-	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+	t.Cleanup(bridge.Stop)
 
 	delivered := make(chan struct{})
 
@@ -2687,7 +2687,7 @@ func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
 	t.Cleanup(bus.Close)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
 	require.NoError(t, startTestBridge(t.Context(), bridge))
-	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+	t.Cleanup(bridge.Stop)
 
 	completed := make(chan string, 2)
 
@@ -2922,7 +2922,7 @@ func TestBridgeStopDisarmsScheduledMessage(t *testing.T) {
 
 		bridge := &Bridge{log: slog.New(slog.NewJSONHandler(&logs, nil)), config: Config{ConversationID: "slack-thread:C123:111.222", SessionService: newTestSessionService(t)}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "later", false))
-		require.NoError(t, bridge.Stop())
+		bridge.Stop()
 
 		time.Sleep(5 * time.Second)
 		synctest.Wait()
@@ -4579,7 +4579,7 @@ func newNoteTest(t *testing.T, respond noteTestResponder) *noteTest {
 
 // run starts a manager of real bridges that hands each published outbound to observe and reports
 // completed ones on finals. It returns the manager and its shutdown.
-func (nt *noteTest) run(t *testing.T, observe func(*protocol.OutboundMessage)) (manager *threadBridgeManager, shutdown func() error) {
+func (nt *noteTest) run(t *testing.T, observe func(*protocol.OutboundMessage)) (manager *threadBridgeManager, shutdown func()) {
 	t.Helper()
 
 	var registry *backgroundRegistry
@@ -4952,7 +4952,7 @@ func TestResumedTurnInjectsNoteOnce(t *testing.T) {
 	first.noteReady(nt.conversationID)
 	close(release)
 	assert.Contains(t, nt.request(t), "turn-0/call/a")
-	require.NoError(t, shutdown())
+	shutdown()
 
 	second, _ := nt.run(t, ignoreOutbound)
 	require.NoError(t, second.StartActiveTurns(t.Context()))
@@ -5176,7 +5176,7 @@ func TestHiddenRunFailedWakeRetries(t *testing.T) {
 		failed(2, 5*time.Minute)
 		assert.Empty(t, posted(), "a failed retry posts nothing to the destination")
 
-		require.NoError(t, shutdown())
+		shutdown()
 		nt.restart(t)
 
 		time.Sleep(5*time.Minute - time.Nanosecond)

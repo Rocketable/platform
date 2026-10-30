@@ -228,7 +228,7 @@ func TestShadowPublicMutationsAreReadOnly(t *testing.T) {
 	store, _ := newShadowTestStore(t)
 	ctx := t.Context()
 	manager, shutdown := newTestBridgeManager(t, store.definitions, store, make(chan *protocol.OutboundMessage, 16))
-	t.Cleanup(func() { require.NoError(t, shutdown()) })
+	t.Cleanup(shutdown)
 
 	runtime := &Runtime{Sessions: store, Cfg: store.definitions, threads: manager}
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main"}))

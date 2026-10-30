@@ -77,7 +77,7 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 
 			finals := make(chan *protocol.OutboundMessage, 8)
 			manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
-			t.Cleanup(func() { require.NoError(t, shutdown()) })
+			t.Cleanup(shutdown)
 
 			for _, id := range []string{"parent", "unrelated"} {
 				bridge, err := manager.recordedBridge(t.Context(), id)
