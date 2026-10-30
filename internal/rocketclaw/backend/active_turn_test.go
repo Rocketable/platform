@@ -2164,7 +2164,7 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 // its parent, level by level up to the top-level session, as a note that continues it. A busy parent takes
 // the note into its running turn; an idle one wakes once, also when a restart came before it heard. A
 // guarded helper type's rejected answer reaches the parent as the blocked result. A wake turn that took a
-// task's steer answers that task call instead.
+// task's steer answers that task call instead, whose review is the answer's only one.
 func TestSubagentWakeReportsUp(t *testing.T) {
 	t.Parallel()
 
@@ -2180,12 +2180,13 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 		{name: "busy parent", woken: "/a", want: report("/a", "found it"), busy: true},
 		{name: "guardrail rejects", woken: "/a", want: report("/a", "delegation response blocked: leaks secrets"), guarded: true},
 		{name: "wake turn took a task steer", woken: "/a", steer: true},
+		{name: "guarded wake turn took a task steer", woken: "/a", guarded: true, steer: true},
 		{name: "restart before the parent heard", woken: "/a", want: report("/a", "found it"), cut: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			hold, release, relayed, noted := make(chan struct{}, 1), make(chan struct{}), make(chan string, 1), make(chan string, 2)
+			hold, release, relayed, noted, reviews := make(chan struct{}, 1), make(chan struct{}), make(chan string, 1), make(chan string, 2), make(chan struct{}, 4)
 			if tc.busy || tc.steer {
 				hold <- struct{}{}
 			}
@@ -2206,6 +2207,8 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 
 				switch {
 				case strings.Contains(body, "Current Action: "):
+					reviews <- struct{}{}
+
 					text = `{"approved":false,"reason":"leaks secrets"}`
 				case research && strings.Contains(body, "<subagent id="):
 					relayed <- lastRequestMessage(t, body)
@@ -2261,9 +2264,11 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 				require.True(t, steered, "the steer joins the helper's wake turn")
 				close(release)
 
-				answer, _, err := nt.bridge(t, manager, nt.conversationID).AwaitSubagent(t.Context(), "/a", "turn-2/call/s")
+				// The task call's wait, as a restart resumes it, reviews the answer as the call would.
+				answer, err := manager.continueSubagent(t.Context(), &backgroundJob{conversationID: nt.conversationID, jobID: "turn-2/call/s", subagentKey: "/a", agent: "main", input: "also the logs"})
 				require.NoError(t, err)
-				assert.True(t, strings.HasSuffix(answer, "logs fine"), "the task call gets the wake turn's answer: %q", answer)
+				assert.Equal(t, "<task_result>\n"+map[bool]string{false: "found it\nlogs fine", true: "delegation response blocked: leaks secrets"}[tc.guarded]+"\n</task_result>", answer, "the task call gets the wake turn's answer")
+				assert.Len(t, reviews, map[bool]int{true: 1}[tc.guarded], "the wake turn leaves the review to the task call")
 				nt.waitIdle(t, manager, helper)
 				assert.Empty(t, noted, "the parent is not woken")
 				assert.Equal(t, []string{"turn-0/call/x consumed true"}, noteStates(t, nt.service), "the parent gets no note")

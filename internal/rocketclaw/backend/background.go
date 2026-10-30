@@ -80,7 +80,7 @@ func backgroundNote(job *backgroundJob) string {
 		switch {
 		case job.status == backgroundRemoved:
 			body = fmt.Sprintf("A person removed your write from session %s's queue before it ran, so no answer will come.", job.target)
-		case slices.Contains([]backgroundStopError{errStoppedByUser, errStoppedByAgent}, backgroundStopError(job.result)):
+		case job.status == backgroundStopped && slices.Contains([]backgroundStopError{errStoppedByUser, errStoppedByAgent}, backgroundStopError(job.result)):
 			body = fmt.Sprintf("This reply was %s, so session %s's answer to your write will not come here; your write may still run there. %s", job.result, job.target, hint)
 		case job.runnerID != "":
 			body = fmt.Sprintf("Session %s's turn that your stop interrupted is over (state %s). %s", job.target, job.status, hint)

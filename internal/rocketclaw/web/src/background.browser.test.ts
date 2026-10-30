@@ -18,7 +18,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
     : n === 60 ? [event(60, 0, "user", done, { header: "[System]", completionNotes: [job("j-done", "execute", "completed", "tests", { note: done })] })]
     : [event(n, 0, "user", `user ${n}`), event(n, 1, "assistant", `assistant ${n}`)];
   const range = (first: number, last: number) => Array.from({ length: last - first + 1 }, (_, i) => first + i);
-  let live = { movable: true, backgroundJobs: [job("j-old", "execute", "running", "old script", { toolCallId: "call-old" }), job("j-sub", "task", "running", "research", { toolCallId: "call-sub", subagentKey: "/call-sub" }), job("j-cron", "task", "running", "cron loop", { toolCallId: "loop", subagentKey: "/loop", hidden: true }), job("j-killed", "execute", "killed", "build", { toolCallId: "call-killed" })] };
+  let live = { movable: true, backgroundJobs: [job("j-old", "execute", "running", "old script", { toolCallId: "call-old" }), job("j-sub", "task", "running", "research", { toolCallId: "call-sub", subagentKey: "/call-sub" }), job("j-cron", "task", "running", "cron loop", { toolCallId: "loop", subagentKey: "/loop", hidden: true }), job("j-killed", "execute", "killed", "build", { toolCallId: "call-killed" }), job("j-reply", "rocketclaw_sessions_write", "stopped", "ops reply")] };
   const calls: { path: string; body: object }[] = [];
   let notify = (_data: string) => {};
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
@@ -61,8 +61,9 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replace(/=+$/, "")}`);
     const jobs = page.getByRole("list", { name: "Background jobs" });
     await jobs.getByRole("listitem").first().waitFor();
-    expect(await jobs.getByRole("listitem").allInnerTexts()).toEqual(["old script\nrunning\nOpen\nStop", "research\nrunning\nOpen\nStop", "cron loop\nrunning\nStop", "build\nkilled (server restarted)\nOpen"]);
-    expect(await jobs.locator('[data-slot="trace-line"]').evaluateAll((lines: HTMLElement[]) => lines.map((line) => line.dataset.status ?? ""))).toEqual(["running", "running", "running", "error"]);
+    // A reply that nobody stopped, such as one whose awaited turn stopped, says only that it stopped.
+    expect(await jobs.getByRole("listitem").allInnerTexts()).toEqual(["old script\nrunning\nOpen\nStop", "research\nrunning\nOpen\nStop", "cron loop\nrunning\nStop", "build\nkilled (server restarted)\nOpen", "ops reply\nstopped\nOpen"]);
+    expect(await jobs.locator('[data-slot="trace-line"]').evaluateAll((lines: HTMLElement[]) => lines.map((line) => line.dataset.status ?? ""))).toEqual(["running", "running", "running", "error", ""]);
 
     // A finished Completion Note stays one row at Messages only, with its note folded beneath.
     const note = page.locator("main").getByRole("button", { name: /^tests\s*finished$/ });

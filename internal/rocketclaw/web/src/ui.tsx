@@ -350,7 +350,7 @@ function QueuePanel({
   );
 }
 
-const jobState = (job: BackgroundJob) => ({ completed: "finished", stopped: `stopped by ${job.stoppedBy}`, killed: "killed (server restarted)" } as Record<string, string | undefined>)[job.state] ?? job.state;
+const jobState = (job: BackgroundJob) => ({ completed: "finished", stopped: job.stoppedBy ? `stopped by ${job.stoppedBy}` : "stopped", killed: "killed (server restarted)" } as Record<string, string | undefined>)[job.state] ?? job.state;
 const jobStatus = (job: BackgroundJob) => job.state === "running" ? "running" : ["failed", "killed"].includes(job.state) ? "error" : undefined;
 
 // jobsSlot is the composer's question card and Background Jobs list, or nothing when the conversation has neither.

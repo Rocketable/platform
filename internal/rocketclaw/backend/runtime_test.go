@@ -1519,12 +1519,27 @@ func TestRuntimeListsAndStopsBackgroundJobs(t *testing.T) {
 	_, err = store.db.ExecContext(t.Context(), `UPDATE turns SET note = $1 WHERE input_id = 'turn-2/call/consumed' AND NOT takes_lane`, noteConsumed)
 	require.NoError(t, err)
 
+	// A reply settled stopped because the turn it waited for stopped keeps that turn's answer, and a bare
+	// stop's reply keeps none; nobody stopped either reply.
+	answered, bare := testReply("reports", "turn-3/call/r", "web:ops"), testReply("reports", "turn-3/call/s", "web:ops")
+	answered.result, bare.runnerID = "half done", "turn-9"
+
+	for _, reply := range []*backgroundJob{answered, bare} {
+		createTestBackgroundJob(t, store, reply)
+
+		reply.status, reply.noteState = backgroundStopped, notePending
+		won, err := store.finishBackgroundJob(t.Context(), reply)
+		require.NoError(t, err)
+		require.True(t, won)
+	}
+
+	replies := []protocol.BackgroundJob{{ID: answered.jobID, Kind: sessionsWriteToolName, State: "stopped", Label: "enqueue"}, {ID: bare.jobID, Kind: sessionsWriteToolName, State: "stopped", Label: "enqueue"}}
 	loop := protocol.BackgroundJob{ID: "turn-1/call/loop", Kind: "task", State: "running", Label: "loop", ToolCallID: "loop", SubagentKey: "/loop", Hidden: true}
 	killed := protocol.BackgroundJob{ID: "turn-2/call/killed", Kind: "execute", State: "killed", Label: "tests", ToolCallID: "call"}
 	jobs, movable, err := rt.BackgroundJobs(t.Context(), "reports")
 	require.NoError(t, err)
 	require.False(t, movable)
-	require.Equal(t, []protocol.BackgroundJob{loop, killed}, jobs)
+	require.Equal(t, append([]protocol.BackgroundJob{loop, killed}, replies...), jobs)
 
 	stopped, err := rt.StopBackgroundJob(t.Context(), "reports", loop.ID)
 	require.NoError(t, err)
@@ -1536,7 +1551,7 @@ func TestRuntimeListsAndStopsBackgroundJobs(t *testing.T) {
 	require.NoError(t, err)
 	jobs, _, err = rt.BackgroundJobs(t.Context(), "reports")
 	require.NoError(t, err)
-	require.Equal(t, []protocol.BackgroundJob{loop}, jobs, "a consumed note drops its job from the list")
+	require.Equal(t, append([]protocol.BackgroundJob{loop}, replies...), jobs, "a consumed note drops its job from the list")
 }
 
 // An attached call's start and finish flip movable, which no row change reports.
