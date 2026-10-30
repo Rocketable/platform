@@ -1,0 +1,1 @@
+[data-component=activity-ring]:where([data-oc-view],[data-oc-view] *){color:var(--v2-icon-icon-muted);flex-shrink:0;display:block}
