@@ -56,7 +56,7 @@ Since v0.2.5, startup itself first replaces the ledger rows for `001` through `0
 ## Prevention
 
 - Identify the running binary's source revision before choosing the deployment base. A PR's base is not evidence of what is running.
-- Compare the live migration ledger with the candidate's embedded migrations before replacing the binary. Matching migration IDs addresses this startup failure; it does not prove all application/schema compatibility.
+- Compare the live migration ledger with the candidate's embedded migrations before replacing the binary. For a v0.2.5+ candidate, ledger rows up to `059_legacy_handoff.sql` are replaced by `001_baseline.sql` at startup when `059` is present (`internal/rocketclaw/backend/store_schema.go:55-60`), so compare only later IDs; a store without `059` is refused (`store_schema.go:61-62`). Matching migration IDs addresses this startup failure; it does not prove all application/schema compatibility.
 - When the deployed source differs from the PR base, build and verify the fix on the deployed baseline separately from the review branch.
 - Keep the known-running binary available during replacement, then check both HTTP service health and Slack connectivity. Restoring that exact binary worked here; arbitrary older binaries are not necessarily compatible after migrations have run.
 

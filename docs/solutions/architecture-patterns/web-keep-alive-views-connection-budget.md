@@ -1,7 +1,7 @@
 ---
 title: Keeping Web Views Mounted Needs a Remount Audit
 date: 2026-10-07
-last_updated: 2026-10-26
+last_updated: 2026-10-29
 category: docs/solutions/architecture-patterns/
 module: internal/rocketclaw/web
 problem_type: architecture_pattern
@@ -51,7 +51,7 @@ Before a view stays mounted while hidden, or before a second instance of it moun
 | Single global ref in context | `SessionCommands.composer` is one ref created in `SessionApp`. One composer mounts today, so palette `$` commands are unambiguous, but on a non-chat page the ref still points at the hidden composer. | With several instances, give hidden views a context copy whose ref is unused. Only the active view gets the real one. |
 | Imperative handle bound to one instance | `Composer` binds that ref with `useImperativeHandle` and no deps. With several composers the one that rendered last owns it, and an unmounting one resets it to `null` even if another owned it. | Bind the handle only from the active view. |
 | Document-wide id lookup | `SelectionQuote` calls `document.getElementById("transcript-scroll")`, and `openCall` queries `#transcript-scroll [data-tool-call-id=...]`. Only `Transcript` renders that viewport, so the id is unique today. | With two transcripts mounted these return the first one in DOM order. Pass each view its own viewport ref, or set the id only on the active viewport. |
-| Effects that assume mount means visible | The new-chat handoff in `Transcript` is a `useLayoutEffect` that calls `route.goSession(...)` once the draft gets its session id. Nothing checks whether the chat pane is showing. `SearchTabs`, the body of every Search page, focuses its input in a mount-only layout effect. | Gate navigation, focus and similar user-facing side effects on the view being active. Re-run them when the view becomes active, not only on mount. |
+| Effects that assume mount means visible | The new-chat handoff in `Transcript` is a `useLayoutEffect` with no deps that calls `route.goSession(...)` once the draft has its session id, but only while `location.pathname === "/"`, so a chat created while another page shows opens when New session shows again (`tabs.browser.test.ts`). `SearchTabs`, the body of every Search page, focuses its input in a mount-only layout effect. | Gate navigation, focus and similar user-facing side effects on the view being active. Re-run them when the view becomes active, not only on mount. |
 | URL-sync effects that would fight the active tab | `SearchTabs` calls `history.replaceState` to its own Search page location (`/search` or `/search/<id>`, plus `?q=`) in an effect with deps `[tab, search, path]`. That is safe only because `SearchPage` mounts only while the route is a Search page, one at a time. | If such a page becomes warm, return early off its own path. |
 | State that relies on remount | `SearchPage` keys `SearchTabs` by owner, location, and whether the page is Shared, so sharing or unsharing a page starts it fresh. `SearchTabs` saves typing still waiting to be saved in its unmount cleanup, and a link's `?q=` is used once, by the mount it led to. | If such a page becomes warm, save waiting typing when it is hidden, not only on unmount, and reset what the key change resets explicitly. The warm-tabs variant kept a stale saved-search draft for lack of that. |
 

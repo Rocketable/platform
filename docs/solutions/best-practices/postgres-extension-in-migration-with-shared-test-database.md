@@ -30,13 +30,13 @@ tags:
 
 The indexed message search added `030_message_search.sql` (now squashed into `internal/rocketclaw/backend/migrations/001_baseline.sql`), the first RocketClaw migration that created a PostgreSQL extension (`pg_trgm`, for a trigram GIN index on lowercased message text). Before that, every migration only created objects inside the current schema.
 
-The test harness does not give each test its own database. `harnessbridgetest.IsolatedTestDatabaseURL` (`internal/rocketclaw/backend/harnessbridgetest/database.go:38-48`) runs `CREATE SCHEMA t_<random>` on the shared `ROCKETCLAW_TEST_DATABASE_URL` database and sets `search_path` to that one schema only (`options=-csearch_path=<schema>`). The schema migration lock is per schema too: `store_schema.go:43` takes `pg_advisory_lock(hashtext('rocketclaw schema migrations'), hashtext(current_schema()))`, so many test schemas run the same migrations at the same time.
+The test harness does not give each test its own database. `harnessbridgetest.IsolatedTestDatabaseURL` (`internal/rocketclaw/backend/harnessbridgetest/database.go:38-48`) runs `CREATE SCHEMA t_<random>` on the shared `ROCKETCLAW_TEST_DATABASE_URL` database and sets `search_path` to that one schema only (`options=-csearch_path=<schema>`). The schema migration lock is per schema too: `store_schema.go:43` takes `pg_advisory_lock(hashtext('rocketclaw schema migrations'), hashtext(current_schema()))`, so many test schemas run the same migrations at the same time. The baseline is the exception: it takes the extension lock below inside its single migration transaction (`applySessionMigration`, `internal/rocketclaw/backend/store_schema.go:128`), so baselines in one database run one at a time, and a test that holds a baseline open must use its own database (`internal/rocketclaw/backend/store_schema_test.go:369`).
 
 An extension does not belong to a schema the way a table does. Each database has at most one copy of an extension. Its objects (functions, operator classes) live in whichever schema it was created in. That conflicts with the per-schema test layout in two ways.
 
 ## Guidance
 
-Write the extension part of the migration like this (as in `001_baseline.sql`, which replaced `030_message_search.sql`):
+Write the extension part of the migration like this (as `030_message_search.sql` did; `001_baseline.sql:4-6` keeps its lock and extension lines):
 
 ```sql
 -- +migrate Up

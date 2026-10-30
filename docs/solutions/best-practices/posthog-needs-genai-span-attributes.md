@@ -1,7 +1,7 @@
 ---
 title: PostHog AI Observability Reads OpenTelemetry GenAI Attributes, Not OpenInference
 date: 2026-10-26
-last_updated: 2026-10-26
+last_updated: 2026-10-29
 category: docs/solutions/best-practices/
 module: internal/rocketclaw
 problem_type: best_practice
@@ -60,8 +60,8 @@ Every span RocketClaw sends carries the OpenTelemetry GenAI attributes next to t
 Two more attributes decide what PostHog shows for a trace:
 
 - **Person.** PostHog takes a trace's person from `user.id` or `posthog.distinct_id` on its spans. Without either, it makes up a UUID. `Bridge.runTurn` sets `user.id` through `instrumentation.WithUser`. It uses the turn's `rocketclaw_principal_email` metadata, or else its `rocketclaw_principal` (`internal/rocketclaw/backend/bridge.go:2119`). `ApplyContextAttributes` copies `user.id` onto every span of the turn, as it does `session.id`. Who that is depends on where the turn came from:
-  - **Web:** the Web username (`internal/rocketclaw/frontend/rpc/server.go:1522`). The browser sends the same username to `posthog.identify` (`internal/rocketclaw/web/src/posthog.ts:16`), so a trace joins that person's page views and replays.
-  - **Slack and voice:** the sender's email set by the connector (`internal/rocketclaw/frontend/slack/connector.go:1142`, `internal/rocketclaw/frontend/rpc/voice.go:455`).
+  - **Web and voice:** the Web username (`internal/rocketclaw/frontend/rpc/server.go:1522`, `internal/rocketclaw/frontend/rpc/voice.go:455`). The browser sends the same username to `posthog.identify` (`internal/rocketclaw/web/src/posthog.ts:16`), so a trace joins that person's page views and replays.
+  - **Slack:** the sender's email set by the connector (`internal/rocketclaw/frontend/slack/connector.go:1142`).
   - **External MCP:** the MCP principal, because the email key is removed (`cmd/rocketclaw/mcp.go:202`).
   - **Cron:** no principal at all (`cmd/rocketclaw/cron.go:37`), so cron traces still get a random person.
   - **Goal-loop continuations and shadow turns:** the email saved from the person who started the goal or the parent turn (`internal/rocketclaw/backend/bridge.go:2067`, `internal/rocketclaw/backend/shadows.go:865`), when there is one.

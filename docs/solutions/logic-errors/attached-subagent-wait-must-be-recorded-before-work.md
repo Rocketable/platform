@@ -43,7 +43,7 @@ A subagent is a session (`conversations.parent_conversation_id`), run by its own
 - Waiters wake when any turn finishes (`finishTurn` → `conversationJobs.turnFinished`).
 
 ## Why This Works
-The prompt is written ahead of any work it starts, under a key the replaying call can compute, and the turn runner already serializes, recovers, and saves each session's turns exactly once. The parent never owns the subagent's lifecycle, so there is nothing to hold.
+The prompt is written ahead of any work it starts, under a key the replaying call can compute, and the turn runner already serializes, recovers, and saves each session's turns exactly once. A replaying parent never holds the subagent, so there is nothing to release. Only a stopped parent reaches into the subagent: its still-queued prompt is held until the next write releases it, and the subagent turn its call waits on is stopped unless that call moved to the background (`backgroundRegistry.awaitSubagent`, `releaseHeldInputs`).
 
 ## Prevention
 - Deliver into a subagent only through its session (`WriteSubagent`), never by starting its turn directly.

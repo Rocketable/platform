@@ -34,7 +34,7 @@ An agent type with a `guardrail` is promised that every delegation prompt is rev
 - A queued follow-up ran through a separate continue path, which returned the raw answer with no response review.
 
 ## What Didn't Work
-- Relying on `runTask` as the single choke point. Before this change a busy continue was refused, so `runTask` really was the only delivery path. The new modes made the Background Job registry (`internal/rocketclaw/backend/background.go`, `backgroundTurn.Run` → `queueFollowUp`, both since replaced by Subagent Session writes) a second delivery path that returns before the wrapped tool call runs.
+- Relying on `runTask` as the single choke point. Before this change a busy continue was refused, so `runTask` really was the only delivery path. The new modes made the Background Job registry (`internal/rocketclaw/backend/background.go`, `backgroundTurn.Run` → `queueFollowUp`; `queueFollowUp` is gone, continue modes are now Subagent Session writes, and `backgroundTurn.Run` now only runs jobs) a second delivery path that returns before the wrapped tool call runs.
 
 ## Solution
 - The delegation and response reviews share `toolFactory.guardTask` (`internal/rocketcode/tasks.go`). A new subagent's prompt is reviewed in `runTask`, and a continue's prompt in `backgroundTool` (`internal/rocketcode/background.go`), each right before `ChildSessions.WriteSubagent` delivers it into the subagent's session. A rejected prompt is never queued or steered, and the caller gets the usual `delegation blocked` result.

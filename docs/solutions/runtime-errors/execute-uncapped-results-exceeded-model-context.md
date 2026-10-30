@@ -73,7 +73,7 @@ A script that already stored its result for the turn can no longer be moved, so 
 
 ## Why This Works
 
-The clipping gate is at the boundary that protects model context, while scripts retain full host content for slicing and searching. Recovery bypasses Execute, so loading cannot spill recursively. ID membership authorizes only one owning turn's registered output, never a caller-supplied path or a sibling turn's result. Existing user filesystem grants and shell-temp permissions keep their separate meaning.
+The clipping gate is at the boundary that protects model context, while scripts retain full host content for slicing and searching. Recovery bypasses Execute, so loading cannot spill recursively. ID membership authorizes only one owning turn's registered output, never a caller-supplied path or a sibling turn's result; a retained Background Job ID is instead parsed as a UUID that names a file in the owning conversation's retained directory, loadable from any later turn. Existing user filesystem grants and shell-temp permissions keep their separate meaning.
 
 ## Prevention
 
