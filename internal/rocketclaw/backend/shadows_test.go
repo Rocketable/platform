@@ -1230,11 +1230,14 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 	cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL, APIKey: "test"}})
 	store.definitions = cfg
 	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
-	manager, shutdown := newTestBridgeManager(t, cfg, store, make(chan *protocol.OutboundMessage, 8))
+
+	finals := make(chan *protocol.OutboundMessage, 8)
+	manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
 	t.Cleanup(shutdown)
 
-	bridge, err := manager.recordedBridge(t.Context(), "parent")
-	require.NoError(t, err)
+	// Only the shadows run in the manager; the parent is driven by runTestTurn below.
+	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: "parent", Agent: "main", SessionService: store, RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}}, slog.New(slog.DiscardHandler))
+	bridge.threads = manager
 
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "admitted", true)}
 	admitted, err := bridge.activateInbound(t.Context(), &request)
