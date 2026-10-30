@@ -153,9 +153,11 @@ func TestLintSuppressions(t *testing.T) {
 description: same
 permission:
   edit:
-    "scripts/call.sh": allow
+    "scripts/allowed-risk.sh": allow
+    "scripts/open-risk.sh": allow
   bash:
-    "scripts/call.sh *": allow #nolint RC001: sandboxed
+    "scripts/allowed-risk.sh *": allow #nolint RC001: sandboxed
+    "scripts/open-risk.sh *": allow
 ---
 same
 `)
@@ -179,7 +181,9 @@ expensive
 	require.NoError(t, err)
 
 	assert.Equal(t, []Finding{
-		{Code: rc002, Severity: "error", Path: "agents/same.md", Message: "same can read scripts/call.sh and execute constrained command scripts/call.sh *", keys: []string{"edit", "scripts/call.sh", "bash", "scripts/call.sh *"}},
+		{Code: rc001, Severity: "error", Path: "agents/same.md", Message: "same can edit scripts/open-risk.sh and execute scripts/open-risk.sh *", keys: []string{"edit", "scripts/open-risk.sh", "bash", "scripts/open-risk.sh *"}},
+		{Code: rc002, Severity: "error", Path: "agents/same.md", Message: "same can read scripts/allowed-risk.sh and execute constrained command scripts/allowed-risk.sh *", keys: []string{"edit", "scripts/allowed-risk.sh", "bash", "scripts/allowed-risk.sh *"}},
+		{Code: rc002, Severity: "error", Path: "agents/same.md", Message: "same can read scripts/open-risk.sh and execute constrained command scripts/open-risk.sh *", keys: []string{"edit", "scripts/open-risk.sh", "bash", "scripts/open-risk.sh *"}},
 	}, result.Findings)
 }
 
@@ -263,31 +267,6 @@ expensive
 		assert.Equal(t, rc008, finding.Code)
 		assert.Equal(t, "error", finding.Severity)
 	}
-}
-
-func TestLintSuppressionIsLocal(t *testing.T) {
-	runtimeRoot := t.TempDir()
-	writeAgent(t, runtimeRoot, "same.md", `---
-description: same
-permission:
-  edit:
-    "scripts/allowed-risk.sh": allow
-    "scripts/open-risk.sh": allow
-  bash:
-    "scripts/allowed-risk.sh *": allow #nolint RC001: sandboxed
-    "scripts/open-risk.sh *": allow
----
-same
-`)
-
-	result, err := Lint(runtimeRoot, new(config.Config))
-	require.NoError(t, err)
-
-	assert.Equal(t, []Finding{
-		{Code: rc001, Severity: "error", Path: "agents/same.md", Message: "same can edit scripts/open-risk.sh and execute scripts/open-risk.sh *", keys: []string{"edit", "scripts/open-risk.sh", "bash", "scripts/open-risk.sh *"}},
-		{Code: rc002, Severity: "error", Path: "agents/same.md", Message: "same can read scripts/allowed-risk.sh and execute constrained command scripts/allowed-risk.sh *", keys: []string{"edit", "scripts/allowed-risk.sh", "bash", "scripts/allowed-risk.sh *"}},
-		{Code: rc002, Severity: "error", Path: "agents/same.md", Message: "same can read scripts/open-risk.sh and execute constrained command scripts/open-risk.sh *", keys: []string{"edit", "scripts/open-risk.sh", "bash", "scripts/open-risk.sh *"}},
-	}, result.Findings)
 }
 
 func TestLintReportsBadSuppressions(t *testing.T) {
