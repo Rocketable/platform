@@ -93,41 +93,45 @@ func TestGatherFailFastCancelsSibling(t *testing.T) {
 }
 
 func TestMapConcurrencyLimit(t *testing.T) {
-	var (
-		mu      sync.Mutex
-		current int
-		maxSeen int
-	)
+	synctest.Test(t, func(t *testing.T) {
+		var (
+			mu      sync.Mutex
+			current int
+			maxSeen int
+		)
 
-	_, err := Run(t.Context(), `def main():
+		got, err := Run(t.Context(), `def main():
     return map([1, 2, 3, 4, 5], lambda n: work(n=n), concurrency=2)
 `, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
-		Name: "work",
-		Call: func(_ context.Context, _ map[string]any) (string, error) {
-			mu.Lock()
+			Name: "work",
+			Call: func(_ context.Context, args map[string]any) (string, error) {
+				mu.Lock()
 
-			current++
-			if current > maxSeen {
-				maxSeen = current
-			}
-			mu.Unlock()
+				current++
+				maxSeen = max(maxSeen, current)
+				mu.Unlock()
 
-			time.Sleep(40 * time.Millisecond)
+				time.Sleep(time.Duration(6-int(args["n"].(float64))) * 10 * time.Millisecond)
 
-			mu.Lock()
-			current--
-			mu.Unlock()
+				mu.Lock()
+				current--
+				mu.Unlock()
 
-			return "ok", nil
-		},
-	}})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
+				return fmt.Sprint(args["n"]), nil
+			},
+		}})
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
 
-	if maxSeen > 2 {
-		t.Fatalf("max in-flight = %d, want <= 2", maxSeen)
-	}
+		if got != `["1","2","3","4","5"]` {
+			t.Fatalf("Run() = %q, want [\"1\",\"2\",\"3\",\"4\",\"5\"]", got)
+		}
+
+		if maxSeen != 2 {
+			t.Fatalf("max in-flight = %d, want 2", maxSeen)
+		}
+	})
 }
 
 func TestToolCallObserverReceivesConcurrencyPath(t *testing.T) {
