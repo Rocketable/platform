@@ -597,7 +597,7 @@ func listedBackgroundJobs(jobs []backgroundJob, conversationID string) []protoco
 		job := &jobs[i]
 
 		listed[i] = protocol.BackgroundJob{ID: job.jobID, Kind: string(job.kind.tool()), State: string(job.status), Label: job.label, ToolCallID: job.callID, SubagentKey: job.subagentKey, Hidden: job.conversationID != conversationID}
-		if job.status == backgroundStopped {
+		if job.status == backgroundStopped && slices.Contains([]backgroundStopError{errStoppedByUser, errStoppedByAgent}, backgroundStopError(job.result)) {
 			listed[i].StoppedBy = strings.TrimPrefix(job.result, "stopped by ")
 		}
 	}

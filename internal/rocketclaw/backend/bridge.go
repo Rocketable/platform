@@ -2504,15 +2504,25 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	// A subagent session's wake turn, which no task call awaits, answers its parent as a task call would
-	// (finishTurn). A resumed turn reviews its answer again.
+	// (finishTurn). One that took a queued input, a task's, reports nothing, since that task call reviews
+	// the answer. A resumed turn reviews its answer again.
 	if b.parent != "" && msg.Metadata[backgroundNotesMetadataKey] != "" {
-		var parent ThreadState
-		if parent, _, err = b.config.SessionService.Thread(b.parent); err != nil {
+		var taken bool
+		if err := queryScalar(ctx, b.config.SessionService.db, "read wake turn's queued inputs", `SELECT count(*) > 0 FROM turns q
+JOIN steps s ON s.conversation_id = q.conversation_id AND s.key = $2 AND s.value::jsonb->'applied_input_ids' ? q.input_id
+WHERE q.conversation_id = $1 AND q.phase = 'waiting'`, &taken, b.config.ConversationID, turnID); err != nil {
 			return result, err
 		}
 
-		if finish.report, err = looper.ReviewTask(ctx, parent.Agent, strings.Join(prepared.Texts, "\n\n"), result.text); err != nil {
-			return result, fmt.Errorf("review subagent answer: %w", err)
+		if !taken {
+			var parent ThreadState
+			if parent, _, err = b.config.SessionService.Thread(b.parent); err != nil {
+				return result, err
+			}
+
+			if finish.report, err = looper.ReviewTask(ctx, parent.Agent, strings.Join(prepared.Texts, "\n\n"), result.text); err != nil {
+				return result, fmt.Errorf("review subagent answer: %w", err)
+			}
 		}
 	}
 

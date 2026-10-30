@@ -9,7 +9,7 @@ permission:
     "main-*": "allow"
   rocketclaw:
     rocketclaw_restart: "allow"
-    rocketclaw_sessions: "allow"
+    rocketclaw_sessions: "auto"
     rocketclaw_store: "allow"
     rocketclaw_read: "allow"
     rocketclaw_delete: "allow"
