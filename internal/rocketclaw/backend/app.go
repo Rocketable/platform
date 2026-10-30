@@ -45,7 +45,6 @@ type lockedRun struct {
 	cancel     context.CancelFunc
 	detach     func() bool
 	signal     <-chan struct{}
-	cfg        *config.LockedConfig
 	configPath string
 	logger     *slog.Logger
 	assemble   FrontendAssembler
@@ -153,7 +152,6 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		cancel:     cancel,
 		detach:     detach,
 		signal:     ctx.Done(),
-		cfg:        config.NewLockedConfig(cfg),
 		configPath: configPath,
 		logger:     logger,
 		assemble:   assemble,
@@ -164,8 +162,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 func (s *lockedRun) Run(runCtx context.Context) error {
 	s.detach()
 
-	cfg, configPath, logger, rocketcodeSessions := s.cfg.Clone(), s.configPath, s.logger, s.sessions
-	rocketcodeSessions.definitions = s.cfg
+	cfg, configPath, logger, rocketcodeSessions := s.sessions.definitions.Clone(), s.configPath, s.logger, s.sessions
 	rt := new(Runtime)
 	workCtx, cancelWork := context.WithCancelCause(runCtx)
 
@@ -187,7 +184,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		return fmt.Errorf("sync rocketclaw skeleton: %w", err)
 	}
 
-	if err := validateRuntimeAssets(s.cfg, cfg.RuntimeDirName()); err != nil {
+	if err := validateRuntimeAssets(rocketcodeSessions.definitions, cfg.RuntimeDirName()); err != nil {
 		return err
 	}
 
@@ -214,7 +211,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 
 	questions := &webQuestions{store: rocketcodeSessions, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}
 
-	threadBridges = newThreadBridgeManager(s.cfg, rocketcodeSessions, logger, conversationFactory{rt: rt, restart: shutdown})
+	threadBridges = newThreadBridgeManager(rocketcodeSessions.definitions, rocketcodeSessions, logger, conversationFactory{rt: rt, restart: shutdown})
 	background = newBackgroundRegistry(rocketcodeSessions, threadBridges, logger.With("component", "background_jobs"))
 	rocketcodeSessions.jobs = background
 	rocketcodeSessions.historyWorkers = threadBridges
@@ -244,7 +241,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 	}()
 
 	*rt = Runtime{
-		Cfg: s.cfg, Log: logger, RunCtx: runCtx,
+		Cfg: rocketcodeSessions.definitions, Log: logger, RunCtx: runCtx,
 		Sessions:          rocketcodeSessions,
 		ExternalMCPUsers:  externalMCPUsers,
 		ExternalMCPAgents: inertExternalMCPAgents{}, assemble: s.assemble,
