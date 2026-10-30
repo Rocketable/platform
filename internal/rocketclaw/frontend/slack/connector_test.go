@@ -400,7 +400,7 @@ func TestStartStopCancelsInboundContext(t *testing.T) {
 
 	require.NoError(t, connector.Authenticate())
 	assert.Equal(t, "UBOT", connector.botUserID)
-	require.NoError(t, connector.Start(context.Background()))
+	connector.Start(context.Background())
 	<-started
 	<-refreshStarted
 	require.NoError(t, connector.Stop(context.Background()))

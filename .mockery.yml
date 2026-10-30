@@ -14,6 +14,10 @@ packages:
       FrontendAssembler:
         configs:
           - structname: frontendAssemblerMock
+          - dir: '{{.ConfigDir}}/cmd/rocketclaw'
+            pkgname: main
+            structname: FrontendAssemblerMock
+            inpackage: false
           - dir: '{{.ConfigDir}}/internal/rocketclaw/frontend/rpc'
             pkgname: rpc
             structname: mockFrontendAssembler
@@ -27,13 +31,9 @@ packages:
       externalMCPAgents:
         config:
           structname: externalMCPAgentsMock
-      SlackFrontend:
-        configs:
-          - structname: slackFrontendMock
-          - dir: '{{.ConfigDir}}/cmd/rocketclaw'
-            pkgname: main
-            structname: SlackFrontendMock
-            inpackage: false
+      slackLookup:
+        config:
+          structname: slackLookupMock
       backgroundNotes:
         config:
           structname: backgroundNotesMock

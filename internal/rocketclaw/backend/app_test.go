@@ -75,24 +75,6 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 		threadID    = protocol.SlackThreadConversationID("C123", "111.0")
 	)
 
-	slack := &slackFrontendMock{
-		StartFunc: func(context.Context) error {
-			order = append(order, "slack started")
-			return nil
-		},
-		StopFunc: func(cleanupCtx context.Context) error {
-			require.NoError(t, cleanupCtx.Err())
-			require.NoError(t, ctx.Err(), "restart shuts down without the caller's signal")
-			require.True(t, assembledRT.threads.stopping, "bridges stop before frontends")
-			require.ErrorIs(t, assembledRT.RunCtx.Err(), context.Canceled, "the run lock context ends after bridges and before frontends")
-
-			order = append(order, "slack stopped")
-
-			require.NoError(t, resources[0].Close())
-
-			return nil
-		},
-	}
 	assembler := &frontendAssemblerMock{
 		ValidateAssetsFunc: func(got *config.Config, runtimeDir string) error {
 			require.Equal(t, cfg, got)
@@ -106,7 +88,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 
 			return nil
 		},
-		AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+		AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 			assembledRT = rt
 			require.Equal(t, cfg, rt.Cfg.Clone())
 			require.NoError(t, rt.RunCtx.Err())
@@ -133,8 +115,19 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 
 			order = append(order, "assembled")
 
-			return slack, rt.RunCtx.Done(), []func(context.Context) error{
-				slack.Stop,
+			return rt.RunCtx.Done(), []func(context.Context) error{
+				func(cleanupCtx context.Context) error {
+					require.NoError(t, cleanupCtx.Err())
+					require.NoError(t, ctx.Err(), "restart shuts down without the caller's signal")
+					require.True(t, assembledRT.threads.stopping, "bridges stop before frontends")
+					require.ErrorIs(t, assembledRT.RunCtx.Err(), context.Canceled, "the run lock context ends after bridges and before frontends")
+
+					order = append(order, "slack stopped")
+
+					require.NoError(t, resources[0].Close())
+
+					return nil
+				},
 				func(cleanupCtx context.Context) error {
 					require.NoError(t, cleanupCtx.Err())
 
@@ -165,7 +158,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	require.NoError(t, seed.Stop())
 
 	require.ErrorIs(t, Run(ctx, cfg, configPath, slog.New(slog.DiscardHandler), assembler), ErrRestartRequested)
-	require.Equal(t, []string{"validated", "validated", "assembled", "slack started", "slack stopped", "extra stopped"}, order)
+	require.Equal(t, []string{"validated", "validated", "assembled", "slack stopped", "extra stopped"}, order)
 
 	for _, resource := range resources {
 		_, err := resource.Stat()
@@ -220,7 +213,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 		copyDone := make(chan struct{})
 		assembler := &frontendAssemblerMock{
 			ValidateAssetsFunc: func(*config.Config, string) error { return nil },
-			AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+			AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 				events := rt.Subscribe(rt.RunCtx)
 				go func() {
 					for event := range events {
@@ -232,10 +225,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 					}
 				}()
 
-				return &slackFrontendMock{
-					StartFunc: func(context.Context) error { return nil },
-					StopFunc:  func(context.Context) error { return nil },
-				}, copyDone, nil, nil
+				return copyDone, nil, nil
 			},
 		}
 
@@ -429,21 +419,10 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 
 			runtimes := make(chan *Runtime, 1)
 
-			slack := &slackFrontendMock{
-				StartFunc: func(context.Context) error { return nil },
-				StopFunc: func(context.Context) error {
-					if background {
-						assert.NoFileExists(t, finished, "background bash is killed")
-					} else {
-						assert.FileExists(t, finished, "frontends stop only after bash finishes")
-					}
-
-					return nil
-				},
-			}
+			stops := 0
 			assembler := &frontendAssemblerMock{
 				ValidateAssetsFunc: func(*config.Config, string) error { return nil },
-				AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+				AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 					runtimes <- rt
 
 					msg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "wait for it"}, true)
@@ -451,7 +430,17 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 					_, err := rt.TextRouter.SubmitMention(rt.RunCtx, "waiter", protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}, msg)
 					require.NoError(t, err)
 
-					return slack, nil, []func(context.Context) error{slack.Stop}, nil
+					return nil, []func(context.Context) error{func(context.Context) error {
+						stops++
+
+						if background {
+							assert.NoFileExists(t, finished, "background bash is killed")
+						} else {
+							assert.FileExists(t, finished, "frontends stop only after bash finishes")
+						}
+
+						return nil
+					}}, nil
 				},
 			}
 
@@ -505,7 +494,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 				t.Fatal("shutdown did not finish after bash")
 			}
 
-			assert.Len(t, slack.StopCalls(), 1)
+			assert.Equal(t, 1, stops)
 
 			if !background {
 				assert.Contains(t, logs.String(), `msg="shutdown waiting for running tool calls" component=thread_bridges conversation_id=slack-thread:C123:111.0`)
@@ -533,8 +522,8 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 			go func() {
 				done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), &frontendAssemblerMock{
 					ValidateAssetsFunc: func(*config.Config, string) error { return nil },
-					AssembleFunc: func(*Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
-						return slack, nil, nil, nil
+					AssembleFunc: func(*Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+						return nil, nil, nil
 					},
 				})
 			}()
@@ -592,26 +581,17 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 	ctx, signal := context.WithCancel(t.Context())
 	defer signal()
 
-	var assembled *Runtime
-
-	slack := &slackFrontendMock{
-		StopFunc: func(context.Context) error { return nil },
-	}
-	slack.StartFunc = func(context.Context) error {
-		msg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "first message"}, true)
-		msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
-
-		if _, err := assembled.TextRouter.SubmitMention(assembled.RunCtx, "main", protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}, msg); err != nil {
-			return fmt.Errorf("submit startup message: %w", err)
-		}
-
-		return nil
-	}
 	assembler := &frontendAssemblerMock{
 		ValidateAssetsFunc: func(*config.Config, string) error { return nil },
-		AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
-			assembled = rt
-			return slack, nil, []func(context.Context) error{slack.Stop}, nil
+		AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+			msg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "first message"}, true)
+			msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
+
+			if _, err := rt.TextRouter.SubmitMention(rt.RunCtx, "main", protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}, msg); err != nil {
+				return nil, nil, fmt.Errorf("submit startup message: %w", err)
+			}
+
+			return nil, nil, nil
 		},
 	}
 
@@ -628,7 +608,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 		t.Fatal("the startup Slack message never ran")
 	}
 
-	assert.Len(t, slack.StartCalls(), 1)
+	assert.Len(t, assembler.AssembleCalls(), 1)
 	signal()
 	require.NoError(t, <-done)
 }

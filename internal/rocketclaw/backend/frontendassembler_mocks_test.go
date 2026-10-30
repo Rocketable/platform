@@ -21,7 +21,7 @@ var _ FrontendAssembler = &frontendAssemblerMock{}
 //
 //		// make and configure a mocked FrontendAssembler
 //		mockedFrontendAssembler := &frontendAssemblerMock{
-//			AssembleFunc: func(runtime *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+//			AssembleFunc: func(runtime *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 //				panic("mock out the Assemble method")
 //			},
 //			ValidateAssetsFunc: func(config1 *config.Config, s string) error {
@@ -35,7 +35,7 @@ var _ FrontendAssembler = &frontendAssemblerMock{}
 //	}
 type frontendAssemblerMock struct {
 	// AssembleFunc mocks the Assemble method.
-	AssembleFunc func(runtime *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error)
+	AssembleFunc func(runtime *Runtime) (<-chan struct{}, []func(context.Context) error, error)
 
 	// ValidateAssetsFunc mocks the ValidateAssets method.
 	ValidateAssetsFunc func(config1 *config.Config, s string) error
@@ -60,7 +60,7 @@ type frontendAssemblerMock struct {
 }
 
 // Assemble calls AssembleFunc.
-func (mock *frontendAssemblerMock) Assemble(runtime *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+func (mock *frontendAssemblerMock) Assemble(runtime *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 	if mock.AssembleFunc == nil {
 		panic("frontendAssemblerMock.AssembleFunc: method is nil but FrontendAssembler.Assemble was just called")
 	}

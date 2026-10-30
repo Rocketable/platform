@@ -38,7 +38,7 @@ func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 		RunCtx: ctx,
 	}
 	rt.ExternalMCPAgents = &mcpAgentIndex{cfg: rt.Cfg}
-	_, _, _, err := processAssembler{}.Assemble(rt)
+	_, _, err := processAssembler{}.Assemble(rt)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "start Slack connector")
 }
@@ -57,36 +57,37 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+	configPath := filepath.Join(workspace, "rocketclaw.json")
+	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.users.json"), []byte(`{"alice":"secret"}`), 0o600))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	rt := &backend.Runtime{
-		Cfg: config.NewLockedConfig(&config.Config{
-			Workspace: workspace,
-			Slack: config.SlackConfig{
-				BotToken: "xoxb-test", AppToken: "xapp-test",
-				Channels: []config.SlackChannelConfig{{Channel: "@"}, {Channel: "#ops", Agents: []string{"main"}}},
-			},
-			MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0"},
-			Web:         config.WebConfig{ListenAddress: "127.0.0.1:0"},
-		}),
-		Log:              slog.New(slog.DiscardHandler),
-		RunCtx:           ctx,
-		Sessions:         sessions,
-		ExternalMCPUsers: map[string]string{"alice": "secret"},
+	cfg := &config.Config{
+		Workspace:   workspace,
+		DatabaseURL: dsn,
+		Slack: config.SlackConfig{
+			BotToken: "xoxb-test", AppToken: "xapp-test",
+			Channels: []config.SlackChannelConfig{{Channel: "@"}, {Channel: "#ops", Agents: []string{"main"}}},
+		},
+		MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0"},
+		Web:         config.WebConfig{ListenAddress: "127.0.0.1:0"},
 	}
-	rt.ExternalMCPAgents = &mcpAgentIndex{cfg: rt.Cfg}
-	front, done, stops, err := processAssembler{}.Assemble(rt)
-	require.NoError(t, err)
-	require.NotNil(t, front)
-	require.NotNil(t, done)
-	require.Len(t, stops, 4, "Slack, Cron, external MCP, and Web must all start")
-	cancel()
-	<-done
-	for _, stop := range stops {
-		require.NoError(t, stop(context.Background()))
-	}
+	require.NoError(t, backend.Run(t.Context(), cfg, configPath, slog.New(slog.DiscardHandler), &FrontendAssemblerMock{
+		ValidateAssetsFunc: processAssembler{}.ValidateAssets,
+		AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+			rt.RunCtx = ctx
+			done, stops, err := processAssembler{}.Assemble(rt)
+			require.NoError(t, err)
+			require.NotNil(t, done)
+			require.Len(t, stops, 4, "Slack, Cron, external MCP, and Web must all start")
+			cancel()
+			<-done
+			for _, stop := range stops {
+				require.NoError(t, stop(context.Background()))
+			}
+
+			return done, nil, nil
+		},
+	}))
 }

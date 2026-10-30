@@ -278,7 +278,7 @@ func (c *Connector) Authenticate() error {
 }
 
 // Start begins consuming Slack input; call it after Authenticate.
-func (c *Connector) Start(ctx context.Context) error {
+func (c *Connector) Start(ctx context.Context) {
 	inboundCtx, inboundStop := context.WithCancel(ctx)
 
 	c.mu.Lock()
@@ -289,8 +289,6 @@ func (c *Connector) Start(ctx context.Context) error {
 	go c.runSocketLoop(inboundCtx)
 
 	c.factsGroup.Go(func() error { return c.refreshChannelFacts(inboundCtx) })
-
-	return nil
 }
 
 // Stop stops Slack socket intake while leaving response delivery usable.

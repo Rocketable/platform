@@ -42,7 +42,7 @@ type searchTestMatch struct {
 // newSessionSearchFixture records the chats of the session-list.test.ts cases,
 // a cron producer, an External MCP private chat and a Delegation History, which
 // Web never shows.
-func newSessionSearchFixture(t *testing.T) (*SessionService, *slackFrontendMock) {
+func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 	t.Helper()
 
 	s := newTestSessionService(t)
@@ -104,7 +104,7 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackFrontendMock)
 		require.NoError(t, err)
 	}
 
-	return s, &slackFrontendMock{
+	return s, &slackLookupMock{
 		SidebarChannelAgentChoicesFunc: func(_ context.Context, channel string) (string, []string, error) {
 			if channel == "C1" {
 				return "support", []string{"main"}, nil

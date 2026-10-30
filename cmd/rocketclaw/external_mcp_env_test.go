@@ -34,7 +34,7 @@ type externalMCPStarted struct {
 
 func (externalMCPAssembler) ValidateAssets(*config.Config, string) error { return nil }
 
-func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 	events := rt.Subscribe(rt.RunCtx)
 	go func() {
 		for event := range events {
@@ -44,17 +44,12 @@ func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (backend.SlackFronte
 
 	server, err := startExternalMCPServer(rt.RunCtx, rt.Cfg.Clone(), nil, &mcpAgentIndex{names: []string{"planner"}}, rt.Sessions, rt, rt.Log)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	a.started <- externalMCPStarted{runtime: rt, server: server}
 
-	slack := &SlackFrontendMock{
-		StartFunc: func(context.Context) error { return nil },
-		StopFunc:  func(context.Context) error { return nil },
-	}
-
-	return slack, make(chan struct{}), []func(context.Context) error{server.Close}, nil
+	return make(chan struct{}), []func(context.Context) error{server.Close}, nil
 }
 
 // An External MCP call and a later turn in its Web chat both run their shell commands with the
