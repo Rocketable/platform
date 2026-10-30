@@ -1326,10 +1326,25 @@ for (const width of [1280, 390]) test(`palette search handoffs stay in their ope
   await focus(page);
   await open();
   await palette.getByRole("button", { name: /^Search: other/ }).waitFor();
+  // A personal save can return the old Shared page after its newer edit was acknowledged.
+  const held = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  let blocked = false;
+  await page.route("**/api/Tabs", async (route: any) => {
+    const input = route.request().postDataJSON();
+    if (input.editShared && !saved.shared.some((tab) => tab.path === "/search/ack")) saved.shared.push({ space: "blue", path: "/search/ack", search: { name: "Acknowledged", searches: [], active: "" } });
+    const response = await route.fetch(), reply = await response.json();
+    if (!blocked && input.state && reply.shared.some((tab: SharedTab) => tab.path === "/search/team" && tab.search?.active === "other")) {
+      blocked = true;
+      held.resolve();
+      await release.promise;
+    }
+    await route.fulfill({ response, json: reply });
+  });
   await input.fill("Alpha");
   await input.press("ArrowUp");
   await input.press("ArrowDown");
   await page.waitForURL(`**${href("alpha")}`);
+  await held.promise;
   await input.fill("needle");
   await page.waitForURL((url: URL) => url.pathname === broad);
   await input.press("End");
@@ -1341,6 +1356,31 @@ for (const width of [1280, 390]) test(`palette search handoffs stay in their ope
   const local = new URL(page.url()).pathname;
   expect(local).toBe("/search/team");
   await until(() => saved.shared.find((tab) => tab.path === local)?.search?.active === "local");
+  // This row arrives only with the edit reply, not with its optimistic cache update.
+  await open();
+  await input.fill("Acknowledged");
+  await palette.getByRole("button", { name: /^Search: Acknowledged/ }).waitFor();
+  await page.keyboard.press("Escape");
+  const queries = await page.evaluateHandle(() => {
+    const queries: string[] = [];
+    const replace = history.replaceState.bind(history);
+    history.replaceState = (...args: Parameters<History["replaceState"]>) => {
+      queries.push(new URL(String(args[2]), location.origin).searchParams.get("q") ?? "");
+      replace(...args);
+    };
+    return queries;
+  });
+  const resumed = page.waitForResponse((response: any) => response.url().endsWith("/api/Tabs") && !!response.request().postDataJSON().state);
+  const nextSave = page.waitForRequest((request: any) => request.url().endsWith("/api/Tabs") && !!request.postDataJSON().state);
+  release.resolve();
+  await (await resumed).finished();
+  await nextSave;
+  await open();
+  await input.fill("Acknowledged");
+  await palette.getByRole("button", { name: /^Search: Acknowledged/ }).waitFor();
+  await page.keyboard.press("Escape");
+  expect(await queries.jsonValue()).not.toContain("other");
+  await page.unroute("**/api/Tabs");
   await page.reload();
   await page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true }).waitFor();
   await at(scoped);

@@ -1011,12 +1011,20 @@ const isShared = (shared: SavedTabs["shared"], space: string, path: string) => !
 const muteOf = (mutes: SavedTabs["mutes"], path: string) => mutes.find((mute) => mute.path === path && (!mute.until || Date.parse(mute.until) > Date.now()));
 
 // Every Tabs reply carries every space's Shared tabs and this person's mutes, which replace the cached ones when they
-// changed, as a cache write redraws the app; this person's tabs are left to the revision merge in useTabs.
+// changed, unless a personal save raced a cache change; this person's tabs are left to the revision merge in useTabs.
 // received sees the reply before the cache takes it.
 async function tabsCall(input: Parameters<typeof mutations.tabs>[0], received?: (reply: SavedTabs) => void) {
+  const cached = queryClient.getQueriesData<SavedTabs>({ queryKey: ["tabs"] });
   const reply = await mutations.tabs(input);
   received?.(reply);
-  queryClient.setQueriesData<SavedTabs>({ queryKey: ["tabs"] }, (old) => old && !reply.stale && JSON.stringify([old.shared, old.mutes]) !== JSON.stringify([reply.shared, reply.mutes]) ? { ...old, shared: reply.shared, mutes: reply.mutes } : undefined);
+  for (const [key, before] of cached) queryClient.setQueryData<SavedTabs>(key, (old) => {
+    if (!old) return;
+    // A personal save's incidental snapshots must not undo changes received while it was in flight.
+    const shared = input.state && old.shared !== before?.shared ? old.shared : reply.shared;
+    const mutes = input.state && old.mutes !== before?.mutes ? old.mutes : reply.mutes;
+    if (reply.stale) return input.state ? { ...reply, shared, mutes } : undefined;
+    return JSON.stringify([old.shared, old.mutes]) !== JSON.stringify([shared, mutes]) ? { ...old, shared, mutes } : undefined;
+  });
   return reply;
 }
 
@@ -1110,7 +1118,7 @@ function useTabs() {
     queue.saving = true;
     queue.next = undefined;
     void tabsCall({ state: sent, revision: queue.revision }).then((reply) => {
-      if (reply.stale) return void queryClient.setQueriesData({ queryKey: ["tabs"] }, reply);
+      if (reply.stale) return;
       [queue.base, queue.revision] = [sent, Number(reply.revision)];
       if (!queue.next) queue.dirty = false;
     }, () => undefined).finally(() => {
