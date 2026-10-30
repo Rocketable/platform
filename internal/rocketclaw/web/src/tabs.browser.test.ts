@@ -5,7 +5,7 @@ import type { SearchPage } from "./types";
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
-const rows: { id: string; name: string; agent: string; running?: boolean; background?: boolean; spaceId?: string; unreadAt?: string; asking?: boolean }[] = [
+const rows: { id: string; name: string; agent: string; running?: boolean; background?: boolean; spaceId?: string; unreadAt?: string; asking?: boolean; forkedFrom?: string }[] = [
   { id: "alpha", name: "Alpha", agent: "main" },
   { id: "bravo", name: "Bravo", agent: "main" },
   { id: "charlie", name: "Charlie", agent: "main" },
@@ -16,6 +16,7 @@ const rows: { id: string; name: string; agent: string; running?: boolean; backgr
   { id: "foxtrot", name: "Foxtrot", agent: "main", running: true, unreadAt: "2026-10-22T10:00:00Z" },
   // Golf's running turn waits on the person's answer.
   { id: "golf", name: "Golf", agent: "main", running: true, asking: true },
+  { id: "hotel", name: "Hotel", agent: "main", forkedFrom: "alpha" },
 ];
 const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
 type SharedTab = { space: string; path: string; search?: SearchPage };
@@ -697,6 +698,14 @@ test("an idle tab with background work shows an hourglass; a running turn keeps 
   expect(await tab("Echo").locator("svg").getAttribute("class")).toContain("lucide-hourglass");
   expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
   expect(await tab("Delta").locator("svg").getAttribute("class")).toContain("lucide-message-square");
+}), 60_000);
+
+test("a forked tab shows a fork glyph in place of the chat icon", () => withPage({}, async (page, origin) => {
+  const tab = strip(page).getByRole("tab", { name: "Hotel", exact: true });
+  await page.goto(`${origin}${href("hotel")}`);
+  await tab.and(page.locator('[aria-description$="Forked session"]')).waitFor();
+  expect(await tab.getAttribute("aria-description")).toBe("Space: Main, Forked session");
+  expect(await tab.locator("svg").getAttribute("class")).toContain("lucide-git-fork");
 }), 60_000);
 
 test("the shimmer visibly sweeps the selected and other running titles in both themes", () => withPage({}, async (page, origin) => {

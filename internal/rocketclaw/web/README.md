@@ -928,7 +928,8 @@ recorded history. The source remains intact, and the fork starts no turn until
 you send a message. Active, unrecorded output and queued work are not copied.
 Copied Completion Notes keep their rows and the scripts' retained oversized output,
 which expires when the source's does; running Background Jobs stay with the source.
-Forked sessions show a fork glyph in session rows. Use **Open original conversation**
+Forked sessions, remote OpenCode forks included, show a fork glyph in session rows,
+and in their tab in place of the chat icon. Use **Open original conversation**
 in the command palette to return to the
 immediate source, or search `is:forked` to find forks.
 Session rows show the title, Slack channel when available, agent name and active
