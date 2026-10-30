@@ -331,8 +331,18 @@ def main(args):
     return helper()
 `)
 
-	if _, err := Load(root, "runtime"); err != nil {
+	definitions, err := Load(root, "runtime")
+	if err != nil {
 		t.Fatalf("Load() error = %v", err)
+	}
+
+	result, err := Run(t.Context(), definitions["test"], RunRequest{RunID: "computed-default"}, &agentRunnerMock{RunFunc: inertAgent})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if result.Text != "3" || result.Silent {
+		t.Fatalf("Run() result = %+v, want computed default 3", result)
 	}
 }
 
@@ -340,17 +350,28 @@ func TestLoadDialectOptions(t *testing.T) {
 	valid := []struct {
 		name string
 		body string
+		want string
 	}{
-		{name: "while", body: "    while False:\n        pass\n    return args"},
-		{name: "set", body: "    values = set([1, 2])\n    return values"},
+		{name: "while", body: "    while False:\n        pass\n    return args", want: "kept"},
+		{name: "set", body: "    values = set([1, 2])\n    return len(values)", want: "2"},
 	}
 	for _, tt := range valid {
 		t.Run(tt.name+" enabled", func(t *testing.T) {
 			root := workflowRoot(t)
 			writeWorkflow(t, root, "test.star", "meta = {\"name\": \"test\", \"description\": \"Test\"}\ndef main(args):\n"+tt.body+"\n")
 
-			if _, err := Load(root, "runtime"); err != nil {
+			definitions, err := Load(root, "runtime")
+			if err != nil {
 				t.Fatalf("Load() error = %v", err)
+			}
+
+			result, err := Run(t.Context(), definitions["test"], RunRequest{RunID: tt.name, Args: "kept"}, &agentRunnerMock{RunFunc: inertAgent})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+
+			if result.Text != tt.want || result.Silent {
+				t.Fatalf("Run() result = %+v, want text %q", result, tt.want)
 			}
 		})
 	}
