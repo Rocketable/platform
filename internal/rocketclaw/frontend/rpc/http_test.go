@@ -12,6 +12,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,10 +35,28 @@ import (
 )
 
 func TestHTTPEventFramingAllocationBudget(t *testing.T) {
+	if os.Getenv("ROCKETCLAW_TEST_EVENT_FRAMING_ALLOCATIONS") != "1" {
+		// The race detector randomly drops gRPC's sync.Pool buffers; measure framing, not that churn.
+		executable := filepath.Join(t.TempDir(), "rpc.test")
+		build := exec.CommandContext(t.Context(), "go", "test", "-c", "-race=false", "-cover=false", "-o", executable, ".")
+
+		build.Env = append(os.Environ(), "GOGC=100", "GOMEMLIMIT=off")
+		output, err := build.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+
+		cmd := exec.CommandContext(t.Context(), executable, "-test.run=^"+t.Name()+"$", "-test.cpu="+strconv.Itoa(runtime.GOMAXPROCS(0)))
+
+		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_EVENT_FRAMING_ALLOCATIONS=1", "GOGC=100", "GOMEMLIMIT=off")
+		output, err = cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+
+		return
+	}
+
 	result := testing.Benchmark(BenchmarkHTTPEventFraming)
 	require.Positive(t, result.N)
-	// Allow transport and race instrumentation, but not a fresh JSON buffer for every row.
-	require.Less(t, result.AllocedBytesPerOp(), int64(9<<20))
+	// Plain transport uses about 2 MiB; a fresh JSON buffer for every row exceeds 3 MiB.
+	require.Less(t, result.AllocedBytesPerOp(), int64(3<<20))
 }
 
 func BenchmarkHTTPEventFraming(b *testing.B) {
