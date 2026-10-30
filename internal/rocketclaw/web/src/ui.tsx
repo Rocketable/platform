@@ -5512,11 +5512,6 @@ function ConfigList({ items, empty }: { items: ConfigItem[]; empty: string }) {
 function ConfigLoaded({ view }: { view: ConfigView }) {
   const identity = useQuery(queries.identity());
   const overlays: ConfigItem[] = (view.overlays ?? []).map((overlay) => ({ key: overlay, label: overlay }));
-  const models: ConfigItem[] = (view.models ?? []).map((model, index) => ({
-    key: `${model.name ?? ""}-${index}`,
-    label: model.name ?? model.model ?? "",
-    detail: model.name && model.model ? [model.model] : [],
-  }));
   const channels: ConfigItem[] = (view.slackChannels ?? []).map((channel, index) => ({
     key: `${channel.channel ?? ""}-${index}`,
     label: channel.channel ?? "",
@@ -5532,7 +5527,6 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
       </ConfigSection>
       <ConfigSection title="Models">
         <ConfigRow label="Auto-approver" value={view.autoApproverModel ?? ""} />
-        <ConfigList items={models} empty="No models" />
       </ConfigSection>
       <ConfigSection title="Web">
         <ConfigRow label="Configured user" value={identity.data?.username ?? ""} />

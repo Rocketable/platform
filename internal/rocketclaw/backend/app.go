@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"os"
 	"runtime/metrics"
-	"slices"
 	"sync"
 	"time"
 
@@ -359,17 +357,8 @@ func validateWorkflowDefinitions(cfg *config.Config, runtimeDir string) (err err
 	}
 	defer func() { err = errors.Join(err, root.Close()) }()
 
-	definitions, err := workflow.Load(root, runtimeDir)
-	if err != nil {
+	if _, err = workflow.Load(root, runtimeDir); err != nil {
 		return fmt.Errorf("validate workflow definitions: %w", err)
-	}
-
-	for _, name := range slices.Sorted(maps.Keys(definitions)) {
-		for _, model := range definitions[name].WorkerModels {
-			if _, ok := cfg.Models[model]; !ok {
-				return fmt.Errorf("validate workflow definitions: workflow worker model %q is not configured", model)
-			}
-		}
 	}
 
 	return nil

@@ -120,15 +120,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	}
 
 	if request.Worker.Model != "" {
-		model, ok := r.cfg.Models[request.Worker.Model]
-		if !ok {
-			return nil, fmt.Errorf("workflow worker model %q is not configured", request.Worker.Model)
-		}
-
-		active.Model, err = r.cfg.RenderAgentModel(model)
-		if err != nil {
-			return nil, fmt.Errorf("render workflow worker model %q: %w", request.Worker.Model, err)
-		}
+		active.Model = request.Worker.Model
 	}
 
 	callAgents.Items[r.agent] = active

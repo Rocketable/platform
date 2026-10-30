@@ -2792,7 +2792,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 		return harness.Agents{}, harness.Skills{}, fmt.Errorf("open skills dir: %w", err)
 	}
 
-	agents, err := loadAgentDefinitions(agentsFS, cfg)
+	agents, err := loadAgentDefinitions(agentsFS)
 	if err != nil {
 		return harness.Agents{}, harness.Skills{}, err
 	}
@@ -2869,8 +2869,8 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 }
 
 // loadAgentDefinitions keeps comparison failures separate from ordinary definitions.
-func loadAgentDefinitions(fsys fs.FS, cfg *config.Config) (harness.Agents, error) {
-	result := harness.LoadAgents(fsys, cfg)
+func loadAgentDefinitions(fsys fs.FS) (harness.Agents, error) {
+	result := harness.LoadAgents(fsys)
 
 	var errLoads []error
 

@@ -728,7 +728,7 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 		return nil, fmt.Errorf("open shadow agents directory: %w", err)
 	}
 
-	definitions, err := loadAgentDefinitions(agentsFS, cfg)
+	definitions, err := loadAgentDefinitions(agentsFS)
 	if err != nil {
 		return nil, err
 	}

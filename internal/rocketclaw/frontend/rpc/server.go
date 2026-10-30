@@ -1132,10 +1132,6 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 		view.TailscaleUser = username
 	}
 
-	for _, name := range slices.Sorted(maps.Keys(cfg.Models)) {
-		view.Models = append(view.Models, &ConfigModel{Name: name, Model: cfg.Models[name]})
-	}
-
 	for _, channel := range cfg.Slack.Channels {
 		view.SlackChannels = append(view.SlackChannels, &ConfigChannel{Channel: channel.Channel, Agents: slices.Clone(channel.Agents)})
 	}

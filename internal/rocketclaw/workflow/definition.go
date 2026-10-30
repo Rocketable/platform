@@ -28,11 +28,10 @@ var workflowNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // Definition is a compiled workflow definition.
 type Definition struct {
-	Name         string
-	Description  string
-	Phases       []string
-	WorkerModels []string
-	program      *starlark.Program
+	Name        string
+	Description string
+	Phases      []string
+	program     *starlark.Program
 }
 
 // Descriptions returns sorted name/description pairs for loaded definitions.
@@ -146,7 +145,7 @@ func Compile(filename, name, source string) (*Definition, error) {
 		return nil, fmt.Errorf("validate top-level syntax: %w", errParse)
 	}
 
-	definitionName, description, phases, workerModels, errValidate := validateFile(options, file, name)
+	definitionName, description, phases, errValidate := validateFile(options, file, name)
 	if errValidate != nil {
 		return nil, errValidate
 	}
@@ -174,15 +173,14 @@ func Compile(filename, name, source string) (*Definition, error) {
 	}
 
 	return &Definition{
-		Name:         definitionName,
-		Description:  description,
-		Phases:       phases,
-		WorkerModels: workerModels,
-		program:      program,
+		Name:        definitionName,
+		Description: description,
+		Phases:      phases,
+		program:     program,
 	}, nil
 }
 
-func validateFile(options *syntax.FileOptions, file *syntax.File, filenameStem string) (name, description string, phases, workerModels []string, err error) {
+func validateFile(options *syntax.FileOptions, file *syntax.File, filenameStem string) (name, description string, phases []string, err error) {
 	functions := make(map[string]*syntax.DefStmt)
 	literals := make(map[string]syntax.Expr)
 
@@ -193,12 +191,12 @@ func validateFile(options *syntax.FileOptions, file *syntax.File, filenameStem s
 		case *syntax.DefStmt:
 			functions[statement.Name.Name] = statement
 			if errBody := validateFunctionBody(statement); errBody != nil {
-				return "", "", nil, nil, errBody
+				return "", "", nil, errBody
 			}
 		case *syntax.AssignStmt:
 			identifier, ok := statement.LHS.(*syntax.Ident)
 			if !ok || statement.Op != syntax.EQ {
-				return "", "", nil, nil, errors.New("top-level assignments must bind one name")
+				return "", "", nil, errors.New("top-level assignments must bind one name")
 			}
 
 			if identifier.Name == "meta" {
@@ -206,52 +204,47 @@ func validateFile(options *syntax.FileOptions, file *syntax.File, filenameStem s
 
 				meta, ok = statement.RHS.(*syntax.DictExpr)
 				if !ok || !isJSONLiteral(statement.RHS) {
-					return "", "", nil, nil, errors.New("meta must be a literal dict")
+					return "", "", nil, errors.New("meta must be a literal dict")
 				}
 
 				continue
 			}
 
 			if call, ok := statement.RHS.(*syntax.CallExpr); ok {
-				model, errWorker := validateWorker(call)
-				if errWorker != nil {
-					return "", "", nil, nil, errWorker
-				}
-
-				if model != "" {
-					workerModels = append(workerModels, model)
+				if errWorker := validateWorker(call); errWorker != nil {
+					return "", "", nil, errWorker
 				}
 
 				continue
 			}
 
 			if !isJSONLiteral(statement.RHS) {
-				return "", "", nil, nil, fmt.Errorf("global %s must be a JSON-compatible literal", identifier.Name)
+				return "", "", nil, fmt.Errorf("global %s must be a JSON-compatible literal", identifier.Name)
 			}
 
 			literals[identifier.Name] = statement.RHS
 		case *syntax.LoadStmt:
-			return "", "", nil, nil, errors.New("load statements are not allowed")
+			return "", "", nil, errors.New("load statements are not allowed")
 		default:
-			return "", "", nil, nil, errors.New("top-level statements must be function definitions or assignments")
+			return "", "", nil, errors.New("top-level statements must be function definitions or assignments")
 		}
 	}
 
 	if meta == nil {
-		return "", "", nil, nil, errors.New("meta must be a literal dict")
+		return "", "", nil, errors.New("meta must be a literal dict")
 	}
 
 	if errSchema := validateAgentSchemas(options, file, literals); errSchema != nil {
-		return "", "", nil, nil, errSchema
+		return "", "", nil, errSchema
 	}
 
 	if errFanout := validateNestedFanout(file, functions); errFanout != nil {
-		return "", "", nil, nil, errFanout
+		return "", "", nil, errFanout
 	}
 
 	name, description, phases, err = parseMeta(meta, filenameStem)
 
-	return name, description, phases, workerModels, err
+	return name, description, phases, err
 }
 
 func validateFunctionBody(statement *syntax.DefStmt) error {
@@ -445,16 +438,14 @@ func isJSONLiteral(expression syntax.Expr) bool {
 	}
 }
 
-func validateWorker(call *syntax.CallExpr) (string, error) {
-	workerModel := ""
-
+func validateWorker(call *syntax.CallExpr) error {
 	function, ok := callName(call)
 	if !ok || function != "worker" {
 		if ok {
-			return "", fmt.Errorf("global value must be a literal, not a %s call", function)
+			return fmt.Errorf("global value must be a literal, not a %s call", function)
 		}
 
-		return "", errors.New("top-level calls other than worker are not allowed")
+		return errors.New("top-level calls other than worker are not allowed")
 	}
 
 	arguments := make(map[string]syntax.Expr)
@@ -462,13 +453,13 @@ func validateWorker(call *syntax.CallExpr) (string, error) {
 	for _, argument := range call.Args {
 		named, ok := argument.(*syntax.BinaryExpr)
 		if !ok || named.Op != syntax.EQ {
-			return "", errors.New("worker arguments must be named literals")
+			return errors.New("worker arguments must be named literals")
 		}
 
 		name := named.X.(*syntax.Ident) // The parser requires an identifier before a keyword argument's '='.
 
 		if _, exists := arguments[name.Name]; exists {
-			return "", fmt.Errorf("worker argument %s is duplicated", name.Name)
+			return fmt.Errorf("worker argument %s is duplicated", name.Name)
 		}
 
 		arguments[name.Name] = named.Y
@@ -477,7 +468,7 @@ func validateWorker(call *syntax.CallExpr) (string, error) {
 	for _, required := range []string{"name", "instructions"} {
 		literal, ok := arguments[required].(*syntax.Literal)
 		if !ok || literal.Token != syntax.STRING || strings.TrimSpace(literal.Value.(string)) == "" {
-			return "", fmt.Errorf("worker %s must be a non-empty literal string", required)
+			return fmt.Errorf("worker %s must be a non-empty literal string", required)
 		}
 	}
 
@@ -485,32 +476,30 @@ func validateWorker(call *syntax.CallExpr) (string, error) {
 		switch model := model.(type) {
 		case *syntax.Literal:
 			if model.Token != syntax.STRING || strings.TrimSpace(model.Value.(string)) == "" {
-				return "", errors.New("worker model must be a non-empty literal string or None")
+				return errors.New("worker model must be a non-empty literal string or None")
 			}
-
-			workerModel = model.Value.(string)
 		case *syntax.Ident:
 			if model.Name != "None" {
-				return "", errors.New("worker model must be a literal string or None")
+				return errors.New("worker model must be a literal string or None")
 			}
 		default:
-			return "", errors.New("worker model must be a literal string or None")
+			return errors.New("worker model must be a literal string or None")
 		}
 	}
 
 	if tools, exists := arguments["tools"]; exists {
 		if err := validateWorkerTools(tools); err != nil {
-			return "", err
+			return err
 		}
 	}
 
 	for name := range arguments {
 		if name != "name" && name != "instructions" && name != "model" && name != "tools" {
-			return "", fmt.Errorf("worker argument %s is not supported", name)
+			return fmt.Errorf("worker argument %s is not supported", name)
 		}
 	}
 
-	return workerModel, nil
+	return nil
 }
 
 func validateWorkerTools(tools syntax.Expr) error {

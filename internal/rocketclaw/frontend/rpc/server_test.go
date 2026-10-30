@@ -2003,7 +2003,6 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 
 	emptyConfig, err := invoke[ListConfigResponse](ctx, connection, "ListConfig", &ListConfigRequest{})
 	require.NoError(t, err)
-	require.Empty(t, emptyConfig.Config.Models)
 	require.Empty(t, emptyConfig.Config.Overlays)
 	require.Empty(t, emptyConfig.Config.McpServers)
 
@@ -2013,7 +2012,6 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	}
 
 	cfg.Overlays = []string{"local-overlay"}
-	cfg.Models = map[string]string{"zeta": "gpt-6.1-sol", "alpha": "gpt-5.4"}
 	cfg.Logging.Level, cfg.AutoApproverModel = "info", "gpt-6.1-sol"
 	cfg.MCPExternal.Enabled, cfg.Instrumentation.Enabled = true, true
 	cfg.OpenAI.APIKey, cfg.OpenAI.Auth = "secret-provider-key", "secret-auth-path"
@@ -2029,7 +2027,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	view, err := invoke[ListConfigResponse](ctx, connection, "ListConfig", &ListConfigRequest{})
 	require.NoError(t, err)
 
-	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, Models: []*ConfigModel{{Name: "alpha", Model: "gpt-5.4"}, {Name: "zeta", Model: "gpt-6.1-sol"}}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-6.1-sol", InstrumentationEnabled: true, McpExternal: true, TailscaleUser: "alice"}
+	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-6.1-sol", InstrumentationEnabled: true, McpExternal: true, TailscaleUser: "alice"}
 	require.True(t, proto.Equal(wantConfig, view.Config), "unexpected config view: %v", view.Config)
 	encodedView, err := proto.Marshal(view)
 	require.NoError(t, err)
