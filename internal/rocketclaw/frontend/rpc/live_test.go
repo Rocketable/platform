@@ -104,9 +104,9 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 
 		ready := make(chan *backend.Runtime)
 		assembly := &mockFrontendAssembler{
-			AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+			AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 				ready <- rt
-				return nil, rt.RunCtx.Done(), nil, nil // The public assembler contract permits absent Slack.
+				return rt.RunCtx.Done(), nil, nil
 			},
 			ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 		}
@@ -433,9 +433,9 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	require.NoError(t, root.WriteFile("agents/main.md", []byte(agent+"Original prompt\n"), 0o600))
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan *backend.Runtime)
-	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 		ready <- rt
-		return nil, rt.RunCtx.Done(), nil, nil // Public assembler permits absent Slack.
+		return rt.RunCtx.Done(), nil, nil
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group
@@ -516,9 +516,9 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	require.NoError(t, root.WriteFile("external-effect.txt", []byte("already happened"), 0o600))
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan *backend.Runtime)
-	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 		ready <- rt
-		return nil, rt.RunCtx.Done(), nil, nil // Public assembler permits absent Slack.
+		return rt.RunCtx.Done(), nil, nil
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group

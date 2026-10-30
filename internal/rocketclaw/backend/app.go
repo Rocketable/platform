@@ -37,7 +37,7 @@ const (
 
 // FrontendAssembler constructs Slack and MCP frontends for a running backend.
 type FrontendAssembler interface {
-	Assemble(*Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error)
+	Assemble(*Runtime) (<-chan struct{}, []func(context.Context) error, error)
 	ValidateAssets(*config.Config, string) error
 }
 
@@ -259,20 +259,12 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		return err
 	}
 
-	slack, copyDone, extraStops, err := s.assemble.Assemble(rt)
+	copyDone, extraStops, err := s.assemble.Assemble(rt)
 	if err != nil {
 		return fmt.Errorf("assemble frontends: %w", err)
 	}
 
 	stops = extraStops
-
-	if slack != nil {
-		rt.AttachSlack(slack)
-
-		if err := slack.Start(runCtx); err != nil {
-			return fmt.Errorf("start Slack connector: %w", err)
-		}
-	}
 
 	if err := resumeJobs(runCtx); err != nil {
 		return err

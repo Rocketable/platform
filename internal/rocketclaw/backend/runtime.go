@@ -14,14 +14,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 )
 
-// SlackFrontend is the Slack surface cmd constructs.
-type SlackFrontend interface {
-	Start(context.Context) error
-	Stop(context.Context) error
-	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
-	SlackTagsMatching(context.Context, string) []string
-}
-
 type runtimeReloader interface {
 	Reload(string) (string, error)
 }
@@ -158,7 +150,7 @@ func (r *Runtime) PublishOutbound(ctx context.Context, message *protocol.Outboun
 }
 
 // AttachSlack makes Slack the session search's Slack lookup.
-func (r *Runtime) AttachSlack(slack SlackFrontend) {
+func (r *Runtime) AttachSlack(slack slackLookup) {
 	r.threads.mu.Lock()
 	r.threads.slackLookups = slack
 	r.threads.mu.Unlock()

@@ -187,9 +187,9 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	ready := make(chan *backend.Runtime)
-	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+	assembly := &mockFrontendAssembler{AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 		ready <- rt
-		return nil, rt.RunCtx.Done(), nil, nil // The public assembler contract permits absent Slack.
+		return rt.RunCtx.Done(), nil, nil
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group
