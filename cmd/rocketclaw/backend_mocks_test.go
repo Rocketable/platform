@@ -50,9 +50,6 @@ var _ frontend.Backend = &BackendMock{}
 //			JustBashInstallErrorFunc: func() string {
 //				panic("mock out the JustBashInstallError method")
 //			},
-//			ListConversationsFunc: func(context1 context.Context) ([]protocol.Conversation, error) {
-//				panic("mock out the ListConversations method")
-//			},
 //			MoveToBackgroundFunc: func(context1 context.Context, s string) (bool, error) {
 //				panic("mock out the MoveToBackground method")
 //			},
@@ -131,9 +128,6 @@ type BackendMock struct {
 
 	// JustBashInstallErrorFunc mocks the JustBashInstallError method.
 	JustBashInstallErrorFunc func() string
-
-	// ListConversationsFunc mocks the ListConversations method.
-	ListConversationsFunc func(context1 context.Context) ([]protocol.Conversation, error)
 
 	// MoveToBackgroundFunc mocks the MoveToBackground method.
 	MoveToBackgroundFunc func(context1 context.Context, s string) (bool, error)
@@ -255,11 +249,6 @@ type BackendMock struct {
 		// JustBashInstallError holds details about calls to the JustBashInstallError method.
 		JustBashInstallError []struct {
 		}
-		// ListConversations holds details about calls to the ListConversations method.
-		ListConversations []struct {
-			// Context1 is the context1 argument value.
-			Context1 context.Context
-		}
 		// MoveToBackground holds details about calls to the MoveToBackground method.
 		MoveToBackground []struct {
 			// Context1 is the context1 argument value.
@@ -377,7 +366,6 @@ type BackendMock struct {
 	lockDeleteQueueItem         sync.RWMutex
 	lockEditQueueItem           sync.RWMutex
 	lockJustBashInstallError    sync.RWMutex
-	lockListConversations       sync.RWMutex
 	lockMoveToBackground        sync.RWMutex
 	lockPendingQuestions        sync.RWMutex
 	lockPopQueueItem            sync.RWMutex
@@ -735,38 +723,6 @@ func (mock *BackendMock) JustBashInstallErrorCalls() []struct {
 	mock.lockJustBashInstallError.RLock()
 	calls = mock.calls.JustBashInstallError
 	mock.lockJustBashInstallError.RUnlock()
-	return calls
-}
-
-// ListConversations calls ListConversationsFunc.
-func (mock *BackendMock) ListConversations(context1 context.Context) ([]protocol.Conversation, error) {
-	if mock.ListConversationsFunc == nil {
-		panic("BackendMock.ListConversationsFunc: method is nil but Backend.ListConversations was just called")
-	}
-	callInfo := struct {
-		Context1 context.Context
-	}{
-		Context1: context1,
-	}
-	mock.lockListConversations.Lock()
-	mock.calls.ListConversations = append(mock.calls.ListConversations, callInfo)
-	mock.lockListConversations.Unlock()
-	return mock.ListConversationsFunc(context1)
-}
-
-// ListConversationsCalls gets all the calls that were made to ListConversations.
-// Check the length with:
-//
-//	len(mockedBackend.ListConversationsCalls())
-func (mock *BackendMock) ListConversationsCalls() []struct {
-	Context1 context.Context
-} {
-	var calls []struct {
-		Context1 context.Context
-	}
-	mock.lockListConversations.RLock()
-	calls = mock.calls.ListConversations
-	mock.lockListConversations.RUnlock()
 	return calls
 }
 

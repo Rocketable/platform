@@ -108,30 +108,6 @@ FROM conversations c LEFT JOIN conversations r ON r.conversation_id = c.cron_run
 	return path, run, nil
 }
 
-// ListConversations returns recorded conversations, never discovered pair IDs.
-func (r *Runtime) ListConversations(ctx context.Context) (conversations []protocol.Conversation, err error) {
-	rows, err := r.Sessions.db.QueryContext(ctx, `SELECT conversation_id, agent, created_by FROM conversations WHERE kind <> 'remote' ORDER BY conversation_id`)
-	if err != nil {
-		return nil, fmt.Errorf("list conversations: %w", err)
-	}
-	defer func() { err = errors.Join(err, rows.Close()) }()
-
-	for rows.Next() {
-		var conversation protocol.Conversation
-		if err := rows.Scan(&conversation.ID, &conversation.Agent, &conversation.CreatedBy); err != nil {
-			return nil, fmt.Errorf("read conversation: %w", err)
-		}
-
-		conversations = append(conversations, conversation)
-	}
-
-	if err := rows.Err(); err != nil {
-		return conversations, fmt.Errorf("list conversation rows: %w", err)
-	}
-
-	return conversations, nil
-}
-
 // RunTurn waits for the submitted work's processing and terminal handling.
 func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage) error {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, inbound.ConversationID); err != nil {

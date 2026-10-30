@@ -14,7 +14,6 @@ type Backend interface {
 	Subscribe(context.Context) iter.Seq[protocol.Event]
 	CreateConversation(context.Context, protocol.Conversation) error
 	ContinueRun(context.Context, string, string) error
-	ListConversations(context.Context) ([]protocol.Conversation, error)
 	SwitchConversationAgent(string, string) (bool, error)
 	RunTurn(context.Context, *protocol.InboundMessage) error
 	StageRevert(context.Context, string, string) (string, string, error)
