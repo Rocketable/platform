@@ -52,6 +52,8 @@ import type {
 import type { SessionUserActions, SessionUserAttachmentReference, SessionUserComment } from "../actions"
 import { agentLabel } from "./agent-label"
 import { attached, imageAttachmentPlaceholderStyle, typeLabel } from "../components/message-file"
+// rocketclaw: show who sent each prompt (upstream packages/session-ui/src/message/message-content.tsx)
+import { MessageAuthor } from "@rocketclaw/host/author"
 
 export async function writeClipboard(text: string): Promise<boolean> {
   const written = await navigator.clipboard?.writeText(text).then(
@@ -691,6 +693,8 @@ export function CurrentUserMessageDisplay(props: {
       }}
       data-timeline-part-id={props.text ? `${props.message.id}:text:0` : undefined}
     >
+      {/* rocketclaw: keep the sender above attachments (upstream packages/session-ui/src/message/message-content.tsx) */}
+      <MessageAuthor message={props.message} />
       {renderAttachments()}
       <Show
         when={props.text}

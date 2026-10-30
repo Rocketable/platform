@@ -53,7 +53,7 @@ const messages = (id: string) => [
     ],
     finish: "stop",
   },
-  { id: `msg_${id}_1`, type: "user", time: { created: 1 }, text: `question in ${id}` },
+  { id: `msg_${id}_1`, type: "user", time: { created: 1 }, text: `question in ${id}`, metadata: { rocketclaw_username: "alice" } },
 ]
 
 const sessions = () =>

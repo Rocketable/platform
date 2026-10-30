@@ -169,6 +169,7 @@ test("mounting a session renders its timeline from the server's proxy route", as
   const view = show()
 
   await answered(view)
+  expect(view.root.querySelector("[data-slot=message-author]")?.textContent).toBe("alice")
   expect(server.requests).toContain("GET /oc/box/api/session/ses_a/message")
   expect(server.requests.every((request) => request.split(" ")[1].startsWith("/oc/box/api/"))).toBe(true)
   expect(calls.reported.at(-1)).toBe("ses_a")
