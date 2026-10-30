@@ -7,34 +7,37 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
 func TestGatherOrderedResults(t *testing.T) {
-	got, err := Run(t.Context(), `def main():
+	synctest.Test(t, func(t *testing.T) {
+		got, err := Run(t.Context(), `def main():
     return gather([
-        lambda: slow(id="a", ms=30),
-        lambda: slow(id="b", ms=5),
+        lambda: gather([lambda: slow(id="a", ms=30), lambda: slow(id="b", ms=5)]),
+        lambda: slow(id="c", ms=0),
     ])
 `, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
-		Name: "slow",
-		Call: func(ctx context.Context, args map[string]any) (string, error) {
-			ms := int(args["ms"].(float64))
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			case <-time.After(time.Duration(ms) * time.Millisecond):
-				return args["id"].(string), nil
-			}
-		},
-	}})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
+			Name: "slow",
+			Call: func(ctx context.Context, args map[string]any) (string, error) {
+				ms := int(args["ms"].(float64))
+				select {
+				case <-ctx.Done():
+					return "", ctx.Err()
+				case <-time.After(time.Duration(ms) * time.Millisecond):
+					return args["id"].(string), nil
+				}
+			},
+		}})
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
 
-	if got != `["a","b"]` {
-		t.Fatalf("Run() = %q, want [\"a\",\"b\"]", got)
-	}
+		if got != `[["a","b"],"c"]` {
+			t.Fatalf("Run() = %q, want [[\"a\",\"b\"],\"c\"]", got)
+		}
+	})
 }
 
 func TestGatherFailFastCancelsSibling(t *testing.T) {
@@ -302,27 +305,6 @@ func TestRaceFirstFailureWins(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "first-done-fail") {
 		t.Fatalf("race_first error = %v, want first-done-fail", err)
-	}
-}
-
-func TestNestedGather(t *testing.T) {
-	got, err := Run(t.Context(), `def main():
-    return gather([
-        lambda: gather([lambda: echo(v="a"), lambda: echo(v="b")]),
-        lambda: echo(v="c"),
-    ])
-`, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
-		Name: "echo",
-		Call: func(_ context.Context, args map[string]any) (string, error) {
-			return args["v"].(string), nil
-		},
-	}})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-
-	if got != `[["a","b"],"c"]` {
-		t.Fatalf("nested gather = %q", got)
 	}
 }
 
