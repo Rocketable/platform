@@ -661,7 +661,7 @@ func (b *Bridge) preserveRevertRequestLocked(ctx context.Context, request *bridg
 	}()
 	// A new stage abandons prepared execution, but not its durable input. Redo
 	// prepares it again just like restart recovery does.
-	if err := request.closeWorkflow(); err != nil {
+	if err := request.workflow.Close(); err != nil {
 		return err
 	}
 
@@ -843,7 +843,7 @@ func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, request *bridgeReques
 
 		defer func() {
 			if !fresh {
-				err = errors.Join(err, request.closeWorkflow())
+				err = errors.Join(err, request.workflow.Close())
 			}
 		}()
 	}

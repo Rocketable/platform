@@ -71,8 +71,17 @@ func newWorkflowAgentRunner(locked *config.LockedConfig, agent string, journal h
 	return &workflowAgentRunner{cfg: cfg, agent: agent, parent: parent, journal: journal, root: root, agents: agents, skills: skills, resolver: resolver, customTools: customTools}, nil
 }
 
+// Close releases prepared data ownership; an unprepared request has no
+// definition or open root. Every workflow.Run still receives a real runner.
 func (r *workflowAgentRunner) Close() error {
-	if err := r.root.Close(); err != nil {
+	if r.root == nil {
+		return nil
+	}
+
+	err := r.root.Close()
+	*r = workflowAgentRunner{}
+
+	if err != nil {
 		return fmt.Errorf("close workflow workspace root: %w", err)
 	}
 
