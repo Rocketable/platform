@@ -1,5 +1,5 @@
-// Package justbash runs the shell commands of agents that set shell: emulated in just-bash
-// (https://github.com/vercel-labs/just-bash), through wrapper.ts run by Node.
+// Package justbash runs the shell commands of easy agents and of agents that set shell: emulated in
+// just-bash (https://github.com/vercel-labs/just-bash), through wrapper.ts run by Node.
 package justbash
 
 import (
@@ -48,6 +48,30 @@ func Shell(frontmatter map[string]any, workspace, runtimeDir, dir string) (harne
 	}
 
 	return harness.CustomShell{Path: filepath.Join(dir, "wrapper.ts"), Setup: setup, Emulated: true}, nil
+}
+
+// Setup is how an easy agent's commands run in just-bash for one turn.
+type Setup struct {
+	// Folder is the agent's workingDirectory, resolved and checked by RocketClaw; the wrapper takes it as is.
+	Folder   string            `json:"folder"`
+	Commands map[string]string `json:"commands"`
+	// NetworkTargets nil means public addresses only.
+	NetworkTargets []string `json:"allowedNetworkTargets"`
+	// Env is the emulator's whole environment but TMPDIR: the turn's variables.
+	Env map[string]string `json:"env"`
+	// Secrets join RocketClaw's environment for commands only.
+	Secrets map[string]string `json:"secrets"`
+	// ReadOnly are folders, none inside another, shown read-only at their paths: the chat's uploads and the
+	// agent's skills.
+	ReadOnly []string `json:"readOnly"`
+}
+
+// EasyShell returns the customShell that runs an easy agent's commands with setup, from dir, the install
+// directory.
+func EasyShell(setup *Setup, dir string) harness.CustomShell {
+	data, _ := json.Marshal(setup)
+
+	return harness.CustomShell{Path: filepath.Join(dir, "wrapper.ts"), Setup: data, Emulated: true, Dir: setup.Folder, ReadOnly: setup.ReadOnly, Secrets: setup.Secrets}
 }
 
 // Install writes the wrapper into dir and installs its pinned just-bash with npm unless that version is

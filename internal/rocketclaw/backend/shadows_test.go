@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -181,7 +182,7 @@ func TestShadowSeedAndFork(t *testing.T) {
 	entry.ReplayInput = append(entry.ReplayInput, json.RawMessage(`{"type":"message","role":"user","prompt_header":"[System]","input_id":"finished running","content":"Completion Note"}`))
 	_, err = store.AppendEntryID(t.Context(), "parent", entry)
 	require.NoError(t, err)
-	require.NoError(t, store.startSubagent(t.Context(), "parent", harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, "helper", true))
+	require.NoError(t, store.startSubagent(t.Context(), "parent", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, Agent: "helper"}))
 	_, err = store.AppendEntryID(t.Context(), "parent/task", testSessionEntry("delegated", "seed child"))
 	require.NoError(t, err)
 
@@ -542,7 +543,7 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(c *Config) directBridge {
 				return NewConversation(cfg, publisher, &Config{ConversationID: c.ConversationID, Agent: c.Agent, SessionService: store}, slog.New(slog.DiscardHandler))
 			}})
-			require.NoError(t, store.startSubagent(t.Context(), childID, harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "main", true))
+			require.NoError(t, store.startSubagent(t.Context(), childID, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "main"}))
 			managed, err := manager.ensureThreadBridge(t.Context(), childID+"/call-1", ThreadState{Agent: "main", parent: childID})
 			require.NoError(t, err)
 
@@ -1731,6 +1732,57 @@ func TestShadowWorkflowTurnsHaveNoShadows(t *testing.T) {
 	var count int
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM shadow_turns`).Scan(&count))
 	require.Zero(t, count)
+}
+
+// A shadow matches its parent's mode, and routine runs, unlike cron-file runs and Web chats, have no shadows.
+func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
+	var logs bytes.Buffer
+
+	logger := slog.Default()
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(logger) })
+
+	store, root := newShadowTestStore(t)
+	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
+
+	for _, name := range []string{"main", "main/a"} {
+		require.NoError(t, root.WriteFile(".rocketclaw/agents/"+name+".md", []byte("---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\nroutines: [30m]\n---\nPrompt\n"), 0o600))
+	}
+
+	cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name()})
+	store.definitions = cfg
+
+	// main/z stays advanced.
+	agents, _, err := LoadRuntimeDefinitions(cfg, config.DefaultRuntimeDir)
+	require.NoError(t, err)
+	require.Equal(t, []string{"main/a"}, agents.ShadowNames("main"))
+	require.Contains(t, logs.String(), "main/z.md")
+	require.Contains(t, logs.String(), "parent main")
+
+	runtime := &Runtime{Sessions: store}
+
+	for id, path := range map[string]string{"routine-run": "agents/main.md#30m", "cron-run": "cron/daily.md", "web": ""} {
+		conversation := protocol.Conversation{ID: id, Agent: "main"}
+		if path != "" {
+			conversation.Run = &protocol.CronRun{Path: path, At: time.Unix(1, 0)}
+		}
+
+		require.NoError(t, runtime.CreateConversation(t.Context(), conversation))
+
+		parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: id, Agent: "main", SessionService: store}}
+		request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "hello", false)}
+		admitted, err := parent.activateInbound(t.Context(), &request)
+		require.NoError(t, err)
+		require.True(t, admitted)
+	}
+
+	mirrored, err := queryStrings(t.Context(), store.db, `SELECT c.shadow_parent || ':' || c.shadow_agent FROM conversations c JOIN shadow_turns s ON s.child_conversation_id = c.conversation_id ORDER BY 1`, "test shadow turns")
+	require.NoError(t, err)
+	require.Equal(t, []string{"cron-run:main/a", "web:main/a"}, mirrored)
+	shadows, err := queryStrings(t.Context(), store.db, `SELECT shadow_parent FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "test shadow sessions")
+	require.NoError(t, err)
+	require.Equal(t, []string{"cron-run", "web"}, shadows, "a routine run creates no shadow sessions")
 }
 
 // Deleting a Web copy while its producer's family holds history locks waits for

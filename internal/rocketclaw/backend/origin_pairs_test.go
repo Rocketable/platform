@@ -28,6 +28,8 @@ func BenchmarkSidebarChat(b *testing.B) {
 		{facts: ChatOriginFacts{ConversationID: "sample-chat"}},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: cron}, cron: true, stem: "Weekly report"},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: &protocol.CronRun{Path: "cron/.md", OneOff: true}}, cron: true},
+		// cron:marketing finds the marketing agent's routine runs.
+		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: &protocol.CronRun{Path: "agents/marketing.md#*/5 * * * *"}}, cron: true, stem: "marketing"},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Binding: binding}},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Binding: binding, Run: cron}},
 	}

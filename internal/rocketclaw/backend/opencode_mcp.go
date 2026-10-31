@@ -137,7 +137,7 @@ func (r *Runtime) openCodeTools(conversation, space string) []harness.Tool {
 		return harness.TextToolResult(string(data)), err
 	}
 
-	return append(pageTools(r.Sessions, nil, r.threads, conversation, space, conversation),
+	return append(pageTools(r.Sessions, nil, &harness.CustomShell{}, r.threads, conversation, space, conversation),
 		harness.Tool{Name: "get_tags", Description: `Return this session's RocketClaw tags as {"tags":[...]}.`, Parameters: map[string]any{"properties": map[string]any{}}, Call: func(ctx context.Context, _ json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 			return reply(sessionTags(ctx, r.Sessions.db, conversation))
 		}},

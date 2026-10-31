@@ -378,7 +378,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 		t.Run(fmt.Sprintf("background=%v", background), func(t *testing.T) {
 			workspace := t.TempDir()
 			require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-			require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "waiter.md"), []byte("---\ndescription: Waiter\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  bash:\n    \"*\": allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n"), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "waiter.md"), []byte("---\ndescription: Waiter\nmodel: gpt-6.1-sol\npermission:\n  bash:\n    \"*\": allow\n  rocketclaw:\n    allow_background: allow\n---\nPrompt\n"), 0o600))
 			started, finished, pid := filepath.Join(workspace, "started"), filepath.Join(workspace, "done"), filepath.Join(workspace, "pid")
 			sleep := map[bool]string{false: "2", true: "60"}[background]
 			waiting, ended := filepath.Join(workspace, "waiting"), filepath.Join(workspace, "ended")
@@ -543,7 +543,7 @@ func TestRunStopsOnInvalidFrontendAssets(t *testing.T) {
 
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n"), 0o600))
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -560,7 +560,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n"), 0o600))
 
 	bodies := make(chan string, 4)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

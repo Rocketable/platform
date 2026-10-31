@@ -209,7 +209,9 @@ func (s *SessionService) SidebarChats(ctx context.Context, username string, slac
 func sidebarChat(ctx context.Context, slack slackLookup, rooms map[string]SidebarChat, row *SidebarSession) (SidebarChat, error) {
 	chat := SidebarChat{Session: *row, Cron: row.Origin.Run != nil && row.Origin.Binding.ManagedConversationID != row.Origin.ConversationID}
 	if chat.Cron {
-		chat.CronName = strings.TrimSuffix(strings.TrimPrefix(row.Origin.Run.Path, "cron/"), ".md")
+		// A routine at agents/<agent>.md#<schedule> is named by its agent.
+		name, _, _ := strings.Cut(row.Origin.Run.Path, ".md#")
+		chat.CronName = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(name, "cron/"), "agents/"), ".md")
 	}
 
 	if row.SlackChannel != "" {

@@ -88,6 +88,8 @@ type GoalState struct {
 	// PrincipalName and PrincipalEmail name the person who set the goal.
 	PrincipalName  string `json:"principal_name,omitempty"`
 	PrincipalEmail string `json:"principal_email,omitempty"`
+	// Origin is the trusted origin header of the turn that set the goal, which its continuations keep.
+	Origin string `json:"origin,omitempty"`
 }
 
 // SessionService owns runtime PostgreSQL session and state access inside one rocketclaw process.
@@ -256,7 +258,7 @@ func (s *SessionService) BeginGoal(conversationID string, goal *GoalState) error
 func beginGoalDB(ctx context.Context, db stateStoreDB, conversationID string, goal *GoalState) error {
 	now := time.Now().UTC()
 
-	rows, err := execRows(ctx, db, "begin goal", `UPDATE conversations SET goal_objective = $2, goal_max_turns = $3, goal_turns_used = 0, goal_status = $4, goal_note = '', goal_created_at_unix_ns = $5, goal_updated_at_unix_ns = $5, goal_principal_name = $6, goal_principal_email = $7 WHERE conversation_id = $1 AND COALESCE(goal_status NOT IN ('', $4), TRUE)`, conversationID, goal.Objective, goal.MaxTurns, GoalStatusActive, timeUnixNano(now), goal.PrincipalName, goal.PrincipalEmail)
+	rows, err := execRows(ctx, db, "begin goal", `UPDATE conversations SET goal_objective = $2, goal_max_turns = $3, goal_turns_used = 0, goal_status = $4, goal_note = '', goal_created_at_unix_ns = $5, goal_updated_at_unix_ns = $5, goal_principal_name = $6, goal_principal_email = $7, goal_origin = $8 WHERE conversation_id = $1 AND COALESCE(goal_status NOT IN ('', $4), TRUE)`, conversationID, goal.Objective, goal.MaxTurns, GoalStatusActive, timeUnixNano(now), goal.PrincipalName, goal.PrincipalEmail, goal.Origin)
 	if err != nil {
 		return err
 	}
@@ -581,6 +583,15 @@ SELECT count(*) > 0 FROM advanced LEFT JOIN running r ON TRUE WHERE r.id IS NULL
 		timeUnixNano(due.NextDue), timeUnixNano(nextDue), timeUnixNano(now), KindCronRun)
 
 	return claimed, err
+}
+
+// CronRunRecorded reports whether a scheduled run of the cron definition at path is recorded.
+func (s *SessionService) CronRunRecorded(path string) (bool, error) {
+	var recorded bool
+
+	err := queryScalar(context.Background(), s.db, "read recorded cron runs", `SELECT count(*) > 0 FROM conversations WHERE cron_path = $1 AND kind = $2`, &recorded, path, KindCronRun)
+
+	return recorded, err
 }
 
 // ActiveGoalThreads returns managed thread state for conversations with active goals.
@@ -1462,7 +1473,7 @@ func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, c
 
 		if _, err := tx.ExecContext(ctx, `UPDATE conversations SET goal_objective = NULL, goal_max_turns = NULL, goal_turns_used = NULL,
     goal_status = NULL, goal_note = NULL, goal_created_at_unix_ns = NULL, goal_updated_at_unix_ns = NULL,
-    goal_principal_name = NULL, goal_principal_email = NULL WHERE conversation_id = $1`, c.id); err != nil {
+    goal_principal_name = NULL, goal_principal_email = NULL, goal_origin = '' WHERE conversation_id = $1`, c.id); err != nil {
 			return 0, false, fmt.Errorf("delete stale goal: %w", err)
 		}
 

@@ -76,7 +76,7 @@ func run(args []string) error {
 	return runServe(args, "127.0.0.1:6060")
 }
 
-var secretFetcher config.SecretFetcher = config.AWSFetcher{}
+var secretFetcher config.SecretFetcher = &config.AWSFetcher{}
 
 func loadRuntimeConfig(secretsARN string) (runtimeConfigFile, *config.Config, error) {
 	selected, err := selectRuntimeConfigFile()

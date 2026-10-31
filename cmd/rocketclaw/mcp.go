@@ -200,6 +200,7 @@ func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAge
 	delete(inbound.Metadata, protocol.InboundPrincipalMetadataKey)
 	delete(inbound.Metadata, protocol.InboundPrincipalNameMetadataKey)
 	delete(inbound.Metadata, protocol.InboundPrincipalEmailMetadataKey)
+	delete(inbound.Metadata, protocol.InboundSenderAgentMetadataKey)
 
 	if inbound.Metadata == nil {
 		inbound.Metadata = map[string]string{}

@@ -23,6 +23,8 @@ type sandboxedFileSystem struct {
 	mu       sync.Mutex
 	root     *os.Root
 	spillRel string
+	// hostPaths makes apply_patch name files by host path, as an easy agent's file view does.
+	hostPaths bool
 }
 
 type readResult struct {
@@ -213,13 +215,6 @@ func (sfs *sandboxedFileSystem) ApplyPatch(patchText string) string {
 	return preview.output
 }
 
-func previewApplyPatch(sfs *sandboxedFileSystem, patchText string) (preview applyPatchPreview, errText string) {
-	sfs.mu.Lock()
-	defer sfs.mu.Unlock()
-
-	return previewApplyPatchLocked(sfs, patchText)
-}
-
 func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (preview applyPatchPreview, errText string) {
 	if patchText == "" {
 		return applyPatchPreview{}, "patchText is required"
@@ -327,6 +322,10 @@ func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (previe
 
 		if change.movePath != "" {
 			target = change.movePath
+		}
+
+		if sfs.hostPaths {
+			target = filepath.Join(sfs.root.Name(), target)
 		}
 
 		lines = append(lines, prefix+filepath.ToSlash(target))
@@ -717,93 +716,21 @@ func tryMatch(lines, pattern []string, startIndex int, compare func(string, stri
 	return -1
 }
 
+type globMatch struct {
+	path  string
+	mtime int64
+}
+
 func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) string {
-	sfs.mu.Lock()
-	defer sfs.mu.Unlock()
-
-	type globMatch struct {
-		path  string
-		mtime int64
+	matches, errText := sfs.globMatches(ctx, pattern, path)
+	if errText != "" {
+		return errText
 	}
 
-	searchPath := path
-	searchRoot := sfs.root
+	return formatGlobOutput(matches)
+}
 
-	hostRoot := sfs.root.Name()
-	if denied := sfs.deniedPath(searchPath); denied != "" {
-		return denied
-	}
-
-	if searchPath != "" {
-		var err error
-
-		searchPath, err = normalizeRootName(sfs.root, searchPath)
-		if err != nil {
-			return err.Error()
-		}
-
-		if err := rejectSymlink(sfs, searchPath); err != nil {
-			return err.Error()
-		}
-
-		root, err := sfs.root.OpenRoot(searchPath)
-		if err != nil {
-			return err.Error()
-		}
-
-		defer func() { _ = root.Close() }()
-
-		searchRoot = root
-		hostRoot = filepath.Join(hostRoot, searchPath)
-	}
-
-	cmd := exec.CommandContext(ctx, "rg", "--no-config", "--files", "--hidden", "--no-follow", "--path-separator=/", "--glob=!.git/*", "-g", pattern)
-	cmd.Dir = hostRoot
-
-	var stderr bytes.Buffer
-
-	cmd.Stderr = &stderr
-
-	stdout, err := cmd.Output()
-	if err != nil {
-		if errExit, ok := errors.AsType[*exec.ExitError](err); ok && errExit.ExitCode() == 1 {
-			return "No files found"
-		}
-
-		message := strings.TrimSpace(stderr.String())
-		if message != "" {
-			return message
-		}
-
-		return err.Error()
-	}
-
-	outputText := strings.TrimSpace(string(stdout))
-	if outputText == "" {
-		return "No files found"
-	}
-
-	matches := strings.Split(outputText, "\n")
-
-	results := make([]globMatch, 0, len(matches))
-	for _, match := range matches {
-		full := filepath.Join(hostRoot, match)
-		if sfs.deniedPath(full) != "" {
-			continue
-		}
-
-		info, err := searchRoot.Lstat(match)
-		if err != nil {
-			continue
-		}
-
-		if info.Mode()&os.ModeSymlink != 0 {
-			continue
-		}
-
-		results = append(results, globMatch{path: full, mtime: info.ModTime().UnixMilli()})
-	}
-
+func formatGlobOutput(results []globMatch) string {
 	if len(results) == 0 {
 		return "No files found"
 	}
@@ -851,16 +778,27 @@ type grepTarget struct {
 }
 
 func (sfs *sandboxedFileSystem) Grep(ctx context.Context, pattern, searchPath, include string) string {
+	matches, partial, errText := sfs.grepMatches(ctx, pattern, searchPath, include)
+	if errText != "" {
+		return errText
+	}
+
+	return formatGrepOutput(matches, partial)
+}
+
+// grepMatches returns the lines matching pattern under searchPath, and whether some paths were skipped,
+// or the error text to show.
+func (sfs *sandboxedFileSystem) grepMatches(ctx context.Context, pattern, searchPath, include string) (matches []grepMatch, partial bool, errText string) {
 	sfs.mu.Lock()
 	defer sfs.mu.Unlock()
 
 	if pattern == "" {
-		return "pattern is required"
+		return nil, false, "pattern is required"
 	}
 
 	target, err := sfs.resolveGrepTarget(searchPath)
 	if err != nil {
-		return err.Error()
+		return nil, false, err.Error()
 	}
 
 	if target.root != sfs.root {
@@ -871,33 +809,116 @@ func (sfs *sandboxedFileSystem) Grep(ctx context.Context, pattern, searchPath, i
 
 	files := target.files
 	if len(files) == 1 && files[0] == "." {
-		var errText string
-
 		files, errText = sfs.allowedRipgrepFiles(ctx, target.hostRoot, include)
-		if errText != "" {
-			return errText
-		}
-
-		if len(files) == 0 {
-			return "No files found"
+		if errText != "" || len(files) == 0 {
+			return nil, false, errText
 		}
 	}
 
 	stdout, partial, errText := runRipgrep(ctx, target.hostRoot, pattern, files)
 	if errText != "" {
-		return errText
+		return nil, false, errText
 	}
 
-	matches, err := parseGrepMatches(stdout, target.root, target.hostRoot)
+	matches, err = parseGrepMatches(stdout, target.root, target.hostRoot)
 	if err != nil {
-		return err.Error()
+		return nil, false, err.Error()
 	}
 
-	if len(matches) == 0 {
-		return "No files found"
+	return matches, partial, ""
+}
+
+func (sfs *sandboxedFileSystem) previewApplyPatch(patchText string) (preview applyPatchPreview, errText string) {
+	sfs.mu.Lock()
+	defer sfs.mu.Unlock()
+
+	return previewApplyPatchLocked(sfs, patchText)
+}
+
+// globMatches returns the files matching pattern under path, or the error text to show.
+func (sfs *sandboxedFileSystem) globMatches(ctx context.Context, pattern, path string) (results []globMatch, errText string) {
+	sfs.mu.Lock()
+	defer sfs.mu.Unlock()
+
+	searchPath := path
+	searchRoot := sfs.root
+
+	hostRoot := sfs.root.Name()
+	if denied := sfs.deniedPath(searchPath); denied != "" {
+		return nil, denied
 	}
 
-	return formatGrepOutput(matches, partial)
+	if searchPath != "" {
+		var err error
+
+		searchPath, err = normalizeRootName(sfs.root, searchPath)
+		if err != nil {
+			return nil, err.Error()
+		}
+
+		if err := rejectSymlink(sfs, searchPath); err != nil {
+			return nil, err.Error()
+		}
+
+		root, err := sfs.root.OpenRoot(searchPath)
+		if err != nil {
+			return nil, err.Error()
+		}
+
+		defer func() { _ = root.Close() }()
+
+		searchRoot = root
+		hostRoot = filepath.Join(hostRoot, searchPath)
+	}
+
+	cmd := exec.CommandContext(ctx, "rg", "--no-config", "--files", "--hidden", "--no-follow", "--path-separator=/", "--glob=!.git/*", "-g", pattern)
+	cmd.Dir = hostRoot
+
+	var stderr bytes.Buffer
+
+	cmd.Stderr = &stderr
+
+	stdout, err := cmd.Output()
+	if err != nil {
+		if errExit, ok := errors.AsType[*exec.ExitError](err); ok && errExit.ExitCode() == 1 {
+			return nil, ""
+		}
+
+		message := strings.TrimSpace(stderr.String())
+		if message != "" {
+			return nil, message
+		}
+
+		return nil, err.Error()
+	}
+
+	outputText := strings.TrimSpace(string(stdout))
+	if outputText == "" {
+		return nil, ""
+	}
+
+	matches := strings.Split(outputText, "\n")
+
+	results = make([]globMatch, 0, len(matches))
+	for _, match := range matches {
+		full := filepath.Join(hostRoot, match)
+		if sfs.deniedPath(full) != "" {
+			continue
+		}
+
+		info, err := searchRoot.Lstat(match)
+		if err != nil {
+			continue
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+
+		results = append(results, globMatch{path: full, mtime: info.ModTime().UnixMilli()})
+	}
+
+	return results, ""
 }
 
 func (sfs *sandboxedFileSystem) deniedPath(name string) string {
@@ -1065,7 +1086,7 @@ func runRipgrep(ctx context.Context, hostRoot, pattern string, files []string) (
 
 	errExit, ok := errors.AsType[*exec.ExitError](err)
 	if ok && errExit.ExitCode() == 1 {
-		return nil, false, "No files found"
+		return nil, false, ""
 	}
 
 	if message != "" {
@@ -1121,6 +1142,10 @@ func parseGrepMatches(stdout []byte, searchRoot *os.Root, hostRoot string) ([]gr
 }
 
 func formatGrepOutput(matches []grepMatch, partial bool) string {
+	if len(matches) == 0 {
+		return "No files found"
+	}
+
 	slices.SortFunc(matches, func(a, b grepMatch) int {
 		if order := cmp.Compare(b.mtime, a.mtime); order != 0 {
 			return order

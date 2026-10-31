@@ -58,8 +58,11 @@ func clone(source *Config) Config {
 	cfg.RocketClaws = maps.Clone(cfg.RocketClaws)
 
 	cfg.MCPServers = maps.Clone(cfg.MCPServers)
-	for name, server := range cfg.MCPServers {
+	for name := range cfg.MCPServers {
+		server := cfg.MCPServers[name]
 		server.Args = slices.Clone(server.Args)
+		server.Tools.Read = slices.Clone(server.Tools.Read)
+		server.Tools.Write = slices.Clone(server.Tools.Write)
 		server.Env = maps.Clone(server.Env)
 		server.Headers = maps.Clone(server.Headers)
 		cfg.MCPServers[name] = server

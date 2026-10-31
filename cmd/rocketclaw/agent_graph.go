@@ -10,13 +10,13 @@ func runAgentGraph(args []string) error {
 		return err
 	}
 
-	runtimeRoot, _, cleanup, err := runtimeRootForInspectionTarget(target, "rocketclaw-agent-graph-*", "agent graph", secretsARN)
+	runtimeRoot, cfg, cleanup, err := runtimeRootForInspectionTarget(target, "rocketclaw-agent-graph-*", "agent graph", secretsARN)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	dot, err := agentlint.AgentGraphDOT(runtimeRoot)
+	dot, err := agentlint.AgentGraphDOT(runtimeRoot, cfg)
 	if err != nil {
 		return err
 	}

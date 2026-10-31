@@ -2,15 +2,21 @@ package harness
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unicode/utf8"
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
@@ -33,7 +39,7 @@ Usage notes:
 - This tool is read-only and does not modify any files
 - Image and PDF responses are returned as model-visible attachments`
 
-func webFetch(ctx context.Context, params webFetchToolParams) (ToolResult, error) {
+func webFetch(ctx context.Context, client *http.Client, params webFetchToolParams) (ToolResult, error) {
 	if !strings.HasPrefix(params.URL, "http://") && !strings.HasPrefix(params.URL, "https://") {
 		return ToolResult{}, errors.New("URL must start with http:// or https://")
 	}
@@ -57,7 +63,7 @@ func webFetch(ctx context.Context, params webFetchToolParams) (ToolResult, error
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	resp, err := doWebFetchRequest(ctx, params.URL, format, false)
+	resp, err := doWebFetchRequest(ctx, client, params.URL, format, false)
 	if err != nil {
 		return ToolResult{}, err
 	}
@@ -67,7 +73,7 @@ func webFetch(ctx context.Context, params webFetchToolParams) (ToolResult, error
 	if resp.StatusCode == http.StatusForbidden && resp.Header.Get("Cf-Mitigated") == "challenge" {
 		_ = resp.Body.Close()
 
-		resp, err = doWebFetchRequest(ctx, params.URL, format, true)
+		resp, err = doWebFetchRequest(ctx, client, params.URL, format, true)
 		if err != nil {
 			return ToolResult{}, err
 		}
@@ -155,7 +161,7 @@ func webFetchToolResult(rawURL, format, contentType string, body []byte) (ToolRe
 	return TextToolResult(content), nil
 }
 
-func doWebFetchRequest(ctx context.Context, rawURL, format string, honestUA bool) (*http.Response, error) {
+func doWebFetchRequest(ctx context.Context, client *http.Client, rawURL, format string, honestUA bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -180,10 +186,122 @@ func doWebFetchRequest(ctx context.Context, rawURL, format string, honestUA bool
 		req.Header.Set("Accept", "*/*")
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send request: %w", err)
 	}
 
 	return resp, nil
+}
+
+// easyWebFetchClient is the client of an easy agent's webfetch, which reaches what the agent's emulated shell
+// reaches (R34): with targets nil any public address, else only the URLs targets lists, redirects included.
+// Like just-bash's fetch, it uses no proxy.
+func easyWebFetchClient(targets []string) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// Every request, each redirect's too, asks Proxy first, and an error refuses it.
+	transport.Proxy = func(req *http.Request) (*url.URL, error) {
+		if targets == nil || networkTargetAllowed(targets, req.URL) {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("%s: not in allowedNetworkTargets", req.URL.Redacted())
+	}
+
+	if targets == nil {
+		dialer := &net.Dialer{Control: publicAddressOnly}
+		transport.DialContext = dialer.DialContext
+	}
+
+	return &http.Client{Transport: transport}
+}
+
+// publicAddressOnly, a dialer's Control, refuses address, the one a name resolved to as it is dialed, when
+// just-bash's denyPrivateRanges refuses it: the ranges isPrivateIp lists in just-bash 3.6.0's
+// src/network/allow-list.ts, an IPv4 address in IPv4-mapped, NAT64 or 6to4 form counting as itself.
+func publicAddressOnly(_, address string, _ syscall.RawConn) error {
+	addrPort, err := netip.ParseAddrPort(address)
+	addr := addrPort.Addr().WithZone("").Unmap()
+	ip := addr.As16()
+
+	switch {
+	case netip.MustParsePrefix("64:ff9b::/96").Contains(addr):
+		addr = netip.AddrFrom4([4]byte(ip[12:]))
+	case netip.MustParsePrefix("2002::/16").Contains(addr):
+		addr = netip.AddrFrom4([4]byte(ip[2:6]))
+	}
+
+	if err != nil || slices.ContainsFunc([]string{
+		"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24",
+		"192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
+		"::/128", "::1/128", "fe80::/10", "fc00::/7", "2001:db8::/32", "64:ff9b:1::/48",
+	}, func(prefix string) bool { return netip.MustParsePrefix(prefix).Contains(addr) }) {
+		return fmt.Errorf("%s: private address, not in allowedNetworkTargets", address)
+	}
+
+	return nil
+}
+
+// networkTargetAllowed reports whether targets, an easy agent's allowedNetworkTargets list, allows u by
+// just-bash 3.6.0's allow-list rules (matchesAllowListEntry in src/network/allow-list.ts) and the wrapper's
+// mapping: a host or host:port is its https and http origins, a URL is an origin and a path prefix.
+func networkTargetAllowed(targets []string, u *url.URL) bool {
+	origin := func(u *url.URL) string {
+		port := u.Port()
+		if port == map[string]string{"http": "80", "https": "443"}[u.Scheme] {
+			port = ""
+		}
+
+		return u.Scheme + "://" + strings.ToLower(u.Hostname()) + ":" + port
+	}
+
+	path := cmp.Or(u.EscapedPath(), "/")
+
+	for _, target := range targets {
+		entries := []string{target}
+		if !strings.Contains(target, "://") {
+			entries = []string{"https://" + target, "http://" + target}
+		}
+
+		for _, entry := range entries {
+			allowed, err := url.Parse(entry)
+			if err != nil || origin(allowed) != origin(u) {
+				continue
+			}
+
+			prefix := allowed.EscapedPath()
+			if prefix == "" || prefix == "/" || !ambiguousPath(path) && (strings.HasSuffix(prefix, "/") && strings.HasPrefix(path, prefix) || path == prefix || strings.HasPrefix(path, prefix+"/")) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// ambiguousPath reports whether just-bash keeps escaped path, a URL's, out of every path prefix because
+// decoding could change its separators. A dot segment counts too: just-bash resolves it before matching,
+// but Go sends it as written.
+func ambiguousPath(path string) bool {
+	if slices.ContainsFunc(strings.Split(path, "/"), func(segment string) bool { return segment == "." || segment == ".." }) {
+		return true
+	}
+
+	for range 3 {
+		lower := strings.ToLower(path)
+
+		decoded, err := url.PathUnescape(path)
+		if err != nil || !utf8.ValidString(decoded) || strings.ContainsAny(path, `\;`) ||
+			slices.ContainsFunc([]string{"%2f", "%2e", "%5c", "%3b"}, func(escape string) bool { return strings.Contains(lower, escape) }) {
+			return true
+		}
+
+		if decoded == path {
+			return false
+		}
+
+		path = decoded
+	}
+
+	return strings.Contains(path, "%")
 }

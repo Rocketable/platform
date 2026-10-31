@@ -284,8 +284,8 @@ func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
 			t.Cleanup(registry.shutdown)
 
 			recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
-			require.NoError(t, store.startSubagent(t.Context(), "main", harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "busy"}, "researcher", true))
-			require.NoError(t, store.startSubagent(t.Context(), "main/a", harness.ChildKey{Path: "/b", Turn: "turn-0", Call: "deep"}, "researcher", true))
+			require.NoError(t, store.startSubagent(t.Context(), "main", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "busy"}, Agent: "researcher"}))
+			require.NoError(t, store.startSubagent(t.Context(), "main/a", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/b", Turn: "turn-0", Call: "deep"}, Agent: "researcher"}))
 
 			// The subagent and the one under it each wait for a session write's reply.
 			replies := []*backgroundJob{testReply("main/a", "turn-0/call/w", "web:ops"), testReply("main/a/b", "turn-0/call/w", "web:ops")}

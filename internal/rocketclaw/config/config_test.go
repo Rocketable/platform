@@ -73,7 +73,7 @@ func TestAttachmentLocation(t *testing.T) {
 				body := fmt.Sprintf(`{"workspace":"work","database_url":"postgres://localhost/test","openai":{"api_key":"test"},"slack":{"bot_token":"test","app_token":"test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"attachments":%s}`, test.raw)
 				require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 
-				cfg, err := Load(path, "", AWSFetcher{})
+				cfg, err := Load(path, "", &AWSFetcher{})
 				if test.driver == "" {
 					require.Error(t, err)
 					return
@@ -114,7 +114,7 @@ func TestLoadSentry(t *testing.T) {
 			content := fmt.Sprintf(`{"database_url":"postgres://localhost/test","openai":{"api_key":"test"},"slack":{"bot_token":"test","app_token":"test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"web":{"sentry":%s}}`, tt.sentry)
 			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
-			cfg, err := Load(path, "", AWSFetcher{})
+			cfg, err := Load(path, "", &AWSFetcher{})
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
@@ -145,7 +145,7 @@ func TestLoadTsnet(t *testing.T) {
 			content := `{"database_url":"postgres://localhost/test","openai":{"api_key":"test"},"slack":{"bot_token":"test","app_token":"test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"web":` + tt.web + `}`
 			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 
-			cfg, err := Load(path, "", AWSFetcher{})
+			cfg, err := Load(path, "", &AWSFetcher{})
 			if tt.wantErr {
 				require.ErrorContains(t, err, "web.tsnet")
 				return
@@ -465,6 +465,29 @@ func TestValidateMCPServers(t *testing.T) {
 			},
 		},
 		{
+			name: "tool in both groups",
+			servers: map[string]MCPServerConfig{
+				"reports": {Command: "npx", Tools: MCPToolGroups{Read: []string{"list_*"}, Write: []string{"list_x"}}},
+			},
+			wantErr: `mcp_servers["reports"]: tools.read "list_*" and tools.write "list_x" match the same tool`,
+		},
+		{
+			name: "shared pattern",
+			servers: map[string]MCPServerConfig{
+				"reports": {Command: "npx", Tools: MCPToolGroups{Read: []string{"get_*", "*_report"}, Write: []string{"*_report"}}},
+			},
+			wantErr: `mcp_servers["reports"]: tools.read "*_report" and tools.write "*_report" match the same tool`,
+		},
+		{
+			name: "disjoint tool groups",
+			servers: map[string]MCPServerConfig{
+				"reports": {Command: "npx", Tools: MCPToolGroups{Read: []string{"list_*", "get_report"}, Write: []string{"update_*", "delete_report"}}},
+			},
+			want: map[string]MCPServerConfig{
+				"reports": {Command: "npx", Tools: MCPToolGroups{Read: []string{"list_*", "get_report"}, Write: []string{"update_*", "delete_report"}}},
+			},
+		},
+		{
 			name:    "omitted",
 			servers: nil,
 		},
@@ -588,19 +611,19 @@ func TestLoadDefaultsWorkspaceToConfigDirectory(t *testing.T) {
 	  "opencode": {"box": {"url": "https://box.example:4096", "password": "pw", "port": 4100}}
 	}`), 0o600))
 
-	cfg, err := Load(path, "", AWSFetcher{})
+	cfg, err := Load(path, "", &AWSFetcher{})
 	require.NoError(t, err, "a config written for relay ports still loads")
 	assert.Equal(t, dir, cfg.Workspace)
 }
 
 func TestLoadRejectsUnreadableOrInvalidConfig(t *testing.T) {
-	_, err := Load(filepath.Join(t.TempDir(), "missing.json"), "", AWSFetcher{})
+	_, err := Load(filepath.Join(t.TempDir(), "missing.json"), "", &AWSFetcher{})
 	require.ErrorContains(t, err, "read config")
 
 	path := filepath.Join(t.TempDir(), "rocketclaw.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{`), 0o600))
 
-	_, err = Load(path, "", AWSFetcher{})
+	_, err = Load(path, "", &AWSFetcher{})
 	require.ErrorContains(t, err, "parse config JSON")
 }
 
@@ -814,7 +837,7 @@ func loadTestConfig(t *testing.T, content string) *Config {
 
 	path := filepath.Join(t.TempDir(), "rocketclaw.json")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644), "write config")
-	cfg, err := Load(path, "", AWSFetcher{})
+	cfg, err := Load(path, "", &AWSFetcher{})
 	require.NoError(t, err)
 
 	return cfg

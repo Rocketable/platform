@@ -26,6 +26,8 @@ type ScheduledMessageState struct {
 	DueAt          time.Time     `json:"due_at,omitzero"`
 	Recurring      bool          `json:"recurring,omitempty"`
 	Interval       time.Duration `json:"interval,omitempty"`
+	// Origin is the trusted origin header of the message's turn: ScheduledMessage and its creator's source.
+	Origin string `json:"origin,omitempty"`
 }
 
 // ThreadQueueItem is one persisted waiting message. A zero Kind means enqueue.

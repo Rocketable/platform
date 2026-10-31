@@ -40,8 +40,9 @@ func parseDynamicWorkflowParams(raw json.RawMessage) (dynamicWorkflowParams, err
 	return params, nil
 }
 
-// dynamicWorkflowTool runs a workflow's steps with shellEnv, the environment of the turn that calls it.
-func (b *Bridge) dynamicWorkflowTool(permissions harness.PermissionSet, agentName, tagConversationID string, definitions map[string]*workflow.Definition, shellEnv map[string]string) (harness.Tool, bool) {
+// dynamicWorkflowTool runs a workflow's steps with shellEnv, the environment of the turn that calls it,
+// originHeader, that turn's trusted origin header, and shell, that turn's agent's shell.
+func (b *Bridge) dynamicWorkflowTool(permissions harness.PermissionSet, agentName, tagConversationID string, definitions map[string]*workflow.Definition, shellEnv map[string]string, originHeader string, shell *harness.CustomShell) (harness.Tool, bool) {
 	allowed := slices.DeleteFunc(workflow.Descriptions(definitions), func(description protocol.WorkflowDescription) bool {
 		return !permissions.Enabled("workflow", description.Name)
 	})
@@ -93,7 +94,7 @@ func (b *Bridge) dynamicWorkflowTool(permissions harness.PermissionSet, agentNam
 				return harness.ToolResult{}, err
 			}
 
-			result, err := b.runNestedWorkflow(ctx, agentName, tagConversationID, params.Name, definitions[params.Name], params.Args, shellEnv)
+			result, err := b.runNestedWorkflow(ctx, agentName, tagConversationID, params.Name, definitions[params.Name], params.Args, shellEnv, originHeader, shell)
 			if err != nil {
 				return harness.ToolResult{}, err
 			}
@@ -103,10 +104,10 @@ func (b *Bridge) dynamicWorkflowTool(permissions harness.PermissionSet, agentNam
 	}, true
 }
 
-func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *harness.Agent, agentName, tagConversationID string, shellEnv map[string]string) (harness.Tool, bool) {
+func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *harness.Agent, agentName, tagConversationID string, shellEnv map[string]string, originHeader string) (harness.Tool, bool) {
 	runtimeCfg := b.runtime.Clone()
 
-	if !agent.Permission.Sudo && !slices.ContainsFunc(agent.Permission.Buckets, func(bucket harness.PermissionBucket) bool {
+	if !agent.Permission.Sudo && !agent.Permission.Easy && !slices.ContainsFunc(agent.Permission.Buckets, func(bucket harness.PermissionBucket) bool {
 		return bucket.Name == "workflow" && slices.ContainsFunc(bucket.Rules, func(rule harness.PermissionRule) bool {
 			return rule.Action == harness.PermissionAllow
 		})
@@ -120,10 +121,10 @@ func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *harness.Agent, a
 		return harness.Tool{}, false
 	}
 
-	return b.dynamicWorkflowTool(agent.Permission, agentName, tagConversationID, definitions, shellEnv)
+	return b.dynamicWorkflowTool(agent.Permission, agentName, tagConversationID, definitions, shellEnv, originHeader, &agent.CustomShell)
 }
 
-func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversationID, name string, definition *workflow.Definition, args string, shellEnv map[string]string) (resultText string, err error) {
+func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversationID, name string, definition *workflow.Definition, args string, shellEnv map[string]string, originHeader string, shell *harness.CustomShell) (resultText string, err error) {
 	if definition == nil {
 		return "", fmt.Errorf("workflow %q is not configured", name)
 	}
@@ -134,7 +135,11 @@ func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversati
 	}
 	defer func() { err = errors.Join(err, agentRun.Close()) }()
 
-	agentRun.shellEnv = shellEnv
+	agentRun.shellEnv, agentRun.originHeader = shellEnv, originHeader
+	if agent := agentRun.agents.Items[agentName]; agent.Mode == harness.AgentModeEasy {
+		agent.CustomShell = *shell
+		agentRun.agents.Items[agentName] = agent
+	}
 
 	result, errRun := workflow.Run(ctx, definition, workflow.RunRequest{
 		RunID: harness.ToolCallKey(ctx), Args: args,

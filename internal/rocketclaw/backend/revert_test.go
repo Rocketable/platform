@@ -405,7 +405,7 @@ func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
 	recordLegacyDelegations(t, s, "main", "call_k")
 
 	for _, key := range []harness.ChildKey{{Path: "/call_k-aaaaaaaa", Turn: "turn-1", Call: "call_k"}, {Path: "/call_r-bbbbbbbb", Turn: "turn-2", Call: "call_r"}, {Path: "/call_b-cccccccc", Turn: "turn-2", Call: "call_b"}} {
-		require.NoError(t, s.startSubagent(ctx, "main", key, "helper", true))
+		require.NoError(t, s.startSubagent(ctx, "main", &harness.SubagentWrite{Key: key, Agent: "helper"}))
 	}
 
 	children := []string{"main/call_k", "main/call_k-aaaaaaaa", "main/call_r-bbbbbbbb", "main/call_b-cccccccc"}
@@ -1156,7 +1156,7 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 	crashed.config.ConversationID = "main"
 
 	workspace := crashed.runtime.Clone().Workspace
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 

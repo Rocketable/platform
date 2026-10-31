@@ -177,10 +177,10 @@ func (d stateDAO) bindRun(ctx context.Context, run, destination string) (owner s
     SELECT conversation_id, agent FROM conversations WHERE conversation_id = $2
 ), recurring AS (
     UPDATE schedules s SET conversation_id = o.conversation_id, agent = o.agent FROM chat o WHERE s.conversation_id = $1
-    RETURNING s.id, s.conversation_id, s.agent, s.message, s.next_due_unix_ns, TRUE, s.interval_ns
+    RETURNING s.id, s.conversation_id, s.agent, s.message, s.next_due_unix_ns, TRUE, s.interval_ns, s.origin
 ), once AS (
     UPDATE turns t SET conversation_id = o.conversation_id, agent = o.agent FROM chat o WHERE t.conversation_id = $1 AND t.phase = 'waiting' AND t.reason = $3
-    RETURNING t.input_id, t.conversation_id, t.agent, t.message, t.run_at_unix_ns, FALSE, 0::bigint
+    RETURNING t.input_id, t.conversation_id, t.agent, t.message, t.run_at_unix_ns, FALSE, 0::bigint, t.origin
 )
 SELECT * FROM recurring UNION ALL SELECT * FROM once`, "rehome producer schedules", scheduledMessageScanner{}, run, owner, waitScheduled)
 
@@ -715,8 +715,8 @@ func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, b
 		createdAt, updatedAt int64
 	)
 
-	err := d.db.QueryRowContext(ctx, `SELECT goal_objective, goal_max_turns, goal_turns_used, goal_status, goal_note, goal_created_at_unix_ns, goal_updated_at_unix_ns, goal_principal_name, goal_principal_email
-FROM conversations WHERE conversation_id = $1 AND goal_objective IS NOT NULL`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &createdAt, &updatedAt, &goal.PrincipalName, &goal.PrincipalEmail)
+	err := d.db.QueryRowContext(ctx, `SELECT goal_objective, goal_max_turns, goal_turns_used, goal_status, goal_note, goal_created_at_unix_ns, goal_updated_at_unix_ns, goal_principal_name, goal_principal_email, goal_origin
+FROM conversations WHERE conversation_id = $1 AND goal_objective IS NOT NULL`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &createdAt, &updatedAt, &goal.PrincipalName, &goal.PrincipalEmail, &goal.Origin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GoalState{}, false, nil
 	}
@@ -738,19 +738,19 @@ FROM conversations WHERE conversation_id = $1 AND goal_objective IS NOT NULL`, s
 // remindersSQL lists reminders: a recurring one is its conversation's schedule, and a one-time one
 // its waiting turn scheduled for its run-at time.
 const remindersSQL = `reminders AS (
-    SELECT id, conversation_id, agent, message, next_due_unix_ns, TRUE AS recurring, interval_ns FROM schedules WHERE cron_path IS NULL
-    UNION ALL SELECT input_id, conversation_id, agent, message, run_at_unix_ns, FALSE, 0 FROM turns WHERE phase = 'waiting' AND reason = 'scheduled'
+    SELECT id, conversation_id, agent, message, next_due_unix_ns, TRUE AS recurring, interval_ns, origin FROM schedules WHERE cron_path IS NULL
+    UNION ALL SELECT input_id, conversation_id, agent, message, run_at_unix_ns, FALSE, 0, origin FROM turns WHERE phase = 'waiting' AND reason = 'scheduled'
 )`
 
 func (d stateDAO) putScheduledMessage(ctx context.Context, id string, message *protocol.ScheduledMessageState) error {
 	_, err := execState(ctx, d.db, "put scheduled message", `WITH recurring AS (
-    INSERT INTO schedules (id, conversation_id, agent, message, next_due_unix_ns, interval_ns) SELECT $1, $2, $3, $4, $5::bigint, $7::bigint WHERE $6::boolean
-    ON CONFLICT (id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, message = excluded.message, next_due_unix_ns = excluded.next_due_unix_ns, interval_ns = excluded.interval_ns
+    INSERT INTO schedules (id, conversation_id, agent, message, next_due_unix_ns, interval_ns, origin) SELECT $1, $2, $3, $4, $5::bigint, $7::bigint, $12 WHERE $6::boolean
+    ON CONFLICT (id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, message = excluded.message, next_due_unix_ns = excluded.next_due_unix_ns, interval_ns = excluded.interval_ns, origin = excluded.origin
 )
-INSERT INTO turns (input_id, conversation_id, agent, message, run_at_unix_ns, created_at_unix_ns, updated_at_unix_ns, phase, reason, delivery)
-SELECT $1, $2, $3, $4, $5, $8::bigint, $8, $9, $10, $11 WHERE NOT $6
-ON CONFLICT (input_id) WHERE phase = 'waiting' DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, message = excluded.message, run_at_unix_ns = excluded.run_at_unix_ns WHERE turns.reason = excluded.reason`, strings.TrimSpace(id), strings.TrimSpace(message.ConversationID), strings.TrimSpace(message.Agent), message.Message,
-		timeUnixNano(message.DueAt), message.Recurring, int64(message.Interval), timeUnixNano(time.Now()), turnWaiting, waitScheduled, protocol.InboundKindPrompt)
+INSERT INTO turns (input_id, conversation_id, agent, message, run_at_unix_ns, created_at_unix_ns, updated_at_unix_ns, phase, reason, delivery, origin)
+SELECT $1, $2, $3, $4, $5, $8::bigint, $8, $9, $10, $11, $12 WHERE NOT $6
+ON CONFLICT (input_id) WHERE phase = 'waiting' DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, message = excluded.message, run_at_unix_ns = excluded.run_at_unix_ns, origin = excluded.origin WHERE turns.reason = excluded.reason`, strings.TrimSpace(id), strings.TrimSpace(message.ConversationID), strings.TrimSpace(message.Agent), message.Message,
+		timeUnixNano(message.DueAt), message.Recurring, int64(message.Interval), timeUnixNano(time.Now()), turnWaiting, waitScheduled, protocol.InboundKindPrompt, message.Origin)
 
 	return err
 }
@@ -1775,7 +1775,7 @@ type scheduledMessageScanner struct{}
 
 func (scheduledMessageScanner) scan(scanner rowScanner) (id string, message protocol.ScheduledMessageState, err error) {
 	var dueAt, interval int64
-	if err := scanner.Scan(&id, &message.ConversationID, &message.Agent, &message.Message, &dueAt, &message.Recurring, &interval); err != nil {
+	if err := scanner.Scan(&id, &message.ConversationID, &message.Agent, &message.Message, &dueAt, &message.Recurring, &interval, &message.Origin); err != nil {
 		return "", protocol.ScheduledMessageState{}, fmt.Errorf("scan scheduled message: %w", err)
 	}
 

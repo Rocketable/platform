@@ -181,7 +181,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	require.NoError(t, root.Mkdir("agents", 0o700))
 
 	for name, model := range map[string]string{"main": "gpt-6.1-sol", "nokey": "nokey/gpt-6.1-sol", "chat": "chat/gpt-6.1-sol", "stale": "stale/gpt-6.1-sol", "worker": "worker/test-model"} {
-		require.NoError(t, root.WriteFile(filepath.Join("agents", name+".md"), []byte("---\ndescription: Voice fixture\nmode: primary\nmodel: "+model+"\npermission: {}\n---\nReply plainly.\n"), 0o600))
+		require.NoError(t, root.WriteFile(filepath.Join("agents", name+".md"), []byte("---\ndescription: Voice fixture\nmodel: "+model+"\npermission: {}\n---\nReply plainly.\n"), 0o600))
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())

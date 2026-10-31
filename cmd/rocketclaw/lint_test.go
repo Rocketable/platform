@@ -53,6 +53,32 @@ bad
 	assert.Contains(t, output, "RC006 error agents/lint-bad.md")
 }
 
+// Lint loads easy agents as startup does, and checks their routines with the cron manager's own check.
+func TestRunLintEasyAgents(t *testing.T) {
+	easy := "---\nmode: easy\nspace: Ops\nworkingDirectory: data\n"
+	for _, tt := range []struct{ name, agent, err string }{
+		{"valid", easy + "routines: [30m]\n---\nmain\n", ""},
+		{"unknown key", easy + "description: main\n---\nmain\n", "load agents: main.md: description: not an easy-mode key"},
+		{"repeated routine", easy + "routines: [30m, 30m]\n---\nmain\n", `validate cron definitions: agents/main.md: routines: schedule "30m" is listed twice`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			t.Chdir(workspace)
+			writeLintConfig(t, workspace)
+			writeLintAgent(t, workspace, "main.md", tt.agent)
+
+			output, err := captureStdoutAndError(t, func() error { return runLint(nil) })
+			if tt.err != "" {
+				require.EqualError(t, err, tt.err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, "rocketclaw lint next: OK\n", output)
+		})
+	}
+}
+
 func TestRunLintRejectsUnknownTarget(t *testing.T) {
 	err := runLint([]string{"later"})
 	require.ErrorContains(t, err, "usage: rocketclaw lint [next|current]")

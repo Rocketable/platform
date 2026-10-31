@@ -61,9 +61,12 @@ type PermissionBucket struct {
 
 // PermissionSet contains all permission buckets configured for an agent.
 // Sudo makes every subject no rule matches require automatic approval.
+// Easy marks an easy agent's compiled rules: features that need an allow
+// also count automatic approval as on, as under Sudo.
 type PermissionSet struct {
 	Buckets   []PermissionBucket
 	Sudo      bool
+	Easy      bool
 	skillRead map[string]skillReadAccess
 }
 
@@ -389,10 +392,10 @@ func (ps PermissionSet) Evaluate(permission, subject string) (action PermissionA
 }
 
 // Enabled reports whether a feature that needs an exact allow is on for subject:
-// it evaluates to allow, or to automatic approval under Sudo.
+// it evaluates to allow, or to automatic approval under Sudo or for an easy agent.
 func (ps PermissionSet) Enabled(permission, subject string) bool {
 	action := ps.evaluate(permission, subject).Action
-	return action == permissionAllow || ps.Sudo && action == permissionAuto
+	return action == permissionAllow || (ps.Sudo || ps.Easy) && action == permissionAuto
 }
 
 func (ps PermissionSet) evaluate(permission, subject string, scripts ...string) permissionDecision {

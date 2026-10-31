@@ -76,29 +76,23 @@ func TestRuntimeWorkflowDescriptionsListsSavedWorkflows(t *testing.T) {
 func TestWorkflowValidationKeepsLiveAssetsOnInvalidReload(t *testing.T) {
 	t.Parallel()
 
-	for _, tt := range []struct{ name, source, want string }{
-		{name: "invalid syntax", source: "not valid starlark", want: "validate workflow definitions"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			workspace := t.TempDir()
-			root, err := os.OpenRoot(workspace)
-			require.NoError(t, err)
-			require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-			require.NoError(t, root.WriteFile(".rocketclaw/workflows/live.star", []byte("live"), 0o600))
-			require.NoError(t, root.Mkdir("workflows", 0o755))
-			require.NoError(t, root.WriteFile("workflows/bad.star", []byte(tt.source), 0o600))
-			t.Cleanup(func() { require.NoError(t, root.Close()) })
+	workspace := t.TempDir()
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
+	require.NoError(t, root.WriteFile(".rocketclaw/workflows/live.star", []byte("live"), 0o600))
+	require.NoError(t, root.Mkdir("workflows", 0o755))
+	require.NoError(t, root.WriteFile("workflows/bad.star", []byte("not valid starlark"), 0o600))
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-			cfg := &config.Config{Workspace: workspace}
-			err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), nil, slog.New(slog.DiscardHandler), config.NewLockedConfig(cfg), func(runtimeDir string) error {
-				return validateWorkflowDefinitions(cfg, runtimeDir)
-			})
-			require.ErrorContains(t, err, tt.want)
-			data, err := root.ReadFile(".rocketclaw/workflows/live.star")
-			require.NoError(t, err)
-			assert.Equal(t, "live", string(data))
-		})
-	}
+	cfg := &config.Config{Workspace: workspace}
+	err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), nil, slog.New(slog.DiscardHandler), config.NewLockedConfig(cfg), func(runtimeDir string) error {
+		return validateWorkflowDefinitions(cfg, runtimeDir)
+	})
+	require.ErrorContains(t, err, "validate workflow definitions")
+	data, err := root.ReadFile(".rocketclaw/workflows/live.star")
+	require.NoError(t, err)
+	assert.Equal(t, "live", string(data))
 }
 
 func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
@@ -313,7 +307,7 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
-	require.NoError(t, beginGoalDB(t.Context(), store.db, conversationID, &GoalState{Objective: "ship it", MaxTurns: 5, PrincipalName: "Alice", PrincipalEmail: "alice@example.com"}))
+	require.NoError(t, beginGoalDB(t.Context(), store.db, conversationID, &GoalState{Objective: "ship it", MaxTurns: 5, PrincipalName: "Alice", PrincipalEmail: "alice@example.com", Origin: `[Web principal="Alice"]`}))
 
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
@@ -327,6 +321,7 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	require.Len(t, submittedMessages(bridge), 1)
 	assert.Equal(t, protocol.GoalActionContinue, submittedMessages(bridge)[0].GoalAction)
 	assert.Equal(t, map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, submittedMessages(bridge)[0].Metadata, "the restart continuation keeps the goal's setter")
+	assert.Equal(t, `[Web principal="Alice"]`, submittedMessages(bridge)[0].OriginHeader, "and its origin")
 	assert.Equal(t, "Continue the active goal loop.", submittedMessages(bridge)[0].Text)
 	assert.Equal(t, conversationID, submittedMessages(bridge)[0].ConversationID)
 	assert.Equal(t, &protocol.SlackReplyTarget{}, submittedMessages(bridge)[0].SlackReply)

@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -157,12 +159,24 @@ func (s *Server) uploadContent(ctx context.Context, conversationID, text string,
 		return content, err
 	}
 
-	root, err := os.OpenRoot(s.cfg.Clone().Workspace)
+	cfg := s.cfg.Clone()
+
+	root, err := os.OpenRoot(cfg.Workspace)
 	if err != nil {
 		return content, fmt.Errorf("open upload workspace: %w", err)
 	}
 
 	defer func() { _ = root.Close() }()
+
+	thread, _, err := s.sessions.Thread(conversationID)
+	if err != nil {
+		return content, fmt.Errorf("read upload conversation: %w", err)
+	}
+
+	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, cfg.RuntimeDirName())
+	if err != nil {
+		return content, fmt.Errorf("load upload agents: %w", err)
+	}
 
 	for _, id := range ids {
 		attachment, err := s.sessions.LoadAttachment(ctx, conversationID, id, true)
@@ -174,17 +188,24 @@ func (s *Server) uploadContent(ctx context.Context, conversationID, text string,
 			return content, fmt.Errorf("load prompt upload: %w", err)
 		}
 
-		dir := filepath.Join("artifacts", "uploads", attachment.ID)
-		if err := root.MkdirAll(dir, 0o700); err != nil {
+		path := filepath.Join("artifacts", "uploads", attachment.ID, attachment.Name)
+		reference := fmt.Sprintf("attachment:%s %q (workspace path %q)", attachment.ID, attachment.Name, path)
+
+		if agents.Items[thread.Agent].Mode == harness.AgentModeEasy {
+			path = filepath.Join(backend.EasyUploadDir(cfg, conversationID), attachment.ID, attachment.Name)
+			reference = fmt.Sprintf("attachment:%s %q (path %q)", attachment.ID, attachment.Name, filepath.Join(cfg.Workspace, path))
+		}
+
+		if err := root.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return content, fmt.Errorf("create upload directory: %w", err)
 		}
 
-		path := filepath.Join(dir, attachment.Name)
 		if err := root.WriteFile(path, attachment.Data, 0o600); err != nil {
 			return content, fmt.Errorf("materialize upload: %w", err)
 		}
 
-		content.TextAttachments = append(content.TextAttachments, fmt.Sprintf("attachment:%s %q (workspace path %q)", attachment.ID, attachment.Name, path))
+		content.TextAttachments = append(content.TextAttachments, reference)
+
 		switch attachment.MIMEType {
 		case "image/jpeg", "image/png", "image/webp":
 			content.Attachments = append(content.Attachments, protocol.InboundAttachment{Name: attachment.Name, MIMEType: attachment.MIMEType, Data: attachment.Data})

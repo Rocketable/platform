@@ -238,7 +238,7 @@ func TestShadowPublicMutationsAreReadOnly(t *testing.T) {
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY shadow_agent LIMIT 1`).Scan(&child))
 	_, err := store.AppendEntryID(ctx, child, testSessionEntry("retained input", "retained answer"))
 	require.NoError(t, err)
-	require.NoError(t, store.startSubagent(ctx, child, harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, "main", true))
+	require.NoError(t, store.startSubagent(ctx, child, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, Agent: "main"}))
 
 	for _, id := range []string{child, child + "/task"} {
 		for _, action := range []string{"fork", "delete", "upload", "stage", "redo", "prompt", "cancel", "goal", "pop", "promote", "delete queue", "reorder", "stash", "switch", "move background", "stop background", "answer"} {
@@ -317,7 +317,7 @@ func TestShadowHistoryChangeSignals(t *testing.T) {
 	var child, producerChild string
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'parent' AND shadow_agent = 'main/a'`).Scan(&child))
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent = 'producer' AND shadow_agent = 'main/a'`).Scan(&producerChild))
-	require.NoError(t, store.startSubagent(ctx, child, harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, "main", true))
+	require.NoError(t, store.startSubagent(ctx, child, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, Agent: "main"}))
 	conn, err := store.db.Conn(ctx)
 
 	require.NoError(t, err)

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -19,7 +20,7 @@ const (
 
 type mapSecrets map[string]string
 
-func (m mapSecrets) SecretString(arn string) (string, error) {
+func (m mapSecrets) SecretString(_ context.Context, arn string) (string, error) {
 	body, ok := m[arn]
 	if !ok {
 		return "", &SecretFetchError{ARN: arn, err: errSecretEmpty}
@@ -34,9 +35,9 @@ type countingSecrets struct {
 	calls []string
 }
 
-func (c *countingSecrets) SecretString(arn string) (string, error) {
+func (c *countingSecrets) SecretString(ctx context.Context, arn string) (string, error) {
 	c.calls = append(c.calls, arn)
-	return c.mapSecrets.SecretString(arn)
+	return c.mapSecrets.SecretString(ctx, arn)
 }
 
 func slackJSON(botToken string) string {

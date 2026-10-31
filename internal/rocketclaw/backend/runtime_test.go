@@ -222,7 +222,7 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 		require.Len(t, scheduled, 1)
 
 		for _, message := range scheduled {
-			require.Equal(t, protocol.ScheduledMessageState{ConversationID: "Y", Agent: "main", Message: "after producer-effects", DueAt: message.DueAt, Recurring: true, Interval: 2 * time.Hour}, message,
+			require.Equal(t, protocol.ScheduledMessageState{ConversationID: "Y", Agent: "main", Message: "after producer-effects", DueAt: message.DueAt, Recurring: true, Interval: 2 * time.Hour, Origin: "[ScheduledMessage source=System]"}, message,
 				"only the successful turn's changes apply to the destination, with the destination's agent")
 		}
 
@@ -376,7 +376,7 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
@@ -799,6 +799,7 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 	assert.Equal(t, "ship it", goal.Objective)
 	assert.Equal(t, 3, goal.MaxTurns)
 	assert.Equal(t, []string{"Alice", "alice@example.com"}, []string{goal.PrincipalName, goal.PrincipalEmail}, "the goal records the person who set it")
+	assert.Equal(t, `[Web principal="Alice <alice@example.com>"]`, goal.Origin, "and the origin its continuations are reviewed with")
 	require.Len(t, bridge.requestCh, 1)
 	kickoff := (<-bridge.requestCh).inbound
 	assert.Equal(t, protocol.GoalActionKickoff, kickoff.GoalAction)
@@ -821,6 +822,7 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, exists)
 	assert.Equal(t, []string{"Alice", "alice@example.com"}, []string{goal.PrincipalName, goal.PrincipalEmail})
+	assert.Equal(t, `[Web principal="Alice <alice@example.com>"]`, goal.Origin)
 }
 
 func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
@@ -1019,7 +1021,7 @@ func TestRuntimeQueueEditKeepsPreparedWorkflow(t *testing.T) {
 			require.NoError(t, root.Remove(".rocketclaw/workflows/audit.star"))
 
 			if test.agent != "" {
-				require.NoError(t, root.WriteFile(".rocketclaw/agents/other.md", []byte("---\ndescription: Other\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nOther queue instructions\n"), 0o600))
+				require.NoError(t, root.WriteFile(".rocketclaw/agents/other.md", []byte("---\ndescription: Other\nmodel: gpt-6.1-sol\npermission: {}\n---\nOther queue instructions\n"), 0o600))
 				bridge.SwitchAgent("other")
 			}
 
@@ -1314,7 +1316,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	})
 	releaseSubagent := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(releaseSubagent) // Before the provider closes, which waits for the held request.
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n    ask_user_question: allow\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n    ask_user_question: allow\n---\nPrompt\n")
 
 	asked, withdrawn := make(chan string, 1), make(chan error, 1)
 	asker := &userQuestionAskerMock{AskUserQuestionFunc: func(ctx context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
@@ -1415,7 +1417,7 @@ func TestMoveToBackgroundSkipsDeniedAgent(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_e","name":"execute","arguments":%q}]}`, arguments)
 	})
 	gate = filepath.Join(nt.cfg.Workspace, "gate")
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n---\nPrompt\n")
 
 	manager, _ := nt.run(t, ignoreOutbound)
 	bridge := nt.bridge(t, manager, nt.conversationID)

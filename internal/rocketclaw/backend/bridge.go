@@ -106,6 +106,8 @@ type Config struct {
 	RequestReload         runtimeReloader
 	UserQuestionAsker     protocol.UserQuestionAsker
 	SessionService        *SessionService
+	// Secrets fetches an easy agent's secretsARN for each of its turns.
+	Secrets config.SecretFetcher
 }
 
 // Bridge forwards rocketclaw messages into one turn-lived rocketcode run per turn.
@@ -288,7 +290,7 @@ ON CONFLICT (conversation_id) DO NOTHING`, b.config.ConversationID+key.Path, b.c
 func (b *Bridge) WriteSubagent(ctx context.Context, write *harness.SubagentWrite) (bool, error) {
 	target := b.config.ConversationID + write.Key.Path
 
-	if err := b.config.SessionService.startSubagent(ctx, b.config.ConversationID, write.Key, write.Agent, write.Mode == ""); err != nil {
+	if err := b.config.SessionService.startSubagent(ctx, b.config.ConversationID, write); err != nil {
 		return false, err
 	}
 
@@ -354,9 +356,15 @@ func hiddenRun(inbound *protocol.InboundMessage) bool {
 }
 
 // ScheduleMessage schedules one delayed prompt for this conversation. origin is the inbound of
-// the asking turn; a hidden producer turn records the prompt privately instead.
+// the asking turn, whose source the prompt's turn keeps; a hidden producer turn records the
+// prompt privately instead.
 func (b *Bridge) ScheduleMessage(origin *protocol.InboundMessage, delay time.Duration, message string, recurring bool) error {
-	scheduled := protocol.ScheduledMessageState{ConversationID: b.config.ConversationID, Agent: b.agentSnapshot(), Message: message, DueAt: time.Now().UTC().Add(delay), Recurring: recurring}
+	header := reviewOriginHeader(origin)
+	if !strings.HasPrefix(header, "[ScheduledMessage ") {
+		header = "[ScheduledMessage source=" + header[1:]
+	}
+
+	scheduled := protocol.ScheduledMessageState{ConversationID: b.config.ConversationID, Agent: b.agentSnapshot(), Message: message, DueAt: time.Now().UTC().Add(delay), Recurring: recurring, Origin: header}
 	if recurring {
 		scheduled.Interval = delay
 	}
@@ -1203,6 +1211,7 @@ SELECT s.private, p.producing FROM self s CROSS JOIN producing p`, b.config.Conv
 		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 		inbound.ConversationID, inbound.SlackReply = b.config.ConversationID, protocol.Clone(note.origin.SlackReply)
 		inbound.SyncDestination, inbound.RequireOutputDecision, inbound.Cronjob = note.origin.SyncDestination, note.origin.RequireOutputDecision, note.origin.Cronjob
+		inbound.OriginHeader = reviewOriginHeader(note.origin)
 
 		if inbound.SyncDestination == "" {
 			return b.enqueue(ctx, &bridgeRequest{inbound: inbound, backgroundWake: true}, "submit background wake")
@@ -1451,7 +1460,7 @@ func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *proto
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, armed.Message, false)
 
-	inbound.ConversationID = b.config.ConversationID
+	inbound.ConversationID, inbound.OriginHeader = b.config.ConversationID, stored.Origin
 	if err := b.enqueue(ctx, &bridgeRequest{inbound: inbound, scheduledMessageID: id, scheduledMessageRecurring: stored.Recurring}, "submit scheduled message"); err != nil {
 		return err
 	}
@@ -1922,7 +1931,10 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 		return result, err
 	}
 
-	runner.shellEnv = b.shellEnvFor(shellEnv)
+	runner.shellEnv, runner.originHeader = b.shellEnvFor(shellEnv), reviewOriginHeader(msg)
+	if err := b.setEasyShell(ctx, runner.cfg, runner.agents, runner.skills, runner.agent, runner.shellEnv, b.config.ConversationID); err != nil {
+		return result, err
+	}
 
 	request := workflow.RunRequest{RunID: turnID, Args: msg.Workflow.Args}
 
@@ -2038,7 +2050,7 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, request *bridgeRequest) err
 	}
 
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.\n\n"+goalSteeringPrompt(&goal), false)
-	inbound.GoalAction = protocol.GoalActionContinue
+	inbound.GoalAction, inbound.OriginHeader = protocol.GoalActionContinue, goal.Origin
 	inbound.ConversationID = b.config.ConversationID
 	inbound.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: goal.PrincipalName, protocol.InboundPrincipalEmailMetadataKey: goal.PrincipalEmail}
 
@@ -2168,6 +2180,23 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			agent.MaxRecursion = new(max(*limit-len(jobs), 0))
 		}
 
+		var (
+			model sql.NullString
+			tools []byte
+		)
+
+		if err = b.config.SessionService.db.QueryRowContext(ctx, `SELECT subagent_model, COALESCE(subagent_tools, 'null') FROM conversations WHERE conversation_id = $1`, b.config.ConversationID).Scan(&model, &tools); err != nil {
+			return runResult{}, fmt.Errorf("read subagent model: %w", err)
+		}
+
+		if model.Valid {
+			agent.Model, agent.ReasoningEffort = harness.ParseModelRef(model.String)
+		}
+
+		if err = json.Unmarshal(tools, &agent.Tools); err != nil {
+			return runResult{}, fmt.Errorf("decode subagent tools: %w", err)
+		}
+
 		agents.Items[agentName] = agent
 	}
 
@@ -2258,6 +2287,12 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	// Tools that act on the turn's routing read origin, so its background work keeps it.
 	tagConversationID := cmp.Or(origin.SyncDestination, self)
 
+	if err := b.setEasyShell(ctx, runtimeCfg, agents, skills, agentName, b.shellEnvFor(shellEnv), self); err != nil {
+		return runResult{}, err
+	}
+
+	agent := agents.Items[agentName]
+
 	// A subagent's turn under a task call that runs in the background, the job writing its input or an ancestor's,
 	// has left the turn it acts for, as that call has: its turn-bound tools refuse, as in other background work,
 	// even once that turn ended.
@@ -2267,10 +2302,9 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	if replyTurn != "" || slices.ContainsFunc(jobs, b.background.detached) {
-		customTools = append(customTools, attachFilesTool(root, b.config.SessionService, b.config.ConversationID, replyTurn))
+		customTools = append(customTools, attachFilesTool(root, &agent.CustomShell, b.config.SessionService, b.config.ConversationID, replyTurn))
 	}
 
-	agent := agents.Items[agentName]
 	if agent.Permission.Enabled("rocketclaw", restartToolName) {
 		customTools = append(customTools, restartTool(b.config.RequestRestart))
 	}
@@ -2287,7 +2321,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 	}
 
-	if tool, ok := b.maybeDynamicWorkflowTool(root, &agent, agentName, tagConversationID, b.shellEnvFor(shellEnv)); ok {
+	originHeader := reviewOriginHeader(origin)
+	if tool, ok := b.maybeDynamicWorkflowTool(root, &agent, agentName, tagConversationID, b.shellEnvFor(shellEnv), originHeader); ok {
 		customTools = append(customTools, tool)
 	}
 
@@ -2296,11 +2331,11 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	customTools = append(customTools, sessionsWriteTool(b, origin, msg, rootAgent, self, agents))
-	customTools = append(customTools, pageTools(b.config.SessionService, root, b.threads, rootAgent, agents.Items[rootAgent].Space, "")...)
+	customTools = append(customTools, pageTools(b.config.SessionService, root, &agent.CustomShell, b.threads, rootAgent, agents.Items[rootAgent].Space, "")...)
 
 	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, customTools...)
 
-	rocketcodeConfig.ChildContext = childContext
+	rocketcodeConfig.ChildContext, rocketcodeConfig.OriginHeader = childContext, originHeader
 	if !b.shadow && !b.underShadow {
 		rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: b.background, root: shared, conversationID: b.config.ConversationID, origin: msg}
 	}
@@ -2377,7 +2412,9 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	if captured {
 		prepared = snapshot.Inputs[0]
 	} else {
-		prompt, err := b.buildPrompt(msg, agents.Items[agentName].Frontmatter)
+		agent := agents.Items[agentName]
+
+		prompt, err := b.buildPrompt(msg, &agent)
 		if err != nil {
 			return runResult{}, err
 		}
@@ -2582,8 +2619,9 @@ func rocketcodeShellTempRel(runtimeDir, conversationID string) string {
 
 // turnShellEnv builds the shell environment of a turn that acts for the top-level session self and its
 // turn's inbound origin: the External MCP metadata and the person who asked. A subagent reads them from
-// its top-level session and turn, as its shell had when it ran inside that turn. It returns the metadata
-// messages child runs see, and appends the turn's additional metadata to contextEntries.
+// its top-level session and turn, as its shell had when it ran inside that turn, but keeps its own
+// conversation ID. It returns the metadata messages child runs see, and appends the turn's additional
+// metadata to contextEntries.
 func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol.InboundMessage, contextEntries *[]harness.SessionEntry) (map[string]string, []harness.SessionEntry, error) {
 	var (
 		shellEnv     map[string]string
@@ -2646,6 +2684,11 @@ func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol
 				*contextEntries = append(*contextEntries, entry)
 			}
 		}
+	}
+
+	// Every turn knows its conversation; External MCP's metadata already names it.
+	if shellEnv == nil {
+		shellEnv = map[string]string{rocketclawConversationIDEnv: b.config.ConversationID}
 	}
 
 	// origin is the top-level turn's inbound, so a subagent acts for the same person.
@@ -2711,9 +2754,9 @@ func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mc
 	}
 
 	out := make(map[string]mcpclient.ServerConfig, len(servers))
-	for name, server := range servers {
-		cfg := mcpclient.ServerConfig(server)
-		out[name] = cfg
+	for name := range servers {
+		server := servers[name]
+		out[name] = mcpclient.ServerConfig{Command: server.Command, Args: server.Args, Env: server.Env, Cwd: server.Cwd, URL: server.URL, Headers: server.Headers}
 	}
 
 	return out
@@ -2792,7 +2835,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 		return harness.Agents{}, harness.Skills{}, fmt.Errorf("open skills dir: %w", err)
 	}
 
-	agents, err := loadAgentDefinitions(agentsFS)
+	agents, err := loadAgentDefinitions(agentsFS, skillsFS, cfg)
 	if err != nil {
 		return harness.Agents{}, harness.Skills{}, err
 	}
@@ -2808,9 +2851,14 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 	for name := range agents.Items {
 		agent := agents.Items[name]
 
+		tagsKey := "permission.rocketclaw." + setTagToolName
+		if agent.Mode == harness.AgentModeEasy {
+			tagsKey = "tags"
+		}
+
 		groups, err := agentTagGroups(&agent)
 		if err != nil {
-			err = fmt.Errorf("permission.rocketclaw.%s: %w", setTagToolName, err)
+			err = fmt.Errorf("%s: %w", tagsKey, err)
 		} else if _, _, errRecipients := agentRecipients(&agent); errRecipients != nil {
 			err = fmt.Errorf("permission.rocketclaw.%s: %w", recipientSetting, errRecipients)
 		} else if shell, errShell := justbash.Shell(agent.Frontmatter, cfg.Workspace, filepath.Join(cfg.Workspace, cfg.RuntimeDirName()), justBashDir(cfg)); errShell != nil {
@@ -2842,7 +2890,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 		}
 
 		action := harness.PermissionDeny
-		if len(groups) > 0 && agent.Permission.Sudo {
+		if len(groups) > 0 && (agent.Permission.Sudo || agent.Permission.Easy) {
 			action = harness.PermissionAuto
 		} else if len(groups) > 0 {
 			action = harness.PermissionAllow
@@ -2868,9 +2916,18 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 	return agents, skillResult.Skills, nil
 }
 
-// loadAgentDefinitions keeps comparison failures separate from ordinary definitions.
-func loadAgentDefinitions(fsys fs.FS) (harness.Agents, error) {
-	result := harness.LoadAgents(fsys)
+// loadAgentDefinitions keeps comparison failures, a shadow whose mode differs from its parent's among them,
+// separate from ordinary definitions. Easy agents are checked against cfg and the skills in skillsFS.
+func loadAgentDefinitions(agentsFS, skillsFS fs.FS, cfg *config.Config) (harness.Agents, error) {
+	result := harness.LoadAgents(agentsFS, harness.AgentLoadConfig{MCPToolGroups: cfg.MCPToolGroups(), Providers: cfg.ProviderNames(), Skills: skillsFS})
+
+	for name := range result.Agents.Items {
+		agent := result.Agents.Items[name]
+		if parent, ok := result.Agents.Items[filepath.Dir(name)]; ok && parent.Mode != agent.Mode {
+			slog.Warn("load shadow definition", "path", agent.Location, "error", fmt.Errorf("mode %s does not match parent %s's mode %s", agent.Mode, parent.Name, parent.Mode))
+			delete(result.Agents.Items, name)
+		}
+	}
 
 	var errLoads []error
 
@@ -3010,8 +3067,8 @@ type attachFilesInput struct {
 }
 
 // attachFilesTool queues files, saved as conversationID's, for the reply of turnID, which sends the
-// files saved for it, a resumed turn's included.
-func attachFilesTool(root *os.Root, sessions *SessionService, conversationID, turnID string) harness.Tool {
+// files saved for it, a resumed turn's included. An easy agent's shell names the folders it attaches from.
+func attachFilesTool(root *os.Root, shell *harness.CustomShell, sessions *SessionService, conversationID, turnID string) harness.Tool {
 	parameters := map[string]any{
 		"properties": map[string]any{
 			"attachments": map[string]any{
@@ -3041,7 +3098,7 @@ func attachFilesTool(root *os.Root, sessions *SessionService, conversationID, tu
 
 		ids := make([]string, 0, len(input.Attachments))
 		for i := range input.Attachments {
-			attachment, err := outboundAttachment(root, &input.Attachments[i])
+			attachment, err := outboundAttachment(root, shell, &input.Attachments[i])
 			if err != nil {
 				return harness.ToolResult{}, err
 			}
@@ -3058,7 +3115,8 @@ func attachFilesTool(root *os.Root, sessions *SessionService, conversationID, tu
 	}}
 }
 
-func outboundAttachment(root *os.Root, input *outboundAttachmentInput) (protocol.OutboundAttachment, error) {
+// outboundAttachment reads a file by path from root or, for an easy agent's shell, from its file view.
+func outboundAttachment(root *os.Root, shell *harness.CustomShell, input *outboundAttachmentInput) (protocol.OutboundAttachment, error) {
 	name := strings.TrimSpace(input.Name)
 	path := strings.TrimSpace(input.Path)
 	mimeType := strings.TrimSpace(input.MIMEType)
@@ -3076,6 +3134,17 @@ func outboundAttachment(root *os.Root, input *outboundAttachmentInput) (protocol
 	case input.Content != "":
 		data = []byte(input.Content)
 	case path != "":
+		if shell.Dir != "" {
+			easyRoot, rel, err := harness.EasyRoot(shell, path)
+			if err != nil {
+				return protocol.OutboundAttachment{}, fmt.Errorf("read attachment: %w", err)
+			}
+
+			defer func() { _ = easyRoot.Close() }()
+
+			root, path = easyRoot, rel
+		}
+
 		read, err := root.ReadFile(path)
 		if err != nil {
 			return protocol.OutboundAttachment{}, fmt.Errorf("read attachment %q: %w", path, err)
@@ -3317,8 +3386,8 @@ func ReplayInputMessageRoleText(item *responses.ResponseInputItemUnionParam, raw
 
 const defaultReplyInstruction = "Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."
 
-func (b *Bridge) buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any) (string, error) {
-	prompt := buildPrompt(msg, agentFrontmatter, false)
+func (b *Bridge) buildPrompt(msg *protocol.InboundMessage, agent *harness.Agent) (string, error) {
+	prompt := buildPrompt(msg, agent, false)
 
 	goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
 	if err != nil {
@@ -3332,12 +3401,19 @@ func (b *Bridge) buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[
 	return prompt + "\n\n" + goalSteeringPrompt(&goal), nil
 }
 
-// buildPrompt frames msg for the model; steer reports whether msg joins a running turn
-// rather than starting one.
-func buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any, steer bool) string {
+// buildPrompt frames msg for agent, nil when unknown, which gets no reply instruction in easy mode;
+// steer reports whether msg joins a running turn rather than starting one.
+func buildPrompt(msg *protocol.InboundMessage, agent *harness.Agent, steer bool) string {
 	instruction := defaultReplyInstruction
-	if override, ok := agentFrontmatter["additionalInstructions"].(string); ok && strings.TrimSpace(override) != "" {
-		instruction = override
+
+	if agent != nil {
+		if override, ok := agent.Frontmatter["additionalInstructions"].(string); ok && strings.TrimSpace(override) != "" {
+			instruction = override
+		}
+
+		if agent.Mode == harness.AgentModeEasy {
+			instruction = ""
+		}
 	}
 
 	body := strings.TrimSpace(msg.Text)
@@ -3520,6 +3596,31 @@ func provenanceHeader(provenance *promptProvenance) string {
 	}
 
 	return header + "]"
+}
+
+// reviewOriginHeader is the trusted origin header permission reviews read for a turn acting for origin, its
+// top-level turn's inbound: the header origin's creator left on a follow-on, else origin's source, the person
+// who asked, and the agent that wrote it, without the prompt's additional instructions.
+func reviewOriginHeader(origin *protocol.InboundMessage) string {
+	if origin.OriginHeader != "" {
+		return origin.OriginHeader
+	}
+
+	provenance := provenanceFromInbound(origin)
+	if origin.Cronjob != nil {
+		provenance.origin = "Cron"
+	}
+
+	provenance.principal = cmp.Or(origin.Metadata[protocol.InboundPrincipalNameMetadataKey], provenance.principal)
+	if email := strings.TrimSpace(origin.Metadata[protocol.InboundPrincipalEmailMetadataKey]); email != "" {
+		provenance.principal = strings.TrimSpace(provenance.principal + " <" + email + ">")
+	}
+
+	if agent := origin.Metadata[protocol.InboundSenderAgentMetadataKey]; agent != "" {
+		provenance.sender = "agent " + agent
+	}
+
+	return provenanceHeader(&provenance)
 }
 
 func provenanceToken(value string) string {
