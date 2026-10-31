@@ -86,7 +86,7 @@ func newResumeTestBridges(t *testing.T, blocked bool) (newBridge func() *Bridge,
 
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 	newBridge = func() *Bridge {
-		return NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, SessionService: service}, slog.New(slog.DiscardHandler))
+		return NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
 	}
 
 	return newBridge, service, requests, finals
@@ -549,7 +549,7 @@ func newTestBridgeManager(t *testing.T, cfg *config.LockedConfig, service *Sessi
 	t.Helper()
 
 	manager = newThreadBridgeManager(cfg, service, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(bridgeCfg *Config) directBridge {
-		bridgeCfg.SessionService, bridgeCfg.RequestRestart = service, &runtimeRestarterMock{restartFunc: testNoopRestart}
+		bridgeCfg.SessionService, bridgeCfg.RequestRestart = service, &runtimeRestarterMock{restartFunc: func(string) string { return "" }}
 		return NewConversation(cfg, finalsPublisher{finals: finals}, bridgeCfg, slog.New(slog.DiscardHandler))
 	}})
 
@@ -1304,7 +1304,7 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 	finals := make(chan *protocol.OutboundMessage, 4)
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 	newBridge := func() *Bridge {
-		return NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, SessionService: service, UserQuestionAsker: asker}, slog.New(slog.DiscardHandler))
+		return NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: service, UserQuestionAsker: asker}, slog.New(slog.DiscardHandler))
 	}
 
 	first := newBridge()
@@ -1458,7 +1458,7 @@ func TestResumedTurnFailurePostsInternalErrorFinal(t *testing.T) {
 
 		return nil
 	}}
-	runTestBridge(t, NewConversation(config.NewLockedConfig(cfg), publisher, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, SessionService: service}, slog.New(slog.DiscardHandler)))
+	runTestBridge(t, NewConversation(config.NewLockedConfig(cfg), publisher, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler)))
 
 	for {
 		message := readFinal(t, outbound)
@@ -1623,7 +1623,7 @@ func TestWorkflowTurnStepsSeeTurnEnvironment(t *testing.T) {
 
 	finals := make(chan *protocol.OutboundMessage, 4)
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
-	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
 	runTestBridge(t, bridge)
 
 	msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "$workflow who", true)
@@ -1691,7 +1691,7 @@ def main(args):
 			finals := make(chan *protocol.OutboundMessage, 4)
 			cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 			newBridge := func() *Bridge {
-				return NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: testNoopRestart}, SessionService: service}, slog.New(slog.DiscardHandler))
+				return NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
 			}
 			submit := func(bridge *Bridge) {
 				msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)

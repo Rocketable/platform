@@ -59,14 +59,14 @@ type runShutdown struct {
 	once sync.Once
 }
 
-func (s *runShutdown) restart(reason string) (string, error) {
+func (s *runShutdown) restart(reason string) string {
 	started := s.start(reason, true)
 
 	if !started {
 		s.logger.Warn("restart requested while shutdown already in progress", "reason", reason)
 	}
 
-	return "restart requested; runtime cancellation started", nil
+	return "restart requested; runtime cancellation started"
 }
 
 func (s *runShutdown) start(reason string, restart bool) bool {
