@@ -197,7 +197,7 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 
 		return &apitype.WhoIsResponse{Node: node, UserProfile: &tailcfg.UserProfile{LoginName: "zoe@example.com"}}, nil
 	}}
-	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, "tail1234.ts.net", startProxyTestRPC(t, upstream.URL)))
+	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, []string{"https://local.tail1234.ts.net"}, startProxyTestRPC(t, upstream.URL)))
 	t.Cleanup(tailnet.Close)
 
 	for _, listener := range []*httptest.Server{web, tailnet} {
@@ -234,7 +234,7 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, response.StatusCode, "a same-origin request over TLS")
 
-	// A RocketClaw page elsewhere on the tailnet reaches OpenCode, with only RocketClaw's CORS answer.
+	// A RocketClaw page this server trusts reaches OpenCode, with only RocketClaw's CORS answer.
 	request, err = http.NewRequestWithContext(t.Context(), http.MethodDelete, tailnet.URL+"/oc/box/api/session/ses_a", http.NoBody)
 	require.NoError(t, err)
 	request.Header.Set("Origin", "https://local.tail1234.ts.net")
@@ -244,7 +244,7 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 
 	_ = response.Body.Close()
 
-	assert.Equal(t, http.StatusOK, response.StatusCode, "a tailnet page passes the relay's origin check")
+	assert.Equal(t, http.StatusOK, response.StatusCode, "a trusted page passes the relay's origin check")
 	assert.Equal(t, []string{"https://local.tail1234.ts.net"}, response.Header.Values("Access-Control-Allow-Origin"))
 
 	tagged = true

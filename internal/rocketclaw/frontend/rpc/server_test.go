@@ -275,7 +275,7 @@ func TestTailnetHandlerPassesOpenCodeMCP(t *testing.T) {
 	whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) {
 		return &apitype.WhoIsResponse{Node: &tailcfg.Node{Tags: []string{"tag:server"}}, UserProfile: &tailcfg.UserProfile{LoginName: "tagged-devices"}}, nil
 	}}
-	handler := NewTailnetHandler(whois, "tail1234.ts.net", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }))
+	handler := NewTailnetHandler(whois, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) }))
 
 	for path, code := range map[string]int{"/opencode/box/mcp": http.StatusTeapot, "/opencode/box/other": http.StatusUnauthorized, "/api/Identity": http.StatusUnauthorized} {
 		response := httptest.NewRecorder()
@@ -325,7 +325,7 @@ func TestTailnetIdentity(t *testing.T) {
 				next = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("refused caller reached the Web handler") })
 			}
 
-			handler := NewTailnetHandler(whois, "tail1234.ts.net", next)
+			handler := NewTailnetHandler(whois, nil, next)
 
 			for _, method := range []string{"Identity", "ListConfig"} {
 				request := httptest.NewRequest(http.MethodPost, "/api/"+method, strings.NewReader(`{}`))
@@ -353,8 +353,8 @@ func TestTailnetIdentity(t *testing.T) {
 	}
 }
 
-// A RocketClaw page elsewhere on the tailnet drives this server as the person on the connection;
-// pages from anywhere else stay cross-site.
+// A RocketClaw page this server trusts drives it as the person on the connection; every other page stays
+// cross-site, even one served from this tailnet, which could otherwise act as whoever opens it.
 func TestTailnetCrossSitePages(t *testing.T) {
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
@@ -384,22 +384,24 @@ func TestTailnetCrossSitePages(t *testing.T) {
 	web := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = r.Header.Clone(); web.ServeHTTP(w, r) })
 
-	serve := func(suffix, method, path, remote, origin string, header http.Header) *httptest.ResponseRecorder {
+	serve := func(trusted []string, method, path, remote, origin string, header http.Header) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(method, "https://rocketclaw.tail1234.ts.net"+path, strings.NewReader(`{}`))
 		request.RemoteAddr = remote
 		request.Header = header
 		request.Header.Set("Origin", origin)
 
 		response := httptest.NewRecorder()
-		NewTailnetHandler(whois, suffix, next).ServeHTTP(response, request)
+		NewTailnetHandler(whois, trusted, next).ServeHTTP(response, request)
 
 		return response
 	}
 
 	const page = "https://local.tail1234.ts.net"
 
+	trusted := []string{page}
+
 	for remote, login := range map[string]string{"100.64.0.1:41641": "alice@example.com", "100.64.0.2:41641": "bob@example.com"} {
-		response := serve("tail1234.ts.net", http.MethodPost, "/api/Identity", remote, page, http.Header{"Sec-Fetch-Site": {"same-site"}})
+		response := serve(trusted, http.MethodPost, "/api/Identity", remote, page, http.Header{"Sec-Fetch-Site": {"same-site"}})
 		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 		require.Contains(t, response.Body.String(), `"username":"`+login+`"`)
 		require.Equal(t, []string{page}, response.Header().Values("Access-Control-Allow-Origin"))
@@ -408,7 +410,7 @@ func TestTailnetCrossSitePages(t *testing.T) {
 	}
 
 	// A tailnet page reads a refusal as one, not as an unreachable server.
-	refused := serve("tail1234.ts.net", http.MethodPost, "/api/Identity", "100.64.0.3:41641", page, http.Header{})
+	refused := serve(trusted, http.MethodPost, "/api/Identity", "100.64.0.3:41641", page, http.Header{})
 	require.Equal(t, http.StatusUnauthorized, refused.Code)
 	require.Equal(t, page, refused.Header().Get("Access-Control-Allow-Origin"))
 
@@ -417,28 +419,35 @@ func TestTailnetCrossSitePages(t *testing.T) {
 		"/oc/box/api/session/ses_a":  {"Access-Control-Request-Method": {"DELETE"}, "Access-Control-Request-Headers": {"x-opencode-directory"}},
 		"/api/UploadAttachment?id=x": {"Access-Control-Request-Method": {"POST"}},
 	} {
-		response := serve("tail1234.ts.net", http.MethodOptions, path, "100.64.0.1:41641", page, preflight)
+		response := serve(trusted, http.MethodOptions, path, "100.64.0.1:41641", page, preflight)
 		require.Equal(t, http.StatusNoContent, response.Code, path)
 		require.Equal(t, page, response.Header().Get("Access-Control-Allow-Origin"), path)
 		require.Equal(t, preflight.Get("Access-Control-Request-Method"), response.Header().Get("Access-Control-Allow-Methods"), path)
 		require.Equal(t, preflight.Get("Access-Control-Request-Headers"), response.Header().Get("Access-Control-Allow-Headers"), path)
 	}
 
-	response := serve("tail1234.ts.net", http.MethodPost, "/api/Identity", "100.64.0.1:41641", "https://100.64.0.9:3000", http.Header{})
-	require.Equal(t, http.StatusOK, response.Code, "a page at a Tailscale IP on this tailnet")
-	require.Equal(t, "https://100.64.0.9:3000", response.Header().Get("Access-Control-Allow-Origin"))
-
-	for _, tt := range []struct{ suffix, origin string }{
-		{"tail1234.ts.net", "https://evil.example"},
-		{"tail1234.ts.net", "http://local.tail1234.ts.net"},
-		{"tail1234.ts.net", "https://node.xtail1234.ts.net"},
-		{"tail1234.ts.net", "https://100.64.0.99"},
-		{"", "https://evil.example"},
-		{"", page},
+	// Another page on this tailnet, a page at a Tailscale IP here, and a trusted page's look-alikes are not trusted,
+	// and nothing is trusted when nothing is listed.
+	for _, tt := range []struct {
+		trusted []string
+		origin  string
+	}{
+		{trusted, "https://evil.example"},
+		{trusted, "https://other.tail1234.ts.net"},
+		{trusted, "https://100.64.0.9:3000"},
+		{trusted, "http://local.tail1234.ts.net"},
+		{trusted, "https://local.tail1234.ts.net:8443"},
+		{trusted, "https://LOCAL.tail1234.ts.net"},
+		{trusted, "null"},
+		{nil, page},
 	} {
-		response := serve(tt.suffix, http.MethodPost, "/api/Reload", "100.64.0.1:41641", tt.origin, http.Header{})
-		require.Equal(t, http.StatusForbidden, response.Code, "%q from %s", tt.suffix, tt.origin)
+		response := serve(tt.trusted, http.MethodPost, "/api/Reload", "100.64.0.1:41641", tt.origin, http.Header{})
+		require.Equal(t, http.StatusForbidden, response.Code, "%v from %s", tt.trusted, tt.origin)
 		require.Empty(t, response.Header().Get("Access-Control-Allow-Origin"), tt.origin)
+
+		preflight := serve(tt.trusted, http.MethodOptions, "/api/Reload", "100.64.0.1:41641", tt.origin, http.Header{"Access-Control-Request-Method": {"POST"}})
+		require.Empty(t, preflight.Header().Get("Access-Control-Allow-Origin"), tt.origin)
+		require.Empty(t, preflight.Header().Get("Access-Control-Allow-Methods"), tt.origin)
 	}
 }
 

@@ -93,14 +93,20 @@ One web page can operate several RocketClaws. Name each other RocketClaw and its
 "rocketclaws": {"work": {"url": "https://rocketclaw.tail1234.ts.net"}}
 ```
 
-Nothing is set on the remote. Names use only `a-z`, `0-9`, and `-`, and each URL is an `https` origin with no path. Changes take effect on restart.
+On each remote, list the local page's address in `trusted_rocketclaws`, exactly as the browser shows it:
+
+```json
+"trusted_rocketclaws": ["https://hally.tail1234.ts.net"]
+```
+
+Names use only `a-z`, `0-9`, and `-`, and each URL or trusted address is an `https` origin with no path. Changes take effect on restart.
 
 - The session list, Cmd/Ctrl+P, desktop notifications, and Search pages cover every server. Remote chats show their server's name.
 - The space picker lists each server, local first, with its spaces. A remote space opens that server's view under `/r/<name>/`: its tabs, agents, cron, skills, settings, pages, voice, and new chats. Opening a remote chat goes to its server too.
 - The browser calls each remote directly, and the remote signs you in with your own Tailscale login, so you act as yourself with that remote's agents and accounts.
-- A remote must serve its tsnet name over HTTPS and run a RocketClaw version with this feature. Otherwise the page shows it as unavailable, with its address. A remote that stops answering keeps its chats listed, greyed out, until it answers again. A remote on another version keeps working with a notice, and some actions may fail.
+- A remote must serve its tsnet name over HTTPS, run a RocketClaw version with this feature, and trust the local page. Otherwise the page shows it as unavailable, with its address. A remote that stops answering keeps its chats listed, greyed out, until it answers again. A remote on another version keeps working with a notice, and some actions may fail.
 
-Each RocketClaw's tsnet listener accepts these calls from RocketClaw pages on machines in its own tailnet; the `listen_address` listener does not.
+Each RocketClaw's tsnet listener accepts these calls only from the pages its `trusted_rocketclaws` lists, because the remote signs in whoever's browser opened the page: any page it trusted could act as that person. Other pages, including other pages on the same tailnet, get no access. The `listen_address` listener accepts none.
 
 ### Slack
 

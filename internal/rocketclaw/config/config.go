@@ -32,12 +32,15 @@ type Config struct {
 	MCPServers        map[string]MCPServerConfig        `json:"mcp_servers,omitempty"`
 	OpenCode          map[string]OpenCodeConfig         `json:"opencode,omitempty"`
 	RocketClaws       map[string]RemoteRocketClawConfig `json:"rocketclaws,omitempty"`
-	Slack             SlackConfig                       `json:"slack"`
-	OpenAI            OpenAIConfig                      `json:"openai"`
-	Providers         map[string]OpenAIConfig           `json:"providers,omitempty"`
-	AutoApproverModel string                            `json:"auto_approver_model"`
-	Instrumentation   InstrumentationConfig             `json:"instrumentation"`
-	PostHog           PostHogConfig                     `json:"posthog,omitzero"`
+	// TrustedRocketClaws are the https origins of the RocketClaw pages whose browsers may call this server's tailnet
+	// address as the person on the connection; a page from any other origin gets no cross-site access.
+	TrustedRocketClaws []string                `json:"trusted_rocketclaws,omitempty"`
+	Slack              SlackConfig             `json:"slack"`
+	OpenAI             OpenAIConfig            `json:"openai"`
+	Providers          map[string]OpenAIConfig `json:"providers,omitempty"`
+	AutoApproverModel  string                  `json:"auto_approver_model"`
+	Instrumentation    InstrumentationConfig   `json:"instrumentation"`
+	PostHog            PostHogConfig           `json:"posthog,omitzero"`
 }
 
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
@@ -631,13 +634,25 @@ func (c *Config) validateInstrumentation() error {
 func (c *Config) validateRocketClaws() error {
 	for _, name := range slices.Sorted(maps.Keys(c.RocketClaws)) {
 		// Names appear in page URLs as /r/{name}/; the URL is a bare origin the browser calls.
-		parsed, errURL := url.Parse(c.RocketClaws[name].URL)
-		if name == "" || strings.Trim(name, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || errURL != nil || strings.ContainsAny(c.RocketClaws[name].URL, "?#") || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		if name == "" || strings.Trim(name, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || !httpsOrigin(c.RocketClaws[name].URL) {
 			return fmt.Errorf("rocketclaws[%q]: name must use a-z, 0-9 and -, and url must be an https origin with no path", name)
 		}
 	}
 
+	// A trusted page is matched against the Origin its browser sends, which is a bare origin too.
+	for i, origin := range c.TrustedRocketClaws {
+		if !httpsOrigin(origin) {
+			return fmt.Errorf("trusted_rocketclaws[%d]: must be an https origin with no path", i)
+		}
+	}
+
 	return nil
+}
+
+// httpsOrigin reports whether raw is an https origin with nothing after its host and port.
+func httpsOrigin(raw string) bool {
+	parsed, err := url.Parse(raw)
+	return err == nil && !strings.ContainsAny(raw, "?#") && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == ""
 }
 
 func (c *Config) validateOpenCode() error {
