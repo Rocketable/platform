@@ -53,20 +53,18 @@ func serverName(cfg *config.Config) string {
 
 func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs rpc.CronJobs) (func(context.Context) error, error) {
 	cfg := rt.Cfg.Clone()
-	// Only HTTP is network-accessible; principal metadata stays inside the process.
-	listener := bufconn.Listen(1 << 20)
 	certificate, err := webCertificate(cfg.Web)
 	if err != nil {
-		_ = listener.Close()
 		return nil, err
 	}
 
 	httpListener, err := net.Listen("tcp", cfg.Web.ListenAddress)
 	if err != nil {
-		_ = listener.Close()
 		return nil, fmt.Errorf("start Web HTTP: %w", err)
 	}
 
+	// Only HTTP is network-accessible; principal metadata stays inside the process.
+	listener := bufconn.Listen(1 << 20)
 	// This fixed passthrough target and insecure credentials cannot fail setup; dialing happens on RPC calls.
 	connection, _ := grpc.NewClient("passthrough:///web", grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
