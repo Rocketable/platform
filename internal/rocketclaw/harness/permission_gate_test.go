@@ -21,7 +21,8 @@ func TestToolCallAgent(t *testing.T) {
 	require.False(t, ok)
 
 	agent := Agent{Name: "child", Frontmatter: map[string]any{"permissions": "retained"}}
-	ctx := withToolCallContext(t.Context(), &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, agent: agent}, nil, "call")
+	loop := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, agent: agent}
+	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: loop, observations: loop.observations, callID: "call"})
 	got, ok := ToolCallAgent(ctx)
 	require.True(t, ok)
 	require.Equal(t, agent, got)
@@ -34,7 +35,7 @@ func TestCheckNestedPermissionAllow(t *testing.T) {
 	require.NoError(t, permissions.Allow("mcp", "demo.echo"))
 
 	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions}
-	ctx := withToolCallContext(t.Context(), looper, nil, "")
+	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})
 
 	err := CheckNestedPermission(ctx, "execute", "mcp", "demo.echo", map[string]any{"message": "hi"})
 	require.NoError(t, err)
@@ -47,7 +48,7 @@ func TestCheckNestedPermissionAutoWithoutAutoApproveDenies(t *testing.T) {
 	require.NoError(t, permissions.Set("mcp", "demo.echo", PermissionAuto))
 
 	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, AutoApprovePermissions: false}
-	ctx := withToolCallContext(t.Context(), looper, nil, "")
+	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})
 
 	err := CheckNestedPermission(ctx, "execute", "mcp", "demo.echo", map[string]any{"message": "hi"})
 	require.Error(t, err)
@@ -61,7 +62,7 @@ func TestCheckNestedPermissionDeny(t *testing.T) {
 	require.NoError(t, permissions.Deny("mcp", "demo.danger"))
 
 	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions}
-	ctx := withToolCallContext(t.Context(), looper, nil, "")
+	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})
 
 	err := CheckNestedPermission(ctx, "execute", "mcp", "demo.danger", nil)
 	require.Error(t, err)
@@ -89,7 +90,7 @@ func TestCheckNestedPermissionAutoWithReviewerAllow(t *testing.T) {
 			PermissionReviewer:     reviewer,
 			agent:                  Agent{Name: "main"},
 		}
-		ctx := withToolCallContext(t.Context(), looper, nil, "call_0")
+		ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: "call_0"})
 
 		err := CheckNestedPermission(ctx, "execute", "mcp", "demo.echo", map[string]any{"message": "hi"})
 		require.NoError(t, err)

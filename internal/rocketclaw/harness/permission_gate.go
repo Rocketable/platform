@@ -24,10 +24,6 @@ type toolCallContext struct {
 	sink         *backgroundSink // The call's own Background Job, if it runs as one.
 }
 
-func withToolCallContext(ctx context.Context, l *looper, output chan<- ChatResponse, callID string) context.Context {
-	return context.WithValue(ctx, toolCallContextKey{}, toolCallContext{looper: l, observations: l.observations, reviewInput: l.permissionReviewInput, output: output, callID: callID})
-}
-
 func toolCallContextFrom(ctx context.Context) (toolCallContext, bool) {
 	value := ctx.Value(toolCallContextKey{})
 	tc, ok := value.(toolCallContext)

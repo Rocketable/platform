@@ -67,7 +67,7 @@ func TestTurnBoundToolRefusesDetachedWork(t *testing.T) {
 				loop := backgroundTestLooper(t, backgroundPermissions, jobs, func(context.Context) (ToolResult, error) { return TextToolResult("probed"), nil })
 				loop.CodeModeHosts["ask"] = ask
 
-				outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", executeToolName, fmt.Sprintf(args, tc.background))}), nil, make(chan ChatResponse, 64))
+				outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", executeToolName, fmt.Sprintf(args, tc.background))}), nil, nil, make(chan ChatResponse, 64))
 				require.NoError(t, err)
 
 				got := outputs[0].Result.Output
@@ -126,7 +126,7 @@ func TestBackgroundExecuteRetainsLargeResult(t *testing.T) {
 		loop.restoreTurnExecuteResults(turnID)
 		t.Cleanup(loop.deleteTurnExecuteResults)
 
-		return loop, withToolCallContext(t.Context(), loop, nil, "call-1")
+		return loop, context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: loop, observations: loop.observations, output: nil, callID: "call-1"})
 	}
 	execute := func(loop *Runtime, ctx context.Context) string {
 		raw, err := json.Marshal(struct {

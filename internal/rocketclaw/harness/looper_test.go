@@ -1847,7 +1847,7 @@ func TestLooperKeepsContextCancellationFatalForToolCalls(t *testing.T) {
 	}
 	looper.Tools = map[string]looperTool{"slow": tool}
 
-	_, hadToolCalls, err := looper.dispatchToolCalls(ctx, responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "slow", `{}`)}), nil, nil)
+	_, hadToolCalls, err := looper.dispatchToolCalls(ctx, responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "slow", `{}`)}), nil, nil, nil)
 
 	require.Error(t, err)
 	require.True(t, hadToolCalls)
@@ -1916,7 +1916,7 @@ func TestToolProgressPermissionAndPersistenceFailure(t *testing.T) {
 					outputs, _, err = l.dispatchToolCalls(ctx, responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{
 						testFunctionCall("slow-item", "slow", "slow", `{}`),
 						testFunctionCall("fast-item", "fast", "fast", `{}`),
-					}), nil, nil)
+					}), nil, nil, nil)
 					returned = true
 				}()
 
@@ -2105,7 +2105,7 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		}
 		looper.Tools = map[string]looperTool{"bash": tool}
 
-		outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil)
+		outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil, nil)
 
 		require.NoError(t, err)
 		require.True(t, hadToolCalls)
@@ -2131,9 +2131,8 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		looper.Tools = map[string]looperTool{"webfetch": tool}
 
 		reviewContext := []responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, "fetch the allowed page", "")}
-		looper.permissionReviewInput = reviewContext
 		output := make(chan ChatResponse, 10)
-		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "webfetch", `{"url":"https://allowed.example/page"}`)}), nil, output)
+		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "webfetch", `{"url":"https://allowed.example/page"}`)}), reviewContext, nil, output)
 
 		require.NoError(t, err)
 		require.True(t, called)
@@ -2164,7 +2163,7 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		looper.Tools = map[string]looperTool{"github_create_issue": tool}
 
 		output := make(chan ChatResponse, 10)
-		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "github_create_issue", `{}`)}), nil, output)
+		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "github_create_issue", `{}`)}), nil, nil, output)
 
 		require.NoError(t, err)
 		require.False(t, called)
@@ -2191,7 +2190,7 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"deploy prod", "rm -rf prod"}, nil }
 		looper.Tools = map[string]looperTool{"bash": tool}
 
-		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil)
+		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil, nil)
 
 		require.NoError(t, err)
 		require.Contains(t, outputs[0].Result.Output, `=> deny`)
@@ -2209,7 +2208,7 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"deploy prod", "release prod"}, nil }
 		looper.Tools = map[string]looperTool{"bash": tool}
 
-		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil)
+		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil, nil)
 
 		require.NoError(t, err)
 		require.Contains(t, outputs[0].Result.Output, `matched multiple automatic reviewers`)

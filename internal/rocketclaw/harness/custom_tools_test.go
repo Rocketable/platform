@@ -212,7 +212,7 @@ func TestCustomToolPermissionDeniedAtCallTime(t *testing.T) {
 	looper := testLooperWithTools(tools)
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "github_*", Action: permissionDeny}}}}}
 
-	outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil)
+	outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("dispatchToolCalls returned error: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestCustomToolPermissionDefaultsDenyAtCallTime(t *testing.T) {
 
 	looper := testLooperWithTools(tools)
 
-	outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil)
+	outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("dispatchToolCalls returned error: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestCustomToolUsesCustomSubjects(t *testing.T) {
 		{Pattern: "github_private_repo", Action: permissionDeny},
 	}}}}
 
-	outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil)
+	outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("dispatchToolCalls returned error: %v", err)
 	}

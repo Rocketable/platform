@@ -121,7 +121,7 @@ func TestBackgroundRequestsRejectedWhenNotOffered(t *testing.T) {
 				probed = true
 				return TextToolResult("probed"), nil
 			})
-			ctx := withToolCallContext(t.Context(), loop, nil, "call-1")
+			ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: loop, observations: loop.observations, output: nil, callID: "call-1"})
 
 			_, err := loop.Tools[tc.tool].Call(ctx, json.RawMessage(tc.args), nil, toolCallMetadata{callID: "call-1", observations: loop.observations, progress: &PublicProgress{}})
 
@@ -194,10 +194,9 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 					return TextToolResult("probed"), nil
 				})
 				turnReview := []responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, "run the tests", "")}
-				loop.permissionReviewInput = turnReview
 				output := make(chan ChatResponse, 20)
 
-				outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", tc.tool, tc.args)}), nil, output)
+				outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", tc.tool, tc.args)}), turnReview, nil, output)
 				require.NoError(t, err)
 				synctest.Wait() // A started script blocks in its first probe.
 
@@ -215,8 +214,6 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 				require.Equal(t, tc.job.SubagentKey, traced.SubagentKey)
 
 				// The turn moves on and closes; the job keeps its own review context and output sink.
-				loop.permissionReviewInput = nil
-
 				loop.observations.close()
 				close(output)
 
@@ -297,7 +294,7 @@ func TestBackgroundForegroundCallKeepsTurnCancellation(t *testing.T) {
 				var dispatch errgroup.Group
 
 				dispatch.Go(func() error {
-					_, _, err := loop.dispatchToolCalls(ctx, responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", executeToolName, `{"code":"def main():\n    return probe()\n","description":"Build","background":false}`)}), nil, nil)
+					_, _, err := loop.dispatchToolCalls(ctx, responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", executeToolName, `{"code":"def main():\n    return probe()\n","description":"Build","background":false}`)}), nil, nil, nil)
 					return err
 				})
 
@@ -393,7 +390,7 @@ func TestTaskContinueNeedsTaskPermission(t *testing.T) {
 	loop := backgroundTestLooper(t, `{rocketclaw: {allow_background: allow}, task: {reviewer: allow}}`, jobs, nil)
 	args := `{"subagent_type":"child","prompt":"more","description":"Review","command":"","background":false,"continue":{"session_id":"/call-1","mode":"steer"}}`
 
-	outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-3", "task", args)}), nil, make(chan ChatResponse, 20))
+	outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-3", "task", args)}), nil, nil, make(chan ChatResponse, 20))
 	require.NoError(t, err)
 	require.Equal(t, `tool call denied: permission "task" has no matching allow rule for subject "child". Choose a different action.`, outputs[0].Result.Output)
 	require.Empty(t, jobs.RunCalls())
@@ -508,7 +505,7 @@ func TestSteerSwitchedSubagentRowNamesFinalType(t *testing.T) {
 	}
 
 	parent := testLooper(mockResponses())
-	got, err := factory.runTask(withToolCallContext(t.Context(), parent, nil, "call-1"), testTaskParams("Review", "check it", "child"), toolCallMetadata{callID: "call-1", observations: parent.observations, progress: &PublicProgress{ID: "call-1"}})
+	got, err := factory.runTask(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call-1"}), testTaskParams("Review", "check it", "child"), toolCallMetadata{callID: "call-1", observations: parent.observations, progress: &PublicProgress{ID: "call-1"}})
 	require.NoError(t, err)
 	require.Equal(t, "<task_result>\nchecked\n</task_result>", got)
 
@@ -643,7 +640,7 @@ func continueTestTask(t *testing.T, mock *mockResponsesAPI, jobs BackgroundJobs,
 		parent := testLooper(mockResponses())
 		parent.observations.turnID = "turn-" + callID
 		args := fmt.Sprintf(`{"subagent_type":%q,"prompt":%q,"description":"Review","command":"","background":false,"continue":{"session_id":%q,"mode":"enqueue"}}`, subagentType, prompt, continueID)
-		result, err := task.Call(withToolCallContext(t.Context(), parent, nil, callID), json.RawMessage(args), nil, toolCallMetadata{callID: callID, observations: parent.observations, progress: &PublicProgress{ID: callID}})
+		result, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: callID}), json.RawMessage(args), nil, toolCallMetadata{callID: callID, observations: parent.observations, progress: &PublicProgress{ID: callID}})
 
 		return result.Output, PublicProgressFromTrace(parent.observations.trace), err
 	}

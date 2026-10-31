@@ -35,7 +35,7 @@ func TestTaskPublicLifecycleKeepsChildContentPrivate(t *testing.T) {
 	outputs, _, err := l.dispatchToolCalls(t.Context(), responseWithFunctionCalls("parent-response", []responses.ResponseFunctionToolCall{
 		testFunctionCall("item-A", "A", "task", `{"subagent_type":"child","prompt":"do it","description":"PRIVATE_DESCRIPTION"}`),
 		testFunctionCall("item-B", "B", "task", `{"subagent_type":"child","prompt":"do it","description":"PRIVATE_DESCRIPTION"}`),
-	}), nil, nil)
+	}), nil, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, outputs, 2)
 	require.Contains(t, outputs[0].Result.Output, "CHILD_PRIVATE_SENTINEL")
@@ -130,7 +130,7 @@ func TestTaskPublicLifecycleFailureAndCancellation(t *testing.T) {
 					outputs, _, err = l.dispatchToolCalls(ctx, responseWithFunctionCalls("response", []responses.ResponseFunctionToolCall{
 						testFunctionCall("child-item", "child-call", "task", `{"subagent_type":"child","prompt":"PRIVATE_PROMPT"}`),
 						testFunctionCall("fast-item", "fast", "fast", `{}`),
-					}), nil, nil)
+					}), nil, nil, nil)
 				}()
 
 				synctest.Wait()
@@ -548,7 +548,7 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 	for _, turnID := range []string{"turn-1", "turn-1", "turn-2"} {
 		parent := testLooper(mockResponses())
 		parent.observations.turnID = turnID
-		result, err := task.Call(withToolCallContext(t.Context(), parent, nil, "call_0"), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review","command":""}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
+		result, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call_0"}), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review","command":""}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nlook: done\n</task_result>", result.Output)
 
@@ -570,7 +570,7 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 	factory.childKey = ChildKey{Path: "/parent"}
 	parent := testLooper(mockResponses())
 	parent.observations.turnID = "turn-3"
-	_, err := task.Call(withToolCallContext(t.Context(), parent, nil, "call_0"), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review","command":""}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
+	_, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call_0"}), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review","command":""}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
 	require.NoError(t, err)
 
 	progress := PublicProgressFromTrace(parent.observations.trace)
