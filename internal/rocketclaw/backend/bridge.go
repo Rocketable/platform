@@ -246,11 +246,7 @@ type workflowRunPhaseSummary struct {
 
 // NewConversation constructs a rocketcode bridge for one conversation.
 func NewConversation(cfg *config.LockedConfig, publisher protocol.OutboundPublisher, bridgeCfg *Config, logger *slog.Logger) *Bridge {
-	normalized := *bridgeCfg
-	normalized.ConversationID = strings.TrimSpace(normalized.ConversationID)
-	normalized.Agent = strings.TrimSpace(normalized.Agent)
-
-	return &Bridge{log: logger.With("component", "rocketcode"), config: normalized, runtime: cfg, bus: publisher, requestCh: make(chan bridgeRequest, defaultQueueSize), stopCh: make(chan struct{})}
+	return &Bridge{log: logger.With("component", "rocketcode"), config: *bridgeCfg, runtime: cfg, bus: publisher, requestCh: make(chan bridgeRequest, defaultQueueSize), stopCh: make(chan struct{})}
 }
 
 // AppendChildEntry saves a permission review turn under b's conversation ID plus key,
