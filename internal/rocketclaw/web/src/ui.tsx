@@ -2094,7 +2094,7 @@ function useSessionSearch(query: string, scope: "messages" | "filters", entered:
   const sent = (entered || !unfinished ? query : query.slice(0, query.length - word.length)).trimEnd();
   const principalChoices = !sent && /^principal:/i.test(word);
   const [result, setResult] = useState<{ query: string; response?: SearchSessionsResponse; error?: string }>({ query: "" });
-  const request = useRef<{ key: string; version: number; failed?: boolean; controller?: AbortController; pending?: Promise<SearchSessionsResponse | undefined> }>({ key: "", version: 0 });
+  const request = useRef<{ key: string; failed?: boolean; controller?: AbortController; pending?: Promise<SearchSessionsResponse | undefined> }>({ key: "" });
   const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
   const deadline = useRef<ReturnType<typeof setTimeout>>(undefined);
   const firstEdit = useRef(0);
@@ -2105,17 +2105,16 @@ function useSessionSearch(query: string, scope: "messages" | "filters", entered:
     const key = `${text}\n${ids}\n${principalChoices}`;
     if (request.current.key === key && request.current.pending) return request.current.pending;
     request.current.controller?.abort();
-    const controller = new AbortController(), version = request.current.version + 1;
-    const current = () => request.current.version === version;
+    const controller = new AbortController();
     const pending = text || principalChoices ? searchAll(["", ...rocketclaws().map((remote) => remote.name)], { query: text, [scope]: true }, controller.signal).then((response) => {
-      if (!current()) return undefined;
+      if (controller.signal.aborted) return undefined;
       setResult({ query: text, response });
       return response;
     }, (error: Error) => {
-      if (current()) { request.current.failed = true; setResult({ query: text, error: error.message }); }
+      if (!controller.signal.aborted) { request.current.failed = true; setResult({ query: text, error: error.message }); }
       return undefined;
-    }).finally(() => { if (current()) request.current.pending = undefined; }) : undefined;
-    request.current = { key, version, controller, pending };
+    }).finally(() => { if (!controller.signal.aborted) request.current.pending = undefined; }) : undefined;
+    request.current = { key, controller, pending };
     if (!text && !principalChoices) setResult((previous) => previous.query === "" ? previous : { query: "" });
     return pending ?? Promise.resolve(undefined);
   }, [ids, scope, principalChoices]);
@@ -2127,7 +2126,7 @@ function useSessionSearch(query: string, scope: "messages" | "filters", entered:
     if (scope === "messages") deadline.current = setTimeout(() => void run(sent), Math.max(0, 1000 - (Date.now() - firstEdit.current)));
     return () => { clearTimeout(pause.current); clearTimeout(deadline.current); };
   }, [query, sent, ids, scope, principalChoices, run]);
-  useEffect(() => () => { request.current.controller?.abort(); request.current.version++; }, []);
+  useEffect(() => () => { request.current.controller?.abort(); }, []);
   const pending = !!sent && result.query !== sent;
   const { found, missing } = useMemo(() => matchedRows(result.response, rows), [result.response, rows]);
   return {
