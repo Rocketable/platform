@@ -248,9 +248,9 @@ func TestBashPermissionsCheckWholeScript(t *testing.T) {
 	for _, command := range []string{"$COMMAND arg", "$(forbidden) arg", "scripts/* arg", "scripts/cmd; export FOO=(", "\rscripts/cmd arg", "scripts/cmd\x00 arg"} {
 		raw, err := json.Marshal(bashParams{Command: command})
 		require.NoError(t, err)
-		outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("response", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", "bash", string(raw))}), nil, nil, nil)
+		outputs, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("response", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", "bash", string(raw))}), nil, nil, nil)
 		require.NoError(t, err)
-		require.Contains(t, outputs[0].Result.Output, "tool call denied", command)
+		require.Contains(t, outputs[0].Param.Output.OfString.Value, "tool call denied", command)
 	}
 
 	_, err = root.Stat("output")
@@ -350,9 +350,9 @@ func TestBashPermissionsCheckWholeScript(t *testing.T) {
 	for _, grant := range []string{"export FOO=bar", command, `export FOO=*; printf '%s' "$FOO" > output`} {
 		loop.Tools = tools
 		loop.Permissions = parsePermissionYAML(t, `bash: {"printf *": allow, "$FOO": allow, ">output": allow}`)
-		outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("response", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", "bash", string(raw))}), nil, nil, nil)
+		outputs, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("response", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", "bash", string(raw))}), nil, nil, nil)
 		require.NoError(t, err)
-		require.Contains(t, outputs[0].Result.Output, "tool call denied")
+		require.Contains(t, outputs[0].Param.Output.OfString.Value, "tool call denied")
 
 		_, err = root.Stat("output")
 		require.ErrorIs(t, err, os.ErrNotExist)
@@ -369,7 +369,7 @@ func TestBashPermissionsCheckWholeScript(t *testing.T) {
 			Code string `json:"code"`
 		}{Code: "def main():\n    return bash(command=r'''" + command + "''')"})
 		require.NoError(t, err)
-		_, _, err = loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("response", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, string(executeArgs))}), nil, nil, nil)
+		_, err = loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("response", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, string(executeArgs))}), nil, nil, nil)
 		require.NoError(t, err)
 		contents, err := root.ReadFile("output")
 		require.NoError(t, err)

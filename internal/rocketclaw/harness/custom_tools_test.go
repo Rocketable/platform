@@ -212,20 +212,16 @@ func TestCustomToolPermissionDeniedAtCallTime(t *testing.T) {
 	looper := testLooperWithTools(tools)
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "github_*", Action: permissionDeny}}}}}
 
-	outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil, nil)
+	outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("dispatchToolCalls returned error: %v", err)
-	}
-
-	if !hadToolCalls {
-		t.Fatalf("dispatchToolCalls hadToolCalls = false; want true")
 	}
 
 	if called {
 		t.Fatalf("custom tool handler was called; want denied before handler")
 	}
 
-	if got := outputs[0].Result.Output; got == "called" || got == "" {
+	if got := outputs[0].Param.Output.OfString.Value; got == "called" || got == "" {
 		t.Fatalf("denied custom tool output = %q; want permission denial", got)
 	}
 }
@@ -243,20 +239,16 @@ func TestCustomToolPermissionDefaultsDenyAtCallTime(t *testing.T) {
 
 	looper := testLooperWithTools(tools)
 
-	outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil, nil)
+	outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("dispatchToolCalls returned error: %v", err)
-	}
-
-	if !hadToolCalls {
-		t.Fatalf("dispatchToolCalls hadToolCalls = false; want true")
 	}
 
 	if called {
 		t.Fatalf("custom tool handler was called; want denied before handler")
 	}
 
-	if got := outputs[0].Result.Output; got == "called" || got == "" {
+	if got := outputs[0].Param.Output.OfString.Value; got == "called" || got == "" {
 		t.Fatalf("default denied custom tool output = %q; want permission denial", got)
 	}
 }
@@ -280,12 +272,12 @@ func TestCustomToolUsesCustomSubjects(t *testing.T) {
 		{Pattern: "github_private_repo", Action: permissionDeny},
 	}}}}
 
-	outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil, nil)
+	outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("dispatchToolCalls returned error: %v", err)
 	}
 
-	if got := outputs[0].Result.Output; got == "called" || got == "" {
+	if got := outputs[0].Param.Output.OfString.Value; got == "called" || got == "" {
 		t.Fatalf("custom subject denial output = %q; want permission denial", got)
 	}
 }

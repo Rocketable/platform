@@ -310,9 +310,7 @@ type toolCallSignature struct {
 }
 
 type dispatchedToolOutput struct {
-	Name        string
 	Param       responses.ResponseInputItemFunctionCallOutputParam
-	Result      ToolResult
 	ReplayInput []responses.ResponseInputItemUnionParam
 }
 
@@ -1088,7 +1086,7 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 		l.setPhase(TurnPhaseFinalAnswer)
 	}
 
-	toolOutputs, _, err = l.dispatchToolCalls(ctx, resp, reviewContext, doomLoop, output)
+	toolOutputs, err = l.dispatchToolCalls(ctx, resp, reviewContext, doomLoop, output)
 	if err == nil {
 		return hadToolCalls, compactionOnly, toolOutputs, false, nil
 	}
@@ -1926,7 +1924,7 @@ func (l *looper) dispatchToolCalls(
 	reviewContext []responses.ResponseInputItemUnionParam,
 	doomLoop *doomLoopTrap,
 	output chan<- ChatResponse,
-) ([]dispatchedToolOutput, bool, error) {
+) ([]dispatchedToolOutput, error) {
 	type pendingToolCall struct {
 		name          string
 		callID        string
@@ -1952,13 +1950,13 @@ func (l *looper) dispatchToolCalls(
 
 		progress := PublicProgress{ID: item.CallID, ParentID: l.observations.turnID + "/" + resp.ID, Kind: PublicProgressTool, State: PublicProgressReview, Agent: l.agent.Name, Model: l.ProviderOrigin.displayModel()}
 		if err := l.observations.observe(ctx, &progress); err != nil {
-			return nil, true, err
+			return nil, err
 		}
 
 		tool, ok := l.Tools[item.Name]
 		if !ok {
 			if err := l.observations.finishCall(ctx, &progress, PublicProgressFailed); err != nil {
-				return nil, true, err
+				return nil, err
 			}
 
 			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, "", args, toolCallMetadata{})
@@ -1967,7 +1965,7 @@ func (l *looper) dispatchToolCalls(
 			span.span.SetAttributes(l.Observability.outputValue(result.Output), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", true))
 			span.span.End()
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result.Output})
-			outputs = append(outputs, dispatchedToolOutput{Name: item.Name, Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
+			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), ReplayInput: nil})
 
 			continue
 		}
@@ -1976,7 +1974,7 @@ func (l *looper) dispatchToolCalls(
 
 		if doomLoop != nil && doomLoop.trapped(item.Name, args) {
 			if err := l.observations.finishCall(ctx, &progress, PublicProgressBlocked); err != nil {
-				return nil, true, err
+				return nil, err
 			}
 
 			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
@@ -1987,7 +1985,7 @@ func (l *looper) dispatchToolCalls(
 			span.span.End()
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
 			toolResult := TextToolResult(result)
-			outputs = append(outputs, dispatchedToolOutput{Name: item.Name, Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
+			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), ReplayInput: nil})
 
 			continue
 		}
@@ -2008,7 +2006,7 @@ func (l *looper) dispatchToolCalls(
 
 		if decision.denied {
 			if err := l.observations.finishCall(ctx, &progress, PublicProgressBlocked); err != nil {
-				return nil, true, err
+				return nil, err
 			}
 
 			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
@@ -2019,7 +2017,7 @@ func (l *looper) dispatchToolCalls(
 			span.span.End()
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
 			toolResult := TextToolResult(result)
-			outputs = append(outputs, dispatchedToolOutput{Name: item.Name, Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
+			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), ReplayInput: nil})
 
 			continue
 		}
@@ -2036,7 +2034,7 @@ func (l *looper) dispatchToolCalls(
 	}
 
 	if len(outputs) == 0 {
-		return nil, false, nil
+		return nil, nil
 	}
 
 	taskIndex := 0
@@ -2075,7 +2073,7 @@ func (l *looper) dispatchToolCalls(
 			progress := call.progress
 
 			key := ToolCallKey(callCtx)
-			if replayed, err := l.replayCall(callCtx, outputs, call.outputIndex, call.name, call.callID, call.tool.resumable, &progress); replayed {
+			if replayed, err := l.replayCall(callCtx, outputs, call.outputIndex, call.callID, call.tool.resumable, &progress); replayed {
 				return err
 			}
 
@@ -2123,17 +2121,17 @@ func (l *looper) dispatchToolCalls(
 			span.span.SetAttributes(l.Observability.outputValue(attachmentOutputMessage(result)), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", err != nil))
 
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: call.name, Result: attachmentOutputMessage(result)})
-			outputs[call.outputIndex] = dispatchedToolOutput{Name: call.name, Param: toolCallOutput(call.callID, result), Result: result, ReplayInput: replayInput}
+			outputs[call.outputIndex] = dispatchedToolOutput{Param: toolCallOutput(call.callID, result), ReplayInput: replayInput}
 
 			return l.recordCall(groupCtx, key, &outputs[call.outputIndex].Param, replayInput)
 		})
 	}
 
 	if err := group.Wait(); err != nil {
-		return nil, true, fmt.Errorf("run tool calls: %w", err)
+		return nil, fmt.Errorf("run tool calls: %w", err)
 	}
 
-	return outputs, true, nil
+	return outputs, nil
 }
 
 // reviewToolCall runs the approver on a model's tool call. An Execute call's decision is its
@@ -2155,7 +2153,7 @@ func (l *looper) reviewToolCall(ctx context.Context, name, callID string, reques
 // replayCall restores a journaled call: a recorded output is reused, and a started, unfinished
 // non-resumable call is reported interrupted. Otherwise it records the started marker and marks the
 // call working; false means the caller runs it. Any error is reported as replayed.
-func (l *looper) replayCall(ctx context.Context, outputs []dispatchedToolOutput, index int, name, callID string, resumable bool, progress *PublicProgress) (bool, error) {
+func (l *looper) replayCall(ctx context.Context, outputs []dispatchedToolOutput, index int, callID string, resumable bool, progress *PublicProgress) (bool, error) {
 	key := ToolCallKey(ctx)
 
 	var step callStep
@@ -2199,7 +2197,7 @@ func (l *looper) replayCall(ctx context.Context, outputs []dispatchedToolOutput,
 		return true, err
 	}
 
-	outputs[index] = dispatchedToolOutput{Name: name, Param: *items[0].OfFunctionCallOutput, ReplayInput: items[1:]}
+	outputs[index] = dispatchedToolOutput{Param: *items[0].OfFunctionCallOutput, ReplayInput: items[1:]}
 
 	return true, l.observations.finishCall(context.WithoutCancel(ctx), progress, state)
 }

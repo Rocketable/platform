@@ -1847,10 +1847,9 @@ func TestLooperKeepsContextCancellationFatalForToolCalls(t *testing.T) {
 	}
 	looper.Tools = map[string]looperTool{"slow": tool}
 
-	_, hadToolCalls, err := looper.dispatchToolCalls(ctx, responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "slow", `{}`)}), nil, nil, nil)
+	_, err := looper.dispatchToolCalls(ctx, responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "slow", `{}`)}), nil, nil, nil)
 
 	require.Error(t, err)
-	require.True(t, hadToolCalls)
 	require.Contains(t, err.Error(), "run tool calls")
 }
 
@@ -1913,7 +1912,7 @@ func TestToolProgressPermissionAndPersistenceFailure(t *testing.T) {
 				returned := false
 
 				go func() {
-					outputs, _, err = l.dispatchToolCalls(ctx, responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{
+					outputs, err = l.dispatchToolCalls(ctx, responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{
 						testFunctionCall("slow-item", "slow", "slow", `{}`),
 						testFunctionCall("fast-item", "fast", "fast", `{}`),
 					}), nil, nil, nil)
@@ -2105,12 +2104,11 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		}
 		looper.Tools = map[string]looperTool{"bash": tool}
 
-		outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil, nil)
+		outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil, nil)
 
 		require.NoError(t, err)
-		require.True(t, hadToolCalls)
 		require.False(t, called)
-		require.Contains(t, outputs[0].Result.Output, `requires automatic approval, but automatic permission approval is disabled`)
+		require.Contains(t, outputs[0].Param.Output.OfString.Value, `requires automatic approval, but automatic permission approval is disabled`)
 	})
 
 	t.Run("approval executes", func(t *testing.T) {
@@ -2132,11 +2130,11 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 
 		reviewContext := []responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, "fetch the allowed page", "")}
 		output := make(chan ChatResponse, 10)
-		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "webfetch", `{"url":"https://allowed.example/page"}`)}), reviewContext, nil, output)
+		outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "webfetch", `{"url":"https://allowed.example/page"}`)}), reviewContext, nil, output)
 
 		require.NoError(t, err)
 		require.True(t, called)
-		require.Equal(t, "fetched", outputs[0].Result.Output)
+		require.Equal(t, "fetched", outputs[0].Param.Output.OfString.Value)
 		require.Equal(t, []ChatResponse{subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Text: "allow: Low-risk action.", Subagent: &SubagentDiagnostic{Label: "result"}})}, drainBufferedResponses(output))
 		require.Len(t, reviewedRequests(reviewer), 1)
 		require.True(t, reviewedRequests(reviewer)[0].ReviewerEmbedded)
@@ -2163,11 +2161,11 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		looper.Tools = map[string]looperTool{"github_create_issue": tool}
 
 		output := make(chan ChatResponse, 10)
-		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "github_create_issue", `{}`)}), nil, nil, output)
+		outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "github_create_issue", `{}`)}), nil, nil, output)
 
 		require.NoError(t, err)
 		require.False(t, called)
-		require.Contains(t, outputs[0].Result.Output, "Not authorized")
+		require.Contains(t, outputs[0].Param.Output.OfString.Value, "Not authorized")
 
 		progress := PublicProgressFromTrace(looper.observations.trace)
 		require.Len(t, progress, 1)
@@ -2190,10 +2188,10 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"deploy prod", "rm -rf prod"}, nil }
 		looper.Tools = map[string]looperTool{"bash": tool}
 
-		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil, nil)
+		outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil, nil)
 
 		require.NoError(t, err)
-		require.Contains(t, outputs[0].Result.Output, `=> deny`)
+		require.Contains(t, outputs[0].Param.Output.OfString.Value, `=> deny`)
 		require.Empty(t, reviewedRequests(reviewer))
 	})
 
@@ -2208,10 +2206,10 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"deploy prod", "release prod"}, nil }
 		looper.Tools = map[string]looperTool{"bash": tool}
 
-		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil, nil)
+		outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil, nil)
 
 		require.NoError(t, err)
-		require.Contains(t, outputs[0].Result.Output, `matched multiple automatic reviewers`)
+		require.Contains(t, outputs[0].Param.Output.OfString.Value, `matched multiple automatic reviewers`)
 		require.Empty(t, reviewedRequests(reviewer))
 	})
 }

@@ -196,7 +196,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 				turnReview := []responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, "run the tests", "")}
 				output := make(chan ChatResponse, 20)
 
-				outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", tc.tool, tc.args)}), turnReview, nil, output)
+				outputs, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", tc.tool, tc.args)}), turnReview, nil, output)
 				require.NoError(t, err)
 				synctest.Wait() // A started script blocks in its first probe.
 
@@ -205,7 +205,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 					text = fmt.Sprintf(taskContinueID, tc.job.SubagentKey) + fmt.Sprintf(backgroundTaskResult, tc.job.ID)
 				}
 
-				require.Equal(t, text, outputs[0].Result.Output)
+				require.Equal(t, text, outputs[0].Param.Output.OfString.Value)
 				require.Len(t, jobs.RunCalls(), 1)
 				require.Equal(t, tc.job, *jobs.RunCalls()[0].Job)
 				// A task's row names its subagent even when the call moves before the subagent reports.
@@ -294,7 +294,7 @@ func TestBackgroundForegroundCallKeepsTurnCancellation(t *testing.T) {
 				var dispatch errgroup.Group
 
 				dispatch.Go(func() error {
-					_, _, err := loop.dispatchToolCalls(ctx, responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", executeToolName, `{"code":"def main():\n    return probe()\n","description":"Build","background":false}`)}), nil, nil, nil)
+					_, err := loop.dispatchToolCalls(ctx, responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", executeToolName, `{"code":"def main():\n    return probe()\n","description":"Build","background":false}`)}), nil, nil, nil)
 					return err
 				})
 
@@ -390,9 +390,9 @@ func TestTaskContinueNeedsTaskPermission(t *testing.T) {
 	loop := backgroundTestLooper(t, `{rocketclaw: {allow_background: allow}, task: {reviewer: allow}}`, jobs, nil)
 	args := `{"subagent_type":"child","prompt":"more","description":"Review","command":"","background":false,"continue":{"session_id":"/call-1","mode":"steer"}}`
 
-	outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-3", "task", args)}), nil, nil, make(chan ChatResponse, 20))
+	outputs, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-3", "task", args)}), nil, nil, make(chan ChatResponse, 20))
 	require.NoError(t, err)
-	require.Equal(t, `tool call denied: permission "task" has no matching allow rule for subject "child". Choose a different action.`, outputs[0].Result.Output)
+	require.Equal(t, `tool call denied: permission "task" has no matching allow rule for subject "child". Choose a different action.`, outputs[0].Param.Output.OfString.Value)
 	require.Empty(t, jobs.RunCalls())
 }
 

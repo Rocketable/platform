@@ -727,11 +727,11 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 	loop.PermissionReviewer = reviewer
 	loop.AutoApprovePermissions = true
 
-	results, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, `{"code":"def main():\n    text = demo_output()\n    if len(text.splitlines()) != 2100:\n        fail(\"host output clipped\")\n    return text\n"}`)}), nil, nil, nil)
+	results, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, `{"code":"def main():\n    text = demo_output()\n    if len(text.splitlines()) != 2100:\n        fail(\"host output clipped\")\n    return text\n"}`)}), nil, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	require.Contains(t, results[0].Result.Output, "load_execute_result")
-	_, footer, ok := strings.Cut(results[0].Result.Output, "result_id=\"")
+	require.Contains(t, results[0].Param.Output.OfString.Value, "load_execute_result")
+	_, footer, ok := strings.Cut(results[0].Param.Output.OfString.Value, "result_id=\"")
 	require.True(t, ok)
 	id, _, ok := strings.Cut(footer, "\"")
 	require.True(t, ok)
@@ -741,7 +741,7 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 
 	for range 2 {
 		output := make(chan ChatResponse, 10)
-		results, _, err = loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("page", []responses.ResponseFunctionToolCall{testFunctionCall("page", "page-call", "load_execute_result", pageArgs)}), nil, nil, output)
+		results, err = loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("page", []responses.ResponseFunctionToolCall{testFunctionCall("page", "page-call", "load_execute_result", pageArgs)}), nil, nil, output)
 		require.NoError(t, err)
 
 		var want strings.Builder
@@ -750,7 +750,7 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 		}
 
 		want.WriteString("\n[next_start_line=2011]\n")
-		require.Equal(t, want.String(), results[0].Result.Output)
+		require.Equal(t, want.String(), results[0].Param.Output.OfString.Value)
 		close(output)
 
 		for _, response := range collectResponses(output) {
@@ -771,9 +771,9 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 	require.True(t, decision.denied)
 
 	for args, want := range map[string]string{`{"result_id":"missing"}`: "unknown or expired execute result", `{"result_id":"../../etc/passwd"}`: "unknown or expired execute result", `{"result_id":1}`: "check permission"} {
-		results, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("invalid", []responses.ResponseFunctionToolCall{testFunctionCall("invalid", "invalid-call", loadExecuteResultToolName, args)}), nil, nil, nil)
+		results, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("invalid", []responses.ResponseFunctionToolCall{testFunctionCall("invalid", "invalid-call", loadExecuteResultToolName, args)}), nil, nil, nil)
 		require.NoError(t, err)
-		require.Contains(t, results[0].Result.Output, want)
+		require.Contains(t, results[0].Param.Output.OfString.Value, want)
 	}
 
 	require.Empty(t, reviewedRequests(reviewer))
@@ -855,18 +855,18 @@ func TestExecuteWholeScriptApproval(t *testing.T) {
 			loop.PermissionReviewer = reviewer
 			output := make(chan ChatResponse, 10)
 
-			results, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, code)}), nil, nil, output)
+			results, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, code)}), nil, nil, output)
 			require.NoError(t, err)
 			require.Len(t, results, 1)
 			require.Equal(t, tc.wantCalls, calls)
 
 			switch {
 			case tc.outcome == permissionReviewOutcomeDeny:
-				require.Contains(t, results[0].Result.Output, "automatic permission review rejected")
+				require.Contains(t, results[0].Param.Output.OfString.Value, "automatic permission review rejected")
 			case tc.wantCalls == 0:
-				require.Contains(t, results[0].Result.Output, `permission "read"`)
+				require.Contains(t, results[0].Param.Output.OfString.Value, `permission "read"`)
 			default:
-				require.Contains(t, results[0].Result.Output, "read result")
+				require.Contains(t, results[0].Param.Output.OfString.Value, "read result")
 			}
 
 			requests := reviewedRequests(reviewer)
@@ -1289,7 +1289,7 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 		calls = append(calls, testFunctionCall(id, id, executeToolName, string(raw)))
 	}
 
-	_, _, err = loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", calls), nil, nil, nil)
+	_, err = loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", calls), nil, nil, nil)
 	require.NoError(t, err)
 
 	records := map[string][]CodeModeCall{}
