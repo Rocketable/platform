@@ -73,9 +73,9 @@ func TestRunParseFailureDoesNotCallHost(t *testing.T) {
 
 			_, err := Run(t.Context(), tc.source, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
 				Name: "bash",
-				Call: func(context.Context, map[string]any) (string, error) {
+				CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
 					called = true
-					return "dispatched", nil
+					return starlark.String("dispatched"), nil
 				},
 			}})
 			if err == nil {
@@ -111,9 +111,9 @@ print("hello")
 PY''')
 `, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
 		Name: "bash",
-		Call: func(_ context.Context, args map[string]any) (string, error) {
+		CallValue: func(_ context.Context, args map[string]any) (starlark.Value, error) {
 			got, _ = args["command"].(string)
-			return "ok", nil
+			return starlark.String("ok"), nil
 		},
 	}})
 	if err != nil {
@@ -347,14 +347,14 @@ func TestRunHostTool(t *testing.T) {
 			"properties": map[string]any{"filePath": map[string]any{"type": "string"}},
 			"required":   []any{"filePath"},
 		},
-		Call: func(ctx context.Context, args map[string]any) (string, error) {
+		CallValue: func(ctx context.Context, args map[string]any) (starlark.Value, error) {
 			if args["filePath"] != "a.txt" {
 				t.Fatalf("args = %#v", args)
 			}
 
 			keys = append(keys, CallKey(ctx))
 
-			return "contents", nil
+			return starlark.String("contents"), nil
 		},
 	}})
 	if err != nil {
@@ -372,9 +372,9 @@ func TestRunRejectsHostToolNames(t *testing.T) {
 		host []HostTool
 		want string
 	}{
-		{"empty name", []HostTool{{Call: nilCallHost}}, "host tool name is required"},
-		{"MCP collision", []HostTool{{Name: "demo_echo", Call: nilCallHost}}, `builtin name collision "demo_echo"`},
-		{"concurrency collision", []HostTool{{Name: "gather", Call: nilCallHost}}, `builtin name collision "gather"`},
+		{"empty name", []HostTool{{CallValue: nilCallHost}}, "host tool name is required"},
+		{"MCP collision", []HostTool{{Name: "demo_echo", CallValue: nilCallHost}}, `builtin name collision "demo_echo"`},
+		{"concurrency collision", []HostTool{{Name: "gather", CallValue: nilCallHost}}, `builtin name collision "gather"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Run(t.Context(), "def main():\n    return 'unused'\n", []ToolDesc{{Server: "demo", Name: "echo"}}, allowAll, nilCall, inertToolCallObserver{}, tc.host)
@@ -394,10 +394,9 @@ func TestRunHostToolValueAndError(t *testing.T) {
 		err  error
 	}{
 		{
-			name: "value takes precedence over string call",
+			name: "tuple value",
 			tool: HostTool{
 				Name: "read",
-				Call: nilCallHost,
 				CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
 					return starlark.Tuple{starlark.String("contents"), starlark.MakeInt(7)}, nil
 				},
@@ -405,11 +404,11 @@ func TestRunHostToolValueAndError(t *testing.T) {
 			want: `["contents",7]`,
 		},
 		{
-			name: "string call failure",
+			name: "call failure",
 			tool: HostTool{
 				Name: "read",
-				Call: func(context.Context, map[string]any) (string, error) {
-					return "partial contents", errHost
+				CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
+					return starlark.String("partial contents"), errHost
 				},
 			},
 			err: errHost,
@@ -424,6 +423,6 @@ func TestRunHostToolValueAndError(t *testing.T) {
 	}
 }
 
-func nilCallHost(context.Context, map[string]any) (string, error) {
-	return "", errors.New("unexpected host call")
+func nilCallHost(context.Context, map[string]any) (starlark.Value, error) {
+	return nil, errors.New("unexpected host call")
 }

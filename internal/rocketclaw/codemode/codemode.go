@@ -35,13 +35,11 @@ type ToolCallObserver interface {
 	ObserveToolCall(ctx context.Context, path []string, name string, args map[string]any)
 }
 
-// HostTool is a non-MCP builtin (e.g. read, glob). Call includes permission enforcement.
+// HostTool is a non-MCP builtin (e.g. read, glob). CallValue includes permission enforcement.
 type HostTool struct {
 	Name        string
 	InputSchema map[string]any
-	// Call returns a string result. Used when CallValue is nil.
-	Call func(ctx context.Context, args map[string]any) (string, error)
-	// CallValue returns a Starlark value. When set, it is preferred over Call.
+	// CallValue is required and returns the tool's Starlark value.
 	CallValue func(ctx context.Context, args map[string]any) (starlark.Value, error)
 }
 
@@ -89,7 +87,7 @@ func BuildCatalog(tools []ToolDesc) (map[string]ToolDesc, error) {
 }
 
 // Run executes Starlark source requiring def main() returning a value.
-// mcp tools use decide+call; host tools use HostTool.Call (caller enforces permissions).
+// mcp tools use decide+call; host tools use HostTool.CallValue (caller enforces permissions).
 // observe receives each validated tool call before permission and execution.
 // Returns string result (string as-is; other values JSON; None is error).
 func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc, call CallFunc, observe ToolCallObserver, host []HostTool) (string, error) {
@@ -120,7 +118,7 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 			return "", fmt.Errorf("builtin name collision %q", tool.Name)
 		}
 
-		predeclared[tool.Name] = newHostToolBuiltin(tool, observe)
+		predeclared[tool.Name] = newKwargsValueBuiltin(tool.Name, tool.InputSchema, observe, tool.CallValue)
 	}
 
 	for name, builtin := range concurrency {
@@ -199,25 +197,6 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 	}
 
 	return string(encoded.(starlark.String)), nil
-}
-
-func newHostToolBuiltin(tool HostTool, observe ToolCallObserver) *starlark.Builtin {
-	return newKwargsValueBuiltin(tool.Name, tool.InputSchema, observe, func(ctx context.Context, args map[string]any) (starlark.Value, error) {
-		if tool.CallValue != nil {
-			return tool.CallValue(ctx, args)
-		}
-
-		if tool.Call == nil {
-			return nil, fmt.Errorf("%s: call is not configured", tool.Name)
-		}
-
-		result, err := tool.Call(ctx, args)
-		if err != nil {
-			return nil, err
-		}
-
-		return starlark.String(result), nil
-	})
 }
 
 func newKwargsBuiltin(name string, schema map[string]any, observe ToolCallObserver, call func(context.Context, map[string]any) (string, error)) *starlark.Builtin {

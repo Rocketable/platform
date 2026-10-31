@@ -9,6 +9,8 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"go.starlark.net/starlark"
 )
 
 func TestGatherOrderedResults(t *testing.T) {
@@ -20,13 +22,13 @@ func TestGatherOrderedResults(t *testing.T) {
     ])
 `, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
 			Name: "slow",
-			Call: func(ctx context.Context, args map[string]any) (string, error) {
+			CallValue: func(ctx context.Context, args map[string]any) (starlark.Value, error) {
 				ms := int(args["ms"].(float64))
 				select {
 				case <-ctx.Done():
-					return "", ctx.Err()
+					return nil, ctx.Err()
 				case <-time.After(time.Duration(ms) * time.Millisecond):
-					return args["id"].(string), nil
+					return starlark.String(args["id"].(string)), nil
 				}
 			},
 		}})
@@ -56,14 +58,14 @@ func TestGatherFailFastCancelsSibling(t *testing.T) {
 `, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{
 		{
 			Name: "boom",
-			Call: func(context.Context, map[string]any) (string, error) {
+			CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
 				<-hangStarted
-				return "", errors.New("boom")
+				return nil, errors.New("boom")
 			},
 		},
 		{
 			Name: "hang",
-			Call: func(ctx context.Context, _ map[string]any) (string, error) {
+			CallValue: func(ctx context.Context, _ map[string]any) (starlark.Value, error) {
 				close(hangStarted)
 
 				select {
@@ -72,9 +74,9 @@ func TestGatherFailFastCancelsSibling(t *testing.T) {
 					cancelled = true
 					mu.Unlock()
 
-					return "", ctx.Err()
+					return nil, ctx.Err()
 				case <-time.After(2 * time.Second):
-					return "late", nil
+					return starlark.String("late"), nil
 				}
 			},
 		},
@@ -104,7 +106,7 @@ func TestMapConcurrencyLimit(t *testing.T) {
     return map([1, 2, 3, 4, 5], lambda n: work(n=n), concurrency=2)
 `, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
 			Name: "work",
-			Call: func(_ context.Context, args map[string]any) (string, error) {
+			CallValue: func(_ context.Context, args map[string]any) (starlark.Value, error) {
 				mu.Lock()
 
 				current++
@@ -117,7 +119,7 @@ func TestMapConcurrencyLimit(t *testing.T) {
 				current--
 				mu.Unlock()
 
-				return fmt.Sprint(args["n"]), nil
+				return starlark.String(fmt.Sprint(args["n"])), nil
 			},
 		}})
 		if err != nil {
@@ -153,8 +155,8 @@ func TestToolCallObserverReceivesConcurrencyPath(t *testing.T) {
 
 			_, err := Run(t.Context(), test.source, nil, allowAll, nilCall, observer, []HostTool{{
 				Name: "echo",
-				Call: func(_ context.Context, _ map[string]any) (string, error) {
-					return "ok", nil
+				CallValue: func(_ context.Context, _ map[string]any) (starlark.Value, error) {
+					return starlark.String("ok"), nil
 				},
 			}})
 			if err != nil {
@@ -230,22 +232,22 @@ func TestRaceSuccessWins(t *testing.T) {
 `, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{
 		{
 			Name: "fast",
-			Call: func(context.Context, map[string]any) (string, error) {
-				return "win", nil
+			CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
+				return starlark.String("win"), nil
 			},
 		},
 		{
 			Name: "slow",
-			Call: func(ctx context.Context, _ map[string]any) (string, error) {
+			CallValue: func(ctx context.Context, _ map[string]any) (starlark.Value, error) {
 				select {
 				case <-ctx.Done():
-					return "", ctx.Err()
+					return nil, ctx.Err()
 				case <-time.After(500 * time.Millisecond):
 					mu.Lock()
 					slowFinished = true
 					mu.Unlock()
 
-					return "lose", nil
+					return starlark.String("lose"), nil
 				}
 			},
 		},
@@ -291,18 +293,18 @@ func TestRaceFirstFailureWins(t *testing.T) {
 `, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{
 		{
 			Name: "fail_fast",
-			Call: func(context.Context, map[string]any) (string, error) {
-				return "", errors.New("first-done-fail")
+			CallValue: func(context.Context, map[string]any) (starlark.Value, error) {
+				return nil, errors.New("first-done-fail")
 			},
 		},
 		{
 			Name: "slow_ok",
-			Call: func(ctx context.Context, _ map[string]any) (string, error) {
+			CallValue: func(ctx context.Context, _ map[string]any) (starlark.Value, error) {
 				select {
 				case <-ctx.Done():
-					return "", ctx.Err()
+					return nil, ctx.Err()
 				case <-time.After(500 * time.Millisecond):
-					return "ok", nil
+					return starlark.String("ok"), nil
 				}
 			},
 		},
@@ -324,8 +326,8 @@ func TestNestedGatherAtMaxConcurrency(t *testing.T) {
 
 	got, err := Run(t.Context(), src, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
 		Name: "echo",
-		Call: func(_ context.Context, args map[string]any) (string, error) {
-			return args["v"].(string), nil
+		CallValue: func(_ context.Context, args map[string]any) (starlark.Value, error) {
+			return starlark.String(args["v"].(string)), nil
 		},
 	}})
 	if err != nil {
@@ -348,9 +350,9 @@ func TestGatherRootCancel(t *testing.T) {
     return gather([lambda: hang()], concurrency=1)
 `, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
 			Name: "hang",
-			Call: func(callCtx context.Context, _ map[string]any) (string, error) {
+			CallValue: func(callCtx context.Context, _ map[string]any) (starlark.Value, error) {
 				<-callCtx.Done()
-				return "", callCtx.Err()
+				return nil, callCtx.Err()
 			},
 		}})
 		errCh <- err
