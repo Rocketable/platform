@@ -42,6 +42,59 @@ type Config struct {
 	PostHog           PostHogConfig              `json:"posthog,omitzero"`
 }
 
+// Behavior holds the Behavior Settings: the Config fields admins edit from the Web. Its JSON has the
+// same shape as those fields in the config file.
+type Behavior struct {
+	Models            map[string]string `json:"models"`
+	AutoApproverModel string            `json:"auto_approver_model"`
+	Slack             struct {
+		Channels []SlackChannelConfig `json:"channels"`
+	} `json:"slack"`
+	WebUsers          map[netip.Addr]string `json:"web_users"`
+	ServerDisplayName string                `json:"server_display_name"`
+	Logging           LoggingConfig         `json:"logging"`
+	Instrumentation   struct {
+		HideInputs  bool `json:"hide_inputs"`
+		HideOutputs bool `json:"hide_outputs"`
+	} `json:"instrumentation"`
+	Web struct {
+		Sentry struct {
+			Environment      string   `json:"environment"`
+			TracesSampleRate *float64 `json:"traces_sample_rate"`
+		} `json:"sentry"`
+	} `json:"web"`
+	Overlays []string `json:"overlays"`
+}
+
+// Behavior returns the behavior fields of c.
+func (c *Config) Behavior() Behavior {
+	var b Behavior
+
+	b.Models, b.AutoApproverModel, b.Slack.Channels, b.WebUsers = c.Models, c.AutoApproverModel, c.Slack.Channels, c.WebUsers
+	b.ServerDisplayName, b.Logging, b.Overlays = c.ServerDisplayName, c.Logging, c.Overlays
+	b.Instrumentation.HideInputs, b.Instrumentation.HideOutputs = c.Instrumentation.HideInputs, c.Instrumentation.HideOutputs
+	b.Web.Sentry.Environment, b.Web.Sentry.TracesSampleRate = c.Web.Sentry.Environment, c.Web.Sentry.TracesSampleRate
+
+	return b
+}
+
+// SetBehavior replaces the behavior fields of c with b and leaves every setup field unchanged.
+func (c *Config) SetBehavior(b *Behavior) {
+	c.Models, c.AutoApproverModel, c.Slack.Channels, c.WebUsers = b.Models, b.AutoApproverModel, b.Slack.Channels, b.WebUsers
+	c.ServerDisplayName, c.Logging, c.Overlays = b.ServerDisplayName, b.Logging, b.Overlays
+	c.Instrumentation.HideInputs, c.Instrumentation.HideOutputs = b.Instrumentation.HideInputs, b.Instrumentation.HideOutputs
+	c.Web.Sentry.Environment, c.Web.Sentry.TracesSampleRate = b.Web.Sentry.Environment, b.Web.Sentry.TracesSampleRate
+}
+
+// RedactUsers clears who may use the server: web_users and every Slack channel's allowed user IDs.
+// It changes the channels b shares, so b must come from a clone.
+func (b *Behavior) RedactUsers() {
+	b.WebUsers = nil
+	for i := range b.Slack.Channels {
+		b.Slack.Channels[i].AllowedUserIDs = nil
+	}
+}
+
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
 const DefaultRuntimeDir = ".rocketclaw"
 
@@ -99,6 +152,8 @@ func (c *Config) RuntimeDirName() string {
 // WebConfig controls the Web listener and conversation presentation.
 type WebConfig struct {
 	ListenAddress string `json:"listen_address,omitempty"`
+	// Admins are the Web usernames allowed to edit Behavior Settings.
+	Admins []string `json:"admins,omitempty"`
 	// TLSCertFile and TLSKeyFile are the PEM certificate and key the listen_address listener serves
 	// HTTPS with. Without them it serves a self-signed certificate made at each start.
 	TLSCertFile string       `json:"tls_cert_file,omitempty"`
@@ -134,10 +189,6 @@ func (c *WebConfig) validate() error {
 }
 
 func (c SentryConfig) validate() error {
-	if rate := c.TracesSampleRate; rate != nil && (*rate < 0 || *rate > 1) {
-		return errors.New("web.sentry.traces_sample_rate must be between 0 and 1")
-	}
-
 	if c.DSN != "" {
 		parsed, err := url.Parse(c.DSN)
 		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Hostname() == "" || parsed.User == nil || parsed.User.Username() == "" || parsed.Path == "" || parsed.Path == "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -249,7 +300,8 @@ type PostHogConfig struct {
 	Host         string `json:"host,omitempty"`
 }
 
-// Load reads, normalizes, and validates the rocketclaw configuration file.
+// Load reads the rocketclaw configuration file and normalizes and validates its setup fields.
+// Its behavior fields are kept as written; ValidateBehavior checks them.
 func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error) {
 	absPath, err := filepath.Abs(configPath)
 	if err != nil {
@@ -302,10 +354,6 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 
 	cfg.Workspace = filepath.Clean(cfg.Workspace)
 
-	if strings.TrimSpace(cfg.Logging.Level) == "" {
-		cfg.Logging.Level = "debug"
-	}
-
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -357,7 +405,7 @@ func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
 	return users, nil
 }
 
-// Validate verifies the configuration is usable.
+// Validate verifies the setup fields are usable.
 func (c *Config) Validate() error {
 	c.Web.ListenAddress = cmp.Or(c.Web.ListenAddress, "0.0.0.0:3000")
 	if _, _, err := c.AttachmentLocation(); err != nil {
@@ -389,20 +437,6 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	c.Overlays = normalizeStrings(c.Overlays)
-
-	for ip, username := range c.WebUsers {
-		if !ip.IsValid() || username == "" || username != strings.TrimSpace(username) {
-			return errors.New("web_users requires valid IP keys and non-empty, trimmed usernames")
-		}
-	}
-
-	for name, model := range c.Models {
-		if strings.TrimSpace(name) == "" || strings.TrimSpace(model) == "" {
-			return errors.New("models keys and values must not be empty")
-		}
-	}
-
 	if err := normalizeOpenAIConfig("openai", &c.OpenAI); err != nil {
 		return err
 	}
@@ -420,13 +454,6 @@ func (c *Config) Validate() error {
 		c.Providers[name] = provider
 	}
 
-	var err error
-
-	c.AutoApproverModel, err = normalizeOpenAIModel("auto_approver_model", c.AutoApproverModel)
-	if err != nil {
-		return err
-	}
-
 	if err := c.validateInstrumentation(); err != nil {
 		return err
 	}
@@ -441,6 +468,46 @@ func (c *Config) Validate() error {
 
 	if err := c.validateOpenCode(); err != nil {
 		return err
+	}
+
+	for _, field := range [...]struct{ value, message string }{{c.Slack.BotToken, "slack.bot_token is required"}, {c.Slack.AppToken, "slack.app_token is required"}} {
+		if strings.TrimSpace(field.value) == "" {
+			return errors.New(field.message)
+		}
+	}
+
+	return nil
+}
+
+// ValidateBehavior verifies and normalizes the behavior fields.
+func (c *Config) ValidateBehavior() error {
+	if strings.TrimSpace(c.Logging.Level) == "" {
+		c.Logging.Level = "debug"
+	}
+
+	c.Overlays = normalizeStrings(c.Overlays)
+
+	for ip, username := range c.WebUsers {
+		if !ip.IsValid() || username == "" || username != strings.TrimSpace(username) {
+			return errors.New("web_users requires valid IP keys and non-empty, trimmed usernames")
+		}
+	}
+
+	for name, model := range c.Models {
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(model) == "" {
+			return errors.New("models keys and values must not be empty")
+		}
+	}
+
+	var err error
+
+	c.AutoApproverModel, err = normalizeOpenAIModel("auto_approver_model", c.AutoApproverModel)
+	if err != nil {
+		return err
+	}
+
+	if rate := c.Web.Sentry.TracesSampleRate; rate != nil && (*rate < 0 || *rate > 1) {
+		return errors.New("web.sentry.traces_sample_rate must be between 0 and 1")
 	}
 
 	return c.validateSlack()
@@ -541,12 +608,6 @@ func normalizeStringList(values []string) []string {
 }
 
 func (c *Config) validateSlack() error {
-	for _, field := range [...]struct{ value, message string }{{c.Slack.BotToken, "slack.bot_token is required"}, {c.Slack.AppToken, "slack.app_token is required"}} {
-		if strings.TrimSpace(field.value) == "" {
-			return errors.New(field.message)
-		}
-	}
-
 	normalized := make([]SlackChannelConfig, 0, len(c.Slack.Channels))
 	for _, channel := range c.Slack.Channels {
 		channel.Channel = strings.TrimSpace(channel.Channel)

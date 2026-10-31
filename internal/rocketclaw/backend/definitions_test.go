@@ -487,10 +487,10 @@ func TestSessionTagInvalidReloadKeepsLiveDefinitions(t *testing.T) {
 	locked := config.NewLockedConfig(cfg)
 	before, _, err := LoadRuntimeDefinitions(locked, cfg.RuntimeDirName())
 	require.NoError(t, err)
-	err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), nil, slog.New(slog.DiscardHandler), locked, func(runtimeDir string) error {
+	err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), new(cfg.Behavior()), slog.New(slog.DiscardHandler), locked, func(runtimeDir string) error {
 		_, _, err := LoadRuntimeDefinitions(locked, runtimeDir)
 		return err
-	})
+	}, func() error { return nil })
 	require.ErrorContains(t, err, "main.md: permission.rocketclaw.rocketclaw_set_tag")
 	after, _, err := LoadRuntimeDefinitions(locked, cfg.RuntimeDirName())
 	require.NoError(t, err)
@@ -524,10 +524,10 @@ func TestLoadRuntimeDefinitionsDuringReload(t *testing.T) {
 		defer cancel()
 
 		for range 20 {
-			if err := skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), nil, logger, locked, func(runtimeDir string) error {
+			if err := skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), new(cfg.Behavior()), logger, locked, func(runtimeDir string) error {
 				_, _, err := LoadRuntimeDefinitions(locked, runtimeDir)
 				return err
-			}); err != nil {
+			}, func() error { return nil }); err != nil {
 				return fmt.Errorf("reload runtime assets: %w", err)
 			}
 		}

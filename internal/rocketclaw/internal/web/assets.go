@@ -3,6 +3,7 @@ package web
 
 import (
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"crypto/sha256"
 	"embed"
@@ -45,32 +46,15 @@ func release(build *debug.BuildInfo) string {
 }
 
 // Handler serves application routes and compiled assets without a frontend runtime.
-// A non-empty serverName prefixes the page title so browser tabs tell servers apart.
-func Handler(sentry config.SentryConfig, posthog config.PostHogConfig, serverName string) http.Handler {
+// Each page load reads the Sentry and PostHog settings and server_display_name from cfg. The display
+// name, else a non-empty serverName, prefixes the page title so browser tabs tell servers apart.
+func Handler(cfg *config.LockedConfig, serverName string) http.Handler {
 	files, _ := fs.Sub(assets, "dist")
 	ocFiles, _ := fs.Sub(assets, "oc-dist")
 
 	// The embedded index exists.
 	page, _ := fs.ReadFile(files, "index.html")
-	index := string(page)
-
-	if serverName != "" {
-		index = strings.Replace(index, "<title>RocketClaw</title>", "<title>"+html.EscapeString(serverName)+" - RocketClaw</title>", 1)
-	}
-
-	if sentry.DSN != "" {
-		// Validated JSON config contains only serializable values.
-		build, _ := debug.ReadBuildInfo()
-		data, _ := json.Marshal(sentryBootstrap{SentryConfig: sentry, Release: release(build)}) // HTML escaping prevents closing the script element.
-		index = strings.Replace(index, "</head>", `<script id="sentry-config" type="application/json">`+string(data)+`</script></head>`, 1)
-	}
-
-	if posthog.ProjectToken != "" {
-		data, _ := json.Marshal(posthog)
-		index = strings.Replace(index, "</head>", `<script id="posthog-config" type="application/json">`+string(data)+`</script></head>`, 1)
-	}
-
-	page = []byte(index)
+	build, _ := debug.ReadBuildInfo()
 
 	var gzipWriters sync.Pool
 
@@ -78,7 +62,24 @@ func Handler(sentry config.SentryConfig, posthog config.PostHogConfig, serverNam
 		w.Header().Set("Cache-Control", "no-cache")
 
 		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/search", "/voice", "/pages", "/shortcuts"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/search/") || strings.HasPrefix(r.URL.Path, "/s/") || strings.HasPrefix(r.URL.Path, "/oc/") || strings.HasPrefix(r.URL.Path, "/skills/") || strings.HasPrefix(r.URL.Path, "/pages/") || strings.HasPrefix(r.URL.Path, "/cron/") {
-			serveFile(w, r, "index.html", page, "assets", &gzipWriters)
+			live, index := cfg.Clone(), string(page)
+
+			if name := cmp.Or(live.ServerDisplayName, serverName); name != "" {
+				index = strings.Replace(index, "<title>RocketClaw</title>", "<title>"+html.EscapeString(name)+" - RocketClaw</title>", 1)
+			}
+
+			if live.Web.Sentry.DSN != "" {
+				// Validated JSON config contains only serializable values.
+				data, _ := json.Marshal(sentryBootstrap{SentryConfig: live.Web.Sentry, Release: release(build)}) // HTML escaping prevents closing the script element.
+				index = strings.Replace(index, "</head>", `<script id="sentry-config" type="application/json">`+string(data)+`</script></head>`, 1)
+			}
+
+			if live.PostHog.ProjectToken != "" {
+				data, _ := json.Marshal(live.PostHog)
+				index = strings.Replace(index, "</head>", `<script id="posthog-config" type="application/json">`+string(data)+`</script></head>`, 1)
+			}
+
+			serveFile(w, r, "index.html", []byte(index), "assets", &gzipWriters)
 
 			return
 		}

@@ -90,6 +90,26 @@ const (
 	SourceSystem      Source = "system"
 )
 
+// InspectKind selects what an inspection of the agents reports.
+type InspectKind string
+
+// Inspection kinds: rocketclaw lint's findings, rocketclaw agent-graph's DOT, or rocketclaw
+// settings' Behavior Settings.
+const (
+	InspectLint     InspectKind = "lint"
+	InspectGraph    InspectKind = "graph"
+	InspectSettings InspectKind = "settings"
+)
+
+// InspectTarget selects the runtime assets an inspection reads.
+type InspectTarget string
+
+// Inspection targets: the assets the next start would build, or the live runtime directory.
+const (
+	InspectNext    InspectTarget = "next"
+	InspectCurrent InspectTarget = "current"
+)
+
 // InboundResponse is the final plain-text result for a queued inbound turn.
 type InboundResponse struct {
 	Text        string

@@ -5,12 +5,15 @@ import (
 	"context"
 	"iter"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
 // Backend owns conversation execution, recording, ordering, and live output.
 type Backend interface {
 	Reload(string) (string, error)
+	SaveBehavior(*config.Behavior) error
+	InspectAgents(protocol.InspectTarget, protocol.InspectKind) (string, int, error)
 	Subscribe(context.Context) iter.Seq[protocol.Event]
 	CreateConversation(context.Context, protocol.Conversation) error
 	ContinueRun(context.Context, string, string) error

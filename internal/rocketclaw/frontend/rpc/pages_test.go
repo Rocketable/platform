@@ -87,7 +87,7 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "")
+	handler := NewHTTPHandler(connection, new(config.LockedConfig), "")
 	app := httptest.NewRecorder()
 	handler.ServeHTTP(app, httptest.NewRequest(http.MethodGet, "/", http.NoBody))
 
@@ -183,7 +183,7 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 func TestPagesRealBrowser(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, Slack: liveSlack()}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -198,7 +198,9 @@ func TestPagesRealBrowser(t *testing.T) {
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group
-	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
+	running.Go(func() error {
+		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly)
+	})
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
 	rt := <-ready
@@ -224,7 +226,7 @@ func TestPagesRealBrowser(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 	// Pages have an opaque origin, so their requests carry Origin: null; their POSTs' answers are recorded.
-	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "")
+	handler := NewHTTPHandler(connection, config.NewLockedConfig(cfg), "")
 
 	var (
 		mu      sync.Mutex

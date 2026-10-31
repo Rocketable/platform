@@ -62,7 +62,7 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 // Connector bridges Slack DM events into the shared rocketclaw bus.
 type Connector struct {
 	log    *slog.Logger
-	config config.SlackConfig
+	config *config.LockedConfig
 
 	threadRouter protocol.PrimaryTextRouter
 
@@ -138,17 +138,19 @@ type rawSlackEventsPayload struct {
 	} `json:"event"`
 }
 
-// New constructs a Slack connector.
-func New(cfg *config.SlackConfig, threadRouter protocol.PrimaryTextRouter, facts channelFactsStore, logger *slog.Logger) *Connector {
-	opts := []slack.Option{slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3)}
+// New constructs a Slack connector with the tokens cfg holds now.
+func New(cfg *config.LockedConfig, threadRouter protocol.PrimaryTextRouter, facts channelFactsStore, logger *slog.Logger) *Connector {
+	tokens := cfg.Clone().Slack
+
+	opts := []slack.Option{slack.OptionAppLevelToken(tokens.AppToken), slack.OptionRetry(3)}
 	if endpoint := strings.TrimSpace(os.Getenv("ROCKETCLAW_SLACK_API_URL")); endpoint != "" {
 		opts = append(opts, slack.OptionAPIURL(endpoint))
 	}
 
-	api := slack.New(cfg.BotToken, opts...)
+	api := slack.New(tokens.BotToken, opts...)
 
 	return &Connector{
-		log: logger.With("component", "slack"), config: *cfg,
+		log: logger.With("component", "slack"), config: cfg,
 		threadRouter: threadRouter,
 		facts:        facts, factsWake: make(chan struct{}, 1), refreshWake: make(chan struct{}, 1), observations: make(map[string]channelObservation),
 		api: api, socketEvents: make(chan socketmode.Event, 50),
@@ -174,7 +176,7 @@ func (c *Connector) ChannelAgentChoices(ctx context.Context, channelID string) (
 		return nil, fmt.Errorf("resolve agent choices for Slack channel %q", channelID)
 	}
 
-	return slices.Clone(c.socialModeAgents(name)), nil
+	return c.socialModeAgents(name), nil
 }
 
 // SidebarChannelAgentChoices returns the stored name and display choices without contacting Slack.
@@ -190,10 +192,10 @@ func (c *Connector) SidebarChannelAgentChoices(ctx context.Context, channelID st
 	}
 
 	if agents := c.socialModeAgents("#" + name); len(agents) > 0 {
-		return name, slices.Clone(agents), nil
+		return name, agents, nil
 	}
 
-	return name, slices.Clone(c.socialModeAgents("@")), nil
+	return name, c.socialModeAgents("@"), nil
 }
 
 // SlackNames returns bare display names for Slack user, user group, and channel
@@ -1076,7 +1078,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		return
 	}
 
-	if ev.User == "" || ev.User == c.botUserID || ev.BotID != "" || ev.Edited != nil || strings.HasPrefix(ev.Channel, "D") || !slices.ContainsFunc(c.config.Channels, func(channel config.SlackChannelConfig) bool {
+	if ev.User == "" || ev.User == c.botUserID || ev.BotID != "" || ev.Edited != nil || strings.HasPrefix(ev.Channel, "D") || !slices.ContainsFunc(c.config.Clone().Slack.Channels, func(channel config.SlackChannelConfig) bool {
 		return slices.Contains(channel.AllowedUserIDs, strings.TrimSpace(ev.User))
 	}) {
 		return
@@ -1168,7 +1170,8 @@ func (c *Connector) replyMentionFailure(ctx context.Context, replyTarget *protoc
 }
 
 func (c *Connector) socialModeChannel(ctx context.Context, channelID string) (channelName, agent string, ok bool) {
-	if len(c.config.Channels) == 0 {
+	slackConfig := c.config.Clone().Slack
+	if len(slackConfig.Channels) == 0 {
 		return "", "", false
 	}
 
@@ -1183,12 +1186,12 @@ func (c *Connector) socialModeChannel(ctx context.Context, channelID string) (ch
 
 	name := "#" + strings.TrimSpace(channel.Name)
 	if name != "#" {
-		if configured, ok := c.config.Channel(name); ok && len(configured.Agents) > 0 {
+		if configured, ok := slackConfig.Channel(name); ok && len(configured.Agents) > 0 {
 			return name, configured.Agents[0], true
 		}
 	}
 
-	if configured, ok := c.config.Channel("@"); ok && len(configured.Agents) > 0 {
+	if configured, ok := slackConfig.Channel("@"); ok && len(configured.Agents) > 0 {
 		return "@", configured.Agents[0], true
 	}
 
@@ -1200,13 +1203,13 @@ func (c *Connector) socialModeChannel(ctx context.Context, channelID string) (ch
 }
 
 func (c *Connector) socialModeAllowsUser(channel, userID string) bool {
-	configured, ok := c.config.Channel(channel)
+	configured, ok := c.config.Clone().Slack.Channel(channel)
 
 	return ok && slices.Contains(configured.AllowedUserIDs, strings.TrimSpace(userID))
 }
 
 func (c *Connector) socialModeAgents(channel string) []string {
-	configured, _ := c.config.Channel(channel)
+	configured, _ := c.config.Clone().Slack.Channel(channel)
 
 	return configured.Agents
 }

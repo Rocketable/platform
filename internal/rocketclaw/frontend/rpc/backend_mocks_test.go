@@ -9,6 +9,7 @@ import (
 	"iter"
 	"sync"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
@@ -47,6 +48,9 @@ var _ frontend.Backend = &mockBackend{}
 //			EditQueueItemFunc: func(context1 context.Context, s string, s1 string, s2 string) (bool, error) {
 //				panic("mock out the EditQueueItem method")
 //			},
+//			InspectAgentsFunc: func(inspectTarget protocol.InspectTarget, inspectKind protocol.InspectKind) (string, int, error) {
+//				panic("mock out the InspectAgents method")
+//			},
 //			JustBashInstallErrorFunc: func() string {
 //				panic("mock out the JustBashInstallError method")
 //			},
@@ -73,6 +77,9 @@ var _ frontend.Backend = &mockBackend{}
 //			},
 //			RunTurnFunc: func(context1 context.Context, inboundMessage *protocol.InboundMessage) error {
 //				panic("mock out the RunTurn method")
+//			},
+//			SaveBehaviorFunc: func(behavior *config.Behavior) error {
+//				panic("mock out the SaveBehavior method")
 //			},
 //			StageRevertFunc: func(context1 context.Context, s string, s1 string) (string, string, error) {
 //				panic("mock out the StageRevert method")
@@ -126,6 +133,9 @@ type mockBackend struct {
 	// EditQueueItemFunc mocks the EditQueueItem method.
 	EditQueueItemFunc func(context1 context.Context, s string, s1 string, s2 string) (bool, error)
 
+	// InspectAgentsFunc mocks the InspectAgents method.
+	InspectAgentsFunc func(inspectTarget protocol.InspectTarget, inspectKind protocol.InspectKind) (string, int, error)
+
 	// JustBashInstallErrorFunc mocks the JustBashInstallError method.
 	JustBashInstallErrorFunc func() string
 
@@ -152,6 +162,9 @@ type mockBackend struct {
 
 	// RunTurnFunc mocks the RunTurn method.
 	RunTurnFunc func(context1 context.Context, inboundMessage *protocol.InboundMessage) error
+
+	// SaveBehaviorFunc mocks the SaveBehavior method.
+	SaveBehaviorFunc func(behavior *config.Behavior) error
 
 	// StageRevertFunc mocks the StageRevert method.
 	StageRevertFunc func(context1 context.Context, s string, s1 string) (string, string, error)
@@ -246,6 +259,13 @@ type mockBackend struct {
 			// S2 is the s2 argument value.
 			S2 string
 		}
+		// InspectAgents holds details about calls to the InspectAgents method.
+		InspectAgents []struct {
+			// InspectTarget is the inspectTarget argument value.
+			InspectTarget protocol.InspectTarget
+			// InspectKind is the inspectKind argument value.
+			InspectKind protocol.InspectKind
+		}
 		// JustBashInstallError holds details about calls to the JustBashInstallError method.
 		JustBashInstallError []struct {
 		}
@@ -304,6 +324,11 @@ type mockBackend struct {
 			Context1 context.Context
 			// InboundMessage is the inboundMessage argument value.
 			InboundMessage *protocol.InboundMessage
+		}
+		// SaveBehavior holds details about calls to the SaveBehavior method.
+		SaveBehavior []struct {
+			// Behavior is the behavior argument value.
+			Behavior *config.Behavior
 		}
 		// StageRevert holds details about calls to the StageRevert method.
 		StageRevert []struct {
@@ -365,6 +390,7 @@ type mockBackend struct {
 	lockCreateConversation      sync.RWMutex
 	lockDeleteQueueItem         sync.RWMutex
 	lockEditQueueItem           sync.RWMutex
+	lockInspectAgents           sync.RWMutex
 	lockJustBashInstallError    sync.RWMutex
 	lockMoveToBackground        sync.RWMutex
 	lockPendingQuestions        sync.RWMutex
@@ -374,6 +400,7 @@ type mockBackend struct {
 	lockReload                  sync.RWMutex
 	lockReorderQueueItems       sync.RWMutex
 	lockRunTurn                 sync.RWMutex
+	lockSaveBehavior            sync.RWMutex
 	lockStageRevert             sync.RWMutex
 	lockStartGoal               sync.RWMutex
 	lockStashQueueItem          sync.RWMutex
@@ -699,6 +726,42 @@ func (mock *mockBackend) EditQueueItemCalls() []struct {
 	return calls
 }
 
+// InspectAgents calls InspectAgentsFunc.
+func (mock *mockBackend) InspectAgents(inspectTarget protocol.InspectTarget, inspectKind protocol.InspectKind) (string, int, error) {
+	if mock.InspectAgentsFunc == nil {
+		panic("mockBackend.InspectAgentsFunc: method is nil but Backend.InspectAgents was just called")
+	}
+	callInfo := struct {
+		InspectTarget protocol.InspectTarget
+		InspectKind   protocol.InspectKind
+	}{
+		InspectTarget: inspectTarget,
+		InspectKind:   inspectKind,
+	}
+	mock.lockInspectAgents.Lock()
+	mock.calls.InspectAgents = append(mock.calls.InspectAgents, callInfo)
+	mock.lockInspectAgents.Unlock()
+	return mock.InspectAgentsFunc(inspectTarget, inspectKind)
+}
+
+// InspectAgentsCalls gets all the calls that were made to InspectAgents.
+// Check the length with:
+//
+//	len(mockedBackend.InspectAgentsCalls())
+func (mock *mockBackend) InspectAgentsCalls() []struct {
+	InspectTarget protocol.InspectTarget
+	InspectKind   protocol.InspectKind
+} {
+	var calls []struct {
+		InspectTarget protocol.InspectTarget
+		InspectKind   protocol.InspectKind
+	}
+	mock.lockInspectAgents.RLock()
+	calls = mock.calls.InspectAgents
+	mock.lockInspectAgents.RUnlock()
+	return calls
+}
+
 // JustBashInstallError calls JustBashInstallErrorFunc.
 func (mock *mockBackend) JustBashInstallError() string {
 	if mock.JustBashInstallErrorFunc == nil {
@@ -1011,6 +1074,38 @@ func (mock *mockBackend) RunTurnCalls() []struct {
 	mock.lockRunTurn.RLock()
 	calls = mock.calls.RunTurn
 	mock.lockRunTurn.RUnlock()
+	return calls
+}
+
+// SaveBehavior calls SaveBehaviorFunc.
+func (mock *mockBackend) SaveBehavior(behavior *config.Behavior) error {
+	if mock.SaveBehaviorFunc == nil {
+		panic("mockBackend.SaveBehaviorFunc: method is nil but Backend.SaveBehavior was just called")
+	}
+	callInfo := struct {
+		Behavior *config.Behavior
+	}{
+		Behavior: behavior,
+	}
+	mock.lockSaveBehavior.Lock()
+	mock.calls.SaveBehavior = append(mock.calls.SaveBehavior, callInfo)
+	mock.lockSaveBehavior.Unlock()
+	return mock.SaveBehaviorFunc(behavior)
+}
+
+// SaveBehaviorCalls gets all the calls that were made to SaveBehavior.
+// Check the length with:
+//
+//	len(mockedBackend.SaveBehaviorCalls())
+func (mock *mockBackend) SaveBehaviorCalls() []struct {
+	Behavior *config.Behavior
+} {
+	var calls []struct {
+		Behavior *config.Behavior
+	}
+	mock.lockSaveBehavior.RLock()
+	calls = mock.calls.SaveBehavior
+	mock.lockSaveBehavior.RUnlock()
 	return calls
 }
 

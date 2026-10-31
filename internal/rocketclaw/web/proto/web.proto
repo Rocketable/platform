@@ -546,12 +546,29 @@ message ConfigView {
   bool mcp_external = 9;
   reserved 10;
   string tailscale_user = 11;
+  string behavior_json = 12;
+  bool can_edit = 13;
 }
 
 message ListConfigRequest {}
 
+message SaveBehaviorSettingsRequest {
+  string document_json = 1;
+}
+
 message ListConfigResponse {
   ConfigView config = 1;
+}
+
+// Asks the server to run rocketclaw lint ("lint") or agent-graph ("graph") on target "next" or "current".
+message InspectAgentsRequest {
+  string target = 1;
+  string kind = 2;
+}
+
+message InspectAgentsResponse {
+  string output = 1;
+  int32 findings = 2;
 }
 
 message UpdateSessionRequest {
@@ -854,6 +871,8 @@ service Web {
   rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
   rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse);
   rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
+  rpc SaveBehaviorSettings(SaveBehaviorSettingsRequest) returns (ListConfigResponse);
+  rpc InspectAgents(InspectAgentsRequest) returns (InspectAgentsResponse);
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
   rpc Identity(IdentityRequest) returns (IdentityResponse);

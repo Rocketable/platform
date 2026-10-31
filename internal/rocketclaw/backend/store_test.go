@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -653,6 +654,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	require.ElementsMatch(t, []string{
 		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
 		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_mutes", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
+		"behavior_settings",
 	}, tables)
 }
 
@@ -2328,6 +2330,32 @@ func TestVoiceSettings(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, VoiceSettings{Agent: "main", Voice: "cedar", Transcript: true}, settings("alice"), "a deleted conversation clears only the pointer")
 	assert.Equal(t, VoiceSettings{Transcript: true}, settings("bob"))
+}
+
+func TestBehaviorSettingsRoundTrip(t *testing.T) {
+	store := newTestSessionService(t)
+	ctx := t.Context()
+
+	_, found, err := store.behaviorSettings(ctx)
+	require.NoError(t, err)
+	require.False(t, found)
+
+	rate := 0.5
+	cfg := &config.Config{Models: map[string]string{"fast": "gpt-a"}, AutoApproverModel: "gpt-b", Overlays: []string{"https://example.com/overlay.git"},
+		WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}, ServerDisplayName: "Ops", Logging: config.LoggingConfig{Level: "warn"},
+		Slack:           config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}},
+		Instrumentation: config.InstrumentationConfig{HideInputs: true, HideOutputs: true},
+		Web:             config.WebConfig{Sentry: config.SentryConfig{Environment: "prod", TracesSampleRate: &rate}}}
+
+	for _, model := range []string{"gpt-a", "gpt-c"} {
+		cfg.Models["fast"] = model
+		require.NoError(t, putBehaviorSettings(ctx, store.db, new(cfg.Behavior())))
+
+		stored, found, err := store.behaviorSettings(ctx)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, cfg.Behavior(), stored)
+	}
 }
 
 func TestWebSpaces(t *testing.T) {

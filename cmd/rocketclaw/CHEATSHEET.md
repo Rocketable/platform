@@ -168,6 +168,8 @@ Concurrent tool calls inside one script use `gather`, `map`, `race`, and `race_f
 
 Set `database_url` on the selected config file. Fresh stores apply embedded SQL migrations. Isolation is one DSN per workspace.
 
+Behavior Settings are one JSON document in the single-row `behavior_settings` table: `models`, `auto_approver_model`, `slack.channels`, `web_users`, `server_display_name`, `logging.level`, `instrumentation.hide_inputs`/`hide_outputs`, `web.sentry.environment`/`traces_sample_rate`, and `overlays`. Every other field, `web.admins` included, is setup and stays in the config file or AWS Secrets Manager. The first start imports the file's behavior fields once every startup check passes; later starts ignore them and log a warning naming each one. Users listed in `web.admins` edit the document on the Web Config page; a save is validated whole and applies live (an overlay-list change re-stages assets like reload), or is rejected and changes nothing. If a stored document fails startup (`stored behavior settings: …`), export it with `SELECT document FROM behavior_settings`, fix it, and write it back with `UPDATE behavior_settings SET document = '<json>'::jsonb` (see the README for a `psql` recipe). Deleting the row re-imports from the file on the next start but discards every Web edit; use it only as a last resort.
+
 Attachment originals use the top-level `attachments` setting: `{"driver":"filesystem","path":"/srv/rocketclaw/attachments"}` or `{"driver":"s3","bucket_arn":"arn:aws:s3:::rocketclaw-attachments"}`. The default is `attachments` under the workspace's selected runtime directory; relative paths are workspace-relative. S3 uses the standard AWS SDK credentials and region configuration. Originals are never overwritten, and PostgreSQL keeps only their metadata and ownership. Back up both PostgreSQL and the original-file store; changing the configured location does not move old files. See the README's attachment storage section for operational details.
 
 ## Model Providers And Credentials
@@ -206,7 +208,7 @@ RocketClaw injects these tools into agent turns as **Code Mode builtins inside `
 | Tool | Available In | Permission Default | What It Does |
 | --- | --- | --- | --- |
 | `rocketclaw_dynamic_workflow` | Persistent parent managed turns when at least one loaded workflow stem is `workflow`-allowed. Never on workflow workers, and not via the RocketClaw auto-allow list. | Gated by `permission.workflow.<stem>`. Not gated by `task`. Not RocketClaw auto-allowed. | Runs a saved Starlark workflow as a nested tool call inside the current turn and returns the final workflow text as the tool result. Slack does not stream phase/agent progress. Not a second managed turn; no human `$workflow` session summary entry. |
-| `rocketclaw_restart` | Persistent bridge turns and raw/cron runs. | Default-deny. Requires explicit per-agent `allow`; generated `main` agents include that allow. | Cancels RocketClaw for supervisor restart after approved runtime config or overlay-list changes. In-progress work resumes after the restart. |
+| `rocketclaw_restart` | Persistent bridge turns and raw/cron runs. | Default-deny. Requires explicit per-agent `allow`; generated `main` agents include that allow. | Cancels RocketClaw for supervisor restart after approved setup changes in the config file. Behavior Settings, the overlay list included, apply on save from the Web Config page and need no restart. In-progress work resumes after the restart. |
 | `rocketclaw_schedule_message` | Persistent bridge turns and raw/cron runs of top-level sessions, hidden cron and External MCP runs included. Never subagent sessions. | Auto-allow unless explicitly denied. | Schedules a one-shot or recurring prompt in the current conversation. Recurring schedules persist until reset and do not replay missed intervals. |
 | `rocketclaw_reset_scheduled_messages` | Persistent bridge turns and raw/cron runs of top-level sessions, hidden cron and External MCP runs included. Never subagent sessions. | Treat as part of the schedule-message permission family. Deny `rocketclaw_schedule_message` to block schedule reset behavior. | Clears scheduled messages for the current conversation. |
 | `rocketclaw_attach_files_to_response` | Persistent bridge turns and raw/cron runs. | Auto-allow unless explicitly denied. | Attaches collected files to the final outbound response through RocketClaw's shared response-attachment path. |
@@ -327,7 +329,7 @@ Deployment-specific model names can be kept out of shared agents:
 model: '{{ model "coding-high" }}'
 ```
 
-Changing `models` requires restart. Agent changes using an existing mapping can use reload.
+`models` is a Behavior Setting: an admin changes it on the Web Config page and it applies on save. Agent changes using an existing mapping can use reload.
 
 RocketClaw denies tools by default. `permission` grants are grouped by bucket, and each bucket maps subjects to actions. Later matching rules override earlier matching rules, so put broad allows before narrower denies when subtracting access.
 
@@ -395,12 +397,13 @@ Running `rocketclaw` without a subcommand starts the server when `femtoclaw.json
 | Command | Purpose |
 | --- | --- |
 | `rocketclaw run` | Starts the RocketClaw server/runtime and fails if the selected configuration is missing or invalid. |
-| `rocketclaw lint [next|current]` | Checks effective agent-system safety. Defaults to `next`. |
-| `rocketclaw agent-graph [next|current]` | Prints the effective task delegation graph as Graphviz/DOT. Defaults to `next`. |
+| `rocketclaw lint [next|current]` | Asks the running server to check effective agent-system safety. Defaults to `next`. |
+| `rocketclaw agent-graph [next|current]` | Asks the running server to print the effective task delegation graph as Graphviz/DOT. Defaults to `next`. |
+| `rocketclaw settings` | Asks the running server to print the live Behavior Settings as JSON, such as `models` and Slack channel routing, without `web_users` or Slack allowed user IDs. |
 | `rocketclaw oai login [provider] [--headless]` | Authenticates the selected provider and writes its credential to the selected runtime `auth.json`; omission selects `openai`. |
 | `rocketclaw oai list` | Lists configured provider auth modes and local credential presence without displaying credentials. |
 | `rocketclaw oai logout [provider]` | Removes only the selected provider's local credential; omission selects `openai`. |
 | `rocketclaw ts login` | Logs the Web's Tailscale node (`web.tsnet`) in with `web.tsnet.auth_key` or a printed login link, waits until it runs, and exits. Run it with RocketClaw stopped. |
 | `rocketclaw help`, `rocketclaw -h`, `rocketclaw --help` | Prints top-level help. |
 
-For `lint` and `agent-graph`, `next` builds a temporary startup-equivalent runtime view from embedded assets, overlays, and workspace files. `current` inspects the selected generated runtime directory as it exists now.
+`lint`, `agent-graph`, and `settings` need a running server: they read the port of `web.listen_address` from the selected config and call the server on `127.0.0.1` at that port. The server does the work against its live behavior settings, such as `models` and `overlays`. When the server cannot be reached, or is too old to know the command, the command fails and says so; it never falls back to reading the file. `next` builds a temporary startup-equivalent runtime view under the workspace from embedded assets, overlays, and workspace files, and removes it afterwards. `current` inspects the generated runtime directory as it exists now.

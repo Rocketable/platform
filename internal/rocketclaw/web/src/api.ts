@@ -104,5 +104,6 @@ export const mutations = {
   stopBackgroundJob: (input: { conversationId: string; jobId: string }) => rpc("StopBackgroundJob", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
   voiceSettings: (input: { action: "START" | "RESET" | "UPDATE"; conversationId?: string; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
+  saveBehaviorSettings: async (input: { documentJson: string }) => (await rpc<{ config: ConfigView }>("SaveBehaviorSettings", input)).config,
   tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; mute?: SavedTabs["mutes"][number]; unmute?: string }) => rpc<SavedTabs>("Tabs", input),
 };

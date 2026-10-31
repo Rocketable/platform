@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime/metrics"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +48,7 @@ type lockedRun struct {
 	signal     <-chan struct{}
 	configPath string
 	logger     *slog.Logger
+	logLevel   *slog.LevelVar
 	assemble   FrontendAssembler
 	sessions   *SessionService
 }
@@ -86,8 +88,9 @@ func (s *runShutdown) start(reason string, restart bool) bool {
 	return started
 }
 
-// Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs.
-func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble FrontendAssembler) error {
+// Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs. It sets
+// logLevel, the level of logger, from the logging.level that applies.
+func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, logLevel *slog.LevelVar, assemble FrontendAssembler) error {
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 
@@ -154,6 +157,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		signal:     ctx.Done(),
 		configPath: configPath,
 		logger:     logger,
+		logLevel:   logLevel,
 		assemble:   assemble,
 		sessions:   rocketcodeSessions,
 	})
@@ -180,16 +184,8 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		logger.Warn("sweep expired retained execute results", "error", err)
 	}
 
-	if err := skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, logger); err != nil {
-		return fmt.Errorf("sync rocketclaw skeleton: %w", err)
-	}
-
-	if err := validateRuntimeAssets(rocketcodeSessions.definitions, cfg.RuntimeDirName()); err != nil {
+	if err := s.startWithBehavior(runCtx, cfg); err != nil {
 		return err
-	}
-
-	if err := s.assemble.ValidateAssets(cfg, cfg.RuntimeDirName()); err != nil {
-		return fmt.Errorf("validate frontend assets: %w", err)
 	}
 
 	var externalMCPUsers map[string]string
@@ -241,7 +237,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 	}()
 
 	*rt = Runtime{
-		Cfg: rocketcodeSessions.definitions, Log: logger, RunCtx: runCtx,
+		Cfg: rocketcodeSessions.definitions, Log: logger, logLevel: s.logLevel, RunCtx: runCtx,
 		Sessions:          rocketcodeSessions,
 		ExternalMCPUsers:  externalMCPUsers,
 		ExternalMCPAgents: inertExternalMCPAgents{}, assemble: s.assemble,
@@ -342,6 +338,96 @@ func (f conversationFactory) newBridge(cfg *Config) directBridge {
 	bridge.background = f.rt.background
 
 	return bridge
+}
+
+func (s *lockedRun) startWithBehavior(ctx context.Context, cfg *config.Config) error {
+	stored, found, err := s.sessions.behaviorSettings(ctx)
+	if err != nil {
+		return err
+	}
+
+	if !found {
+		if err := s.startWith(cfg); err != nil {
+			return err
+		}
+
+		return putBehaviorSettings(ctx, s.sessions.db, new(cfg.Behavior()))
+	}
+
+	if ignored := setBehaviorFields(new(cfg.Behavior())); len(ignored) > 0 {
+		s.logger.Warn("ignoring behavior settings in the config file; the stored behavior settings apply", "fields", ignored)
+	}
+
+	cfg.SetBehavior(&stored)
+
+	if err := s.startWith(cfg); err != nil {
+		return fmt.Errorf("stored behavior settings: %w", err)
+	}
+
+	return nil
+}
+
+func (s *lockedRun) startWith(cfg *config.Config) error {
+	if err := cfg.ValidateBehavior(); err != nil {
+		return fmt.Errorf("validate behavior settings: %w", err)
+	}
+
+	s.sessions.definitions.Store(cfg)
+	SetLogLevel(s.logLevel, cfg.Logging.Level)
+
+	if err := skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, s.logger); err != nil {
+		return fmt.Errorf("sync rocketclaw skeleton: %w", err)
+	}
+
+	if err := validateRuntimeAssets(s.sessions.definitions, cfg.RuntimeDirName()); err != nil {
+		return err
+	}
+
+	if err := s.assemble.ValidateAssets(cfg, cfg.RuntimeDirName()); err != nil {
+		return fmt.Errorf("validate frontend assets: %w", err)
+	}
+
+	return nil
+}
+
+func setBehaviorFields(b *config.Behavior) []string {
+	var names []string
+
+	for _, field := range []struct {
+		name string
+		set  bool
+	}{
+		{"models", b.Models != nil},
+		{"auto_approver_model", b.AutoApproverModel != ""},
+		{"slack.channels", b.Slack.Channels != nil},
+		{"web_users", b.WebUsers != nil},
+		{"server_display_name", b.ServerDisplayName != ""},
+		{"logging.level", b.Logging.Level != ""},
+		{"instrumentation.hide_inputs", b.Instrumentation.HideInputs},
+		{"instrumentation.hide_outputs", b.Instrumentation.HideOutputs},
+		{"web.sentry.environment", b.Web.Sentry.Environment != ""},
+		{"web.sentry.traces_sample_rate", b.Web.Sentry.TracesSampleRate != nil},
+		{"overlays", b.Overlays != nil},
+	} {
+		if field.set {
+			names = append(names, field.name)
+		}
+	}
+
+	return names
+}
+
+// SetLogLevel sets level from a logging.level value: debug, info, warn (or warning), or error, in
+// any case. Any other value sets debug.
+func SetLogLevel(level *slog.LevelVar, text string) {
+	text = strings.TrimSpace(strings.ToUpper(text))
+	if text == "WARNING" {
+		text = "WARN"
+	}
+
+	if err := level.UnmarshalText([]byte(text)); err != nil {
+		level.Set(slog.LevelDebug)
+	}
 }
 
 func validateRuntimeAssets(cfg *config.LockedConfig, runtimeDir string) error {

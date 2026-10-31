@@ -1,95 +1,104 @@
 package main
 
 import (
+	"bytes"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
+	"net"
+	"net/http"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/agentlint"
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/skel"
+	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 func runLint(args []string) error {
-	target, secretsARN, err := parseInspectionCommand("lint", args)
+	output, findings, err := inspectAgents("lint", protocol.InspectLint, args)
 	if err != nil {
 		return err
 	}
 
-	runtimeRoot, cfg, cleanup, err := runtimeRootForInspectionTarget(target, "rocketclaw-lint-*", "lint", secretsARN)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-
-	result, err := agentlint.Lint(runtimeRoot, cfg)
-	if err != nil {
+	if err := printStdout(output, "lint result"); err != nil {
 		return err
 	}
 
-	if len(result.Findings) == 0 {
-		return printStdout(fmt.Sprintf("rocketclaw lint %s: OK\n", target), "lint result")
+	if findings > 0 {
+		return exitCodeError(1)
 	}
 
-	lines := []string{fmt.Sprintf("rocketclaw lint %s: found %d findings", target, len(result.Findings))}
-	for _, finding := range result.Findings {
-		lines = append(lines, fmt.Sprintf("%s %s %s: %s", finding.Code, finding.Severity, finding.Path, finding.Message))
-	}
-	if err := printStdout(strings.Join(lines, "\n")+"\n", "lint result"); err != nil {
-		return err
-	}
-
-	return exitCodeError(1)
+	return nil
 }
 
-func parseInspectionCommand(name string, args []string) (string, string, error) {
+func runSettings(args []string) error {
+	settings, _, err := inspectAgents("settings", protocol.InspectSettings, args)
+	if err != nil {
+		return err
+	}
+
+	return printStdout(settings, "settings")
+}
+
+func inspectAgents(name string, kind protocol.InspectKind, args []string) (string, int, error) {
 	flagSet := flag.NewFlagSet("rocketclaw "+name, flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
 	arn := flagSet.String(secretsARNFlag, "", secretsARNUsage)
 	if err := flagSet.Parse(args); err != nil {
-		return "", "", fmt.Errorf("parse %s flags: %w", name, err)
+		return "", 0, fmt.Errorf("parse %s flags: %w", name, err)
 	}
-	rest := flagSet.Args()
-	target := "next"
-	if len(rest) > 0 {
-		target = rest[0]
+	rest, target, usage := flagSet.Args(), protocol.InspectNext, "usage: rocketclaw "+name+" [next|current]"
+	if kind == protocol.InspectSettings {
+		target, usage = protocol.InspectCurrent, "usage: rocketclaw settings"
+	} else if len(rest) > 0 {
+		target, rest = protocol.InspectTarget(rest[0]), rest[1:]
 	}
-	if len(rest) > 1 || (target != "next" && target != "current") {
-		return "", "", fmt.Errorf("usage: rocketclaw %s [next|current]", name)
+	if len(rest) > 0 || (target != protocol.InspectNext && target != protocol.InspectCurrent) {
+		return "", 0, errors.New(usage)
 	}
 
-	return target, *arn, nil
-}
-
-func runtimeRootForInspectionTarget(target, tempPattern, buildName, secretsARN string) (string, *config.Config, func(), error) {
-	cleanup := func() {}
-
-	_, cfg, err := loadRuntimeConfig(secretsARN)
+	_, cfg, err := loadRuntimeConfig(*arn)
 	if err != nil {
-		return "", nil, cleanup, fmt.Errorf("load config: %w", err)
+		return "", 0, fmt.Errorf("load config: %w", err)
 	}
 
-	runtimeRoot := filepath.Join(cfg.Workspace, cfg.RuntimeDirName())
-	if target == "next" {
-		tmp, err := os.MkdirTemp("", tempPattern)
-		if err != nil {
-			return "", nil, cleanup, fmt.Errorf("create %s temp dir: %w", buildName, err)
-		}
-		cleanup = func() {
-			os.RemoveAll(tmp)
-		}
-
-		runtimeRoot = filepath.Join(tmp, cfg.RuntimeDirName())
-		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-		if err := skel.SyncEffectiveRuntimeAssets(cfg.Workspace, runtimeRoot, cfg.Overlays, logger); err != nil {
-			cleanup()
-			return "", nil, cleanup, fmt.Errorf("build %s target: %w", buildName, err)
-		}
+	_, port, err := net.SplitHostPort(cfg.Web.ListenAddress)
+	if err != nil {
+		return "", 0, fmt.Errorf("read web.listen_address: %w", err)
 	}
 
-	return runtimeRoot, cfg, cleanup, nil
+	address := net.JoinHostPort("127.0.0.1", port)
+	body, err := protojson.Marshal(&rpc.InspectAgentsRequest{Target: string(target), Kind: string(kind)})
+	if err != nil {
+		return "", 0, fmt.Errorf("encode %s request: %w", name, err)
+	}
+
+	// The server's certificate may be self-signed anew at each start, and loopback never leaves this host.
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	response, err := client.Post("https://"+address+"/api/InspectAgents", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return "", 0, fmt.Errorf("could not reach the running rocketclaw server at %s: %w", address, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	var result struct {
+		Output   string `json:"output"`
+		Findings int    `json:"findings"`
+		Message  string `json:"message"`
+	}
+	errDecode := json.NewDecoder(response.Body).Decode(&result)
+	if response.StatusCode != http.StatusOK {
+		// An older server answers a route it does not know with plain text, not {code,message}.
+		if errDecode != nil || result.Message == "" {
+			return "", 0, errors.New("the running rocketclaw server does not support this command; restart it after upgrading")
+		}
+		return "", 0, fmt.Errorf("rocketclaw server at %s failed %s: %s", address, name, result.Message)
+	}
+	if errDecode != nil {
+		return "", 0, fmt.Errorf("read rocketclaw server %s answer: %w", name, errDecode)
+	}
+
+	return result.Output, result.Findings, nil
 }

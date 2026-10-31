@@ -286,10 +286,12 @@ func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
 
 	tool := restartTool(&runtimeRestarterMock{restartFunc: testNoopRestart})
 
-	assert.Contains(t, tool.Description, "explicitly requested runtime configuration change")
+	assert.Contains(t, tool.Description, "explicitly requested setup change")
 	assert.Contains(t, tool.Description, "rocketclaw.json")
 	assert.Contains(t, tool.Description, "femtoclaw.json")
-	assert.Contains(t, tool.Description, "configured overlay entries")
+	assert.Contains(t, tool.Description, "Behavior Settings")
+	assert.Contains(t, tool.Description, "Web Config page")
+	assert.NotContains(t, tool.Description, "overlay entries")
 	assert.Contains(t, tool.Description, "Use rocketclaw_reload instead")
 	assert.Contains(t, tool.Description, "agents/")
 	assert.Contains(t, tool.Description, "skills/")
@@ -300,6 +302,10 @@ func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
 	assert.Contains(t, tool.Description, "data-file edits")
 	assert.NotContains(t, tool.Description, "file changes")
 	assert.Equal(t, []string{"reason"}, tool.Parameters["required"])
+
+	reload := reloadTool(&runtimeReloaderMock{ReloadFunc: func(string) (string, error) { return "", nil }})
+	assert.Contains(t, reload.Description, "Web Config page")
+	assert.NotContains(t, reload.Description, "requires rocketclaw_restart")
 }
 
 func TestRestartToolCallsConfiguredRestart(t *testing.T) {

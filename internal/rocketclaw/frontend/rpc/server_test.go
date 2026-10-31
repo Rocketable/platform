@@ -157,7 +157,14 @@ func TestTailscaleBrowserIdentity(t *testing.T) {
 
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "tailscale"), []byte(script), 0o700))
 
-			server := &Server{cfg: new(config.LockedConfig), usernames: map[netip.Addr]string{netip.MustParseAddr("100.64.0.1"): "configured-user"}}
+			cfg := config.NewLockedConfig(&config.Config{WebUsers: map[netip.Addr]string{}})
+			server := New(&mockBackend{}, nil, cfg, &mockChannels{}, &mockCronJobs{})
+			// The live web_users mapping applies to the next call without rebuilding the server.
+			require.NoError(t, cfg.Do(func(cfg *config.Config) error {
+				cfg.WebUsers[netip.MustParseAddr("100.64.0.1")] = "configured-user"
+				return nil
+			}))
+
 			username, principal, err := server.principal(ctx)
 			require.NoError(t, err)
 			require.Equal(t, "configured-user", username)
@@ -165,7 +172,10 @@ func TestTailscaleBrowserIdentity(t *testing.T) {
 
 			_, err = server.listConfig(ctx)
 			require.NoError(t, err)
-			clear(server.usernames)
+			require.NoError(t, cfg.Do(func(cfg *config.Config) error {
+				clear(cfg.WebUsers)
+				return nil
+			}))
 
 			view, err := server.listConfig(ctx)
 			if tt.want == "" {
@@ -247,7 +257,7 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 				request.Header.Set("Tailscale-User-Name", "Alice")
 
 				response := httptest.NewRecorder()
-				NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "").ServeHTTP(response, request)
+				NewHTTPHandler(connection, new(config.LockedConfig), "").ServeHTTP(response, request)
 
 				// Protocol negotiation answers any caller; every other method needs the mapping.
 				code := tt.code
@@ -329,7 +339,7 @@ func TestTailnetIdentity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) { return tt.who, tt.err }}
 
-			next := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "")
+			next := NewHTTPHandler(connection, new(config.LockedConfig), "")
 			if tt.identity == "" {
 				next = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("refused caller reached the Web handler") })
 			}
@@ -430,6 +440,175 @@ func TestTailscaleIdentityCache(t *testing.T) {
 	})
 }
 
+// Only admins save behavior settings and see web_users, a save answers with the refreshed config,
+// and a save that would sign out a caller identified by IP never reaches the backend.
+func TestSaveBehaviorSettings(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tailscale"), []byte("#!/bin/sh\n[ \"$*\" = 'whois --json 100.64.0.1' ] || exit 1\nprintf '%s' '{\"UserProfile\":{\"LoginName\":\"carol@example.com\"}}'\n"), 0o700))
+
+	cfg := &config.Config{Models: map[string]string{"fast": "gpt-a"}, WebUsers: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"}}
+	cfg.Slack.Channels = []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}}}
+	cfg.Web.Admins = []string{"alice", "carol@example.com"}
+	locked := config.NewLockedConfig(cfg)
+	core := &mockBackend{SaveBehaviorFunc: func(behavior *config.Behavior) error {
+		if len(behavior.Slack.Channels[0].Agents) == 0 {
+			return errors.New("slack.channels[].agents is required")
+		}
+
+		return locked.Do(func(cfg *config.Config) error { cfg.SetBehavior(behavior); return nil })
+	}}
+	server := New(core, nil, locked, &mockChannels{}, &mockCronJobs{})
+	caller := func(pairs ...string) context.Context {
+		return metadata.NewIncomingContext(t.Context(), metadata.Pairs(append([]string{"rocketclaw-principal"}, pairs...)...))
+	}
+	alice, bob, carol := caller("192.0.2.1"), caller("192.0.2.2"), caller("100.64.0.1")
+	document := func(change func(*config.Behavior)) string {
+		behavior := locked.Clone().Behavior()
+		change(&behavior)
+		data, err := json.Marshal(behavior)
+		require.NoError(t, err)
+
+		return string(data)
+	}
+
+	view, err := server.listConfig(alice)
+	require.NoError(t, err)
+	require.True(t, view.Config.CanEdit)
+
+	want, err := json.MarshalIndent(locked.Clone().Behavior(), "", "  ")
+	require.NoError(t, err)
+	require.Equal(t, string(want), view.Config.BehaviorJson)
+	require.Contains(t, view.Config.BehaviorJson, `"192.0.2.2": "bob"`)
+
+	view, err = server.listConfig(bob)
+	require.NoError(t, err)
+	require.False(t, view.Config.CanEdit)
+	require.Contains(t, view.Config.BehaviorJson, `"web_users": null`)
+	require.NotContains(t, view.Config.BehaviorJson, "192.0.2")
+
+	for _, tt := range []struct {
+		name, document, message string
+		ctx                     context.Context
+		code                    codes.Code
+	}{
+		{"non-admin", document(func(*config.Behavior) {}), "only admins", bob, codes.PermissionDenied},
+		{"malformed", `{"models":`, "unexpected end of JSON input", alice, codes.InvalidArgument},
+		{"drops own web_users IP", document(func(b *config.Behavior) { delete(b.WebUsers, netip.MustParseAddr("192.0.2.1")) }), "sign you out as alice", alice, codes.InvalidArgument},
+		{"maps own whois IP to another user", document(func(b *config.Behavior) { b.WebUsers[netip.MustParseAddr("100.64.0.1")] = "bob" }), "sign you out as carol@example.com", carol, codes.InvalidArgument},
+	} {
+		_, err := server.saveBehaviorSettings(tt.ctx, &SaveBehaviorSettingsRequest{DocumentJson: tt.document})
+		require.Equal(t, tt.code, status.Code(err), tt.name)
+		require.ErrorContains(t, err, tt.message, tt.name)
+	}
+
+	require.Empty(t, core.SaveBehaviorCalls())
+
+	_, err = server.saveBehaviorSettings(alice, &SaveBehaviorSettingsRequest{DocumentJson: document(func(b *config.Behavior) { b.Slack.Channels[0].Agents = nil })})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	require.ErrorContains(t, err, "slack.channels[].agents is required")
+
+	saved, err := server.saveBehaviorSettings(alice, &SaveBehaviorSettingsRequest{DocumentJson: document(func(b *config.Behavior) { b.Models["fast"] = "gpt-b" })})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"fast": "gpt-b"}, core.SaveBehaviorCalls()[1].Behavior.Models)
+	require.True(t, saved.Config.CanEdit)
+	require.Contains(t, saved.Config.BehaviorJson, `"fast": "gpt-b"`)
+
+	listener, err := net.Listen("unix", testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+	server.Register(transport)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() { transport.Stop(); require.NoError(t, serving.Wait()) })
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	body, err := json.Marshal(struct {
+		DocumentJSON string `json:"documentJson"`
+	}{document(func(b *config.Behavior) { b.Models["fast"] = "gpt-c" })})
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		address, body string
+		code          int
+	}{
+		{"192.0.2.2:1234", string(body), http.StatusForbidden},
+		{"192.0.2.1:1234", `{}`, http.StatusBadRequest},
+		{"192.0.2.1:1234", string(body), http.StatusOK},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/api/SaveBehaviorSettings", strings.NewReader(tt.body))
+		request.RemoteAddr = tt.address
+		response := httptest.NewRecorder()
+		NewHTTPHandler(connection, new(config.LockedConfig), "").ServeHTTP(response, request)
+		require.Equal(t, tt.code, response.Code, response.Body.String())
+	}
+
+	require.Equal(t, "gpt-c", locked.Clone().Models["fast"])
+
+	// A tailnet login does not depend on web_users, so it may drop the mapping of its own IP.
+	tailnet := caller("192.0.2.1", "rocketclaw-tailnet-login-bin", "carol@example.com", "rocketclaw-tailnet-name-bin", "Carol")
+	_, err = server.saveBehaviorSettings(tailnet, &SaveBehaviorSettingsRequest{DocumentJson: document(func(b *config.Behavior) { delete(b.WebUsers, netip.MustParseAddr("192.0.2.1")) })})
+	require.NoError(t, err)
+	require.NotContains(t, locked.Clone().WebUsers, netip.MustParseAddr("192.0.2.1"))
+}
+
+// Only a direct loopback caller, one no relay forwarded, inspects agents without a principal, and
+// only through InspectAgents.
+func TestInspectAgentsDirectLocal(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // Without tailscale, no caller here has a principal.
+
+	core := &mockBackend{InspectAgentsFunc: func(target protocol.InspectTarget, _ protocol.InspectKind) (string, int, error) {
+		return "rocketclaw lint " + string(target) + ": OK\n", 0, nil
+	}}
+	listener, err := net.Listen("unix", testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+	New(core, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() { transport.Stop(); require.NoError(t, serving.Wait()) })
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	for _, tt := range []struct {
+		method, address, header string
+		code                    int
+	}{
+		{"InspectAgents", "192.0.2.1:1234", "", http.StatusUnauthorized},
+		{"InspectAgents", "127.0.0.1:1234", "", http.StatusOK},
+		{"InspectAgents", "[::1]:1234", "", http.StatusOK},
+		{"InspectAgents", "127.0.0.1:1234", "X-Forwarded-For", http.StatusUnauthorized},
+		{"InspectAgents", "127.0.0.1:1234", "Forwarded", http.StatusUnauthorized},
+		{"InspectAgents", "127.0.0.1:1234", "Tailscale-User-Login", http.StatusUnauthorized},
+		{"Identity", "127.0.0.1:1234", "", http.StatusUnauthorized},
+	} {
+		body := map[string]string{"InspectAgents": `{"target":"next","kind":"lint"}`, "Identity": `{}`}[tt.method]
+		request := httptest.NewRequest(http.MethodPost, "/api/"+tt.method, strings.NewReader(body))
+		request.RemoteAddr = tt.address
+
+		if tt.header != "" {
+			request.Header.Set(tt.header, "192.0.2.1")
+		}
+
+		response := httptest.NewRecorder()
+		NewHTTPHandler(connection, new(config.LockedConfig), "").ServeHTTP(response, request)
+		require.Equal(t, tt.code, response.Code, "%+v: %s", tt, response.Body.String())
+	}
+
+	require.Len(t, core.InspectAgentsCalls(), 2)
+	require.Equal(t, protocol.InspectNext, core.InspectAgentsCalls()[0].InspectTarget)
+	require.Equal(t, protocol.InspectLint, core.InspectAgentsCalls()[0].InspectKind)
+}
+
 func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -451,7 +630,7 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 
 			return nil
 		}},
-		usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"},
+		cfg: config.NewLockedConfig(&config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"}}),
 	}
 	firstCtx, cancelFirst := context.WithCancel(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")))
 	secondCtx, cancelSecond := context.WithCancel(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.2")))
@@ -536,8 +715,8 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 
 	matching := map[string][]string{"cs-operators": {"S0BA868QQ90"}, "alan": {"U05MD4PEVHN"}}
 	server := &Server{
-		sessions:  sessions,
-		usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"},
+		sessions: sessions,
+		cfg:      config.NewLockedConfig(&config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"}}),
 		channels: &mockChannels{SlackTagsMatchingFunc: func(_ context.Context, needle string) []string {
 			return matching[needle]
 		}},
@@ -592,7 +771,7 @@ func TestSearchSessionsSharedFlightCancellation(t *testing.T) {
 
 			return nil
 		}},
-		usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"},
+		cfg: config.NewLockedConfig(&config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"}}),
 	}
 
 	type result struct {
@@ -689,7 +868,7 @@ func TestSearchSessionsUnreadPerCaller(t *testing.T) {
 			<-release
 			return "support", nil, nil
 		}},
-		usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"},
+		cfg: config.NewLockedConfig(&config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"}}),
 	}
 
 	found := make([][]string, 2)
@@ -760,7 +939,7 @@ WHERE c.conversation_id = v.id`)
 		SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) { return "support", []string{"main"}, nil },
 		SlackTagsMatchingFunc:          func(context.Context, string) []string { return []string{"U7"} },
 	}
-	server := &Server{sessions: sessions, channels: channels, usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"}}
+	server := &Server{sessions: sessions, channels: channels, cfg: config.NewLockedConfig(&config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice"}})}
 
 	_, err = server.searchSessions(t.Context(), &SearchSessionsRequest{Query: "billing", Messages: true})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
@@ -797,17 +976,16 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	seeded := openTestTurns(t, dsn)
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
 	server := &Server{
-		backend:   withoutBackgroundJobs(),
-		sessions:  sessions,
-		cfg:       config.NewLockedConfig(cfg),
-		usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"},
-		channels:  &mockChannels{SlackTagsMatchingFunc: func(context.Context, string) []string { return nil }},
+		backend:  withoutBackgroundJobs(),
+		sessions: sessions,
+		cfg:      config.NewLockedConfig(cfg),
+		channels: &mockChannels{SlackTagsMatchingFunc: func(context.Context, string) []string { return nil }},
 	}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
@@ -1052,11 +1230,12 @@ func TestSessionEntries(t *testing.T) {
 
 		return protocol.CronRunResult{ConversationID: progress.SyncDestination}, nil
 	}}
+	live := config.NewLockedConfig(cfg)
 	cronjobs := cronfrontend.New(cfg.Workspace, cfg.RuntimeDirName(), sessions, cronRunner, slog.New(slog.DiscardHandler))
 	require.NoError(t, cronjobs.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, cronjobs.Stop(context.Background())) })
 
-	server := New(core, sessions, config.NewLockedConfig(cfg), channels, cronjobs)
+	server := New(core, sessions, live, channels, cronjobs)
 	socketPath := testSocketPath(t)
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
@@ -1087,7 +1266,6 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 	_, err = invoke[PromptResponse](t.Context(), connection, "Prompt", &PromptRequest{Id: "unrelated", Text: "hello"})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
-	clear(cfg.WebUsers) // The server retains the startup mapping, not mutable config state.
 
 	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
 	identity, err := invoke[IdentityResponse](ctx, connection, "Identity", &IdentityRequest{})
@@ -1952,7 +2130,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	view, err := invoke[ListConfigResponse](ctx, connection, "ListConfig", &ListConfigRequest{})
 	require.NoError(t, err)
 
-	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, Models: []*ConfigModel{{Name: "alpha", Model: "gpt-5.4"}, {Name: "zeta", Model: "gpt-6.1-sol"}}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-6.1-sol", InstrumentationEnabled: true, McpExternal: true}
+	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, Models: []*ConfigModel{{Name: "alpha", Model: "gpt-5.4"}, {Name: "zeta", Model: "gpt-6.1-sol"}}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-6.1-sol", InstrumentationEnabled: true, McpExternal: true, BehaviorJson: view.Config.BehaviorJson}
 	require.True(t, proto.Equal(wantConfig, view.Config), "unexpected config view: %v", view.Config)
 	encodedView, err := proto.Marshal(view)
 	require.NoError(t, err)
@@ -2890,7 +3068,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		// Shadow visibility also reads managed ownership, so the locked lookup
 		// fails before selecting an agent rather than returning incomplete choices.
-		selectedServer := &Server{backend: server.backend, sessions: lockedSessions, usernames: server.usernames, cfg: server.cfg, channels: server.channels, cronjobs: server.cronjobs}
+		selectedServer := &Server{backend: server.backend, sessions: lockedSessions, cfg: server.cfg, channels: server.channels, cronjobs: server.cronjobs}
 		incoming := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
 		selected, err := selectedServer.listAgents(incoming, id)
 		require.ErrorContains(t, err, "resolve web conversation visibility")
@@ -3563,7 +3741,10 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		}})
 		require.NoError(t, err)
 
-		server.usernames[netip.MustParseAddr("192.0.2.3")] = "bob"
+		require.NoError(t, server.cfg.Do(func(cfg *config.Config) error {
+			cfg.WebUsers[netip.MustParseAddr("192.0.2.3")] = "bob"
+			return nil
+		}))
 
 		original := channels.SlackTagsMatchingFunc
 		defer func() { channels.SlackTagsMatchingFunc = original }()
@@ -3723,7 +3904,8 @@ func TestContinueCronRun(t *testing.T) {
 	rt := &backend.Runtime{Sessions: sessions}
 	core.CreateConversationFunc, core.ContinueRunFunc = rt.CreateConversation, rt.ContinueRun
 	cronjobs := &mockCronJobs{LoadOneOffCronjobFunc: func(string) (protocol.OneOffCronjob, error) { return protocol.OneOffCronjob{}, os.ErrNotExist }}
-	server := &Server{backend: core, sessions: sessions, cfg: config.NewLockedConfig(cfg), cronjobs: cronjobs, usernames: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	cfg.WebUsers = map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}
+	server := &Server{backend: core, sessions: sessions, cfg: config.NewLockedConfig(cfg), cronjobs: cronjobs}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
 	texts := func(id string) (shown []string) {

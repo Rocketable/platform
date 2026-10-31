@@ -85,7 +85,7 @@ func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger 
 	}
 
 	target := filepath.Join(workspace, runtimeDir)
-	if err := resetRuntimeDirectory(target, logger, true); err != nil {
+	if err := resetRuntimeDirectory(target, "", logger, true); err != nil {
 		return fmt.Errorf("reset rocketclaw target: %w", err)
 	}
 
@@ -138,9 +138,11 @@ func SyncEffectiveRuntimeAssets(workspace, target string, overlays []string, log
 	return nil
 }
 
-// ReplaceRuntimeAssetsAfterValidation rebuilds runtime assets in a stage and replaces live assets only after validate accepts the staged work dir.
-// locked must be shared with definition readers; validation runs outside Do so it can load staged definitions.
-func ReplaceRuntimeAssetsAfterValidation(workspace, runtimeDir string, overlays []string, logger *slog.Logger, locked *config.LockedConfig, validate func(string) error) error {
+// ReplaceRuntimeAssetsAfterValidation rebuilds runtime assets with the overlays of behavior in a stage, and replaces live assets
+// and the behavior fields of locked together only after validate accepts the staged work dir. It then runs apply; when the
+// replacement or apply fails, it restores the previous live assets and behavior fields together.
+// locked must be shared with definition readers; validation and apply run outside Do so they can read locked.
+func ReplaceRuntimeAssetsAfterValidation(workspace, runtimeDir string, behavior *config.Behavior, logger *slog.Logger, locked *config.LockedConfig, validate func(string) error, apply func() error) error {
 	stage, err := os.MkdirTemp(workspace, ".rocketclaw-reload-*")
 	if err != nil {
 		return fmt.Errorf("create rocketclaw reload stage: %w", err)
@@ -148,7 +150,14 @@ func ReplaceRuntimeAssetsAfterValidation(workspace, runtimeDir string, overlays 
 
 	defer func() { _ = os.RemoveAll(stage) }()
 
-	if err := SyncEffectiveRuntimeAssets(workspace, stage, overlays, logger); err != nil {
+	previous, err := os.MkdirTemp(workspace, ".rocketclaw-previous-*")
+	if err != nil {
+		return fmt.Errorf("create rocketclaw previous runtime assets directory: %w", err)
+	}
+
+	defer func() { _ = os.RemoveAll(previous) }()
+
+	if err := SyncEffectiveRuntimeAssets(workspace, stage, behavior.Overlays, logger); err != nil {
 		return err
 	}
 
@@ -161,23 +170,51 @@ func ReplaceRuntimeAssetsAfterValidation(workspace, runtimeDir string, overlays 
 		return err
 	}
 
-	if err := locked.Do(func(_ *config.Config) error {
-		live := filepath.Join(workspace, runtimeDir)
-		if err := resetRuntimeDirectory(live, logger, false); err != nil {
-			return err
+	live := filepath.Join(workspace, runtimeDir)
+
+	var kept config.Behavior
+
+	// ponytail: a move aside that fails part way loses the live entries it had not moved yet; the
+	// runtime directory is derived, and the next start or reload rebuilds it.
+	restore := func(cfg *config.Config) error {
+		cfg.SetBehavior(&kept)
+
+		if err := resetRuntimeDirectory(live, "", logger, false); err != nil {
+			return fmt.Errorf("restore runtime assets: %w", err)
 		}
 
-		if err := commitStagedRuntimeAssets(stage, live); err != nil {
-			return fmt.Errorf("commit rocketclaw reload stage: %w", err)
+		if err := commitStagedRuntimeAssets(previous, live); err != nil {
+			return fmt.Errorf("restore runtime assets: %w", err)
 		}
 
-		if err := syncWorkspaceScriptSymlinks(workspace, runtimeDir, logger); err != nil {
-			return fmt.Errorf("sync workspace script symlinks: %w", err)
+		return syncWorkspaceScriptSymlinks(workspace, runtimeDir, logger)
+	}
+
+	if err := locked.Do(func(cfg *config.Config) error {
+		kept = cfg.Behavior()
+
+		err := resetRuntimeDirectory(live, previous, logger, false)
+		if err == nil {
+			err = commitStagedRuntimeAssets(stage, live)
 		}
+
+		if err == nil {
+			err = syncWorkspaceScriptSymlinks(workspace, runtimeDir, logger)
+		}
+
+		if err != nil {
+			return errors.Join(fmt.Errorf("commit rocketclaw reload stage: %w", err), restore(cfg))
+		}
+
+		cfg.SetBehavior(behavior)
 
 		return nil
 	}); err != nil {
 		return fmt.Errorf("replace runtime assets: %w", err)
+	}
+
+	if err := apply(); err != nil {
+		return errors.Join(err, locked.Do(restore))
 	}
 
 	return nil
@@ -592,7 +629,8 @@ func gitOverlaySlug(url, ref string) string {
 	return cmp.Or(strings.Join(parts, "-"), "overlay")
 }
 
-func resetRuntimeDirectory(target string, logger *slog.Logger, preserveOverlays bool) error {
+// resetRuntimeDirectory removes the generated entries of target, or moves them into aside when it is not empty.
+func resetRuntimeDirectory(target, aside string, logger *slog.Logger, preserveOverlays bool) error {
 	preserved := map[string]struct{}{
 		".rocketcode":    {},
 		"attachments":    {},
@@ -629,7 +667,11 @@ func resetRuntimeDirectory(target string, logger *slog.Logger, preserveOverlays 
 		}
 
 		path := filepath.Join(target, entry.Name())
-		if err := os.RemoveAll(path); err != nil {
+		if aside != "" {
+			if err := os.Rename(path, filepath.Join(aside, entry.Name())); err != nil {
+				return fmt.Errorf("move rocketclaw target entry %s aside: %w", path, err)
+			}
+		} else if err := os.RemoveAll(path); err != nil {
 			return fmt.Errorf("remove rocketclaw target entry %s: %w", path, err)
 		}
 

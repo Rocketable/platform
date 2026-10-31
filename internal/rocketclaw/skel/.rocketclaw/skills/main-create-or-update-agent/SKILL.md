@@ -21,7 +21,7 @@ Only use these runtime paths:
 - read the current effective agent from `.rocketclaw`
 - copy the current effective content from `.rocketclaw` into `agents/` before editing an existing agent
 - make the requested edits in `agents/`
-- after all requested `agents/` overlay edits are complete, call `rocketclaw_reload` exactly once so the runtime validates and reloads the updated agent definitions. Use `rocketclaw_restart` instead only when runtime configuration or overlay-list entries changed. Do not call reload or restart for memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.
+- after all requested `agents/` overlay edits are complete, call `rocketclaw_reload` exactly once so the runtime validates and reloads the updated agent definitions. Use `rocketclaw_restart` instead only when setup fields in `rocketclaw.json` changed. Model mappings, Slack channel agents, and the overlay list are Behavior Settings that an admin changes on the Web Config page; they apply on save and need neither reload nor restart. Do not call reload or restart for memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.
 - never edit `.rocketclaw` directly
 
 ## Required inputs
@@ -219,7 +219,7 @@ The resulting frontmatter must include at least:
 - `description`
 - `model`
 
-The `model` value is required. Use a concrete model such as `gpt-6.1-sol`, or `{{ model "name" }}` when `name` already exists in the selected config's `models` object. If the human has not specified either one, ask before writing the file. Do not invent a mapping.
+The `model` value is required. Use a concrete model such as `gpt-6.1-sol`, or `{{ model "name" }}` when `name` already exists in the `models` Behavior Setting. Do not read `models` from `rocketclaw.json`: its copy is ignored after the first start. Run `rocketclaw settings` to see the live models and Slack routing. Check the mapping with `rocketclaw lint`, which renders every agent's model against the live settings and fails with `model "name" is not configured` when the mapping is missing. If the human has not specified either one, ask before writing the file. Do not invent a mapping; when a new one is needed, ask the human to add it on the Web Config page.
 
 When updating an existing agent, preserve the existing non-empty `model` unless the human explicitly asked to change it. If the existing agent has no `model` or an empty `model`, ask the human which model to use and add it.
 
@@ -267,7 +267,7 @@ The body must also end with an extra instruction that explicitly tells the agent
 4. Summarize the agent change you are about to make.
 5. Create or update the overlay file in `agents/`.
 6. If this is a rename and an old overlay file exists at the previous path, remove that old overlay file.
-7. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, run `rocketclaw lint`, resolve or explicitly suppress findings approved by the human, then optionally tell the human you are applying them now and call `rocketclaw_reload` exactly once. Use `rocketclaw_restart` only when runtime configuration or overlay-list entries changed.
+7. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, run `rocketclaw lint`, resolve or explicitly suppress findings approved by the human, then optionally tell the human you are applying them now and call `rocketclaw_reload` exactly once. Use `rocketclaw_restart` only when setup fields in `rocketclaw.json` changed.
 
 ## Important
 

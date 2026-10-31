@@ -207,7 +207,9 @@ credentials, cost, and what OpenAI receives.
 
 ## Frontend error and performance tracking
 
-Set `web.sentry` in either `rocketclaw.json` or `femtoclaw.json`:
+Set `web.sentry.dsn` in either `rocketclaw.json` or `femtoclaw.json`.
+`environment` and `traces_sample_rate` are Behavior Settings: the first start
+imports them from the file, and later an admin changes them on the Config page.
 
 ```json
 {
@@ -225,10 +227,10 @@ Use the **public DSN** from your Sentry project's Client Keys settings, not an
 auth token or a DSN containing a private key. Only these three settings and
 the running module version (as the Sentry release, omitted for local
 `(devel)` builds) are embedded in the HTML; the rest of the runtime config is
-not exposed. Restart
-RocketClaw and reload the browser after changing them. No frontend rebuild is
-needed for config changes. When both filenames exist, `femtoclaw.json` takes
-precedence.
+not exposed. After changing the DSN, restart RocketClaw; a saved
+`environment` or `traces_sample_rate` needs no restart. Either way, reload the
+browser. No frontend rebuild is needed for config changes. When both filenames
+exist, `femtoclaw.json` takes precedence.
 
 With a DSN, the browser reports uncaught JS/TS errors, unhandled promise
 rejections, React rendering errors (caught, uncaught, and recoverable),
@@ -372,6 +374,13 @@ for five minutes. These IP rules apply to the `web.listen_address` listener. On 
 `web.tsnet` listener the Tailscale node identifies each connection itself: it
 refuses tagged or unknown devices, never consults `web_users` or the CLI, and the
 Config page shows the connection's login.
+
+Users named in the config file's `web.admins` also get a **Behavior settings**
+section on the Config page. **Edit** opens the stored Behavior Settings as JSON
+(see the [root README](../../../README.md#getting-started) for which fields they
+are); **Save** replaces the whole document and applies it to the running server,
+or shows the validation error and changes nothing. Everyone else sees the page
+read-only, without `web_users` or Slack allowed user IDs.
 
 Oxlint runs `@shadcn/lint` with `no-restyle` enabled, including inside the UI
 components. Use component variants for styling and `className` for layout;

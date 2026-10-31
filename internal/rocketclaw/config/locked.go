@@ -72,6 +72,7 @@ func clone(source *Config) Config {
 		cfg.Slack.Channels[i].AllowedUserIDs = slices.Clone(cfg.Slack.Channels[i].AllowedUserIDs)
 	}
 
+	cfg.Web.Admins = slices.Clone(cfg.Web.Admins)
 	cfg.Web.Sentry.TracesSampleRate = protocol.Clone(cfg.Web.Sentry.TracesSampleRate)
 
 	if cfg.Web.Tsnet != nil {

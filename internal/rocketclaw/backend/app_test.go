@@ -56,10 +56,11 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.users.json"), []byte(`{"alice":"secret"}`), 0o600))
 
 	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: config.SlackConfig{
-		Channels: []config.SlackChannelConfig{{Channel: "@"}, {Channel: "#general"}},
+		Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#general", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}},
 	}, MCPExternal: config.MCPExternalConfig{Enabled: true}, Instrumentation: config.InstrumentationConfig{
 		Enabled: true, CollectorEndpoint: collector.URL, ProjectName: "rocketclaw-test", APIKey: "token",
 	}}
+	require.NoError(t, cfg.ValidateBehavior())
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -149,7 +150,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	lock, err := client.Acquire(runLockName, pglock.FailIfLocked())
 	require.NoError(t, err)
 	ctxLock, cancelLock := context.WithTimeout(t.Context(), time.Second)
-	err = Run(ctxLock, cfg, configPath, slog.New(slog.DiscardHandler), assembler)
+	err = Run(ctxLock, cfg, configPath, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler)
 
 	cancelLock()
 	require.ErrorIs(t, err, pglock.ErrNotAcquired)
@@ -157,7 +158,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	require.NoError(t, lock.Close())
 	require.NoError(t, seed.Stop())
 
-	require.ErrorIs(t, Run(ctx, cfg, configPath, slog.New(slog.DiscardHandler), assembler), ErrRestartRequested)
+	require.ErrorIs(t, Run(ctx, cfg, configPath, slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler), ErrRestartRequested)
 	require.Equal(t, []string{"validated", "validated", "assembled", "slack stopped", "extra stopped"}, order)
 
 	for _, resource := range resources {
@@ -202,9 +203,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 	require.NoError(t, seed.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{ID: "q2", ConversationID: conversationID, Message: "second", Principal: "alice", Source: protocol.SourceWeb, Position: 1, StashAt: time.Unix(2, 0).UTC()}))
 	require.NoError(t, seed.Stop())
 
-	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: config.SlackConfig{
-		Channels: []config.SlackChannelConfig{{Channel: "@"}},
-	}}
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: testSlack()}
 
 	runQueuedStartup := func(t *testing.T, wait time.Duration) []string {
 		t.Helper()
@@ -234,7 +233,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 
 		errRun := make(chan error, 1)
 		go func() {
-			errRun <- Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), slog.New(slog.DiscardHandler), assembler)
+			errRun <- Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler)
 		}()
 
 		var texts []string
@@ -366,6 +365,119 @@ func TestKeyedConversationLocksAllowIndependentIDs(t *testing.T) {
 	unlockFirst()
 }
 
+// The first start imports the file's behavior once every startup check passed; later starts apply the
+// stored Behavior Settings and name the file's behavior fields they ignore.
+func TestRunMergesStoredBehaviorSettings(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	store, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Stop()) })
+
+	type started struct {
+		live  *config.Config
+		level slog.Level
+		logs  string
+	}
+
+	start := func(behavior func(*config.Config)) (started, error) {
+		t.Helper()
+
+		var (
+			logs bytes.Buffer
+			live *config.Config
+		)
+
+		cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn}
+		behavior(cfg)
+
+		level, copyDone := new(slog.LevelVar), make(chan struct{})
+		close(copyDone)
+
+		err := Run(t.Context(), cfg, "", slog.New(slog.NewTextHandler(&logs, nil)), level, &frontendAssemblerMock{
+			ValidateAssetsFunc: func(*config.Config, string) error { return nil },
+			AssembleFunc: func(rt *Runtime) (<-chan struct{}, []func(context.Context) error, error) {
+				live = rt.Cfg.Clone()
+				return copyDone, nil, nil
+			},
+		})
+
+		return started{live, level.Level(), logs.String()}, err
+	}
+	stored := func() (config.Behavior, bool) {
+		t.Helper()
+
+		behavior, found, err := store.behaviorSettings(t.Context())
+		require.NoError(t, err)
+
+		return behavior, found
+	}
+	setupOnly := func(*config.Config) {}
+
+	_, err = start(setupOnly)
+	require.ErrorContains(t, err, "slack.channels is required")
+
+	_, found := stored()
+	require.False(t, found, "a fresh install needs behavior from the file or the database")
+
+	_, err = start(func(cfg *config.Config) {
+		cfg.Slack.Channels = []config.SlackChannelConfig{{Channel: "#ops"}}
+	})
+	require.ErrorContains(t, err, "slack.channels[].agents is required")
+
+	_, found = stored()
+	require.False(t, found, "a failed import stores nothing")
+
+	got, err := start(func(cfg *config.Config) {
+		cfg.Slack, cfg.Models, cfg.Logging.Level = testSlack(), map[string]string{"fast": "gpt-a"}, "info"
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"fast": "gpt-a"}, got.live.Models)
+	require.Equal(t, slog.LevelInfo, got.level)
+
+	imported, found := stored()
+	require.True(t, found)
+	require.Equal(t, got.live.Behavior(), imported, "the first start stores the normalized file behavior")
+
+	got, err = start(func(cfg *config.Config) {
+		cfg.Slack, cfg.Models, cfg.Logging.Level = testSlack(), map[string]string{"fast": "gpt-b"}, "error"
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"fast": "gpt-a"}, got.live.Models, "the stored models apply")
+	require.Equal(t, slog.LevelInfo, got.level, "the stored logging.level replaces the file's")
+	require.Contains(t, got.logs, `level=WARN msg="ignoring behavior settings in the config file; the stored behavior settings apply" fields="[models slack.channels logging.level]"`)
+
+	got, err = start(setupOnly)
+	require.NoError(t, err)
+	require.Equal(t, imported.Slack.Channels, got.live.Slack.Channels, "a setup-only file serves the stored Slack channels")
+	require.NotContains(t, got.logs, "ignoring behavior settings")
+
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.WriteFile("workflows/slow.star", []byte("meta = {\"name\": \"slow\", \"description\": \"Slow\"}\nw = worker(name=\"w\", instructions=\"work\", model=\"slow\")\ndef main(args): return None\n"), 0o600))
+
+	_, err = start(setupOnly)
+	require.ErrorContains(t, err, `stored behavior settings: validate workflow definitions: workflow worker model "slow" is not configured`)
+	require.NoError(t, root.Remove("workflows/slow.star"))
+
+	invalid := imported
+	invalid.Slack.Channels = []config.SlackChannelConfig{{Channel: "#ops"}}
+	require.NoError(t, putBehaviorSettings(t.Context(), store.db, &invalid))
+
+	_, err = start(setupOnly)
+	require.ErrorContains(t, err, "stored behavior settings: validate behavior settings: slack.channels[].agents is required")
+}
+
+// testSlack returns the slack.channels of configs that tests start Run with.
+func testSlack() config.SlackConfig {
+	return config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}}
+}
+
 func testLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
@@ -412,7 +524,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 			require.NoError(t, err)
 
-			cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
+			cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: testSlack()}
 
 			ctx, signal := context.WithCancel(t.Context())
 			defer signal()
@@ -447,7 +559,9 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 			var logs bytes.Buffer
 
 			done := make(chan error, 1)
-			go func() { done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(&logs, nil)), assembler) }()
+			go func() {
+				done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(&logs, nil)), new(slog.LevelVar), assembler)
+			}()
 
 			var rt *Runtime
 
@@ -520,7 +634,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 			defer signal()
 
 			go func() {
-				done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), &frontendAssemblerMock{
+				done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), &frontendAssemblerMock{
 					ValidateAssetsFunc: func(*config.Config, string) error { return nil },
 					AssembleFunc: func(*Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 						return nil, nil, nil
@@ -551,7 +665,7 @@ func TestRunStopsOnInvalidFrontendAssets(t *testing.T) {
 
 	errInvalid := errors.New("invalid cron")
 	assembler := &frontendAssemblerMock{ValidateAssetsFunc: func(*config.Config, string) error { return errInvalid }}
-	require.ErrorIs(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), assembler), errInvalid)
+	require.ErrorIs(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler), errInvalid)
 	assert.Empty(t, assembler.AssembleCalls())
 }
 
@@ -576,7 +690,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
-	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: testSlack()}
 
 	ctx, signal := context.WithCancel(t.Context())
 	defer signal()
@@ -596,7 +710,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembler) }()
+	go func() { done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembler) }()
 
 	select {
 	case body := <-bodies:

@@ -123,7 +123,7 @@ func TestResetRuntimeDirectoryPreservesAuthAndAttachments(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(target, "justbash", "wrapper.ts"), []byte("wrapper"), 0o755))
 
 	for _, preserveOverlays := range []bool{false, true} {
-		require.NoError(t, resetRuntimeDirectory(target, testLogger(), preserveOverlays))
+		require.NoError(t, resetRuntimeDirectory(target, "", testLogger(), preserveOverlays))
 		data, err := os.ReadFile(filepath.Join(target, "attachments", "original"))
 		require.NoError(t, err)
 		require.Equal(t, "immutable", string(data))
@@ -707,7 +707,7 @@ func TestReplaceRuntimeAssetsAfterValidationLeavesLiveAssetsUnchangedOnValidatio
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "main.md"), []byte("broken"), 0o644))
 
 	errValidate := errors.New("invalid staged assets")
-	err := ReplaceRuntimeAssetsAfterValidation(workspace, targetRoot, nil, testLogger(), new(config.LockedConfig), func(string) error { return errValidate })
+	err := ReplaceRuntimeAssetsAfterValidation(workspace, targetRoot, new(config.Behavior), testLogger(), new(config.LockedConfig), func(string) error { return errValidate }, func() error { return nil })
 	require.ErrorIs(t, err, errValidate)
 
 	data, err := os.ReadFile(filepath.Join(liveAgents, "main.md"))
@@ -744,13 +744,16 @@ func TestReplaceRuntimeAssetsAfterValidationCommitsFreshOverlayAndRefreshesScrip
 	repoGit(t, repo, "add", ".")
 	repoGit(t, repo, "commit", "-m", "new")
 
-	require.NoError(t, ReplaceRuntimeAssetsAfterValidation(workspace, targetRoot, []string{repo}, testLogger(), new(config.LockedConfig), func(stagedWorkDir string) error {
+	locked := new(config.LockedConfig)
+	require.NoError(t, ReplaceRuntimeAssetsAfterValidation(workspace, targetRoot, &config.Behavior{Overlays: []string{repo}}, testLogger(), locked, func(stagedWorkDir string) error {
 		data, err := os.ReadFile(filepath.Join(workspace, stagedWorkDir, agentsRoot, "remote.md"))
 		require.NoError(t, err)
 		assert.Equal(t, "new remote", string(data))
+		assert.Empty(t, locked.Clone().Overlays, "behavior applies only with the commit")
 
 		return nil
-	}))
+	}, func() error { return nil }))
+	assert.Equal(t, []string{repo}, locked.Clone().Overlays)
 
 	data, err := os.ReadFile(filepath.Join(workspace, targetRoot, agentsRoot, "remote.md"))
 	require.NoError(t, err)
