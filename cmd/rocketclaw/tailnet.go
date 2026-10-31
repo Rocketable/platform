@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -174,9 +173,7 @@ func serveTailnet(ctx context.Context, rt *backend.Runtime, node *tailnetNode, s
 		return errors.New("tailscale node has no HTTPS name: enable MagicDNS and HTTPS in the admin console")
 	}
 
-	// The HTTPS name is <host>.<MagicDNS suffix>, known only once the node runs.
-	_, suffix, _ := strings.Cut(domains[0], ".")
-	server.Handler = rpc.NewTailnetHandler(node.client, suffix, server.Handler)
+	server.Handler = rpc.NewTailnetHandler(node.client, rt.Cfg.Clone().TrustedRocketClaws, server.Handler)
 
 	listener, err := node.server.Listen("tcp", ":443")
 	if err != nil {

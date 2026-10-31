@@ -56,6 +56,7 @@ func clone(source *Config) Config {
 	cfg.Providers = maps.Clone(cfg.Providers)
 	cfg.OpenCode = maps.Clone(cfg.OpenCode)
 	cfg.RocketClaws = maps.Clone(cfg.RocketClaws)
+	cfg.TrustedRocketClaws = slices.Clone(cfg.TrustedRocketClaws)
 
 	cfg.MCPServers = maps.Clone(cfg.MCPServers)
 	for name := range cfg.MCPServers {

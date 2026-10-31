@@ -221,10 +221,12 @@ type tailnetWhoIs interface {
 
 // NewTailnetHandler signs each request in by its tailnet connection and refuses tagged or unknown callers,
 // except at coding servers' MCP endpoints, which check their callers' passwords themselves.
-// A RocketClaw page served from this tailnet may call across sites: it gets CORS answers, and its
-// request reaches next as same-origin, so next's own origin checks hold for it. suffix is the
-// tailnet's MagicDNS suffix. next must serve NewHTTPHandler, which appends the IP principal to this identity.
-func NewTailnetHandler(client tailnetWhoIs, suffix string, next http.Handler) http.Handler {
+// Only a page whose origin is in trusted, a RocketClaw page this server was told to trust, may call across
+// sites: it gets CORS answers, and its request reaches next as same-origin, so next's own origin checks
+// hold for it. Any other page stays cross-site, even one served from this tailnet, because the browser
+// signs in as the person on the device and a page could otherwise act as them.
+// next must serve NewHTTPHandler, which appends the IP principal to this identity.
+func NewTailnetHandler(client tailnetWhoIs, trusted []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if bridge, _ := path.Match("/opencode/*/mcp", r.URL.Path); bridge {
 			next.ServeHTTP(w, r)
@@ -234,7 +236,7 @@ func NewTailnetHandler(client tailnetWhoIs, suffix string, next http.Handler) ht
 		// A tailnet page reads every answer, so a refusal reaches it as one rather than as an unreachable server.
 		origin := r.Header.Get("Origin")
 
-		page := tailnetPage(r, client, suffix, origin)
+		page := origin != "" && slices.Contains(trusted, origin)
 		if page {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Add("Vary", "Origin")
@@ -266,27 +268,6 @@ func NewTailnetHandler(client tailnetWhoIs, suffix string, next http.Handler) ht
 
 		next.ServeHTTP(w, r)
 	})
-}
-
-// tailnetPage reports whether origin is another page on this tailnet: https, and either under the
-// MagicDNS suffix or a Tailscale IP of a node here. An unknown suffix trusts no name.
-func tailnetPage(r *http.Request, client tailnetWhoIs, suffix, origin string) bool {
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == r.Host {
-		return false
-	}
-
-	host := parsed.Hostname()
-	if suffix != "" && strings.HasSuffix(host, "."+suffix) {
-		return true
-	}
-
-	if addr, err := netip.ParseAddr(host); err == nil {
-		_, err = client.WhoIs(r.Context(), addr.String())
-		return err == nil
-	}
-
-	return false
 }
 
 // httpJSON writes a JSON body, gzip-compressed when the client accepts it.

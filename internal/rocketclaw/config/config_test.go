@@ -570,10 +570,20 @@ func TestValidateRocketClaws(t *testing.T) {
 			err := cfg.Validate()
 			if tt.wantErr {
 				require.ErrorContains(t, err, fmt.Sprintf("rocketclaws[%q]", tt.key))
-				return
+			} else {
+				require.NoError(t, err)
 			}
 
-			require.NoError(t, err)
+			// A trusted page's origin follows the same rule as a remote's URL; only the "work" cases vary the URL.
+			cfg = validConfig()
+			cfg.TrustedRocketClaws = []string{tt.url}
+
+			err = cfg.Validate()
+			if tt.wantErr && tt.key == "work" {
+				require.ErrorContains(t, err, "trusted_rocketclaws[0]")
+			} else {
+				require.NoError(t, err)
+			}
 		})
 	}
 }

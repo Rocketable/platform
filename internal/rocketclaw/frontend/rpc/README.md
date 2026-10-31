@@ -491,11 +491,11 @@ a key is closed at startup with one "Tailscale authentication unavailable" warni
 a node that loses its login later stops serving the same way. Tailscale's log upload is
 off. Never use `tailscale funnel`.
 
-The `web.tsnet` listener also serves RocketClaw pages from other machines on its
-tailnet, so one page can operate several RocketClaws. A request whose `Origin` is
-`https` and whose host ends with `.` plus the tailnet's MagicDNS suffix, or is a
-Tailscale IP that WhoIs knows, is such a page. The suffix comes from the node's HTTPS
-name once the node runs. For that page the handler answers the `OPTIONS` preflight
+The `web.tsnet` listener also serves the RocketClaw pages its config trusts, so one
+page can operate several RocketClaws. A request whose `Origin` exactly matches an entry
+of `trusted_rocketclaws` is such a page; no other origin is, not even another page on
+the same tailnet, because the listener signs in the person on the device and a trusted
+page acts as them. For that page the handler answers the `OPTIONS` preflight
 with `204`, echoing the requested method and headers, and sets
 `Access-Control-Allow-Origin` and `Vary: Origin` on every answer. It then rewrites
 `Origin` to its own origin and `Sec-Fetch-Site` to `same-origin`, so

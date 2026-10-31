@@ -114,6 +114,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		mu       sync.Mutex
 		down     bool
 		versions = map[string]bool{}
+		tailnet  http.Handler
 	)
 
 	versioned := func(name string, next http.Handler) http.Handler {
@@ -132,17 +133,16 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 	}
 
 	remoteRPC, remoteWorkspace := serve("Remote reply")
-	tailnet := NewTailnetHandler(whois, suffix, versioned("work", NewHTTPHandler(remoteRPC, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)))
 	remote := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		off := down
+		off, handler := down, tailnet
 		mu.Unlock()
 
 		if off {
 			panic(http.ErrAbortHandler)
 		}
 
-		tailnet.ServeHTTP(w, r)
+		handler.ServeHTTP(w, r)
 	}))
 	t.Cleanup(remote.Close)
 
@@ -169,6 +169,11 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		web.ServeHTTP(w, r)
 	}))
 	t.Cleanup(local.Close)
+
+	// The remote trusts the local page's origin, which exists only now, and no other page.
+	mu.Lock()
+	tailnet = NewTailnetHandler(whois, []string{named("local", local)}, versioned("work", NewHTTPHandler(remoteRPC, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)))
+	mu.Unlock()
 
 	runWebTest(t, "src/remote-transport.test.ts", "ROCKETCLAW_REMOTE_TEST_LOCAL="+named("local", local), "ROCKETCLAW_REMOTE_TEST_REMOTE="+named("work", remote), "ROCKETCLAW_REMOTE_TEST_WORKSPACE="+remoteWorkspace, "ROCKETCLAW_REMOTE_TEST_SUFFIX="+suffix)
 }
