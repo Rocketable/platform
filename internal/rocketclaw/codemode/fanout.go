@@ -20,11 +20,11 @@ const (
 	MaxConcurrency  = 64
 	childStepBudget = 100_000
 
-	localCtx      = "ctx"
-	localPath     = "path"
-	localSlotHold = "slotHold"
-	localKey      = "key"
-	localSteps    = "steps"
+	localCtx   = "ctx"
+	localPath  = "path"
+	localSlots = "slots"
+	localKey   = "key"
+	localSteps = "steps"
 )
 
 type callKeyContext struct{}
@@ -49,37 +49,6 @@ func nextKey(thread *starlark.Thread) string {
 type branchOutcome struct {
 	value starlark.Value
 	err   error
-}
-
-// slotHold tracks one global in-flight token for a fan-out branch goroutine.
-// Nested fan-out temporarily releases the parent hold so children can acquire
-// without deadlocking at MaxConcurrency.
-type slotHold struct {
-	slots *semaphore.Weighted
-	held  bool
-}
-
-func (h *slotHold) acquire(ctx context.Context) error {
-	if h.held {
-		return nil
-	}
-
-	if err := h.slots.Acquire(ctx, 1); err != nil {
-		return fmt.Errorf("acquire concurrency slot: %w", err)
-	}
-
-	h.held = true
-
-	return nil
-}
-
-func (h *slotHold) release() {
-	if !h.held {
-		return
-	}
-
-	h.slots.Release(1)
-	h.held = false
 }
 
 func concurrencyBuiltins() starlark.StringDict {
@@ -233,16 +202,16 @@ func threadPath(thread *starlark.Thread) []string {
 // fan-out so children can acquire without deadlocking at MaxConcurrency.
 // Restore uses a non-canceled context so cancel mid-nest does not leak the permit.
 func releaseParentSlot(parent *starlark.Thread) func() {
-	hold, ok := parent.Local(localSlotHold).(*slotHold)
+	slots, ok := parent.Local(localSlots).(*semaphore.Weighted)
 	if !ok {
 		return func() {}
 	}
 
-	hold.release()
+	slots.Release(1)
 
 	return func() {
 		// Restore admission even if the parent branch ctx was canceled mid-nest.
-		_ = hold.acquire(context.Background())
+		_ = slots.Acquire(context.Background(), 1)
 	}
 }
 
@@ -274,17 +243,16 @@ func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, co
 
 	for i, value := range values {
 		group.Go(func() error {
-			hold := &slotHold{slots: slots}
-			if err := hold.acquire(groupCtx); err != nil {
-				return err
+			if err := slots.Acquire(groupCtx, 1); err != nil {
+				return fmt.Errorf("acquire concurrency slot: %w", err)
 			}
-			defer hold.release()
+			defer slots.Release(1)
 
 			var out branchOutcome
 			if mapFn != nil {
-				out = callBranch(groupCtx, fmt.Sprintf("map-%d", i), mapFn, starlark.Tuple{value}, hold, branchPath, branchKey)
+				out = callBranch(groupCtx, fmt.Sprintf("map-%d", i), mapFn, starlark.Tuple{value}, slots, branchPath, branchKey)
 			} else {
-				out = callBranch(groupCtx, fmt.Sprintf("gather-%d", i), value, nil, hold, branchPath, branchKey)
+				out = callBranch(groupCtx, fmt.Sprintf("gather-%d", i), value, nil, slots, branchPath, branchKey)
 			}
 
 			if out.err != nil {
@@ -374,19 +342,12 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 				return nil
 			}
 
-			hold := &slotHold{slots: slots}
-			if err := hold.acquire(groupCtx); err != nil {
-				if groupCtx.Err() != nil {
-					return nil
-				}
-
-				finish(branchOutcome{err: err})
-
+			if slots.Acquire(groupCtx, 1) != nil {
 				return nil
 			}
-			defer hold.release()
+			defer slots.Release(1)
 
-			finish(callBranch(groupCtx, fmt.Sprintf("race-%d", i), callable, nil, hold, branchPath, branchKey))
+			finish(callBranch(groupCtx, fmt.Sprintf("race-%d", i), callable, nil, slots, branchPath, branchKey))
 
 			return nil
 		})
@@ -404,7 +365,7 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 	return branchOutcome{value: winner}
 }
 
-func callBranch(ctx context.Context, name string, callable starlark.Value, args starlark.Tuple, hold *slotHold, path []string, key string) branchOutcome {
+func callBranch(ctx context.Context, name string, callable starlark.Value, args starlark.Tuple, slots *semaphore.Weighted, path []string, key string) branchOutcome {
 	if err := context.Cause(ctx); err != nil {
 		return branchOutcome{err: fmt.Errorf("branch context: %w", err)}
 	}
@@ -412,7 +373,7 @@ func callBranch(ctx context.Context, name string, callable starlark.Value, args 
 	thread, stop := newCancellableThread(ctx, name, childStepBudget)
 	defer stop()
 
-	thread.SetLocal(localSlotHold, hold)
+	thread.SetLocal(localSlots, slots)
 	thread.SetLocal(localPath, slices.Clone(path))
 	thread.SetLocal(localKey, key+name+"/")
 
