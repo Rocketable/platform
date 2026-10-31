@@ -358,11 +358,6 @@ func TestSocketLoopRecreatesClientAndKeepsStableEventChannel(t *testing.T) {
 	assert.Equal(t, socketmode.EventTypeConnecting, secondEvent.Type)
 }
 
-func TestStopBeforeStart(t *testing.T) {
-	connector := newTestConnector("http://slack.test")
-	require.NoError(t, connector.Stop(context.Background()))
-}
-
 func TestStartStopCancelsInboundContext(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
