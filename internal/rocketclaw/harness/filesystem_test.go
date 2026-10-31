@@ -942,51 +942,45 @@ func TestApplyPatchParity(t *testing.T) {
 		requireParity(t, "*** Begin Patch\n*** End Patch", nil)
 	})
 
-	t.Run("applies add update delete in one patch", func(t *testing.T) {
+	t.Run("applies independent file changes in one patch", func(t *testing.T) {
 		seed := map[string][]byte{
-			"modify.txt": []byte("line1\nline2\n"),
-			"delete.txt": []byte("obsolete\n"),
+			"modify.txt":                  []byte("line1\nline2\n"),
+			"delete.txt":                  []byte("obsolete\n"),
+			"multi.txt":                   []byte("line1\nline2\nline3\nline4\n"),
+			"insert_only.txt":             []byte("alpha\nomega\n"),
+			"no_newline.txt":              []byte("no newline at end"),
+			"old/name.txt":                []byte("old content\n"),
+			"overwrite/name.txt":          []byte("from\n"),
+			"overwrite-dest/dir/name.txt": []byte("existing\n"),
+			"duplicate.txt":               []byte("old content\n"),
+			"header_ctx.txt":              []byte("fn a\nx=10\ny=2\nfn b\nx=10\ny=20\n"),
+			"eof_anchor.txt":              []byte("start\nmarker\nmiddle\nmarker\nend\n"),
+			"trailing_ws.txt":             []byte("line1  \nline2\nline3   \n"),
+			"leading_ws.txt":              []byte("  line1\nline2\n  line3\n"),
+			"repeated.txt":                []byte("  marker\nmiddle\nmarker\nend\n"),
+			"unicode.txt":                 []byte("He said “hello”\nsome—dash\nend\n"),
+			"example.cs":                  []byte("\ufeffusing System;\n\nclass Test {}\n"),
 		}
-		patch := "*** Begin Patch\n*** Add File: nested/new.txt\n+created\n*** Delete File: delete.txt\n*** Update File: modify.txt\n@@\n-line2\n+changed\n*** End Patch"
-		requireParity(t, patch, seed)
-	})
-
-	t.Run("multiple hunks", func(t *testing.T) {
-		seed := map[string][]byte{"multi.txt": []byte("line1\nline2\nline3\nline4\n")}
-		patch := "*** Begin Patch\n*** Update File: multi.txt\n@@\n-line2\n+changed2\n@@\n-line4\n+changed4\n*** End Patch"
-		requireParity(t, patch, seed)
-	})
-
-	t.Run("insert only hunk", func(t *testing.T) {
-		seed := map[string][]byte{"insert_only.txt": []byte("alpha\nomega\n")}
-		patch := "*** Begin Patch\n*** Update File: insert_only.txt\n@@\n alpha\n+beta\n omega\n*** End Patch"
-		requireParity(t, patch, seed)
-	})
-
-	t.Run("appends trailing newline on update", func(t *testing.T) {
-		seed := map[string][]byte{"no_newline.txt": []byte("no newline at end")}
-		patch := "*** Begin Patch\n*** Update File: no_newline.txt\n@@\n-no newline at end\n+first line\n+second line\n*** End Patch"
-		requireParity(t, patch, seed)
-	})
-
-	t.Run("moves file", func(t *testing.T) {
-		seed := map[string][]byte{"old/name.txt": []byte("old content\n")}
-		patch := "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-old content\n+new content\n*** End Patch"
-		requireParity(t, patch, seed)
-	})
-
-	t.Run("moves file overwriting existing destination", func(t *testing.T) {
-		seed := map[string][]byte{
-			"old/name.txt":         []byte("from\n"),
-			"renamed/dir/name.txt": []byte("existing\n"),
-		}
-		patch := "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-from\n+new\n*** End Patch"
-		requireParity(t, patch, seed)
-	})
-
-	t.Run("adds file overwriting existing file", func(t *testing.T) {
-		seed := map[string][]byte{"duplicate.txt": []byte("old content\n")}
-		patch := "*** Begin Patch\n*** Add File: duplicate.txt\n+new content\n*** End Patch"
+		// One oracle process checks every independent edit and the complete resulting tree.
+		// OpenCode packages/opencode/src/patch/index.ts tries exact matches before whitespace fallbacks.
+		patch := strings.Join([]string{
+			"*** Begin Patch",
+			"*** Add File: nested/new.txt\n+created\n*** Delete File: delete.txt\n*** Update File: modify.txt\n@@\n-line2\n+changed",
+			"*** Update File: multi.txt\n@@\n-line2\n+changed2\n@@\n-line4\n+changed4",
+			"*** Update File: insert_only.txt\n@@\n alpha\n+beta\n omega",
+			"*** Update File: no_newline.txt\n@@\n-no newline at end\n+first line\n+second line",
+			"*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-old content\n+new content",
+			"*** Update File: overwrite/name.txt\n*** Move to: overwrite-dest/dir/name.txt\n@@\n-from\n+new",
+			"*** Add File: duplicate.txt\n+new content",
+			"*** Update File: header_ctx.txt\n@@ fn b\n-x=10\n+x=11",
+			"*** Update File: eof_anchor.txt\n@@\n-marker\n-end\n+marker-changed\n+end\n*** End of File",
+			"*** Update File: trailing_ws.txt\n@@\n line1\n-line2\n+changed\n line3",
+			"*** Update File: leading_ws.txt\n@@\n line1\n-line2\n+changed\n line3",
+			"*** Update File: repeated.txt\n@@\n-marker\n+changed",
+			"*** Update File: unicode.txt\n@@\n-He said \"hello\"\n+He said \"hi\"",
+			"*** Update File: example.cs\n@@\n class Test {}\n+class Next {}",
+			"*** End Patch",
+		}, "\n")
 		requireParity(t, patch, seed)
 	})
 
@@ -1030,52 +1024,9 @@ func TestApplyPatchParity(t *testing.T) {
 		requireParity(t, patch, seed)
 	})
 
-	t.Run("disambiguates change context with header", func(t *testing.T) {
-		seed := map[string][]byte{"multi_ctx.txt": []byte("fn a\nx=10\ny=2\nfn b\nx=10\ny=20\n")}
-		patch := "*** Begin Patch\n*** Update File: multi_ctx.txt\n@@ fn b\n-x=10\n+x=11\n*** End Patch"
-		requireParity(t, patch, seed)
-	})
-
-	t.Run("EOF anchor matches from end of file first", func(t *testing.T) {
-		seed := map[string][]byte{"eof_anchor.txt": []byte("start\nmarker\nmiddle\nmarker\nend\n")}
-		patch := "*** Begin Patch\n*** Update File: eof_anchor.txt\n@@\n-marker\n-end\n+marker-changed\n+end\n*** End of File\n*** End Patch"
-		requireParity(t, patch, seed)
-	})
-
 	t.Run("heredoc wrapped patch without cat", func(t *testing.T) {
 		patch := "<<EOF\n*** Begin Patch\n*** Add File: heredoc_no_cat.txt\n+no cat prefix\n*** End Patch\nEOF"
 		requireParity(t, patch, nil)
-	})
-
-	t.Run("trailing whitespace differences", func(t *testing.T) {
-		seed := map[string][]byte{"trailing_ws.txt": []byte("line1  \nline2\nline3   \n")}
-		patch := "*** Begin Patch\n*** Update File: trailing_ws.txt\n@@\n line1\n-line2\n+changed\n line3\n*** End Patch"
-		requireParity(t, patch, seed)
-	})
-
-	t.Run("leading whitespace differences", func(t *testing.T) {
-		seed := map[string][]byte{"leading_ws.txt": []byte("  line1\nline2\n  line3\n")}
-		patch := "*** Begin Patch\n*** Update File: leading_ws.txt\n@@\n line1\n-line2\n+changed\n line3\n*** End Patch"
-		requireParity(t, patch, seed)
-	})
-
-	t.Run("exact match wins over earlier whitespace match", func(t *testing.T) {
-		// OpenCode packages/opencode/src/patch/index.ts tries exact matches before whitespace fallbacks.
-		seed := map[string][]byte{"repeated.txt": []byte("  marker\nmiddle\nmarker\nend\n")}
-		patch := "*** Begin Patch\n*** Update File: repeated.txt\n@@\n-marker\n+changed\n*** End Patch"
-		requireParity(t, patch, seed)
-	})
-
-	t.Run("unicode punctuation differences", func(t *testing.T) {
-		seed := map[string][]byte{"unicode.txt": []byte("He said “hello”\nsome—dash\nend\n")}
-		patch := "*** Begin Patch\n*** Update File: unicode.txt\n@@\n-He said \"hello\"\n+He said \"hi\"\n*** End Patch"
-		requireParity(t, patch, seed)
-	})
-
-	t.Run("BOM file update parity", func(t *testing.T) {
-		seed := map[string][]byte{"example.cs": []byte("\ufeffusing System;\n\nclass Test {}\n")}
-		patch := "*** Begin Patch\n*** Update File: example.cs\n@@\n class Test {}\n+class Next {}\n*** End Patch"
-		requireParity(t, patch, seed)
 	})
 }
 
