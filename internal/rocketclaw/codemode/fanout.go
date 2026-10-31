@@ -172,15 +172,6 @@ func listOrTuple(value starlark.Value) ([]starlark.Value, error) {
 	}
 }
 
-func threadContext(thread *starlark.Thread) (context.Context, error) {
-	ctx, ok := thread.Local(localCtx).(context.Context)
-	if !ok {
-		return nil, errors.New("codemode context missing")
-	}
-
-	return ctx, nil
-}
-
 func threadPath(thread *starlark.Thread) []string {
 	path, _ := thread.Local(localPath).([]string)
 
@@ -216,10 +207,7 @@ func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, co
 		return starlark.NewList(nil), nil
 	}
 
-	parentCtx, err := threadContext(parent)
-	if err != nil {
-		return nil, err
-	}
+	parentCtx := parent.Local(localCtx).(context.Context)
 
 	defer releaseParentSlot(parent)()
 
@@ -269,10 +257,7 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 		return nil, errors.New("race requires at least one callable")
 	}
 
-	parentCtx, err := threadContext(parent)
-	if err != nil {
-		return nil, err
-	}
+	parentCtx := parent.Local(localCtx).(context.Context)
 
 	defer releaseParentSlot(parent)()
 

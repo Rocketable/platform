@@ -246,10 +246,7 @@ func newKwargsValueBuiltin(name string, schema map[string]any, observe ToolCallO
 			return nil, fmt.Errorf("%s: invalid arguments: %w", b.Name(), err)
 		}
 
-		ctx, errCtx := threadContext(thread)
-		if errCtx != nil {
-			return nil, errCtx
-		}
+		ctx := thread.Local(localCtx).(context.Context)
 
 		observe.ObserveToolCall(ctx, threadPath(thread), name, callArgs)
 
