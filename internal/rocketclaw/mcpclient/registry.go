@@ -76,10 +76,9 @@ type ToolInfo struct {
 
 // Session is one execute tool-call lifetime.
 type Session struct {
-	reg    Registry
-	mu     sync.Mutex
-	conns  map[string]*mcp.ClientSession
-	closed bool
+	reg   Registry
+	mu    sync.Mutex
+	conns map[string]*mcp.ClientSession
 }
 
 // ListTools returns the full tool catalog for server.
@@ -128,12 +127,6 @@ func (s *Session) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.closed {
-		return nil
-	}
-
-	s.closed = true
-
 	var errs []error
 
 	for name, cs := range s.conns {
@@ -142,7 +135,7 @@ func (s *Session) Close() error {
 		}
 	}
 
-	clear(s.conns)
+	s.conns = nil
 
 	return errors.Join(errs...)
 }
@@ -151,7 +144,7 @@ func (s *Session) connect(ctx context.Context, name string) (*mcp.ClientSession,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.closed {
+	if s.conns == nil {
 		return nil, errSessionClosed
 	}
 
