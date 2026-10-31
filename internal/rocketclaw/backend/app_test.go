@@ -579,7 +579,6 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
 
 	ctx, signal := context.WithCancel(t.Context())
-	defer signal()
 
 	assembler := &frontendAssemblerMock{
 		ValidateAssetsFunc: func(*config.Config, string) error { return nil },
@@ -587,16 +586,28 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 			msg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "first message"}, true)
 			msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.0", ThreadTS: "111.0"}
 
-			if _, err := rt.TextRouter.SubmitMention(rt.RunCtx, "main", protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}, msg); err != nil {
+			accepted, err := rt.TextRouter.SubmitMention(rt.RunCtx, "main", protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}, msg)
+			if err != nil {
 				return nil, nil, fmt.Errorf("submit startup message: %w", err)
 			}
+
+			assert.True(t, accepted, "the startup Slack mention must be admitted")
 
 			return nil, nil, nil
 		},
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembler) }()
+	go func() {
+		done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(t.Output(), nil)), assembler)
+
+		close(done)
+	}()
+
+	t.Cleanup(func() {
+		signal()
+		require.NoError(t, <-done)
+	})
 
 	select {
 	case body := <-bodies:
@@ -609,6 +620,4 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 	}
 
 	assert.Len(t, assembler.AssembleCalls(), 1)
-	signal()
-	require.NoError(t, <-done)
 }
