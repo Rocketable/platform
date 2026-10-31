@@ -21,6 +21,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.starlark.net/starlark"
 )
 
 func TestCodeModeHostInputSchemaRequiredFields(t *testing.T) {
@@ -330,14 +331,14 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 	bound, _ := codeModeHostToolsFromContext(ctx)
 
 	var bashTool *struct {
-		Call func(context.Context, map[string]any) (string, error)
+		Call func(context.Context, map[string]any) (starlark.Value, error)
 	}
 
 	for i := range bound {
 		if bound[i].Name == "bash" {
 			bashTool = &struct {
-				Call func(context.Context, map[string]any) (string, error)
-			}{Call: bound[i].Call}
+				Call func(context.Context, map[string]any) (starlark.Value, error)
+			}{Call: bound[i].CallValue}
 
 			break
 		}
@@ -347,7 +348,7 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 
 	out, err := bashTool.Call(ctx, map[string]any{"command": "echo hi"})
 	require.NoError(t, err)
-	assert.Contains(t, out, "hi")
+	assert.Contains(t, out.String(), "hi")
 
 	_, err = bashTool.Call(ctx, map[string]any{"command": "rm -rf /tmp/x"})
 	require.Error(t, err)
