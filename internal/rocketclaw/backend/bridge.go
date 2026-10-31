@@ -3782,7 +3782,7 @@ func normalizeInboundAttachments(msg *protocol.InboundMessage) {
 			continue
 		}
 
-		data, mimeType, _, err := fitInboundImageWithinLimit(mimeType, data, targetLimit)
+		data, mimeType, err := fitInboundImageWithinLimit(mimeType, data, targetLimit)
 		if err != nil {
 			msg.AttachmentWarnings = append(msg.AttachmentWarnings, "Skipped attachment "+name+" because "+inboundAttachmentReductionFailureReason(err, targetLimit)+".")
 			continue
@@ -3795,26 +3795,26 @@ func normalizeInboundAttachments(msg *protocol.InboundMessage) {
 	msg.Attachments = attachments
 }
 
-func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (transformedData []byte, transformedMIMEType string, changed bool, err error) {
+func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (transformedData []byte, transformedMIMEType string, err error) {
 	mimeType = protocol.NormalizeMIMEType(mimeType)
 	if len(data) <= targetLimit {
-		return data, mimeType, false, nil
+		return data, mimeType, nil
 	}
 
 	if mimeType == "image/png" {
-		transformed, changed, err := resizePNGWithinLimit(data, targetLimit)
+		transformed, err := resizePNGWithinLimit(data, targetLimit)
 		if err == nil {
-			return transformed, mimeType, changed, nil
+			return transformed, mimeType, nil
 		}
 
 		if !errors.Is(err, errInboundAttachmentReductionNotEnough) {
-			return nil, "", false, err
+			return nil, "", err
 		}
 	}
 
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return nil, "", false, fmt.Errorf("%w: decode image: %w", errInboundAttachmentReductionFailed, err)
+		return nil, "", fmt.Errorf("%w: decode image: %w", errInboundAttachmentReductionFailed, err)
 	}
 
 	flattened := flattenInboundImageForJPEG(img)
@@ -3823,34 +3823,32 @@ func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (
 
 	candidate, candidateSize, err := encoder.encodeWithinLimit(flattened, targetLimit)
 	if err != nil {
-		return nil, "", false, err
+		return nil, "", err
 	}
 
 	if candidate == nil {
 		candidate, err = reduceResizedImageWithinLimit(flattened, candidateSize, targetLimit, encoder)
 		if err != nil {
-			return nil, "", false, err
+			return nil, "", err
 		}
 	}
 
-	return candidate, "image/jpeg", true, nil
+	return candidate, "image/jpeg", nil
 }
 
-func resizePNGWithinLimit(data []byte, targetLimit int) (transformed []byte, changed bool, err error) {
+func resizePNGWithinLimit(data []byte, targetLimit int) ([]byte, error) {
 	src, err := png.Decode(bytes.NewReader(data))
 	if err != nil {
-		return nil, false, fmt.Errorf("%w: decode png: %w", errInboundAttachmentReductionFailed, err)
+		return nil, fmt.Errorf("%w: decode png: %w", errInboundAttachmentReductionFailed, err)
 	}
 
 	encoded := encodeInboundPNG(src)
 
 	if len(encoded) <= targetLimit {
-		return encoded, !bytes.Equal(encoded, data), nil
+		return encoded, nil
 	}
 
-	transformed, err = reduceResizedImageWithinLimit(src, len(encoded), targetLimit, inboundPNGEncoder{})
-
-	return transformed, transformed != nil, err
+	return reduceResizedImageWithinLimit(src, len(encoded), targetLimit, inboundPNGEncoder{})
 }
 
 type inboundImageEncoder interface {

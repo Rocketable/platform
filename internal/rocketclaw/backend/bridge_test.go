@@ -1703,11 +1703,10 @@ func TestFitInboundImageWithinLimitLeavesSmallImageUnchanged(t *testing.T) {
 
 	data := encodeAttachmentTestPNG(t, newAttachmentTestImage(1, 1), png.BestCompression)
 
-	transformed, transformedMIMEType, changed, err := fitInboundImageWithinLimit(" Image/PNG; Charset=UTF-8 ", data, len(data))
+	transformed, transformedMIMEType, err := fitInboundImageWithinLimit(" Image/PNG; Charset=UTF-8 ", data, len(data))
 	require.NoError(t, err)
 	assert.Equal(t, data, transformed)
 	assert.Equal(t, "image/png", transformedMIMEType)
-	assert.False(t, changed)
 }
 
 func TestFitInboundImageWithinLimitUsesLosslessPNGFirst(t *testing.T) {
@@ -1718,9 +1717,8 @@ func TestFitInboundImageWithinLimitUsesLosslessPNGFirst(t *testing.T) {
 	target := len(encodeAttachmentTestPNG(t, img, png.BestCompression))
 	require.Greater(t, len(original), target)
 
-	transformed, transformedMIMEType, changed, err := fitInboundImageWithinLimit("image/png", original, target)
+	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/png", original, target)
 	require.NoError(t, err)
-	assert.True(t, changed)
 	assert.Equal(t, "image/png", transformedMIMEType)
 	assert.LessOrEqual(t, len(transformed), target)
 
@@ -1747,9 +1745,8 @@ func TestFitInboundImageWithinLimitUsesSmallestSuccessfulJPEGChangeFirst(t *test
 
 	require.NotZero(t, target)
 
-	transformed, transformedMIMEType, changed, err := fitInboundImageWithinLimit("image/jpeg", original, target)
+	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/jpeg", original, target)
 	require.NoError(t, err)
-	assert.True(t, changed)
 	assert.Equal(t, "image/jpeg", transformedMIMEType)
 	assert.LessOrEqual(t, len(transformed), target)
 
@@ -1766,9 +1763,8 @@ func TestFitInboundImageWithinLimitResizesPNG(t *testing.T) {
 	target := 4096
 	require.Greater(t, len(original), target)
 
-	transformed, transformedMIMEType, changed, err := fitInboundImageWithinLimit("image/png", original, target)
+	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/png", original, target)
 	require.NoError(t, err)
-	assert.True(t, changed)
 	assert.Equal(t, "image/png", transformedMIMEType)
 	assert.LessOrEqual(t, len(transformed), target)
 
@@ -1785,9 +1781,8 @@ func TestFitInboundImageWithinLimitFallsBackToJPEG(t *testing.T) {
 	target := 1024
 	require.Greater(t, len(original), target)
 
-	transformed, transformedMIMEType, changed, err := fitInboundImageWithinLimit("image/webp", original, target)
+	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/webp", original, target)
 	require.NoError(t, err)
-	assert.True(t, changed)
 	assert.Equal(t, "image/jpeg", transformedMIMEType)
 	assert.LessOrEqual(t, len(transformed), target)
 
@@ -1796,10 +1791,9 @@ func TestFitInboundImageWithinLimitFallsBackToJPEG(t *testing.T) {
 	assert.NotZero(t, cfg.Height)
 
 	oversized := encodeAttachmentTestPNG(t, newAttachmentTestImage(65536, 1), png.NoCompression)
-	transformed, transformedMIMEType, changed, err = fitInboundImageWithinLimit("image/webp", oversized, 1)
+	transformed, transformedMIMEType, err = fitInboundImageWithinLimit("image/webp", oversized, 1)
 	assert.Nil(t, transformed)
 	assert.Empty(t, transformedMIMEType)
-	assert.False(t, changed)
 	require.ErrorIs(t, err, errInboundAttachmentReductionFailed)
 
 	errJPEGText := "jpeg: image is too large to encode"
@@ -1818,20 +1812,18 @@ func TestFitInboundImageWithinLimitFallsBackToJPEG(t *testing.T) {
 func TestFitInboundImageWithinLimitReportsDecodeFailure(t *testing.T) {
 	t.Parallel()
 
-	transformed, transformedMIMEType, changed, err := fitInboundImageWithinLimit("image/webp", []byte("not an image"), 1)
+	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/webp", []byte("not an image"), 1)
 	assert.Nil(t, transformed)
 	assert.Empty(t, transformedMIMEType)
-	assert.False(t, changed)
 	assert.ErrorIs(t, err, errInboundAttachmentReductionFailed)
 }
 
 func TestFitInboundImageWithinLimitReportsPNGDecodeFailure(t *testing.T) {
 	t.Parallel()
 
-	transformed, transformedMIMEType, changed, err := fitInboundImageWithinLimit("image/png", []byte("not a png"), 1)
+	transformed, transformedMIMEType, err := fitInboundImageWithinLimit("image/png", []byte("not a png"), 1)
 	assert.Nil(t, transformed)
 	assert.Empty(t, transformedMIMEType)
-	assert.False(t, changed)
 	assert.ErrorIs(t, err, errInboundAttachmentReductionFailed)
 }
 
@@ -1840,9 +1832,8 @@ func TestResizePNGWithinLimitRejectsSinglePixelImageTooLargeForTarget(t *testing
 
 	original := encodeAttachmentTestPNG(t, newAttachmentTestImage(1, 1), png.NoCompression)
 
-	transformed, changed, err := resizePNGWithinLimit(original, 1)
+	transformed, err := resizePNGWithinLimit(original, 1)
 	assert.Nil(t, transformed)
-	assert.False(t, changed)
 	assert.ErrorIs(t, err, errInboundAttachmentReductionNotEnough)
 }
 
