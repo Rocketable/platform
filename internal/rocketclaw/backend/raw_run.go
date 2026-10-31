@@ -135,9 +135,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	}
 
 	callAgents.Items[r.agent] = active
-	if err := prepareWorkflowTags(callAgents, r.agent, request.Worker.Tools); err != nil {
-		return nil, err
-	}
+	prepareWorkflowTags(callAgents, r.agent, request.Worker.Tools)
 
 	shellTempRel := filepath.ToSlash(filepath.Join(r.parent, "workflow-"+rand.Text()))
 	if err := r.root.Mkdir(shellTempRel, 0o700); err != nil {
@@ -233,7 +231,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 }
 
 // prepareWorkflowTags keeps worker limits and caller guidance local to one run.
-func prepareWorkflowTags(agents harness.Agents, worker string, tools []string) error {
+func prepareWorkflowTags(agents harness.Agents, worker string, tools []string) {
 	agent := agents.Items[worker]
 
 	agent.Permission.Buckets = slices.Clone(agent.Permission.Buckets)
@@ -253,16 +251,11 @@ func prepareWorkflowTags(agents harness.Agents, worker string, tools []string) e
 	for name := range agents.Items {
 		item := agents.Items[name]
 
-		groups, err := agentTagGroups(&item)
-		if err != nil {
-			return err
-		}
+		groups, _ := agentTagGroups(&item) // readRocketCodeDefinitionsIn already rejected invalid groups.
 
 		appendSessionTagPrompt(&item, groups)
 		agents.Items[name] = item
 	}
-
-	return nil
 }
 
 func prepareRocketCode(locked *config.LockedConfig, agent string, logger *slog.Logger, mode toolMode) (*os.Root, harness.Agents, harness.Skills, *modelResolver, error) {
