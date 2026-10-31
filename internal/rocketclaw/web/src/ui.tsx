@@ -1,6 +1,6 @@
 "use client";
 
-import { QueryClient, QueryCache, MutationCache, QueryClientProvider, keepPreviousData, queryOptions, useQuery, useMutation, useIsMutating } from "@tanstack/react-query";
+import { QueryClient, QueryCache, MutationCache, QueryClientProvider, keepPreviousData, queryOptions, useQueries, useQuery, useMutation, useIsMutating } from "@tanstack/react-query";
 import { captureException } from "@sentry/react";
 import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
@@ -37,7 +37,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
-import type { Agent, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, TranscriptEvent, VoiceSettings } from "@/types";
+import type { Agent, AgentChoices, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, TranscriptEvent, VoiceSettings } from "@/types";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import type { MountOptions, Mounted } from "../../oc/host/api";
@@ -2287,7 +2287,6 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
   }, [mode]);
   // Leaving session search for cron or folders swaps the input, so each mode focuses its own.
   useLayoutEffect(() => { if (mode !== undefined) input.current?.focus(); }, [mode]);
-  const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: mode === "sessions" });
   const active = useRef<HTMLButtonElement>(null);
   const { search, filtered, free, matches, rows } = usePaletteSessions(query, mode === "sessions", entered);
   const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" || mode === "timeline" });
@@ -2340,7 +2339,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
       <DialogContent initialFocus={input} showCloseButton={false} className="top-[20%] flex max-h-[75vh] translate-y-0 flex-col overflow-hidden sm:max-w-lg [@media(pointer:coarse)]:top-[var(--search-top,1rem)] [@media(pointer:coarse)]:max-h-[var(--search-height,75vh)]">
         <DialogTitle className="sr-only">{copy.title}</DialogTitle>
         <DialogDescription className="sr-only">{copy.desc}</DialogDescription>
-        {mode === "sessions" ? <SessionSearch rows={sidebar.all} catalog={agents.data?.agents ?? []} query={query} setQuery={(update) => { setPick(""); setEntered(false); setQuery(update); peek(); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
+        {mode === "sessions" ? <SessionSearch rows={sidebar.all} query={query} setQuery={(update) => { setPick(""); setEntered(false); setQuery(update); peek(); }} search={search} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
           ref={input}
           value={query}
           onChange={(event) => { setPick(""); setQuery(event.target.value); }}
@@ -2757,7 +2756,6 @@ function SearchTabs({ path, owner, inShared, page, link, consumeLink }: { path: 
   const input = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => { input.current?.focus(); }, []);
   const sidebar = useContext(Sidebar);
-  const agents = useQuery({ ...queries.agents(), staleTime: 60_000 });
   const selected = saved.searches.findIndex((tab) => tab.id === saved.active);
   const tab = saved.searches[selected];
   const search = useSearch();
@@ -2832,7 +2830,7 @@ function SearchTabs({ path, owner, inShared, page, link, consumeLink }: { path: 
       <Select items={boardChoices} value={page?.board ?? ""} onValueChange={(board) => tabs.editSearch(path, { board: board as string }, inShared)}><SelectTrigger aria-label="Board style" className="shrink-0"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{boardChoices.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent></Select>
       {page?.board ? <Button variant={tab.notify ? "default" : "outline"} size="icon" aria-label="Notify" title="Notify when a session enters this lane" aria-pressed={!!tab.notify} onClick={() => edit(() => ({ notify: !tab.notify }))}><BellRing className="size-4" /></Button> : null}
     </div>
-    <SearchResults key={tab.id} tab={tab} rows={sidebar.all} catalog={agents.data?.agents ?? []} edit={edit} input={input} board={page?.board} />
+    <SearchResults key={tab.id} tab={tab} rows={sidebar.all} edit={edit} input={input} board={page?.board} />
     {page?.board ? <Board style={page.board} /> : null}
   </section>;
 }
@@ -2883,7 +2881,7 @@ function SearchStatus({ search, empty = false, incomplete = false }: { search: {
 
 const searchPage = 200;
 
-function SearchResults({ tab, rows, catalog, edit, input, board }: { tab: SavedSearch; rows: Session[]; catalog: Agent[]; edit: (change: (item: SavedSearch) => Partial<SavedSearch>, typed?: boolean) => void; input: RefObject<HTMLInputElement | null>; board?: string }) {
+function SearchResults({ tab, rows, edit, input, board }: { tab: SavedSearch; rows: Session[]; edit: (change: (item: SavedSearch) => Partial<SavedSearch>, typed?: boolean) => void; input: RefObject<HTMLInputElement | null>; board?: string }) {
   const sidebar = useContext(Sidebar);
   // Opening a saved search or a link sends its whole query.
   const [entered, setEntered] = useState(true);
@@ -2906,7 +2904,7 @@ function SearchResults({ tab, rows, catalog, edit, input, board }: { tab: SavedS
   }, [response, search.found, rowsDrawn]);
   return <>
     <div id="search-tab-panel" role="tabpanel" aria-label="Search" className="min-w-0">
-      <SessionSearch rows={rows} catalog={catalog} query={tab.query} setQuery={(update) => { setEntered(false); edit((item) => ({ query: update(item.query) }), true); }} search={search} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { setEntered(true); void search.run(tab.query.trimEnd()); } }} />
+      <SessionSearch rows={rows} query={tab.query} setQuery={(update) => { setEntered(false); edit((item) => ({ query: update(item.query) }), true); }} search={search} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { setEntered(true); void search.run(tab.query.trimEnd()); } }} />
     </div>
     {board ? null : <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
       <SearchStatus search={search} empty={!!search.sent && !search.pending && !search.error && search.found.length === 0} incomplete={!searchIsAuthoritative(sidebar) || search.missing} />
@@ -2962,14 +2960,15 @@ function Board({ style }: { style: string }) {
 }
 
 // Values offered for the operator word being typed; a completed value commits on space or Enter instead of offering itself again.
-// Remote OpenCode sessions add their servers, agents and models; RocketClaw agents bring their configured models.
+// Remote OpenCode sessions add their servers, agents and models; every RocketClaw's agents bring their configured models,
+// a name several share offered once.
 function searchChoices(word: string, rows: Session[], catalog: Agent[], principals: string[], spaces: Space[]) {
   const typed = new RegExp(`^(${filterKeys}):"?(.*?)"?$`, "is").exec(word);
   const key = typed?.[1].toLowerCase() ?? "", needle = typed?.[2].toLowerCase() ?? "";
   const remote = (field: "server" | "agent" | "model") => [...new Set(rows.flatMap((row) => row.server && row[field] ? [row[field]!] : []))];
   const names = key === "space" ? spaces.map(({ name }) => name) : key === "principal" ? principals : key === "room" ? slackRooms(rows) : key === "cron" ? [...new Set(rows.flatMap((row) => row.cronName ? [row.cronName] : []))] : key === "tag" ? [...new Set(rows.flatMap((row) => row.tags ?? []))] : key === "sort" ? ["newest", "oldest"]
     : key === "server" ? remote("server") : key === "model" ? [...new Set([...catalog.flatMap(({ model }) => model ? [model] : []), ...remote("model")])] : ["pinned", "forked", "cron", "unread", "running", "queued", "waiting", "external"];
-  const agents = [...catalog.map(({ name, model, reasoning }) => ({ key: name, detail: [model, reasoning].filter(Boolean).join(" · ") })), ...remote("agent").filter((name) => !catalog.some((agent) => agent.name === name)).map((name) => ({ key: name, detail: "OpenCode" }))];
+  const agents = [...catalog.filter((agent, i) => catalog.findIndex(({ name }) => name === agent.name) === i).map(({ name, model, reasoning, rocketclaw }) => ({ key: name, detail: [rocketclaw, model, reasoning].filter(Boolean).join(" · ") })), ...remote("agent").filter((name) => !catalog.some((agent) => agent.name === name)).map((name) => ({ key: name, detail: "OpenCode" }))];
   const quoted = word.includes(':"');
   const spelling = (name: string) => quoted ? JSON.stringify(name).slice(1, -1) : name;
   const offered = !key ? [] : (key === "agent" ? agents : names.map((name) => ({ key: name, detail: "" }))).filter((item) => spelling(item.key).toLowerCase().includes(needle));
@@ -3012,9 +3011,8 @@ function usePills(query: string, setQuery: (update: (query: string) => string) =
   };
 }
 
-function SessionSearch({ rows, catalog, query, setQuery, search, inputRef, placeholder, onKeyDown }: {
+function SessionSearch({ rows, query, setQuery, search, inputRef, placeholder, onKeyDown }: {
   rows: Session[];
-  catalog: Agent[];
   query: string;
   setQuery: (update: (query: string) => string) => void;
   search: ReturnType<typeof useSessionSearch>;
@@ -3025,6 +3023,10 @@ function SessionSearch({ rows, catalog, query, setQuery, search, inputRef, place
   const sidebar = useContext(Sidebar);
   const stale = !sidebar.refreshing && rows.length > 0 && !searchIsAuthoritative(sidebar);
   const [overlayPick, setOverlayPick] = useState(0);
+  const servers = ["", ...rocketclaws().map((remote) => remote.name)];
+  // Agent and model choices cover every server's agents, a remote's marked with its name.
+  const catalog = useQueries({ queries: servers.map((name) => ({ queryKey: [{ server: name }, "agents"], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<AgentChoices>("ListAgents", {}, signal, name), staleTime: 60_000 })) })
+    .flatMap(({ data }, i) => (data?.agents ?? []).map((agent) => ({ ...agent, rocketclaw: servers[i] })));
   const { key, choices } = searchChoices(search.word, rows, catalog, search.result.response?.principals ?? [], useContext(TabActions).state.spaces);
   const { pills, input, change, head, select, edit, remove, pick: choose } = usePills(query, setQuery, search, inputRef);
   const pick = choices.length === 0 ? 0 : overlayPick % choices.length;
