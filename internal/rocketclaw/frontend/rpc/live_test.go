@@ -105,6 +105,13 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		assembly := &mockFrontendAssembler{
 			AssembleFunc: func(rt *backend.Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 				ready <- rt
+
+				if final == "calls" {
+					// This checkpoint is a display fixture, not work for startup recovery.
+					<-ctx.Done()
+					return nil, nil, ctx.Err()
+				}
+
 				return rt.RunCtx.Done(), nil, nil
 			},
 			ValidateAssetsFunc: func(*config.Config, string) error { return nil },
@@ -118,7 +125,12 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		t.Cleanup(func() {
 			release()
 			cancel()
-			require.NoError(t, running.Wait())
+
+			if final == "calls" {
+				require.ErrorIs(t, running.Wait(), context.Canceled)
+			} else {
+				require.NoError(t, running.Wait())
+			}
 		})
 
 		rt := <-ready
