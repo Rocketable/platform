@@ -475,6 +475,19 @@ func TestSessionToolsErrors(t *testing.T) {
 func TestSessionToolsBridgePermissions(t *testing.T) {
 	t.Parallel()
 
+	// Permission cases only read this history; keep their runtimes and agent files separate.
+	service := newTestSessionService(t)
+
+	entries := []harness.SessionEntry{
+		*testSessionEntry("secret user", "secret answer"),
+		{Version: 1, Type: "compaction", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"compaction","id":"cmp_1","encrypted_content":"sealed"}`)}},
+		*testSessionEntry("after compaction", "recent answer"),
+	}
+	for _, entry := range entries {
+		_, err := service.AppendEntryID(t.Context(), "external_mcp:private", &entry)
+		require.NoError(t, err)
+	}
+
 	// One rocketclaw_sessions rule offers all five session tools; the old per-tool rules load and offer none.
 	for _, tc := range []struct {
 		name, rules   string
@@ -489,17 +502,6 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			workspace := t.TempDir()
 			writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  rocketclaw:\n    "+tc.rules+"\n---\nPrompt\n")
-			service := newTestSessionServiceAt(t, workspace)
-
-			entries := []harness.SessionEntry{
-				*testSessionEntry("secret user", "secret answer"),
-				{Version: 1, Type: "compaction", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"compaction","id":"cmp_1","encrypted_content":"sealed"}`)}},
-				*testSessionEntry("after compaction", "recent answer"),
-			}
-			for _, entry := range entries {
-				_, err := service.AppendEntryID(t.Context(), "external_mcp:private", &entry)
-				require.NoError(t, err)
-			}
 
 			requests, approvals, listApprovals := 0, 0, 0
 
