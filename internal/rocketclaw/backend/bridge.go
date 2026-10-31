@@ -179,19 +179,6 @@ type bridgeRequest struct {
 	released bool
 }
 
-// closeWorkflow releases prepared data ownership; an unprepared request has no
-// definition or open root. Every workflow.Run still receives a real runner.
-func (request *bridgeRequest) closeWorkflow() error {
-	if request.workflow.definition == nil {
-		return nil
-	}
-
-	err := request.workflow.Close()
-	request.workflow = workflowAgentRunner{}
-
-	return err
-}
-
 // claimQueueItem starts the request's queued waiting turn as turnID, unless a withdrawal or another
 // start took it first, and runs the text it holds now, which an edit may have changed.
 func (request *bridgeRequest) claimQueueItem(ctx context.Context, db stateStoreDB, conversationID, turnID string) (protocol.ThreadQueueItem, bool, error) {
@@ -214,7 +201,7 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $5 AND reason = $6 RETU
 	}
 
 	if request.inbound.Text != current.Text {
-		if err := request.closeWorkflow(); err != nil {
+		if err := request.workflow.Close(); err != nil {
 			return item, false, err
 		}
 	}
@@ -851,7 +838,7 @@ func (b *Bridge) storeQueued() {
 	for {
 		select {
 		case request := <-b.requestCh:
-			if err := errors.Join(b.storeStopped(&request, "store waiting request"), request.closeWorkflow()); err != nil && !errors.Is(err, protocol.ErrBridgeStopped) {
+			if err := errors.Join(b.storeStopped(&request, "store waiting request"), request.workflow.Close()); err != nil && !errors.Is(err, protocol.ErrBridgeStopped) {
 				b.log.Error("store waiting request during shutdown", "conversation_id", b.config.ConversationID, "error", err)
 			}
 		default:
@@ -862,7 +849,7 @@ func (b *Bridge) storeQueued() {
 
 func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 	defer func() {
-		_ = request.closeWorkflow()
+		_ = request.workflow.Close()
 	}()
 
 	b.log.Info("bridge dequeued request", "event", "request_dequeued", "conversation_id", b.config.ConversationID, "has_inbound", request.inbound != nil, "turn_id", request.turnID, "scheduled_message_id", request.scheduledMessageID, "queue_item_id", request.queueItemID, "queue_len", len(b.requestCh))
@@ -1931,7 +1918,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 	}
 
 	runner := &incoming.workflow
-	defer func() { err = errors.Join(err, incoming.closeWorkflow()) }()
+	defer func() { err = errors.Join(err, incoming.workflow.Close()) }()
 
 	// Workflow steps run with the environment of an ordinary turn of this conversation.
 	shellEnv, _, err := b.turnShellEnv(ctx, b.config.ConversationID, msg, new([]harness.SessionEntry))

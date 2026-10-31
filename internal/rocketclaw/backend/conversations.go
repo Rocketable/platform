@@ -185,7 +185,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 	}
 
 	if err := bridge.enqueue(ctx, &request, "run turn"); err != nil {
-		return errors.Join(err, request.closeWorkflow())
+		return errors.Join(err, request.workflow.Close())
 	}
 
 	select {
@@ -406,7 +406,7 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $3 AND reason <> $4 AND
 		}
 
 		if request.inbound.Text != updatedText {
-			if err := request.closeWorkflow(); err != nil {
+			if err := request.workflow.Close(); err != nil {
 				return false, err
 			}
 		}
@@ -480,14 +480,14 @@ func (r *Runtime) StashQueueItem(ctx context.Context, conversationID string, ite
 
 			fresh, err := r.admitWeb(ctx, bridge, &request, protocol.GoalRequest{})
 			if err != nil || !fresh || item.Kind == protocol.InboundKindHeld {
-				return errors.Join(err, request.closeWorkflow())
+				return errors.Join(err, request.workflow.Close())
 			}
 
 			request.queueItemID = item.ID
 
 			err = bridge.enqueue(ctx, &request, "enqueue Web prompt")
 			if err != nil {
-				err = errors.Join(err, request.closeWorkflow())
+				err = errors.Join(err, request.workflow.Close())
 			}
 
 			return err
