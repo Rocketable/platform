@@ -150,6 +150,8 @@ func TestJustBash(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			var shell harness.CustomShell
 			if tc.setup != nil {
 				shell = EasyShell(tc.setup, dir)
@@ -184,6 +186,8 @@ func TestJustBash(t *testing.T) {
 		{"a workdir in a symlinked read-only folder is used", filepath.Join(linked, "scripts"), "pwd && cat run.sh", filepath.Join(linked, "scripts") + "\necho \"skill ran in $(pwd)\"\n", true, &Setup{Folder: easyFolder, Env: turn, ReadOnly: []string{linked}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			out, err := run(t, EasyShell(tc.setup, dir), tc.workdir, tc.command)
 			require.Equal(t, tc.success, err == nil, out)
 			require.Contains(t, out, tc.output)
@@ -205,6 +209,8 @@ func TestJustBash(t *testing.T) {
 
 	for _, row := range rows {
 		t.Run(string(row.Targets)+" "+row.URL, func(t *testing.T) {
+			t.Parallel()
+
 			setup := &Setup{Folder: easyFolder, Env: turn}
 			if string(row.Targets) != `"auto"` {
 				require.NoError(t, json.Unmarshal(row.Targets, &setup.NetworkTargets))
@@ -215,13 +221,15 @@ func TestJustBash(t *testing.T) {
 		})
 	}
 
-	data, err = os.ReadFile(filepath.Join(folder, "f.txt"))
-	require.NoError(t, err)
-	require.Equal(t, "hi\n", string(data))
+	t.Cleanup(func() {
+		data, err := os.ReadFile(filepath.Join(folder, "f.txt"))
+		require.NoError(t, err)
+		require.Equal(t, "hi\n", string(data))
 
-	data, err = os.ReadFile(upload)
-	require.NoError(t, err)
-	require.Equal(t, "uploaded", string(data))
+		data, err = os.ReadFile(upload)
+		require.NoError(t, err)
+		require.Equal(t, "uploaded", string(data))
+	})
 }
 
 func TestInstallFailure(t *testing.T) {
