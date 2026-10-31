@@ -354,17 +354,14 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 		definitionsByPath[definition.relativePath] = definition
 	}
 
-	startedFiles := map[string]struct{}{}
-
 	for _, state := range due {
 		scheduled, ok := statesByID[state.ScheduleID]
 		if !ok {
 			continue
 		}
 
-		definition := definitionsByPath[scheduled.RelativePath]
-
-		if _, ok := startedFiles[definition.relativePath]; ok {
+		definition, ok := definitionsByPath[scheduled.RelativePath]
+		if !ok {
 			continue
 		}
 
@@ -386,7 +383,7 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 		m.wg.Add(1)
 		m.mu.Unlock()
 
-		startedFiles[definition.relativePath] = struct{}{}
+		delete(definitionsByPath, definition.relativePath)
 
 		go func() {
 			defer m.wg.Done()
