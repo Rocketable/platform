@@ -1765,27 +1765,67 @@ func (r *DecisionItemCreateEventParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-// The properties Content, Role are required.
 type DecisionItemCreateEventItemParam struct {
-	// The text input to the model.
+	// The required content of a message item. Tool call and output items omit content.
 	Content DecisionItemCreateEventItemContentUnionParam `json:"content,omitzero" api:"required"`
 	// The unique ID of this message item.
 	ID param.Opt[string] `json:"id,omitzero"`
-	// Any of "message".
+	// The item type. An omitted type denotes a message. Tool call and output items
+	// have their corresponding tool type.
 	Type string `json:"type,omitzero"`
-	// The message role. Always `user`.
-	//
-	// This field can be elided, and will marshal its zero value as "user".
+	// The role on a message item, defaulting to user. Tool call and output items omit
+	// role.
 	Role constant.User `json:"role" default:"user"`
 	paramObj
+	decodedExtraFields map[string]json.RawMessage `json:"-"`
 }
 
 func (r DecisionItemCreateEventItemParam) MarshalJSON() (data []byte, err error) {
 	type shadow DecisionItemCreateEventItemParam
-	return param.MarshalObject(r, (*shadow)(&r))
+	if _, overridden := r.Overrides(); overridden {
+		return param.MarshalObject(r, (*shadow)(&r))
+	}
+	_, typeOverridden := r.ExtraFields()["type"]
+	omitRole := !typeOverridden && r.Role == "" && r.Type != "" && r.Type != "message"
+	if len(r.decodedExtraFields) == 0 && !omitRole {
+		return param.MarshalObject(r, (*shadow)(&r))
+	}
+	extras := make(map[string]any, len(r.decodedExtraFields)+len(r.ExtraFields())+1)
+	for key, value := range r.decodedExtraFields {
+		extras[key] = value
+	}
+	if omitRole {
+		extras["role"] = param.Omit
+	}
+	for key, value := range r.ExtraFields() {
+		extras[key] = value
+	}
+	return param.MarshalWithExtras(r, (*shadow)(&r), extras)
 }
 func (r *DecisionItemCreateEventItemParam) UnmarshalJSON(data []byte) error {
-	return apijson.UnmarshalRoot(data, r)
+	if err := apijson.UnmarshalRoot(data, r); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	delete(fields, "content")
+	delete(fields, "id")
+	delete(fields, "type")
+	delete(fields, "role")
+	if len(fields) == 0 {
+		return nil
+	}
+	extras := make(map[string]json.RawMessage, len(fields)+len(r.decodedExtraFields))
+	for key, value := range r.decodedExtraFields {
+		extras[key] = value
+	}
+	for key, value := range fields {
+		extras[key] = value
+	}
+	r.decodedExtraFields = extras
+	return nil
 }
 
 func init() {
@@ -1942,11 +1982,12 @@ func (r *DecisionItemCreatedEvent) UnmarshalJSON(data []byte) error {
 type DecisionItemCreatedEventItem struct {
 	// The ID of the stored Decision input item.
 	ID string `json:"id" api:"required"`
-	// The text input to the model.
+	// The required content of a message item. Tool call and output items omit content.
 	Content DecisionItemCreatedEventItemContentUnion `json:"content" api:"required"`
-	// The message role. Always `user`.
+	// The role on a message item. Tool call and output items omit role.
 	Role constant.User `json:"role" default:"user"`
-	// Any of "message".
+	// The item type. An omitted type denotes a message. Tool call and output items
+	// have their corresponding tool type.
 	Type string `json:"type"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -6428,8 +6469,8 @@ func (r *ResponsesDelegationUpdateConfigToolWebSearchParam) UnmarshalJSON(data [
 // [DecisionItemDeletedEvent], [ResponseEvent], [SessionUsageUpdatedEvent],
 // [SessionClosedEvent], [ErrorEvent], [InfoEvent],
 // [ServerEventTransportDtmfReceived], [ServerEventTransportDtmfSend],
-// [ServerEventTransportRinging], [ServerEventTransportAnswered],
-// [ServerEventTransportFailed].
+// [ServerEventTransportDtmfSent], [ServerEventTransportRinging],
+// [ServerEventTransportAnswered], [ServerEventTransportFailed].
 //
 // Use the [ServerEventUnion.AsAny] method to switch on the variant.
 //
@@ -6459,6 +6500,7 @@ type ServerEventUnion struct {
 	OfInfoEvent                          InfoEvent                          `json:",inline"`
 	OfServerEventTransportDtmfReceived   ServerEventTransportDtmfReceived   `json:",inline"`
 	OfServerEventTransportDtmfSend       ServerEventTransportDtmfSend       `json:",inline"`
+	OfServerEventTransportDtmfSent       ServerEventTransportDtmfSent       `json:",inline"`
 	OfServerEventTransportRinging        ServerEventTransportRinging        `json:",inline"`
 	OfServerEventTransportAnswered       ServerEventTransportAnswered       `json:",inline"`
 	OfServerEventTransportFailed         ServerEventTransportFailed         `json:",inline"`
@@ -6488,6 +6530,7 @@ type ServerEventUnion struct {
 		OfInfoEvent                          respjson.Field
 		OfServerEventTransportDtmfReceived   respjson.Field
 		OfServerEventTransportDtmfSend       respjson.Field
+		OfServerEventTransportDtmfSent       respjson.Field
 		OfServerEventTransportRinging        respjson.Field
 		OfServerEventTransportAnswered       respjson.Field
 		OfServerEventTransportFailed         respjson.Field
@@ -6526,6 +6569,7 @@ func (ErrorEvent) implServerEventUnion()                         {}
 func (InfoEvent) implServerEventUnion()                          {}
 func (ServerEventTransportDtmfReceived) implServerEventUnion()   {}
 func (ServerEventTransportDtmfSend) implServerEventUnion()       {}
+func (ServerEventTransportDtmfSent) implServerEventUnion()       {}
 func (ServerEventTransportRinging) implServerEventUnion()        {}
 func (ServerEventTransportAnswered) implServerEventUnion()       {}
 func (ServerEventTransportFailed) implServerEventUnion()         {}
@@ -6557,6 +6601,7 @@ func (ServerEventTransportFailed) implServerEventUnion()         {}
 //	case live.InfoEvent:
 //	case live.ServerEventTransportDtmfReceived:
 //	case live.ServerEventTransportDtmfSend:
+//	case live.ServerEventTransportDtmfSent:
 //	case live.ServerEventTransportRinging:
 //	case live.ServerEventTransportAnswered:
 //	case live.ServerEventTransportFailed:
@@ -6613,6 +6658,8 @@ func (u ServerEventUnion) AsAny() anyServerEvent {
 		return u.AsServerEventTransportDtmfReceived()
 	case "transport.dtmf.send":
 		return u.AsServerEventTransportDtmfSend()
+	case "transport.dtmf.sent":
+		return u.AsServerEventTransportDtmfSent()
 	case "transport.ringing":
 		return u.AsServerEventTransportRinging()
 	case "transport.answered":
@@ -6739,6 +6786,11 @@ func (u ServerEventUnion) AsServerEventTransportDtmfReceived() (v ServerEventTra
 }
 
 func (u ServerEventUnion) AsServerEventTransportDtmfSend() (v ServerEventTransportDtmfSend) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u ServerEventUnion) AsServerEventTransportDtmfSent() (v ServerEventTransportDtmfSent) {
 	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
@@ -6902,6 +6954,11 @@ func (r *ServerEventUnion) unmarshalWebsocketEventWithRawType(data []byte) error
 			return err
 		}
 		r.JSON.OfServerEventTransportDtmfSend = respjson.NewField(r.JSON.raw)
+	case "transport.dtmf.sent":
+		if err := apijson.UnmarshalRoot(data, &r.OfServerEventTransportDtmfSent); err != nil {
+			return err
+		}
+		r.JSON.OfServerEventTransportDtmfSent = respjson.NewField(r.JSON.raw)
 	case "transport.ringing":
 		if err := apijson.UnmarshalRoot(data, &r.OfServerEventTransportRinging); err != nil {
 			return err
@@ -6967,8 +7024,9 @@ func (r *ServerEventTransportDtmfReceived) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-// A SIP DTMF keypress successfully sent to the SIP trunk. Delivered only to
-// sideband observers; this is not a client command.
+// Legacy SIP DTMF delivery notification retained for SDK compatibility and saved
+// events. Current servers confirm delivery with transport.dtmf.sent;
+// transport.dtmf.send is now the client command.
 type ServerEventTransportDtmfSend struct {
 	// The event_id of the client command, when supplied.
 	ClientEventID string                     `json:"client_event_id"`
@@ -6989,6 +7047,31 @@ type ServerEventTransportDtmfSend struct {
 // Returns the unmodified JSON received from the API
 func (r ServerEventTransportDtmfSend) RawJSON() string { return r.JSON.raw }
 func (r *ServerEventTransportDtmfSend) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// A SIP DTMF keypress successfully sent to the SIP trunk. Delivered only to
+// sideband observers; this is not a client command.
+type ServerEventTransportDtmfSent struct {
+	// The event_id of the client command, when supplied.
+	ClientEventID string                     `json:"client_event_id"`
+	Event         string                     `json:"event" api:"required"`
+	EventID       string                     `json:"event_id" api:"required"`
+	Type          constant.TransportDtmfSent `json:"type" default:"transport.dtmf.sent"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		ClientEventID respjson.Field
+		Event         respjson.Field
+		EventID       respjson.Field
+		Type          respjson.Field
+		ExtraFields   map[string]respjson.Field
+		raw           string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r ServerEventTransportDtmfSent) RawJSON() string { return r.JSON.raw }
+func (r *ServerEventTransportDtmfSent) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
