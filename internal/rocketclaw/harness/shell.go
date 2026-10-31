@@ -110,7 +110,6 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell CustomShe
 	}
 
 	hostDir := sss.root.Name()
-	cleanup := func() {}
 
 	if params.Workdir != "" {
 		workdir := params.Workdir
@@ -139,12 +138,10 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell CustomShe
 		if err != nil {
 			return bashFailure(fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error())
 		}
+		defer func() { _ = root.Close() }()
 
 		hostDir = root.Name()
-		cleanup = func() { _ = root.Close() }
 	}
-
-	defer cleanup()
 
 	if denied := sss.deniedBashPath(params.Command, hostDir); denied != "" {
 		return bashFailure(denied)
