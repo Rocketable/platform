@@ -66,7 +66,7 @@ func (d stateDAO) createConversation(ctx context.Context, conversation protocol.
 	}
 
 	// A new conversation's named birth space is created when missing; each aggregate yields one row, NULL without a name.
-	created, err := execRows(ctx, d.db, "create conversation", "count created conversation", `WITH existing AS (SELECT count(*) AS n FROM conversations WHERE conversation_id = $1),
+	created, err := execRows(ctx, d.db, "create conversation", `WITH existing AS (SELECT count(*) AS n FROM conversations WHERE conversation_id = $1),
 space AS (
     INSERT INTO web_spaces (name) SELECT $4::text FROM existing WHERE n = 0 AND $4 <> ''
     ON CONFLICT ((lower(name))) DO UPDATE SET name = web_spaces.name RETURNING id
@@ -334,7 +334,7 @@ func spaceNameError(_ sql.Result, err error) error {
 // left, keeping when they were added; one shared there already stays once. Locking every space, in id
 // order, makes concurrent deletes take turns, so two cannot remove the last two.
 func (s *SessionService) DeleteSpace(ctx context.Context, id string) error {
-	deleted, err := execRows(ctx, s.db, "delete space", "count deleted space", `WITH locked AS (SELECT id, created_at FROM web_spaces ORDER BY id FOR UPDATE),
+	deleted, err := execRows(ctx, s.db, "delete space", `WITH locked AS (SELECT id, created_at FROM web_spaces ORDER BY id FOR UPDATE),
 others AS (SELECT id FROM locked WHERE id <> $1 ORDER BY created_at, id LIMIT 1),
 moved AS (
     INSERT INTO web_shared_tabs (space, path, conversation_id, added_at, search)
@@ -470,7 +470,7 @@ func (s *SessionService) SaveTabState(ctx context.Context, username string, stat
 	}
 
 	// Each space's last tab is kept under the path its tab is saved as.
-	if claimed, err := execRows(ctx, tx, "save tab state", "count saved tab state", `WITH lasts AS (
+	if claimed, err := execRows(ctx, tx, "save tab state", `WITH lasts AS (
     SELECT COALESCE(jsonb_object_agg(l.space, COALESCE(`+tabPathSQL+`, l.path)), '{}') AS last
     FROM unnest($4::text[], $5::text[], $6::text[]) AS l(space, path, conversation_id)
     LEFT JOIN conversations c ON c.conversation_id = l.conversation_id
@@ -575,7 +575,7 @@ ON CONFLICT DO NOTHING`, space, path, TabConversation(path), string(search))
 // EditSharedSearch replaces the page of the Search tab path in space's Shared tabs with search when the saved page is
 // still base, the page the edit was made from, and reports whether it did. One no longer shared stays unshared.
 func (s *SessionService) EditSharedSearch(ctx context.Context, space, path string, base, search []byte) (bool, error) {
-	edited, err := execRows(ctx, s.db, "edit shared search", "count edited shared search", `UPDATE web_shared_tabs SET search = NULLIF($3, '')::jsonb
+	edited, err := execRows(ctx, s.db, "edit shared search", `UPDATE web_shared_tabs SET search = NULLIF($3, '')::jsonb
 WHERE space = $1 AND path = $2 AND search IS NOT DISTINCT FROM NULLIF($4, '')::jsonb`, space, path, string(search), string(base))
 
 	return edited > 0, err
@@ -641,7 +641,7 @@ UPDATE web_tabs SET unread_at = NULL WHERE username = $1 AND conversation_id = $
 
 // SetThreadAgentIfExists updates a managed conversation agent without creating a thread.
 func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (bool, error) {
-	rows, err := execRows(context.Background(), s.db, "update managed conversation agent", "count managed conversation agent update", `UPDATE conversations SET agent = $1 WHERE conversation_id = $2`, strings.TrimSpace(agent), strings.TrimSpace(conversationID))
+	rows, err := execRows(context.Background(), s.db, "update managed conversation agent", `UPDATE conversations SET agent = $1 WHERE conversation_id = $2`, strings.TrimSpace(agent), strings.TrimSpace(conversationID))
 	return rows > 0, err
 }
 
@@ -811,7 +811,7 @@ func putThreadQueueItem(ctx context.Context, db stateStoreDB, id string, item *p
 		inbound = new(string(removeSessionEntryNUL(data)))
 	}
 
-	changed, err := execRows(ctx, db, "put thread queue item", "count stored queue items", `INSERT INTO turns (`+waitingColumns+`, updated_at_unix_ns, phase, reason)
+	changed, err := execRows(ctx, db, "put thread queue item", `INSERT INTO turns (`+waitingColumns+`, updated_at_unix_ns, phase, reason)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $5, $15, CASE WHEN $10 <> 'held' THEN $16 WHEN $14::json->>'Kind' = 'enqueue' THEN $17 ELSE $18 END)
 ON CONFLICT (input_id) WHERE phase = 'waiting' DO UPDATE SET message = excluded.message, principal = excluded.principal, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns, position = excluded.position, park_after = excluded.park_after, slack_channel = excluded.slack_channel, slack_ts = excluded.slack_ts, delivery = excluded.delivery, reason = excluded.reason, content = excluded.content, source = excluded.source, slack_reply = excluded.slack_reply, inbound_json = excluded.inbound_json WHERE turns.conversation_id = excluded.conversation_id`,
 		strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, strings.TrimSpace(item.ParkAfter), item.SlackChannel, item.SlackTS, kind, content, item.Source, reply, inbound, turnWaiting, waitQueued, waitHeld, waitStashed)
@@ -1209,7 +1209,7 @@ WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2`, finish.conver
 		return nil, inputPersistenceError{cause: fmt.Errorf("close mirrored input: %w", err)}
 	}
 
-	moved, err := execRows(ctx, tx, "finish active turn", "count finished active turn", `WITH reply AS (
+	moved, err := execRows(ctx, tx, "finish active turn", `WITH reply AS (
     SELECT 'ReplyState' AS key, value FROM steps WHERE conversation_id = $7 AND key = $8
 ), final AS (
     SELECT json_object_agg(key, COALESCE(r.value, p.value)) AS outbound FROM json_each($3::json) p FULL JOIN reply r USING (key)
@@ -1357,7 +1357,7 @@ SELECT COALESCE(MIN(wake_attempts), 0) FROM released`, finish.conversationID, tu
 // the replies owed for the session writes among them and, for a subagent session's wake turn, reports
 // its answer to the parent. It returns the conversations to wake once tx commits.
 func (f *turnFinish) settleInputs(ctx context.Context, tx stateStoreDB, turnID string) ([]string, error) {
-	released, err := execRows(ctx, tx, "release recorded input ownership", "count released inputs", `WITH queued AS (
+	released, err := execRows(ctx, tx, "release recorded input ownership", `WITH queued AS (
     SELECT input_id FROM turns WHERE conversation_id = $1 AND phase = 'waiting'
 ), recorded AS (
     SELECT q.input_id FROM queued q JOIN entries e ON e.conversation_id = $1
@@ -1650,7 +1650,7 @@ func scanBackgroundJob(scanner rowScanner) (backgroundJob, error) {
 func createBackgroundJob(ctx context.Context, db stateStoreDB, job *backgroundJob) (stored backgroundJob, created bool, err error) {
 	origin, _ := json.Marshal(job.origin)
 
-	inserted, err := execRows(ctx, db, "create background job", "count created background job", `INSERT INTO turns (conversation_id, input_id, kind, takes_lane, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message, reply_target)
+	inserted, err := execRows(ctx, db, "create background job", `INSERT INTO turns (conversation_id, input_id, kind, takes_lane, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message, reply_target)
 VALUES ($1, $2, $3, FALSE, $4, $5, $6, $7, $8, $9, $10, FALSE, 0, 0, '', $11, $11, '', $12, NULLIF($13, '')) ON CONFLICT (conversation_id, input_id) WHERE NOT takes_lane DO NOTHING`, job.conversationID, job.jobID, job.kind, job.agent, job.label, job.callID, job.subagentKey, string(removeSessionEntryNUL(origin)), job.runnerID, noteNone, timeUnixNano(time.Now()), strings.ReplaceAll(job.input, "\x00", ""), job.target)
 	if err != nil {
 		return backgroundJob{}, false, err
@@ -1671,7 +1671,7 @@ func (s *SessionService) finishBackgroundJob(ctx context.Context, job *backgroun
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	finished, err := execRows(ctx, tx, "finish background job", "count finished background job", `UPDATE turns SET phase = 'done', terminal = CASE WHEN $4 = $9 THEN '' ELSE $4 END, note = $5, wake = $6, result = $7, updated_at_unix_ns = $8
+	finished, err := execRows(ctx, tx, "finish background job", `UPDATE turns SET phase = 'done', terminal = CASE WHEN $4 = $9 THEN '' ELSE $4 END, note = $5, wake = $6, result = $7, updated_at_unix_ns = $8
 WHERE conversation_id = $1 AND input_id = $2 AND NOT takes_lane AND runner_id = $3 AND phase = 'running'`, job.conversationID, job.jobID, job.runnerID, job.status, job.noteState, job.wake, strings.ReplaceAll(job.result, "\x00", ""), timeUnixNano(time.Now()), backgroundCompleted)
 	if err != nil || finished == 0 {
 		return false, err
@@ -1690,7 +1690,7 @@ WHERE conversation_id = $1 AND input_id = $2 AND NOT takes_lane AND runner_id = 
 
 // restampBackgroundJob hands a running job held by job.runnerID to runnerID.
 func (s *SessionService) restampBackgroundJob(ctx context.Context, job *backgroundJob, runnerID string) (bool, error) {
-	moved, err := execRows(ctx, s.db, "restamp background job", "count restamped background job", `UPDATE turns SET runner_id = $4 WHERE conversation_id = $1 AND input_id = $2 AND NOT takes_lane AND runner_id = $3 AND phase = 'running'`, job.conversationID, job.jobID, job.runnerID, runnerID)
+	moved, err := execRows(ctx, s.db, "restamp background job", `UPDATE turns SET runner_id = $4 WHERE conversation_id = $1 AND input_id = $2 AND NOT takes_lane AND runner_id = $3 AND phase = 'running'`, job.conversationID, job.jobID, job.runnerID, runnerID)
 	return moved > 0, err
 }
 

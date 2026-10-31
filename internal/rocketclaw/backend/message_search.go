@@ -240,7 +240,7 @@ LEFT JOIN saved ON TRUE WHERE a.id = $2 AND a.terminal <> '' AND saved.found IS 
 		return err
 	}
 
-	changed, err := execRows(ctx, db, "index turn message search", "count indexed turns", `UPDATE turns SET search_text = NULLIF($2, '')
+	changed, err := execRows(ctx, db, "index turn message search", `UPDATE turns SET search_text = NULLIF($2, '')
 WHERE id = $1 AND search_text IS DISTINCT FROM NULLIF($2, '')`, turnID, text)
 	if err != nil || changed == 0 {
 		return err

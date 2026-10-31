@@ -151,16 +151,13 @@ func execState(ctx context.Context, db stateStoreDB, op, query string, args ...a
 	return result, nil
 }
 
-func execRows(ctx context.Context, db stateStoreDB, execOp, countOp, query string, args ...any) (int64, error) {
+func execRows(ctx context.Context, db stateStoreDB, execOp, query string, args ...any) (int64, error) {
 	result, err := execState(ctx, db, execOp, query, args...)
 	if err != nil {
 		return 0, err
 	}
 
-	n, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", countOp, err)
-	}
+	n, _ := result.RowsAffected() // pgx returns driver.RowsAffected, whose row count cannot fail.
 
 	return n, nil
 }
@@ -259,7 +256,7 @@ func (s *SessionService) BeginGoal(conversationID string, goal *GoalState) error
 func beginGoalDB(ctx context.Context, db stateStoreDB, conversationID string, goal *GoalState) error {
 	now := time.Now().UTC()
 
-	rows, err := execRows(ctx, db, "begin goal", "count goal start", `UPDATE conversations SET goal_objective = $2, goal_max_turns = $3, goal_turns_used = 0, goal_status = $4, goal_note = '', goal_created_at_unix_ns = $5, goal_updated_at_unix_ns = $5, goal_principal_name = $6, goal_principal_email = $7 WHERE conversation_id = $1 AND COALESCE(goal_status NOT IN ('', $4), TRUE)`, conversationID, goal.Objective, goal.MaxTurns, GoalStatusActive, timeUnixNano(now), goal.PrincipalName, goal.PrincipalEmail)
+	rows, err := execRows(ctx, db, "begin goal", `UPDATE conversations SET goal_objective = $2, goal_max_turns = $3, goal_turns_used = 0, goal_status = $4, goal_note = '', goal_created_at_unix_ns = $5, goal_updated_at_unix_ns = $5, goal_principal_name = $6, goal_principal_email = $7 WHERE conversation_id = $1 AND COALESCE(goal_status NOT IN ('', $4), TRUE)`, conversationID, goal.Objective, goal.MaxTurns, GoalStatusActive, timeUnixNano(now), goal.PrincipalName, goal.PrincipalEmail)
 	if err != nil {
 		return err
 	}
@@ -449,7 +446,7 @@ func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversa
 		}
 	}
 
-	rows, err := execRows(ctx, tx, "update conversation details", "count updated conversation details", `UPDATE conversations SET pinned = COALESCE($2, pinned), name = COALESCE($3, name),
+	rows, err := execRows(ctx, tx, "update conversation details", `UPDATE conversations SET pinned = COALESCE($2, pinned), name = COALESCE($3, name),
     title = CASE WHEN kind = $4 THEN COALESCE($3, title) ELSE title END,
     synced_at = CASE WHEN kind = $4 AND $3 IS NOT NULL THEN clock_timestamp() ELSE synced_at END WHERE conversation_id = $1`, conversationID, pinned, name, KindRemote)
 	if err != nil {
@@ -901,7 +898,7 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return rows, nil
 	}
 
-	rows, err := execRows(ctx, tx, "delete rocketcode session", "count deleted rocketcode session rows", `DELETE FROM entries WHERE conversation_id = ANY($1)`, ids)
+	rows, err := execRows(ctx, tx, "delete rocketcode session", `DELETE FROM entries WHERE conversation_id = ANY($1)`, ids)
 	if err != nil {
 		return 0, err
 	}
@@ -1498,7 +1495,7 @@ func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, c
 
 	// The run and what its chat shows stay, and so do the attachments and files they reference.
 	if c.kind == pruneRunContext {
-		rows, err = execRows(ctx, tx, "prune finished cron run context", "count pruned cron run context", `DELETE FROM entries WHERE conversation_id = $1 AND audience = 'sandbox'`, c.id)
+		rows, err = execRows(ctx, tx, "prune finished cron run context", `DELETE FROM entries WHERE conversation_id = $1 AND audience = 'sandbox'`, c.id)
 		if err != nil {
 			return 0, false, err
 		}
@@ -1634,7 +1631,7 @@ func (s *SessionService) setGoalStatus(conversationID, status, note string) (Goa
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := execRows(ctx, tx, "set active goal status", "count active goal status update", `UPDATE conversations SET goal_status = $1, goal_note = $2, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (goal_status = '' OR goal_status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive); err != nil {
+	if _, err := execRows(ctx, tx, "set active goal status", `UPDATE conversations SET goal_status = $1, goal_note = $2, goal_updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (goal_status = '' OR goal_status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive); err != nil {
 		return GoalState{}, err
 	}
 
@@ -1814,7 +1811,7 @@ UPDATE conversations c SET principals = m.principals FROM merged m WHERE c.conve
 
 	// The unsynced entry hides its turn's record from History (observeTranscriptDB).
 	if entry.TurnID != "" {
-		hidden, err := execRows(ctx, db, "clear hidden turn message search", "count hidden turn message search", `UPDATE turns SET search_text = NULL
+		hidden, err := execRows(ctx, db, "clear hidden turn message search", `UPDATE turns SET search_text = NULL
 WHERE conversation_id = $1 AND id = $2 AND search_text IS NOT NULL`, conversationID, entry.TurnID)
 		if err != nil {
 			return 0, err
@@ -2117,7 +2114,7 @@ func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs 
 			return 0, err
 		}
 
-		rows, err := execRows(ctx, db, "delete stale session entries", "count stale session entries", `DELETE FROM entries WHERE conversation_id = $1`, conversationID)
+		rows, err := execRows(ctx, db, "delete stale session entries", `DELETE FROM entries WHERE conversation_id = $1`, conversationID)
 		if err != nil {
 			return 0, err
 		}
