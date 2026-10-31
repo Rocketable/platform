@@ -406,8 +406,8 @@ func codeModeSearchTool(index []codeModeSearchEntry) codemode.HostTool {
 				"limit":     map[string]any{"type": "integer", "description": "Max results (default 10)."},
 			},
 		},
-		Call: func(_ context.Context, args map[string]any) (string, error) {
-			return codeModeSearch(index, args), nil
+		CallValue: func(_ context.Context, args map[string]any) (starlark.Value, error) {
+			return starlark.String(codeModeSearch(index, args)), nil
 		},
 	}
 }
