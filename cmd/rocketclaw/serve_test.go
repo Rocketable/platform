@@ -31,10 +31,12 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 		{name: "enabled with backend startup failure", want: "start rocketcode session service"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			diagnosticsAddress := "127.0.0.1:0"
 			if tc.occupied {
-				listener, err := net.Listen("tcp", "127.0.0.1:6060")
+				listener, err := net.Listen("tcp", diagnosticsAddress)
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, listener.Close()) })
+				diagnosticsAddress = listener.Addr().String()
 			}
 
 			workspace := t.TempDir()
@@ -56,17 +58,13 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 
 			t.Cleanup(func() { os.Stderr = stderr })
 
-			err = runServe(tc.args)
+			err = runServe(tc.args, diagnosticsAddress)
 			require.ErrorContains(t, err, tc.want)
 
 			if tc.want == "start rocketcode session service" {
 				require.ErrorContains(t, err, "run rocketclaw")
-			}
-
-			if !tc.occupied {
-				listener, err := net.Listen("tcp", "127.0.0.1:6060")
-				require.NoError(t, err, "diagnostics listener leaked after backend startup failure")
-				require.NoError(t, listener.Close())
+			} else {
+				require.EqualError(t, err, "start private pprof HTTP: listen tcp "+diagnosticsAddress+": bind: address already in use")
 			}
 
 			data, err := os.ReadFile(defaultConfigPath)
@@ -97,7 +95,17 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 
 			if len(tc.args) == 0 && !tc.occupied {
 				require.Contains(t, string(output), `msg="started private pprof HTTP"`)
-				require.Contains(t, string(output), "address=127.0.0.1:6060")
+				_, address, ok := strings.Cut(string(output), "address=")
+				require.True(t, ok)
+				address, _, _ = strings.Cut(address, "\n")
+				require.True(t, strings.HasPrefix(address, "127.0.0.1:"), address)
+				require.NotEqual(t, "127.0.0.1:0", address)
+
+				listener, err := net.Listen("tcp", address)
+				require.NoError(t, err, "diagnostics listener leaked after backend startup failure")
+				require.NoError(t, listener.Close())
+			} else {
+				require.NotContains(t, string(output), `msg="started private pprof HTTP"`)
 			}
 		})
 	}
@@ -124,7 +132,7 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 	)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))
 
-	err = runServe([]string{"--pprof=false"})
+	err = runServe([]string{"--pprof=false"}, "127.0.0.1:0")
 	require.EqualError(t, err, "run rocketclaw: assemble frontends: start Slack connector: slack auth test failed: invalid_auth")
 }
 

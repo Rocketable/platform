@@ -54,7 +54,7 @@ func run(args []string) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "run":
-			return runServe(args[1:])
+			return runServe(args[1:], "127.0.0.1:6060")
 		case "lint":
 			return runLint(args[1:])
 		case "agent-graph":
@@ -74,7 +74,7 @@ func run(args []string) error {
 	if !selected.Found {
 		return printStdout(helpText, "help")
 	}
-	return runServe(args)
+	return runServe(args, "127.0.0.1:6060")
 }
 
 var secretFetcher config.SecretFetcher = config.AWSFetcher{}
