@@ -1585,15 +1585,15 @@ func TestAttachmentFallbackAndImageAttachments(t *testing.T) {
 	inbound.AttachmentPresence = protocol.AttachmentPresenceUnsupported
 	inbound.Metadata = map[string]string{"web_message_id": "attachment-input"}
 
-	var group errgroup.Group
-	group.Go(func() error { return handleTestInbound(t.Context(), bridge, &bridgeRequest{inbound: inbound}) })
+	// The buffered bus needs no reader while the fallback handles its database work.
+	require.NoError(t, handleTestInbound(t.Context(), bridge, &bridgeRequest{inbound: inbound}))
+	require.Len(t, bus.outbound, 2, "fallback must publish consumed input followed by its final response")
 
 	consumed := readRocketCodeOutbound(t, bus)
 	require.Equal(t, "attachment-input", consumed.ConsumedID)
 	require.Empty(t, consumed.ConsumedHeader, "no model prompt was generated")
 	final := readRocketCodeOutbound(t, bus)
 	require.Equal(t, unsupportedFileFallback, final.Text)
-	require.NoError(t, group.Wait())
 }
 
 func TestNormalizeInboundAttachmentsCentralizesModelPolicy(t *testing.T) {
