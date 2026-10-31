@@ -715,6 +715,83 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 	})
 }
 
+func grepInventoryFixture(tb testing.TB) *sandboxedFileSystem {
+	tb.Helper()
+	root, err := os.OpenRoot(tb.TempDir())
+	require.NoError(tb, err)
+	tb.Cleanup(func() { require.NoError(tb, root.Close()) })
+
+	var listing strings.Builder
+	for i := range 65536 {
+		fmt.Fprintf(&listing, ".env.%05d\n", i)
+	}
+
+	require.NoError(tb, root.WriteFile("listing", []byte(listing.String()), 0o644))
+	require.NoError(tb, root.WriteFile("rg", []byte("#!/bin/sh\nexec /bin/cat listing\n"), 0o755))
+	tb.Setenv("PATH", root.Name())
+
+	return &sandboxedFileSystem{root: root}
+}
+
+func BenchmarkGrepInventory(b *testing.B) {
+	sfs := grepInventoryFixture(b)
+	b.ReportAllocs()
+
+	for b.Loop() {
+		files, errText := sfs.allowedRipgrepFiles(b.Context(), sfs.root.Name(), "")
+		if errText != "" || len(files) != 0 {
+			b.Fatalf("filtered inventory = %d files, %q; want no files or error", len(files), errText)
+		}
+	}
+}
+
+func TestGrepInventoryAllocations(t *testing.T) {
+	sfs := grepInventoryFixture(t)
+	perFile := testing.Benchmark(func(b *testing.B) {
+		b.Helper()
+
+		for b.Loop() {
+			if sfs.deniedPath(filepath.Join(sfs.root.Name(), ".env.00000")) == "" {
+				b.Fatal("environment file was not filtered")
+			}
+		}
+	})
+	require.Positive(t, perFile.N)
+
+	listing := testing.Benchmark(func(b *testing.B) {
+		b.Helper()
+
+		for b.Loop() {
+			cmd := exec.CommandContext(t.Context(), "rg")
+			cmd.Dir = sfs.root.Name()
+
+			stdout, err := cmd.Output()
+			if err != nil {
+				b.Fatal(err)
+			}
+
+			if len(strings.Split(strings.TrimSpace(string(stdout)), "\n")) != 65536 {
+				b.Fatal("incomplete file inventory")
+			}
+		}
+	})
+	require.Positive(t, listing.N)
+
+	cost := testing.Benchmark(func(b *testing.B) {
+		b.Helper()
+
+		for b.Loop() {
+			files, errText := sfs.allowedRipgrepFiles(t.Context(), sfs.root.Name(), "")
+			if errText != "" || len(files) != 0 {
+				b.Fatalf("filtered inventory = %d files, %q; want no files or error", len(files), errText)
+			}
+		}
+	})
+	require.Positive(t, cost.N)
+	// Calibrate command buffering and path costs, leaving room for bookkeeping but not another inventory.
+	require.Less(t, cost.AllocedBytesPerOp()-listing.AllocedBytesPerOp()-65536*perFile.AllocedBytesPerOp(), int64(512<<10))
+}
+
 func TestApplyPatchSymlinkDenied(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
