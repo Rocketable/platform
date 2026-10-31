@@ -83,18 +83,18 @@ type openCodeShells struct {
 // where every shell runs, and reads no events meanwhile, so the events that arrived during the
 // list apply after it. Listing only loaded locations never makes the server load one. A location
 // whose list fails, such as one deleted from disk, adds no shells.
-func (shells *openCodeShells) follow(ctx context.Context, name string, server config.OpenCodeConfig) error {
+func (shells *openCodeShells) follow(ctx context.Context, name string, server config.OpenCodeConfig) {
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(server.URL, "/")+"/api/event", http.NoBody) // Config validation already parsed the URL.
 	request.SetBasicAuth("opencode", server.Password)
 
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("follow opencode %s events: %w", name, err)
+		return
 	}
 	defer func() { _ = response.Body.Close() }()
 
 	if response.StatusCode/100 != 2 {
-		return &openCodeError{Server: name, Path: "/api/event", Status: response.StatusCode}
+		return
 	}
 
 	lines := bufio.NewScanner(response.Body)
@@ -126,8 +126,8 @@ func (shells *openCodeShells) follow(ctx context.Context, name string, server co
 			var locations []struct {
 				Directory string `json:"directory"`
 			}
-			if err := openCodeCall(ctx, name, server, http.MethodGet, "/api/debug/location", nil, &locations); err != nil {
-				return err
+			if openCodeCall(ctx, name, server, http.MethodGet, "/api/debug/location", nil, &locations) != nil {
+				return
 			}
 
 			running := map[string]string{}
@@ -164,12 +164,6 @@ func (shells *openCodeShells) follow(ctx context.Context, name string, server co
 			shells.mu.Unlock()
 		}
 	}
-
-	if err := lines.Err(); err != nil {
-		return fmt.Errorf("read opencode %s events: %w", name, err)
-	}
-
-	return nil
 }
 
 // SyncOpenCode keeps each configured server's newest root sessions in the store every
@@ -190,7 +184,7 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, servers map[string]co
 		following.Go(func() error {
 			for {
 				connection, cancel := context.WithTimeout(ctx, openCodeShellsEvery)
-				_ = running.follow(connection, name, server)
+				running.follow(connection, name, server)
 
 				cancel()
 
