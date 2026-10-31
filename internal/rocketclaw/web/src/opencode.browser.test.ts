@@ -94,6 +94,7 @@ async function until(check: () => boolean | Promise<boolean>) {
 }
 
 test("a remote session mounts OpenCode's view in the page, with RocketClaw's keys, commands, and tabs around it", async () => {
+  const started = performance.now();
   const { chromium: engine } = await import(playwright!);
   const { web, calls, release, terminals, base } = start();
   fake.extraText = '<script>window.__ocUnsafe=1</script><img src=x onerror="window.__ocUnsafe=1"><a href="javascript:alert(1)">unsafe link</a>\n\n```mermaid\nflowchart LR\nA["<img src=x onerror=alert(1)>"]\nclick A "javascript:alert(1)"\n```';
@@ -320,8 +321,18 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await page.getByText("Fork was refused", { exact: true }).waitFor();
     expect(page.url()).toBe(`${base}${route("opencode:box:ses_a")}`);
     expect(await page.locator('[role="tablist"][aria-label="Open tabs"] [role="tab"]').count()).toBe(beforeForkTabs);
+    const forkRequests = fake.requests.length;
     await page.locator("[data-oc-portal]").locator("[role=option], button", { hasText: "question in ses_a" }).first().click();
     await page.waitForURL(new RegExp(`/oc/${encode("opencode:box:ses_fork_").slice(0, -2)}`));
+    console.info("Waiting for visible fork answer", {
+      expected: "/answer in ses_fork_/",
+      elapsedMs: performance.now() - started,
+      url: page.url(),
+      tabs: await tabs.allTextContents(),
+      rendered: await page.locator("main").allTextContents(),
+      errors,
+      requests: fake.requests.slice(forkRequests),
+    });
     await view.getByText(/answer in ses_fork_/).waitFor();
     expect(calls.filter(({ path }) => path === "/api/ForkSession").map(({ body }) => body)).toEqual(Array(2).fill({ id: "opencode:box:ses_a", before: "msg_ses_a_1" }));
     expect(await view.locator("[data-component=composer] [contenteditable=true]").textContent()).toBe("question in ses_a");
