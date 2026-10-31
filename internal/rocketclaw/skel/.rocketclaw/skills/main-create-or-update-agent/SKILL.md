@@ -27,7 +27,8 @@ Only use these runtime paths:
 ## Required inputs
 
 For creation, you must know:
-- target name under `agents/`, description, concrete model or configured model placeholder, and purpose
+- whether the agent is easy or advanced (see [Easy mode agents](#easy-mode-agents)); for easy agents, gather that section's inputs instead of the two items below
+- target name under `agents/`, description, a real model name (optionally `provider/model` and `#effort`), and purpose
 - agent kind and exact opt-ins: bash command patterns, writable path patterns, skill names, task agent names, or another named permission bucket
 
 For updates, you must know:
@@ -39,6 +40,8 @@ For rename, you must also know:
 Ask only for the missing items.
 
 ## Permission handling
+
+This section and the `shell`, `sudo` and `description` guidance below apply to advanced agents only; easy agents have none of those keys.
 
 Do not ask the human to write raw `permission` YAML. For creation, ask what kind of agent they want and which exact opt-ins it needs: bash command patterns for execution agents, writable path patterns for file-modifying agents, skill names, task agent names, or another named permission bucket.
 
@@ -215,11 +218,11 @@ If the requested agent does not exist, create it directly in `agents/`.
 
 Create or update the agent as a markdown agent file with YAML frontmatter.
 
-The resulting frontmatter must include at least:
+The resulting advanced frontmatter must include at least:
 - `description`
 - `model`
 
-The `model` value is required. Use a concrete model such as `gpt-6.1-sol`, or `{{ model "name" }}` when `name` already exists in the selected config's `models` object. If the human has not specified either one, ask before writing the file. Do not invent a mapping.
+The `model` value is required. Use a real model name such as `gpt-6.1-sol` or `provider/model`, optionally with an `#effort` suffix such as `#high`. If the human has not specified one, ask before writing the file.
 
 When updating an existing agent, preserve the existing non-empty `model` unless the human explicitly asked to change it. If the existing agent has no `model` or an empty `model`, ask the human which model to use and add it.
 
@@ -259,6 +262,61 @@ When updating an existing agent, preserve body content that the human did not as
 
 The body must also end with an extra instruction that explicitly tells the agent to use `MEMORY.md`.
 
+## Easy mode agents
+
+An agent file with `mode: easy` uses a shorter format. Write it when the human asks for an easy agent, or for one that works in its own folder, turns whole features on or off, and has every action reviewed by an approver. Otherwise write the advanced format above. Leaving `mode` out means advanced; any value other than `easy` or `advanced` fails loading.
+
+A section left out, or set to `auto`, turns on everything in it, reviewed by the agent's approver; a written section turns on only what it lists. For creation, ask for the target name, `model`, `space`, `workingDirectory` and purpose, and which sections to narrow. Do not ask for a description, permission opt-ins, `shell` or `sudo`.
+
+Keys:
+- `mode: easy`
+- `model` (required): a real model name, optionally `provider/model` and `#effort`; its provider must be configured in `rocketclaw.json`
+- `space` (required): Web space name
+- `workingDirectory` (required): the agent's own folder, the only one its shell and file tools can write, for example `sessions/<name>/$ROCKETCLAW_CONVERSATION_ID`; relative to RocketClaw's working directory; it may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills`, `cron`, `scripts` or `workflows`, wherever a link puts them
+- `subagents`: models `task` may run this agent on, each like `model`; `[]` for none; default its own `model`
+- `maxRecursion`: subagent levels, 0 or more; `0` turns `task` off; default `1`
+- `approver`: `model` replaces the review model, `prompt` is added to the guardian's rules; default `guardian` on `auto_approver_model`
+- `secretsARN`: Secrets Manager ARNs, fetched each turn, given only to `commands` programs and ``!`…` `` lines
+- `commands`: map from command name to the host command line it runs
+- `mcp`: `{}` for none, or a map from server to `auto` or tool groups `[read]` or `[read, write]`; groups come from `mcp_servers.<name>.tools` in `rocketclaw.json` (use `main-update-rocketclaw-json`); an unknown server or group fails loading
+- `rocketclaw`: `[]` for none, or a list of the groups `sessions`, `pages`, `tags`, `background`, `workflow`, `restart`; default all six
+- `tags`: tag groups as a list of lists; when `rocketclaw` is a list, `tags` and its `tags` group need each other
+- `skills`: `[]` for none, or folders under `skills/`; a missing folder fails loading; default all skills
+- `allowedNetworkTargets`: hosts, `host:port` entries and URL prefixes; wildcards and CIDR ranges fail loading; default public addresses only
+- `routines`: the agent's schedules; use `main-update-cron-or-heartbeat`
+- `delegatedFrom`: `true` (default), `false`, or the agent names that may start, message or stop its chats
+- `schema.output`: as for advanced agents
+
+Any other key fails loading with `<key>: not an easy-mode key`, including the advanced keys `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo`, `guardrail` and `additionalInstructions`. `approver` takes only `model` and `prompt`, and `schema` only `output`.
+
+The body is the agent's whole instructions: easy agents never load `AGENTS.md`, and their tools see only `workingDirectory`. ``!`…` `` lines in the body run in host bash from the workspace, so end the body with ``!`cat MEMORY.md` `` instead of the `MEMORY.md` instruction, and add ``!`cat AGENTS.md` `` when the human wants it included.
+
+```yaml
+---
+mode: easy
+model: openai/gpt-6.1-sol#high
+space: Marketing
+workingDirectory: sessions/marketing/$ROCKETCLAW_CONVERSATION_ID
+approver:
+  prompt: "Deny write actions the user did not explicitly request."
+mcp:
+  alitu_google_marketing: [read]
+rocketclaw: [sessions, pages]
+skills:
+  - marketing
+routines:
+  - "0 9 * * 1-5": "Check the campaign dashboard for anomalies."
+---
+
+Agent instructions.
+
+!`cat AGENTS.md`
+
+!`cat MEMORY.md`
+```
+
+When the effective file has `mode: easy`, keep it easy: never add advanced keys, and carry over its sections, `space`, `workingDirectory` and `routines` unless the human asked to change them. Switch an agent between modes only when the human asks, and then write only the new mode's keys. Renaming an easy agent leaves its earlier routine runs under the old name.
+
 ## Workflow
 
 1. Determine whether the request is a create, in-place update, or rename.
@@ -276,7 +334,8 @@ The body must also end with an extra instruction that explicitly tells the agent
 - RocketCode denies unmatched permissions by default. Do not write top-level or per-bucket default deny rules.
 - Do not write broad `edit: allow` or `bash: allow`; prefer exact `edit` or exact `bash` opt-ins, not both.
 - Run `rocketclaw lint` after requested agent or relevant script edits and before `rocketclaw_reload` or `rocketclaw_restart`.
-- Always end the agent instructions with an explicit instruction to use `MEMORY.md`.
+- Always end the agent instructions with an explicit instruction to use `MEMORY.md`, or, for easy agents, with ``!`cat MEMORY.md` ``.
+- Never add advanced keys to a `mode: easy` file.
 - Make all requested agent-definition edits before calling `rocketclaw_reload` or `rocketclaw_restart`; do not call either between intermediate edits.
 - Be truthful about overlay limitations when a rename cannot remove an old embedded source path.
 - If no agent-definition file changed, do not call `rocketclaw_restart`.

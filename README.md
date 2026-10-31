@@ -149,7 +149,7 @@ Release note for Slack answering mentions only:
 
 MCP clients call `session_prompt` with a conversation ID and an agent. Each MCP conversation shows as a Web chat run by that agent. Continue it or switch its agent from Web.
 
-A job file in `cron/` runs its agent on its schedule. An empty reply reports nothing; any other reply opens a new Web chat with the report, run by the job's agent. The Cron page in Web lists every run, and continuing one opens the same chat.
+A job file in `cron/` runs its agent on its schedule. An empty reply reports nothing; any other reply opens a new Web chat with the report, run by the job's agent. The Cron page in Web lists every run, and continuing one opens the same chat. An [easy mode agent](#easy-mode-agents) schedules itself with `routines` in its own file instead; a cron file cannot name it.
 
 Cron definition bodies expand shell snippets (an exclamation mark followed by a backtick-quoted command) before the model reads them. These are trusted commands, like those in agent prompts: they run in the workspace through the selected agent's `shell`, when set, without a tool permission review. Ordinary messages, scheduled messages, and Background Job completion notes stay literal.
 
@@ -168,7 +168,7 @@ On shutdown, tool calls already running finish and are saved, and background job
 
 ## Agents and permissions
 
-Each agent file must set `model`, either as a model name such as `gpt-6.1-sol` or as a name mapped in `rocketclaw.json` (see [Models and providers](#models-and-providers)).
+Each agent file must set `model` to a real model name, such as `gpt-6.1-sol` or `work/gpt-6.1-sol` (see [Models and providers](#models-and-providers)).
 
 The root `AGENTS.md` goes into every agent's instructions. To leave it out for one agent, add this to that agent's frontmatter:
 
@@ -244,6 +244,77 @@ Release note for agent session control:
 - Every subagent now runs as a session of its own, on the same turn runner as other sessions, so its queue, steers, stops, and restart recovery work as a top-level session's do. A subagent session is not listed in the sidebar or search. Its Background Jobs report to the subagent itself. It acts for its top-level session's running turn: it writes sessions and tags for that session, the sessions it creates keep that turn's creator and agent limits, the files it attaches go out with that turn's reply, and `rocketclaw_sessions_current_id` returns that session's ID. It is not offered `rocketclaw_schedule_message` or `rocketclaw_reset_scheduled_messages`. Its first prompt carries a header naming the session and agent that delegated it.
 - Stopping a turn while its foreground `task` call waits also stops the subagent's current turn, and so on down a chain of foreground subagents, unless a background `task` job waits on that turn. The prompt the call sent, if still queued, is not withdrawn but held: it stays in the subagent's queue, shown in Web like a stash, through restarts, while the rest of the queue moves on. The next message sent to the subagent, by `task`, `rocketclaw_sessions_write`, or a person in Web, releases it to run just before that message, and a person's `$goal` releases it to run before the goal; a stash releases nothing, and a person's stash is never released this way. The stopped session gets no note. A restart is not a stop: the call waits again.
 
+Every permission review starts with a header RocketClaw writes outside the transcript: the turn's source (`Web`, `Slack`, `Cron`, `ExternalMCP` or `System`, or `ScheduledMessage` with its creator's source), the person who asked when known, and the agent that sent the message. Subagents, workflow workers and shadows carry their top-level turn's header. The reviewer trusts it over any origin the transcript claims, so a rule such as "cron turns never use write credentials" can be enforced.
+
+### Easy mode agents
+
+An agent file with `mode: easy` uses a shorter format. Leaving `mode` out, or `mode: advanced`, keeps the format described above; any other value fails to load. The rules of an easy file:
+
+- A section left out, or set to `auto`, turns on everything in it. A section written out turns on only what it lists.
+- Everything turned on is reviewed before it runs by the agent's approver: the guardian, on `approver.model` when set, with `approver.prompt` added to its rules. As under `sudo`, skills, `task`, web search and the default-on RocketClaw tools (reload, scheduled messages, attaching files, goal updates and questions) run without review.
+- `model`, `space` and `workingDirectory` are required. A misspelled or unknown key fails to load, and so do the advanced keys `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo`, `guardrail` and `additionalInstructions`.
+- The body is the agent's whole instructions. Easy agents never load `AGENTS.md` and get no reply-style line; write ``!`cat AGENTS.md` `` in the body to include it.
+
+```yaml
+---
+mode: easy
+model: openai/gpt-6.1-sol#high
+space: Marketing
+workingDirectory: sessions/marketing/$ROCKETCLAW_CONVERSATION_ID
+
+subagents:
+  - openai/gpt-6-luna#max
+  - anthropic/claude-haiku-4-5#high
+maxRecursion: 1
+
+approver:
+  model: openai/gpt-6-luna#max
+  prompt: "Cron turns never use write credentials. Deny write actions the user did not explicitly request."
+
+secretsARN:
+  - "arn:aws:secretsmanager:us-east-1:123456789012:secret:marketing-read"
+
+commands:
+  stripe-write: "stripe -c $ROCKETCLAW_METADATA_CUSTOMER_ID"
+
+mcp:
+  alitu_google_marketing: [read]
+
+rocketclaw: [sessions, tags]
+tags:
+  - [triage, investigating, resolved]
+
+skills:
+  - marketing
+
+allowedNetworkTargets:
+  - api.stripe.com
+  - localhost:8080
+  - https://api.example.com/v1/
+
+routines:
+  - "*/5 * * * *": "Check the campaign dashboard for anomalies."
+  - "30m"
+
+delegatedFrom: [main]
+---
+
+Agent instructions.
+
+!`cat AGENTS.md`
+```
+
+The [cheatsheet](cmd/rocketclaw/CHEATSHEET.md#easy-mode-agent-frontmatter) lists every key and what leaving it out means. How an easy agent runs:
+
+- Its shell commands always run in the [emulated shell](#emulated-shell), in its `workingDirectory`. A relative path starts from RocketClaw's working directory. `$VAR`s come from the turn, each made into one safe path segment, or else from RocketClaw's environment; an unset variable fails the turn. `ROCKETCLAW_CONVERSATION_ID` is set on every turn, so the example gives each chat its own folder. The folder may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills`, `cron`, `scripts` or `workflows`, wherever a link puts them. Subagents and workflow workers use their top-level session's folder.
+- `read`, `glob`, `grep`, `apply_patch` and attaching files see only that folder, plus two read-only exceptions at their full host paths, which the shell sees too: the chat's uploads and the folders of the skills the agent may use. Files uploaded from Web go to `.rocketclaw/uploads/<chat>`; Slack files are put into the prompt, not uploaded.
+- The emulated shell sees only the turn's `ROCKETCLAW_*` variables and `TMPDIR`. The programs `commands` starts run in host bash with RocketClaw's environment plus the `secretsARN` secrets. Each secret is a JSON object of string values, and each key becomes one variable. Secrets are fetched on every turn; a failure fails the turn and names the ARN and key.
+- ``!`…` `` lines in the body, in a routine's instruction and in the `SKILL.md` of a skill the agent loads run in host bash, from the workspace, with the secrets. A skill's lines run before the model's arguments go in, so text the model passes never runs.
+- `allowedNetworkTargets` limits `webfetch` with exactly the rules the shell's `curl`, `fetch` and `jb_http` follow.
+- `task` takes a `model` from `subagents` and the `tools` the subagent gets, `null` for all of the parent's. The subagent runs the parent's own file, with the same folder, approver and secrets. Advanced agents cannot `task` an easy agent; they write to its sessions with `rocketclaw_sessions`, which `delegatedFrom` limits.
+- Each routine runs the agent on a schedule written as in a cron file, with its instruction, or with `Scheduled run (<schedule>).` for a bare schedule. It reports like a cron job, in the agent's `space`. The Cron page lists it as `<agent> · <schedule>`, and `cron:<agent>` finds its runs. A one-off time runs once; a run started with the Run button does not count. A cron file cannot name an easy agent. Renaming the agent file leaves earlier routine runs under the old name.
+- A shadow must use its parent's mode; one that does not is dropped with a warning. An easy shadow needs the same required keys, and its `space` may differ. Routine runs get no shadows, and a shadow's own `routines` never run.
+
 ### Emulated shell
 
 An agent that sets `shell: emulated` runs its shell commands in [just-bash](https://github.com/vercel-labs/just-bash), a bash emulator, instead of host bash: `bash` tool calls, `` !`…` `` lines and workflow workers. It has the usual tools plus `python3`, `js-exec` and `sqlite3`. Each command runs in a fresh process, so files in the working directory persist between calls but variables and `cd` do not.
@@ -259,10 +330,12 @@ allowedNetworkTargets: # or auto, the default
   - https://api.example.com/v1/
 ```
 
-- `workingDirectory` is required: it is the only host folder the commands see, at its real path. Everything else, `TMPDIR` (`/tmp`) included, lives in memory and is gone when the command ends. `$VAR`s come from the turn's environment and a relative path starts at the workspace. It may not be or contain the workspace or `.rocketclaw`, nor lie inside `.rocketclaw`.
+- `workingDirectory` is required: it is the only host folder the commands see, at its real path. Everything else, `TMPDIR` (`/tmp`) included, lives in memory and is gone when the command ends. `$VAR`s come from the turn's environment, and an unset one becomes empty. `ROCKETCLAW_CONVERSATION_ID` is set on every turn, so the example gives each chat its own folder. A relative path starts at the workspace. It may not be or contain the workspace or `.rocketclaw`, nor lie inside `.rocketclaw`.
 - `commands` are the host programs the commands can start. `stripe-write a b` runs `stripe -c $ROCKETCLAW_METADATA_CUSTOMER_ID a b` with host bash and the host's environment only: variables the commands set never reach it. Its output keeps its exact bytes through pipes and files. Binary data a command prints straight to its output, rather than to a file, comes back garbled: just-bash decodes that output as text.
 - `allowedNetworkTargets` limits `curl`, Python's `jb_http` and JavaScript's `fetch`. `auto` allows public addresses and refuses loopback, link-local (including `169.254.169.254`) and private ones. A list allows hosts (optionally with a port) and URL prefixes, with any HTTP method. just-bash has no wildcards, CIDR ranges or per-entry methods, so such entries fail every command.
 - Running it needs `node` 22.18 or later and `npm`. At startup and on each reload, RocketClaw installs just-bash into `.rocketclaw/justbash/` with `npm` when an agent uses it; a failed install shows in the Web interface.
+
+Easy mode agents always use the emulated shell, with the differences listed under [Easy mode agents](#easy-mode-agents).
 
 ### Shadow agents
 
@@ -339,18 +412,17 @@ Skill templates read their arguments the same way OpenCode commands do: `$ARGUME
 
 ## Models and providers
 
-The top-level `openai` object is the default model provider. Add more under `providers`, and give models short names under `models`:
+The top-level `openai` object is the default model provider. Add more under `providers`:
 
 ```json
 {
   "openai": {"auth": "chatgpt"},
-  "providers": {"work": {"auth": "chatgpt"}},
-  "models": {"coding-high": "work/gpt-6.1-sol"}
+  "providers": {"work": {"auth": "chatgpt"}}
 }
 ```
 
 ```yaml
-model: '{{ model "coding-high" }}'
+model: work/gpt-6.1-sol
 ```
 
 `work/gpt-6.1-sol` uses the `work` provider, and a bare `gpt-6.1-sol` uses `openai`. RocketClaw never switches to another provider on its own. Each provider compacts conversation history at 200000 tokens unless you set `autocompaction_threshold`.
