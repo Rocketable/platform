@@ -22,6 +22,39 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+func TestConversationSpaceIndexMigration(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	store.db.SetMaxOpenConns(1)
+
+	ctx := t.Context()
+	_, err := store.db.ExecContext(ctx, `INSERT INTO web_spaces (id, name) VALUES ('birth', 'Birth');
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, space_id)
+SELECT 'chat-' || n, 'main', 'alice', 'web_chat', TRUE, CASE WHEN n <= 4 THEN 'birth' END
+FROM generate_series(1, 2048) n;
+ANALYZE conversations;
+SET plan_cache_mode = force_generic_plan;
+PREPARE birth_space_lookup(text) AS UPDATE ONLY conversations SET space_id = NULL WHERE space_id = $1;`)
+	require.NoError(t, err)
+
+	for range 2 {
+		// The foreign key clears birth spaces with this lookup when DeleteSpace removes a space.
+		plan, err := queryStrings(ctx, store.db, `EXPLAIN EXECUTE birth_space_lookup('birth')`, "birth-space lookup plan")
+		require.NoError(t, err)
+		require.Contains(t, strings.Join(plan, "\n"), "conversations_space")
+		t.Log(strings.Join(plan, "\n"))
+
+		_, err = (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 76)
+		require.NoError(t, err)
+
+		var exists bool
+		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT to_regclass('conversations_space') IS NOT NULL`).Scan(&exists))
+		require.False(t, exists)
+		require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+	}
+}
+
 func TestDelegationLookupStopsAtFirstChildEntry(t *testing.T) {
 	t.Parallel()
 
@@ -640,12 +673,12 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.Equal(t, 1, kept)
 
 	// The later migrations already ran here; running them again would fail on what they created.
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql")
+	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
 	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql"}, ledger)
+	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql"}, ledger)
 
 	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
 	require.NoError(t, err)
