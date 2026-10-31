@@ -19,13 +19,13 @@ Define literal `meta` with matching non-empty `name` and `description`, plus an 
 
 ## Quick Reference
 
-- `worker(name, instructions, model=None, tools=None)` defines a workflow-local worker. Omit `model` to inherit, or use an existing configured model mapping key. Omit `tools` to inherit, use `tools=[]` for no tools, never include `task`, and remember that `skill` also grants its required `find_skills` companion. Never invent a model, named agent file, or permission.
+- `worker(name, instructions, model=None, tools=None)` defines a workflow-local worker. Omit `model` to inherit, or use a real model name (optionally `provider/model` and `#effort`); for an easy agent it must be the agent's own `model` or one of its `subagents`, exactly as written there. Omit `tools` to inherit, use `tools=[]` for no tools, never include `task`, and remember that `skill` also grants its required `find_skills` companion. Never invent a model, named agent file, or permission.
 - `agent(prompt, worker=None, label="", schema=None)` runs one isolated worker, returning text or schema-shaped native Starlark JSON values. Slack does not display worker activity or labels. Every object schema must set `"additionalProperties": False`.
 - `parallel(callables)` concurrently runs zero-argument callbacks in declaration order.
 - `pipeline(items, fn)` concurrently applies one callback per item in input order.
 - `phase(name, fn)` executes one unique named phase once and records its terminal counts and status. Calls outside named phases use the implicit `run` phase even when strict metadata does not declare it. Declared, dynamic, and implicit phases count toward a limit of 100 total phases.
 
-Instructions, models, and tools are workflow-local. `tools` only narrows the invoking agent; workers never receive RocketClaw behavior tools. Workers run their shell commands through the invoking agent's `shell` when it sets one.
+Instructions, models, and tools are workflow-local. `tools` only narrows the invoking agent; workers never receive RocketClaw behavior tools. Workers run their shell commands through the invoking agent's `shell` when it sets one; an easy agent's workers use its emulated shell in its top-level session's folder.
 
 ## Safety
 

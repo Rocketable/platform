@@ -7,7 +7,7 @@ problem_type: tooling_decision
 component: service_layer
 severity: high
 applies_when:
-  - Changing how RocketClaw runs or installs just-bash for agents that set shell: emulated
+  - Changing how RocketClaw runs or installs just-bash for easy agents or agents that set shell: emulated
   - Proposing bunx, bun, npx, or a bun build bundle to run the just-bash wrapper
   - Moving wrapper.ts, renaming it to .mjs, or embedding just-bash in the binary
   - Upgrading the pinned just-bash version or the Node version CI installs
@@ -30,7 +30,7 @@ retire_when: "Bun ships node:module registerHooks and just-bash reports level fu
 
 ## Context
 
-Agents that set `shell: emulated` run their shell commands in [just-bash](https://github.com/vercel-labs/just-bash), a bash emulator written in TypeScript. RocketClaw embeds a small TypeScript wrapper (`internal/rocketclaw/justbash/wrapper.ts`) and a `package.json` that pins `just-bash` to `3.6.0`. At startup and on each reload, when some agent uses the emulated shell, the server writes both into `<runtime dir>/justbash/` and runs `npm install` there (`internal/rocketclaw/justbash/justbash.go:55-90`, called from `internal/rocketclaw/backend/justbash.go:17-36`). Each shell command then runs `<runtime dir>/justbash/wrapper.ts` directly, and its `#!/usr/bin/env node` first line hands it to Node; it gets the setup and the command on stdin.
+Easy agents, and agents that set `shell: emulated`, run their shell commands in [just-bash](https://github.com/vercel-labs/just-bash), a bash emulator written in TypeScript. RocketClaw embeds a small TypeScript wrapper (`internal/rocketclaw/justbash/wrapper.ts`) and a `package.json` that pins `just-bash` to `3.6.0`. At startup and on each reload, when some agent uses the emulated shell, the server writes both into `<runtime dir>/justbash/` and runs `npm install` there (`internal/rocketclaw/justbash/justbash.go:77-115`, called from `internal/rocketclaw/backend/justbash.go:15-36`). Each shell command then runs `<runtime dir>/justbash/wrapper.ts` directly, and its `#!/usr/bin/env node` first line hands it to Node; it gets the setup and the command on stdin.
 
 The code and README say *what* happens. They do not say why the shorter-looking routes were dropped. The repo already uses Bun for the Web app, and the first request in this work was to "use bunx to run the embedded TypeScript wrapper". So the next person will reach for Bun, `npx`, or a bundle again. Each one was tried in the session that built PR #755 (merged), and each one failed or lost something.
 
@@ -54,8 +54,8 @@ What was tried and why it was dropped:
 
 Two related limits are already written down in the tree. Leave them alone unless you are fixing them on purpose:
 
-- **Binary written straight to stdout comes back garbled.** just-bash's `exec()` turns stdout into text, so after that `café` and raw bytes look alike. Binary that goes to files or through pipes keeps its exact bytes, because the wrapper hands host-command output to just-bash as bytes (`bytesOutput`). The session tried four workarounds, and none of them worked or kept text correct: a group redirect, `exec >file`, `ctx.exec()`, and guessing the encoding. Exact stdout bytes need an upstream change (`wrapper.ts:105-106`, README "Emulated shell").
-- **`Emulated` fails closed.** An empty `CustomShell` means host bash. So `shell: emulated` sets `Emulated: true`, and a code path that never received the wrapper fails ("shell command path is required", `internal/rocketclaw/harness/shell.go:167`) rather than quietly running on the host (`internal/rocketclaw/harness/rocketcode.go:37-50`).
+- **Binary written straight to stdout comes back garbled.** just-bash's `exec()` turns stdout into text, so after that `café` and raw bytes look alike. Binary that goes to files or through pipes keeps its exact bytes, because the wrapper hands host-command output to just-bash as bytes (`bytesOutput`). The session tried four workarounds, and none of them worked or kept text correct: a group redirect, `exec >file`, `ctx.exec()`, and guessing the encoding. Exact stdout bytes need an upstream change (`wrapper.ts:130-131`, README "Emulated shell").
+- **`Emulated` fails closed.** An empty `CustomShell` means host bash. So `shell: emulated`, and every easy agent, sets `Emulated: true`, and a code path that never received the wrapper fails ("shell command path is required", `internal/rocketclaw/harness/shell.go:148`) rather than quietly running on the host (`internal/rocketclaw/harness/rocketcode.go:37-39` and `withCustomShell` at `:55-58`).
 
 ## Why This Matters
 

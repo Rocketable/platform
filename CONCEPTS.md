@@ -121,10 +121,10 @@ A sandbox capability the Code Mode script can call directly, as opposed to a mod
 
 ### Emulated Shell
 
-An agent's opt-in shell mode in which its shell commands run in a bash emulator instead of host bash.
+An agent's opt-in shell mode, always on for an Easy Agent, in which its shell commands run in a bash emulator instead of host bash.
 *Avoid:* just-bash shell
 
-Each command runs in a fresh emulator process. Only the agent's declared working directory reaches the host disk; everything else, temporary files included, lives in memory and is gone when the command ends. The commands can start only the host programs the agent approves, and those programs see only the host's environment, never variables the emulated script set. Network access follows the agent's allowed targets. An agent that asked for the Emulated Shell but never received one has its shell commands fail rather than fall back to host bash.
+Each command runs in a fresh emulator process. Only the agent's declared working directory reaches the host disk, with an Easy Agent's uploads and skill folders read-only; everything else, temporary files included, lives in memory and is gone when the command ends. The commands can start only the host programs the agent approves, and those programs see only the host's environment, plus an Easy Agent's secrets, never variables the emulated script set. Network access follows the agent's allowed targets. An agent that asked for the Emulated Shell but never received one has its shell commands fail rather than fall back to host bash.
 
 ### Script Call Record
 
@@ -157,7 +157,15 @@ An automatic check, by a reviewer agent, of a tool call or a whole Execute scrip
 
 ### Task
 
-The model-facing tool through which an agent delegates a prompt to another agent type; the work runs as a Subagent Session, and its answer returns as the tool's result.
+The model-facing tool through which an agent delegates a prompt to another agent type, or an Easy Agent to itself on one of its subagent models; the work runs as a Subagent Session, and its answer returns as the tool's result. Another agent cannot Task an Easy Agent.
+
+### Easy Agent
+
+An agent whose file sets `mode: easy`. A section its file leaves out turns on everything in it, a section it writes turns on only what it lists, and everything on is reviewed by the agent's own approver. Its shell commands always run in the Emulated Shell, in its own folder, and it gets only the commands, secrets, MCP tools, skills, models, and Routines its file names.
+
+### Routine
+
+A schedule an Easy Agent declares in its own file, in place of a cron file, that runs the agent with the routine's instruction and reports as a cron job does. Its identity is its agent and schedule text, and its runs have no Shadow Sessions.
 
 ### Subagent Session
 
