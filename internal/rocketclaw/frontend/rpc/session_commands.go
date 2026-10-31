@@ -135,14 +135,12 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 		return nil, err
 	}
 
-	response := &SearchMessagesResponse{}
-
 	needle := strings.ToLower(strings.TrimSpace(request.Query))
 	if needle == "" {
-		return response, nil
+		return &SearchMessagesResponse{}, nil
 	}
 
-	found, err := s.sharedSearch(ctx, needle, messageSearch{needle: needle, response: response})
+	found, err := s.sharedSearch(ctx, needle, messageSearch{needle: needle})
 	if err != nil {
 		return nil, err
 	}
@@ -151,8 +149,7 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 }
 
 type messageSearch struct {
-	needle   string
-	response *SearchMessagesResponse
+	needle string
 }
 
 func (work messageSearch) search(scanCtx context.Context, s *Server) (any, error) {
@@ -161,10 +158,7 @@ func (work messageSearch) search(scanCtx context.Context, s *Server) (any, error
 		return nil, fmt.Errorf("web message search: %w", err)
 	}
 
-	work.response.Matches = messageMatches(hits)
-	work.response.TagIds = backend.MentionedIDs(hits, mentions)
-
-	return work.response, nil
+	return &SearchMessagesResponse{Matches: messageMatches(hits), TagIds: backend.MentionedIDs(hits, mentions)}, nil
 }
 
 func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequest) (*SearchSessionsResponse, error) {
