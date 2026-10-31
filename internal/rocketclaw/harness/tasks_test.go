@@ -32,13 +32,13 @@ func TestTaskPublicLifecycleKeepsChildContentPrivate(t *testing.T) {
 	l.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 	l.Tools = map[string]looperTool{"task": factory.taskTool()}
 
-	outputs, _, err := l.dispatchToolCalls(t.Context(), responseWithFunctionCalls("parent-response", []responses.ResponseFunctionToolCall{
+	outputs, err := l.dispatchToolCalls(t.Context(), responseWithFunctionCalls("parent-response", []responses.ResponseFunctionToolCall{
 		testFunctionCall("item-A", "A", "task", `{"subagent_type":"child","prompt":"do it","description":"PRIVATE_DESCRIPTION"}`),
 		testFunctionCall("item-B", "B", "task", `{"subagent_type":"child","prompt":"do it","description":"PRIVATE_DESCRIPTION"}`),
 	}), nil, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, outputs, 2)
-	require.Contains(t, outputs[0].Result.Output, "CHILD_PRIVATE_SENTINEL")
+	require.Contains(t, outputs[0].Param.Output.OfString.Value, "CHILD_PRIVATE_SENTINEL")
 
 	writes := sink.SaveTraceCalls()
 	progress := PublicProgressFromTrace(writes[len(writes)-1].Trace)
@@ -127,7 +127,7 @@ func TestTaskPublicLifecycleFailureAndCancellation(t *testing.T) {
 				go func() {
 					defer close(done)
 
-					outputs, _, err = l.dispatchToolCalls(ctx, responseWithFunctionCalls("response", []responses.ResponseFunctionToolCall{
+					outputs, err = l.dispatchToolCalls(ctx, responseWithFunctionCalls("response", []responses.ResponseFunctionToolCall{
 						testFunctionCall("child-item", "child-call", "task", `{"subagent_type":"child","prompt":"PRIVATE_PROMPT"}`),
 						testFunctionCall("fast-item", "fast", "fast", `{}`),
 					}), nil, nil, nil)
@@ -166,7 +166,7 @@ func TestTaskPublicLifecycleFailureAndCancellation(t *testing.T) {
 						require.ErrorIs(t, err, context.Canceled)
 					} else {
 						require.NoError(t, err)
-						require.Contains(t, outputs[0].Result.Output, "CHILD_FAILURE_PRIVATE_SENTINEL")
+						require.Contains(t, outputs[0].Param.Output.OfString.Value, "CHILD_FAILURE_PRIVATE_SENTINEL")
 					}
 				}
 

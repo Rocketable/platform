@@ -67,10 +67,10 @@ func TestTurnBoundToolRefusesDetachedWork(t *testing.T) {
 				loop := backgroundTestLooper(t, backgroundPermissions, jobs, func(context.Context) (ToolResult, error) { return TextToolResult("probed"), nil })
 				loop.CodeModeHosts["ask"] = ask
 
-				outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", executeToolName, fmt.Sprintf(args, tc.background))}), nil, nil, make(chan ChatResponse, 64))
+				outputs, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", executeToolName, fmt.Sprintf(args, tc.background))}), nil, nil, make(chan ChatResponse, 64))
 				require.NoError(t, err)
 
-				got := outputs[0].Result.Output
+				got := outputs[0].Param.Output.OfString.Value
 
 				if tc.move {
 					close(release)
