@@ -163,7 +163,7 @@ function tagSpan(text: string, needle: string | undefined, key?: number) {
 }
 
 function SlackTag({ id, sigil, needle }: { id: string; sigil: "@" | "#"; needle?: string }) {
-  const name = useQuery<string | undefined>(queries.slackName(id)).data;
+  const name = useQuery(queries.slackName(id)).data;
   return tagSpan(sigil + (name ?? id), needle);
 }
 
@@ -220,7 +220,7 @@ export function mentionIds(text: string): string[] {
 
 // useSlackNames maps the loaded names of ids; it keeps its result while ids and their names are unchanged.
 export function useSlackNames(ids: string[]): Record<string, string> {
-  const combine = useCallback((results: { data?: string }[]) => Object.fromEntries(ids.flatMap((id, index) => results[index].data ? [[id, results[index].data]] : [])), [ids]);
+  const combine = useCallback((results: { data?: string | null }[]) => Object.fromEntries(ids.flatMap((id, index) => results[index].data ? [[id, results[index].data]] : [])), [ids]);
   return useQueries({ queries: ids.map((id) => queries.slackName(id)), combine });
 }
 

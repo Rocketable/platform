@@ -122,8 +122,9 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
     expect(queries.slackName("U1")).toMatchObject({ queryKey: ["slackName", "U1"], retry: false });
     expect(queries.slackName("U1").staleTime({ state: { data: "alan" } })).toBe(8 * 60 * 60 * 1000);
     expect(queries.slackName("U1").staleTime({ state: { data: undefined } })).toBe(60_000);
+    expect(queries.slackName("U1").staleTime({ state: { data: null } })).toBe(60_000);
     responses.SlackNames = {};
-    expect(await queries.slackName("U2").queryFn({ signal })).toBeUndefined();
+    expect(await queries.slackName("U2").queryFn({ signal })).toBeNull();
     expect(await queries.queue({ id: "visible" }).queryFn({ signal })).toEqual([]);
     expect(await queries.cronJobs().queryFn({ signal })).toEqual([]);
     expect(await queries.config().queryFn({ signal })).toEqual({});

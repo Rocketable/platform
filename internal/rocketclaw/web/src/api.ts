@@ -84,7 +84,7 @@ export async function searchAll(servers: string[], input: object, signal: AbortS
 
 export const queries = {
   searchMessages: (query: string) => ({ queryKey: ["searchMessages", query], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<SearchMessagesResponse>("SearchMessages", { query }, signal)).matches }),
-  slackName: (id: string) => ({ queryKey: ["slackName", id], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<SlackNamesResponse>("SlackNames", { ids: [id] }, signal)).names?.[id], retry: false, staleTime: (query: { state: { data: string | undefined } }) => query.state.data ? 8 * 60 * 60 * 1000 : 60_000 }),
+  slackName: (id: string) => ({ queryKey: ["slackName", id], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<SlackNamesResponse>("SlackNames", { ids: [id] }, signal)).names?.[id] ?? null, retry: false, staleTime: (query: { state: { data: string | null | undefined } }) => query.state.data ? 8 * 60 * 60 * 1000 : 60_000 }),
   protocol: (name = server()) => ({ queryKey: [{ server: name }, "protocol"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ protoSha256: string }>("Protocol", {}, signal, name)).protoSha256 }),
   identity: (name = server()) => ({ queryKey: [{ server: name }, "identity"], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ username: string; principal?: string; justBashError?: string }>("Identity", {}, signal, name) }),
   agents: (input?: { conversationId: string }) => ({ queryKey: ["agents", input], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<AgentChoices>("ListAgents", input, signal) }),

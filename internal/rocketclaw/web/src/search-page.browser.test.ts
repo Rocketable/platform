@@ -67,6 +67,26 @@ function serve(rows: object[], search: (input: { query: string; filters?: boolea
   return { server, paths, tabs, origin: `http://127.0.0.1:${server.port}` };
 }
 
+test("missing Slack names keep their IDs and reuse the fresh lookup", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const { server, origin } = serve([{ id: "example", name: "<@UFAKE1>", preview: "needle" }], ({ query }) => response(query, [{ conversationId: "example", text: "needle <@UFAKE1>" }]));
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    let lookups = 0;
+    page.on("request", (request: { url(): string }) => { if (request.url().endsWith("/api/SlackNames")) lookups++; });
+    const lookup = page.waitForResponse((reply: { url(): string }) => reply.url().endsWith("/api/SlackNames"));
+    await page.goto(`${origin}/search?q=needle`);
+    await (await lookup).finished();
+    await page.locator('[aria-label="Search results"]').getByRole("link", { name: "@UFAKE1", exact: true }).waitFor();
+    await page.locator('[aria-label="Search results"]').getByText("needle @UFAKE1", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Search sessions and commands", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: /@UFAKE1/ }).waitFor();
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(lookups).toBe(1);
+  } finally { await browser.close(); server.stop(true); }
+}, 30_000);
+
 for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
   let owner = "alice";
