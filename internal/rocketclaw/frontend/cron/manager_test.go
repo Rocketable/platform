@@ -310,39 +310,6 @@ func TestLoadDefinitionsReportsDirectoryErrors(t *testing.T) {
 	}
 }
 
-func TestStartRejectsAlreadyStartedManager(t *testing.T) {
-	workspace := t.TempDir()
-
-	cronDir := filepath.Join(workspace, "cron")
-	if err := os.Mkdir(cronDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\n---\nBody"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	m := New(workspace, ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		t.Fatal("future duration cronjob ran during duplicate start test")
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
-
-	if err := m.Start(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := m.Start(t.Context()); err == nil || !strings.Contains(err.Error(), "cronjob manager already started") {
-		t.Fatalf("Start() error = %v; want already-started error", err)
-	}
-
-	stopCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	if err := m.Stop(stopCtx); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestOneOffCronjobRunsImmediatelyAndDeletesFile(t *testing.T) {
 	workspace := t.TempDir()
 

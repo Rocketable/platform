@@ -79,13 +79,6 @@ func ValidateRuntimeDefinitions(workspace, runtimeDir string) error {
 
 // Start loads cron definitions and starts scheduling them.
 func (m *Manager) Start(ctx context.Context) error {
-	m.mu.Lock()
-	if m.stop != nil {
-		m.mu.Unlock()
-		return errors.New("cronjob manager already started")
-	}
-	m.mu.Unlock()
-
 	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
 	if err != nil {
 		return err
@@ -104,11 +97,6 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	if m.stop != nil {
-		cancel()
-		return errors.New("cronjob manager already started")
-	}
 
 	m.stop = cancel
 
@@ -142,11 +130,6 @@ func (m *Manager) Start(ctx context.Context) error {
 // Stop shuts the cron manager down.
 func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.Lock()
-	if m.stop == nil {
-		m.mu.Unlock()
-		return nil
-	}
-
 	m.closed = true
 	stop := m.stop
 	m.mu.Unlock()
