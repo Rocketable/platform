@@ -63,11 +63,66 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await row.click();
   await page.waitForURL((url: URL) => url.pathname === chat);
 
+  // The remote chat goes on the Top Shelf, which names where it lives and keeps it after its tab closes.
+  const shelf = page.getByRole("tablist", { name: "Top Shelf" }), strip = page.getByRole("tablist", { name: "Open tabs" });
+  const chatTab = strip.locator('[data-tab^="/s/"]');
+  await chatTab.getByRole("button", { name: "Tab actions" }).click();
+  await page.getByRole("menuitem", { name: "Add to Top Shelf" }).click();
+  await shelf.getByText("work · Main").waitFor();
+  await chatTab.getByRole("button", { name: /^Close / }).click();
+  await chatTab.waitFor({ state: "detached" });
+  for (let saved = true; saved; await Bun.sleep(100)) {
+    saved = await page.evaluate(async (url: string) => (await (await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).state.tabs.some((tab: { path: string }) => tab.path.startsWith("/s/")), remote);
+  }
+  // From a local space it opens on the remote, in its space, without a tab.
+  await page.goto(`${local}/`);
+  await shelf.getByRole("tab").click();
+  await page.waitForURL((url: URL) => url.pathname === chat);
+  await page.locator("#transcript-scroll").getByText("Remote reply", { exact: true }).first().waitFor();
+  await shelf.getByRole("tab", { selected: true }).waitFor();
+  await page.getByRole("button", { name: "Space: work / Main" }).waitFor();
+  expect(await chatTab.count()).toBe(0);
+
+  // A shelved Search page opens without a tab too, also from a space other than Main, and its edits save into the shelf.
+  await page.evaluate(async () => { await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ createSpace: "Side" }) }); });
+  await page.goto(`${local}/`);
+  await page.getByRole("button", { name: "Space: Main" }).click();
+  await page.getByRole("menuitemradio", { name: "Side" }).click();
+  await page.getByRole("button", { name: "Space: Side" }).waitFor();
+  for (let entered = false; !entered; await Bun.sleep(100)) {
+    entered = await page.evaluate(async () => {
+      const view = await (await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
+      return view.spaces.some((space: { id: string; name: string }) => space.name === "Side" && space.id === view.state.space);
+    });
+  }
+  await page.goto(`${local}/search/shelved?q=Shelved`);
+  const searchTab = strip.locator('[data-tab="/search/shelved"]');
+  await searchTab.getByRole("button", { name: "Tab actions" }).click();
+  await page.getByRole("menuitem", { name: "Add to Top Shelf" }).click();
+  await shelf.getByText("Local · Side").waitFor();
+  await searchTab.getByRole("button", { name: /^Close / }).click();
+  await searchTab.waitFor({ state: "detached" });
+  await shelf.getByRole("tab", { name: "Shelved", exact: true }).click();
+  const query = page.getByRole("textbox", { name: "Search sessions" });
+  expect(await query.inputValue()).toBe("Shelved");
+  await query.fill("Shelved edit");
+  for (let saved = false; !saved; await Bun.sleep(100)) {
+    saved = await page.evaluate(async () => JSON.stringify((await (await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).topShelf).includes("Shelved edit"));
+  }
+  await page.reload();
+  await page.getByRole("textbox", { name: "Search sessions" }).waitFor();
+  expect(await page.getByRole("textbox", { name: "Search sessions" }).inputValue()).toBe("Shelved edit");
+  expect(await searchTab.count()).toBe(0);
+  // Removing a row takes it off the shelf.
+  await shelf.getByRole("tab", { name: "Shelved edit", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Remove from Top Shelf" }).click();
+  await shelf.getByRole("tab", { name: "Shelved edit", exact: true }).waitFor({ state: "detached" });
+
   // The space picker is a tree of servers; a remote's space opens on that server, whose settings it shows.
   // An empty space has no tab to open, so the tree must enter it on arrival.
   await page.goto(`${local}/`);
   await page.evaluate(async (url: string) => { await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ createSpace: "Billing" }) }); }, remote);
-  await page.getByRole("button", { name: "Space: Main" }).click();
+  await page.getByRole("button", { name: /^Space: / }).click();
   await page.getByRole("group", { name: "work" }).getByRole("menuitem", { name: "Billing" }).click();
   await page.getByRole("button", { name: "Space: work / Billing" }).waitFor();
   expect(new URL(page.url()).pathname).toStartWith("/r/work/");

@@ -37,7 +37,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
-import type { Agent, AgentChoices, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, TranscriptEvent, VoiceSettings } from "@/types";
+import type { Agent, AgentChoices, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, TopShelf, TranscriptEvent, VoiceSettings } from "@/types";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import type { MountOptions, Mounted } from "../../oc/host/api";
@@ -1011,7 +1011,7 @@ function savedTabs(owner?: string, saved?: Pick<SavedTabs, "spaces" | "state">):
   return { owner, tabs: arrange(tabs), active: "", groups, spaces, space: known(saved?.state.space) ? saved!.state.space : spaces[0].id, last: saved?.state.last ?? {}, sharedOrder: saved?.state.sharedOrder ?? [] };
 }
 
-// A space chosen on another server's branch of the space tree, which its first load enters.
+// A space chosen on another server's branch of the space tree, or a Top Shelf tab's, which its first load enters.
 let arriving = "";
 
 // The URL is the active tab, so a reload keeps it and any other URL not shared in the space opens as a permanent tab.
@@ -1031,7 +1031,37 @@ const savedState = (state: TabState): SavedTabs["state"] => ({
   space: state.space, last: state.last, sharedOrder: state.sharedOrder,
 });
 
-const noShared: SavedTabs["shared"] = [], noMutes: SavedTabs["mutes"] = [];
+const noShared: SavedTabs["shared"] = [], noMutes: SavedTabs["mutes"] = [], noShelf: TopShelf = {}, noRows: Session[] = [];
+type ShelfTab = NonNullable<TopShelf["tabs"]>[number];
+
+// This person's Top Shelf, kept by the local server, from the saved tabs its view or its session list fetches;
+// undefined until they arrive.
+function useTopShelf() {
+  const owner = useQuery(queries.identity("")).data?.username, saved = useQuery({ ...queries.tabs(owner ?? "", ""), enabled: false }).data;
+  return saved && (saved.topShelf ?? noShelf);
+}
+
+// A Top Shelf change saves the whole shelf to the local server, one save at a time in order, and the cache takes it at
+// once. Until the last save answers, changes build on the newest shelf, not on one a poll brought back meanwhile, and its
+// answer then replaces the cache. Before the shelf arrives nothing is saved, which would replace it.
+let shelving: { latest?: TopShelf; saves: Promise<unknown> } = { saves: Promise.resolve() };
+function saveShelf(change: (shelf: TopShelf) => TopShelf) {
+  const owner = queryClient.getQueryData<{ username: string }>(queries.identity("").queryKey)?.username, { queryKey } = queries.tabs(owner ?? "", "");
+  const saved = queryClient.getQueryData<SavedTabs>(queryKey);
+  if (owner === undefined || !saved) return;
+  const topShelf = shelving.latest = change(shelving.latest ?? saved.topShelf ?? noShelf);
+  void queryClient.cancelQueries({ queryKey });
+  queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, topShelf });
+  shelving.saves = shelving.saves.then(() => mutations.tabs({ topShelf }, "")).then((reply) => {
+    if (shelving.latest !== topShelf) return;
+    shelving = { saves: shelving.saves };
+    queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, topShelf: reply.topShelf });
+  }, () => {
+    shelving = { saves: Promise.resolve() };
+    void queryClient.invalidateQueries({ queryKey });
+  });
+}
+const unshelve = (tab: ShelfTab) => saveShelf((shelf) => ({ ...shelf, tabs: shelf.tabs?.filter((item) => (item.server ?? "") !== (tab.server ?? "") || item.path !== tab.path) }));
 const sharedTab = (shared: SavedTabs["shared"], space: string, path: string) => shared.find((tab) => tab.space === space && tab.path === path);
 const isShared = (shared: SavedTabs["shared"], space: string, path: string) => !!sharedTab(shared, space, path);
 // A tab's mute, or its snooze until it ends; the next Tabs reply drops an ended snooze.
@@ -1086,9 +1116,13 @@ function useTabs() {
   const identity = useQuery(queries.identity());
   const owner = identity.data?.username;
   const saved = useQuery({ ...queries.tabs(owner ?? "", name), enabled: owner !== undefined });
-  const shared = saved.data?.shared ?? noShared, mutes = saved.data?.mutes ?? noMutes;
+  const shared = saved.data?.shared ?? noShared, mutes = saved.data?.mutes ?? noMutes, shelf = useTopShelf();
   const pathname = usePathname() || "/";
   const [state, setState] = useState(() => loadTabs(pathname));
+  // This server's Top Shelf tabs open like Shared ones, without a tab; one of a deleted space opens in space. The spaces
+  // are the saved ones, which a first load has before this state does.
+  const shelved = useCallback((spaces: Space[], space: string) => (shelf?.tabs ?? []).flatMap((tab) => (tab.server ?? "") === name ? [{ ...tab, space: spaces.some((item) => item.id === tab.space) ? tab.space : space }] : []), [shelf, name]);
+  const reach = useMemo(() => [...shared, ...shelved(saved.data?.spaces ?? state.spaces, state.space)], [shared, shelved, saved.data?.spaces, state.spaces, state.space]);
   // This person's order puts the space's Shared tabs it names first; the rest follow, oldest added first.
   const rank = (path: string) => state.sharedOrder.indexOf(path) + 1 || Infinity;
   const here = shared.flatMap((tab) => tab.space === state.space ? [tab.path] : []).toSorted((a, b) => rank(a) - rank(b) || 0);
@@ -1096,10 +1130,10 @@ function useTabs() {
   // The tab whose notifications Pick date & time snoozes.
   const [snoozing, setSnoozing] = useState<string>();
   // base is the saved state this window last saved or took in, at revision; at stamps the read last taken in.
-  const sync = useRef<{ saving: boolean; dirty: boolean; next?: TabState; applied?: TabState; base?: SavedTabs["state"]; revision: number; at?: number; server: string }>({ saving: false, dirty: false, revision: 0, server: name });
+  const sync = useRef<{ saving: boolean; dirty: boolean; next?: TabState; applied?: TabState; base?: SavedTabs["state"]; revision: number; at?: number; server: string; shelf?: TopShelf }>({ saving: false, dirty: false, revision: 0, server: name });
   const spaceChange = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onSuccess: (view) => setState((current) => ({ ...current, spaces: view.spaces })), onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
   const sharing = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
-  if (state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname, shared));
+  if (state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname, reach));
   // A page link whose space segment was rewritten shows the rewritten path, once the owner's spaces are known.
   useEffect(() => {
     if (state.owner === undefined || state.active === pathname) return;
@@ -1118,18 +1152,20 @@ function useTabs() {
   // left as if this window deleted it.
   useEffect(() => {
     const queue = sync.current;
-    if (!saved.data || (state.owner === owner && queue.at === saved.dataUpdatedAt)) return;
-    queue.at = saved.dataUpdatedAt;
+    // A first load waits for the Top Shelf, so a shelved page it opens gets no tab.
+    // A changed shelf rechecks that the page shown is still reachable.
+    if (!saved.data || (state.owner === owner && queue.at === saved.dataUpdatedAt && queue.shelf === shelf) || (state.owner !== owner && rocketclaws().length > 0 && !shelf)) return;
+    [queue.at, queue.shelf] = [saved.dataUpdatedAt, shelf];
     const alive = saved.data.spaces.some((item) => item.id === state.space);
-    const base = queue.base, revision = Number(saved.data.revision), inShared = alive && isShared(shared, state.space, state.active);
+    const base = queue.base, revision = Number(saved.data.revision), inShared = alive && isShared(reach, state.space, state.active);
     // A first load saves the tab its URL added.
     if (state.owner !== owner) {
       [queue.base, queue.revision] = [saved.data.state, revision];
-      return setState(loadTabs(pathname, owner, saved.data, shared));
+      return setState(loadTabs(pathname, owner, saved.data, reach));
     }
     if (revision <= queue.revision) {
-      if (!alive) return setState(openTab(leave(state, state.space, saved.data.spaces), state.active, shared));
-      if (!inShared && !state.tabs.some((tab) => tab.path === state.active && tab.space === state.space)) navigate(entry(state, state.space, shared));
+      if (!alive) return setState(openTab(leave(state, state.space, saved.data.spaces), state.active, reach));
+      if (!inShared && !state.tabs.some((tab) => tab.path === state.active && tab.space === state.space)) navigate(entry(state, state.space, reach));
       return;
     }
     [queue.base, queue.revision] = [saved.data.state, revision];
@@ -1137,8 +1173,8 @@ function useTabs() {
     const merged = { ...next, tabs: next.tabs.map((tab) => ({ ...tab, unplaced: state.tabs.find((item) => item.path === tab.path)?.unplaced })), active: state.active, space: open?.space ?? (next.spaces.some((item) => item.id === state.space) ? state.space : next.spaces[0].id) };
     queue.applied = queue.dirty ? undefined : merged;
     setState(merged);
-    if (!open) navigate(entry(merged, merged.space, shared));
-  }, [saved.data, saved.dataUpdatedAt, owner, state, pathname, shared]);
+    if (!open) navigate(entry(merged, merged.space, reach));
+  }, [saved.data, saved.dataUpdatedAt, owner, state, pathname, reach, shelf]);
   // Each change saves the whole state, made from the saved revision, one save at a time, the newest waiting change next.
   // A failed save is not undone: the next change or reload saves it again. A save refused because another window saved
   // first answers with that newer state, which the reload above merges in and saves again.
@@ -1163,7 +1199,7 @@ function useTabs() {
     if (!queue.saving) flush();
   }, [state]);
   // Moving a tab makes it permanent and takes it out of its group; moving the active tab follows it to its new space.
-  const moveTo = (paths: Set<string>, space: string) => setState((current) => openTab({ ...current, tabs: current.tabs.map((tab) => paths.has(tab.path) ? { ...permanent(tab, space), group: undefined } : tab) }, current.active, shared));
+  const moveTo = (paths: Set<string>, space: string) => setState((current) => openTab({ ...current, tabs: current.tabs.map((tab) => paths.has(tab.path) ? { ...permanent(tab, space), group: undefined } : tab) }, current.active, reach));
   // An unplaced session moves to the space it was born in once its row names it; an unknown new space is fetched first.
   // A background window holds stale tabs, so it waits until it is focused and has reloaded.
   const settle = (rows: Session[]) => {
@@ -1196,8 +1232,8 @@ function useTabs() {
     navigate(target ?? (shown.slice(at + 1).find(kept) ?? shown.slice(0, at).findLast(kept))?.path ?? "/");
   };
   const enter = (id: string, spaces = state.spaces) => {
-    const path = entry(state, id, shared);
-    setState(openTab({ ...state, spaces, space: id }, path, shared));
+    const path = entry(state, id, reach);
+    setState(openTab({ ...state, spaces, space: id }, path, reach));
     if (path !== pathname) navigate(path);
   };
   const mute = (path: string, until: string) => sharing.mutate({ mute: { path, until } });
@@ -1210,10 +1246,10 @@ function useTabs() {
     if (theirs) saveShared(space, path, theirs, rebase(base, page, theirs));
   } });
   // The tab is opened with the navigation, in one render, so the URL never shows it as a preview first.
-  const open = (path: string, query = "", space?: string, list = shared, search?: SearchPageState) => flushSync(() => { setState((current) => openTab(space ? { ...current, space } : current, path, list, false, search)); navigate(path + query); });
+  const open = (path: string, query = "", space?: string, list = reach, search?: SearchPageState) => flushSync(() => { setState((current) => openTab(space ? { ...current, space } : current, path, list, false, search)); navigate(path + query); });
   const addSearch = (page: SearchPageState, inShared: boolean) => {
     const path = freshSearch(), id = (i: number) => `${path.slice("/search/".length)}-${i}`, search = { ...page, searches: page.searches.map((item, i) => ({ ...item, id: id(i) })), active: id(page.searches.findIndex((item) => item.id === page.active)) };
-    return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, reply.shared) }) : open(path, "", undefined, shared, search);
+    return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, reply.shared) }) : open(path, "", undefined, reach, search);
   };
   return {
     state, shown, groups, here, shared, mutes, pathname, close, enter, edit, editor, setEditor, settle, snoozing, setSnoozing, mute, open, addSearch, pending: spaceChange.isPending,
@@ -1228,14 +1264,14 @@ function useTabs() {
       while (taken.has(`space ${n}`)) n++;
       const spaces = (await spaceChange.mutateAsync({ createSpace: `Space ${n}` })).spaces, id = spaces.find((space) => space.name === `Space ${n}`)?.id;
       // A new space has no tabs, so entering it opens New session.
-      setState((current) => openTab({ ...current, spaces, space: id ?? current.space }, "/", shared));
+      setState((current) => openTab({ ...current, spaces, space: id ?? current.space }, "/", reach));
       navigate("/");
     },
     // A rejected name keeps the old one.
     renameSpace: (name: string) => spaceChange.mutate({ renameSpace: { id: state.space, name } }),
     deleteSpace: async () => {
       const doomed = state.space, reply = await spaceChange.mutateAsync({ deleteSpace: doomed });
-      setState((current) => openTab(leave(current, doomed, reply.spaces), current.active, reply.shared));
+      setState((current) => openTab(leave(current, doomed, reply.spaces), current.active, [...reply.shared, ...shelved(reply.spaces, reply.spaces[0].id)]));
     },
     promote: (path: string) => { if (state.tabs.some((tab) => tab.path === path && tab.preview)) update((tabs) => tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab)); },
     // Cmd/Ctrl+[ and ], and their palette commands, step through this space's Shared rows, then its tabs, each tab once,
@@ -1249,6 +1285,8 @@ function useTabs() {
     // shares, which the cache takes at once so the next change merges into it.
     editSearch: (path: string, change: Partial<SearchPageState>, inShared = false) => {
       const merge = <T extends { path: string; search?: SearchPageState }>(tab: T) => tab.path === path ? { ...tab, search: { searches: [], active: "", ...tab.search, ...change } } : tab;
+      // A Search page shown only from the Top Shelf saves into the shelf.
+      if (!inShared && !state.tabs.some((tab) => tab.path === path)) return saveShelf((current) => ({ ...current, tabs: current.tabs?.map((tab) => (tab.server ?? "") === name ? merge(tab) : tab) }));
       if (!inShared) return setState((current) => ({ ...current, tabs: current.tabs.map(merge) }));
       const next = shared.map((tab) => tab.space === state.space ? merge(tab) : tab);
       queryClient.setQueriesData<SavedTabs>({ queryKey: [{ server: name }, "tabs"] }, (old) => old && { ...old, shared: next });
@@ -1280,6 +1318,8 @@ function useTabs() {
         : path === "/" ? [] : [{ key: "share", label: "Add to Shared", run: () => sharing.mutate({ share: { space: state.space, path, search: tab?.search } }) }];
       const source = sharedTab(shared, state.space, path)?.search ?? tab?.search;
       const copy = isSearch(path) ? [{ key: "duplicate", label: "Duplicate", run: () => addSearch({ ...source!, name: `${searchTitle(source)} copy` }, here.includes(path)) }] : [];
+      const shelve = rocketclaws().length && shelf && path !== "/" && !shelf.tabs?.some((item) => (item.server ?? "") === name && item.path === path)
+        ? [{ key: "shelve", label: "Add to Top Shelf", run: () => saveShelf((current) => ({ ...current, tabs: [...current.tabs ?? [], { server: name, space: tab?.space ?? state.space, path, search: source }] })) }] : [];
       // Muting and snoozing are this person's, and only sessions notify. Snooze ends are reckoned when chosen, in local time.
       const nine = (days: number) => new Date().setHours(24 * days + 9, 0, 0, 0);
       const notify = !pathSession(path) ? [] : muteOf(mutes, path) ? [{ key: "notify-unmute", label: "Unmute notifications", run: () => sharing.mutate({ unmute: path }) }] : [
@@ -1289,13 +1329,13 @@ function useTabs() {
           .map(([key, label, sub, until]) => ({ key: `notify-${key}`, label: `Snooze notifications ${label}`, sub: { menu: "Snooze notifications", label: sub }, run: () => mute(path, new Date(until()).toISOString()) })),
         { key: "notify-pick", label: "Snooze notifications until a picked time…", sub: { menu: "Snooze notifications", label: "Pick date & time…" }, run: () => setSnoozing(path) },
       ];
-      if (!shown.some((item) => item.path === path)) return [...share, ...copy, ...notify];
+      if (!shown.some((item) => item.path === path)) return [...share, ...copy, ...shelve, ...notify];
       return [
         { key: "close", label: "Close", run: () => close([...paths]) },
         { key: "close-others", label: "Close others", run: () => close(shown.flatMap((tab) => tab.path === path ? [] : [tab.path]), path) },
         { key: "close-right", label: "Close to the right", run: () => close(shown.slice(shown.findIndex((tab) => tab.path === path) + 1).map((tab) => tab.path), path) },
         { key: "close-all", label: "Close all", run: () => close(shown.map((tab) => tab.path)) },
-        ...share, ...copy,
+        ...share, ...copy, ...shelve,
         ...notify,
         { key: "group-new", label: "Add to new group", sub: { menu: "Add to group", label: "New group" }, run: () => {
           const id = crypto.getRandomValues(new Uint32Array(2)).join("-");
@@ -1316,7 +1356,7 @@ function useTabs() {
       { key: "ungroup", label: "Ungroup", run: () => regroup((tab) => tab.group === id) },
       { key: "close", label: "Close group", run: () => close(state.tabs.flatMap((tab) => tab.group === id ? [tab.path] : [])) },
       // A group moves whole, keeping its name, color, and collapsed state; its tabs become permanent, and the active tab follows.
-      ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move group to "${space.name}"`, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? permanent(tab, space.id) : tab) }, state.active, shared)) })),
+      ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move group to "${space.name}"`, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? permanent(tab, space.id) : tab) }, state.active, reach)) })),
     ],
   };
 }
@@ -1341,12 +1381,13 @@ function TabSettling() {
 function TabNotifications() {
   const { all, servers } = useContext(Sidebar), { state, shared, mutes } = useContext(TabActions);
   const name = useServer();
-  const owner = useQuery(queries.identity("")).data?.username;
+  const owner = useQuery(queries.identity("")).data?.username, shelf = useTopShelf();
   const seen = useRef<{ owner?: string; unread: Map<string, string>; servers: Set<string> }>({ unread: new Map(), servers: new Set() });
-  // Each row is checked against its own server's open tabs and mutes: the live ones here, the saved ones elsewhere.
+  // Each row is checked against its own server's open tabs, Top Shelf tabs, and mutes: the live ones here, the saved ones
+  // elsewhere.
   const tabsOf = (row: Session) => {
-    const saved = servers[row.rocketclaw ?? ""]?.tabs, live = (row.rocketclaw ?? "") === name;
-    return { open: live ? [...state.tabs, ...shared] : [...saved?.state.tabs ?? [], ...saved?.shared ?? []], mutes: live ? mutes : saved?.mutes ?? [], active: live ? state.active : "" };
+    const saved = servers[row.rocketclaw ?? ""]?.tabs, live = (row.rocketclaw ?? "") === name, shelved = shelf?.tabs?.filter((tab) => (tab.server ?? "") === (row.rocketclaw ?? "")) ?? [];
+    return { open: [...live ? [...state.tabs, ...shared] : [...saved?.state.tabs ?? [], ...saved?.shared ?? []], ...shelved], mutes: live ? mutes : saved?.mutes ?? [], active: live ? state.active : "" };
   };
   useEffect(() => {
     // A server's rows count once it listed them all, and its first full listing raises nothing.
@@ -1408,7 +1449,7 @@ function useInSpace() {
   return (item: { space?: string }) => !item.space || item.space.toLowerCase() === name;
 }
 
-const arrows: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }, sharedDrag = "application/x-rocketclaw-shared";
+const arrows: Record<string, number> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }, sharedDrag = "application/x-rocketclaw-shared", shelfDrag = "application/x-rocketclaw-shelf";
 type MenuAnchor = Element | { getBoundingClientRect: () => DOMRect };
 const popupClass = "min-w-44 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none", itemClass = "flex cursor-default items-center rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent";
 
@@ -1442,13 +1483,13 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
 function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { path: string; shared?: boolean }, rows: Session[], targets: Set<string>, rename: () => void, remove: (id: string) => void) {
   const renaming = targets.size === 1 && (isSearch(menu.path) || (pathSession(menu.path) && !menu.shared)) ? [{ key: "rename", label: isSearch(menu.path) ? "Rename search" : "Rename session", run: rename }] : [];
   const remote = targets.size === 1 && !menu.shared ? rows.find((row) => row.id === pathSession(menu.path) && row.server) : undefined;
-  return [...renaming, ...menu.shared ? commands(menu.path, rows).filter(({ key }) => key === "unshare" || key === "duplicate" || key.startsWith("notify")) : commands(menu.path, rows, targets), ...remote ? [{ key: "delete", label: "Delete session", run: () => remove(remote.id) }] : []];
+  return [...renaming, ...menu.shared ? commands(menu.path, rows).filter(({ key }) => key === "unshare" || key === "duplicate" || key === "shelve" || key.startsWith("notify")) : commands(menu.path, rows, targets), ...remote ? [{ key: "delete", label: "Delete session", run: () => remove(remote.id) }] : []];
 }
 
 function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat: () => void }) {
   const { rows } = useContext(Sidebar);
   const { state, shown, groups, pathname, close, promote, move, moveGroup, commands, edit, editor, setEditor, groupCommands } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
-  const [menu, setMenu] = useState<{ path: string; anchor: MenuAnchor; shared?: boolean }>();
+  const [menu, setMenu] = useState<{ path: string; anchor: MenuAnchor; shared?: boolean; shelf?: ShelfTab }>();
   const [editing, setEditing] = useState<string>();
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   const list = useRef<HTMLDivElement>(null), refocus = useRef("");
@@ -1462,11 +1503,13 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
   // The menu of a selected tab acts on every selected tab; any other tab's menu acts on that tab alone.
   const targets = menu && !selection.has(menu.path) ? new Set([menu.path]) : selection;
   const { setCommand } = useContext(SessionCommands);
-  const items: ReturnType<typeof commands> = !menu ? [] : menuItems(commands, menu, rows, targets, () => setEditing(`${menu.shared ? "shared:" : ""}${menu.path}`), (id) => setCommand({ mode: "delete", source: id }));
+  const items: ReturnType<typeof commands> = !menu ? [] : menu.shelf ? [{ key: "unshelve", label: "Remove from Top Shelf", run: () => unshelve(menu.shelf!) }]
+    : menuItems(commands, menu, rows, targets, () => setEditing(`${menu.shared ? "shared:" : ""}${menu.path}`), (id) => setCommand({ mode: "delete", source: id }));
   // The active tab is the list's keyboard stop, else, while it shows only in Shared, the first rendered tab.
   const stop = shown.some((tab) => tab.path === pathname) ? pathname : shown.find((tab) => !groups.find((item) => item.id === tab.group)?.collapsed)?.path;
   const option = ({ key, label, run }: (typeof items)[number]) => <Menu.Item key={key} onClick={() => { refocus.current = key; run(); }} className={itemClass}>{label}</Menu.Item>;
   return <div data-tab-lists className="flex h-full shrink-0 flex-col">
+    {rocketclaws().length ? <TopShelfTabs tabs={tabs} openMenu={(tab, anchor) => setMenu({ path: tab.path, anchor, shelf: tab })} /> : null}
     <SpaceMenu tabs={tabs} name={space} />
     <SharedTabs tabs={tabs} space={space} editing={editing} endEdit={() => setEditing(undefined)} openMenu={(path, anchor) => setMenu({ path, anchor, shared: true })} />
     <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation="vertical" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1 [scrollbar-width:thin]"
@@ -1493,7 +1536,7 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
         const group = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group;
         event.dataTransfer.setData(group ? "application/x-rocketclaw-group" : "application/x-rocketclaw-tab", group ?? pathOf(event)!);
       }}
-      onDragOver={(event) => { if (!event.dataTransfer.types.includes(sharedDrag)) event.preventDefault(); }}
+      onDragOver={(event) => { if (!event.dataTransfer.types.some((type) => type === sharedDrag || type === shelfDrag)) event.preventDefault(); }}
       // A group header stands for its first tab, the only drop target a collapsed group shows.
       onDrop={(event) => {
         const header = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group, group = event.dataTransfer.getData("application/x-rocketclaw-group");
@@ -1596,6 +1639,72 @@ function SharedTabs({ tabs: { state, here, shared, pathname, promote, toggleShar
     </div>
     <div className="mx-2.5 mt-1 h-px shrink-0 bg-border" />
   </>;
+}
+
+// The Top Shelf holds this person's tabs from any RocketClaw above the space picker, the same in every space and on every
+// server. Each opens where it is, in its space, without a tab of its own, and names its server and space. Like a group,
+// tabs dragged onto it join it, its tabs reorder by dragging or Shift+Arrow, and collapsed it shows only its active tab,
+// bold while a hidden one is unread and saying it needs you while a hidden one's session waits on this person.
+// Its rows are found by position, as two servers can shelve the same path.
+function TopShelfTabs({ tabs, openMenu }: { tabs: ReturnType<typeof useTabs>; openMenu: (tab: ShelfTab, anchor: MenuAnchor) => void }) {
+  const shelf = useTopShelf() ?? noShelf, list = shelf.tabs ?? [], sidebar = useContext(Sidebar), here = useServer(), { state, pathname } = tabs, inert = () => undefined;
+  const active = (tab: ShelfTab) => (tab.server ?? "") === here && tab.path === pathname, rows = (tab: ShelfTab) => sidebar.servers[tab.server ?? ""]?.rows ?? noRows;
+  const hidden = shelf.collapsed ? list.filter((tab) => !active(tab)).flatMap((tab) => rows(tab).filter((row) => row.id === pathSession(tab.path))) : [];
+  const unread = hidden.some((row) => row.unreadAt), asking = hidden.some((row) => row.asking);
+  const whence = (tab: ShelfTab) => [tab.server || "Local", ((tab.server ?? "") === here ? state.spaces : sidebar.servers[tab.server ?? ""]?.tabs?.spaces)?.find((space) => space.id === tab.space)?.name].filter(Boolean).join(" · ");
+  const go = (tab: ShelfTab) => {
+    if ((tab.server ?? "") === here) return tabs.open(tab.path, "", state.spaces.some((space) => space.id === tab.space) ? tab.space : undefined);
+    arriving = tab.space;
+    navigate(tab.path, false, tab.server ?? "");
+  };
+  const move = (from: number, to: number) => saveShelf((current) => ({ ...current, tabs: moveQueueId(Object.keys(current.tabs ?? []), String(from), String(to)).map((at) => current.tabs![Number(at)]) }));
+  const at = (node: EventTarget) => Number((node as Element).closest<HTMLElement>("[data-shelf]")?.dataset.shelf ?? -1);
+  return <>
+    <div className="flex max-h-1/3 shrink-0 flex-col gap-0.5 overflow-y-auto px-1 pt-1 [scrollbar-width:thin]">
+      <div className="flex shrink-0 items-center">
+        <button type="button" aria-expanded={!shelf.collapsed} className="flex h-7 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => saveShelf((current) => ({ ...current, collapsed: !current.collapsed }))}>
+          <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium", groupColors.Yellow)}><Pin aria-hidden="true" className="size-3" />Top Shelf</span>
+        </button>
+        {asking ? needsYou : null}
+      </div>
+      <div role="tablist" aria-label="Top Shelf" aria-orientation="vertical" className="flex min-h-7 flex-col gap-0.5"
+        // A row opens on its own server, in place of the tab's own navigation on this page's server.
+        onClickCapture={(event) => {
+          if (!(event.target as Element).closest('[role="tab"]')) return;
+          event.stopPropagation();
+          go(list[at(event.target)]);
+        }}
+        onKeyDown={(event) => {
+          // Shift+Arrow moves to the neighbour, the nearest row holding the path it names.
+          const from = at(event.target), near = (path: string) => list.reduce((best, tab, i) => tab.path === path && i !== from && Math.abs(i - from) < Math.abs(best - from) ? i : best, -1);
+          if (event.key !== "Enter" && event.key !== " ") return tabKeys(event, pathname, (_, anchor) => openMenu(list[at(anchor as Element)], anchor), (_, to) => move(from, near(to)));
+          event.preventDefault();
+          (event.target as HTMLElement).click();
+        }}
+        onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
+        onAuxClick={(event) => { if (event.button === 1 && list[at(event.target)]) unshelve(list[at(event.target)]); }}
+        onDragStart={(event) => event.dataTransfer.setData(shelfDrag, String(at(event.target)))}
+        onDragOver={(event) => event.preventDefault()}
+        // A shelved tab dropped on another moves there; a tab of this server dropped here joins the shelf.
+        onDrop={(event) => {
+          const from = event.dataTransfer.getData(shelfDrag), path = event.dataTransfer.getData("application/x-rocketclaw-tab") || event.dataTransfer.getData(sharedDrag), to = at(event.target);
+          if (from) move(Number(from), to < 0 ? list.length - 1 : to);
+          else if (path) tabs.commands(path, sidebar.rows).find((item) => item.key === "shelve")?.run();
+        }}>
+        {list.map((tab, index) => shelf.collapsed && !active(tab) ? null : <div key={`${tab.server} ${tab.path}`} data-shelf={index}>
+          <ShelfRow tab={tab} rows={rows(tab)} description={`Top Shelf, ${whence(tab)}`} chosen={false} rule="Yellow" active={active(tab)} stop={active(tab) || (index === 0 && !list.some(active))} editing={false} endEdit={inert} promote={inert} close={() => unshelve(tab)} openMenu={(anchor) => openMenu(tab, anchor)} />
+          <p aria-hidden="true" className="-mt-1.5 truncate pb-1 pl-9 text-xs text-muted-foreground">{whence(tab)}</p>
+        </div>)}
+      </div>
+    </div>
+    <div className="mx-2.5 mt-1 h-px shrink-0 bg-border" />
+  </>;
+}
+
+// A Top Shelf row reads its own server's sessions, so its title and badges are that server's.
+function ShelfRow({ tab, rows, ...props }: { tab: ShelfTab; rows: Session[] } & Omit<ComponentProps<typeof TabItem>, "tab">) {
+  const sidebar = useContext(Sidebar), value = useMemo(() => ({ ...sidebar, rows }), [sidebar, rows]);
+  return <Sidebar.Provider value={value}><TabItem tab={{ path: tab.path, search: tab.search }} {...props} /></Sidebar.Provider>;
 }
 
 // The space button opens the space menu; renaming edits the name in place of the button, as Base UI's Menu takes printable keys.
@@ -2686,11 +2795,12 @@ function withQuery({ searches, active }: SavedSearches, query: string): SavedSea
 // page everyone there edits. A link's query opens once, in the page it led to; a page opened again in place, as when it
 // is shared, shows what it holds.
 function SearchPage() {
-  const { state, shared } = useContext(TabActions), path = usePathname(), inShared = sharedTab(shared, state.space, path);
+  const { state, shared } = useContext(TabActions), path = usePathname(), inShared = sharedTab(shared, state.space, path), here = useServer();
+  const shelved = useTopShelf()?.tabs?.find((tab) => (tab.server ?? "") === here && tab.path === path);
   const [pendingLink, setPendingLink] = useState({ path, search: location.search });
   if (pendingLink.path !== path) setPendingLink({ path, search: location.search });
   if (state.owner === undefined) return null;
-  return <SearchTabs key={`${state.owner} ${path} ${!!inShared}`} path={path} owner={state.owner} inShared={!!inShared} page={(inShared ?? state.tabs.find((tab) => tab.path === path))?.search} link={pendingLink.search}
+  return <SearchTabs key={`${state.owner} ${path} ${!!inShared}`} path={path} owner={state.owner} inShared={!!inShared} page={(inShared ?? state.tabs.find((tab) => tab.path === path) ?? shelved)?.search} link={pendingLink.search}
     consumeLink={() => setPendingLink((current) => current.search ? { path, search: "" } : current)} />;
 }
 

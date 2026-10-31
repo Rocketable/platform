@@ -652,7 +652,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{
 		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
-		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_mutes", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
+		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_mutes", "web_top_shelves", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
 	}, tables)
 }
 

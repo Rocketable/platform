@@ -410,6 +410,14 @@ live ones for the page's server, the saved ones for others. The space picker
 lists each server with its spaces, and choosing another server's space opens
 that server's view in that space.
 
+The Top Shelf is the person's own and lives on the local server, in the Tabs
+reply's `topShelf`; each change saves the whole shelf. A shelved tab names its
+server and space. Opening one on its own server works like a Shared tab: it
+shows the page in its space with no tab, and a shelved Search page edits the
+shelf's copy unless the person has a tab of it there. One on another server is
+opened by entering that server's view in the tab's space. With remotes, a first
+load waits for the shelf, so reloading a shelved page adds no tab.
+
 The local server's protocol change reloads the page. A remote that never
 answered shows why it is unavailable, one that stopped answering shows it is
 offline, and one on another protocol keeps working with a notice.

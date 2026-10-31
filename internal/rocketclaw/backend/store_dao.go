@@ -627,6 +627,26 @@ WHERE m.username = $1 AND (m.until IS NULL OR m.until > now()) ORDER BY m.conver
 	}, username)
 }
 
+// TopShelf returns username's Top Shelf as the Web saved it, nil when none is saved.
+func (s *SessionService) TopShelf(ctx context.Context, username string) ([]byte, error) {
+	var shelf []byte
+
+	err := queryScalar(ctx, s.db, "read top shelf", `SELECT shelf FROM web_top_shelves WHERE username = $1`, &shelf, username)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+
+	return shelf, err
+}
+
+// SaveTopShelf replaces username's Top Shelf with shelf, as the Web saves it.
+func (s *SessionService) SaveTopShelf(ctx context.Context, username string, shelf []byte) error {
+	_, err := execState(ctx, s.db, "save top shelf", `INSERT INTO web_top_shelves (username, shelf) VALUES ($1, $2::jsonb)
+ON CONFLICT (username) DO UPDATE SET shelf = excluded.shelf`, username, string(shelf))
+
+	return err
+}
+
 // ViewSession records that username has conversationID in view now, which clears their mark on it
 // and ends their view of every other session. A conversationID naming no conversation writes nothing.
 func (s *SessionService) ViewSession(ctx context.Context, username, conversationID string) error {

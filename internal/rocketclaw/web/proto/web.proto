@@ -750,6 +750,22 @@ message SharedTab {
   SearchPage base = 4;
 }
 
+// TopShelf is one person's Top Shelf: tabs of any RocketClaw kept above the space picker, in their order, and whether
+// they collapsed it.
+message TopShelf {
+  repeated ShelfTab tabs = 1;
+  bool collapsed = 2;
+}
+
+// ShelfTab is a tab on the Top Shelf: the RocketClaw it is on, "" for this one, its space id and location there, and
+// for a Search tab the page it held when shelved.
+message ShelfTab {
+  string server = 1;
+  string space = 2;
+  string path = 3;
+  SearchPage search = 4;
+}
+
 // TabMute is a session tab whose desktop notifications a person muted, by location. until is the
 // RFC 3339 time a snooze ends; empty mutes the tab until it is unmuted.
 message TabMute {
@@ -758,7 +774,8 @@ message TabMute {
 }
 
 // TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space,
-// adds one tab to or removes one from a space's Shared group, or mutes or unmutes one session tab for the caller.
+// adds one tab to or removes one from a space's Shared group, mutes or unmutes one session tab for the caller, or
+// replaces the caller's Top Shelf.
 // revision is the saved revision the state was made from.
 message TabsRequest {
   reserved 8;
@@ -775,13 +792,14 @@ message TabsRequest {
   string unmute = 10;
   // edit_shared saves a Shared Search page's one page; a page no longer shared stays unshared.
   SharedTab edit_shared = 11;
+  TopShelf top_shelf = 12;
 }
 
 // TabsResponse is every space, oldest first, and the caller's saved tab state and its revision.
 // stale reports a refused save: the state was made from an older revision than the one saved, or a Shared Search
 // page edit made from a page that has since changed.
 // shared is every space's Shared tabs, oldest added first. mutes is the caller's mutes and snoozes
-// that have not ended.
+// that have not ended. top_shelf is the caller's Top Shelf.
 message TabsResponse {
   repeated Space spaces = 1;
   TabState state = 2;
@@ -791,6 +809,7 @@ message TabsResponse {
   repeated TabMute mutes = 6;
   // unshared is the Search page a Search tab taken out of Shared held.
   SearchPage unshared = 7;
+  TopShelf top_shelf = 8;
 }
 
 // The first event answers the browser's SDP offer; the last ends the call.

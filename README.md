@@ -102,6 +102,7 @@ On each remote, list the local page's address in `trusted_rocketclaws`, exactly 
 Names use only `a-z`, `0-9`, and `-`, and each URL or trusted address is an `https` origin with no path. Changes take effect on restart.
 
 - The session list, Cmd/Ctrl+P, desktop notifications, and Search pages cover every server. Remote chats show their server's name.
+- The Top Shelf, above the space picker, holds tabs from any server and stays the same in every space and on every server. Add a tab from its menu or by dragging it there; clicking a shelved tab opens it on its server and space without opening another tab. Each shelved tab names its server and space.
 - The space picker lists each server, local first, with its spaces. A remote space opens that server's view under `/r/<name>/`: its tabs, agents, cron, skills, settings, pages, voice, and new chats. Opening a remote chat goes to its server too.
 - The browser calls each remote directly, and the remote signs you in with your own Tailscale login, so you act as yourself with that remote's agents and accounts.
 - A remote must serve its tsnet name over HTTPS, run a RocketClaw version with this feature, and trust the local page. Otherwise the page shows it as unavailable, with its address. A remote that stops answering keeps its chats listed, greyed out, until it answers again. A remote on another version keeps working with a notice, and some actions may fail.
