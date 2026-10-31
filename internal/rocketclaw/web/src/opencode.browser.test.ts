@@ -344,6 +344,21 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await page.locator("[data-oc-portal] button", { hasText: "Delete session" }).click();
     await until(async () => await tabs.getByRole("tab").count() === forkTabs - 1);
     expect(page.url()).not.toContain(encode("opencode:box:ses_fork_").slice(0, -2));
+
+    // RocketClaw's palette and the tab's menu delete the shown session on its server after asking; Cancel keeps it.
+    await page.goto(`${base}${route("opencode:box:ses_a")}`);
+    await view.getByText("answer in ses_a").waitFor();
+    const confirm = page.getByRole("dialog", { name: "Delete session", exact: true });
+    await command("Delete session");
+    await confirm.getByText('Delete session "Alpha work"?', { exact: true }).waitFor();
+    await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+    await confirm.waitFor({ state: "hidden" });
+    expect(fake.sessions.has("ses_a")).toBe(true);
+    await tabs.getByRole("button", { name: "Tab actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Delete session", exact: true }).click();
+    await confirm.getByRole("button", { name: "Cancel", exact: true }).and(page.locator(":focus")).waitFor();
+    await confirm.getByRole("button", { name: "Delete session", exact: true }).click();
+    await until(async () => !fake.sessions.has("ses_a") && !page.url().includes(route("opencode:box:ses_a")) && await tabs.getByRole("tab", { name: "Alpha work", exact: true }).count() === 0);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

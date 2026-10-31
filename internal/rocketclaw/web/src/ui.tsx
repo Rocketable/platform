@@ -60,7 +60,7 @@ const queryClient = new QueryClient({
   queryCache: new QueryCache({ onError: (error) => { captureException(error); } }),
   mutationCache: new MutationCache({ onError: (error) => { captureException(error); } }),
 });
-type SessionCommand = { mode: "fork" | "handoff" | "name" | "tag"; source: string; target?: MessageMatch };
+type SessionCommand = { mode: "fork" | "handoff" | "name" | "tag" | "delete"; source: string; target?: MessageMatch };
 const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
 
 function sessionPath(id: string) {
@@ -1438,10 +1438,11 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
 }
 
 // Sessions and Search pages can be renamed from their tab, and a Search page from its Shared row, which otherwise offers
-// only its Shared, Duplicate, and notification items.
-function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { path: string; shared?: boolean }, rows: Session[], targets: Set<string>, rename: () => void) {
+// only its Shared, Duplicate, and notification items. A remote OpenCode session's own tab can also delete it.
+function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { path: string; shared?: boolean }, rows: Session[], targets: Set<string>, rename: () => void, remove: (id: string) => void) {
   const renaming = targets.size === 1 && (isSearch(menu.path) || (pathSession(menu.path) && !menu.shared)) ? [{ key: "rename", label: isSearch(menu.path) ? "Rename search" : "Rename session", run: rename }] : [];
-  return [...renaming, ...menu.shared ? commands(menu.path, rows).filter(({ key }) => key === "unshare" || key === "duplicate" || key.startsWith("notify")) : commands(menu.path, rows, targets)];
+  const remote = targets.size === 1 && !menu.shared ? rows.find((row) => row.id === pathSession(menu.path) && row.server) : undefined;
+  return [...renaming, ...menu.shared ? commands(menu.path, rows).filter(({ key }) => key === "unshare" || key === "duplicate" || key.startsWith("notify")) : commands(menu.path, rows, targets), ...remote ? [{ key: "delete", label: "Delete session", run: () => remove(remote.id) }] : []];
 }
 
 function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat: () => void }) {
@@ -1460,7 +1461,8 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
   const selection = new Set(shown.flatMap((tab) => tab.path === pathname || (picked.at === pathname && picked.paths.has(tab.path)) ? [tab.path] : []));
   // The menu of a selected tab acts on every selected tab; any other tab's menu acts on that tab alone.
   const targets = menu && !selection.has(menu.path) ? new Set([menu.path]) : selection;
-  const items: ReturnType<typeof commands> = !menu ? [] : menuItems(commands, menu, rows, targets, () => setEditing(`${menu.shared ? "shared:" : ""}${menu.path}`));
+  const { setCommand } = useContext(SessionCommands);
+  const items: ReturnType<typeof commands> = !menu ? [] : menuItems(commands, menu, rows, targets, () => setEditing(`${menu.shared ? "shared:" : ""}${menu.path}`), (id) => setCommand({ mode: "delete", source: id }));
   // The active tab is the list's keyboard stop, else, while it shows only in Shared, the first rendered tab.
   const stop = shown.some((tab) => tab.path === pathname) ? pathname : shown.find((tab) => !groups.find((item) => item.id === tab.group)?.collapsed)?.path;
   const option = ({ key, label, run }: (typeof items)[number]) => <Menu.Item key={key} onClick={() => { refocus.current = key; run(); }} className={itemClass}>{label}</Menu.Item>;
@@ -1884,6 +1886,7 @@ function SnoozeDialog({ path }: { path: string }) {
 
 function SessionCommandDialog({ command, drafts, onDraftChange }: { command: SessionCommand; drafts: Map<string, ComposerDraft>; onDraftChange: () => void }) {
   if (command.mode === "name" || command.mode === "tag") return <NameSessionDialog id={command.source} tag={command.mode === "tag"} />;
+  if (command.mode === "delete") return <DeleteSessionDialog id={command.source} />;
   return command.mode === "fork" ? <ForkDialog source={command.source} drafts={drafts} onDraftChange={onDraftChange} /> : <HandoffDialog command={command} drafts={drafts} onDraftChange={onDraftChange} />;
 }
 
@@ -2581,7 +2584,7 @@ function useSessionActions(session: Session | undefined, onSuccess?: () => void)
     { key: "name", label: "Name session", run: () => setCommand({ mode: "name", source: id }) },
     { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
     ...choices.map((tag) => ({ key: `tag-${tag}`, label: `${tags.has(tag) ? "Remove" : "Add"} tag ${tag}`, keep: true, run: () => update.mutate({ id, tag }) })),
-    ...(session.server ? [{ key: "add-tag", label: "Add tag…", run: () => setCommand({ mode: "tag", source: id }) }, ...remoteActions(id, remote?.servers[session.server] ?? "", session.remoteSessionId ?? "")] : []),
+    ...(session.server ? [{ key: "add-tag", label: "Add tag…", run: () => setCommand({ mode: "tag", source: id }) }, { key: "delete", label: "Delete session", run: () => setCommand({ mode: "delete", source: id }) }, ...remoteActions(id, remote?.servers[session.server] ?? "", session.remoteSessionId ?? "")] : []),
   ].map((item) => ({ ...item, disabled: update.isPending })) : [];
   return { items, error: update.error };
 }
@@ -2618,6 +2621,32 @@ function NameSessionDialog({ id, tag = false }: { id: string; tag?: boolean }) {
           </form>
         </DialogContent>
     </Dialog>;
+}
+
+// Deletes a remote OpenCode session on its server, through the Web's /oc/<server>/api/ proxy, and closes its tab.
+function DeleteSessionDialog({ id }: { id: string }) {
+  const sidebar = useContext(Sidebar);
+  const tabs = useContext(TabActions);
+  const { setCommand } = useContext(SessionCommands);
+  const [session] = useState(() => sidebar.rows.find((row) => row.id === id)!);
+  const remove = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(`${serverURL()}/oc/${session.server}/api/session/${session.remoteSessionId}`, { method: "DELETE" });
+      if (!response.ok) throw new Error(`${session.server} did not delete the session (HTTP ${response.status}).`);
+    },
+    onSuccess: () => { tabs.close([rowPath(session)]); sidebar.invalidateQueries(); setCommand(undefined); },
+  });
+  return <Dialog open onOpenChange={(open) => { if (!open && !remove.isPending) setCommand(undefined); }}>
+    <DialogContent>
+      <DialogTitle>Delete session</DialogTitle>
+      <DialogDescription>Delete session "{sessionTitle(session)}"?</DialogDescription>
+      {remove.error ? <p role="alert" className="text-sm text-destructive">{remove.error.message}</p> : null}
+      <div className="mt-6 flex justify-end gap-2">
+        <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+        <Button disabled={remove.isPending} onClick={() => remove.mutate()}>{remove.isPending ? "Deleting…" : "Delete session"}</Button>
+      </div>
+    </DialogContent>
+  </Dialog>;
 }
 
 type SavedSearch = SearchPageState["searches"][number];

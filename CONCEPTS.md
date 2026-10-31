@@ -258,7 +258,7 @@ It holds its own searches, shown as tabs inside the page, and can be named; unna
 
 ### Remote OpenCode Session
 
-A session on a configured OpenCode coding server that RocketClaw keeps a synced copy of, so the Web lists, opens, creates, and forks it beside RocketClaw's own sessions; its agent runs on that server, not in the Harness.
+A session on a configured OpenCode coding server that RocketClaw keeps a synced copy of, so the Web lists, opens, creates, forks, and deletes it beside RocketClaw's own sessions; its agent runs on that server, not in the Harness.
 
 ### Dashboard
 
