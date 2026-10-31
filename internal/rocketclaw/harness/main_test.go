@@ -228,7 +228,7 @@ func TestNewBindsBashToEachAgentCustomShell(t *testing.T) {
 	agents := LoadAgents(fstest.MapFS{
 		"boxed.md": {Data: []byte("---\nmodel: gpt-5.4\nshell: " + shell + "\npermission: {bash: allow, task: allow}\n---\nBOXED")},
 		"plain.md": {Data: []byte("---\nmodel: gpt-5.4\npermission: {bash: allow, task: allow}\n---\nPLAIN")},
-	}, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
+	}, AgentLoadConfig{})
 	require.Empty(t, agents.Errors)
 
 	run := func(t *testing.T, tool looperTool) string {

@@ -1,6 +1,6 @@
 ---
 name: main-update-cron-or-heartbeat
-description: Mandatory skill for any request to create or modify cron/ (aka the heartbeat definition, aka the cronjob configuration)
+description: Mandatory skill for any request to create or modify cron/ (aka the heartbeat definition, aka the cronjob configuration) or an easy agent's routines
 ---
 ## Purpose
 
@@ -19,6 +19,24 @@ If the request touches cron behavior, cron content, or the `schedule:` frontmatt
 Only use this runtime path:
 
 - `cron`
+
+## Easy agents use routines
+
+Before writing a cron file, read its agent's `.rocketclaw/agents/<agent>.md`. If it has `mode: easy`, do not write a cron file: one whose `agent` is an easy agent fails startup and reload with `agent <agent> is an easy agent; schedule it with its routines`. Schedule it with `routines` in its own agent file instead, edited through `main-create-or-update-agent` (overlay in `agents/`, `rocketclaw lint`, then `rocketclaw_reload`). Advanced agents have no routines; schedule them with cron files.
+
+```yaml
+routines:
+  - "*/5 * * * *": "Check the campaign dashboard for anomalies."
+  - "30m"
+  - "2026-11-02T09:00:00Z": "Send the launch summary."
+```
+
+- Each entry is a schedule string, or a one-entry map from schedule to instruction.
+- A schedule uses the cron-file syntax below, one schedule per entry: 5-field cron, a Go duration, an `@daily`-style shortcut, or a one-off RFC 3339 time. `@every` fails loading.
+- An entry with an instruction sends it as the prompt; a bare entry sends `Scheduled run (<schedule>).` Runs report like cron runs, in the agent's `space`.
+- A routine is its agent plus its schedule text: editing the instruction keeps it, changing the schedule starts a new one, and the same schedule twice in one file fails loading.
+- A one-off time fires once and stays in the file; remove it when the human asks. A Run-button run does not count.
+- Only top-level agents' routines run; a shadow's own `routines` never run, and routine runs get no shadows.
 
 ## Heartbeat interval
 

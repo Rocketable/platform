@@ -50,30 +50,35 @@ func (s *SessionService) checkTopLevelSession(ctx context.Context, id string) (s
 	return agent, err
 }
 
-// startSubagent records the subagent session at key under conversation, run by agent, unless recorded. A
-// continue, unlike a new subagent, needs a session saved before: recorded, or a Delegation History older
-// than subagent sessions.
-func (s *SessionService) startSubagent(ctx context.Context, conversation string, key harness.ChildKey, agent string, isNew bool) error {
-	conversationID, parent := conversation+key.Path, conversation+key.Parent
+// startSubagent records the subagent session write.Key names under conversation, run by write.Agent on
+// write.Model with write.Tools, which a continue changes. A continue, unlike a new subagent, needs a session
+// saved before: recorded, or a Delegation History older than subagent sessions.
+func (s *SessionService) startSubagent(ctx context.Context, conversation string, write *harness.SubagentWrite) error {
+	conversationID, parent, isNew := conversation+write.Key.Path, conversation+write.Key.Parent, write.Mode == ""
+
+	tools := "" // NULL: every tool of the agent.
+
+	if write.Tools != nil {
+		encoded, _ := json.Marshal(write.Tools)
+		tools = string(encoded)
+	}
 
 	started, err := execRows(ctx, s.db, "start subagent session", "count started subagent session", `WITH saved AS (
     SELECT count(*) AS entries FROM entries WHERE conversation_id = $1
+), recorded AS (
+    SELECT count(*) AS sessions FROM conversations WHERE conversation_id = $1 AND retention = 'record'
 ), parent AS (
     SELECT max(slack_channel) AS slack_channel FROM conversations WHERE conversation_id = $2
 )
-INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, slack_channel, call_turn, call_id)
-SELECT $1, $3, '', $2, $5, FALSE, p.slack_channel, $6, $7 FROM saved, parent p WHERE $4 OR entries > 0
-ON CONFLICT (conversation_id) DO UPDATE SET agent = excluded.agent, kind = excluded.kind, retention = 'record' WHERE conversations.retention <> 'record'`,
-		conversationID, parent, agent, isNew, KindSubagent, key.Turn, key.Call)
+INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, slack_channel, call_turn, call_id, subagent_model, subagent_tools)
+SELECT $1, $3, '', $2, $5, FALSE, p.slack_channel, $6, $7, NULLIF($8, ''), NULLIF($9, '')::jsonb FROM saved, recorded, parent p WHERE $4 OR entries > 0 OR sessions > 0
+ON CONFLICT (conversation_id) DO UPDATE SET agent = excluded.agent, kind = excluded.kind, retention = 'record', subagent_model = excluded.subagent_model, subagent_tools = excluded.subagent_tools`,
+		conversationID, parent, write.Agent, isNew, KindSubagent, write.Key.Turn, write.Key.Call, write.Model, tools)
 	if err != nil || started > 0 || isNew {
 		return err
 	}
 
-	if _, recorded, err := s.Thread(conversationID); err != nil || recorded {
-		return err
-	}
-
-	return fmt.Errorf("continue ID %q has no saved subagent history in this conversation", key.Path)
+	return fmt.Errorf("continue ID %q has no saved subagent history in this conversation", write.Key.Path)
 }
 
 // subagentLineage returns the top-level session the subagent session conversationID belongs to, the turn
@@ -128,31 +133,34 @@ func (s *SessionService) checkSessionTarget(ctx context.Context, owner, syncDest
 	return agent, nil
 }
 
+// agentTagGroups reads agent's tag groups: an easy agent's tags, or an advanced agent's rocketclaw_set_tag list.
 func agentTagGroups(agent *harness.Agent) ([][]string, error) {
-	permission, _ := agent.Frontmatter["permission"].(map[string]any)
-	rocketclaw, _ := permission["rocketclaw"].(map[string]any)
+	groups := agent.TagGroups
+	if agent.Mode != harness.AgentModeEasy {
+		permission, _ := agent.Frontmatter["permission"].(map[string]any)
+		rocketclaw, _ := permission["rocketclaw"].(map[string]any)
 
-	raw, present := rocketclaw[setTagToolName]
-	if !present {
-		return nil, nil
-	}
+		raw, present := rocketclaw[setTagToolName]
+		if !present {
+			return nil, nil
+		}
 
-	if _, scalar := raw.(string); scalar {
-		return nil, nil
-	}
+		if _, scalar := raw.(string); scalar {
+			return nil, nil
+		}
 
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("encode tag permissions: %w", err)
-	}
+		data, err := json.Marshal(raw)
+		if err != nil {
+			return nil, fmt.Errorf("encode tag permissions: %w", err)
+		}
 
-	var groups [][]string
-	if err := json.Unmarshal(data, &groups); err != nil {
-		return nil, fmt.Errorf("decode tag groups: %w", err)
-	}
+		if err := json.Unmarshal(data, &groups); err != nil {
+			return nil, fmt.Errorf("decode tag groups: %w", err)
+		}
 
-	if groups == nil {
-		return nil, errors.New("tags must be a list of tag lists")
+		if groups == nil {
+			return nil, errors.New("tags must be a list of tag lists")
+		}
 	}
 
 	var names []string
@@ -176,8 +184,12 @@ func agentTagGroups(agent *harness.Agent) ([][]string, error) {
 
 // agentRecipients reads agent's rocketclaw_sessions_recipient: whether every agent may write into its
 // sessions and, when not, the agents that may. Absent means every agent, or none for a sudo agent;
-// false means none.
+// false means none. An easy agent's delegatedFrom says the same.
 func agentRecipients(agent *harness.Agent) (all bool, names []string, err error) {
+	if agent.Mode == harness.AgentModeEasy {
+		return agent.DelegatedFrom == nil, agent.DelegatedFrom, nil
+	}
+
 	permission, _ := agent.Frontmatter["permission"].(map[string]any)
 	rocketclaw, _ := permission["rocketclaw"].(map[string]any)
 
@@ -208,14 +220,19 @@ func agentRecipients(agent *harness.Agent) (all bool, names []string, err error)
 }
 
 // checkRecipient refuses a write by agent sender into a session of agent target unless target's
-// rocketclaw_sessions_recipient accepts sender.
+// rocketclaw_sessions_recipient, or an easy target's delegatedFrom, accepts sender.
 func checkRecipient(agents harness.Agents, target, sender string) error {
 	definition := agents.Items[target]
 	if all, names, _ := agentRecipients(&definition); all || slices.Contains(names, sender) {
 		return nil
 	}
 
-	return fmt.Errorf("agent %q does not accept writes from agent %q (permission.rocketclaw.%s)", target, sender, recipientSetting)
+	setting := "permission.rocketclaw." + recipientSetting
+	if definition.Mode == harness.AgentModeEasy {
+		setting = "delegatedFrom"
+	}
+
+	return fmt.Errorf("agent %q does not accept writes from agent %q (%s)", target, sender, setting)
 }
 
 func appendSessionTagPrompt(agent *harness.Agent, groups [][]string) {
@@ -783,7 +800,7 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 			"Only stop takes an empty prompt: it then just stops the turn and goal, queues nothing, and posts that this session stopped it into that session's transcript without starting a turn. " +
 			"The receiver is told this session and agent sent it and that its answer comes back here. Each call that returns a queue_item_id gets exactly one reply: when the target's turn that took prompt ends, or, for an empty-prompt stop, once the stopped turn is over, a <session_reply> note naming that queue_item_id arrives here with the outcome and that turn's final answer. A steer's answer covers the whole turn it joined. " +
 			"DO NOT wait, sleep, poll, or write again to get the reply: work on anything that does not depend on it, or end your response; you will be resumed when it arrives. " +
-			"Every call, including create and stop, fails before doing anything when the target agent's permission.rocketclaw." + recipientSetting + " does not accept this agent. " +
+			"Every call, including create and stop, fails before doing anything when the target agent's permission.rocketclaw." + recipientSetting + ", or an easy target's delegatedFrom, does not accept this agent. " +
 			"Returns JSON with outcome (created, steered, queued or stopped), session_id, url, queue_item_id (absent only for an empty-prompt stop when no turn was running, which gets no reply) and, for stop, turn_was_running. Share url so a person can open the session.",
 		Parameters: map[string]any{"properties": properties, "required": slices.Sorted(maps.Keys(properties))},
 		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {

@@ -959,7 +959,7 @@ func TestSessionEntries(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	configPath := filepath.Join(t.TempDir(), "rocketclaw.json")
 	require.NoError(t, os.WriteFile(configPath, []byte(`{"database_url":"postgres://localhost/rocketclaw_test", "openai":{"api_key":"test"}, "slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}}`), 0o600))
-	cfg, err := config.Load(configPath, "", config.AWSFetcher{})
+	cfg, err := config.Load(configPath, "", &config.AWSFetcher{})
 	require.NoError(t, err)
 
 	cfg.Workspace = t.TempDir()
@@ -1130,7 +1130,7 @@ func TestSessionEntries(t *testing.T) {
 
 		return protocol.CronRunResult{ConversationID: progress.SyncDestination}, nil
 	}}
-	cronjobs := cronfrontend.New(cfg.Workspace, cfg.RuntimeDirName(), sessions, cronRunner, slog.New(slog.DiscardHandler))
+	cronjobs := cronfrontend.New(config.NewLockedConfig(cfg), cfg.RuntimeDirName(), sessions, cronRunner, slog.New(slog.DiscardHandler))
 	require.NoError(t, cronjobs.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, cronjobs.Stop(context.Background())) })
 
@@ -2003,7 +2003,6 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 
 	emptyConfig, err := invoke[ListConfigResponse](ctx, connection, "ListConfig", &ListConfigRequest{})
 	require.NoError(t, err)
-	require.Empty(t, emptyConfig.Config.Models)
 	require.Empty(t, emptyConfig.Config.Overlays)
 	require.Empty(t, emptyConfig.Config.McpServers)
 
@@ -2013,7 +2012,6 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	}
 
 	cfg.Overlays = []string{"local-overlay"}
-	cfg.Models = map[string]string{"zeta": "gpt-6.1-sol", "alpha": "gpt-5.4"}
 	cfg.Logging.Level, cfg.AutoApproverModel = "info", "gpt-6.1-sol"
 	cfg.MCPExternal.Enabled, cfg.Instrumentation.Enabled = true, true
 	cfg.OpenAI.APIKey, cfg.OpenAI.Auth = "secret-provider-key", "secret-auth-path"
@@ -2029,7 +2027,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	view, err := invoke[ListConfigResponse](ctx, connection, "ListConfig", &ListConfigRequest{})
 	require.NoError(t, err)
 
-	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, Models: []*ConfigModel{{Name: "alpha", Model: "gpt-5.4"}, {Name: "zeta", Model: "gpt-6.1-sol"}}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-6.1-sol", InstrumentationEnabled: true, McpExternal: true, TailscaleUser: "alice"}
+	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-6.1-sol", InstrumentationEnabled: true, McpExternal: true, TailscaleUser: "alice"}
 	require.True(t, proto.Equal(wantConfig, view.Config), "unexpected config view: %v", view.Config)
 	encodedView, err := proto.Marshal(view)
 	require.NoError(t, err)
@@ -2401,11 +2399,11 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 
 	require.Equal(t, []string{"Billing", "Ops"}, []string{jobs.Jobs[0].GetSpace(), jobs.Jobs[1].GetSpace()}, "alpha inherits planner's space; zeta names its own")
 
-	// Cron spaces fall back to agent spaces, so agent definition failures fail the listing.
+	// Agents hold routines and the spaces cron files fall back to, so agent definition failures fail the listing.
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md"), []byte("---\nmodel: [\n---\nHelp."), 0o600))
 
 	_, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
-	require.ErrorContains(t, err, "load web cron agents")
+	require.ErrorContains(t, err, "list web cron jobs: load agents: broken.md")
 	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md")))
 
 	// Seed the exact persisted relation written by Sync, without changing Sync.
@@ -3440,6 +3438,50 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.Equal(t, codes.NotFound, status.Code(stream.RecvMsg(&Attachment{})))
 	})
 
+	// An easy agent's chat keeps its uploads where reload keeps them and its file view shows them, by host path.
+	t.Run("easy chat uploads", func(t *testing.T) {
+		const conversation = "web:easy-attachments"
+
+		agentPath := filepath.Join(cfg.RuntimeDirName(), "agents", "easy.md")
+		require.NoError(t, root.WriteFile(agentPath, []byte("---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\n---\nHelp."), 0o600))
+		t.Cleanup(func() { require.NoError(t, root.Remove(agentPath)) })
+		require.NoError(t, sessions.UpsertThread(conversation, backend.ThreadState{Agent: "easy"}))
+
+		previousRunTurn := core.RunTurnFunc
+		core.RunTurnFunc = func(_ context.Context, inbound *protocol.InboundMessage) error {
+			turns = append(turns, inbound)
+			return nil
+		}
+
+		defer func() { core.RunTurnFunc = previousRunTurn }()
+
+		upload, err := connection.NewStream(ctx, &grpc.StreamDesc{ClientStreams: true}, "/rpc.Web/UploadAttachment")
+		require.NoError(t, err)
+		require.NoError(t, upload.SendMsg(&Attachment{ConversationId: conversation, Name: "notes.txt", Data: []byte("easy notes")}))
+		require.NoError(t, upload.CloseSend())
+
+		file := &Attachment{}
+		require.NoError(t, upload.RecvMsg(file))
+
+		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: conversation, Text: "read it", AttachmentIds: []string{file.Id}})
+		require.NoError(t, err)
+
+		path := filepath.Join(cfg.RuntimeDirName(), "uploads", "web:easy-attachments", file.Id, "notes.txt")
+		require.Equal(t, fmt.Sprintf("read it\n\nattachment:%s \"notes.txt\" (path %q)", file.Id, filepath.Join(cfg.Workspace, path)), turns[len(turns)-1].Text)
+
+		data, err := root.ReadFile(path)
+		require.NoError(t, err)
+		require.Equal(t, "easy notes", string(data))
+
+		_, err = root.Stat(filepath.Join("artifacts", "uploads", file.Id))
+		require.ErrorIs(t, err, os.ErrNotExist, "the workspace holds no copy")
+
+		shown, files, err := sessions.InputAttachments(ctx, conversation, turns[len(turns)-1].Text)
+		require.NoError(t, err)
+		require.Equal(t, "read it", shown, "the reference is stripped")
+		require.Len(t, files, 1)
+	})
+
 	t.Run("fork search and rejoin an ordinary session", func(t *testing.T) {
 		const (
 			source = "handoff-source"
@@ -3871,6 +3913,49 @@ func TestContinueCronRun(t *testing.T) {
 			require.JSONEq(t, `{"type":"message","role":"user","content":"follow-up"}`, string(agent[1].Entry.ReplayInput[0]))
 		})
 	}
+}
+
+// An easy agent's routine is its own Cron job, named "<agent> · <schedule>", with its runs, and Run starts it.
+func TestRoutineCronJobs(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	root, err := os.OpenRoot(cfg.Workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "marketing.md"), []byte("---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\nroutines: [30m]\n---\nHelp."), 0o600))
+
+	ran := make(chan string, 1)
+	runner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+		ran <- agent + "|" + progress.Run.Path + "|" + progress.SyncDestination + "|" + prompt
+		return protocol.CronRunResult{}, nil
+	}}
+	locked := config.NewLockedConfig(cfg)
+	core := withoutBackgroundJobs()
+	rt := &backend.Runtime{Sessions: sessions}
+	core.CreateConversationFunc = rt.CreateConversation
+	server := &Server{backend: core, sessions: sessions, cfg: locked, cronjobs: cronfrontend.New(locked, cfg.RuntimeDirName(), sessions, runner, slog.New(slog.DiscardHandler))}
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1", "rocketclaw-tailnet-login-bin", "alice", "rocketclaw-tailnet-name-bin", "Alice"))
+
+	run := "cron:agents/marketing.md#30m:20260905T010000.000000001Z:first"
+	require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "marketing", CreatedBy: "cron", Run: &protocol.CronRun{Path: "agents/marketing.md#30m", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}}))
+	_, err = sessions.AppendEntryID(ctx, run, &harness.SessionEntry{Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"report"}`)}})
+	require.NoError(t, err)
+
+	jobs, err := server.listCronJobs(ctx)
+	require.NoError(t, err)
+	require.Len(t, jobs.Jobs, 2)
+	require.True(t, proto.Equal(&CronJob{Stem: "marketing · 30m", Schedule: "30m", Body: "Scheduled run (30m).", Agent: "marketing", Origin: "agents/marketing.md#30m", Space: "Ops"}, jobs.Jobs[0]), "unexpected job: %v", jobs.Jobs[0])
+	require.True(t, proto.Equal(&CronJob{Stem: "marketing · 30m", Status: "ran", LastRun: "2026-09-05T01:00:00.000000001Z", Origin: run}, jobs.Jobs[1]), "unexpected run: %v", jobs.Jobs[1])
+
+	started, err := server.runCronJob(ctx, &RunCronJobRequest{Stem: "marketing · 30m"})
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(<-ran, "marketing|agents/marketing.md#30m|"+started.Id+"|Scheduled run (30m).\n\n"), "the run sends the routine's message and the cron reply instruction")
 }
 
 // withoutBackgroundJobs is a backend with no Background Jobs, nothing to move, and no pending questions.

@@ -176,7 +176,7 @@ func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
 func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*agentInfo, []Finding, error) {
 	agentsRoot := filepath.Join(runtimeRoot, "agents")
 
-	agentLoad := harness.LoadAgents(os.DirFS(agentsRoot), cfg)
+	agentLoad := harness.LoadAgents(os.DirFS(agentsRoot), harness.AgentLoadConfig{MCPToolGroups: cfg.MCPToolGroups(), Providers: cfg.ProviderNames(), Skills: os.DirFS(filepath.Join(runtimeRoot, "skills"))})
 	if len(agentLoad.Errors) > 0 {
 		return nil, nil, fmt.Errorf("load agents: %w", agentLoad.Errors[0])
 	}
@@ -272,9 +272,19 @@ func parseNoLint(comment string) (string, bool) {
 	return code, afterCode != ""
 }
 
-// lintCustomShellEdits reports edit grants that could rewrite a sandboxed agent's wrapper or agent file.
+// lintCustomShellEdits reports edit grants, and easy agents' working directories, that could rewrite a
+// sandboxed agent's wrapper or agent file.
 func lintCustomShellEdits(infos map[string]*agentInfo, workspace string, writes []capability) []Finding {
 	findings := []Finding{}
+
+	// An easy agent writes its workingDirectory, relative to RocketClaw's working directory. Turn variables are
+	// unset here, so the folder is the widest one the turns may name.
+	for name, info := range infos {
+		folder, err := filepath.Abs(os.ExpandEnv(info.agent.WorkingDirectory))
+		if rel, errRel := filepath.Rel(workspace, folder); info.agent.Mode == harness.AgentModeEasy && err == nil && errRel == nil && filepath.IsLocal(rel) {
+			writes = append(writes, capability{agent: name, file: info.filePath, bucket: "workingDirectory", pattern: filepath.ToSlash(rel)})
+		}
+	}
 
 	for _, write := range writes {
 		for name, info := range infos {
@@ -323,7 +333,8 @@ func taskEdges(infos map[string]*agentInfo) map[string][]string {
 	for _, from := range names {
 		info := infos[from]
 		for _, to := range names {
-			if action, _ := info.agent.Permission.Evaluate("task", to); action == harness.PermissionAllow {
+			// task never runs an easy agent, and an easy agent's task runs the agent itself on another model.
+			if action, _ := info.agent.Permission.Evaluate("task", to); action == harness.PermissionAllow && info.agent.Mode != harness.AgentModeEasy && infos[to].agent.Mode != harness.AgentModeEasy {
 				edges[from] = append(edges[from], to)
 			}
 		}

@@ -119,11 +119,9 @@ func (InertBackgroundJobs) Run(ctx context.Context, _ *BackgroundJob, work Backg
 }
 
 type backgroundParams struct {
-	Background   bool         `json:"background"`
-	Description  string       `json:"description"`
-	Continue     taskContinue `json:"continue"`
-	Prompt       string       `json:"prompt"`
-	SubagentType string       `json:"subagent_type"`
+	Background  bool         `json:"background"`
+	Description string       `json:"description"`
+	Continue    taskContinue `json:"continue"`
 }
 
 // taskContinue is task's continue parameter; an empty SessionID starts a new subagent.
@@ -267,13 +265,21 @@ func (f *toolFactory) backgroundTool(agent *Agent, kind BackgroundKind, tool *lo
 				subagent = "/" + name
 				key := ChildKey{Path: subagent, Turn: metadata.observations.turnID, Call: metadata.callID}.under(f.childKey.Path)
 
-				// The named type takes the subagent over (OpenCode packages/core/src/tool/plugin/subagent.ts).
-				child, ok := f.agents.Items[params.SubagentType]
-				if !ok {
-					return ToolResult{}, fmt.Errorf(unknownAgentType, params.SubagentType)
+				// The named type, or an easy agent's model and tools, takes the subagent over (OpenCode
+				// packages/core/src/tool/plugin/subagent.ts).
+				var task taskParams
+				if err := decodeToolParams(raw, &task); err != nil {
+					return ToolResult{}, err
 				}
 
-				steered, err := f.childSessions.WriteSubagent(ctx, &SubagentWrite{Key: key, CallKey: job.ID, Agent: child.Name, Delegator: agent.Name, Prompt: params.Prompt, Mode: params.Continue.Mode})
+				write, err := f.subagentWrite(ctx, &task)
+				if err != nil {
+					return ToolResult{}, err
+				}
+
+				write.Key, write.CallKey, write.Mode = key, job.ID, params.Continue.Mode
+
+				steered, err := f.childSessions.WriteSubagent(ctx, &write)
 				if err != nil {
 					return ToolResult{}, fmt.Errorf("write subagent: %w", err)
 				}

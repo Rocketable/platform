@@ -96,7 +96,7 @@ func TestShadowsRealBackendBrowser(t *testing.T) {
 	for name, model := range map[string]string{"main": "gpt-parent", "main/a": "gpt-shadow-a", "main/b": "gpt-shadow-b"} {
 		file := filepath.Join("agents", name+".md")
 		require.NoError(t, root.MkdirAll(filepath.Dir(file), 0o700))
-		require.NoError(t, root.WriteFile(file, fmt.Appendf(nil, "---\ndescription: Live shadow fixture\nmode: primary\nmodel: %s\npermission: {}\n---\nReply as %s.\n", model, name), 0o600))
+		require.NoError(t, root.WriteFile(file, fmt.Appendf(nil, "---\ndescription: Live shadow fixture\nmodel: %s\npermission: {}\n---\nReply as %s.\n", model, name), 0o600))
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())

@@ -152,7 +152,7 @@ func TestWebTurnQuestionContinuesAfterRestart(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	service := newTestSessionServiceAt(t, workspace)
 

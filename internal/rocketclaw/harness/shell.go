@@ -92,7 +92,7 @@ func shellEnvList(shellEnv map[string]string) ([]string, error) {
 	return env, nil
 }
 
-func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell CustomShell, params bashParams) BashResult {
+func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomShell, params bashParams) BashResult {
 	sss.mu.Lock()
 	defer sss.mu.Unlock()
 
@@ -110,43 +110,24 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell CustomShe
 	}
 
 	hostDir := sss.root.Name()
-	cleanup := func() {}
 
-	if params.Workdir != "" {
-		workdir := params.Workdir
-
-		var err error
-
-		params.Workdir, err = normalizeRootName(sss.root, workdir)
+	switch {
+	case customShell.Dir != "" && filepath.IsAbs(params.Workdir):
+		hostDir = params.Workdir
+	case customShell.Dir != "":
+		hostDir = filepath.Join(customShell.Dir, params.Workdir)
+	case params.Workdir != "":
+		root, err := sss.workdirRoot(params.Workdir)
 		if err != nil {
-			return bashFailure(fmt.Errorf("resolve workdir %q: %w", workdir, err).Error())
+			return bashFailure(err.Error())
 		}
 
-		if isExecuteSpillPath(sss.root, sss.spillRel, params.Workdir) {
-			return bashFailure(deniedSpillAccess)
-		}
-
-		info, err := sss.root.Stat(params.Workdir)
-		if err != nil {
-			return bashFailure(fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error())
-		}
-
-		if !info.IsDir() {
-			return bashFailure(fmt.Errorf("resolve workdir %q: not a directory", params.Workdir).Error())
-		}
-
-		root, err := sss.root.OpenRoot(params.Workdir)
-		if err != nil {
-			return bashFailure(fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error())
-		}
+		defer func() { _ = root.Close() }()
 
 		hostDir = root.Name()
-		cleanup = func() { _ = root.Close() }
 	}
 
-	defer cleanup()
-
-	if denied := sss.deniedBashPath(params.Command, hostDir); denied != "" {
+	if denied := sss.deniedBashPath(params.Command, hostDir); customShell.Dir == "" && denied != "" {
 		return bashFailure(denied)
 	}
 
@@ -253,6 +234,34 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell CustomShe
 		ErrorCode: errorCode,
 		Success:   err == nil && !timedOut,
 	}
+}
+
+// workdirRoot opens workdir, a directory in the workspace outside the spill directory.
+func (sss *sandboxedShellSystem) workdirRoot(workdir string) (*os.Root, error) {
+	name, err := normalizeRootName(sss.root, workdir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workdir %q: %w", workdir, err)
+	}
+
+	if isExecuteSpillPath(sss.root, sss.spillRel, name) {
+		return nil, errors.New(deniedSpillAccess)
+	}
+
+	info, err := sss.root.Stat(name)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workdir %q: %w", name, err)
+	}
+
+	if !info.IsDir() {
+		return nil, fmt.Errorf("resolve workdir %q: not a directory", name)
+	}
+
+	root, err := sss.root.OpenRoot(name)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workdir %q: %w", name, err)
+	}
+
+	return root, nil
 }
 
 func bashFailure(message string) BashResult {

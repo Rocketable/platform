@@ -49,6 +49,14 @@ packages:
       runLockWork:
         config:
           structname: runLockWorkMock
+  github.com/Rocketable/platform/internal/rocketclaw/config:
+    interfaces:
+      SecretFetcher:
+        config:
+          dir: '{{.ConfigDir}}/internal/rocketclaw/backend'
+          pkgname: backend
+          structname: secretFetcherMock
+          inpackage: false
   github.com/Rocketable/platform/internal/rocketclaw/frontend:
     interfaces:
       Backend:
@@ -137,9 +145,6 @@ packages:
       shellCommander:
         config:
           structname: mockShellCommander
-      agentModelRenderer:
-        config:
-          structname: mockAgentModelRenderer
       SteerDrain:
         config:
           structname: mockSteerDrain

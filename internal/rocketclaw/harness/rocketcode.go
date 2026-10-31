@@ -37,13 +37,22 @@ type CustomShell struct {
 	// Emulated means the agent asked for the embedding application's emulated shell (shell: emulated).
 	// The embedder fills in Path and Setup; until it does, the agent's shell commands do not run.
 	Emulated bool
+	// Dir, when set, is the folder the program confines commands to. A bash call runs there, or in its
+	// workdir taken from there, and skips the workspace path check: the program does the confining.
+	Dir string
+	// ReadOnly are folders, none inside another, the program shows read-only at their host paths besides Dir.
+	// An easy agent's file tools see Dir and these, as its shell does.
+	ReadOnly []string
+	// Secrets are environment variables only host programs get: the program's host commands, through Setup,
+	// and an easy agent's prompt and skill expansion in host bash.
+	Secrets map[string]string
 }
 
 // withCustomShell runs command with an agent's customShell, or through shell when the agent declares
 // none. stdin is what the program reads, empty unless customShell has a Setup; env is its environment.
 // An emulated customShell without a Path returns an empty path, so the command fails instead of running
 // under bash.
-func withCustomShell(shell shellCommander, customShell CustomShell, command string, env []string) (path string, args []string, stdin []byte) {
+func withCustomShell(shell shellCommander, customShell *CustomShell, command string, env []string) (path string, args []string, stdin []byte) {
 	if customShell.Path == "" {
 		if customShell.Emulated {
 			return "", nil, nil
@@ -102,6 +111,9 @@ type Config struct {
 	ShellEnv               map[string]string
 	// ChildContext supplies host messages to permission reviewers.
 	ChildContext []SessionEntry
+	// OriginHeader is the embedder's trusted statement of who started the turn, which permission
+	// reviewers read ahead of the untrusted transcript.
+	OriginHeader string
 	// ShellCommand builds the executable used for bash tool (and prompt !`…`)
 	// commands. Required; pass DefaultShellCommand{} to match permission validation.
 	// Custom implementations must preserve the validated Bash syntax and semantics.
@@ -146,6 +158,10 @@ type SubagentWrite struct {
 	Agent, Delegator, Prompt string
 	// Mode is a continue's mode; empty for a new subagent.
 	Mode ContinueMode
+	// Model, an entry of Agent.Subagents as written, and Tools (Agent.Tools) are what an easy agent's
+	// subagent session, which runs that agent, runs with; an agent type's leaves them empty.
+	Model string
+	Tools []string
 }
 
 // InertChildSessions discards child session entries and runs no subagents.
@@ -258,7 +274,7 @@ func (c *shellTempConfig) effectivePermissions(permissions PermissionSet) Permis
 	)
 	buckets = append(buckets, permissions.Buckets...)
 
-	return PermissionSet{Buckets: buckets, Sudo: permissions.Sudo, skillRead: permissions.skillRead}
+	return PermissionSet{Buckets: buckets, Sudo: permissions.Sudo, Easy: permissions.Easy, skillRead: permissions.skillRead}
 }
 
 // NewWithProviders loads the supplied runtime dependencies and returns a configured looper.
@@ -440,6 +456,7 @@ func NewWithModelResolver(
 		baseTools:                  baseTools,
 		shellSystem:                shellSystem,
 		childContext:               config.ChildContext,
+		originHeader:               config.OriginHeader,
 		shellTemp:                  shellTemp,
 		spillRel:                   spillRel,
 		retainedRel:                filepath.Join(spillRel, config.RetainedResultDir),

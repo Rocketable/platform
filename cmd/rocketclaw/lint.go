@@ -31,6 +31,14 @@ func runLint(args []string) error {
 		return err
 	}
 
+	// Startup's own cron check covers routines and cron files. It reads runtimeRoot as a workspace's runtime directory.
+	assets := *cfg
+	assets.Workspace = filepath.Dir(runtimeRoot)
+
+	if err := (processAssembler{}).ValidateAssets(&assets, cfg.RuntimeDirName()); err != nil {
+		return err
+	}
+
 	if len(result.Findings) == 0 {
 		return printStdout(fmt.Sprintf("rocketclaw lint %s: OK\n", target), "lint result")
 	}

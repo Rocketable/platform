@@ -28,7 +28,7 @@ Use for docs.
 `)},
 	}
 
-	agentResult := LoadAgents(agentsFS, &mockAgentModelRenderer{RenderAgentModelFunc: func(model string) (string, error) { return model, nil }})
+	agentResult := LoadAgents(agentsFS, AgentLoadConfig{})
 	skillResult := LoadSkills(skillsFS, "/virtual/skills")
 	agents, skills := agentResult.Agents, skillResult.Skills
 

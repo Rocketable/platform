@@ -12,7 +12,7 @@ import (
 )
 
 func (processAssembler) ValidateAssets(cfg *config.Config, runtimeDir string) error {
-	if err := cronfrontend.ValidateRuntimeDefinitions(cfg.Workspace, runtimeDir); err != nil {
+	if err := cronfrontend.ValidateRuntimeDefinitions(config.NewLockedConfig(cfg), runtimeDir); err != nil {
 		return fmt.Errorf("validate cron definitions: %w", err)
 	}
 	return nil

@@ -32,7 +32,7 @@ func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T)
 		return nil
 	})
 	content := &protocol.InboundContent{Text: "prompt"}
-	metadata := map[string]string{"ticket": "123", protocol.InboundPrincipalNameMetadataKey: "Mallory", protocol.InboundPrincipalEmailMetadataKey: "mallory@example.com"}
+	metadata := map[string]string{"ticket": "123", protocol.InboundPrincipalNameMetadataKey: "Mallory", protocol.InboundPrincipalEmailMetadataKey: "mallory@example.com", protocol.InboundSenderAgentMetadataKey: "main"}
 	result, accepted, err := submitExternalMCPInput(context.Background(), turns, "planner", "external_mcp:planner:private", "managed-chat", content, metadata, "alice", "public-1")
 
 	require.NoError(t, err)
@@ -44,6 +44,7 @@ func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T)
 	assert.Equal(t, "alice", captured.Metadata[protocol.InboundPrincipalMetadataKey])
 	assert.NotContains(t, captured.Metadata, protocol.InboundPrincipalNameMetadataKey, "an External MCP caller cannot name a person")
 	assert.NotContains(t, captured.Metadata, protocol.InboundPrincipalEmailMetadataKey)
+	assert.NotContains(t, captured.Metadata, protocol.InboundSenderAgentMetadataKey, "nor the agent a permission review names")
 	assert.Equal(t, "external_mcp:planner:private", captured.ConversationID)
 	assert.Equal(t, "managed-chat", captured.SyncDestination, "the private run reports to its Web chat")
 	assert.Nil(t, captured.SlackReply, "External MCP never replies in Slack")

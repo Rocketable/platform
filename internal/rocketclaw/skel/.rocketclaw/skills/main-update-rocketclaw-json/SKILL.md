@@ -105,9 +105,13 @@ When the human asks for a config change in plain English:
 - preserve the correct JSON type
 - if the target path or intended type is ambiguous, ask a clarifying question before writing
 
-The top-level `models` object maps arbitrary placeholder names to deployment model names. Agent frontmatter uses a mapping as `model: '{{ model "name" }}'`.
-
 Slack uses direct `slack.channels` mappings. Each mapping requires `channel`, a non-empty ordered `agents` list, and non-empty `allowed_user_ids`. An `@` row is a hail fallback, not a Slack channel. Slack only answers mentions: cron and External MCP never post there. One External MCP conversation ID remains bound to one private MCP session and one Web chat. MCP history shows in that chat, but chat history does not copy back.
+
+An easy agent's `mcp: {<server>: [read]}` or `[read, write]` needs that group in `mcp_servers.<server>.tools`: `tools.read` and `tools.write` are lists of tool-name patterns without the server prefix, such as `"get_*"`. Keep the groups disjoint: the same pattern in both, or a pattern in one matching an entry of the other, fails config loading (`tools.read "…" and tools.write "…" match the same tool`); a tool in neither group is reachable only through `auto`. A group an easy agent names that is empty or missing fails agent loading (`mcp: server "<server>" has no "<group>" tool group`). For example:
+
+```bash
+tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --argjson r '["get_*","list_*"]' --argjson w '["create_*"]' '.mcp_servers.demo.tools = {read: $r, write: $w}' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
+```
 
 Use `jq` operations for arrays and object updates instead of rewriting large sections by hand.
 

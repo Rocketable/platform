@@ -166,6 +166,10 @@ type InboundMessage struct {
 	RequireOutputDecision bool
 	// Cronjob identifies the cron job that produced the message; nil for other messages.
 	Cronjob *CronjobMessage
+	// OriginHeader, set on a follow-on message such as a scheduled message, a goal continuation or a
+	// background wake, is the trusted origin header of the turn that created it, which permission
+	// reviews of its turn read instead of one rendered from Source and Metadata.
+	OriginHeader string
 
 	responseInit, responseOnce sync.Once
 	responseCh                 chan InboundResponse

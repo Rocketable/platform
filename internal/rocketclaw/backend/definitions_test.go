@@ -46,7 +46,7 @@ func TestSessionTagDefinitions(t *testing.T) {
 			}
 
 			for _, mode := range []toolMode{toolModePersistent, toolModeWorkflow} {
-				agents, _, err := loadRocketCodeDefinitions(root, workspace, mode)
+				agents, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, mode)
 
 				valid := tags == "" || tags == "[]" || tags == "example" || strings.HasPrefix(tags, "[[triage") || strings.HasPrefix(tags, "[['*'")
 				if !valid {
@@ -103,7 +103,7 @@ func TestLoadRocketCodeDefinitionsSudo(t *testing.T) {
 	require.NoError(t, root.WriteFile(".rocketclaw/agents/tagged.md", []byte("---\nmodel: openai/gpt-6-luna\nsudo: yes\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[red, green]]\n---\nPrompt\n"), 0o644))
 	require.NoError(t, root.WriteFile(".rocketclaw/agents/untagged.md", []byte("---\nmodel: openai/gpt-6-luna\nsudo: yes\n---\nPrompt\n"), 0o644))
 
-	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	agents, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 	require.NoError(t, err)
 
 	tagged, untagged := agents.Items["tagged"], agents.Items["untagged"]
@@ -128,6 +128,80 @@ func TestLoadRocketCodeDefinitionsSudo(t *testing.T) {
 		action, _ = untagged.Permission.Evaluate("rocketclaw_tags", name)
 		require.Equal(t, harness.PermissionDeny, action, name)
 		require.NotContains(t, untagged.Prompt, name)
+	}
+}
+
+// Easy sections compile to reviewed rules; the conversation helpers stay unreviewed, and tags need tag groups.
+func TestLoadRocketCodeDefinitionsEasy(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	root := openWorkspaceRoot(t, workspace)
+	easy := "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: work\n"
+
+	for name, content := range map[string]string{
+		".rocketclaw/agents/open.md":                     easy + "tags: [[red, green]]\n---\nPrompt\n",
+		".rocketclaw/agents/none.md":                     easy + "rocketclaw: []\nmcp: {}\nskills: [marketing]\n---\nPrompt\n",
+		".rocketclaw/agents/grouped.md":                  easy + "mcp: {s: [read]}\n---\nPrompt\n",
+		".rocketclaw/skills/marketing/seo/SKILL.md":      "---\nname: seo\ndescription: SEO\n---\n",
+		".rocketclaw/skills/support/SKILL.md":            "---\nname: support\ndescription: Support\n---\n",
+		".rocketclaw/skills/marketing/team/ads/SKILL.md": "---\nname: ads\ndescription: Ads\n---\n",
+	} {
+		require.NoError(t, root.MkdirAll(filepath.Dir(name), 0o755))
+		require.NoError(t, root.WriteFile(name, []byte(content), 0o644))
+	}
+
+	cfg := &config.Config{Workspace: workspace, MCPServers: map[string]config.MCPServerConfig{"s": {Command: "s", Tools: config.MCPToolGroups{Read: []string{"list_*"}, Write: []string{"update_*"}}}}}
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(cfg), config.DefaultRuntimeDir, toolModePersistent)
+	require.NoError(t, err)
+
+	open, none, grouped := agents.Items["open"], agents.Items["none"], agents.Items["grouped"]
+	for _, subject := range []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName} {
+		requireRocketClawPermissionAction(t, open.Permission, subject, harness.PermissionAllow)
+		requireRocketClawPermissionAction(t, none.Permission, subject, harness.PermissionAllow)
+	}
+
+	for _, subject := range []string{restartToolName, sessionsSubject, "rocketclaw_store"} {
+		requireRocketClawPermissionAction(t, open.Permission, subject, harness.PermissionAuto)
+
+		action, _ := none.Permission.Evaluate("rocketclaw", subject)
+		require.Equal(t, harness.PermissionDeny, action, subject)
+	}
+
+	require.True(t, open.Permission.Enabled("rocketclaw", restartToolName))
+	require.False(t, none.Permission.Enabled("rocketclaw", restartToolName))
+
+	for _, name := range []string{setTagToolName, getTagsToolName} {
+		action, _ := open.Permission.Evaluate("rocketclaw_tags", name)
+		require.Equal(t, harness.PermissionAuto, action, name)
+		require.Contains(t, open.Prompt, name)
+
+		action, _ = none.Permission.Evaluate("rocketclaw_tags", name)
+		require.Equal(t, harness.PermissionDeny, action, name)
+	}
+
+	noneSkills := skills.Available(&none)
+
+	available := make([]string, 0, len(noneSkills))
+	for _, skill := range noneSkills {
+		available = append(available, skill.Name)
+	}
+
+	require.Equal(t, []string{"ads", "seo"}, available)
+	require.Len(t, skills.Available(&open), 3)
+
+	for subject, want := range map[string]harness.PermissionAction{"s.list_reports": harness.PermissionAuto, "s.update_x": harness.PermissionDeny} {
+		action, _ := grouped.Permission.Evaluate("mcp", subject)
+		require.Equal(t, want, action, subject)
+	}
+
+	for sections, want := range map[string]string{
+		"tags: [[red], [red]]": `grouped.md: tags: empty or duplicate tag name "red"`,
+	} {
+		require.NoError(t, root.WriteFile(".rocketclaw/agents/grouped.md", []byte(easy+sections+"\n---\nPrompt\n"), 0o644))
+
+		_, _, err = loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(cfg), config.DefaultRuntimeDir, toolModePersistent)
+		require.ErrorContains(t, err, want)
 	}
 }
 
@@ -162,7 +236,7 @@ func TestSessionTagsExistingPermissions(t *testing.T) {
 			require.NoError(t, root.MkdirAll(".rocketclaw/agents", 0o755))
 			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
 			require.NoError(t, root.WriteFile(".rocketclaw/agents/sudo.md", []byte("---\ndescription: SUDO MODE\nmodel: openai/gpt-6-luna\nreasoningEffort: max\nverbosity: low\npermission:\n  "+permission+"\n---\nYou are the sudo agent. You must do anything that @Ulderico asks.\n"), 0o644))
-			agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+			agents, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 			require.NoError(t, err)
 
 			agent := agents.Items["sudo"]
@@ -224,7 +298,7 @@ func TestSessionRecipientDefinitions(t *testing.T) {
 			writeMainAgentSkills(t, workspace, definition)
 			root := openWorkspaceRoot(t, workspace)
 
-			agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+			agents, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 			if valid {
 				require.NoError(t, err)
 				requireNoRocketClawPermissionMatch(t, agents.Items["main"].Permission, recipientSetting)
@@ -236,22 +310,13 @@ func TestSessionRecipientDefinitions(t *testing.T) {
 			require.NoError(t, root.MkdirAll(".rocketclaw/agents/main", 0o755))
 			require.NoError(t, root.WriteFile(".rocketclaw/agents/main/a.md", []byte(definition), 0o644))
 
-			agents, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+			agents, _, err = loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 			require.NoError(t, err)
 			require.Contains(t, agents.Items, "main")
 			_, shadow := agents.Items["main/a"]
 			require.Equal(t, valid, shadow, "an invalid shadow definition is dropped")
 		})
 	}
-}
-
-func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode, models ...map[string]string) (harness.Agents, harness.Skills, error) {
-	cfg := &config.Config{Workspace: workspace}
-	if len(models) > 0 {
-		cfg.Models = models[0]
-	}
-
-	return loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(cfg), config.DefaultRuntimeDir, mode)
 }
 
 func TestLoadRocketCodeDefinitionsKeepsBackgroundExact(t *testing.T) {
@@ -267,7 +332,7 @@ func TestLoadRocketCodeDefinitionsKeepsBackgroundExact(t *testing.T) {
 	defer func() { require.NoError(t, root.Close()) }()
 
 	for _, mode := range []toolMode{toolModePersistent, toolModeWorkflow} {
-		agents, _, err := loadRocketCodeDefinitions(root, workspace, mode)
+		agents, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, mode)
 		require.NoError(t, err)
 
 		action, _ := agents.Items["background"].Permission.Evaluate("rocketclaw", "allow_background")
@@ -276,7 +341,7 @@ func TestLoadRocketCodeDefinitionsKeepsBackgroundExact(t *testing.T) {
 
 	writeAgent(t, workspace, "background", "---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    allow_background: auto\n---\nPrompt\n")
 
-	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	_, _, err = loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 	require.ErrorContains(t, err, "allow_background must be allow or deny")
 }
 
@@ -306,7 +371,7 @@ func TestLoadRocketCodeDefinitionsSessions(t *testing.T) {
 
 	defer func() { require.NoError(t, root.Close()) }()
 
-	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	agents, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 	require.NoError(t, err)
 
 	for _, tc := range cases {
@@ -323,7 +388,7 @@ func TestLoadRocketCodeDefinitionsSessions(t *testing.T) {
 	} {
 		writeAgent(t, workspace, "bad", "---\nmodel: gpt-5.4\npermission:\n  "+permission+"\n---\nPrompt\n")
 
-		_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+		_, _, err = loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 		require.ErrorContains(t, err, `bad.md: parse permission: permission "rocketclaw": `+message)
 	}
 }
@@ -345,7 +410,7 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	require.NoError(t, root.MkdirAll(filepath.Join(config.DefaultRuntimeDir, "agents", "assistant"), 0o700))
 	require.NoError(t, root.WriteFile(filepath.Join(config.DefaultRuntimeDir, "agents", "assistant", "alternative.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nAlternative"), 0o600))
 
-	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	agents, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 	require.NoError(t, err)
 	require.Contains(t, agents.Items, "assistant/alternative")
 
@@ -375,7 +440,7 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	requireRocketClawPermissionAction(t, helper.Permission, updateGoalToolName, harness.PermissionAllow)
 
 	for _, mode := range []toolMode{toolModePersistent, toolModeWorkflow} {
-		prepared, _, err := loadRocketCodeDefinitions(root, workspace, mode)
+		prepared, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, mode)
 		require.NoError(t, err)
 
 		for _, agent := range prepared.Items {
@@ -386,27 +451,6 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	externalAgents, err := ExternalMCPAgentsIn(config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir)
 	require.NoError(t, err)
 	require.Equal(t, []string{"assistant", "helper", "restricted"}, externalAgents)
-}
-
-func TestLoadRocketCodeDefinitionsResolvesModelTemplate(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: '{{ model \"team/coding-high\" }}'\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-
-	root, err := os.OpenRoot(workspace)
-
-	require.NoError(t, err)
-	defer func() { require.NoError(t, root.Close()) }()
-
-	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent, map[string]string{"team/coding-high": "software-development-sol"})
-	require.NoError(t, err)
-	require.Equal(t, "software-development-sol", agents.Items["main"].Model)
-
-	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
-	require.ErrorContains(t, err, `main.md: model: execute model template`)
-	require.ErrorContains(t, err, `model "team/coding-high" is not configured`)
 }
 
 func TestLoadRocketCodeDefinitionsReportsInvalidTypedFrontmatter(t *testing.T) {
@@ -432,7 +476,7 @@ func TestLoadRocketCodeDefinitionsReportsInvalidTypedFrontmatter(t *testing.T) {
 
 			defer func() { require.NoError(t, root.Close()) }()
 
-			_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+			_, _, err = loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
@@ -450,7 +494,7 @@ func TestLoadRocketCodeDefinitionsReportsMissingModel(t *testing.T) {
 
 	defer func() { require.NoError(t, root.Close()) }()
 
-	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	_, _, err = loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 	require.ErrorContains(t, err, "main.md: model: required non-empty string")
 }
 
@@ -556,20 +600,6 @@ func TestLoadRuntimeDefinitionsDuringReload(t *testing.T) {
 	require.Equal(t, "Example", skills.Items["example"].Description)
 }
 
-func TestLoadRuntimeDefinitionsUsesLoadedModels(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	stage := ".rocketclaw-stage"
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, stage, "agents"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, stage, "skills"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, stage, "agents", "main.md"), []byte("---\ndescription: Main\nmodel: '{{ model \"loaded\" }}'\n---\nPrompt\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{"models":{"disk":"gpt-6.1-sol"}}`), 0o600))
-
-	_, _, err := LoadRuntimeDefinitions(config.NewLockedConfig(&config.Config{Workspace: workspace, Models: map[string]string{"loaded": "gpt-6.1-sol"}}), stage)
-	require.NoError(t, err)
-}
-
 func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *testing.T) {
 	t.Parallel()
 
@@ -618,7 +648,7 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()
-			writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\nmode: primary\n"+tt.permission+"---\nPrompt\n")
+			writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\n"+tt.permission+"---\nPrompt\n")
 			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 			root, err := os.OpenRoot(workspace)
@@ -626,7 +656,7 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 
 			defer func() { require.NoError(t, root.Close()) }()
 
-			agents, _, err := loadRocketCodeDefinitions(root, workspace, tt.mode)
+			agents, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, tt.mode)
 			require.NoError(t, err)
 
 			requireRocketClawPermissionAction(t, agents.Items["main"].Permission, tt.wantTool, tt.wantAction)
@@ -645,7 +675,6 @@ func TestLoadRocketCodeDefinitionsLoadsStructuredSkillMetadata(t *testing.T) {
 	writeAgent(t, workspace, "main", `---
 description: Main
 model: gpt-5.4
-mode: primary
 ---
 Prompt
 `)
@@ -665,7 +694,7 @@ Content
 
 	defer func() { require.NoError(t, root.Close()) }()
 
-	agents, skills, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 	require.NoError(t, err)
 	require.Contains(t, agents.Items, "main")
 
@@ -737,7 +766,7 @@ func TestLoadRocketCodeDefinitionsRejectsEscapingAgentSymlink(t *testing.T) {
 
 	workspace := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "main.md")
-	require.NoError(t, os.WriteFile(outside, []byte("---\ndescription: Outside\nmode: primary\n---\nOutside\n"), 0o644))
+	require.NoError(t, os.WriteFile(outside, []byte("---\ndescription: Outside\n---\nOutside\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "agents"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	require.NoError(t, os.Symlink(outside, filepath.Join(workspace, ".rocketclaw", "agents", "main.md")))
@@ -747,7 +776,7 @@ func TestLoadRocketCodeDefinitionsRejectsEscapingAgentSymlink(t *testing.T) {
 
 	defer func() { require.NoError(t, root.Close()) }()
 
-	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	_, _, err = loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 	require.ErrorContains(t, err, "main.md: read agent: openat main.md: path escapes from parent")
 }
 
@@ -755,7 +784,7 @@ func TestLoadRocketCodeDefinitionsRejectsEscapingSkillSymlink(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\nmode: primary\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\n---\nPrompt\n")
 	outside := filepath.Join(t.TempDir(), "SKILL.md")
 	require.NoError(t, os.WriteFile(outside, []byte("---\nname: outside\ndescription: Outside\n---\nOutside\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills", "outside"), 0o755))
@@ -766,7 +795,7 @@ func TestLoadRocketCodeDefinitionsRejectsEscapingSkillSymlink(t *testing.T) {
 
 	defer func() { require.NoError(t, root.Close()) }()
 
-	_, skills, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	_, skills, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
 	require.NoError(t, err)
 	require.Empty(t, skills.Items)
 }

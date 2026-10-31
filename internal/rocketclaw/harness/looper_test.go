@@ -1825,7 +1825,7 @@ func TestLooperReportsToolErrorsInBand(t *testing.T) {
 				return result, err
 			}
 
-			return webFetch(ctx, params)
+			return webFetch(ctx, http.DefaultClient, params)
 		}
 		run(t, map[string]looperTool{"webfetch": tool}, testFunctionCall("tool-1", "call-1", "webfetch", fmt.Sprintf(`{"url":%q}`, server.URL)), "tool call failed: webfetch: request failed with status 404")
 	})

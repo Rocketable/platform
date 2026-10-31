@@ -35,6 +35,25 @@ type Agent struct {
 	Frontmatter     map[string]any
 	FrontmatterNode *yaml.Node
 	FileMode        fs.FileMode
+	Mode            AgentMode
+
+	// Easy-only fields, compiled from an easy file's sections; advanced agents leave them zero.
+	// Model entries keep their text as written, provider prefix and #effort included.
+	WorkingDirectory string
+	Commands         map[string]string
+	SecretsARN       []string
+	Subagents        []string
+	ApproverModel    string
+	ApproverPrompt   string
+	Routines         []AgentRoutine
+	TagGroups        [][]string
+	// DelegatedFrom lists the agents that may write into this agent's sessions; nil means any agent.
+	DelegatedFrom []string
+	// NetworkTargets lists the emulated shell's allowed network targets; nil means public addresses only.
+	NetworkTargets []string
+	// Tools, set by the embedder for an easy agent's subagent session, names the only tools it has: tool names
+	// and MCP server.tool subjects. Nil means every tool.
+	Tools []string
 }
 
 // Agents contains all discovered agents keyed by name.
@@ -92,13 +111,10 @@ func (e *AgentMaxRecursionError) Unwrap() error {
 	return e.Err
 }
 
-type agentModelRenderer interface {
-	RenderAgentModel(string) (string, error)
-}
-
 // LoadAgents loads top-level Markdown agents and immediate shadows in each
-// matching directory. Shadow names retain their parent path.
-func LoadAgents(fsys fs.FS, models agentModelRenderer) AgentLoadResult {
+// matching directory. Shadow names retain their parent path. Easy agents are checked and
+// compiled against cfg.
+func LoadAgents(fsys fs.FS, cfg AgentLoadConfig) AgentLoadResult {
 	result := AgentLoadResult{
 		Agents: Agents{Items: map[string]Agent{}},
 		Errors: nil,
@@ -147,7 +163,7 @@ func LoadAgents(fsys fs.FS, models agentModelRenderer) AgentLoadResult {
 	}
 
 	for _, filePath := range files {
-		agent, err := loadAgent(fsys, filePath, models)
+		agent, err := loadAgent(fsys, filePath, cfg)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			continue
@@ -163,7 +179,14 @@ func LoadAgents(fsys fs.FS, models agentModelRenderer) AgentLoadResult {
 	return result
 }
 
-func loadAgent(fsys fs.FS, filePath string, models agentModelRenderer) (Agent, error) {
+// ParseModelRef splits a "model#effort" reference into its trimmed model and its effort, empty without "#".
+func ParseModelRef(ref string) (model, effort string) {
+	model, effort, _ = strings.Cut(ref, "#")
+
+	return strings.TrimSpace(model), effort
+}
+
+func loadAgent(fsys fs.FS, filePath string, cfg AgentLoadConfig) (Agent, error) {
 	data, err := fs.ReadFile(fsys, filePath)
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: read agent: %w", filePath, err)
@@ -179,49 +202,14 @@ func loadAgent(fsys fs.FS, filePath string, models agentModelRenderer) (Agent, e
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
 
-	var sudo bool
-
-	if field := frontmatterField(frontmatterNode, "sudo"); field != nil {
-		// Non-scalar nodes have an empty Value and fail here too.
-		switch strings.ToLower(field.Value) {
-		case "true", "1", "on", "yes":
-			sudo = true
-		case "false", "0", "off", "no":
-		default:
-			return Agent{}, fmt.Errorf("%s: sudo: must be one of true/1/on/yes or false/0/off/no", filePath)
-		}
+	mode := AgentModeAdvanced
+	if field := frontmatterField(frontmatterNode, "mode"); field != nil {
+		mode = AgentMode(field.Value)
 	}
 
-	var permission PermissionSet
-
-	if sudo {
-		// Sudo replaces the permission block; skills and delegation skip review.
-		permission.Sudo = true
-		_ = permission.Allow("skill", "*") // The fixed categories and allow action cannot fail.
-		_ = permission.Allow("task", "*")
-	} else if permission, err = parsePermissionNode(frontmatterField(frontmatterNode, "permission")); err != nil {
-		return Agent{}, fmt.Errorf("%s: parse permission: %w", filePath, err)
-	}
-
-	var maxRecursion *int
-
-	if field := frontmatterField(frontmatterNode, "maxRecursion"); field != nil {
-		if field.Kind != yaml.ScalarNode || field.ShortTag() != "!!int" {
-			return Agent{}, &AgentMaxRecursionError{Location: filePath, Err: errors.New("must be an integer greater than or equal to -1")}
-		}
-
-		var value int
-		if err := field.Decode(&value); err != nil {
-			return Agent{}, &AgentMaxRecursionError{Location: filePath, Err: err}
-		}
-
-		if value < -1 {
-			return Agent{}, &AgentMaxRecursionError{Location: filePath, Err: errors.New("must be an integer greater than or equal to -1")}
-		}
-
-		if value >= 0 {
-			maxRecursion = &value
-		}
+	// Non-scalar nodes have an empty Value and fail here too.
+	if !slices.Contains([]AgentMode{AgentModeAdvanced, AgentModeEasy}, mode) {
+		return Agent{}, fmt.Errorf("%s: mode: must be easy or advanced", filePath)
 	}
 
 	name := strings.TrimSuffix(filePath, filepath.Ext(filePath))
@@ -234,20 +222,9 @@ func loadAgent(fsys fs.FS, filePath string, models agentModelRenderer) (Agent, e
 		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
 	}
 
-	modelRef, modelEffort, _ := strings.Cut(modelField.Value, "#")
-
-	model, err := models.RenderAgentModel(modelRef)
-	if err != nil {
-		return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
-	}
-
-	if strings.TrimSpace(model) == "" {
+	model, modelEffort := ParseModelRef(modelField.Value)
+	if model == "" {
 		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
-	}
-
-	customShell, err := parseAgentShell(frontmatterField(frontmatterNode, "shell"))
-	if err != nil {
-		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
 
 	var space string
@@ -265,23 +242,65 @@ func loadAgent(fsys fs.FS, filePath string, models agentModelRenderer) (Agent, e
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
 
-	return Agent{
-		Name:            name,
-		Description:     argString(frontmatter, "description"),
-		Model:           model,
-		ReasoningEffort: cmp.Or(modelEffort, argString(frontmatter, "reasoningEffort")),
-		Verbosity:       argString(frontmatter, "verbosity"),
-		MaxRecursion:    maxRecursion,
-		CustomShell:     customShell,
-		Space:           space,
-		Prompt:          strings.TrimSpace(prompt),
-		Location:        filePath,
-		Permission:      permission,
-		OutputSchema:    outputSchema,
-		Frontmatter:     frontmatter,
-		FrontmatterNode: frontmatterNode,
-		FileMode:        info.Mode(),
-	}, nil
+	agent := Agent{Name: name, Model: model, ReasoningEffort: modelEffort, Space: space, Prompt: strings.TrimSpace(prompt), Location: filePath, OutputSchema: outputSchema, Frontmatter: frontmatter, FrontmatterNode: frontmatterNode, FileMode: info.Mode(), Mode: mode}
+	if mode == AgentModeEasy {
+		if err := compileEasyAgent(&agent, cfg); err != nil {
+			return Agent{}, fmt.Errorf("%s: %w", filePath, err)
+		}
+
+		return agent, nil
+	}
+
+	var sudo bool
+
+	if field := frontmatterField(frontmatterNode, "sudo"); field != nil {
+		// Non-scalar nodes have an empty Value and fail here too.
+		switch strings.ToLower(field.Value) {
+		case "true", "1", "on", "yes":
+			sudo = true
+		case "false", "0", "off", "no":
+		default:
+			return Agent{}, fmt.Errorf("%s: sudo: must be one of true/1/on/yes or false/0/off/no", filePath)
+		}
+	}
+
+	if sudo {
+		// Sudo replaces the permission block; skills and delegation skip review.
+		agent.Permission.Sudo = true
+		_ = agent.Permission.Allow("skill", "*")
+		_ = agent.Permission.Allow("task", "*")
+	} else if agent.Permission, err = parsePermissionNode(frontmatterField(frontmatterNode, "permission")); err != nil {
+		return Agent{}, fmt.Errorf("%s: parse permission: %w", filePath, err)
+	}
+
+	if field := frontmatterField(frontmatterNode, "maxRecursion"); field != nil {
+		if field.Kind != yaml.ScalarNode || field.ShortTag() != "!!int" {
+			return Agent{}, &AgentMaxRecursionError{Location: filePath, Err: errors.New("must be an integer greater than or equal to -1")}
+		}
+
+		var value int
+		if err := field.Decode(&value); err != nil {
+			return Agent{}, &AgentMaxRecursionError{Location: filePath, Err: err}
+		}
+
+		if value < -1 {
+			return Agent{}, &AgentMaxRecursionError{Location: filePath, Err: errors.New("must be an integer greater than or equal to -1")}
+		}
+
+		if value >= 0 {
+			agent.MaxRecursion = &value
+		}
+	}
+
+	if agent.CustomShell, err = parseAgentShell(frontmatterField(frontmatterNode, "shell")); err != nil {
+		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
+	}
+
+	agent.Description = argString(frontmatter, "description")
+	agent.ReasoningEffort = cmp.Or(modelEffort, argString(frontmatter, "reasoningEffort"))
+	agent.Verbosity = argString(frontmatter, "verbosity")
+
+	return agent, nil
 }
 
 func parseAgentFrontmatter(content []byte) (frontmatter map[string]any, frontmatterNode *yaml.Node, prompt string, err error) {

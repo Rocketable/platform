@@ -264,7 +264,7 @@ func (m *threadBridgeManager) StartActiveGoals(ctx context.Context) error {
 		}
 
 		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.", false)
-		inbound.GoalAction = protocol.GoalActionContinue
+		inbound.GoalAction, inbound.OriginHeader = protocol.GoalActionContinue, goal.Origin
 		inbound.ConversationID = conversationID
 		inbound.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: goal.PrincipalName, protocol.InboundPrincipalEmailMetadataKey: goal.PrincipalEmail}
 		inbound.SlackReply = &protocol.SlackReplyTarget{}

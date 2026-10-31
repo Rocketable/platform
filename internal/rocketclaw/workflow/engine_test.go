@@ -22,7 +22,7 @@ import (
 func TestRunValuesAndWorkers(t *testing.T) {
 	t.Run("text agent receives worker and arguments", func(t *testing.T) {
 		definition := engineDefinition(t, `
-researcher = worker(name="researcher", instructions="Find facts", model="fast", tools=["read", "grep"])
+researcher = worker(name="researcher", instructions="Find facts", model="gpt-6.1-sol", tools=["read", "grep"])
 def main(args):
     return agent(args, worker=researcher, label="first")
 `)
@@ -41,7 +41,7 @@ def main(args):
 			t.Fatalf("Run() result = %+v, want text answer", result)
 		}
 
-		wantWorker := Worker{Name: "researcher", Instructions: "Find facts", Model: "fast", Tools: []string{"read", "grep"}}
+		wantWorker := Worker{Name: "researcher", Instructions: "Find facts", Model: "gpt-6.1-sol", Tools: []string{"read", "grep"}}
 		if request.Prompt != "question" || request.Worker.Name != wantWorker.Name || request.Worker.Instructions != wantWorker.Instructions || request.Worker.Model != wantWorker.Model || !slices.Equal(request.Worker.Tools, wantWorker.Tools) {
 			t.Fatalf("agent request = %+v, want prompt, implicit phase, and worker", request)
 		}

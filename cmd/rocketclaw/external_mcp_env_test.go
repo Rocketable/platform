@@ -125,7 +125,7 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	started := <-assembler.started
 
 	// Startup installs the workspace's runtime assets, so the agents are written after it.
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", "planner.md"), []byte("---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n---\nPrompt\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", "planner.md"), []byte("---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n---\nPrompt\n"), 0o600))
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
 	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: started.server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
