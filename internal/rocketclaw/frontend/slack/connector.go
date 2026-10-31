@@ -77,10 +77,10 @@ type Connector struct {
 	ackSocketEvent  func(*socketmode.Client, socketmode.Request, ...any) error
 	reconnectDelay  time.Duration
 
-	mu               sync.Mutex
-	responseMu       sync.Mutex
-	replies, pending map[string]slackReplyState
-	observations     map[string]channelObservation
+	mu           sync.Mutex
+	responseMu   sync.Mutex
+	replies      map[string]slackReplyState
+	observations map[string]channelObservation
 
 	facts       channelFactsStore
 	factsWake   chan struct{}
@@ -113,7 +113,7 @@ type channelFactsStore interface {
 }
 
 type slackReplyState struct {
-	ChannelID, MessageTS, Key, ConversationID string
+	ChannelID, MessageTS, ConversationID string
 	// processing is when a Slack-started turn set its thread's agent session to processing.
 	processing time.Time
 }
@@ -162,8 +162,8 @@ func New(cfg *config.SlackConfig, threadRouter protocol.PrimaryTextRouter, facts
 			return client.Ack(req, payload...)
 		},
 		reconnectDelay: time.Second,
-		replies:        map[string]slackReplyState{}, pending: map[string]slackReplyState{},
-		nameByID: map[string]string{},
+		replies:        map[string]slackReplyState{},
+		nameByID:       map[string]string{},
 	}
 }
 
@@ -340,16 +340,13 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 			return nil
 		}
 
-		slots, ok := c.responseSlots(msg)
-		if !ok {
-			_, footer := c.mentionFooter(ctx, msg)
-			if slots, err = c.createReplyPlaceholder(ctx, msg.SlackReply, footer...); err != nil {
-				return err
-			}
-
-			c.startSession(ctx, msg, &slots)
-			c.setReplyState(msg.TurnID, &slots)
+		_, footer := c.mentionFooter(ctx, msg)
+		if slots, err = c.createReplyPlaceholder(ctx, msg.SlackReply, footer...); err != nil {
+			return err
 		}
+
+		c.startSession(ctx, msg, &slots)
+		c.setReplyState(msg.TurnID, &slots)
 
 		data, _ := json.Marshal(slots)
 
@@ -366,7 +363,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 		c.logDelivery(msg, startedAt, err)
 	}()
 
-	slots, ok := c.responseSlots(msg)
+	slots, ok := c.replyState(msg.TurnID)
 	if !ok && msg.ReplyState != nil {
 		if err := json.Unmarshal(msg.ReplyState, &slots); err != nil {
 			return fmt.Errorf("decode stored Slack reply placeholder: %w", err)
@@ -411,10 +408,6 @@ func (c *Connector) AbortResponse(msg *protocol.OutboundMessage) {
 	defer cancel()
 
 	slots, ok := c.replyState(msg.TurnID)
-	if !ok {
-		slots, ok = c.claimPendingState(msg.SlackReply)
-	}
-
 	c.finishResponse(cleanupCtx, msg, &slots, ok, true)
 }
 
@@ -765,19 +758,6 @@ func (c *Connector) findPosted(ctx context.Context, posting *slackPosting, block
 			return "", nil
 		}
 	}
-}
-
-func (c *Connector) responseSlots(msg *protocol.OutboundMessage) (slackReplyState, bool) {
-	slots, ok := c.replyState(msg.TurnID)
-	if !ok && strings.TrimSpace(msg.TurnID) != "" {
-		slots, ok = c.claimPendingState(msg.SlackReply)
-		if ok {
-			c.setReplyState(msg.TurnID, &slots)
-			c.log.Info("claimed Slack placeholder", "turn_id", msg.TurnID, "channel", slots.ChannelID, "placeholder_ts", slots.MessageTS, "reply_channel", msg.SlackReply.ChannelID, "reply_message_ts", msg.SlackReply.MessageTS, "reply_thread_ts", msg.SlackReply.ThreadTS)
-		}
-	}
-
-	return slots, ok
 }
 
 func (c *Connector) sendGoalTurnResponse(ctx context.Context, msg *protocol.OutboundMessage, slots *slackReplyState, hasSlots bool, footer []slack.Block) error {
@@ -1346,24 +1326,6 @@ func (c *Connector) setReplyState(turnID string, state *slackReplyState) {
 	defer c.mu.Unlock()
 
 	c.replies[turnID] = *state
-	if state.Key != "" {
-		delete(c.pending, state.Key)
-	}
-}
-
-func (c *Connector) claimPendingState(replyTarget *protocol.SlackReplyTarget) (slackReplyState, bool) {
-	key := slackPendingKey(replyTarget)
-	if key == "" {
-		return slackReplyState{}, false
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	state, ok := c.pending[key]
-	delete(c.pending, key)
-
-	return state, ok
 }
 
 func (c *Connector) clearReplyState(turnID string) {
@@ -1432,21 +1394,6 @@ func (c *Connector) slackPrincipal(ctx context.Context, userID string) (principa
 	return name + " (" + userID + ")", name, user.Profile.Email
 }
 
-func slackPendingKey(replyTarget *protocol.SlackReplyTarget) string {
-	if replyTarget == nil {
-		return ""
-	}
-
-	channelID := strings.TrimSpace(replyTarget.ChannelID)
-	messageTS := strings.TrimSpace(replyTarget.MessageTS)
-
-	if channelID == "" || messageTS == "" {
-		return ""
-	}
-
-	return channelID + "\x00" + messageTS + "\x00" + strings.TrimSpace(replyTarget.ThreadTS)
-}
-
 func (c *Connector) createReplyPlaceholder(ctx context.Context, replyTarget *protocol.SlackReplyTarget, footer ...slack.Block) (slackReplyState, error) {
 	channelID, threadTS := slackReplyDestination(replyTarget)
 
@@ -1467,12 +1414,8 @@ func (c *Connector) createReplyPlaceholder(ctx context.Context, replyTarget *pro
 	slots := slackReplyState{
 		ChannelID: channelID,
 		MessageTS: messageTS,
-		Key:       slackPendingKey(replyTarget),
 	}
 
-	c.mu.Lock()
-	c.pending[slots.Key] = slots
-	c.mu.Unlock()
 	c.log.Info("created Slack reply placeholder", "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS, "thread_ts", replyTarget.ThreadTS, "placeholder_channel", slots.ChannelID, "placeholder_ts", slots.MessageTS)
 
 	return slots, nil
