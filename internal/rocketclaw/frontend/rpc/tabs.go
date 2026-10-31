@@ -33,6 +33,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		spaces   []backend.Space
 		shared   []backend.SharedTab
 		mutes    []backend.TabMute
+		shelf    []byte
 		state    backend.TabState
 		response = &TabsResponse{Stale: (request.State != nil && !saved) || refused}
 	)
@@ -51,6 +52,15 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 
 	if err == nil {
 		mutes, err = s.sessions.TabMutes(ctx, username)
+	}
+
+	if err == nil {
+		shelf, err = s.sessions.TopShelf(ctx, username)
+	}
+
+	if err == nil && shelf != nil {
+		response.TopShelf = &TopShelf{}
+		err = (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(shelf, response.TopShelf)
 	}
 
 	if err == nil && !saved {
@@ -119,6 +129,10 @@ func (s *Server) changeTabs(ctx context.Context, username string, request *TabsR
 		err = s.muteTab(ctx, username, request.Mute)
 	case request.Unmute != "":
 		err = s.sessions.UnmuteTab(ctx, username, request.Unmute)
+	case request.TopShelf != nil:
+		// The shelf came from a request's protobuf JSON, so it marshals back without error.
+		shelf, _ := protojson.Marshal(request.TopShelf)
+		err = s.sessions.SaveTopShelf(ctx, username, shelf)
 	}
 
 	if err != nil {

@@ -270,6 +270,10 @@ Each session in that space appears once, in the first lane it matches. A session
 
 Another RocketClaw server declared in the local server's configuration, whose chats, spaces and pages the local Web page lists and operates beside its own; the browser talks to it directly, and it identifies each person by their own Tailscale login. Its spaces appear under it in the space picker and hold only its own chats. Not to be confused with a Remote OpenCode Session, which RocketClaw keeps a synced copy of.
 
+### Top Shelf
+
+One person's own tab group above the space picker, shown only when the local RocketClaw has Remote RocketClaws, holding tabs from any server. It is the same in every space and on every server, and opening one of its tabs shows that page on its own server and in its own space without creating a tab, as a Shared Group tab opens; a Search Page opened from it is edited in place. Tabs join, leave and reorder as in any group, and each names the server and space it comes from.
+
 ### Birth Space
 
 The Space a session was born in.

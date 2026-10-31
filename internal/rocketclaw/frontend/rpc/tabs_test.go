@@ -266,4 +266,22 @@ func TestTabs(t *testing.T) {
 	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/Yw " + until}, mutes(response), "a refused mute stores nothing")
+
+	// A Top Shelf is the caller's own: each save replaces it whole, and every reply carries it.
+	assert.Nil(t, response.TopShelf, "nothing shelved yet")
+
+	shelf := &TopShelf{Tabs: []*ShelfTab{{Server: "work", Space: "main", Path: "/s/eA"}, {Path: "/search/1", Space: "main", Search: &SearchPage{Name: "x"}}}, Collapsed: true}
+	_, err = call("127.0.0.1", &TabsRequest{TopShelf: shelf})
+	require.NoError(t, err)
+	response, err = call("127.0.0.1", &TabsRequest{})
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(shelf, response.TopShelf), "%v", response.TopShelf)
+	response, err = call("192.0.2.2", &TabsRequest{})
+	require.NoError(t, err)
+	assert.Nil(t, response.TopShelf, "another person's shelf is not theirs")
+	_, err = call("127.0.0.1", &TabsRequest{TopShelf: &TopShelf{}})
+	require.NoError(t, err)
+	response, err = call("127.0.0.1", &TabsRequest{})
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "an emptied shelf stays empty: %v", response.TopShelf)
 }
