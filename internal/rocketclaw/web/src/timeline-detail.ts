@@ -121,12 +121,10 @@ export const timelineFailure = /^(tool call (failed|denied|aborted)|subagent tas
 export function projectTimeline<T extends TimelineItem>(items: T[], rows: TimelineRows) {
   const projected: ({ kind: "line"; line: T; open?: boolean } | TimelineGroup<T>)[] = [];
   const level = timelineLevel(rows)?.id;
-  let group: TimelineGroup<T> | undefined;
   for (const line of items) {
     const id = line.role === "tool" ? categoryByTool[line.toolName ?? ""] ?? "tools" : categoryByRole[line.role];
     if (!id) {
       projected.push({ kind: "line", line });
-      group = undefined;
       continue;
     }
     const { placement, details } = rows[id];
@@ -136,12 +134,12 @@ export function projectTimeline<T extends TimelineItem>(items: T[], rows: Timeli
     const failed = line.role === "tool" && (line.state === "background" || (level !== "messages" && timelineFailure.test((line.toolName ? line.toolParts?.[0]?.text : line.text) ?? "")));
     if (placement === "hidden" && !pinned && !failed) continue;
     if (placement === "grouped" && !pinned) {
-      if (!group) projected.push(group = { kind: "group", key: line.id, label: "", members: [] });
-      group.members.push({ line, open });
+      const group = projected.at(-1);
+      if (group?.kind === "group") group.members.push({ line, open });
+      else projected.push({ kind: "group", key: line.id, label: "", members: [{ line, open }] });
       continue;
     }
     projected.push({ kind: "line", line, open: pinned || placement === "hidden" || open });
-    group = undefined;
   }
   for (const row of projected) {
     if (row.kind !== "group") continue;
