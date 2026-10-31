@@ -532,7 +532,7 @@ func (c *Connector) sendFooterOnlyResponse(ctx context.Context, msg *protocol.Ou
 		key := msg.TurnID + "/footer"
 		footer[0].(*slack.ContextBlock).BlockID = key
 		channelID, threadTS := slackReplyDestination(msg.SlackReply)
-		_, _, err = c.postOnce(ctx, msg.ConversationID, key, key, channelID, threadTS, options...)
+		err = c.postOnce(ctx, msg.ConversationID, key, channelID, threadTS, options...)
 	}
 
 	if err != nil {
@@ -665,44 +665,44 @@ type slackPosting struct {
 	ThreadTS  string `json:"thread_ts"`
 }
 
-// postOnce posts the message for the journaled step key at most once, and reports
-// whether it posted now. The message must carry blockID: a post cut off before its
+// postOnce posts the message for the journaled step key at most once.
+// The message must carry key as its block ID: a post cut off before its
 // target was recorded is found by that block ID instead of being repeated.
-func (c *Connector) postOnce(ctx context.Context, conversationID, key, blockID, channelID, threadTS string, options ...slack.MsgOption) (protocol.TextConversationTarget, bool, error) {
+func (c *Connector) postOnce(ctx context.Context, conversationID, key, channelID, threadTS string, options ...slack.MsgOption) error {
 	var target protocol.TextConversationTarget
 
 	recorded, found, err := c.facts.LoadTurnStep(ctx, conversationID, key)
 	if err != nil {
-		return target, false, fmt.Errorf("load recorded Slack post: %w", err)
+		return fmt.Errorf("load recorded Slack post: %w", err)
 	}
 
 	if found {
 		if err := json.Unmarshal(recorded, &target); err != nil {
-			return target, false, fmt.Errorf("decode recorded Slack post: %w", err)
+			return fmt.Errorf("decode recorded Slack post: %w", err)
 		}
 
-		return target, false, nil
+		return nil
 	}
 
 	var posting slackPosting
 
 	marker, marked, err := c.facts.LoadTurnStep(ctx, conversationID, key+"/posting")
 	if err != nil {
-		return target, false, fmt.Errorf("load Slack posting marker: %w", err)
+		return fmt.Errorf("load Slack posting marker: %w", err)
 	}
 
 	if marked {
 		if err := json.Unmarshal(marker, &posting); err != nil {
-			return target, false, fmt.Errorf("decode Slack posting marker: %w", err)
+			return fmt.Errorf("decode Slack posting marker: %w", err)
 		}
 
-		if ts, err := c.findPosted(ctx, &posting, blockID); err != nil || ts != "" {
+		if ts, err := c.findPosted(ctx, &posting, key); err != nil || ts != "" {
 			target = protocol.TextConversationTarget{ChannelID: posting.ChannelID, MessageID: ts, ThreadID: posting.ThreadTS}
 			if err == nil {
 				c.recordPost(ctx, conversationID, key, &target)
 			}
 
-			return target, false, err
+			return err
 		}
 	}
 
@@ -710,7 +710,7 @@ func (c *Connector) postOnce(ctx context.Context, conversationID, key, blockID, 
 
 	marker, _ = json.Marshal(posting)
 	if err := c.facts.SaveTurnStep(ctx, conversationID, key+"/posting", marker); err != nil {
-		return target, false, fmt.Errorf("record Slack posting marker: %w", err)
+		return fmt.Errorf("record Slack posting marker: %w", err)
 	}
 
 	if threadTS != "" {
@@ -719,13 +719,13 @@ func (c *Connector) postOnce(ctx context.Context, conversationID, key, blockID, 
 
 	postedChannelID, ts, err := c.api.PostMessageContext(ctx, channelID, options...)
 	if err != nil {
-		return target, false, fmt.Errorf("post Slack message: %w", err)
+		return fmt.Errorf("post Slack message: %w", err)
 	}
 
 	target = protocol.TextConversationTarget{ChannelID: postedChannelID, MessageID: ts, ThreadID: threadTS}
 	c.recordPost(ctx, conversationID, key, &target)
 
-	return target, true, nil
+	return nil
 }
 
 // recordPost saves a posted message's target. A failure is only logged: the
