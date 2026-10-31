@@ -23,7 +23,6 @@ const (
 
 type runtimeConfigFile struct {
 	Path, WorkDir string
-	Found         bool
 }
 
 const helpText = "rocketclaw\n\nUsage:\n  rocketclaw run [--pprof=false]\n  rocketclaw lint [next|current]\n  rocketclaw agent-graph [next|current]\n  rocketclaw oai login [provider] [--headless]\n  rocketclaw oai list\n  rocketclaw oai logout [provider]\n  rocketclaw ts login\n  rocketclaw help\n\nCommands:\n  run          Start rocketclaw and fail if the configuration file is missing or invalid.\n  lint         Check effective agent-system safety.\n  agent-graph  Print the effective task delegation graph as DOT.\n  oai          Manage provider-specific ChatGPT credentials for model requests.\n  ts           Log the Web's Tailscale node (web.tsnet) in to the tailnet.\n  help         Show this help screen.\n\nRun options:\n  --pprof      Serve private Go profiles at 127.0.0.1:6060; enabled by default, disable with --pprof=false, not saved in config.\n\nRunning `rocketclaw` without a subcommand starts the server when femtoclaw.json or rocketclaw.json is present.\nIf both files are missing, this help screen is shown instead.\n"
@@ -71,7 +70,7 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("stat config path: %w", err)
 	}
-	if !selected.Found {
+	if selected.Path == "" {
 		return printStdout(helpText, "help")
 	}
 	return runServe(args, "127.0.0.1:6060")
@@ -84,7 +83,7 @@ func loadRuntimeConfig(secretsARN string) (runtimeConfigFile, *config.Config, er
 	if err != nil {
 		return runtimeConfigFile{}, nil, err
 	}
-	if !selected.Found {
+	if selected.Path == "" {
 		return runtimeConfigFile{}, nil, os.ErrNotExist
 	}
 
@@ -102,7 +101,6 @@ func selectRuntimeConfigFile() (runtimeConfigFile, error) {
 	} {
 		_, err := os.Stat(candidate.Path)
 		if err == nil {
-			candidate.Found = true
 			return candidate, nil
 		}
 		if !errors.Is(err, os.ErrNotExist) {
