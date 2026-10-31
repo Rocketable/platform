@@ -454,6 +454,7 @@ test("actual App renders independent public lifecycle and reconnect replacements
 }, 60_000);
 
 test("actual App restores, merges, isolates and keeps composer independent", async () => {
+  const started = Date.now();
   const { chromium: engine } = await import(playwright!);
   let identityHold = Promise.withResolvers<void>();
   let promptHold = Promise.withResolvers<string>();
@@ -463,7 +464,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
   let cronRunCalls = 0;
   let cronFailures = 0;
   const cronHistory: string[] = [];
-  const historyRequests: { id: string }[] = [];
+  const historyRequests: { id: string; revision?: string }[] = [];
   const searchQueries: string[] = [];
   const manySearchHold = Promise.withResolvers<void>();
   const lastSearchHold = Promise.withResolvers<void>();
@@ -2105,6 +2106,13 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       });
       ctrl.history[ctrl.history.length - 1] = { ...ctrl.history.at(-1)!, text: `\nFollowing latest ${width}\n` + "More streamed text.\n".repeat(40) };
       (await transcriptStream(`jump-${width}`).promise).enqueue(`data: ${JSON.stringify({ conversationId: `jump-${width}`, revision: "hint" })}\n\n`);
+      console.info("Waiting for latest reply", {
+        expected: `Following latest ${width}`,
+        elapsedMs: Date.now() - started,
+        fixture: ctrl.history.at(-1)?.text.trim().split("\n")[0],
+        requestCursors: historyRequests.filter((request) => request.id === `jump-${width}`).slice(-2).map((request) => request.revision ? JSON.parse(request.revision).messages.at(-1)?.text.trim().split("\n")[0] : null),
+        rendered: (await scroll.locator('[data-slot="bubble-content"]').last().textContent())?.trim().split("\n")[0],
+      });
       await transcriptPage.getByText(`Following latest ${width}`, { exact: false }).waitFor({ state: "attached" });
       await transcriptPage.waitForFunction(() => {
         const el = document.querySelector("#transcript-scroll")!;
