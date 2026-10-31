@@ -1614,7 +1614,7 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 	case msg.Workflow.Name != "":
 		result, errTurn = b.runWorkflow(ctx, request, &finish)
 	default:
-		result, errTurn = b.runTurn(ctx, msg, turnID, turnID, &finish)
+		result, errTurn = b.runTurn(ctx, msg, turnID, &finish)
 	}
 
 	if errTurn != nil {
@@ -2076,7 +2076,7 @@ func appendSessionEntry(entries iter.Seq2[harness.SessionEntry, error], added *h
 }
 
 //nolint:gocyclo // Turn execution coordinates model, tools, progress, and goal accounting.
-func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turnID, journalKey string, finish *turnFinish) (result runResult, err error) {
+func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turnID string, finish *turnFinish) (result runResult, err error) {
 	runtimeCfg := b.runtime.Clone()
 
 	var header string
@@ -2153,7 +2153,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	// A subagent session acts as it did inside its top-level session's running turn: for that session, by
 	// that turn's agent and inbound, into that turn's reply. It delegates as deep as that agent allows.
-	self, rootAgent, replyTurn, origin := b.config.ConversationID, agentName, journalKey, msg
+	self, rootAgent, replyTurn, origin := b.config.ConversationID, agentName, turnID, msg
 
 	var jobs []backgroundKey
 
@@ -2387,7 +2387,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 
 		header, _, _ = strings.Cut(prompt, "\n\n")
-		prepared = harness.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey], turnID+"/initial"), TurnID: journalKey, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: inboundDirectSkill(msg)}
+		prepared = harness.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey], turnID+"/initial"), TurnID: turnID, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: inboundDirectSkill(msg)}
 		prepared.ExpandShellCommands = msg.Cronjob != nil && msg.Metadata[backgroundNotesMetadataKey] == ""
 		snapshot.Inputs, snapshot.Environment, snapshot.ChildContext = []harness.PromptInput{prepared}, shellEnv, childContext
 
@@ -2419,7 +2419,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 	}
 
-	prepared.TurnID, prepared.Responses = journalKey, output
+	prepared.TurnID, prepared.Responses = turnID, output
 	input <- prepared
 
 	close(input)
@@ -2501,7 +2501,7 @@ WHERE q.conversation_id = $1 AND q.phase = 'waiting'`, &taken, b.config.Conversa
 
 	// The reply sends the files the turn and its subagents attached; an empty cron reply is silent, files included.
 	if !msg.RequireOutputDecision || strings.TrimSpace(result.text) != "" {
-		if result.attachments, err = b.config.SessionService.TurnAttachments(ctx, b.config.ConversationID, journalKey); err != nil {
+		if result.attachments, err = b.config.SessionService.TurnAttachments(ctx, b.config.ConversationID, turnID); err != nil {
 			return result, err
 		}
 

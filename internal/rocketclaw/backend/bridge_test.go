@@ -814,7 +814,7 @@ func runTestTurn(ctx context.Context, b *Bridge, msg *protocol.InboundMessage, t
 	b.mu.Lock()
 	b.activeTurnID = turnID
 	b.mu.Unlock()
-	result, err := b.runTurn(ctx, msg, turnID, turnID, &finish)
+	result, err := b.runTurn(ctx, msg, turnID, &finish)
 
 	for i := range finish.entries {
 		if _, errAppend := appendSessionEntryDB(context.WithoutCancel(ctx), b.config.SessionService.db, finish.conversationID, &finish.entries[i]); errAppend != nil {
