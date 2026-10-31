@@ -26,20 +26,19 @@ func frontmatter(t *testing.T, doc string) map[string]any {
 func TestShell(t *testing.T) {
 	t.Parallel()
 
-	_, ok, err := Shell(frontmatter(t, "model: x\n"), "/ws", "/ws/.rocketclaw", "/ws/.rocketclaw/justbash")
+	shell, err := Shell(frontmatter(t, "model: x\n"), "/ws", "/ws/.rocketclaw", "/ws/.rocketclaw/justbash")
 	require.NoError(t, err)
-	require.False(t, ok)
+	require.False(t, shell.Emulated)
 
-	_, ok, err = Shell(frontmatter(t, "shell: /bin/sandbox\nworkingDirectory: data\n"), "/ws", "/ws/.rocketclaw", "/ws/.rocketclaw/justbash")
+	shell, err = Shell(frontmatter(t, "shell: /bin/sandbox\nworkingDirectory: data\n"), "/ws", "/ws/.rocketclaw", "/ws/.rocketclaw/justbash")
 	require.NoError(t, err)
-	require.False(t, ok, "a program path is not the emulated shell")
+	require.False(t, shell.Emulated, "a program path is not the emulated shell")
 
-	_, _, err = Shell(frontmatter(t, "shell: emulated\n"), "/ws", "/ws/.rocketclaw", "/ws/.rocketclaw/justbash")
+	_, err = Shell(frontmatter(t, "shell: emulated\n"), "/ws", "/ws/.rocketclaw", "/ws/.rocketclaw/justbash")
 	require.EqualError(t, err, "workingDirectory: required with shell: emulated")
 
-	shell, ok, err := Shell(frontmatter(t, "shell: emulated\nmodel: x\nworkingDirectory: data\ncommands: {hello: printf hi}\nallowedNetworkTargets: [api.stripe.com]\n"), "/ws", "/ws/.rocketclaw", "/ws/.rocketclaw/justbash")
+	shell, err = Shell(frontmatter(t, "shell: emulated\nmodel: x\nworkingDirectory: data\ncommands: {hello: printf hi}\nallowedNetworkTargets: [api.stripe.com]\n"), "/ws", "/ws/.rocketclaw", "/ws/.rocketclaw/justbash")
 	require.NoError(t, err)
-	require.True(t, ok)
 	require.True(t, shell.Emulated)
 	require.Equal(t, "/ws/.rocketclaw/justbash/wrapper.ts", shell.Path)
 	require.JSONEq(t, `{"workspace":"/ws","runtimeDir":"/ws/.rocketclaw","workingDirectory":"data","commands":{"hello":"printf hi"},"allowedNetworkTargets":["api.stripe.com"]}`, string(shell.Setup))
@@ -87,9 +86,9 @@ func TestJustBash(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			shell, ok, err := Shell(frontmatter(t, "shell: emulated\n"+tc.settings), workspace, runtimeDir, dir)
+			shell, err := Shell(frontmatter(t, "shell: emulated\n"+tc.settings), workspace, runtimeDir, dir)
 			require.NoError(t, err)
-			require.True(t, ok)
+			require.True(t, shell.Emulated)
 
 			// The harness starts the wrapper with no arguments and writes the setup line, then the command.
 			env := map[string]string{}

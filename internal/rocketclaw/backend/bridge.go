@@ -2817,9 +2817,9 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 			err = fmt.Errorf("permission.rocketclaw.%s: %w", setTagToolName, err)
 		} else if _, _, errRecipients := agentRecipients(&agent); errRecipients != nil {
 			err = fmt.Errorf("permission.rocketclaw.%s: %w", recipientSetting, errRecipients)
-		} else if shell, ok, errShell := justbash.Shell(agent.Frontmatter, cfg.Workspace, filepath.Join(cfg.Workspace, cfg.RuntimeDirName()), justBashDir(cfg)); errShell != nil {
+		} else if shell, errShell := justbash.Shell(agent.Frontmatter, cfg.Workspace, filepath.Join(cfg.Workspace, cfg.RuntimeDirName()), justBashDir(cfg)); errShell != nil {
 			err = errShell
-		} else if ok {
+		} else if shell.Emulated {
 			agent.CustomShell = shell
 		}
 

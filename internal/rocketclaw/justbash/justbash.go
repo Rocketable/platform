@@ -23,15 +23,15 @@ var (
 )
 
 // Shell returns the customShell of an agent whose frontmatter sets shell: emulated, running from dir, the
-// install directory inside runtimeDir. It reports false for other agents.
-func Shell(frontmatter map[string]any, workspace, runtimeDir, dir string) (harness.CustomShell, bool, error) {
+// install directory inside runtimeDir. It returns a zero CustomShell for other agents.
+func Shell(frontmatter map[string]any, workspace, runtimeDir, dir string) (harness.CustomShell, error) {
 	if frontmatter["shell"] != "emulated" {
-		return harness.CustomShell{}, false, nil
+		return harness.CustomShell{}, nil
 	}
 
 	// just-bash always works on top of a working directory.
 	if dir, ok := frontmatter["workingDirectory"].(string); !ok || strings.TrimSpace(dir) == "" {
-		return harness.CustomShell{}, false, errors.New("workingDirectory: required with shell: emulated")
+		return harness.CustomShell{}, errors.New("workingDirectory: required with shell: emulated")
 	}
 
 	config := map[string]any{"workspace": workspace, "runtimeDir": runtimeDir}
@@ -44,10 +44,10 @@ func Shell(frontmatter map[string]any, workspace, runtimeDir, dir string) (harne
 
 	setup, err := json.Marshal(config)
 	if err != nil {
-		return harness.CustomShell{}, false, fmt.Errorf("just-bash settings: %w", err)
+		return harness.CustomShell{}, fmt.Errorf("just-bash settings: %w", err)
 	}
 
-	return harness.CustomShell{Path: filepath.Join(dir, "wrapper.ts"), Setup: setup, Emulated: true}, true, nil
+	return harness.CustomShell{Path: filepath.Join(dir, "wrapper.ts"), Setup: setup, Emulated: true}, nil
 }
 
 // Install writes the wrapper into dir and installs its pinned just-bash with npm unless that version is
