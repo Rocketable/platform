@@ -162,7 +162,11 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await copyButton.waitFor();
     // The disabled Revert takes no focus, so Tab reaches Copy.
     await page.keyboard.press("Tab");
-    expect(await copyButton.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
+    expect(await copyButton.evaluate((node: HTMLElement) => ({
+      copyFocused: node === document.activeElement,
+      activeElement: document.activeElement?.outerHTML,
+      expectedButton: node.outerHTML,
+    }))).toMatchObject({ copyFocused: true });
     const composer = page.locator("textarea");
     await composer.fill("$fork");
     await composer.press("Enter");
