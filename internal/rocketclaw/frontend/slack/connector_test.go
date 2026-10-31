@@ -170,7 +170,6 @@ func TestDirectMessagesHaveNoEffect(t *testing.T) {
 	connector.handleAppMentionEvent(t.Context(), &slackevents.AppMentionEvent{User: "U1", Channel: "D1", TimeStamp: "1.2", ThreadTimeStamp: "1.1", Text: "again"}, slackNativeForward{})
 
 	assert.Empty(t, connector.replies)
-	assert.Empty(t, connector.pending)
 }
 
 func TestInboundContentDownloadsSlackTextFilesIntoPromptText(t *testing.T) {
@@ -1025,24 +1024,15 @@ func newTestStoredChannelFacts(t *testing.T) *backend.SessionService {
 	return store
 }
 
-func TestReplyStateTracksPendingSlots(t *testing.T) {
-	replyTarget := &protocol.SlackReplyTarget{ChannelID: " D123 ", MessageTS: " 111.222 ", ThreadTS: " 333.444 "}
-	key := slackPendingKey(replyTarget)
-	slots := slackReplyState{ChannelID: "D123", MessageTS: "555.2", Key: key}
+func TestReplyStateTracksSlots(t *testing.T) {
+	slots := slackReplyState{ChannelID: "D123", MessageTS: "555.2"}
 	connector := newTestConnector("http://slack.test")
-	connector.pending = map[string]slackReplyState{key: slots}
-
-	assert.Equal(t, "D123\x00111.222\x00333.444", key)
 
 	connector.setReplyState("turn-1", &slots)
 
 	got, ok := connector.replyState("turn-1")
 	require.True(t, ok)
 	assert.Equal(t, "555.2", got.MessageTS)
-
-	claimed, ok := connector.claimPendingState(replyTarget)
-	assert.False(t, ok)
-	assert.Equal(t, slackReplyState{}, claimed)
 
 	connector.clearReplyState(" ")
 	_, ok = connector.replyState("turn-1")
@@ -1213,7 +1203,6 @@ func TestSendResponseKeepsOnePlaceholderUntilFinal(t *testing.T) {
 	partial.TurnID = "turn-1"
 	partial.SlackReply = reply
 	require.ErrorContains(t, connector.SendResponse(t.Context(), partial), "post Slack reply placeholder")
-	assert.Empty(t, connector.pending, "failed placeholder creation must not reserve a reply")
 	assert.Empty(t, connector.replies, "failed placeholder creation must not reserve a reply")
 	require.NoError(t, connector.SendResponse(t.Context(), partial))
 	require.NoError(t, connector.SendResponse(t.Context(), partial))
@@ -1237,7 +1226,6 @@ func TestSendResponseKeepsOnePlaceholderUntilFinal(t *testing.T) {
 	assert.Equal(t, "555.1", updated[0].Get("ts"))
 	assert.Equal(t, "Final answer", updated[0].Get("text"))
 	assert.NotContains(t, updated[0].Get("blocks"), "task_card")
-	assert.Empty(t, connector.pending)
 	assert.Empty(t, connector.replies)
 }
 
@@ -1345,11 +1333,9 @@ func TestSendResponseRetriesTitledFinalUpdates(t *testing.T) {
 			message := tt.message
 			message.TurnID, message.Text, message.Agent, message.Complete = "turn-1", "final answer", "main", true
 			message.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.1"}
-			key := slackPendingKey(message.SlackReply)
-			connector.pending[key] = slackReplyState{ChannelID: "C123", MessageTS: "555.1", Key: key}
+			connector.replies[message.TurnID] = slackReplyState{ChannelID: "C123", MessageTS: "555.1"}
 
 			require.ErrorContains(t, connector.SendResponse(t.Context(), message), "update_failed")
-			assert.Empty(t, connector.pending)
 			assert.Contains(t, connector.replies, message.TurnID)
 			require.NoError(t, connector.SendResponse(t.Context(), message))
 			require.Len(t, updated, 2)
@@ -1394,7 +1380,7 @@ func TestSendResponseUsesGoalBlocksForGoalAnswers(t *testing.T) {
 
 	connector := newTestConnector(server.URL)
 	turnID := "goal-turn-1"
-	connector.setReplyState(turnID, &slackReplyState{ChannelID: "D123", MessageTS: "a.1", Key: "pending"})
+	connector.setReplyState(turnID, &slackReplyState{ChannelID: "D123", MessageTS: "a.1"})
 
 	body := "Progress summary: I counted 1. Current state: 1 of 10. Next concrete step: count 2 on the next turn."
 	msg := protocol.NewOutboundMessage("test", body)
@@ -1424,7 +1410,7 @@ func TestSendResponseUsesGoalBlocksForGoalAnswers(t *testing.T) {
 	assert.Equal(t, body, blocks[2].Text.Text)
 	assert.Empty(t, reactions)
 
-	connector.setReplyState(turnID, &slackReplyState{ChannelID: "D123", MessageTS: "a.2", Key: "pending"})
+	connector.setReplyState(turnID, &slackReplyState{ChannelID: "D123", MessageTS: "a.2"})
 
 	done := protocol.NewOutboundMessage("test", "shipped")
 	done.TurnID = turnID
@@ -1487,7 +1473,7 @@ func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, false, nil))
 	replyTarget := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
-	_, err := connector.createReplyPlaceholder(context.Background(), replyTarget)
+	slots, err := connector.createReplyPlaceholder(context.Background(), replyTarget)
 	require.NoError(t, err)
 
 	longText := strings.Repeat("x", slackBlockTextLimit*50) + "closing line"
@@ -1497,6 +1483,7 @@ func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 	msg.Complete, msg.Terminal = true, protocol.TerminalComplete
 	msg.Agent = "main"
 	msg.SlackReply = replyTarget
+	connector.setReplyState(msg.TurnID, &slots)
 	require.NoError(t, connector.SendResponse(context.Background(), msg))
 
 	assert.Empty(t, deleted)
@@ -2029,7 +2016,7 @@ func TestSendResponseUpdatesTailAnswerPlaceholder(t *testing.T) {
 
 	connector := newTestConnector(server.URL)
 	replyTarget := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
-	_, err := connector.createReplyPlaceholder(context.Background(), replyTarget)
+	slots, err := connector.createReplyPlaceholder(context.Background(), replyTarget)
 	require.NoError(t, err)
 
 	msg := protocol.NewOutboundMessage("test", "thread answer")
@@ -2037,6 +2024,7 @@ func TestSendResponseUpdatesTailAnswerPlaceholder(t *testing.T) {
 	msg.Complete = true
 	msg.Agent = "main"
 	msg.SlackReply = replyTarget
+	connector.setReplyState(msg.TurnID, &slots)
 	require.NoError(t, connector.SendResponse(context.Background(), msg))
 
 	assert.Empty(t, deleted)
@@ -2096,13 +2084,14 @@ func TestSendResponseUpdatesNonTailAnswerPlaceholder(t *testing.T) {
 	connector := newTestConnector(server.URL)
 	first := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.1", ThreadTS: "111.1"}
 
-	_, err := connector.createReplyPlaceholder(context.Background(), first)
+	slots, err := connector.createReplyPlaceholder(context.Background(), first)
 	require.NoError(t, err)
 
 	msg := protocol.NewOutboundMessage("test", "first answer")
 	msg.TurnID = "turn-thread"
 	msg.Complete = true
 	msg.SlackReply = first
+	connector.setReplyState(msg.TurnID, &slots)
 	require.NoError(t, connector.SendResponse(context.Background(), msg))
 
 	require.Len(t, posted, 1)
@@ -2149,13 +2138,14 @@ func TestSendResponseDeletesPlaceholdersForEmptyFinal(t *testing.T) {
 
 	connector := newTestConnector(server.URL)
 	replyTarget := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
-	_, err := connector.createReplyPlaceholder(context.Background(), replyTarget)
+	slots, err := connector.createReplyPlaceholder(context.Background(), replyTarget)
 	require.NoError(t, err)
 
 	msg := protocol.NewOutboundMessage("test", "")
 	msg.TurnID = "turn-thread"
 	msg.Complete = true
 	msg.SlackReply = replyTarget
+	connector.setReplyState(msg.TurnID, &slots)
 	require.NoError(t, connector.SendResponse(context.Background(), msg))
 
 	require.Len(t, posted, 1)
@@ -2185,14 +2175,14 @@ func TestCreateReplyPlaceholderPostsOneMessage(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	_, err := connector.createReplyPlaceholder(context.Background(), &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"})
+	slots, err := connector.createReplyPlaceholder(context.Background(), &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"})
 
 	require.NoError(t, err)
 	require.Len(t, posted, 1)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, "111.222", posted[0].Get("thread_ts"))
 	assert.Empty(t, posted[0].Get("blocks"))
-	assert.Contains(t, connector.pending, slackPendingKey(&protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}))
+	assert.Equal(t, slackReplyState{ChannelID: "D123", MessageTS: "555.1"}, slots)
 }
 
 func TestSendResponseDoesNotFailWhenAttachmentUploadFails(t *testing.T) {
@@ -2640,7 +2630,7 @@ func TestAbortResponseReleasesFailedFinalTurn(t *testing.T) {
 	assert.Empty(t, connector.replies)
 }
 
-func TestAbortResponseReleasesPendingPlaceholderWhenSlackCleanupFails(t *testing.T) {
+func TestAbortResponseReleasesPlaceholderWhenSlackCleanupFails(t *testing.T) {
 	var paths []string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2668,12 +2658,10 @@ func TestAbortResponseReleasesPendingPlaceholderWhenSlackCleanupFails(t *testing
 	msg.TurnID = "turn-1"
 	msg.Complete = true
 	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.1", ThreadTS: "111.0"}
-	key := slackPendingKey(msg.SlackReply)
-	connector.pending[key] = slackReplyState{ChannelID: "C123", MessageTS: "555.1", Key: key}
+	connector.replies[msg.TurnID] = slackReplyState{ChannelID: "C123", MessageTS: "555.1"}
 
 	connector.AbortResponse(msg)
 	assert.Equal(t, []string{"/chat.delete", "/reactions.remove"}, paths)
-	assert.Empty(t, connector.pending)
 	assert.Empty(t, connector.replies)
 }
 
@@ -3134,7 +3122,6 @@ func newTestConnectorWithOptions(apiURL string, channels []config.SlackChannelCo
 	}
 	connector.reconnectDelay = time.Second
 	connector.replies = map[string]slackReplyState{}
-	connector.pending = map[string]slackReplyState{}
 	connector.facts = newTestChannelFacts()
 	connector.factsWake = make(chan struct{}, 1)
 	connector.refreshWake = make(chan struct{}, 1)
