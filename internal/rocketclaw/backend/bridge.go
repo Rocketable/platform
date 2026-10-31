@@ -96,7 +96,7 @@ const (
 )
 
 type runtimeRestarter interface {
-	restart(string) (string, error)
+	restart(string) string
 }
 
 // Config controls one rocketcode bridge conversation.
@@ -2936,12 +2936,7 @@ func restartTool(requestRestart runtimeRestarter) harness.Tool {
 			return harness.ToolResult{}, err
 		}
 
-		output, err := requestRestart.restart(reason)
-		if err != nil {
-			return harness.ToolResult{}, err
-		}
-
-		return harness.TextToolResult(output), nil
+		return harness.TextToolResult(requestRestart.restart(reason)), nil
 	}}
 }
 

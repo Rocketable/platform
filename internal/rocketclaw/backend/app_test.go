@@ -108,8 +108,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			_, err = bridge.threads.createSession(rt.RunCtx, &threadStart{agent: "missing"}, nil, "", nil, nil)
 			require.ErrorContains(t, err, `agent "missing" is not configured`)
 
-			msg, err := bridge.config.RequestRestart.restart("test restart")
-			require.NoError(t, err)
+			msg := bridge.config.RequestRestart.restart("test restart")
 			require.Equal(t, "restart requested; runtime cancellation started", msg)
 			require.NoError(t, rt.RunCtx.Err(), "restart cancels work, not the run lock")
 

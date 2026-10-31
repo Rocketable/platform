@@ -18,7 +18,7 @@ var _ runtimeRestarter = &runtimeRestarterMock{}
 //
 //		// make and configure a mocked runtimeRestarter
 //		mockedruntimeRestarter := &runtimeRestarterMock{
-//			restartFunc: func(s string) (string, error) {
+//			restartFunc: func(s string) string {
 //				panic("mock out the restart method")
 //			},
 //		}
@@ -29,7 +29,7 @@ var _ runtimeRestarter = &runtimeRestarterMock{}
 //	}
 type runtimeRestarterMock struct {
 	// restartFunc mocks the restart method.
-	restartFunc func(s string) (string, error)
+	restartFunc func(s string) string
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -43,7 +43,7 @@ type runtimeRestarterMock struct {
 }
 
 // restart calls restartFunc.
-func (mock *runtimeRestarterMock) restart(s string) (string, error) {
+func (mock *runtimeRestarterMock) restart(s string) string {
 	if mock.restartFunc == nil {
 		panic("runtimeRestarterMock.restartFunc: method is nil but runtimeRestarter.restart was just called")
 	}
