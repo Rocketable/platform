@@ -1065,7 +1065,7 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 
 	// A one-time reminder's waiting turn starts as turnID, releasing the input parked after it.
 	if request.scheduledMessageID != "" && !request.scheduledMessageRecurring {
-		started, err := execRows(ctx, tx, "start scheduled turn", "count started scheduled turns", `WITH parked AS (UPDATE turns SET park_after = '' WHERE park_after = $2)
+		started, err := execRows(ctx, tx, "start scheduled turn", `WITH parked AS (UPDATE turns SET park_after = '' WHERE park_after = $2)
 UPDATE turns SET id = $3, phase = $4, reason = NULL WHERE conversation_id = $1 AND input_id = $2 AND phase = $5 AND reason = $6`,
 			owner.config.ConversationID, request.scheduledMessageID, turnID, turnRunning, turnWaiting, waitScheduled)
 		if err != nil || started == 0 {

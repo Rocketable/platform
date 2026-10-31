@@ -65,7 +65,7 @@ WHERE p.agent = $1 AND p.kind = $2 AND p.name = $3`, agent, kind, name).Scan(&pa
 
 // DeletePage removes the page and reports whether it existed.
 func (s *SessionService) DeletePage(ctx context.Context, agent string, kind PageKind, name string) (bool, error) {
-	rows, err := execRows(ctx, s.db, "delete page", "count deleted pages", `DELETE FROM hosted_pages WHERE agent = $1 AND kind = $2 AND name = $3`, agent, kind, name)
+	rows, err := execRows(ctx, s.db, "delete page", `DELETE FROM hosted_pages WHERE agent = $1 AND kind = $2 AND name = $3`, agent, kind, name)
 	return rows > 0, err
 }
 

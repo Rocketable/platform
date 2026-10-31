@@ -1527,9 +1527,6 @@ func TestDeleteSessionEntriesReportsDeleteFailures(t *testing.T) {
 
 	_, err := deleteSessionEntries(context.Background(), errStore{errExec: errors.New("no delete")}, []string{"main"})
 	require.ErrorContains(t, err, "lock session history")
-
-	_, err = deleteSessionEntries(context.Background(), errStore{result: errResult{errRows: errors.New("no rows")}}, []string{"main"})
-	require.ErrorContains(t, err, "count stale session entries")
 }
 
 func TestSessionServicePrunesOldState(t *testing.T) {
@@ -2080,16 +2077,11 @@ func collectEntries(t *testing.T, seq iter.Seq2[harness.SessionEntry, error]) []
 }
 
 type errStore struct {
-	result  sql.Result
 	errExec error
 }
 
 func (s errStore) ExecContext(context.Context, string, ...any) (sql.Result, error) {
-	if s.errExec != nil {
-		return nil, s.errExec
-	}
-
-	return s.result, nil
+	return nil, s.errExec
 }
 
 func (errStore) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
@@ -2103,19 +2095,6 @@ func (s errStore) QueryRowContext(ctx context.Context, query string, args ...any
 	}
 
 	return db.QueryRowContext(ctx, query, args...)
-}
-
-type errResult struct {
-	errID   error
-	errRows error
-}
-
-func (r errResult) LastInsertId() (int64, error) {
-	return 0, r.errID
-}
-
-func (r errResult) RowsAffected() (int64, error) {
-	return 0, r.errRows
 }
 
 func testTurnStepKeys(t *testing.T, service *SessionService, conversationID string) []string {

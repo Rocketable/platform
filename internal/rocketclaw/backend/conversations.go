@@ -285,7 +285,7 @@ func (r *Runtime) PopQueueItem(ctx context.Context, conversationID, id string) (
 		return r.mutateWebQueue(ctx, conversationID, id, protocol.InboundKindEnqueue)
 	}
 
-	changed, err := execRows(ctx, r.Sessions.db, "pop queue item", "count popped queue items", popQueueItemSQL, conversationID, id, protocol.InboundKindEnqueue, protocol.InboundKindHeld, waitQueued)
+	changed, err := execRows(ctx, r.Sessions.db, "pop queue item", popQueueItemSQL, conversationID, id, protocol.InboundKindEnqueue, protocol.InboundKindHeld, waitQueued)
 	if err != nil || changed == 0 {
 		return false, err
 	}

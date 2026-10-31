@@ -56,7 +56,7 @@ func (s *SessionService) checkTopLevelSession(ctx context.Context, id string) (s
 func (s *SessionService) startSubagent(ctx context.Context, conversation string, key harness.ChildKey, agent string, isNew bool) error {
 	conversationID, parent := conversation+key.Path, conversation+key.Parent
 
-	started, err := execRows(ctx, s.db, "start subagent session", "count started subagent session", `WITH saved AS (
+	started, err := execRows(ctx, s.db, "start subagent session", `WITH saved AS (
     SELECT count(*) AS entries FROM entries WHERE conversation_id = $1
 ), parent AS (
     SELECT max(slack_channel) AS slack_channel FROM conversations WHERE conversation_id = $2

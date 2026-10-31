@@ -775,7 +775,7 @@ func (r *Runtime) mutateWebQueue(ctx context.Context, conversationID, id string,
 	}
 
 	if kind == protocol.InboundKindEnqueue {
-		changed, err := execRows(ctx, tx, "pop Web queue item", "count popped queue items", popQueueItemSQL, conversationID, id, kind, protocol.InboundKindHeld, waitQueued)
+		changed, err := execRows(ctx, tx, "pop Web queue item", popQueueItemSQL, conversationID, id, kind, protocol.InboundKindHeld, waitQueued)
 		if err != nil || changed == 0 {
 			return false, err
 		}
