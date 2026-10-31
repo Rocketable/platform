@@ -213,6 +213,8 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     await tabs.first().click();
     await name.fill("Alice");
     await name.press("Enter");
+    // Finish Alice's save before subsequent requests sign in as Bob.
+    await until(() => shown("alice")?.searches[0]?.name === "Alice");
     await page.evaluate(() => localStorage.setItem("last-seen:alice", "/s/b25l?message=private"));
     owner = "bob";
     await searches.getByRole("tab", { name: "Search 1" }).waitFor({ timeout: 10_000 });
