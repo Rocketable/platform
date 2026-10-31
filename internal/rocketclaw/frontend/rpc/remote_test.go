@@ -72,11 +72,17 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 			return rt.RunCtx.Done(), nil, nil
 		}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
-		var running errgroup.Group
+		running, ctxRunning := errgroup.WithContext(ctx)
 		running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
 		t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
-		rt := <-ready
+		var rt *backend.Runtime
+		select {
+		case rt = <-ready:
+		case <-ctxRunning.Done():
+			t.Fatalf("start %q fixture before readiness: %v", reply, running.Wait())
+		}
+
 		listener, err := net.Listen("unix", testSocketPath(t))
 		require.NoError(t, err)
 
