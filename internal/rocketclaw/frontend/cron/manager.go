@@ -35,10 +35,10 @@ type Manager struct {
 	now                   func() time.Time
 	tickerInterval        time.Duration
 
-	mu            sync.Mutex
-	stop          context.CancelFunc
-	start, closed bool
-	wg            sync.WaitGroup
+	mu     sync.Mutex
+	stop   context.CancelFunc
+	closed bool
+	wg     sync.WaitGroup
 }
 
 type cronScheduleStore interface {
@@ -80,7 +80,7 @@ func ValidateRuntimeDefinitions(workspace, runtimeDir string) error {
 // Start loads cron definitions and starts scheduling them.
 func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Lock()
-	if m.start {
+	if m.stop != nil {
 		m.mu.Unlock()
 		return errors.New("cronjob manager already started")
 	}
@@ -105,14 +105,12 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.start {
+	if m.stop != nil {
 		cancel()
 		return errors.New("cronjob manager already started")
 	}
 
 	m.stop = cancel
-	m.start = true
-	m.closed = false
 
 	for i := range definitions {
 		if len(definitions[i].schedules) == 1 && !definitions[i].schedules[0].DueAt.IsZero() {
@@ -144,7 +142,7 @@ func (m *Manager) Start(ctx context.Context) error {
 // Stop shuts the cron manager down.
 func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.Lock()
-	if !m.start {
+	if m.stop == nil {
 		m.mu.Unlock()
 		return nil
 	}
