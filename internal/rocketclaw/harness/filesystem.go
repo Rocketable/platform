@@ -1034,7 +1034,7 @@ func (sfs *sandboxedFileSystem) allowedRipgrepFiles(ctx context.Context, hostRoo
 
 	listed := strings.Split(outputText, "\n")
 
-	allowed := make([]string, 0, len(listed))
+	allowed := listed[:0]
 	for _, file := range listed {
 		if sfs.deniedPath(filepath.Join(hostRoot, file)) != "" {
 			continue
