@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
-import type { PromptDelivery, Session, TranscriptEvent } from "./types";
+import type { PromptDelivery, SavedTabs, Session, TranscriptEvent } from "./types";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
@@ -13,6 +13,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     source: [message("1:0", "user", "First request"), message("1:1", "assistant", "First answer"), message("2:0", "user", "Choose this prompt")],
     destination: [message("3:0", "user", "Destination search needle"), message("3:1", "assistant", "You are looking at the destination")],
   };
+  const tabs: SavedTabs = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [], mutes: [] };
   const header = "[ exact <header>\n" + "long-unbroken-header-value".repeat(40) + " ]";
   histories.source[0].header = header;
   const prompts: { id: string; text: string; delivery?: PromptDelivery }[] = [];
@@ -46,7 +47,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await request.json() as { id: string; before?: string; text: string; messageId?: string; delivery?: PromptDelivery; query: string } & Partial<Session>;
+    const input = await request.json() as { id: string; before?: string; text: string; messageId?: string; delivery?: PromptDelivery; query: string; state?: SavedTabs["state"] } & Partial<Session>;
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "session-commands" });
       case "/api/Identity": return Response.json({ username: "tester" });
@@ -101,7 +102,10 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
         if (input.id === "created" && failFirstTurn) return Response.json({ message: "First turn failed", code: 13 }, { status: 500 });
         return Response.json({ privateText: "" });
       }
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      case "/api/Tabs":
+        // A focus refresh must return the saved tabs, not report the active session closed elsewhere.
+        if (input.state) { tabs.state = input.state; tabs.revision = String(Number(tabs.revision) + 1); }
+        return Response.json(tabs);
       default: return Response.json({});
     }
   } });
