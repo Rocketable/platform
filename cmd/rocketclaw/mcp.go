@@ -119,7 +119,7 @@ func startExternalMCPServer(
 				return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", usedAgent)
 			}
 
-			result, _, err := submitExternalMCPInput(callCtx, turns, usedAgent, session.PrivateConversationID, session.ManagedConversationID, &inboundContent, metadata, strings.TrimSpace(username), externalConversationID)
+			result, _, err := submitExternalMCPInput(callCtx, turns, usedAgent, session.PrivateConversationID, session.ManagedConversationID, &inboundContent, metadata, username, externalConversationID)
 
 			return result, err
 		}
@@ -141,7 +141,7 @@ func startExternalMCPServer(
 
 		logger.Info("started external MCP session", "event", "external_mcp_session_started", "external_conversation_id", externalConversationID, "conversation_id", privateConversationID, "managed_conversation_id", managedConversationID, "agent", usedAgent, "user", username)
 
-		result, promptAccepted, err = submitExternalMCPInput(callCtx, turns, usedAgent, privateConversationID, managedConversationID, &inboundContent, metadata, strings.TrimSpace(username), externalConversationID)
+		result, promptAccepted, err = submitExternalMCPInput(callCtx, turns, usedAgent, privateConversationID, managedConversationID, &inboundContent, metadata, username, externalConversationID)
 
 		return result, err
 	})
@@ -201,19 +201,13 @@ func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAge
 	delete(inbound.Metadata, protocol.InboundPrincipalNameMetadataKey)
 	delete(inbound.Metadata, protocol.InboundPrincipalEmailMetadataKey)
 
-	principal = strings.TrimSpace(principal)
-	externalConversationID = strings.TrimSpace(externalConversationID)
-	if principal != "" || externalConversationID != "" {
-		if inbound.Metadata == nil {
-			inbound.Metadata = map[string]string{}
-		}
-		if principal != "" {
-			inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
-		}
-		if externalConversationID != "" {
-			inbound.Metadata["external_conversation_id"] = externalConversationID
-		}
+	if inbound.Metadata == nil {
+		inbound.Metadata = map[string]string{}
 	}
+	if principal != "" {
+		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
+	}
+	inbound.Metadata["external_conversation_id"] = externalConversationID
 
 	inbound.ConversationID, inbound.SyncDestination = conversationID, managedConversationID
 
