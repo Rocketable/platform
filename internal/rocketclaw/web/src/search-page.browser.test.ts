@@ -81,7 +81,7 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
     if (url.pathname === "/api/SearchSessions") {
       const { query } = await request.json() as { query: string };
-      return Response.json(response(query, [], ({ 'tag:"Needs review" is:forked': ['tag:"Needs review"', "is:forked"], "is:forked": ["is:forked"] } as Record<string, string[]>)[query]));
+      return Response.json(response(query, [], ({ 'tag:"Needs review" is:forked': ['tag:"Needs review"', "is:forked"], 'tag:"Needs review"': ['tag:"Needs review"'], "is:forked": ["is:forked"] } as Record<string, string[]>)[query]));
     }
     if (url.pathname === "/api/Tabs") return api.reply(request);
     if (url.pathname.startsWith("/api/")) return Response.json({});
@@ -188,7 +188,8 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     await page.reload();
     await pills.nth(1).waitFor();
     expect(await search.inputValue()).toBe("");
-    while (await pills.count()) await pills.first().click();
+    // Remove right to left so surviving pills keep their offsets while the next response is pending.
+    while (await pills.count()) await pills.last().click();
     await search.fill("edited");
     expect(await tabs.first().textContent()).toBe("Saved query");
     await searches.getByRole("tab", { name: "Saved query", exact: true }).click();
