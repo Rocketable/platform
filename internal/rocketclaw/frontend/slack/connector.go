@@ -281,9 +281,7 @@ func (c *Connector) Authenticate() error {
 func (c *Connector) Start(ctx context.Context) {
 	inboundCtx, inboundStop := context.WithCancel(ctx)
 
-	c.mu.Lock()
 	c.inboundStop = inboundStop
-	c.mu.Unlock()
 
 	go c.eventLoop(inboundCtx)
 	go c.runSocketLoop(inboundCtx)
@@ -293,12 +291,7 @@ func (c *Connector) Start(ctx context.Context) {
 
 // Stop stops Slack socket intake while leaving response delivery usable.
 func (c *Connector) Stop(context.Context) error {
-	c.mu.Lock()
-	if c.inboundStop != nil {
-		c.inboundStop()
-	}
-
-	c.mu.Unlock()
+	c.inboundStop()
 
 	if err := c.factsGroup.Wait(); err != nil {
 		return fmt.Errorf("stop Slack channel facts: %w", err)
