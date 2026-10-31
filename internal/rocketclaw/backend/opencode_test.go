@@ -716,10 +716,11 @@ func TestOpenCodeShellsFollowEvents(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	shells := &openCodeShells{running: map[string]string{"sh_stale": "ses_z"}}
-	done := make(chan error, 1)
+	done := make(chan struct{})
 
 	go func() {
-		done <- shells.follow(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "pw"})
+		shells.follow(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "pw"})
+		close(done)
 	}()
 
 	running := func(want map[string]string) func() bool {
@@ -743,7 +744,7 @@ func TestOpenCodeShellsFollowEvents(t *testing.T) {
 	require.Eventually(t, running(map[string]string{"sh_new": "ses_c"}), 5*time.Second, 10*time.Millisecond)
 
 	close(fake.events)
-	require.NoError(t, <-done, "an ended stream returns so the caller reconnects")
+	<-done // An ended stream returns so the caller reconnects.
 }
 
 func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
