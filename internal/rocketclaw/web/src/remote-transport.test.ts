@@ -38,6 +38,10 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await row.waitFor({ state: "hidden" });
   await palette.getByPlaceholder("Search sessions").fill("agent:main");
   await row.waitFor();
+  // Agent choices offer the remote's own agents too, under its name.
+  await palette.getByPlaceholder("Search sessions").fill("agent:sc");
+  await palette.getByRole("button").filter({ hasText: "scout" }).filter({ hasText: "work · gpt-6.1-sol" }).waitFor();
+  await palette.getByPlaceholder("Search sessions").fill("");
   await page.keyboard.press("Escape");
 
   // A new reply on the remote, while a local page shows, notifies: the chat is in one of the remote's tabs.

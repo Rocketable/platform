@@ -32,8 +32,9 @@ import (
 func TestRemoteRocketClawRealBrowser(t *testing.T) {
 	const suffix = "tail1234.ts.net"
 
-	// serve starts a RocketClaw whose model always says reply, and returns its Web RPC and workspace.
-	serve := func(reply string) (*grpc.ClientConn, string) {
+	// serve starts a RocketClaw whose model always says reply, with agents beside its built-in ones, and returns its Web RPC
+	// and workspace.
+	serve := func(reply string, agents ...string) (*grpc.ClientConn, string) {
 		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 			if !assert.NoError(t, err) {
@@ -62,8 +63,12 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		root, err := os.OpenRoot(cfg.Workspace)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
-		require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
-		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\ndescription: Remote browser fixture\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
+		// Startup builds the runtime agents from the workspace's agents directory.
+		require.NoError(t, root.MkdirAll("agents", 0o700))
+
+		for _, agent := range agents {
+			require.NoError(t, root.WriteFile(filepath.Join("agents", agent+".md"), []byte("---\ndescription: Remote browser fixture\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
+		}
 
 		ctx, cancel := context.WithCancel(t.Context())
 		ready := make(chan *backend.Runtime)
@@ -132,7 +137,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		})
 	}
 
-	remoteRPC, remoteWorkspace := serve("Remote reply")
+	remoteRPC, remoteWorkspace := serve("Remote reply", "scout")
 	remote := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		off, handler := down, tailnet
