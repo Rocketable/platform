@@ -69,6 +69,8 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   expect(new URL(page.url()).pathname).toStartWith("/r/work/");
   await page.goto(`${local}/r/work/config`);
   await page.getByText(process.env.ROCKETCLAW_REMOTE_TEST_WORKSPACE!, { exact: true }).waitFor();
+  // Config can render before Protocol answers; establish online before taking the remote offline.
+  await (await page.waitForResponse((response: { url(): string; ok(): boolean }) => response.url() === `${remote}/api/Protocol` && response.ok())).finished();
 
   // With the remote off, its page says so and a local space is still a choice away.
   expect(await page.evaluate(async () => (await fetch("/test/remote/down", { method: "POST" })).ok)).toBe(true);
