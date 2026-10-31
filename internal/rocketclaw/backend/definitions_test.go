@@ -131,6 +131,80 @@ func TestLoadRocketCodeDefinitionsSudo(t *testing.T) {
 	}
 }
 
+// Easy sections compile to reviewed rules; the conversation helpers stay unreviewed, and tags need tag groups.
+func TestLoadRocketCodeDefinitionsEasy(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	root := openWorkspaceRoot(t, workspace)
+	easy := "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: work\n"
+
+	for name, content := range map[string]string{
+		".rocketclaw/agents/open.md":                     easy + "tags: [[red, green]]\n---\nPrompt\n",
+		".rocketclaw/agents/none.md":                     easy + "rocketclaw: []\nmcp: {}\nskills: [marketing]\n---\nPrompt\n",
+		".rocketclaw/agents/grouped.md":                  easy + "mcp: {s: [read]}\n---\nPrompt\n",
+		".rocketclaw/skills/marketing/seo/SKILL.md":      "---\nname: seo\ndescription: SEO\n---\n",
+		".rocketclaw/skills/support/SKILL.md":            "---\nname: support\ndescription: Support\n---\n",
+		".rocketclaw/skills/marketing/team/ads/SKILL.md": "---\nname: ads\ndescription: Ads\n---\n",
+	} {
+		require.NoError(t, root.MkdirAll(filepath.Dir(name), 0o755))
+		require.NoError(t, root.WriteFile(name, []byte(content), 0o644))
+	}
+
+	cfg := &config.Config{Workspace: workspace, MCPServers: map[string]config.MCPServerConfig{"s": {Command: "s", Tools: config.MCPToolGroups{Read: []string{"list_*"}, Write: []string{"update_*"}}}}}
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(cfg), config.DefaultRuntimeDir, toolModePersistent)
+	require.NoError(t, err)
+
+	open, none, grouped := agents.Items["open"], agents.Items["none"], agents.Items["grouped"]
+	for _, subject := range []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName} {
+		requireRocketClawPermissionAction(t, open.Permission, subject, harness.PermissionAllow)
+		requireRocketClawPermissionAction(t, none.Permission, subject, harness.PermissionAllow)
+	}
+
+	for _, subject := range []string{restartToolName, sessionsSubject, "rocketclaw_store"} {
+		requireRocketClawPermissionAction(t, open.Permission, subject, harness.PermissionAuto)
+
+		action, _ := none.Permission.Evaluate("rocketclaw", subject)
+		require.Equal(t, harness.PermissionDeny, action, subject)
+	}
+
+	require.True(t, open.Permission.Enabled("rocketclaw", restartToolName))
+	require.False(t, none.Permission.Enabled("rocketclaw", restartToolName))
+
+	for _, name := range []string{setTagToolName, getTagsToolName} {
+		action, _ := open.Permission.Evaluate("rocketclaw_tags", name)
+		require.Equal(t, harness.PermissionAuto, action, name)
+		require.Contains(t, open.Prompt, name)
+
+		action, _ = none.Permission.Evaluate("rocketclaw_tags", name)
+		require.Equal(t, harness.PermissionDeny, action, name)
+	}
+
+	noneSkills := skills.Available(&none)
+
+	available := make([]string, 0, len(noneSkills))
+	for _, skill := range noneSkills {
+		available = append(available, skill.Name)
+	}
+
+	require.Equal(t, []string{"ads", "seo"}, available)
+	require.Len(t, skills.Available(&open), 3)
+
+	for subject, want := range map[string]harness.PermissionAction{"s.list_reports": harness.PermissionAuto, "s.update_x": harness.PermissionDeny} {
+		action, _ := grouped.Permission.Evaluate("mcp", subject)
+		require.Equal(t, want, action, subject)
+	}
+
+	for sections, want := range map[string]string{
+		"tags: [[red], [red]]": `grouped.md: tags: empty or duplicate tag name "red"`,
+	} {
+		require.NoError(t, root.WriteFile(".rocketclaw/agents/grouped.md", []byte(easy+sections+"\n---\nPrompt\n"), 0o644))
+
+		_, _, err = loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(cfg), config.DefaultRuntimeDir, toolModePersistent)
+		require.ErrorContains(t, err, want)
+	}
+}
+
 func TestSessionTagsExistingPermissions(t *testing.T) {
 	t.Parallel()
 
@@ -574,7 +648,7 @@ func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *te
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()
-			writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\nmode: primary\n"+tt.permission+"---\nPrompt\n")
+			writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\n"+tt.permission+"---\nPrompt\n")
 			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 			root, err := os.OpenRoot(workspace)
@@ -601,7 +675,6 @@ func TestLoadRocketCodeDefinitionsLoadsStructuredSkillMetadata(t *testing.T) {
 	writeAgent(t, workspace, "main", `---
 description: Main
 model: gpt-5.4
-mode: primary
 ---
 Prompt
 `)
@@ -693,7 +766,7 @@ func TestLoadRocketCodeDefinitionsRejectsEscapingAgentSymlink(t *testing.T) {
 
 	workspace := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "main.md")
-	require.NoError(t, os.WriteFile(outside, []byte("---\ndescription: Outside\nmode: primary\n---\nOutside\n"), 0o644))
+	require.NoError(t, os.WriteFile(outside, []byte("---\ndescription: Outside\n---\nOutside\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "agents"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	require.NoError(t, os.Symlink(outside, filepath.Join(workspace, ".rocketclaw", "agents", "main.md")))
@@ -711,7 +784,7 @@ func TestLoadRocketCodeDefinitionsRejectsEscapingSkillSymlink(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\nmode: primary\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\n---\nPrompt\n")
 	outside := filepath.Join(t.TempDir(), "SKILL.md")
 	require.NoError(t, os.WriteFile(outside, []byte("---\nname: outside\ndescription: Outside\n---\nOutside\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills", "outside"), 0o755))

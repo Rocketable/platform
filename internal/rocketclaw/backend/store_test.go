@@ -1359,13 +1359,13 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		histories := make([]string, 0, 3+2*len(children))
 		histories = append(histories, id+"/call-1", id+"/call-1/call-2", decoy)
 
-		require.NoError(t, store.startSubagent(t.Context(), id, harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "helper", true))
-		require.NoError(t, store.startSubagent(t.Context(), id+"/call-1", harness.ChildKey{Path: "/call-2", Turn: "turn-2", Call: "call-2"}, "helper", true))
+		require.NoError(t, store.startSubagent(t.Context(), id, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "helper"}))
+		require.NoError(t, store.startSubagent(t.Context(), id+"/call-1", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-2", Turn: "turn-2", Call: "call-2"}, Agent: "helper"}))
 
 		histories = append(histories, children...)
 		for _, child := range children {
-			require.NoError(t, store.startSubagent(t.Context(), child, harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, "helper", true))
-			require.NoError(t, store.startSubagent(t.Context(), child+"/task", harness.ChildKey{Path: "/nested", Turn: "turn-1", Call: "nested"}, "helper", true))
+			require.NoError(t, store.startSubagent(t.Context(), child, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/task", Turn: "turn-1", Call: "task"}, Agent: "helper"}))
+			require.NoError(t, store.startSubagent(t.Context(), child+"/task", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/nested", Turn: "turn-1", Call: "nested"}, Agent: "helper"}))
 			histories = append(histories, child+"/task/nested")
 		}
 
@@ -2615,7 +2615,7 @@ func TestConversationKindsAtCreation(t *testing.T) {
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "web:" + run, Agent: "main", CreatedBy: "alice"}))
 	require.NoError(t, runtime.ContinueRun(ctx, run, "web:"+run))
 	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "job", PrivateConversationID: "private", ManagedConversationID: "mcp-chat"}))
-	require.NoError(t, store.startSubagent(ctx, "web", harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "helper", true))
+	require.NoError(t, store.startSubagent(ctx, "web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "helper"}))
 
 	for _, parent := range []string{"web", run} {
 		require.NoError(t, (&Bridge{config: Config{ConversationID: parent, SessionService: store}}).AppendChildEntry(ctx, harness.ChildKey{Path: "/call-2-review-0a1b2c3d", Turn: "turn-2", Call: "call-2"}, testSessionEntry("review", "allowed")))

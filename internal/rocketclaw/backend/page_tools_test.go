@@ -5,8 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -50,13 +53,13 @@ func TestPageTools(t *testing.T) {
 		return out
 	}
 
-	reporter := pageTools(store, root, threads, "reporter", "Billing", "")
+	reporter := pageTools(store, root, &harness.CustomShell{}, threads, "reporter", "Billing", "")
 	for agent, want := range map[string]string{"reporter": "https://rc.example/pages/Billing/reporter/dashboard/index.html", "main": "https://rc.example/pages/-/main/dashboard/index.html", "main/review": "https://rc.example/pages/-/main%2Freview/dashboard/index.html"} {
-		tools := pageTools(store, root, threads, agent, map[string]string{"reporter": "Billing"}[agent], "")
+		tools := pageTools(store, root, &harness.CustomShell{}, threads, agent, map[string]string{"reporter": "Billing"}[agent], "")
 		require.Equal(t, want, must(tools, "rocketclaw_store", map[string]string{"path": "dashboard/index.html", "content": "<p>" + agent + "</p>"}))
 	}
 
-	team := pageTools(store, root, threads, "reporter", "Billing Team", "")
+	team := pageTools(store, root, &harness.CustomShell{}, threads, "reporter", "Billing Team", "")
 	require.Equal(t, "https://rc.example/pages/Billing%20Team/reporter/a%20b/c.html", must(team, "rocketclaw_store", map[string]string{"path": "a b/c.html", "content": "x"}))
 
 	require.Equal(t, "https://rc.example/pages/Billing/reporter/chart.js", must(reporter, "rocketclaw_store", map[string]string{"path": "chart.js", "source": "chart.js"}))
@@ -104,7 +107,7 @@ func TestPageTools(t *testing.T) {
 	require.Len(t, listed.Keys, 1)
 
 	// Tools for main see only main's files, never main/review's (AE7).
-	mainTools := pageTools(store, root, threads, "main", "", "")
+	mainTools := pageTools(store, root, &harness.CustomShell{}, threads, "main", "", "")
 	require.NoError(t, json.Unmarshal([]byte(must(mainTools, "rocketclaw_list", struct{}{})), &listed))
 	require.Len(t, listed.Files, 1)
 	require.Empty(t, listed.Keys)
@@ -122,4 +125,36 @@ func TestPageTools(t *testing.T) {
 
 	_, err = call(reporter, "rocketclaw_kv_read", map[string]string{"key": "revenue"})
 	require.Error(t, err)
+}
+
+// An easy agent stores a page from a file only through its file view, as it attaches one (R30).
+func TestPageStoreReadsEasyFileView(t *testing.T) {
+	dir := t.TempDir()
+	base, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+
+	require.NoError(t, base.Mkdir("workspace", 0o755))
+	require.NoError(t, base.Mkdir("folder", 0o755))
+	require.NoError(t, base.WriteFile("workspace/rocketclaw.json", []byte("{}"), 0o600))
+	require.NoError(t, base.WriteFile("folder/chart.js", []byte("draw()"), 0o600))
+
+	workspace, err := base.OpenRoot("workspace")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, workspace.Close()) })
+
+	store := newTestSessionService(t)
+	threads := &threadBridgeManager{runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store}
+	pageStore := pageTools(store, workspace, &harness.CustomShell{Emulated: true, Dir: filepath.Join(dir, "folder")}, threads, "easy", "Ops", "")[0]
+
+	_, err = pageStore.Call(t.Context(), json.RawMessage(`{"path":"config.json","source":"rocketclaw.json"}`), nil)
+	require.ErrorIs(t, err, fs.ErrNotExist, "a relative source starts from the agent's folder")
+
+	result, err := pageStore.Call(t.Context(), json.RawMessage(`{"path":"chart.js","source":"chart.js"}`), nil)
+	require.NoError(t, err)
+	require.Equal(t, "https://rc.example/pages/Ops/easy/chart.js", result.Output)
+
+	outside := filepath.Join(dir, "workspace", "rocketclaw.json")
+	_, err = pageStore.Call(t.Context(), json.RawMessage(`{"path":"config.json","source":`+strconv.Quote(outside)+`}`), nil)
+	require.EqualError(t, err, "read attachment: "+outside+" is outside this agent's folders")
 }

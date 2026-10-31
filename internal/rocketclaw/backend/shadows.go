@@ -698,8 +698,9 @@ func (b *Bridge) startShadowWorkers(ctx context.Context, turn string) error {
 // reconcileShadows attaches new definitions once under the parent's history lock.
 // Existing bindings survive removal and switching; the next activation fixes its roster.
 func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, parent, agent string) ([]string, error) {
-	var child bool
-	if err := queryScalar(ctx, db, "read shadow ownership", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND shadow_parent IS NOT NULL`, &child, parent); err != nil || child {
+	// A shadow has no shadows of its own, and a routine's run, whatever started its turn, runs without them.
+	var unshadowed bool
+	if err := queryScalar(ctx, db, "read shadow ownership", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND (shadow_parent IS NOT NULL OR cron_path LIKE 'agents/%')`, &unshadowed, parent); err != nil || unshadowed {
 		return nil, err
 	}
 
@@ -728,7 +729,12 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 		return nil, fmt.Errorf("open shadow agents directory: %w", err)
 	}
 
-	definitions, err := loadAgentDefinitions(agentsFS)
+	skillsFS, err := fs.Sub(root.FS(), filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), "skills")))
+	if err != nil {
+		return nil, fmt.Errorf("open shadow skills directory: %w", err)
+	}
+
+	definitions, err := loadAgentDefinitions(agentsFS, skillsFS, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -859,7 +865,7 @@ SELECT h.id, h.inbound_json FROM head h CROSS JOIN busy b WHERE jsonb_array_leng
 	// Build a fresh request: connector reply, completion, goal, and sync ownership
 	// belong to the parent, never to its comparison child.
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, parent.Text, false)
-	inbound.ConversationID = child
+	inbound.ConversationID, inbound.OriginHeader = child, reviewOriginHeader(&parent)
 	inbound.PreserveWhitespace = parent.PreserveWhitespace
 	// The shadow's subagents act for the parent's person, as the shadow's captured environment does.
 	if name := parent.Metadata[protocol.InboundPrincipalNameMetadataKey]; name != "" {

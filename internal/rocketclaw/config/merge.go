@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,7 +25,7 @@ func mergeJSON(dst, src any) any {
 	return dstMap
 }
 
-func resolveAWS(value any, fetcher SecretFetcher) (any, error) {
+func resolveAWS(ctx context.Context, value any, fetcher SecretFetcher) (any, error) {
 	switch node := value.(type) {
 	case map[string]any:
 		if raw, exists := node["aws"]; len(node) == 1 && exists {
@@ -40,11 +41,11 @@ func resolveAWS(value any, fetcher SecretFetcher) (any, error) {
 				return nil, &SecretFetchError{ARN: arn, Key: key, err: errInvalidAWSRef}
 			}
 
-			return secretField(fetcher, arn, key)
+			return secretField(ctx, fetcher, arn, key)
 		}
 
 		for key, child := range node {
-			resolved, err := resolveAWS(child, fetcher)
+			resolved, err := resolveAWS(ctx, child, fetcher)
 			if err != nil {
 				return nil, err
 			}
@@ -53,7 +54,7 @@ func resolveAWS(value any, fetcher SecretFetcher) (any, error) {
 		}
 	case []any:
 		for i, child := range node {
-			resolved, err := resolveAWS(child, fetcher)
+			resolved, err := resolveAWS(ctx, child, fetcher)
 			if err != nil {
 				return nil, err
 			}

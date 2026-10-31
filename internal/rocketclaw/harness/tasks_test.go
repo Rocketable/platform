@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"sync"
@@ -576,6 +578,130 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 	progress := PublicProgressFromTrace(parent.observations.trace)
 	require.Equal(t, taskKey("turn-3", "call_0"), progress[len(progress)-1].SubagentKey)
 	require.Equal(t, ChildKey{Path: "/parent" + taskKey("turn-3", "call_0"), Parent: "/parent", Turn: "turn-3", Call: "call_0"}, sessions.WriteSubagentCalls()[3].Write.Key)
+}
+
+// R7, KTD9: an easy agent's task picks a model from its subagents and the tools, from its own, its subagent
+// has; a new call and a continue check both against what the agent has now, so a continue naming a model
+// a reload removed changes nothing. The subagent runs the agent itself.
+func TestEasyTaskDelegatesByModel(t *testing.T) {
+	agent, errs := loadEasyTestAgent(t, easyRequired+"\nsubagents: [gpt-6-luna, gpt-6.1-sol#high]")
+	require.Empty(t, errs)
+
+	sessions := answeringSessions(map[string][]SessionEntry{}, false)
+	task := func(agent *Agent, callID, args string) error {
+		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": *agent}})
+		factory.childSessions, factory.backgroundJobs = sessions, &mockBackgroundJobs{EnabledFunc: func() bool { return true }, RunFunc: InertBackgroundJobs{}.Run}
+		parent := testLooper(mockResponses())
+		parent.observations.turnID, parent.Permissions = "turn-"+callID, agent.Permission
+		parent.Tools, parent.CodeModeHosts = factory.assembleTools(agent)
+		_, err := parent.Tools["task"].Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: callID}), json.RawMessage(args), nil, toolCallMetadata{callID: callID, observations: parent.observations, progress: &PublicProgress{ID: callID}})
+
+		return err
+	}
+	args := func(model, tools, continueID string) string {
+		return fmt.Sprintf(`{"model":%q,"tools":%s,"prompt":"look","description":"Look","command":"","background":false,"continue":{"session_id":%q,"mode":"enqueue"}}`, model, tools, continueID)
+	}
+
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": agent}})
+	tools, _ := factory.assembleTools(&agent)
+	schema := string(marshalParameters(t, tools["task"].Definition.Parameters))
+	require.Contains(t, schema, `"tools":{"items":{"type":"string"},"type":["array","null"]}`)
+	require.Contains(t, schema, `"model":{"type":"string"}`)
+	require.NotContains(t, schema, "subagent_type")
+	require.Contains(t, tools["task"].Definition.Description.Value, "Available models:\n- gpt-6-luna\n- gpt-6.1-sol#high")
+
+	err := task(&agent, "call-1", args("gpt-6-luna", `["bash","s.list_reports"]`, ""))
+	require.NoError(t, err)
+	err = task(&agent, "call-2", args("gpt-6.1-sol#high", "null", ""))
+	require.NoError(t, err)
+
+	writes := sessions.WriteSubagentCalls()
+	require.Len(t, writes, 2)
+	require.Equal(t, []any{"main", "main", "gpt-6-luna", []string{"bash", "s.list_reports"}}, []any{writes[0].Write.Agent, writes[0].Write.Delegator, writes[0].Write.Model, writes[0].Write.Tools})
+	require.Equal(t, []any{"gpt-6.1-sol#high", []string(nil)}, []any{writes[1].Write.Model, writes[1].Write.Tools}, "null gives every tool of the parent")
+
+	for _, tc := range []struct{ name, args, want string }{
+		{"unlisted model", args("gpt-7", "null", ""), `model "gpt-7" is not one of this agent's subagent models: gpt-6-luna, gpt-6.1-sol#high`},
+		{"tool the parent lacks", args("gpt-6-luna", `["bash","rocketclaw_restart"]`, ""), `tool "rocketclaw_restart" is not one of your tools`},
+		{"MCP wildcard", args("gpt-6-luna", `["s.*"]`, ""), `tool "s.*" is not one of your tools`},
+	} {
+		err := task(&agent, "call-3", tc.args)
+		require.ErrorContains(t, err, tc.want, tc.name)
+	}
+
+	require.Len(t, sessions.WriteSubagentCalls(), 2, "a refused call starts no subagent")
+
+	reloaded, errs := loadEasyTestAgent(t, easyRequired+"\nsubagents: [gpt-6.1-sol#high]")
+	require.Empty(t, errs)
+
+	err = task(&reloaded, "call-4", args("gpt-6-luna", "null", writes[0].Write.Key.Path))
+	require.EqualError(t, err, `model "gpt-6-luna" is not one of this agent's subagent models: gpt-6.1-sol#high`)
+	require.Len(t, sessions.WriteSubagentCalls(), 2, "a refused continue leaves the subagent unchanged")
+
+	err = task(&reloaded, "call-5", args("gpt-6.1-sol#high", `["bash"]`, writes[0].Write.Key.Path))
+	require.NoError(t, err)
+	require.Equal(t, SubagentWrite{Key: ChildKey{Path: writes[0].Write.Key.Path, Turn: "turn-call-5", Call: "call-5"}, CallKey: "turn-call-5/call/call-5", Agent: "main", Delegator: "main", Prompt: "look", Mode: ContinueEnqueue, Model: "gpt-6.1-sol#high", Tools: []string{"bash"}}, *sessions.WriteSubagentCalls()[2].Write)
+
+	// The subagent runs with the tools it was given, also inside execute, and passes them on when it names none.
+	subagent := agent
+	subagent.Tools = []string{"bash", "s.list_reports"}
+	loop, err := factory.newLooper(&subagent, "")
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{executeToolName, loadExecuteResultToolName}, slices.Collect(maps.Keys(loop.Tools)))
+	require.Equal(t, []string{"bash"}, slices.Collect(maps.Keys(loop.CodeModeHosts)))
+
+	for subject, want := range map[string]PermissionAction{"s.list_reports": PermissionAuto, "s.update_x": PermissionDeny, "t.get_x": PermissionDeny} {
+		action, _ := loop.Permissions.Evaluate(mcpPermissionBucket, subject)
+		require.Equal(t, want, action, subject)
+	}
+
+	subagent.Tools = []string{"task", "bash"}
+	err = task(&subagent, "call-6", args("gpt-6-luna", "null", ""))
+	require.NoError(t, err)
+	require.Equal(t, []string{"task", "bash"}, sessions.WriteSubagentCalls()[3].Write.Tools)
+
+	loop, err = factory.newLooper(&agent, "")
+	require.NoError(t, err)
+	require.Subset(t, slices.Collect(maps.Keys(loop.CodeModeHosts)), []string{"bash", "read"}, "without a list the subagent has every tool")
+}
+
+// R7, R8: an easy agent has task only with subagents and depth left.
+func TestEasyTaskNeedsSubagentsAndDepth(t *testing.T) {
+	for _, tc := range []struct {
+		sections  string
+		remaining int
+		offered   bool
+	}{
+		{"", 1, true},
+		{"subagents: []", 1, false},
+		{"subagents: [gpt-6-luna]\nmaxRecursion: 0", 0, false},
+		{"", 0, false}, // A subagent one level below an agent whose maxRecursion is omitted.
+	} {
+		agent, errs := loadEasyTestAgent(t, easyRequired+"\n"+tc.sections)
+		require.Empty(t, errs)
+
+		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": agent}})
+		factory.recursionRemaining = &tc.remaining
+		tools, _ := factory.assembleTools(&agent)
+		require.Equal(t, tc.offered, tools["task"].Call != nil, tc)
+	}
+}
+
+// A4: task never runs an easy agent, which an advanced agent reaches through its sessions instead.
+func TestAdvancedTaskRefusesEasyAgent(t *testing.T) {
+	easy, errs := loadEasyTestAgent(t, easyRequired)
+	require.Empty(t, errs)
+
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": easy, "child": testAgent("child")}})
+	factory.childSessions = answeringSessions(map[string][]SessionEntry{}, false)
+	factory.agent = testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"task": permissionAllow}))
+	factory.agent.Name = "boss"
+
+	require.NotContains(t, factory.taskDescription(), "- main:")
+
+	parent := testLooper(mockResponses())
+	_, err := factory.taskTool().Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call-1"}), json.RawMessage(`{"subagent_type":"main","prompt":"look","description":"Look","command":""}`), nil, toolCallMetadata{callID: "call-1", observations: parent.observations, progress: &PublicProgress{ID: "call-1"}})
+	require.EqualError(t, err, "agent type main is an easy agent, which task cannot run; write to its sessions with rocketclaw_sessions instead")
 }
 
 // taskKey is the subagent key of a new root task call keyed turnID + "/call/" + callID.

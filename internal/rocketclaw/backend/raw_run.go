@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	instrumentation "github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -43,8 +45,10 @@ type workflowAgentRunner struct {
 	skills        harness.Skills
 	resolver      *modelResolver
 	customTools   []harness.Tool
-	// shellEnv is the environment of the turn the workflow runs for (Bridge.turnShellEnv).
-	shellEnv map[string]string
+	// shellEnv is the environment of the turn the workflow runs for (Bridge.turnShellEnv), and
+	// originHeader that turn's trusted origin header (reviewOriginHeader).
+	shellEnv     map[string]string
+	originHeader string
 }
 
 // workflowWorkerStep is a finished workflow worker's recorded result.
@@ -119,8 +123,15 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 		active.Prompt = request.Worker.Instructions
 	}
 
-	if request.Worker.Model != "" {
-		active.Model = request.Worker.Model
+	if model := request.Worker.Model; model != "" {
+		// An easy agent's effort comes only from its model's #effort, so this is its model as written.
+		own := strings.TrimSuffix(active.Model+"#"+active.ReasoningEffort, "#")
+		if active.Mode == harness.AgentModeEasy && !slices.Contains(append([]string{own}, active.Subagents...), model) {
+			return nil, fmt.Errorf("worker model %q is neither this agent's model nor one of its subagent models: %s", model, strings.Join(active.Subagents, ", "))
+		}
+
+		name, effort := harness.ParseModelRef(model)
+		active.Model, active.ReasoningEffort = name, cmp.Or(effort, active.ReasoningEffort)
 	}
 
 	callAgents.Items[r.agent] = active
@@ -140,7 +151,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 
 	runtimeConfig := harness.Config{AutoApproverModel: r.cfg.AutoApproverModel, ShellTempDir: filepath.Join(r.cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(r.cfg), RetainedResultDir: filepath.Join("retained", "unused"), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: harness.ObservabilityConfig{Enabled: r.cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.cfg.Instrumentation.HideInputs, HideOutputs: r.cfg.Instrumentation.HideOutputs}}, ChildSessions: harness.InertChildSessions{}, Journal: r.journal, BackgroundJobs: harness.InertBackgroundJobs{}, ShellCommand: harness.DefaultShellCommand{}}
 	runtimeConfig.CustomTools = r.customTools
-	runtimeConfig.ShellEnv = r.shellEnv
+	runtimeConfig.ShellEnv, runtimeConfig.OriginHeader = r.shellEnv, r.originHeader
 
 	runtime, err := harness.NewWithModelResolver(r.resolver, &runtimeConfig, r.root, callAgents, r.skills, r.agent, io.Discard)
 	if err != nil {

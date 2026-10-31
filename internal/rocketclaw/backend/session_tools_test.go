@@ -714,7 +714,7 @@ func TestSessionsWriteToolDescription(t *testing.T) {
 		"Only stop takes an empty prompt: it then just stops the turn and goal, queues nothing, and posts that this session stopped it into that session's transcript without starting a turn. "+
 		"The receiver is told this session and agent sent it and that its answer comes back here. Each call that returns a queue_item_id gets exactly one reply: when the target's turn that took prompt ends, or, for an empty-prompt stop, once the stopped turn is over, a <session_reply> note naming that queue_item_id arrives here with the outcome and that turn's final answer. A steer's answer covers the whole turn it joined. "+
 		"DO NOT wait, sleep, poll, or write again to get the reply: work on anything that does not depend on it, or end your response; you will be resumed when it arrives. "+
-		"Every call, including create and stop, fails before doing anything when the target agent's permission.rocketclaw.rocketclaw_sessions_recipient does not accept this agent. "+
+		"Every call, including create and stop, fails before doing anything when the target agent's permission.rocketclaw.rocketclaw_sessions_recipient, or an easy target's delegatedFrom, does not accept this agent. "+
 		"Returns JSON with outcome (created, steered, queued or stopped), session_id, url, queue_item_id (absent only for an empty-prompt stop when no turn was running, which gets no reply) and, for stop, turn_was_running. Share url so a person can open the session.", write.Description)
 
 	mode, err := json.Marshal(write.Parameters["properties"].(map[string]any)["mode"])
@@ -842,12 +842,17 @@ func TestSessionsWriteRecipients(t *testing.T) {
 	writeAgent(t, workspace, "root", "---\nmodel: gpt-6.1-sol\nsudo: yes\n---\nPrompt\n")
 	writeAgent(t, workspace, "admin", "---\nmodel: gpt-6.1-sol\nsudo: yes\npermission:\n  rocketclaw:\n    "+recipientSetting+": [researcher]\n---\nPrompt\n")
 
+	// An easy agent's delegatedFrom says the same; omitted, any agent may write.
+	for name, delegatedFrom := range map[string]string{"easyopen": "", "easyclosed": "delegatedFrom: false\n", "easylead": "delegatedFrom: [main]\n"} {
+		writeAgent(t, workspace, name, "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: work\n"+delegatedFrom+"---\nPrompt\n")
+	}
+
 	store := newTestSessionServiceAt(t, workspace)
 	cfg := &config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(cfg), store: store, bridges: map[string]directBridge{}}
 
 	targets := map[string]*Bridge{}
-	for _, agent := range []string{"main", "ops", "lead", "open", "root", "admin"} {
+	for _, agent := range []string{"main", "ops", "lead", "open", "root", "admin", "easyopen", "easyclosed", "easylead"} {
 		targets[agent] = runningTestBridge(t, store, manager, "web:"+agent)
 		require.NoError(t, store.UpsertThread("web:"+agent, ThreadState{Agent: agent}))
 	}
@@ -865,6 +870,9 @@ func TestSessionsWriteRecipients(t *testing.T) {
 		{"main", `session_id="web:main", mode="enqueue", prompt="p", title="", agent=""`},
 		{"root", `session_id="web:root", mode="enqueue", prompt="p", title="", agent=""`},
 		{"admin", `session_id="web:admin", mode="enqueue", prompt="p", title="", agent=""`},
+		{"easyopen", `session_id="web:easyopen", mode="enqueue", prompt="p", title="", agent=""`},
+		{"easyclosed", `session_id="web:easyclosed", mode="enqueue", prompt="p", title="", agent=""`},
+		{"easylead", `session_id="web:easylead", mode="enqueue", prompt="p", title="", agent=""`},
 	}
 
 	for _, sender := range []string{"main", "researcher", "ops"} {
@@ -928,8 +936,13 @@ func TestSessionsWriteRecipients(t *testing.T) {
 		require.Len(t, outputs, len(writes))
 
 		for i, write := range writes {
-			refusal := fmt.Sprintf("agent %q does not accept writes from agent %q (permission.rocketclaw.%s)", write.target, sender, recipientSetting)
-			if write.target == "ops" || write.target == "root" || write.target == "lead" && sender != "main" || write.target == "admin" && sender != "researcher" {
+			setting := "permission.rocketclaw." + recipientSetting
+			if strings.HasPrefix(write.target, "easy") {
+				setting = "delegatedFrom"
+			}
+
+			refusal := fmt.Sprintf("agent %q does not accept writes from agent %q (%s)", write.target, sender, setting)
+			if write.target == "ops" || write.target == "root" || write.target == "easyclosed" || (write.target == "lead" || write.target == "easylead") && sender != "main" || write.target == "admin" && sender != "researcher" {
 				assert.Contains(t, outputs[i], refusal, "%s writes %s", sender, write.call)
 			} else {
 				assert.Contains(t, outputs[i], `"outcome":"queued"`, "%s writes %s", sender, write.call)
@@ -951,7 +964,7 @@ func TestSessionsWriteRecipients(t *testing.T) {
 	assert.Zero(t, parked, "a refused stop parks no line")
 	assert.Equal(t, 1, opsSessions, "a refused create records no session")
 
-	for target, accepted := range map[string]int{"lead": 1, "open": 3, "main": 3, "root": 0, "admin": 1} {
+	for target, accepted := range map[string]int{"lead": 1, "open": 3, "main": 3, "root": 0, "admin": 1, "easyopen": 3, "easyclosed": 0, "easylead": 1} {
 		assert.Len(t, queueIDs(t, store, "web:"+target), accepted, target)
 	}
 }
@@ -991,7 +1004,7 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 					_, _ = w.Write([]byte(script("write", "def main():\n    return rocketclaw_sessions_write(session_id='', mode='stop', prompt='child task', title='Child', agent='') + '|' + rocketclaw_sessions_write(session_id='slack-thread:C123:111.222', mode='steer', prompt='also check 2025', title='', agent='')\n")))
 				}
 			})
-			writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\n"+permission+"\n---\nPrompt\n")
+			writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\n"+permission+"\n---\nPrompt\n")
 			nt.cfg.AutoApproverModel = "review-model"
 			nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 			require.NoError(t, nt.service.UpsertThread(caller, ThreadState{Agent: "main"}))
@@ -1072,7 +1085,7 @@ func replyNoteTest(t *testing.T, code string, answer noteTestResponder) *noteTes
 			Code string `json:"code"`
 		}{"def main():\n    return " + code + "\n"})
 	})
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nPrompt\n")
 	nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 	require.NoError(t, nt.service.UpsertThread("web:caller", ThreadState{Agent: "main"}))
 
@@ -1201,8 +1214,8 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 			answerNoteTest(w, r, n, body)
 		}
 	})
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n---\nPrompt\n")
-	writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nResearch\n")
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_sessions: allow}\n---\nResearch\n")
 	nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 	require.NoError(t, nt.service.UpsertThread("web:ops", ThreadState{Agent: "main"}))
 
@@ -1541,7 +1554,7 @@ func TestChildConversationsKeepSlackChannel(t *testing.T) {
 	thread := protocol.SlackThreadConversationID("C1", "1.1")
 	recordTestConversations(t, store, "main", map[string]ConversationKind{thread: KindSlackThread})
 
-	require.NoError(t, store.startSubagent(t.Context(), thread, harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "helper", true))
+	require.NoError(t, store.startSubagent(t.Context(), thread, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "helper"}))
 	require.NoError(t, (&Bridge{config: Config{ConversationID: thread + "/call-1", SessionService: store}}).AppendChildEntry(t.Context(), harness.ChildKey{Path: "/call-2-review-0a1b2c3d", Turn: "turn-2", Call: "call-2"}, testSessionEntry("review", "allowed")))
 
 	for _, child := range []string{thread + "/call-1", thread + "/call-1/call-2-review-0a1b2c3d"} {
@@ -1550,6 +1563,38 @@ func TestChildConversationsKeepSlackChannel(t *testing.T) {
 		assert.Equal(t, "C1", channel, child)
 		assert.Empty(t, slackThread, "only the Slack thread itself is one")
 	}
+}
+
+// KTD9: an easy agent's subagent session keeps the model and tools its task call chose, no tools meaning
+// every tool, and a continue replaces them; an agent type's subagent keeps neither.
+func TestStartSubagentKeepsModelAndTools(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"web": KindWebChat})
+
+	saved := func(id string) []string {
+		var model, tools string
+		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT COALESCE(subagent_model, 'NULL'), COALESCE(subagent_tools::text, 'NULL') FROM conversations WHERE conversation_id = $1`, id).Scan(&model, &tools))
+
+		return []string{model, tools}
+	}
+
+	require.NoError(t, store.startSubagent(t.Context(), "web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a", Turn: "turn-1", Call: "a"}, Agent: "main", Model: "gpt-6-luna#max", Tools: []string{"bash"}}))
+	require.Equal(t, []string{"gpt-6-luna#max", `["bash"]`}, saved("web/a"))
+
+	// A continue before the first turn saves an entry replaces them too.
+	require.NoError(t, store.startSubagent(t.Context(), "web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a"}, Agent: "main", Model: "gpt-6-luna", Tools: []string{"read"}, Mode: harness.ContinueEnqueue}))
+	require.Equal(t, []string{"gpt-6-luna", `["read"]`}, saved("web/a"))
+
+	insertSessionEntryWithoutSummary(t, store, "web/a", testSessionEntry("look", "found"))
+	require.NoError(t, store.startSubagent(t.Context(), "web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a"}, Agent: "main", Model: "gpt-6.1-sol", Mode: harness.ContinueEnqueue}))
+	require.Equal(t, []string{"gpt-6.1-sol", "NULL"}, saved("web/a"))
+
+	require.EqualError(t, store.startSubagent(t.Context(), "web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/never"}, Agent: "main", Mode: harness.ContinueEnqueue}), `continue ID "/never" has no saved subagent history in this conversation`)
+
+	require.NoError(t, store.startSubagent(t.Context(), "web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/b", Turn: "turn-1", Call: "b"}, Agent: "helper"}))
+	require.Equal(t, []string{"NULL", "NULL"}, saved("web/b"))
 }
 
 // A parked "Stopped by" line that cannot be decoded fails its post, which leaves it parked.

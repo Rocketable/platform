@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -42,6 +43,7 @@ type toolFactory struct {
 	baseTools                  map[string]looperTool
 	shellSystem                *sandboxedShellSystem // Shared by every agent's bash tool in this runtime.
 	childContext               []SessionEntry
+	originHeader               string
 	shellTemp                  shellTempConfig
 	spillRel                   string
 	retainedRel                string // This conversation's retained background results.
@@ -114,10 +116,19 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 		scopedAgent := *agent
 		scopedAgent.Permission = f.shellTemp.effectivePermissions(scopedAgent.Permission)
 		agent = &scopedAgent
-		scoped.promptExpansion.customShell = agent.CustomShell
+		scoped.promptExpansion = f.promptExpansion.forAgent(agent)
 
 		if agent.CustomShell.Path != "" || agent.CustomShell.Emulated {
-			tools["bash"] = bashTool(f.shellSystem, agent.CustomShell)
+			tools["bash"] = bashTool(f.shellSystem, &agent.CustomShell)
+		}
+
+		if agent.Mode == AgentModeEasy {
+			easy := makeSandboxedTools(&easyFiles{shell: agent.CustomShell}, f.shellSystem)
+			for _, name := range []string{"read", "apply_patch", "glob", "grep"} {
+				tools[name] = easy[name]
+			}
+
+			tools["webfetch"] = webFetchTool(easyWebFetchClient(agent.NetworkTargets))
 		}
 	}
 
@@ -128,6 +139,11 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 	tools["task"] = scoped.taskTool()
 	if scoped.recursionRemaining != nil && *scoped.recursionRemaining == 0 {
 		delete(tools, "task")
+	}
+
+	// A subagent that names its tools has only those; execute, which runs them, comes below.
+	if agent != nil && agent.Tools != nil {
+		maps.DeleteFunc(tools, func(name string, _ looperTool) bool { return !slices.Contains(agent.Tools, name) })
 	}
 
 	codeHosts = make(map[string]looperTool, 6)
@@ -176,6 +192,22 @@ func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, err
 	client, origin, err := resolveModel(f.resolver, agent.Model)
 	if err != nil {
 		return nil, err
+	}
+
+	// A subagent that names its tools keeps only the MCP tools it names, under the rules it had for them:
+	// execute lists MCP tools by permission.
+	if agent.Tools != nil {
+		restricted := *agent
+		rules := []PermissionRule{{Pattern: "*", Action: PermissionDeny}}
+
+		for _, name := range agent.Tools {
+			if action, _ := agent.Permission.Evaluate(mcpPermissionBucket, name); strings.Contains(name, ".") {
+				rules = append(rules, PermissionRule{Pattern: name, Action: action})
+			}
+		}
+
+		restricted.Permission.Buckets = append(slices.Clip(agent.Permission.Buckets), PermissionBucket{Name: mcpPermissionBucket, Rules: rules})
+		agent = &restricted
 	}
 
 	modelTools, codeHosts := f.assembleTools(agent)
@@ -236,7 +268,17 @@ func toolVisible(agent *Agent, name string, tool *looperTool) bool {
 	return agent.Permission.hasRuleForPermission(permission, permissionAllow, permissionAuto)
 }
 
-func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map[string]looperTool {
+// fileSystem is what the file tools work on: the workspace sandbox, or an easy agent's file view.
+type fileSystem interface {
+	ReadResult(filename string, offset int) ToolResult
+	readPermissionSubject(name string) string
+	previewApplyPatch(patchText string) (applyPatchPreview, string)
+	ApplyPatch(patchText string) string
+	Glob(ctx context.Context, pattern, path string) string
+	Grep(ctx context.Context, pattern, searchPath, include string) string
+}
+
+func makeSandboxedTools(sfs fileSystem, sss *sandboxedShellSystem) map[string]looperTool {
 	return map[string]looperTool{
 		"websearch": webSearchTool(),
 		"read": {
@@ -273,7 +315,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 					return nil, err
 				}
 
-				preview, errText := previewApplyPatch(sfs, cmp.Or(params.PatchText, params.Patch))
+				preview, errText := sfs.previewApplyPatch(cmp.Or(params.PatchText, params.Patch))
 				if errText != "" {
 					return nil, errors.New(errText)
 				}
@@ -285,7 +327,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 						target = change.movePath
 					}
 
-					subjects = append(subjects, rootedPathSubject(target))
+					subjects = append(subjects, sfs.readPermissionSubject(target))
 				}
 
 				return subjects, nil
@@ -351,35 +393,39 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 				return TextToolResult(sfs.Grep(ctx, params.Pattern, params.Path, params.Include)), nil
 			},
 		},
-		"webfetch": {
-			Definition: *functionTool("webfetch", webFetchDescription, map[string]any{
-				"url":       map[string]any{"type": "string"},
-				"format":    map[string]any{"type": "string", "enum": []string{"text", "markdown", "html"}},
-				"timeout_s": map[string]any{"type": "integer"},
-			}),
-			Permission: "webfetch",
-			Subjects: func(raw json.RawMessage) ([]string, error) {
-				var params webFetchToolParams
-				if err := decodeToolParams(raw, &params); err != nil {
-					return nil, err
-				}
-
-				return []string{params.URL}, nil
-			},
-			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				var params webFetchToolParams
-				if err := decodeToolParams(raw, &params); err != nil {
-					return ToolResult{}, err
-				}
-
-				return webFetch(ctx, params)
-			},
-		},
-		"bash": bashTool(sss, CustomShell{}),
+		"webfetch": webFetchTool(http.DefaultClient),
+		"bash":     bashTool(sss, &CustomShell{}),
 	}
 }
 
-func bashTool(sss *sandboxedShellSystem, customShell CustomShell) looperTool {
+func webFetchTool(client *http.Client) looperTool {
+	return looperTool{
+		Definition: *functionTool("webfetch", webFetchDescription, map[string]any{
+			"url":       map[string]any{"type": "string"},
+			"format":    map[string]any{"type": "string", "enum": []string{"text", "markdown", "html"}},
+			"timeout_s": map[string]any{"type": "integer"},
+		}),
+		Permission: "webfetch",
+		Subjects: func(raw json.RawMessage) ([]string, error) {
+			var params webFetchToolParams
+			if err := decodeToolParams(raw, &params); err != nil {
+				return nil, err
+			}
+
+			return []string{params.URL}, nil
+		},
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+			var params webFetchToolParams
+			if err := decodeToolParams(raw, &params); err != nil {
+				return ToolResult{}, err
+			}
+
+			return webFetch(ctx, client, params)
+		},
+	}
+}
+
+func bashTool(sss *sandboxedShellSystem, customShell *CustomShell) looperTool {
 	description := "Run a shell script in the workspace. Every operation needs permission, including declarations, assignments, redirections, expansions, and nested commands. Whole-script rules support wildcards within the same operation tree; last matching rule wins per operation. Invalid syntax and unresolved executable names are denied. Inside execute JSON code, bash(command=...) takes r'''...''' only.\nExample: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}"
 	if customShell.Emulated {
 		description += "\nCommands run in an emulated bash shell, which may limit what they can reach."
@@ -550,8 +596,15 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, raw json.RawMes
 		)
 	}
 
+	content := strings.TrimSpace(skill.Content)
+
+	easy := f.agent != nil && f.agent.Mode == AgentModeEasy
+	if easy && f.expandPromptShellCommands.SkillPrompts {
+		content = f.promptExpansion.expandShellCommands(ctx, content)
+	}
+
 	lines = append(lines,
-		renderSkillArguments(strings.TrimSpace(skill.Content), input.Arguments, input.Direct),
+		renderSkillArguments(content, input.Arguments, input.Direct),
 		"",
 		"Base directory for this skill: file://"+filepath.ToSlash(filepath.Join(f.skills.Root, filepath.FromSlash(dir))),
 		"Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
@@ -565,7 +618,7 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, raw json.RawMes
 
 	output := strings.Join(lines, "\n")
 
-	if f.expandPromptShellCommands.SkillPrompts {
+	if !easy && f.expandPromptShellCommands.SkillPrompts {
 		output = f.promptExpansion.expandShellCommands(ctx, output)
 	}
 

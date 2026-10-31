@@ -121,6 +121,8 @@ func TestResetRuntimeDirectoryPreservesAuthAndAttachments(t *testing.T) {
 	// A reload keeps the just-bash install that running bash calls use.
 	require.NoError(t, os.Mkdir(filepath.Join(target, "justbash"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(target, "justbash", "wrapper.ts"), []byte("wrapper"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(target, "uploads", "web:c1", "up1"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(target, "uploads", "web:c1", "up1", "notes.txt"), []byte("notes"), 0o600))
 
 	for _, preserveOverlays := range []bool{false, true} {
 		require.NoError(t, resetRuntimeDirectory(target, testLogger(), preserveOverlays))
@@ -128,6 +130,7 @@ func TestResetRuntimeDirectoryPreservesAuthAndAttachments(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "immutable", string(data))
 		require.FileExists(t, filepath.Join(target, "justbash", "wrapper.ts"))
+		require.FileExists(t, filepath.Join(target, "uploads", "web:c1", "up1", "notes.txt"))
 	}
 
 	data, err := os.ReadFile(filepath.Join(target, ".auth.json-in-flight"))

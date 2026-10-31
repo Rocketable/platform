@@ -78,7 +78,7 @@ func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronj
 
 	schedules := make([]CronSchedule, 0, len(raw.Schedule.values))
 	for _, value := range raw.Schedule.values {
-		schedule, err := parseCronSchedule(value)
+		schedule, err := ParseCronSchedule(value)
 		if err != nil {
 			return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s schedule %q: %w", relativePath, value, err)
 		}
@@ -170,7 +170,8 @@ type CronSchedule struct {
 	parsed   cron.Schedule
 }
 
-func parseCronSchedule(raw string) (CronSchedule, error) {
+// ParseCronSchedule parses one cron-file schedule: a 5-field cron, a Go duration, an @shortcut, or an RFC 3339 time.
+func ParseCronSchedule(raw string) (CronSchedule, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return CronSchedule{}, errors.New("schedule must not be blank")

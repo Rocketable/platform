@@ -2,6 +2,7 @@
 package cronfrontend
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
@@ -28,6 +30,7 @@ type Runner interface {
 
 // Manager loads and runs workspace cron definitions.
 type Manager struct {
+	cfg                   *config.LockedConfig
 	workspace, runtimeDir string
 	store                 cronScheduleStore
 	run                   Runner
@@ -38,7 +41,9 @@ type Manager struct {
 	mu     sync.Mutex
 	stop   context.CancelFunc
 	closed bool
-	wg     sync.WaitGroup
+	// armed holds the schedule IDs of the one-offs whose timers started, so each starts once.
+	armed map[string]bool
+	wg    sync.WaitGroup
 }
 
 type cronScheduleStore interface {
@@ -46,6 +51,7 @@ type cronScheduleStore interface {
 	SyncCronSchedules([]backend.CronScheduleState) error
 	DueCronSchedules(time.Time) ([]backend.CronScheduleState, error)
 	ClaimCronSchedule(backend.CronScheduleState, time.Time, time.Time) (bool, error)
+	CronRunRecorded(string) (bool, error)
 }
 
 type definition struct {
@@ -65,21 +71,21 @@ const (
 	oneOffCronTracePrefix = "one-off-cron:"
 )
 
-// New constructs a cronjob manager using runtimeDir for effective runtime cron definitions.
-func New(workspace, runtimeDir string, store cronScheduleStore, run Runner, logger *slog.Logger) *Manager {
-	return &Manager{workspace: workspace, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, runtimeDir: runtimeDir}
+// New constructs a cronjob manager using runtimeDir for effective runtime cron definitions and agents' routines.
+func New(cfg *config.LockedConfig, runtimeDir string, store cronScheduleStore, run Runner, logger *slog.Logger) *Manager {
+	return &Manager{cfg: cfg, workspace: cfg.Clone().Workspace, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, runtimeDir: runtimeDir, armed: map[string]bool{}}
 }
 
-// ValidateRuntimeDefinitions loads cron definitions from runtimeDir without mutating scheduler state.
-func ValidateRuntimeDefinitions(workspace, runtimeDir string) error {
-	_, err := loadDefinitionsIn(workspace, runtimeDir)
+// ValidateRuntimeDefinitions loads cron definitions and routines from runtimeDir without mutating scheduler state.
+func ValidateRuntimeDefinitions(cfg *config.LockedConfig, runtimeDir string) error {
+	_, err := loadDefinitionsIn(cfg, runtimeDir)
 
 	return err
 }
 
 // Start loads cron definitions and starts scheduling them.
 func (m *Manager) Start(ctx context.Context) error {
-	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
+	definitions, err := loadDefinitionsIn(m.cfg, m.runtimeDir)
 	if err != nil {
 		return err
 	}
@@ -100,14 +106,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	m.stop = cancel
 
-	for i := range definitions {
-		if len(definitions[i].schedules) == 1 && !definitions[i].schedules[0].DueAt.IsZero() {
-			definition := definitions[i]
-
-			m.wg.Add(1)
-			go m.runOneOffTimer(runCtx, &definition, max(definition.schedules[0].DueAt.Sub(now), 0))
-		}
-	}
+	m.armOneOffs(runCtx, definitions, now)
 
 	m.wg.Add(1)
 	go m.runTickerLoop(runCtx)
@@ -151,8 +150,32 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 }
 
-// LoadOneOffCronjob resolves and loads one live cronjob for a run from Web.
+// Stem is the name the cron job at path is listed and loaded by: a cron file's stem, or
+// "<agent> · <schedule>" for the routine at agents/<agent>.md#<schedule>.
+func Stem(path string) string {
+	if agent, schedule, ok := strings.Cut(strings.TrimPrefix(path, "agents/"), ".md#"); ok {
+		return agent + " · " + schedule
+	}
+
+	return strings.TrimSuffix(strings.TrimPrefix(path, "cron/"), ".md")
+}
+
+// LoadOneOffCronjob resolves and loads one live cronjob, a cron file or a routine, for a run from Web.
 func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, error) {
+	if strings.Contains(target, " · ") {
+		definitions, err := loadDefinitionsIn(m.cfg, m.runtimeDir)
+		if err != nil {
+			return protocol.OneOffCronjob{}, fmt.Errorf("load one-off cronjob: %w", err)
+		}
+
+		i := slices.IndexFunc(definitions, func(d definition) bool { return Stem(d.relativePath) == target })
+		if i < 0 {
+			return protocol.OneOffCronjob{}, fmt.Errorf("load one-off cronjob: no routine %q", target)
+		}
+
+		return protocol.OneOffCronjob{RelativePath: definitions[i].relativePath, Agent: definitions[i].agent, Space: definitions[i].space, Prompt: m.preparePrompt(definitions[i].body)}, nil
+	}
+
 	job, err := config.LoadOneOffCronjob(m.workspace, m.runtimeDir, target)
 	if err != nil {
 		return protocol.OneOffCronjob{}, fmt.Errorf("load one-off cronjob: %w", err)
@@ -166,7 +189,7 @@ func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, erro
 // Jobs returns loaded definitions and their next triggers in the next day.
 // It neither refreshes scheduler state nor claims any work.
 func (m *Manager) Jobs() ([]Job, error) {
-	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
+	definitions, err := loadDefinitionsIn(m.cfg, m.runtimeDir)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +263,26 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCron
 	return result, nil
 }
 
-func (m *Manager) runOneOffTimer(ctx context.Context, definition *definition, interval time.Duration) {
+// armOneOffs starts the timer of each one-off in definitions not armed before. m.mu must be held.
+func (m *Manager) armOneOffs(ctx context.Context, definitions []definition, now time.Time) {
+	for _, definition := range definitions {
+		if len(definition.schedules) != 1 || definition.schedules[0].DueAt.IsZero() {
+			continue
+		}
+
+		id := scheduleID(definition.relativePath, 0, definition.schedules[0].Raw)
+		if m.armed[id] {
+			continue
+		}
+
+		m.armed[id] = true
+
+		m.wg.Add(1)
+		go m.runOneOffTimer(ctx, id, max(definition.schedules[0].DueAt.Sub(now), 0))
+	}
+}
+
+func (m *Manager) runOneOffTimer(ctx context.Context, id string, interval time.Duration) {
 	defer m.wg.Done()
 
 	timer := time.NewTimer(interval)
@@ -260,7 +302,42 @@ func (m *Manager) runOneOffTimer(ctx context.Context, definition *definition, in
 		return
 	}
 
+	// Only a one-off still defined runs: an edited time or a removed one-off leaves this timer stale. One that
+	// fails to load arms again at the next scan that loads it, which reports the error.
+	definitions, _ := loadDefinitionsIn(m.cfg, m.runtimeDir)
+
+	i := slices.IndexFunc(definitions, func(d definition) bool {
+		return len(d.schedules) == 1 && scheduleID(d.relativePath, 0, d.schedules[0].Raw) == id
+	})
+	if i < 0 {
+		m.mu.Lock()
+		delete(m.armed, id)
+		m.mu.Unlock()
+
+		return
+	}
+
+	definition := &definitions[i]
+
+	// A routine lives in its agent's file, which is never deleted: one with a scheduled run recorded is done.
+	routine := strings.HasPrefix(definition.relativePath, "agents/")
+	if routine {
+		ran, err := m.store.CronRunRecorded(definition.relativePath)
+		if err != nil {
+			m.log.Error("read one-off routine runs", "file", definition.relativePath, "error", err)
+			return
+		}
+
+		if ran {
+			return
+		}
+	}
+
 	m.executeJob(ctx, definition)
+
+	if routine {
+		return
+	}
 
 	relativePath := filepath.ToSlash(filepath.Join(m.runtimeDir, "cron", filepath.Base(definition.relativePath)))
 	if err := os.Remove(filepath.Join(m.workspace, relativePath)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -298,7 +375,7 @@ func (m *Manager) runTickerLoop(ctx context.Context) {
 func (m *Manager) scanScheduled(ctx context.Context) error {
 	now := m.now()
 
-	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
+	definitions, err := loadDefinitionsIn(m.cfg, m.runtimeDir)
 	if err != nil {
 		return err
 	}
@@ -309,7 +386,12 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 	}
 
 	m.mu.Lock()
+
 	closed := m.closed
+	if !closed {
+		m.armOneOffs(ctx, definitions, now)
+	}
+
 	m.mu.Unlock()
 
 	if closed {
@@ -442,9 +524,34 @@ func (m *Manager) preparePrompt(body string) string {
 	return strings.TrimSuffix(body, "\n") + "\n\n" + cronReplyInstruction
 }
 
-// loadDefinitionsIn loads every cron definition.
-func loadDefinitionsIn(workspace, runtimeDir string) ([]definition, error) {
-	root, err := os.OpenRoot(workspace)
+// loadDefinitionsIn loads every cron definition: one per top-level agent routine, at
+// agents/<agent>.md#<schedule>, then the cron files, which may not target easy agents.
+func loadDefinitionsIn(cfg *config.LockedConfig, runtimeDir string) ([]definition, error) {
+	agents, _, err := backend.LoadRuntimeDefinitions(cfg, runtimeDir)
+	if err != nil {
+		return nil, fmt.Errorf("load agents: %w", err)
+	}
+
+	var definitions []definition
+
+	for _, name := range agents.PrimaryNames() {
+		agent := agents.Items[name]
+		for _, routine := range agent.Routines {
+			schedule, err := config.ParseCronSchedule(routine.Schedule)
+			if err != nil {
+				return nil, fmt.Errorf("agents/%s: routines: schedule %q: %w", agent.Location, routine.Schedule, err)
+			}
+
+			relativePath := "agents/" + agent.Location + "#" + schedule.Raw
+			if slices.ContainsFunc(definitions, func(d definition) bool { return d.relativePath == relativePath }) {
+				return nil, fmt.Errorf("agents/%s: routines: schedule %q is listed twice", agent.Location, schedule.Raw)
+			}
+
+			definitions = append(definitions, definition{relativePath: relativePath, agent: name, body: cmp.Or(routine.Instruction, "Scheduled run ("+schedule.Raw+")."), space: agent.Space, schedules: []config.CronSchedule{schedule}})
+		}
+	}
+
+	root, err := os.OpenRoot(cfg.Clone().Workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open workspace root: %w", err)
 	}
@@ -455,7 +562,7 @@ func loadDefinitionsIn(workspace, runtimeDir string) ([]definition, error) {
 
 	cronRoot, err := root.OpenRoot(cronPath)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return definitions, nil
 	}
 
 	if err != nil {
@@ -469,7 +576,6 @@ func loadDefinitionsIn(workspace, runtimeDir string) ([]definition, error) {
 		return nil, fmt.Errorf("read cronjob directory: %w", err)
 	}
 
-	definitions := make([]definition, 0, len(entries))
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, ".md") || strings.HasSuffix(name, ".example.md") {
@@ -486,6 +592,10 @@ func loadDefinitionsIn(workspace, runtimeDir string) ([]definition, error) {
 		definition, err := loadDefinition(data, relativePath)
 		if err != nil {
 			return nil, err
+		}
+
+		if agents.Items[definition.agent].Mode == harness.AgentModeEasy {
+			return nil, fmt.Errorf("%s: agent %s is an easy agent; schedule it with its routines", relativePath, definition.agent)
 		}
 
 		definitions = append(definitions, definition)

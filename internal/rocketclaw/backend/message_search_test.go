@@ -97,6 +97,10 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	reference := uploadTestAttachment(t, s, "web-chat", "file-1")
+	// An easy agent's chat names its upload by host path.
+	uploadTestAttachment(t, s, "web-chat", "file-2")
+
+	easyReference := `attachment:file-2 "notes.txt" (path "/ws/.rocketclaw/uploads/web-chat/file-2/notes.txt")`
 
 	id, err := s.AppendEntryID(ctx, "web-chat", testReplayEntry(
 		`{"type":"message","role":"user","prompt_header":"[Web]","content":"[Web]\n\nHello ÀB"}`,
@@ -109,6 +113,7 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 		`{"type":"compaction","id":"cmp_1","encrypted_content":"sealed"}`,
 		`{"type":"message","role":"assistant","content":"nul\u0000 Reply"}`,
 		`{"type":"message","role":"assistant","content":"\u0000 "}`,
+		`{"type":"message","role":"user","content":`+jsonString("see easy\n\n"+easyReference)+`}`,
 	))
 	require.NoError(t, err)
 	require.Equal(t, []messageSearchTestRow{
@@ -117,6 +122,7 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 		{id, 1, 2, "assistant", "Third", "third"},
 		{id, 2, 0, "user", "look attachment:nope", "look attachment:nope"},
 		{id, 8, 0, "assistant", "nul Reply", "nul reply"},
+		{id, 10, 0, "user", "see easy", "see easy"},
 	}, messageSearchTestRows(t, s, "web-chat"))
 
 	_, err = s.DeleteSession(ctx, "web-chat")

@@ -209,7 +209,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 
 	questions := &webQuestions{store: rocketcodeSessions, waiting: map[webQuestionKey]chan protocol.AskUserQuestionAnswer{}}
 
-	threadBridges = newThreadBridgeManager(rocketcodeSessions.definitions, rocketcodeSessions, logger, conversationFactory{rt: rt, restart: shutdown})
+	threadBridges = newThreadBridgeManager(rocketcodeSessions.definitions, rocketcodeSessions, logger, conversationFactory{rt: rt, restart: shutdown, secrets: &config.AWSFetcher{}})
 	background = newBackgroundRegistry(rocketcodeSessions, threadBridges, logger.With("component", "background_jobs"))
 	rocketcodeSessions.jobs = background
 	rocketcodeSessions.historyWorkers = threadBridges
@@ -328,6 +328,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 type conversationFactory struct {
 	rt      *Runtime
 	restart runtimeRestarter
+	secrets config.SecretFetcher
 }
 
 func (f conversationFactory) newBridge(cfg *Config) directBridge {
@@ -335,6 +336,7 @@ func (f conversationFactory) newBridge(cfg *Config) directBridge {
 	cfg.RequestReload = f.rt
 	cfg.UserQuestionAsker = f.rt.questions
 	cfg.SessionService = f.rt.Sessions
+	cfg.Secrets = f.secrets
 
 	bridge := NewConversation(f.rt.Cfg, f.rt, cfg, f.rt.Log)
 	bridge.background = f.rt.background

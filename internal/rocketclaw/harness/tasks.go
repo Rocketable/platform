@@ -21,24 +21,40 @@ type taskParams struct {
 	Prompt       string `json:"prompt"`
 	SubagentType string `json:"subagent_type"`
 	Command      string `json:"command"`
+	// Model and Tools replace SubagentType for an easy agent (subagentWrite).
+	Model string   `json:"model"`
+	Tools []string `json:"tools"`
 	// Continue names a saved subagent; backgroundTool checks it is a direct child.
 	Continue taskContinue `json:"continue"`
 }
 
 func (f *toolFactory) taskTool() looperTool {
+	easy := f.agent != nil && f.agent.Mode == AgentModeEasy
+	properties := map[string]any{
+		"description":   map[string]any{"type": "string"},
+		"prompt":        map[string]any{"type": "string"},
+		"subagent_type": map[string]any{"type": "string"},
+		"command":       map[string]any{"type": "string"},
+	}
+
+	if easy {
+		delete(properties, "subagent_type")
+		properties["model"] = map[string]any{"type": "string"}
+		properties["tools"] = map[string]any{"type": []string{"array", "null"}, "items": map[string]any{"type": "string"}}
+	}
+
 	return f.backgroundTool(f.agent, BackgroundKindTask, &looperTool{
-		Definition: *functionTool("task", f.taskDescription(), map[string]any{
-			"description":   map[string]any{"type": "string"},
-			"prompt":        map[string]any{"type": "string"},
-			"subagent_type": map[string]any{"type": "string"},
-			"command":       map[string]any{"type": "string"},
-		}),
+		Definition: *functionTool("task", f.taskDescription(), properties),
 		Permission: "task",
 		resumable:  true,
 		Subjects: func(raw json.RawMessage) ([]string, error) {
 			var params taskParams
 			if err := json.Unmarshal(raw, &params); err != nil {
 				return nil, fmt.Errorf("parse task params: %w", err)
+			}
+
+			if easy {
+				return []string{f.agent.Name}, nil
 			}
 
 			return []string{params.SubagentType}, nil
@@ -60,10 +76,19 @@ func (f *toolFactory) taskTool() looperTool {
 }
 
 func (f *toolFactory) taskDescription() string {
+	var selection, available string
+	if f.agent != nil && f.agent.Mode == AgentModeEasy {
+		selection = "When using the Task tool, you must specify a model parameter, one of the models listed below, to select which model runs the subagent, and a tools parameter: null to give it all of your tools, or the names of the ones it may use, MCP tools as server.tool."
+		available = "Available models:\n- " + strings.Join(f.agent.Subagents, "\n- ")
+	} else {
+		selection = "When using the Task tool, you must specify a subagent_type parameter to select which agent type to use."
+		available = f.availableSubagentsDescription()
+	}
+
 	return strings.Join([]string{
 		"Launch a new agent to handle complex, multistep tasks autonomously.",
 		"",
-		"When using the Task tool, you must specify a subagent_type parameter to select which agent type to use.",
+		selection,
 		"",
 		"When to use the Task tool:",
 		"- When you are instructed to execute custom slash commands. Use the Task tool with the slash command invocation as the entire prompt. The slash command can take arguments. For example: Task(description=\"Check the file\", prompt=\"/check-file path/to/file.py\")",
@@ -118,14 +143,14 @@ func (f *toolFactory) taskDescription() string {
 		"assistant: \"I'm going to use the Task tool to launch the with the greeting-responder agent\"",
 		"</example>",
 		"",
-		f.availableSubagentsDescription(),
+		available,
 	}, "\n")
 }
 
 func (f *toolFactory) availableSubagentsDescription() string {
 	names := make([]string, 0, len(f.agents.Items))
 	for name := range f.agents.Items {
-		if f.agent == nil || f.agent.Permission.evaluate("task", name).Action != permissionAllow {
+		if f.agent == nil || f.agents.Items[name].Mode == AgentModeEasy || f.agent.Permission.evaluate("task", name).Action != permissionAllow {
 			continue
 		}
 
@@ -185,14 +210,14 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 		return "", errors.New("maxRecursion limit reached: task delegation is unavailable")
 	}
 
-	agent, ok := f.agents.Items[params.SubagentType]
-	if !ok {
-		return "", fmt.Errorf(unknownAgentType, params.SubagentType)
+	write, err := f.subagentWrite(ctx, params)
+	if err != nil {
+		return "", err
 	}
 
 	progress := *metadata.progress
 	// The model stays absent until the turn ends; neither aliases nor parent attribution leak.
-	progress.Kind, progress.Agent, progress.Model = PublicProgressDelegation, agent.Name, ""
+	progress.Kind, progress.Agent, progress.Model = PublicProgressDelegation, write.Agent, ""
 	// The row names the subagent by its key under the history that holds the call.
 	key := ChildKey{Path: "/" + delegationName(metadata.callID, ToolCallKey(ctx)), Turn: metadata.observations.turnID, Call: metadata.callID}
 	if id := params.Continue.SessionID; id != "" {
@@ -202,13 +227,9 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 	progress.SubagentKey = key.Path
 	key = key.under(f.childKey.Path)
 
-	originatingAgent := ""
-	if f.agent != nil {
-		originatingAgent = f.agent.Name
-	}
-
 	if params.Continue.SessionID == "" {
-		if _, err := f.childSessions.WriteSubagent(ctx, &SubagentWrite{Key: key, CallKey: ToolCallKey(ctx), Agent: agent.Name, Delegator: originatingAgent, Prompt: params.Prompt}); err != nil {
+		write.Key, write.CallKey = key, ToolCallKey(ctx)
+		if _, err := f.childSessions.WriteSubagent(ctx, &write); err != nil {
 			return "", fmt.Errorf("write subagent: %w", err)
 		}
 	}
@@ -230,6 +251,51 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 	}
 
 	return TaskResult(last), nil
+}
+
+// subagentWrite is the write, but its key, that delegates params: to the agent type they name, never an easy
+// agent (A4), or, for an easy agent, to that agent on the model they pick from its subagents, with the tools
+// they name from its own, or all of its own when they name none (R7).
+func (f *toolFactory) subagentWrite(ctx context.Context, params *taskParams) (SubagentWrite, error) {
+	if f.agent == nil || f.agent.Mode != AgentModeEasy {
+		agent, ok := f.agents.Items[params.SubagentType]
+		if !ok {
+			return SubagentWrite{}, fmt.Errorf(unknownAgentType, params.SubagentType)
+		}
+
+		if agent.Mode == AgentModeEasy {
+			return SubagentWrite{}, fmt.Errorf("agent type %s is an easy agent, which task cannot run; write to its sessions with rocketclaw_sessions instead", agent.Name)
+		}
+
+		delegator := ""
+		if f.agent != nil {
+			delegator = f.agent.Name
+		}
+
+		return SubagentWrite{Agent: agent.Name, Delegator: delegator, Prompt: params.Prompt}, nil
+	}
+
+	if !slices.Contains(f.agent.Subagents, params.Model) {
+		return SubagentWrite{}, fmt.Errorf("model %q is not one of this agent's subagent models: %s", params.Model, strings.Join(f.agent.Subagents, ", "))
+	}
+
+	tc, _ := toolCallContextFrom(ctx)
+	for _, name := range params.Tools {
+		_, tool := tc.looper.Tools[name]
+		_, host := tc.looper.CodeModeHosts[name]
+		action, _ := tc.looper.Permissions.Evaluate(mcpPermissionBucket, name)
+
+		if !tool && !host && (!strings.Contains(name, ".") || strings.ContainsAny(name, "*?") || action == PermissionDeny) {
+			return SubagentWrite{}, fmt.Errorf("tool %q is not one of your tools", name)
+		}
+	}
+
+	tools := params.Tools
+	if tools == nil {
+		tools = f.agent.Tools
+	}
+
+	return SubagentWrite{Agent: f.agent.Name, Delegator: f.agent.Name, Prompt: params.Prompt, Model: params.Model, Tools: tools}, nil
 }
 
 // TaskResult is the task call result of answer, a subagent session's answer.

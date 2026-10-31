@@ -358,7 +358,7 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 	t.Parallel()
 
 	bridge := newGoalAccountingTestBridge(t)
-	require.NoError(t, beginGoalDB(t.Context(), bridge.config.SessionService.db, "thread-1", &GoalState{Objective: "ship it", MaxTurns: 3, PrincipalName: "Alice"}))
+	require.NoError(t, beginGoalDB(t.Context(), bridge.config.SessionService.db, "thread-1", &GoalState{Objective: "ship it", MaxTurns: 3, PrincipalName: "Alice", Origin: `[Web principal="Alice"]`}))
 
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ship it", false)
 	msg.GoalAction = protocol.GoalActionKickoff
@@ -374,6 +374,7 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 	assert.Equal(t, protocol.GoalActionContinue, continuation.GoalAction)
 	assert.Equal(t, &protocol.SlackReplyTarget{}, continuation.SlackReply)
 	assert.Equal(t, map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: ""}, continuation.Metadata, "the continuation keeps the goal's setter")
+	assert.Equal(t, `[Web principal="Alice"]`, continuation.OriginHeader, "and its origin")
 
 	msg = protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	msg.GoalAction = protocol.GoalActionContinue
@@ -1178,7 +1179,7 @@ func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: main-model\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: main-model\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
 	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: child/helper-model\n---\nHelper prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
@@ -1466,7 +1467,7 @@ func TestAttachFilesToolReadsWorkspacePath(t *testing.T) {
 	require.NoError(t, root.WriteFile("reports/latest.txt", data, 0o644))
 
 	sessions := newTestSessionService(t)
-	tool := attachFilesTool(root, sessions, "attachment-test", "turn-1")
+	tool := attachFilesTool(root, &harness.CustomShell{}, sessions, "attachment-test", "turn-1")
 	parameters := tool.Parameters
 	properties := parameters["properties"].(map[string]any)
 	attachmentsSchema := properties["attachments"].(map[string]any)
@@ -1514,25 +1515,25 @@ func TestOutboundAttachmentSources(t *testing.T) {
 
 	defer func() { require.NoError(t, root.Close()) }()
 
-	got, err := outboundAttachment(root, &outboundAttachmentInput{Name: "note.txt", Content: "hello"})
+	got, err := outboundAttachment(root, &harness.CustomShell{}, &outboundAttachmentInput{Name: "note.txt", Content: "hello"})
 	require.NoError(t, err)
 	assert.Equal(t, protocol.OutboundAttachment{Name: "note.txt", MIMEType: "text/plain", Data: []byte("hello")}, got)
 
-	got, err = outboundAttachment(root, &outboundAttachmentInput{Name: "", MIMEType: "Text/Plain; Charset=UTF-8", ContentBase64: "aGVsbG8="})
+	got, err = outboundAttachment(root, &harness.CustomShell{}, &outboundAttachmentInput{Name: "", MIMEType: "Text/Plain; Charset=UTF-8", ContentBase64: "aGVsbG8="})
 	require.NoError(t, err)
 	assert.Equal(t, protocol.OutboundAttachment{Name: "attachment", MIMEType: "text/plain", Data: []byte("hello")}, got)
 
-	got, err = outboundAttachment(root, &outboundAttachmentInput{Name: "blob", Content: "hello"})
+	got, err = outboundAttachment(root, &harness.CustomShell{}, &outboundAttachmentInput{Name: "blob", Content: "hello"})
 	require.NoError(t, err)
 	assert.Equal(t, protocol.OutboundAttachment{Name: "blob", MIMEType: "text/plain", Data: []byte("hello")}, got)
 
-	_, err = outboundAttachment(root, &outboundAttachmentInput{Name: "bad", ContentBase64: "%%%"})
+	_, err = outboundAttachment(root, &harness.CustomShell{}, &outboundAttachmentInput{Name: "bad", ContentBase64: "%%%"})
 	require.ErrorContains(t, err, `decode attachment "bad"`)
 
-	_, err = outboundAttachment(root, &outboundAttachmentInput{Path: "missing.txt"})
+	_, err = outboundAttachment(root, &harness.CustomShell{}, &outboundAttachmentInput{Path: "missing.txt"})
 	require.ErrorContains(t, err, `read attachment "missing.txt"`)
 
-	_, err = outboundAttachment(root, &outboundAttachmentInput{Name: "empty"})
+	_, err = outboundAttachment(root, &harness.CustomShell{}, &outboundAttachmentInput{Name: "empty"})
 	require.ErrorContains(t, err, `attachment "empty" has no content or path`)
 }
 
@@ -1545,13 +1546,57 @@ func TestAttachFilesToolReportsInvalidInput(t *testing.T) {
 
 	defer func() { require.NoError(t, root.Close()) }()
 
-	tool := attachFilesTool(root, newTestSessionService(t), "attachment-test", "turn-1")
+	tool := attachFilesTool(root, &harness.CustomShell{}, newTestSessionService(t), "attachment-test", "turn-1")
 	_, err = tool.Call(t.Context(), []byte(`{`), nil)
 	require.ErrorContains(t, err, "parse response attachments")
 
 	raw := []byte(`{"attachments":[{"path":"missing.txt","name":"","mime_type":"","content":"","content_base64":""}]}`)
 	_, err = tool.Call(t.Context(), raw, nil)
 	require.ErrorContains(t, err, `read attachment "missing.txt"`)
+}
+
+// An easy agent attaches a file by host path from its file view, and none outside it.
+func TestAttachFilesToolEasyView(t *testing.T) {
+	t.Parallel()
+
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	base, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+
+	require.NoError(t, base.Mkdir("workspace", 0o755))
+	require.NoError(t, base.Mkdir("folder", 0o755))
+	require.NoError(t, base.WriteFile("workspace/secret.txt", []byte("secret"), 0o600))
+	require.NoError(t, base.WriteFile("folder/report.txt", []byte("report"), 0o600))
+
+	workspace, err := base.OpenRoot("workspace")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, workspace.Close()) })
+
+	sessions := newTestSessionService(t)
+	tool := attachFilesTool(workspace, &harness.CustomShell{Emulated: true, Dir: filepath.Join(dir, "folder")}, sessions, "easy-attach", "turn-1")
+	attach := func(path string) json.RawMessage {
+		raw, err := json.Marshal(attachFilesInput{Attachments: []outboundAttachmentInput{{Path: path}}})
+		require.NoError(t, err)
+
+		return raw
+	}
+
+	_, err = tool.Call(t.Context(), attach(filepath.Join(dir, "folder", "report.txt")), nil)
+	require.NoError(t, err)
+
+	got, err := sessions.TurnAttachments(t.Context(), "easy-attach", "turn-1")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	stored, err := sessions.LoadAttachment(t.Context(), "easy-attach", got[0].ID, false)
+	require.NoError(t, err)
+	require.Equal(t, protocol.OutboundAttachment{ID: got[0].ID, Name: "report.txt", MIMEType: "text/plain", Data: []byte("report"), Size: 6}, stored)
+
+	_, err = tool.Call(t.Context(), attach(filepath.Join(dir, "workspace", "secret.txt")), nil)
+	require.EqualError(t, err, "read attachment: "+filepath.Join(dir, "workspace", "secret.txt")+" is outside this agent's folders")
 }
 
 func TestAttachmentFallbackAndImageAttachments(t *testing.T) {
@@ -2030,9 +2075,10 @@ func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
 
 	msg := &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Text: "hello", Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}
 
-	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": "Reply in one sentence."}, false))
-	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": " "}, false))
-	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": 7}, false))
+	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", buildPrompt(msg, &harness.Agent{Frontmatter: map[string]any{"additionalInstructions": "Reply in one sentence."}}, false))
+	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, &harness.Agent{Frontmatter: map[string]any{"additionalInstructions": " "}}, false))
+	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, &harness.Agent{Frontmatter: map[string]any{"additionalInstructions": 7}}, false))
+	assert.Equal(t, "[Slack principal=\"Alice\"]\n\nhello", buildPrompt(msg, &harness.Agent{Mode: harness.AgentModeEasy}, false), "easy agents get no reply-style line")
 	assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n task \n", buildPrompt(&protocol.InboundMessage{Source: protocol.SourceSystem, PreserveWhitespace: true, Text: " task \n", Metadata: map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text"}}, nil, false))
 }
 
@@ -2201,6 +2247,26 @@ func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
 	assert.Equal(t, `[Web media=Voice principal="Alice"]`, provenanceHeader(&voice))
 }
 
+// R40: a review's trusted origin header names the turn's source, its person and the agent that wrote it,
+// never additional instructions; a follow-on turn keeps the header of the turn that created it.
+func TestReviewOriginHeader(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		inbound *protocol.InboundMessage
+		want    string
+	}{
+		{"cron", &protocol.InboundMessage{Source: protocol.SourceSystem, Text: `[Web principal="x"] deploy`, Cronjob: &protocol.CronjobMessage{RelativePath: "cron/daily.md"}}, "[Cron]"},
+		{"web", &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}}, `[Web principal="Alice <alice@example.com>"]`},
+		{"external MCP", &protocol.InboundMessage{Source: protocol.SourceExternalMCP, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: `Bob "ops"`}}, `[ExternalMCP principal="Bob \"ops\""]`},
+		{"agent write", &protocol.InboundMessage{Source: protocol.SourceSystem, Metadata: map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundSenderSessionMetadataKey: "web:1", protocol.InboundSenderAgentMetadataKey: "planner"}}, `[System sender="agent planner"]`},
+		{"follow-on", &protocol.InboundMessage{Source: protocol.SourceSystem, OriginHeader: "[ScheduledMessage source=Cron]"}, "[ScheduledMessage source=Cron]"},
+	} {
+		assert.Equal(t, tc.want, reviewOriginHeader(tc.inbound), tc.name)
+	}
+}
+
 // R17: the builder names an agent sender and picks the verb by how the message reaches the turn. An
 // agent's write tells the receiver its answer returns on its own; a task prompt's answer is the task
 // call's result, so its header does not.
@@ -2261,7 +2327,7 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	threadKey := newBridge().config.ConversationID
 	privateConversationID := "external_mcp:planner:private"
 
-	writeAgent(t, cfg.Clone().Workspace, "selected", "---\ndescription: Selected\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nSelected canonical instructions\n")
+	writeAgent(t, cfg.Clone().Workspace, "selected", "---\ndescription: Selected\nmodel: gpt-6.1-sol\npermission: {}\n---\nSelected canonical instructions\n")
 	require.NoError(t, service.UpsertThread(threadKey, ThreadState{Agent: "selected"}))
 	require.NoError(t, service.UpsertThread(privateConversationID, ThreadState{Agent: "planner"}))
 	require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: threadKey}))
@@ -3212,7 +3278,7 @@ func TestRunTurnExposesPrincipalEnv(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  bash: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  bash: allow\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
@@ -3254,9 +3320,9 @@ func TestRunTurnExposesPrincipalEnv(t *testing.T) {
 		metadata             map[string]string
 		want                 string
 	}{
-		{"name and email", "web-1", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice Smith", protocol.InboundPrincipalEmailMetadataKey: "Alice@Example.com "}, "Alice Smith|Alice@Example.com |ff8d9819fc0e12bf0d24892e45987e249a28dce836a85cad60e28eaaa8c6d976|unset"},
-		{"name only", "web-2", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Bob"}, "Bob|unset|unset|unset"},
-		{"no person", "web-3", nil, "unset|unset|unset|unset"},
+		{"name and email", "web-1", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice Smith", protocol.InboundPrincipalEmailMetadataKey: "Alice@Example.com "}, "Alice Smith|Alice@Example.com |ff8d9819fc0e12bf0d24892e45987e249a28dce836a85cad60e28eaaa8c6d976|web-1"},
+		{"name only", "web-2", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Bob"}, "Bob|unset|unset|web-2"},
+		{"no person", "web-3", nil, "unset|unset|unset|web-3"},
 		{"person in an External MCP thread", "external_mcp:planner:private", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice Smith", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, "Alice Smith|alice@example.com|ff8d9819fc0e12bf0d24892e45987e249a28dce836a85cad60e28eaaa8c6d976|external_mcp:planner:private"},
 	} {
 		bridge := &Bridge{runtime: runtime, config: Config{ConversationID: tc.conversationID, Agent: "planner", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
@@ -3291,7 +3357,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  bash: auto\n---\nPrompt\n")
+	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  bash: auto\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
@@ -3447,7 +3513,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	}
 
 	// Web-created bridges know only the actual conversation ID, not pairing fields.
-	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  edit:\n    '.tmp/${ROCKETCLAW_METADATA_A}/note.txt': allow\n  read: allow\n  bash: auto\n---\nPrompt\n")
+	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmodel: gpt-6.1-sol\npermission:\n  edit:\n    '.tmp/${ROCKETCLAW_METADATA_A}/note.txt': allow\n  read: allow\n  bash: auto\n---\nPrompt\n")
 
 	managedBridge := &Bridge{runtime: bridge.runtime, config: Config{ConversationID: managedConversationID, Agent: "planner", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 	// The run reports to its Slack thread, which shows its entries without a copy.
@@ -3476,8 +3542,8 @@ func TestRunTurnTranslatesDollarToDirectSkill(t *testing.T) {
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
-	writeAgent(t, workspace, "denied", "---\ndescription: Denied\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    docs-helper: deny\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "denied", "---\ndescription: Denied\nmodel: gpt-6.1-sol\npermission:\n  skill:\n    docs-helper: deny\n---\nPrompt\n")
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills/docs-helper", 0o755))
 	require.NoError(t, root.WriteFile(".rocketclaw/skills/docs-helper/SKILL.md", []byte(`---
 name: docs-helper
@@ -3677,7 +3743,7 @@ func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: work/gpt\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: work/gpt\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
@@ -3721,7 +3787,7 @@ func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	service, err := NewSessionService(workspace)
@@ -3830,8 +3896,8 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: work/model-a\nreasoningEffort: high\npermission: {}\n---\nPrompt\n")
-	writeAgent(t, workspace, "reviewer", "---\ndescription: Reviewer\nmode: primary\nmodel: work/model-b\nreasoningEffort: low\nadditionalInstructions: Reply in one sentence.\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: work/model-a\nreasoningEffort: high\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "reviewer", "---\ndescription: Reviewer\nmodel: work/model-b\nreasoningEffort: low\nadditionalInstructions: Reply in one sentence.\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -4019,7 +4085,7 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
@@ -4084,7 +4150,7 @@ func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
@@ -4505,10 +4571,10 @@ func newNoteTest(t *testing.T, respond noteTestResponder) *noteTest {
 
 	workspace := t.TempDir()
 	for _, agent := range []string{"main", "job"} {
-		writeAgent(t, workspace, agent, "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
+		writeAgent(t, workspace, agent, "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	}
 
-	writeAgent(t, workspace, "researcher", "---\ndescription: Researcher\nmode: subagent\nmodel: gpt-6.1-sol\npermission: {}\n---\nResearch\n")
+	writeAgent(t, workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission: {}\n---\nResearch\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	nt := &noteTest{service: newTestSessionServiceAt(t, workspace), conversationID: protocol.SlackThreadConversationID("C123", "111.222"), requests: make(chan string, 16), finals: make(chan *protocol.OutboundMessage, 16)}
@@ -5224,7 +5290,7 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 	})
 	gate = filepath.Join(nt.cfg.Workspace, "gate")
 	writeWorkflowFixture(t, nt.cfg.Workspace, "quiet", "meta = {\"name\": \"quiet\", \"description\": \"Quiet\"}\ndef main(args):\n    return None\n")
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmode: primary\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  workflow: {\"*\": allow}\n  rocketclaw: {allow_background: allow, rocketclaw_restart: allow}\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  workflow: {\"*\": allow}\n  rocketclaw: {allow_background: allow, rocketclaw_restart: allow}\n---\nPrompt\n")
 
 	manager, _ := nt.run(t, ignoreOutbound)
 	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
@@ -5263,7 +5329,7 @@ func TestTurnBoundPlatformTools(t *testing.T) {
 
 	origin := new(protocol.InboundMessage)
 	bridge := &Bridge{runtime: new(config.LockedConfig), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
-	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []harness.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{restartFunc: func(string) string { return "" }}), attachFilesTool(nil, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), sessionsWriteTool(bridge, origin, origin, "main", "main", harness.Agents{}), currentSessionIDTool("main")}, pageTools(bridge.config.SessionService, nil, nil, "main", "", ""))
+	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []harness.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{restartFunc: func(string) string { return "" }}), attachFilesTool(nil, &harness.CustomShell{}, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), sessionsWriteTool(bridge, origin, origin, "main", "main", harness.Agents{}), currentSessionIDTool("main")}, pageTools(bridge.config.SessionService, nil, &harness.CustomShell{}, nil, "main", "", ""))
 
 	var bound []string
 

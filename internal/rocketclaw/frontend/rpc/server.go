@@ -998,7 +998,7 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 	for i := range jobs {
 		job := &jobs[i]
 
-		row := &CronJob{Stem: cronStem(job.RelativePath), Schedule: strings.Join(job.Schedules, ", "), Body: job.Body, Agent: job.Agent, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
+		row := &CronJob{Stem: cronfrontend.Stem(job.RelativePath), Schedule: strings.Join(job.Schedules, ", "), Body: job.Body, Agent: job.Agent, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
 		for _, at := range job.Upcoming {
 			row.Upcoming = append(row.Upcoming, at.Format(time.RFC3339Nano))
 		}
@@ -1021,7 +1021,7 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 	for _, source := range sources {
 		row, ok := runs[source.SourceConversationID]
 		if !ok {
-			row = &CronJob{Stem: cronStem(source.Run.Path), Status: "ran", LastRun: source.Run.At.Format("2006-01-02T15:04:05.000000000Z"), Origin: source.SourceConversationID}
+			row = &CronJob{Stem: cronfrontend.Stem(source.Run.Path), Status: "ran", LastRun: source.Run.At.Format("2006-01-02T15:04:05.000000000Z"), Origin: source.SourceConversationID}
 			runs[row.Origin] = row
 		}
 
@@ -1319,11 +1319,6 @@ func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) 
 	return choices, nil
 }
 
-// cronStem is the name a cron job at path is listed and loaded by.
-func cronStem(path string) string {
-	return strings.TrimSuffix(strings.TrimPrefix(path, "cron/"), ".md")
-}
-
 func (s *Server) createSession(ctx context.Context, request *CreateSessionRequest) (*CreateSessionResponse, error) {
 	principal, _, err := s.principal(ctx)
 	if err != nil {
@@ -1401,7 +1396,7 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 	space := agents.Items[request.Agent].Space
 
 	if path != "" {
-		if job, err := s.cronjobs.LoadOneOffCronjob(cronStem(path)); err == nil {
+		if job, err := s.cronjobs.LoadOneOffCronjob(cronfrontend.Stem(path)); err == nil {
 			space = cmp.Or(job.Space, agents.Items[job.Agent].Space)
 		}
 	}

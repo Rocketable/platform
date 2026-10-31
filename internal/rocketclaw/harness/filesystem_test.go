@@ -507,7 +507,7 @@ func TestRunRipgrepExitResults(t *testing.T) {
 		errText string
 	}{
 		{name: "success with stderr", code: 0, stderr: "detail", stdout: []byte("result")},
-		{name: "no matches with stderr", code: 1, stderr: "detail", errText: "No files found"},
+		{name: "no matches with stderr", code: 1, stderr: "detail"},
 		{name: "partial", code: 2, stdout: []byte("result"), partial: true},
 		{name: "error with stderr", code: 2, stderr: "detail", errText: "detail"},
 		{name: "other failure", code: 3, errText: "exit status 3"},

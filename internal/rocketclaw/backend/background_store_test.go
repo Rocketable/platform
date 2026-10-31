@@ -523,7 +523,7 @@ func TestFinishTurnReportsSubagentWakeUp(t *testing.T) {
 				reportTestRun(t, store, "main", "web:main")
 			}
 
-			require.NoError(t, store.startSubagent(ctx, "main", harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "a"}, "researcher", true))
+			require.NoError(t, store.startSubagent(ctx, "main", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "a"}, Agent: "researcher"}))
 
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 

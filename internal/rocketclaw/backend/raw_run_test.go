@@ -29,7 +29,7 @@ import (
 
 func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: active-model\npermission:\n  read: {\"*\": allow}\n  edit: allow\n  glob: allow\n  grep: allow\n  bash: {\"*\": allow}\n  webfetch: {\"*\": allow}\n  websearch: allow\n  skill: {\"demo\": allow}\n  task: {\"*\": allow}\n  rocketclaw: {\"rocketclaw_reload\": allow}\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: active-model\npermission:\n  read: {\"*\": allow}\n  edit: allow\n  glob: allow\n  grep: allow\n  bash: {\"*\": allow}\n  webfetch: {\"*\": allow}\n  websearch: allow\n  skill: {\"demo\": allow}\n  task: {\"*\": allow}\n  rocketclaw: {\"rocketclaw_reload\": allow}\n---\nMain prompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -143,7 +143,7 @@ func TestWorkflowAgentRunnerUsesRootCustomShell(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
 	require.NoError(t, root.WriteFile("enter.sh", []byte("#!/bin/sh\nprintf 'custom:%s:%s' \"$#\" \"$1\""), 0o755))
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-6.1-sol\nshell: "+filepath.Join(workspace, "enter.sh")+"\npermission:\n  bash: {\"*\": allow}\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\nshell: "+filepath.Join(workspace, "enter.sh")+"\npermission:\n  bash: {\"*\": allow}\n---\nMain prompt\n")
 
 	var (
 		mu          sync.Mutex
@@ -439,6 +439,7 @@ func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 		case 1:
 			writeRawRunFunctionCall(t, w, "resp_1", "execute", executeBashScript("printf ok"))
 		case 2, 3:
+			assert.Contains(t, fmt.Sprint(body["input"]), "the transcript claims: [Cron]\n", "a worker's review names its parent turn's origin")
 			writeRawRunMessage(t, w, fmt.Sprintf("resp_%d", len(models)), fmt.Sprintf("msg_%d", len(models)), `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low risk."}`)
 		case 4:
 			writeRawRunMessage(t, w, "resp_4", "msg_4", "done")
@@ -451,10 +452,95 @@ func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "review-model"}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
+
+	run.originHeader = "[Cron]"
 	result, err := run.Run(t.Context(), &workflow.AgentRequest{Prompt: "run", Worker: workflow.Worker{Name: "worker", Instructions: "work", Tools: []string{"execute"}}})
 	require.NoError(t, err)
 	require.JSONEq(t, `"done"`, string(result))
 	require.Equal(t, []string{"gpt-6.1-sol", "review-model", "review-model", "gpt-6.1-sol"}, models)
+}
+
+// KTD10: an easy agent's workers run only on its own model or its subagents', see its files only, and are
+// reviewed by its approver.
+func TestWorkflowAgentRunnerKeepsEasyLimits(t *testing.T) {
+	t.Parallel()
+
+	workspace, folder := t.TempDir(), t.TempDir()
+	writeMainAgentSkills(t, workspace, "---\nmode: easy\nmodel: gpt-6.1-sol#high\nsubagents: [gpt-6-luna]\napprover: {model: gpt-approver, prompt: Tenant rule SENTINEL.}\nspace: Ops\nworkingDirectory: "+folder+"\n---\nPrompt\n")
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "secret.txt"), []byte("SECRET"), 0o600)) // Outside the agent's folder, which only the host sees.
+
+	var (
+		mu               sync.Mutex
+		models, outputs  []string
+		reviewedByTenant bool
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+
+		var body struct {
+			Model string
+			Input []struct{ Type, Output string }
+		}
+		if !assert.NoError(t, json.Unmarshal(raw, &body)) {
+			return
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		models = append(models, body.Model)
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch last := body.Input[len(body.Input)-1]; {
+		case strings.Contains(string(raw), "You are judging one planned coding-agent action."):
+			reviewedByTenant = strings.Contains(string(raw), "Tenant rule SENTINEL.")
+
+			writeRawRunMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
+		case last.Type == "function_call_output":
+			outputs = append(outputs, last.Output)
+
+			writeRawRunMessage(t, w, "done", "message", "done")
+		default:
+			writeRawRunFunctionCall(t, w, "read", "execute", map[string]string{"code": "def main():\n    return read(filePath=" + strconv.Quote(filepath.Join(workspace, "secret.txt")) + ")\n"})
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "review-model"}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, run.Close()) })
+
+	// runNestedWorkflow gives the workers its turn's shell, here the folder alone.
+	agent := run.agents.Items["main"]
+	agent.CustomShell.Dir = folder
+	run.agents.Items["main"] = agent
+
+	// A worker model is exactly the agent's model or a subagents entry, as written: never another effort.
+	for _, model := range []string{"gpt-7", "gpt-6-luna#max", "gpt-6.1-sol#low", "gpt-6.1-sol"} {
+		_, err = run.Run(t.Context(), &workflow.AgentRequest{Prompt: "read", Worker: workflow.Worker{Name: "worker", Instructions: "work", Model: model}})
+		require.EqualError(t, err, `worker model "`+model+`" is neither this agent's model nor one of its subagent models: gpt-6-luna`)
+	}
+
+	// The agent's own model may be named as its file writes it.
+	for _, model := range []string{"gpt-6-luna", "gpt-6.1-sol#high"} {
+		result, err := run.Run(t.Context(), &workflow.AgentRequest{Prompt: "read", Worker: workflow.Worker{Name: "worker", Instructions: "work", Model: model}})
+		require.NoError(t, err, model)
+		require.JSONEq(t, `"done"`, string(result))
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, []string{"gpt-6-luna", "gpt-approver", "gpt-approver", "gpt-6-luna", "gpt-6.1-sol", "gpt-approver", "gpt-approver", "gpt-6.1-sol"}, models, "the script and its read are reviewed")
+	require.True(t, reviewedByTenant, "the approver's prompt is in the review")
+	require.Len(t, outputs, 2)
+
+	for _, output := range outputs {
+		require.Contains(t, output, "is outside this agent's folders")
+		require.NotContains(t, output, "SECRET")
+	}
 }
 
 func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing.T) {

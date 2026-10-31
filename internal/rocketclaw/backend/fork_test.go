@@ -63,8 +63,8 @@ func TestForkConversation(t *testing.T) {
 
 	note := []protocol.BackgroundJob{{ID: "turn-1/call/a", Kind: "execute", State: "completed", Label: "tests", ToolCallID: "call", Note: backgroundNote(&backgroundJob{jobID: "turn-1/call/a", kind: turnScript, status: backgroundCompleted, label: "tests", result: "completed"})}}
 
-	require.NoError(t, sessions.startSubagent(t.Context(), "source", harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, "helper", true))
-	require.NoError(t, sessions.startSubagent(t.Context(), "source/call-1", harness.ChildKey{Path: "/call-2", Turn: "turn-2", Call: "call-2"}, "helper", true))
+	require.NoError(t, sessions.startSubagent(t.Context(), "source", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "helper"}))
+	require.NoError(t, sessions.startSubagent(t.Context(), "source/call-1", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-2", Turn: "turn-2", Call: "call-2"}, Agent: "helper"}))
 
 	for _, delegation := range []string{"source/call-1", "source/call-1/call-2"} {
 		_, err = sessions.AppendEntryID(t.Context(), delegation, testSessionEntry(delegation, "child"))

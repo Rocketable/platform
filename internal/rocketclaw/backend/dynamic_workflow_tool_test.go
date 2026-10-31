@@ -62,7 +62,7 @@ def main(args): return None
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}), log: slog.New(slog.DiscardHandler)}
 
 	output := make(chan harness.ChatResponse, 4)
-	tool, ok := bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil)
+	tool, ok := bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil, "", &harness.CustomShell{})
 	require.True(t, ok)
 	assert.Equal(t, "workflow", tool.Permission)
 	assert.True(t, tool.Resumable)
@@ -83,25 +83,25 @@ def main(args): return None
 	assert.Equal(t, harness.TextToolResult("audit:path/to"), result)
 	require.Empty(t, output)
 
-	_, ok = bridge.dynamicWorkflowTool(harness.PermissionSet{}, "main", "main", definitions, nil)
+	_, ok = bridge.dynamicWorkflowTool(harness.PermissionSet{}, "main", "main", definitions, nil, "", &harness.CustomShell{})
 	assert.False(t, ok)
 
-	sudo, ok := bridge.dynamicWorkflowTool(harness.PermissionSet{Sudo: true}, "main", "main", definitions, nil)
+	sudo, ok := bridge.dynamicWorkflowTool(harness.PermissionSet{Sudo: true}, "main", "main", definitions, nil, "", &harness.CustomShell{})
 	require.True(t, ok)
 	assert.Equal(t, []string{"audit", "secret"}, sudo.VisibilitySubjects)
 
 	for _, definitions := range []map[string]*workflow.Definition{nil, {}} {
-		_, ok := bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil)
+		_, ok := bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil, "", &harness.CustomShell{})
 		assert.False(t, ok)
 	}
 
 	require.NoError(t, permissions.Allow("workflow", "sec*"))
-	tool, ok = bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil)
+	tool, ok = bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil, "", &harness.CustomShell{})
 	require.True(t, ok)
 	assert.Equal(t, []string{"audit", "secret"}, tool.VisibilitySubjects)
 	assert.Equal(t, wantDescription+"\n- secret: Secret", tool.Description)
 	require.NoError(t, permissions.Deny("workflow", "secret"))
-	tool, ok = bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil)
+	tool, ok = bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil, "", &harness.CustomShell{})
 	require.True(t, ok)
 	assert.Equal(t, []string{"audit"}, tool.VisibilitySubjects)
 	assert.Equal(t, wantDescription, tool.Description)
@@ -111,7 +111,7 @@ def main(args): return None
 
 	definitions["audit"].Description = "\t Audit routes \n"
 	definitions["secret"].Description = "\n\t "
-	tool, ok = bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil)
+	tool, ok = bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil, "", &harness.CustomShell{})
 	require.True(t, ok)
 	assert.Equal(t, []string{"audit", "secret"}, tool.VisibilitySubjects)
 	assert.Equal(t, wantDescription+"\n- secret: Saved Starlark workflow.", tool.Description)
@@ -144,21 +144,21 @@ def main(args):
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
 
-	_, err = bridge.runNestedWorkflow(t.Context(), "main", "main", "missing", nil, "", nil)
+	_, err = bridge.runNestedWorkflow(t.Context(), "main", "main", "missing", nil, "", nil, "", &harness.CustomShell{})
 	require.ErrorContains(t, err, `workflow "missing" is not configured`)
 
-	text, err := bridge.runNestedWorkflow(t.Context(), "main", "main", "echo", definitions["echo"], "hello-nested", nil)
+	text, err := bridge.runNestedWorkflow(t.Context(), "main", "main", "echo", definitions["echo"], "hello-nested", nil, "", &harness.CustomShell{})
 	require.NoError(t, err)
 	assert.Equal(t, "hello-nested", text)
 
-	text, err = bridge.runNestedWorkflow(t.Context(), "main", "main", "quiet", definitions["quiet"], "", nil)
+	text, err = bridge.runNestedWorkflow(t.Context(), "main", "main", "quiet", definitions["quiet"], "", nil, "", &harness.CustomShell{})
 	require.NoError(t, err)
 	assert.Equal(t, nestedWorkflowSilentCompleteText, text)
 
 	// maybeDynamicWorkflowTool: workflow allow → tool; task-only → omit; Call works.
 	var workflowAllow harness.PermissionSet
 	require.NoError(t, workflowAllow.Allow("workflow", "audit-routes"))
-	tool, ok := bridge.maybeDynamicWorkflowTool(root, &harness.Agent{Permission: workflowAllow}, "main", "main", nil)
+	tool, ok := bridge.maybeDynamicWorkflowTool(root, &harness.Agent{Permission: workflowAllow}, "main", "main", nil, "")
 	require.True(t, ok)
 	assert.Equal(t, []string{"audit-routes"}, tool.VisibilitySubjects)
 
@@ -170,8 +170,17 @@ def main(args):
 
 	var taskOnly harness.PermissionSet
 	require.NoError(t, taskOnly.Allow("task", "*"))
-	_, ok = bridge.maybeDynamicWorkflowTool(root, &harness.Agent{Permission: taskOnly}, "main", "main", nil)
+	_, ok = bridge.maybeDynamicWorkflowTool(root, &harness.Agent{Permission: taskOnly}, "main", "main", nil, "")
 	assert.False(t, ok)
+
+	// An easy agent's workflow group compiles to reviewed rules, which still offer the tool.
+	easy := harness.PermissionSet{Easy: true}
+	_, ok = bridge.maybeDynamicWorkflowTool(root, &harness.Agent{Permission: easy}, "main", "main", nil, "")
+	assert.False(t, ok)
+	require.NoError(t, easy.Set("workflow", "*", harness.PermissionAuto))
+	tool, ok = bridge.maybeDynamicWorkflowTool(root, &harness.Agent{Permission: easy}, "main", "main", nil, "")
+	require.True(t, ok)
+	assert.Contains(t, tool.VisibilitySubjects, "audit-routes")
 
 	// Load failure omits tool.
 	bad := t.TempDir()
@@ -185,13 +194,13 @@ def main(args):
 	var logs strings.Builder
 
 	badBridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: bad}), log: slog.New(slog.NewTextHandler(&logs, nil))}
-	_, ok = badBridge.maybeDynamicWorkflowTool(badRoot, &harness.Agent{Permission: star}, "main", "main", nil)
+	_, ok = badBridge.maybeDynamicWorkflowTool(badRoot, &harness.Agent{Permission: star}, "main", "main", nil, "")
 	assert.False(t, ok)
 	assert.Contains(t, logs.String(), "load workflows")
 
 	logs.Reset()
 	require.NoError(t, star.Deny("workflow", "*"))
-	_, ok = badBridge.maybeDynamicWorkflowTool(badRoot, &harness.Agent{Permission: star}, "main", "main", nil)
+	_, ok = badBridge.maybeDynamicWorkflowTool(badRoot, &harness.Agent{Permission: star}, "main", "main", nil, "")
 	assert.False(t, ok)
 	assert.Contains(t, logs.String(), "load workflows", "an overridden allow rule still triggers workflow loading")
 }
@@ -241,7 +250,7 @@ func TestNestedWorkflowSessionTags(t *testing.T) {
 	require.NoError(t, err)
 
 	for range 2 {
-		_, err = bridge.runNestedWorkflow(t.Context(), "main", "visible", "tag", definitions["tag"], "", nil)
+		_, err = bridge.runNestedWorkflow(t.Context(), "main", "visible", "tag", definitions["tag"], "", nil, "", &harness.CustomShell{})
 		require.NoError(t, err)
 		require.Equal(t, 2, requests, "a rerun returns the finished worker's recorded result")
 	}
@@ -254,27 +263,37 @@ func TestNestedWorkflowSessionTags(t *testing.T) {
 	require.Equal(t, []string{"customer"}, tags)
 }
 
-// A nested workflow's steps run with the environment of the turn that calls it.
+// A nested workflow's steps run with the environment of the turn that calls it, and an easy agent's with
+// that turn's shell, so they work in that turn's folder.
 func TestNestedWorkflowStepsSeeTurnEnvironment(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeMainAgentSkills(t, workspace, "---\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n---\nPrompt\n")
 	root := openWorkspaceRoot(t, workspace)
 	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
 	require.NoError(t, root.WriteFile(".rocketclaw/workflows/env.star", []byte("meta = {\"name\": \"env\", \"description\": \"Env\"}\ndef main(args): return agent(\"print\", label=\"worker\")\n"), 0o600))
+	// The turn's shell prints its setup and the variable it sees.
+	require.NoError(t, root.WriteFile("shell.sh", []byte("#!/bin/sh\nread -r line\nprintf '%s|%s' \"${line%%,\\\"env\\\"*}\" \"$ROCKETCLAW_METADATA_TICKET\""), 0o755))
 
 	var output string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+
 		var body struct {
 			Input []struct{ Type, Output string }
 		}
-		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+		if !assert.NoError(t, json.Unmarshal(raw, &body)) {
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(string(raw), "You are judging one planned coding-agent action.") {
+			writeRawRunMessage(t, w, "review", "verdict", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`)
+
+			return
+		}
 
 		if last := body.Input[len(body.Input)-1]; last.Type == "function_call_output" {
 			output = last.Output
@@ -288,20 +307,30 @@ func TestNestedWorkflowStepsSeeTurnEnvironment(t *testing.T) {
 	}))
 	defer server.Close()
 
-	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "chat", SessionService: newTestSessionServiceAt(t, workspace)}, log: slog.New(slog.DiscardHandler)}
+	service := newTestSessionServiceAt(t, workspace)
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
 
-	_, err = bridge.runNestedWorkflow(t.Context(), "main", "chat", "env", definitions["env"], "", map[string]string{"ROCKETCLAW_METADATA_TICKET": "T-1"})
-	require.NoError(t, err)
-	require.Equal(t, "T-1", output)
+	shell := harness.CustomShell{Path: filepath.Join(workspace, "shell.sh"), Setup: json.RawMessage(`{"folder":"/parent"}`), Emulated: true}
+
+	for _, tc := range []struct{ chat, agent, want string }{
+		{"advanced", "---\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n---\nPrompt\n", "T-1"},
+		{"easy", "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\n---\nPrompt\n", `{"config":{"folder":"/parent"}|T-1`},
+	} {
+		writeMainAgentSkills(t, workspace, tc.agent)
+
+		bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "gpt-review"}), config: Config{ConversationID: tc.chat, SessionService: service}, log: slog.New(slog.DiscardHandler)}
+		_, err = bridge.runNestedWorkflow(t.Context(), "main", tc.chat, "env", definitions["env"], "", map[string]string{"ROCKETCLAW_METADATA_TICKET": "T-1"}, "", &shell)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, output)
+	}
 }
 
 func TestDynamicWorkflowToolNotInRocketClawAutoAllowList(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\nmode: primary\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	root := openWorkspaceRoot(t, workspace)
 

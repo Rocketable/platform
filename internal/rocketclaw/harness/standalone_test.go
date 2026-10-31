@@ -28,7 +28,7 @@ Use for docs.
 `)},
 	}
 
-	agentResult := LoadAgents(agentsFS)
+	agentResult := LoadAgents(agentsFS, AgentLoadConfig{})
 	skillResult := LoadSkills(skillsFS, "/virtual/skills")
 	agents, skills := agentResult.Agents, skillResult.Skills
 
