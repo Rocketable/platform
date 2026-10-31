@@ -63,7 +63,7 @@ func TestRunServeKeepsLegacyConfigReadOnly(t *testing.T) {
 	legacy := []byte(`{"workspace":".","database_url":"postgres://localhost/rocketclaw_test?sslmode=disable","slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","human_user_id":"U123","room":"D123","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`)
 	require.NoError(t, os.WriteFile(defaultConfigPath, legacy, 0o600))
 
-	err := runServe(nil)
+	err := runServe(nil, "127.0.0.1:0")
 	require.ErrorContains(t, err, "slack.channels is required")
 
 	data, err := os.ReadFile(defaultConfigPath)
@@ -103,7 +103,7 @@ func TestRunServeRequiresConfig(t *testing.T) {
 		require.NoError(t, os.Chdir(cwd))
 	})
 
-	err = runServe(nil)
+	err = runServe(nil, "127.0.0.1:0")
 	require.ErrorContains(t, err, "load config")
 }
 

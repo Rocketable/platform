@@ -21,7 +21,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func runServe(args []string) error {
+func runServe(args []string, diagnosticsAddress string) error {
 	processStart := time.Now().UTC().Format(time.RFC3339Nano)
 	flagSet := flag.NewFlagSet("rocketclaw", flag.ContinueOnError)
 	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
@@ -76,7 +76,7 @@ func runServe(args []string) error {
 	logBuildIdentity(logger, &build)
 
 	if *pprofEnabled {
-		listener, err := net.Listen("tcp", "127.0.0.1:6060")
+		listener, err := net.Listen("tcp", diagnosticsAddress)
 		if err != nil {
 			return fmt.Errorf("start private pprof HTTP: %w", err)
 		}

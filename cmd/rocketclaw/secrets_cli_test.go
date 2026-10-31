@@ -134,7 +134,7 @@ func TestServeErrorOmitsResolvedSecret(t *testing.T) {
 	}`), 0o600))
 	useTestSecrets(t, testSecrets{testSecretsARN: `{"token":"LEAKED-SECRET-VALUE"}`})
 
-	err := runServe([]string{"--aws-secrets-manager-arn", testSecretsARN})
+	err := runServe([]string{"--aws-secrets-manager-arn", testSecretsARN}, "127.0.0.1:0")
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "LEAKED-SECRET-VALUE")
 }
