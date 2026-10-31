@@ -747,43 +747,29 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 		toolCopy := tool
 		output := tc.output
 
-		callTool := func(ctx context.Context, args map[string]any) (ToolResult, error) {
-			raw, err := json.Marshal(args)
-			if err != nil {
-				return ToolResult{}, fmt.Errorf("marshal %s args: %w", toolName, err)
-			}
-
-			return recordHostCall(ctx, toolName, args, toolCopy.resumable, toolHostCall{name: toolName, tool: &toolCopy, raw: raw, output: output})
-		}
-
-		bound := codemode.HostTool{
+		host = append(host, codemode.HostTool{
 			Name:        toolName,
 			InputSchema: schema,
-			Call: func(ctx context.Context, args map[string]any) (string, error) {
-				result, errCall := callTool(ctx, args)
-				if errCall != nil {
-					return "", errCall
+			CallValue: func(ctx context.Context, args map[string]any) (starlark.Value, error) {
+				raw, err := json.Marshal(args)
+				if err != nil {
+					return nil, fmt.Errorf("marshal %s args: %w", toolName, err)
 				}
 
-				return attachmentOutputMessage(result), nil
-			},
-		}
-		if toolName == "bash" {
-			bound.CallValue = func(ctx context.Context, args map[string]any) (starlark.Value, error) {
-				result, errCall := callTool(ctx, args)
+				result, errCall := recordHostCall(ctx, toolName, args, toolCopy.resumable, toolHostCall{name: toolName, tool: &toolCopy, raw: raw, output: output})
 				if errCall != nil {
 					return nil, errCall
 				}
 
-				if bashResult, ok := result.Data.(BashResult); ok {
-					return &bashStarlarkResult{output: bashResult.Output, errorCode: bashResult.ErrorCode}, nil
+				if toolName == "bash" {
+					if bashResult, ok := result.Data.(BashResult); ok {
+						return &bashStarlarkResult{output: bashResult.Output, errorCode: bashResult.ErrorCode}, nil
+					}
 				}
 
 				return starlark.String(attachmentOutputMessage(result)), nil
-			}
-		}
-
-		host = append(host, bound)
+			},
+		})
 	}
 
 	return host, hosts
