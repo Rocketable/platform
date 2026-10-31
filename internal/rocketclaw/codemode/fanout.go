@@ -46,11 +46,6 @@ func nextKey(thread *starlark.Thread) string {
 	return prefix + strconv.Itoa(steps)
 }
 
-type branchOutcome struct {
-	value starlark.Value
-	err   error
-}
-
 func concurrencyBuiltins() starlark.StringDict {
 	slots := semaphore.NewWeighted(MaxConcurrency)
 
@@ -69,9 +64,7 @@ func makeGather(slots *semaphore.Weighted) func(*starlark.Thread, *starlark.Buil
 			return nil, err
 		}
 
-		out := runGather(thread, slots, concurrencyOpGather, concurrency, callables, nil)
-
-		return out.value, out.err
+		return runGather(thread, slots, concurrencyOpGather, concurrency, callables, nil)
 	}
 }
 
@@ -104,9 +97,7 @@ func makeMap(slots *semaphore.Weighted) func(*starlark.Thread, *starlark.Builtin
 			value.Freeze()
 		}
 
-		out := runGather(thread, slots, concurrencyOpMap, limit, values, fn)
-
-		return out.value, out.err
+		return runGather(thread, slots, concurrencyOpMap, limit, values, fn)
 	}
 }
 
@@ -122,9 +113,7 @@ func makeRace(slots *semaphore.Weighted, firstDone bool) func(*starlark.Thread, 
 			op = concurrencyOpRaceFirst
 		}
 
-		out := runRace(thread, slots, op, concurrency, callables, firstDone)
-
-		return out.value, out.err
+		return runRace(thread, slots, op, concurrency, callables, firstDone)
 	}
 }
 
@@ -222,14 +211,14 @@ const (
 	concurrencyOpRaceFirst = "race_first"
 )
 
-func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, concurrency int, values []starlark.Value, mapFn starlark.Callable) branchOutcome {
+func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, concurrency int, values []starlark.Value, mapFn starlark.Callable) (starlark.Value, error) {
 	if len(values) == 0 {
-		return branchOutcome{value: starlark.NewList(nil)}
+		return starlark.NewList(nil), nil
 	}
 
 	parentCtx, err := threadContext(parent)
 	if err != nil {
-		return branchOutcome{err: err}
+		return nil, err
 	}
 
 	defer releaseParentSlot(parent)()
@@ -248,38 +237,41 @@ func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, co
 			}
 			defer slots.Release(1)
 
-			var out branchOutcome
+			var (
+				result starlark.Value
+				err    error
+			)
 			if mapFn != nil {
-				out = callBranch(groupCtx, fmt.Sprintf("map-%d", i), mapFn, starlark.Tuple{value}, slots, branchPath, branchKey)
+				result, err = callBranch(groupCtx, fmt.Sprintf("map-%d", i), mapFn, starlark.Tuple{value}, slots, branchPath, branchKey)
 			} else {
-				out = callBranch(groupCtx, fmt.Sprintf("gather-%d", i), value, nil, slots, branchPath, branchKey)
+				result, err = callBranch(groupCtx, fmt.Sprintf("gather-%d", i), value, nil, slots, branchPath, branchKey)
 			}
 
-			if out.err != nil {
-				return out.err
+			if err != nil {
+				return err
 			}
 
-			results[i] = out.value
+			results[i] = result
 
 			return nil
 		})
 	}
 
 	if err := group.Wait(); err != nil {
-		return branchOutcome{err: fmt.Errorf("%s: %w", op, err)}
+		return nil, fmt.Errorf("%s: %w", op, err)
 	}
 
-	return branchOutcome{value: starlark.NewList(results)}
+	return starlark.NewList(results), nil
 }
 
-func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, concurrency int, callables []starlark.Value, firstDone bool) branchOutcome {
+func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, concurrency int, callables []starlark.Value, firstDone bool) (starlark.Value, error) {
 	if len(callables) == 0 {
-		return branchOutcome{err: errors.New("race requires at least one callable")}
+		return nil, errors.New("race requires at least one callable")
 	}
 
 	parentCtx, err := threadContext(parent)
 	if err != nil {
-		return branchOutcome{err: err}
+		return nil, err
 	}
 
 	defer releaseParentSlot(parent)()
@@ -295,7 +287,7 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 		failed  int
 	)
 
-	finish := func(out branchOutcome) {
+	finish := func(value starlark.Value, err error) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -303,10 +295,10 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 			return
 		}
 
-		if firstDone || out.err == nil {
+		if firstDone || err == nil {
 			settled = true
-			winner = out.value
-			errWin = out.err
+			winner = value
+			errWin = err
 
 			cancel()
 
@@ -316,7 +308,7 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 		failed++
 
 		if errWin == nil {
-			errWin = out.err
+			errWin = err
 		}
 
 		if failed == len(callables) {
@@ -359,15 +351,15 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 	defer mu.Unlock()
 
 	if errWin != nil {
-		return branchOutcome{err: errWin}
+		return nil, errWin
 	}
 
-	return branchOutcome{value: winner}
+	return winner, nil
 }
 
-func callBranch(ctx context.Context, name string, callable starlark.Value, args starlark.Tuple, slots *semaphore.Weighted, path []string, key string) branchOutcome {
+func callBranch(ctx context.Context, name string, callable starlark.Value, args starlark.Tuple, slots *semaphore.Weighted, path []string, key string) (starlark.Value, error) {
 	if err := context.Cause(ctx); err != nil {
-		return branchOutcome{err: fmt.Errorf("branch context: %w", err)}
+		return nil, fmt.Errorf("branch context: %w", err)
 	}
 
 	thread, stop := newCancellableThread(ctx, name, childStepBudget)
@@ -380,17 +372,17 @@ func callBranch(ctx context.Context, name string, callable starlark.Value, args 
 	value, err := starlark.Call(thread, callable, args, nil)
 	if err != nil {
 		if errCtx := context.Cause(ctx); errCtx != nil {
-			return branchOutcome{err: fmt.Errorf("branch context: %w", errCtx)}
+			return nil, fmt.Errorf("branch context: %w", errCtx)
 		}
 
-		return branchOutcome{err: fmt.Errorf("branch call: %w", err)}
+		return nil, fmt.Errorf("branch call: %w", err)
 	}
 
 	if err := context.Cause(ctx); err != nil {
-		return branchOutcome{err: fmt.Errorf("branch context: %w", err)}
+		return nil, fmt.Errorf("branch context: %w", err)
 	}
 
-	return branchOutcome{value: value}
+	return value, nil
 }
 
 func newCancellableThread(ctx context.Context, name string, maxSteps uint64) (thread *starlark.Thread, stop func()) {
