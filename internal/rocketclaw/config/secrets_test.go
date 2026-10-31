@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -102,7 +103,15 @@ func TestAWSFetcherReusesConnectionAndStopsWithContext(t *testing.T) {
 		clients = map[string]bool{}
 	)
 
+	requestWritten := make(chan httptrace.WroteRequestInfo, 1)
+	ctxFetch := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) { requestWritten <- info },
+	})
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// An early response lets the SDK close the request body while HTTP is still writing it.
+		assert.NoError(t, (<-requestWritten).Err)
+
 		mu.Lock()
 		clients[r.RemoteAddr] = true
 		mu.Unlock()
@@ -121,7 +130,7 @@ func TestAWSFetcherReusesConnectionAndStopsWithContext(t *testing.T) {
 
 	fetcher := new(AWSFetcher)
 	for range 2 {
-		got, err := fetcher.SecretString(t.Context(), testSecretARN)
+		got, err := fetcher.SecretString(ctxFetch, testSecretARN)
 		require.NoError(t, err)
 		require.Equal(t, "alpha", got)
 	}
