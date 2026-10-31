@@ -188,7 +188,6 @@ type looper struct {
 	// CodeModeHosts are tools available only inside execute (not model-facing):
 	// sandbox host tools plus embedder custom tools (e.g. rocketclaw_*).
 	CodeModeHosts          map[string]looperTool
-	permissionReviewInput  []responses.ResponseInputItemUnionParam
 	Diagnostics            bool
 	AutoApprovePermissions bool
 	PermissionReviewer     permissionReviewer
@@ -1089,11 +1088,7 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 		l.setPhase(TurnPhaseFinalAnswer)
 	}
 
-	previousReviewInput := l.permissionReviewInput
-	l.permissionReviewInput = reviewContext
-	toolOutputs, _, err = l.dispatchToolCalls(ctx, resp, doomLoop, output)
-	l.permissionReviewInput = previousReviewInput
-
+	toolOutputs, _, err = l.dispatchToolCalls(ctx, resp, reviewContext, doomLoop, output)
 	if err == nil {
 		return hadToolCalls, compactionOnly, toolOutputs, false, nil
 	}
@@ -1928,6 +1923,7 @@ func pruneHistoryBeforeLatestCompaction(items []responses.ResponseInputItemUnion
 func (l *looper) dispatchToolCalls(
 	ctx context.Context,
 	resp *responses.Response,
+	reviewContext []responses.ResponseInputItemUnionParam,
 	doomLoop *doomLoopTrap,
 	output chan<- ChatResponse,
 ) ([]dispatchedToolOutput, bool, error) {
@@ -2004,7 +2000,7 @@ func (l *looper) dispatchToolCalls(
 			decision.message = toolCallFailureResult(item.Name, fmt.Errorf("check permission: %w", err)).Output
 			errDenied = err
 		} else if !decision.denied && decision.review != nil {
-			reviewDecision := l.reviewToolCall(ctx, item.Name, item.CallID, decision.review, output)
+			reviewDecision := l.reviewToolCall(ctx, item.Name, item.CallID, decision.review, reviewContext, output)
 			decision.denied = reviewDecision.Outcome != permissionReviewOutcomeAllow
 			decision.message = formatPermissionReviewDenied(reviewDecision)
 			errDenied = errors.New("automatic permission review denied tool call")
@@ -2075,7 +2071,7 @@ func (l *looper) dispatchToolCalls(
 			callCtx, span := l.Observability.startToolSpan(groupCtx, call.name, call.callID, call.tool.Permission, call.args, metadata)
 			defer span.span.End()
 
-			callCtx = withToolCallContext(callCtx, l, output, call.callID)
+			callCtx = context.WithValue(callCtx, toolCallContextKey{}, toolCallContext{looper: l, observations: l.observations, reviewInput: reviewContext, output: output, callID: call.callID})
 			progress := call.progress
 
 			key := ToolCallKey(callCtx)
@@ -2143,8 +2139,8 @@ func (l *looper) dispatchToolCalls(
 // reviewToolCall runs the approver on a model's tool call. An Execute call's decision is its
 // whole-script review, recorded under the call. A failed save is sticky, so the call's next
 // progress write reports it.
-func (l *looper) reviewToolCall(ctx context.Context, name, callID string, request *permissionReviewRequest, output chan<- ChatResponse) permissionReviewDecision {
-	request.ReviewContext = slices.Clone(l.permissionReviewInput)
+func (l *looper) reviewToolCall(ctx context.Context, name, callID string, request *permissionReviewRequest, reviewContext []responses.ResponseInputItemUnionParam, output chan<- ChatResponse) permissionReviewDecision {
+	request.ReviewContext = slices.Clone(reviewContext)
 	request.Review = ChildKey{Path: "/" + ReviewKey(l.observations.turnID, callID), Turn: l.observations.turnID, Call: callID}
 	request.Turn = ReviewTurn(CallKey(l.observations.turnID, callID))
 

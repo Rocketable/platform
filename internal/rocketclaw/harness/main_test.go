@@ -464,7 +464,7 @@ func TestExecuteSpillStorageIsPrivate(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, root.WriteFile("ordinary.txt", []byte("ordinary\n"), 0o600))
 
-			ctx := withToolCallContext(t.Context(), loop, nil, "")
+			ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: loop, observations: loop.observations, output: nil, callID: ""})
 			for id, stored := range loop.spillResults {
 				paths := []string{stored, filepath.Join(root.Name(), stored), filepath.Dir(stored) + "/../turn/" + filepath.Base(stored)}
 				if _, err := root.Stat(strings.ToUpper(spillRel)); err == nil {
