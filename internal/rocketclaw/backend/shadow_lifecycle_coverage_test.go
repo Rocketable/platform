@@ -18,7 +18,7 @@ import (
 )
 
 // rejectShadowLifecycleWrite makes a real database write fail inside the tested
-// transaction. Each test owns an isolated schema and removes the trigger to retry.
+// transaction. Each parent test owns an isolated schema; cases remove the trigger to retry.
 func rejectShadowLifecycleWrite(t *testing.T, store *SessionService, table, event string) {
 	t.Helper()
 
@@ -27,15 +27,22 @@ BEGIN RAISE EXCEPTION 'shadow lifecycle write unavailable'; END $$`)
 	require.NoError(t, err)
 	_, err = store.db.ExecContext(t.Context(), `CREATE TRIGGER reject_shadow_lifecycle_write BEFORE `+event+` ON `+table+` FOR EACH STATEMENT EXECUTE FUNCTION reject_shadow_lifecycle_write()`)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, err := store.db.Exec(`DROP FUNCTION reject_shadow_lifecycle_write() CASCADE`)
+		require.NoError(t, err)
+	})
 }
 
 func TestShadowLifecycleAdmissionRollback(t *testing.T) {
 	t.Parallel()
 
+	store, _ := newShadowTestStore(t)
+
 	for _, table := range []string{"conversations", "entries", "turns", "shadow_turns"} {
 		t.Run(table, func(t *testing.T) {
-			store, _ := newShadowTestStore(t)
-			_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat})
+			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
+			require.NoError(t, err)
+			_, err = (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat})
 			require.NoError(t, err)
 			_, err = store.AppendEntryID(t.Context(), "parent", testSessionEntry("seed", "answer"))
 			require.NoError(t, err)
@@ -84,12 +91,16 @@ func TestShadowLifecycleAdmissionRollback(t *testing.T) {
 func TestShadowLifecycleClearRollback(t *testing.T) {
 	t.Parallel()
 
+	store, _ := newShadowTestStore(t)
+
 	for _, step := range []struct{ table, event string }{
 		{"entries", "DELETE"}, {"conversations", "UPDATE"}, {"steps", "DELETE"},
 		{"shadow_turns", "DELETE"}, {"pending_attachment_deletions", "INSERT"},
 	} {
 		t.Run(step.table, func(t *testing.T) {
-			store, _ := newShadowTestStore(t)
+			_, err := store.db.ExecContext(t.Context(), `TRUNCATE attachments, pending_attachment_deletions, entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
+			require.NoError(t, err)
+			store.attachments = filesystemAttachments{path: t.TempDir()}
 			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
 			children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "clear children")
 			require.NoError(t, err)
@@ -195,10 +206,22 @@ func TestShadowLifecycleCaptureFailureAndRetry(t *testing.T) {
 func TestShadowLifecycleDefinitionFailureAndRetry(t *testing.T) {
 	t.Parallel()
 
+	store, root := newShadowTestStore(t)
+	dir := filepath.Join(config.DefaultRuntimeDir, "agents", "main")
+	definition, err := root.ReadFile(filepath.Join(dir, "a.md"))
+	require.NoError(t, err)
+
+	definitions := store.definitions
+
 	for _, failure := range []string{"invalid definition", "escaping directory", "unavailable workspace"} {
 		t.Run(failure, func(t *testing.T) {
-			store, root := newShadowTestStore(t)
-			dir := filepath.Join(config.DefaultRuntimeDir, "agents", "main")
+			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				store.definitions = definitions
+
+				require.NoError(t, root.WriteFile(filepath.Join(dir, "a.md"), definition, 0o600))
+			})
 
 			switch failure {
 			case "invalid definition":
@@ -214,7 +237,7 @@ func TestShadowLifecycleDefinitionFailureAndRetry(t *testing.T) {
 
 			runtime := &Runtime{Sessions: store}
 
-			err := runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"})
+			err = runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"})
 			if failure == "invalid definition" {
 				require.NoError(t, err)
 			} else {
@@ -254,12 +277,15 @@ func TestShadowLifecycleDefinitionFailureAndRetry(t *testing.T) {
 func TestShadowLifecycleRevertRollback(t *testing.T) {
 	t.Parallel()
 
+	store, _ := newShadowTestStore(t)
+
 	for _, step := range []struct{ table, event string }{
 		{"entries", "DELETE"}, {"conversations", "UPDATE"},
 		{"steps", "DELETE"},
 	} {
 		t.Run(step.table+" "+step.event, func(t *testing.T) {
-			store, _ := newShadowTestStore(t)
+			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
+			require.NoError(t, err)
 			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
 
 			entry := testSessionEntry("discarded", "answer")
@@ -311,9 +337,12 @@ func TestShadowLifecycleRevertRollback(t *testing.T) {
 func TestShadowLifecycleSettlementFailureReleasesFamily(t *testing.T) {
 	t.Parallel()
 
+	store, _ := newShadowTestStore(t)
+
 	for _, failure := range []string{"busy", "settlement failed", "canceled"} {
 		t.Run(failure, func(t *testing.T) {
-			store, _ := newShadowTestStore(t)
+			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
+			require.NoError(t, err)
 			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
 			children, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY 1`, "settling children")
 			require.NoError(t, err)
@@ -325,6 +354,9 @@ func TestShadowLifecycleSettlementFailureReleasesFamily(t *testing.T) {
 			}
 
 			store.historyWorkers = manager
+
+			t.Cleanup(func() { store.historyWorkers = noHistoryWorkers{} })
+
 			child := manager.bridges[children[1]].(*Bridge)
 			errSettlement := errors.New("child settlement failed")
 
@@ -436,9 +468,13 @@ func TestShadowLifecycleUnavailableStateDoesNotStartWork(t *testing.T) {
 func TestShadowLifecycleDeferredCommitFailureAndRetry(t *testing.T) {
 	t.Parallel()
 
+	store, _ := newShadowTestStore(t)
+
 	for _, operation := range []string{"capture", "claim", "clear", "revert", "finish"} {
 		t.Run(operation, func(t *testing.T) {
-			store, _ := newShadowTestStore(t)
+			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
+			require.NoError(t, err)
+
 			parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
 			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
 			admitted, err := parent.activateInbound(t.Context(), &request)
@@ -460,6 +496,10 @@ func TestShadowLifecycleDeferredCommitFailureAndRetry(t *testing.T) {
 BEGIN RAISE EXCEPTION 'shadow commit unavailable'; END $$;
 CREATE CONSTRAINT TRIGGER reject_shadow_commit AFTER UPDATE ON shadow_turns DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_shadow_commit()`)
 			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, err := store.db.Exec(`DROP FUNCTION reject_shadow_commit() CASCADE`)
+				require.NoError(t, err)
+			})
 
 			for _, rejected := range []bool{true, false} {
 				switch operation {
@@ -504,12 +544,16 @@ CREATE CONSTRAINT TRIGGER reject_shadow_commit AFTER UPDATE ON shadow_turns DEFE
 func TestShadowLifecycleFinishRollback(t *testing.T) {
 	t.Parallel()
 
+	store, _ := newShadowTestStore(t)
+
 	for _, step := range []struct{ table, event string }{
 		{"shadow_turns", "UPDATE"}, {"entries", "INSERT"}, {"turns", "DELETE"},
 		{"turns", "UPDATE OF note"}, {"steps", "DELETE"},
 	} {
 		t.Run(step.table+" "+step.event, func(t *testing.T) {
-			store, _ := newShadowTestStore(t)
+			// Cases share migrations only; every admission starts with empty history and journals.
+			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
+			require.NoError(t, err)
 			ctx := t.Context()
 			parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
 			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
