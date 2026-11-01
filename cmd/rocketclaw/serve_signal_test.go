@@ -3,16 +3,16 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-// The helper process waits for shutdownSignals' first signal, then takes a moment to "shut down" before it exits.
+// The helper process waits for the first signal, then for the parent to release its graceful shutdown.
 func TestShutdownSignalsHelper(t *testing.T) {
 	if os.Getenv("ROCKETCLAW_SIGNAL_HELPER") == "" {
 		t.Skip("run by TestShutdownSignals")
@@ -24,7 +24,8 @@ func TestShutdownSignalsHelper(t *testing.T) {
 	fmt.Println("ready")
 	<-ctx.Done()
 	fmt.Println("shutting down")
-	time.Sleep(time.Second)
+	_, err := io.Copy(io.Discard, os.Stdin)
+	require.NoError(t, err)
 	fmt.Println("stopped")
 }
 
@@ -41,6 +42,8 @@ func TestShutdownSignals(t *testing.T) {
 		t.Run(tc.signal.String(), func(t *testing.T) {
 			helper := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestShutdownSignalsHelper$")
 			helper.Env = append(os.Environ(), "ROCKETCLAW_SIGNAL_HELPER=1")
+			release, err := helper.StdinPipe()
+			require.NoError(t, err)
 			output, err := helper.StdoutPipe()
 			require.NoError(t, err)
 			require.NoError(t, helper.Start())
@@ -52,6 +55,9 @@ func TestShutdownSignals(t *testing.T) {
 			require.True(t, lines.Scan())
 			require.Equal(t, "shutting down", lines.Text())
 			require.NoError(t, helper.Process.Signal(tc.signal))
+			if tc.stopped {
+				require.NoError(t, release.Close())
+			}
 
 			rest := []string{}
 			for lines.Scan() {
