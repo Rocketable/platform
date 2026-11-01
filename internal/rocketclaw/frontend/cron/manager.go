@@ -38,9 +38,14 @@ type Manager struct {
 	now                   func() time.Time
 	tickerInterval        time.Duration
 
+	// refreshed wakes the ticker loop to arm the one-offs a Refresh added; one pending wake covers any number.
+	refreshed chan struct{}
+
 	mu     sync.Mutex
 	stop   context.CancelFunc
 	closed bool
+	// definitions are the ones Start or the latest Refresh loaded, the only ones the scheduler runs.
+	definitions []definition
 	// armed holds the schedule IDs of the one-offs whose timers started, so each starts once.
 	armed map[string]bool
 	wg    sync.WaitGroup
@@ -51,7 +56,6 @@ type cronScheduleStore interface {
 	SyncCronSchedules([]backend.CronScheduleState) error
 	DueCronSchedules(time.Time) ([]backend.CronScheduleState, error)
 	ClaimCronSchedule(backend.CronScheduleState, time.Time, time.Time) (bool, error)
-	CronRunRecorded(string) (bool, error)
 }
 
 type definition struct {
@@ -73,7 +77,7 @@ const (
 
 // New constructs a cronjob manager using runtimeDir for effective runtime cron definitions and agents' routines.
 func New(cfg *config.LockedConfig, runtimeDir string, store cronScheduleStore, run Runner, logger *slog.Logger) *Manager {
-	return &Manager{cfg: cfg, workspace: cfg.Clone().Workspace, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, runtimeDir: runtimeDir, armed: map[string]bool{}}
+	return &Manager{cfg: cfg, workspace: cfg.Clone().Workspace, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, runtimeDir: runtimeDir, refreshed: make(chan struct{}, 1), armed: map[string]bool{}}
 }
 
 // ValidateRuntimeDefinitions loads cron definitions and routines from runtimeDir without mutating scheduler state.
@@ -104,7 +108,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.stop = cancel
+	m.stop, m.definitions = cancel, definitions
 
 	m.armOneOffs(runCtx, definitions, now)
 
@@ -121,6 +125,30 @@ func (m *Manager) Start(ctx context.Context) error {
 				"agent", definition.agent,
 			)
 		}
+	}
+
+	return nil
+}
+
+// Refresh loads the cron definitions anew; a reload calls it once it has validated and installed them. It
+// syncs the schedules table before the scheduler uses them, and a load or sync error leaves both unchanged.
+func (m *Manager) Refresh() error {
+	definitions, err := loadDefinitionsIn(m.cfg, m.runtimeDir)
+	if err != nil {
+		return err
+	}
+
+	if err := m.store.SyncCronSchedules(m.scheduledStates(definitions, m.now())); err != nil {
+		return fmt.Errorf("sync cron schedules: %w", err)
+	}
+
+	m.mu.Lock()
+	m.definitions = definitions
+	m.mu.Unlock()
+
+	select {
+	case m.refreshed <- struct{}{}:
+	default:
 	}
 
 	return nil
@@ -295,49 +323,25 @@ func (m *Manager) runOneOffTimer(ctx context.Context, id string, interval time.D
 	}
 
 	m.mu.Lock()
-	closed := m.closed
-	m.mu.Unlock()
+	closed, definitions := m.closed, m.definitions
 
-	if closed {
-		return
-	}
-
-	// Only a one-off still defined runs: an edited time or a removed one-off leaves this timer stale. One that
-	// fails to load arms again at the next scan that loads it, which reports the error.
-	definitions, _ := loadDefinitionsIn(m.cfg, m.runtimeDir)
-
+	// Only a one-off still defined runs: a refresh that edited its time or removed it leaves this timer stale.
 	i := slices.IndexFunc(definitions, func(d definition) bool {
 		return len(d.schedules) == 1 && scheduleID(d.relativePath, 0, d.schedules[0].Raw) == id
 	})
 	if i < 0 {
-		m.mu.Lock()
 		delete(m.armed, id)
-		m.mu.Unlock()
+	}
 
+	m.mu.Unlock()
+
+	if closed || i < 0 {
 		return
 	}
 
 	definition := &definitions[i]
 
-	// A routine lives in its agent's file, which is never deleted: one with a scheduled run recorded is done.
-	routine := strings.HasPrefix(definition.relativePath, "agents/")
-	if routine {
-		ran, err := m.store.CronRunRecorded(definition.relativePath)
-		if err != nil {
-			m.log.Error("read one-off routine runs", "file", definition.relativePath, "error", err)
-			return
-		}
-
-		if ran {
-			return
-		}
-	}
-
 	m.executeJob(ctx, definition)
-
-	if routine {
-		return
-	}
 
 	relativePath := filepath.ToSlash(filepath.Join(m.runtimeDir, "cron", filepath.Base(definition.relativePath)))
 	if err := os.Remove(filepath.Join(m.workspace, relativePath)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -361,6 +365,14 @@ func (m *Manager) runTickerLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-m.refreshed:
+			m.mu.Lock()
+			if !m.closed {
+				m.armOneOffs(ctx, m.definitions, m.now())
+			}
+			m.mu.Unlock()
+
+			continue
 		case <-ticker.C:
 		}
 
@@ -375,23 +387,8 @@ func (m *Manager) runTickerLoop(ctx context.Context) {
 func (m *Manager) scanScheduled(ctx context.Context) error {
 	now := m.now()
 
-	definitions, err := loadDefinitionsIn(m.cfg, m.runtimeDir)
-	if err != nil {
-		return err
-	}
-
-	states := m.scheduledStates(definitions, now)
-	if err := m.store.SyncCronSchedules(states); err != nil {
-		return fmt.Errorf("sync cron schedules: %w", err)
-	}
-
 	m.mu.Lock()
-
-	closed := m.closed
-	if !closed {
-		m.armOneOffs(ctx, definitions, now)
-	}
-
+	closed, definitions := m.closed, m.definitions
 	m.mu.Unlock()
 
 	if closed {
@@ -408,7 +405,7 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 	}
 
 	statesByID := map[string]backend.CronScheduleState{}
-	for _, state := range states {
+	for _, state := range m.scheduledStates(definitions, now) {
 		statesByID[state.ScheduleID] = state
 	}
 
@@ -540,6 +537,11 @@ func loadDefinitionsIn(cfg *config.LockedConfig, runtimeDir string) ([]definitio
 			schedule, err := config.ParseCronSchedule(routine.Schedule)
 			if err != nil {
 				return nil, fmt.Errorf("agents/%s: routines: schedule %q: %w", agent.Location, routine.Schedule, err)
+			}
+
+			// A routine cannot mark itself done, so a timestamp would fire again once its run record expires.
+			if !schedule.DueAt.IsZero() {
+				return nil, fmt.Errorf("agents/%s: routines: schedule %q: a routine repeats; for a single future run use rocketclaw_schedule_message", agent.Location, schedule.Raw)
 			}
 
 			relativePath := "agents/" + agent.Location + "#" + schedule.Raw

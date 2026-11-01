@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,7 +153,7 @@ func TestValidateRuntimeDefinitionsReportsStagedCronParseErrors(t *testing.T) {
 
 	m := New(newCronConfig(t, workspace, ".rocketclaw-stage"), ".rocketclaw-stage", newCronScheduleStore(t), &runnerMock{}, slog.New(slog.DiscardHandler))
 	require.ErrorContains(t, m.Start(t.Context()), "yaml frontmatter is required")
-	require.ErrorContains(t, m.scanScheduled(t.Context()), "yaml frontmatter is required")
+	require.ErrorContains(t, m.Refresh(), "yaml frontmatter is required")
 }
 
 func TestLoadOneOffCronjobUsesEffectiveRuntimeCron(t *testing.T) {
@@ -417,7 +418,7 @@ func stopCronManager(t *testing.T, m *Manager) {
 	}
 }
 
-func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
+func TestScanScheduledRunsLoadedDefinitionUntilRefresh(t *testing.T) {
 	workspace := t.TempDir()
 
 	cronDir := filepath.Join(workspace, "cron")
@@ -430,50 +431,68 @@ func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := newCronScheduleStore(t)
+	store, db := newCronScheduleStoreDB(t)
 	runPrompt := make(chan string, 1)
 	m := New(newCronConfig(t, workspace, "."), ".", store, &runnerMock{RunFunc: func(_ context.Context, _ string, prompt string, _ *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		runPrompt <- prompt
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
 
+	// The ticker reads the clock after each Refresh, so the test moves it under a lock.
+	var (
+		clockMu sync.Mutex
+		elapsed time.Duration
+	)
+
 	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
-	m.now = func() time.Time { return start }
+	m.now = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
 
-	defs, err := loadDefinitionsIn(newCronConfig(t, workspace, "."), ".")
-	if err != nil {
-		t.Fatal(err)
+		return start.Add(elapsed)
 	}
+	require.NoError(t, m.Start(t.Context()))
+	t.Cleanup(func() { stopCronManager(t, m) })
 
-	if err := store.SyncCronSchedules(m.scheduledStates(defs, start)); err != nil {
-		t.Fatal(err)
-	}
+	scan := func(at time.Duration, want string) {
+		t.Helper()
 
-	if err := os.WriteFile(cronPath, []byte("---\nschedule: 1s\nagent: helper\n---\nnew body"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+		clockMu.Lock()
+		elapsed = at
+		clockMu.Unlock()
 
-	m.now = func() time.Time { return start.Add(10 * time.Second) }
+		require.NoError(t, m.scanScheduled(t.Context()))
 
-	if err := m.scanScheduled(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-
-	select {
-	case prompt := <-runPrompt:
-		// Every scheduled run's reply is reported in a Web chat, so every run is told so.
-		if prompt != "new body\n\n"+cronReplyInstruction {
-			t.Fatalf("scheduled prompt = %q; want latest body and the report instruction", prompt)
+		select {
+		case prompt := <-runPrompt:
+			// Every scheduled run's reply is reported in a Web chat, so every run is told so.
+			require.Equal(t, want+"\n\n"+cronReplyInstruction, prompt)
+		case <-time.After(time.Second):
+			t.Fatal("scheduled cronjob did not run")
 		}
-	case <-time.After(time.Second):
-		t.Fatal("scheduled cronjob did not run")
 	}
 
-	m.wg.Wait()
+	// An edit takes effect only once a reload refreshes the definitions, and a broken file or a failed sync never does.
+	require.NoError(t, os.WriteFile(cronPath, []byte("---\nschedule: 2s\nagent: helper\n---\nnew body"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(cronDir, "broken.md"), []byte("not frontmatter"), 0o644))
+	scan(10*time.Second, "old body")
+	require.ErrorContains(t, m.Refresh(), "yaml frontmatter is required")
+	scan(20*time.Second, "old body")
+
+	require.NoError(t, os.Remove(filepath.Join(cronDir, "broken.md")))
+	_, err := db.ExecContext(t.Context(), `ALTER TABLE schedules ADD CONSTRAINT refuse_edit CHECK (id <> 'cron/daily.md#0#2s')`)
+	require.NoError(t, err)
+	require.ErrorContains(t, m.Refresh(), "sync cron schedules")
+	scan(30*time.Second, "old body")
+
+	_, err = db.ExecContext(t.Context(), `ALTER TABLE schedules DROP CONSTRAINT refuse_edit`)
+	require.NoError(t, err)
+	require.NoError(t, m.Refresh())
+	scan(40*time.Second, "new body")
 
 	triggers, err := store.DueCronSchedules(start.Add(time.Hour))
 	require.NoError(t, err)
-	require.Equal(t, []backend.CronScheduleState{{ScheduleID: "cron/daily.md#0#1s", RelativePath: "cron/daily.md", NextDue: start.Add(11 * time.Second)}}, triggers)
+	require.Equal(t, []backend.CronScheduleState{{ScheduleID: "cron/daily.md#0#2s", RelativePath: "cron/daily.md", NextDue: start.Add(42 * time.Second)}}, triggers)
 }
 
 func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
@@ -505,15 +524,7 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 
 	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 	m.now = func() time.Time { return start }
-
-	defs, err := loadDefinitionsIn(newCronConfig(t, workspace, "."), ".")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := store.SyncCronSchedules(m.scheduledStates(defs, start)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, m.Refresh())
 
 	m.now = func() time.Time { return start.Add(time.Second) }
 	if err := m.scanScheduled(t.Context()); err != nil {
@@ -770,6 +781,7 @@ func TestValidateRuntimeDefinitionsRefusesBadRoutines(t *testing.T) {
 	}{
 		{"duplicate schedule", easyRoutineAgent + "  - 30m\n  - 30m: Again.\n---\nPrompt\n", "", `agents/marketing.md: routines: schedule "30m" is listed twice`},
 		{"phrase", easyRoutineAgent + "  - every 30min\n---\nPrompt\n", "", `agents/marketing.md: routines: schedule "every 30min": invalid cron expression`},
+		{"timestamp", easyRoutineAgent + "  - '2026-11-15T09:00:00Z': Launch.\n---\nPrompt\n", "", `agents/marketing.md: routines: schedule "2026-11-15T09:00:00Z": a routine repeats; for a single future run use rocketclaw_schedule_message`},
 		{"cron file for an easy agent", easyRoutineAgent + "  - 30m\n---\nPrompt\n", "---\nschedule: 1h\nagent: marketing\n---\nBody\n", "cron/daily.md: agent marketing is an easy agent"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -787,90 +799,37 @@ func TestValidateRuntimeDefinitionsRefusesBadRoutines(t *testing.T) {
 	}
 }
 
-func TestOneOffRoutineFiresOnce(t *testing.T) {
+func TestOneOffAddedByRefreshFiresOnce(t *testing.T) {
 	workspace := t.TempDir()
-	cfg := newCronConfig(t, workspace, ".")
-	agentPath := filepath.Join(workspace, "agents", "marketing.md")
-	require.NoError(t, os.WriteFile(agentPath, []byte(easyRoutineAgent+"  - '2000-01-01T00:00:00Z': Launch.\n---\nPrompt\n"), 0o644))
-
-	store := newCronScheduleStore(t)
-	runDone := make(chan error, 1)
-	// The run is recorded as the cron runner records it.
-	m := New(cfg, ".", store, &runnerMock{RunFunc: func(ctx context.Context, agent, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		runDone <- (&backend.Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: progress.ConversationID, Agent: agent, CreatedBy: "cron", Run: progress.Run})
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
-	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
-	require.NoError(t, m.Start(t.Context()))
-
-	select {
-	case err := <-runDone:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("past-due one-off routine did not run")
-	}
-
-	stopCronManager(t, m)
-	require.FileExists(t, agentPath, "a routine's agent file is never deleted")
-
-	// After a restart, the recorded run makes the one-off routine done.
-	definitions, err := loadDefinitionsIn(cfg, ".")
-	require.NoError(t, err)
-
-	restarted := New(cfg, ".", store, &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		t.Fatal("one-off routine fired again")
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
-	restarted.wg.Add(1)
-	restarted.runOneOffTimer(t.Context(), scheduleID(definitions[0].relativePath, 0, definitions[0].schedules[0].Raw), 0)
-}
-
-func TestOneOffsAddedAfterStartFireOnce(t *testing.T) {
-	workspace := t.TempDir()
-	cfg := newCronConfig(t, workspace, ".")
-	store := newCronScheduleStore(t)
-	sessions := &backend.Runtime{Sessions: store}
-	dueAt := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, sessions.CreateConversation(t.Context(), protocol.Conversation{ID: "cron:sales", Agent: "sales", CreatedBy: "cron", Run: &protocol.CronRun{Path: "agents/sales.md#2000-01-01T00:00:00Z", At: dueAt}}))
-
 	runs, release := make(chan string, 10), make(chan struct{})
-	// The run is recorded as the cron runner records it; the cron file's run lasts until released.
-	m := New(cfg, ".", store, &runnerMock{RunFunc: func(ctx context.Context, agent, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		assert.NoError(t, sessions.CreateConversation(ctx, protocol.Conversation{ID: progress.ConversationID, Agent: agent, CreatedBy: "cron", Run: progress.Run}))
-
+	// The cron file's run lasts until released.
+	m := New(newCronConfig(t, workspace, "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		runs <- progress.Run.Path
 
-		if progress.Run.Path == "cron/launch.md" {
-			<-release
-		}
+		<-release
 
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
-	m.now = func() time.Time { return dueAt.Add(24 * time.Hour) }
+	m.now = func() time.Time { return time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC) }
 	m.tickerInterval = 10 * time.Millisecond
 	require.NoError(t, m.Start(t.Context()))
 
-	// Past-due one-offs added after start, as a reload adds them: the sales one already ran.
-	oneOff := easyRoutineAgent + "  - '2000-01-01T00:00:00Z': Launch.\n---\nPrompt\n"
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "marketing.md"), []byte(oneOff), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "sales.md"), []byte(oneOff), 0o644))
+	// A past-due one-off added after start waits for the refresh a reload makes.
 	require.NoError(t, os.Mkdir(filepath.Join(workspace, "cron"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "cron", "launch.md"), []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\n---\nBody"), 0o644))
+	time.Sleep(10 * m.tickerInterval)
+	require.Empty(t, runs, "a one-off runs only once a refresh loads it")
+	require.NoError(t, m.Refresh())
 
-	var got []string
-
-	for range 2 {
-		select {
-		case path := <-runs:
-			got = append(got, path)
-		case <-time.After(5 * time.Second):
-			t.Fatalf("one-offs added after start ran %v; want the marketing routine and the cron file", got)
-		}
+	select {
+	case path := <-runs:
+		require.Equal(t, "cron/launch.md", path)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the one-off added by a refresh did not run")
 	}
 
-	require.ElementsMatch(t, []string{"agents/marketing.md#2000-01-01T00:00:00Z", "cron/launch.md"}, got)
-
-	// Scans go on while the cron file still runs and exists.
+	// Scans and refreshes go on while the cron file still runs and exists.
+	require.NoError(t, m.Refresh())
 	time.Sleep(30 * m.tickerInterval)
 	close(release)
 	stopCronManager(t, m)
@@ -914,6 +873,8 @@ func TestStaleOneOffTimerRunsNothing(t *testing.T) {
 			} else {
 				require.NoError(t, os.WriteFile(cronPath, []byte(tc.edit), 0o644))
 			}
+
+			require.NoError(t, m.Refresh())
 
 			time.Sleep(800 * time.Millisecond)
 			stopCronManager(t, m)

@@ -28,14 +28,12 @@ Before writing a cron file, read its agent's `.rocketclaw/agents/<agent>.md`. If
 routines:
   - "*/5 * * * *": "Check the campaign dashboard for anomalies."
   - "30m"
-  - "2026-11-02T09:00:00Z": "Send the launch summary."
 ```
 
 - Each entry is a schedule string, or a one-entry map from schedule to instruction.
-- A schedule uses the cron-file syntax below, one schedule per entry: 5-field cron, a Go duration, an `@daily`-style shortcut, or a one-off RFC 3339 time. `@every` fails loading.
+- A schedule uses the cron-file syntax below for repeating schedules, one schedule per entry: 5-field cron, a Go duration, or an `@daily`-style shortcut. `@every` and a one-off RFC 3339 time fail loading: routines repeat. For a single future run, use `rocketclaw_schedule_message`.
 - An entry with an instruction sends it as the prompt; a bare entry sends `Scheduled run (<schedule>).` Runs report like cron runs, in the agent's `space`.
 - A routine is its agent plus its schedule text: editing the instruction keeps it, changing the schedule starts a new one, and the same schedule twice in one file fails loading.
-- A one-off time fires once and stays in the file; remove it when the human asks. A Run-button run does not count.
 - Only top-level agents' routines run; a shadow's own `routines` never run, and routine runs get no shadows.
 
 ## Heartbeat interval

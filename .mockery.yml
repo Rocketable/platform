@@ -28,9 +28,9 @@ packages:
       runtimeRestarter:
         config:
           structname: runtimeRestarterMock
-      externalMCPAgents:
+      runtimeRefresher:
         config:
-          structname: externalMCPAgentsMock
+          structname: runtimeRefresherMock
       slackLookup:
         config:
           structname: slackLookupMock
