@@ -242,7 +242,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		Cfg: rocketcodeSessions.definitions, Log: logger, RunCtx: runCtx,
 		Sessions:          rocketcodeSessions,
 		ExternalMCPUsers:  externalMCPUsers,
-		ExternalMCPAgents: inertExternalMCPAgents{}, assemble: s.assemble,
+		ExternalMCPAgents: inertRefresher{}, CronJobs: inertRefresher{}, assemble: s.assemble,
 		TextRouter: threadBridges, threads: threadBridges, background: background,
 		questions: questions,
 	}

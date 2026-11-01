@@ -585,15 +585,6 @@ SELECT count(*) > 0 FROM advanced LEFT JOIN running r ON TRUE WHERE r.id IS NULL
 	return claimed, err
 }
 
-// CronRunRecorded reports whether a scheduled run of the cron definition at path is recorded.
-func (s *SessionService) CronRunRecorded(path string) (bool, error) {
-	var recorded bool
-
-	err := queryScalar(context.Background(), s.db, "read recorded cron runs", `SELECT count(*) > 0 FROM conversations WHERE cron_path = $1 AND kind = $2`, &recorded, path, KindCronRun)
-
-	return recorded, err
-}
-
 // ActiveGoalThreads returns managed thread state for conversations with active goals.
 func (s *SessionService) ActiveGoalThreads() (map[string]ThreadState, error) {
 	threads, err := queryMap(context.Background(), s.db, `SELECT conversation_id, agent, created_by FROM conversations

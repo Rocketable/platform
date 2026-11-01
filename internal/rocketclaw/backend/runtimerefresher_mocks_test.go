@@ -8,26 +8,26 @@ import (
 	"sync"
 )
 
-// Ensure that externalMCPAgentsMock does implement externalMCPAgents.
+// Ensure that runtimeRefresherMock does implement runtimeRefresher.
 // If this is not the case, regenerate this file with mockery.
-var _ externalMCPAgents = &externalMCPAgentsMock{}
+var _ runtimeRefresher = &runtimeRefresherMock{}
 
-// externalMCPAgentsMock is a mock implementation of externalMCPAgents.
+// runtimeRefresherMock is a mock implementation of runtimeRefresher.
 //
-//	func TestSomethingThatUsesexternalMCPAgents(t *testing.T) {
+//	func TestSomethingThatUsesruntimeRefresher(t *testing.T) {
 //
-//		// make and configure a mocked externalMCPAgents
-//		mockedexternalMCPAgents := &externalMCPAgentsMock{
+//		// make and configure a mocked runtimeRefresher
+//		mockedruntimeRefresher := &runtimeRefresherMock{
 //			RefreshFunc: func() error {
 //				panic("mock out the Refresh method")
 //			},
 //		}
 //
-//		// use mockedexternalMCPAgents in code that requires externalMCPAgents
+//		// use mockedruntimeRefresher in code that requires runtimeRefresher
 //		// and then make assertions.
 //
 //	}
-type externalMCPAgentsMock struct {
+type runtimeRefresherMock struct {
 	// RefreshFunc mocks the Refresh method.
 	RefreshFunc func() error
 
@@ -41,9 +41,9 @@ type externalMCPAgentsMock struct {
 }
 
 // Refresh calls RefreshFunc.
-func (mock *externalMCPAgentsMock) Refresh() error {
+func (mock *runtimeRefresherMock) Refresh() error {
 	if mock.RefreshFunc == nil {
-		panic("externalMCPAgentsMock.RefreshFunc: method is nil but externalMCPAgents.Refresh was just called")
+		panic("runtimeRefresherMock.RefreshFunc: method is nil but runtimeRefresher.Refresh was just called")
 	}
 	callInfo := struct {
 	}{}
@@ -56,8 +56,8 @@ func (mock *externalMCPAgentsMock) Refresh() error {
 // RefreshCalls gets all the calls that were made to Refresh.
 // Check the length with:
 //
-//	len(mockedexternalMCPAgents.RefreshCalls())
-func (mock *externalMCPAgentsMock) RefreshCalls() []struct {
+//	len(mockedruntimeRefresher.RefreshCalls())
+func (mock *runtimeRefresherMock) RefreshCalls() []struct {
 } {
 	var calls []struct {
 	}

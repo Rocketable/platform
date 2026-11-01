@@ -12,7 +12,7 @@ import (
 )
 
 func TestRuntimeReload(t *testing.T) {
-	for _, scenario := range []string{"success", "invalid-agent", "invalid-frontend", "refresh-failure"} {
+	for _, scenario := range []string{"success", "invalid-agent", "invalid-frontend", "refresh-failure", "cron-refresh-failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			cfg := &config.Config{Workspace: t.TempDir()}
 			root, err := os.OpenRoot(cfg.Workspace)
@@ -46,19 +46,24 @@ func TestRuntimeReload(t *testing.T) {
 
 				return nil
 			}}
-			refresh := &externalMCPAgentsMock{}
-			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, assemble: assembler, ExternalMCPAgents: refresh}
-			refresh.RefreshFunc = func() error {
-				require.False(t, rt.reloadMu.TryLock(), "reload remains serialized through MCP refresh")
+			refresh, cron := &runtimeRefresherMock{}, &runtimeRefresherMock{}
+			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, assemble: assembler, ExternalMCPAgents: refresh, CronJobs: cron}
+			refreshed := func(failure string) error {
+				require.False(t, rt.reloadMu.TryLock(), "reload remains serialized through each refresh")
 				live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/main.md")
 				require.NoError(t, err)
 				require.Equal(t, newAgent, string(live), "refresh runs after replacement")
 
-				if scenario == "refresh-failure" {
+				if scenario == failure {
 					return errors.New("refresh failed")
 				}
 
 				return nil
+			}
+			refresh.RefreshFunc = func() error { return refreshed("refresh-failure") }
+			cron.RefreshFunc = func() error {
+				require.Len(t, refresh.RefreshCalls(), 1, "cron jobs refresh after External MCP agents")
+				return refreshed("cron-refresh-failure")
 			}
 
 			receipt, err := rt.Reload("updated assets")
@@ -76,9 +81,17 @@ func TestRuntimeReload(t *testing.T) {
 			if scenario == "invalid-agent" || scenario == "invalid-frontend" {
 				require.Equal(t, oldAgent, string(live))
 				require.Empty(t, refresh.RefreshCalls())
+				require.Empty(t, cron.RefreshCalls())
 			} else {
 				require.Equal(t, newAgent, string(live))
 				require.Len(t, refresh.RefreshCalls(), 1)
+
+				cronCalls := 1
+				if scenario == "refresh-failure" {
+					cronCalls = 0
+				}
+
+				require.Len(t, cron.RefreshCalls(), cronCalls)
 			}
 		})
 	}

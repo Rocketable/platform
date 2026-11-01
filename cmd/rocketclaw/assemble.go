@@ -26,11 +26,12 @@ func (processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []func(c
 	}
 
 	stops = append(stops, slack.Stop)
-	done := slack.StartEvents(rt.RunCtx, rt)
 	if err := cronjobs.Start(rt.RunCtx); err != nil {
 		return nil, nil, err
 	}
 	stops = append(stops, cronjobs.Stop)
+	rt.CronJobs = cronjobs
+	done := slack.StartEvents(rt.RunCtx, rt)
 
 	if cfg.MCPExternal.Enabled {
 		agents := &mcpAgentIndex{cfg: rt.Cfg}

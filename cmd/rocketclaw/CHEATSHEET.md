@@ -413,10 +413,9 @@ An unknown key fails loading, and so do `description`, `reasoningEffort`, `verbo
 
 Routines:
 
-- A schedule uses the cron-file syntax: 5-field cron, a Go duration such as `30m`, an `@daily`-style shortcut, or a one-off RFC 3339 time. `@every` and phrases such as `every 30min` fail at startup and reload.
+- A schedule uses the cron-file syntax for repeating schedules: 5-field cron, a Go duration such as `30m`, or an `@daily`-style shortcut. `@every`, phrases such as `every 30min`, and a one-off RFC 3339 time fail at startup and reload; `rocketclaw_schedule_message` sends a single future run.
 - An entry with an instruction sends it as the prompt; a bare one sends `Scheduled run (<schedule>).` An empty reply reports nothing; any other opens a Web chat in the agent's `space`.
 - A routine is its agent plus its schedule text: editing the instruction keeps it, changing the schedule starts a new one, and the same schedule twice fails loading. Its runs are recorded as `agents/<agent>.md#<schedule>`, the Cron page lists it as `<agent> · <schedule>`, and `cron:<agent>` finds its runs, along with those of a cron file named `cron/<agent>.md`. Renaming the agent file leaves earlier runs under the old name.
-- A one-off time fires once; a run from the Run button does not count.
 - A cron file whose `agent` is an easy agent fails at startup and reload.
 
 Shadows:

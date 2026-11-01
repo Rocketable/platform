@@ -60,6 +60,7 @@ func TestRunLintEasyAgents(t *testing.T) {
 		{"valid", easy + "routines: [30m]\n---\nmain\n", ""},
 		{"unknown key", easy + "description: main\n---\nmain\n", "load agents: main.md: description: not an easy-mode key"},
 		{"repeated routine", easy + "routines: [30m, 30m]\n---\nmain\n", `validate cron definitions: agents/main.md: routines: schedule "30m" is listed twice`},
+		{"timestamp routine", easy + "routines: [\"2026-11-15T09:00:00Z\"]\n---\nmain\n", `validate cron definitions: agents/main.md: routines: schedule "2026-11-15T09:00:00Z": a routine repeats; for a single future run use rocketclaw_schedule_message`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()

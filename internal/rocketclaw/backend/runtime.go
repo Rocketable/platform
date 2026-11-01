@@ -18,13 +18,13 @@ type runtimeReloader interface {
 	Reload(string) (string, error)
 }
 
-type externalMCPAgents interface {
+type runtimeRefresher interface {
 	Refresh() error
 }
 
-type inertExternalMCPAgents struct{}
+type inertRefresher struct{}
 
-func (inertExternalMCPAgents) Refresh() error { return nil }
+func (inertRefresher) Refresh() error { return nil }
 
 // Runtime is the backend after construction, before frontends.
 type Runtime struct {
@@ -33,7 +33,8 @@ type Runtime struct {
 	RunCtx            context.Context
 	Sessions          *SessionService
 	ExternalMCPUsers  map[string]string
-	ExternalMCPAgents externalMCPAgents
+	ExternalMCPAgents runtimeRefresher
+	CronJobs          runtimeRefresher
 	assemble          FrontendAssembler
 
 	reloadMu sync.Mutex
@@ -51,7 +52,7 @@ type Runtime struct {
 	justBashErr error
 }
 
-// Reload validates and replaces runtime assets, then refreshes External MCP agents.
+// Reload validates and replaces runtime assets, then refreshes External MCP agents and the cron jobs.
 // It uses the startup configuration, never rereading the configuration file.
 func (r *Runtime) Reload(reason string) (string, error) {
 	r.reloadMu.Lock()
@@ -72,6 +73,10 @@ func (r *Runtime) Reload(reason string) (string, error) {
 
 	if err := r.ExternalMCPAgents.Refresh(); err != nil {
 		return "", fmt.Errorf("refresh external MCP agents: %w", err)
+	}
+
+	if err := r.CronJobs.Refresh(); err != nil {
+		return "", fmt.Errorf("refresh cron jobs: %w", err)
 	}
 
 	r.installJustBash()

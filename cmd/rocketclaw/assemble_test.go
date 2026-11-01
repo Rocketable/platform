@@ -15,6 +15,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
 )
 
 func TestValidateAssetsAcceptsWorkspaceWithoutCronjobs(t *testing.T) {
@@ -85,6 +86,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, done)
 			require.Len(t, stops, 4, "Slack, Cron, external MCP, and Web must all start")
+			require.IsType(t, &cronfrontend.Manager{}, rt.CronJobs, "a reload refreshes the started cron jobs")
 			cancel()
 			<-done
 			for _, stop := range stops {
