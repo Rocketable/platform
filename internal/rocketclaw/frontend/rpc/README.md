@@ -183,20 +183,18 @@ intervals on a read. `RunCronJob` loads the selected stem through that manager,
 runs its fresh private X, and returns the actual destination Y only after the
 existing runner's RunTurn and Sync finish successfully.
 
-Historical Cron rows use existing `sync_source_entry_id` links to surviving source
-entries. Backend entry reads expose generic source conversation provenance; RPC
+Backend entry reads expose generic source conversation provenance; RPC
 decodes the Cron prefix and the timestamp/random suffix from the right. The stored
 path label is used as-is, including previously stored underscores, without matching
-current definitions. Each run X is one row, whatever chats hold its output and
-whatever subagent or review sessions ran under it; those sessions count as X. The
-row links to a recorded human Y holding a copy, the greatest ID if several. Rows sort
-newest-first by the source run timestamp, with X as tie-breaker. A synced row proves a
-copy, not successful model execution or delivery.
-Recorded private Cron conversations with saved entries or visible turn checkpoints
-also supply run timestamps through the same metadata query, without reading replay
-content. Checkpoint visibility follows the transcript's terminal, supersession, and
-revert rules.
-When no human destination has a copy, Web's **Open chat** action uses
+current definitions. Each run X is one row, whatever chats hold its output. Only X's
+own history and turns count; subagent and review sessions under X and copied entries
+are not read. The row links to a recorded human Y that X reports to or that continues
+X, the greatest ID if several. Rows sort newest-first by the source run timestamp,
+with X as tie-breaker.
+Recorded private Cron conversations with saved entries or a running, failed, or
+stopped turn also supply run timestamps through the same metadata query, without
+reading replay content. Runs cannot revert, so no revert cutoff applies to them.
+When no human chat holds the run's output, Web's **Open chat** action uses
 `CreateSession.source_conversation_id`, which accepts a recorded Cron
 producer and creates or reuses `web:<source ID>`, which continues the run: it shows
 the run's messages under their own IDs before its own, without copying them, and

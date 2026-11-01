@@ -2419,6 +2419,8 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	sources := []string{"cron:cron/report:daily.md:20260905T010000.000000001Z:first", "one-off-cron:cron/report_daily.md:20260905T020000.000000002Z:second"}
 	runs := []*protocol.CronRun{{Path: "cron/report:daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, {Path: "cron/report_daily.md", At: time.Date(2026, 9, 5, 2, 0, 0, 2, time.UTC), OneOff: true}}
 
+	runEntries := make([]int64, 0, len(sources))
+
 	for i, source := range sources {
 		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: source, Agent: "producer", Run: runs[i]}))
 
@@ -2426,6 +2428,8 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		runEntry.ReplayInput = []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"` + source + `"}`)}
 		sourceEntry, err := sessions.AppendEntryID(ctx, source, &runEntry)
 		require.NoError(t, err)
+
+		runEntries = append(runEntries, sourceEntry)
 		trace, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: source})
 		require.NoError(t, err)
 		require.Len(t, trace.Messages, 1)
@@ -2493,6 +2497,9 @@ UPDATE entries e SET entry_json = jsonb_set(e.entry_json::jsonb, '{replay_input}
 		require.NoError(t, err)
 	}
 
+	// Each run reports to id; the copies above link no run to a chat.
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $1 WHERE conversation_id = ANY($2)`, id, sources)
+	require.NoError(t, err)
 	jobs, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
 	require.Len(t, jobs.Jobs, 4) // Two definitions and two runs, not four copied entries.
@@ -2515,12 +2522,7 @@ UPDATE entries e SET entry_json = jsonb_set(e.entry_json::jsonb, '{replay_input}
 	t.Run("a cron run is one row whatever chats and sessions it has", func(t *testing.T) {
 		const destination, subagent = "opaque-human-Y", "cron-subagent"
 		require.NoError(t, sessions.UpsertThread(destination, backend.ThreadState{Agent: "main"}))
-		source, err := sessions.ObserveEntries(ctx, sources[0])
-		require.NoError(t, err)
-		require.Len(t, source, 1)
-		copied, err := sessions.AppendEntryID(ctx, destination, &source[0].Entry)
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, source[0].ID, copied)
+		_, err = db.ExecContext(ctx, `UPDATE conversations SET continues = $2 WHERE conversation_id = $1`, destination, sources[0])
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, parent_conversation_id, kind, listed, call_turn, call_id)
 VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, sources[0])
@@ -2532,15 +2534,16 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, err)
 		require.True(t, proto.Equal(jobs, listed), "unexpected cron runs: %v", listed)
 
-		// A wipe keeps a copied cron report, so remove the copy itself.
-		_, err = db.ExecContext(ctx, `DELETE FROM entries WHERE conversation_id IN ($1, $2)`, destination, subagent)
+		_, err = db.ExecContext(ctx, `UPDATE conversations SET continues = NULL WHERE conversation_id = $1`, destination)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `DELETE FROM entries WHERE conversation_id = $1`, subagent)
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, `DELETE FROM conversations WHERE conversation_id = $1`, subagent)
 		require.NoError(t, err)
 	})
 
-	// A destination's revert cutoff hides the deliveries after it; that run has no chat.
-	_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = $2`, fmt.Sprintf("%d:0", observed[2].ID), id)
+	// A destination's revert cutoff hides the deliveries from it on; that run has no chat.
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = $2`, fmt.Sprintf("%d:0", runEntries[1]), id)
 	require.NoError(t, err)
 	reverted, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
@@ -2615,40 +2618,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 				} else {
 					require.Len(t, transcript, 1)
 					require.True(t, proto.Equal(want, listed), "terminal checkpoint missing or inventory changed: %v", listed)
-				}
-			}
-
-			require.NoError(t, seeded.SetActiveTurnTerminal(ctx, source, protocol.TerminalFailed))
-			_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '0:0' WHERE conversation_id = $1`, source)
-			require.NoError(t, err)
-			reverted, err := sessions.ObserveTranscript(ctx, source, 0, 0, nil)
-			require.NoError(t, err)
-			require.Empty(t, reverted)
-
-			listed, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
-			require.NoError(t, err)
-			require.True(t, proto.Equal(withSilent, listed), "reverted checkpoint changed inventory: %v", listed)
-
-			_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1`, source)
-			require.NoError(t, err)
-			savedID, err := sessions.AppendEntryID(ctx, source, &transcript[0].Entry)
-			require.NoError(t, err)
-
-			for _, marker := range []string{fmt.Sprintf("%d:1", savedID), fmt.Sprintf("%d:0", savedID), "0:0"} {
-				_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = $2`, marker, source)
-				require.NoError(t, err)
-				transcript, err := sessions.ObserveTranscript(ctx, source, 0, 0, nil)
-				require.NoError(t, err)
-				listed, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
-				require.NoError(t, err)
-
-				if marker == fmt.Sprintf("%d:1", savedID) {
-					require.Len(t, transcript, 1)
-					require.False(t, transcript[0].Active)
-					require.True(t, proto.Equal(want, listed), "saved turn changed inventory: %v", listed)
-				} else {
-					require.Empty(t, transcript)
-					require.True(t, proto.Equal(withSilent, listed), "reverted checkpoint reappeared: %v", listed)
 				}
 			}
 		})

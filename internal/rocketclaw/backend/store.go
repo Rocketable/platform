@@ -1199,21 +1199,14 @@ type CronRunSource struct {
 	Run protocol.CronRun
 }
 
-// CronRunSources returns, in one query, every recorded cron run whose own effective
-// history (including checkpoints), or that of a recorded session under it, is not
-// empty, paired with itself, and with each recorded conversation people may see whose
-// effective history holds output of the run or a session under it: the chat it
-// reports to, chats continuing it, and chats holding copies, following chained
-// copies. Only each conversation's own revert cutoff applies.
+// CronRunSources returns, in one query, every recorded cron run with saved history or
+// a running, failed, or stopped turn, paired with itself, and with each recorded
+// conversation people may see whose effective history holds output of the run: the
+// chat it reports to and chats continuing it. Sessions under a run and copied entries
+// are not consulted. Only each chat's own revert cutoff applies; runs cannot revert.
 func (s *SessionService) CronRunSources(ctx context.Context) ([]CronRunSource, error) {
-	// = ANY rules out hash and merge joins, so each hop stays an index probe of
-	// session_entries_sync_source_id; those joins read every synced entry_json
-	// from TOAST to compare the key.
-	return queryRows(ctx, s.db, `WITH RECURSIVE runs AS (
-    SELECT conversation_id, conversation_id AS run_id, reports_to, revert_message_id, retention, cron_path, cron_run_at_unix_ns FROM conversations WHERE kind IN ('cron_run', 'one_off_cron_run')
-    UNION ALL
-    -- A run's subagent and review sessions belong to the run.
-    SELECT c.conversation_id, r.run_id, c.reports_to, c.revert_message_id, c.retention, r.cron_path, r.cron_run_at_unix_ns FROM runs r JOIN conversations c ON c.parent_conversation_id = r.conversation_id
+	return queryRows(ctx, s.db, `WITH runs AS (
+    SELECT conversation_id, reports_to, cron_path, cron_run_at_unix_ns FROM conversations WHERE kind IN ('cron_run', 'one_off_cron_run')
 ), deliveries AS (
     SELECT e.id, e.conversation_id, e.conversation_id AS source FROM runs r JOIN entries e USING (conversation_id)
     UNION ALL
@@ -1221,30 +1214,19 @@ func (s *SessionService) CronRunSources(ctx context.Context) ([]CronRunSource, e
     WHERE r.reports_to IS NOT NULL AND e.audience <> 'sandbox'
     UNION ALL
     SELECT e.id, c.conversation_id, c.continues FROM conversations c JOIN entries e ON e.conversation_id = c.continues WHERE e.audience <> 'sandbox'
-    UNION ALL
-    SELECT copy.id, copy.conversation_id, d.source FROM deliveries d
-    JOIN entries copy ON copy.entry_json::jsonb->>'sync_source_entry_id' = ANY(ARRAY[d.id::text])
-), shown_turns AS (
-    SELECT a.id, a.conversation_id FROM turns a JOIN conversations c USING (conversation_id)
-    WHERE c.retention = 'record' AND a.takes_lane AND (a.phase NOT IN ('waiting', 'done') OR a.terminal <> '') AND (c.revert_message_id = '' OR a.history_anchor_id < split_part(c.revert_message_id, ':', 1)::bigint)
-), saved_turns AS (
-    SELECT DISTINCT t.id FROM shown_turns t
-    JOIN entries e ON e.conversation_id = t.conversation_id AND e.entry_json->>'turn_id' = t.id
-    LEFT JOIN entries source ON source.id = (e.entry_json->>'sync_source_entry_id')::bigint
-    WHERE NOT e.entry_json::jsonb ? 'sync_source_entry_id' OR COALESCE(e.entry_json->>'sync_source_conversation_id', source.conversation_id, '') = t.conversation_id
 ), located AS (
     -- A run whose start migration 051 could not read from its ID has no location and is left out.
-    SELECT conversation_id, run_id, cron_path, cron_run_at_unix_ns FROM runs WHERE cron_path IS NOT NULL
+    SELECT conversation_id, cron_path, cron_run_at_unix_ns FROM runs WHERE cron_path IS NOT NULL
 )
-SELECT DISTINCT CASE WHEN d.conversation_id = d.source THEN r.run_id ELSE d.conversation_id END, r.run_id, r.cron_path, r.cron_run_at_unix_ns FROM deliveries d
+SELECT DISTINCT d.conversation_id, r.conversation_id, r.cron_path, r.cron_run_at_unix_ns FROM deliveries d
 JOIN conversations c ON c.conversation_id = d.conversation_id JOIN located r ON r.conversation_id = d.source
 LEFT JOIN runs own ON own.conversation_id = d.conversation_id
 WHERE c.retention = 'record' AND (c.revert_message_id = '' OR d.id < split_part(c.revert_message_id, ':', 1)::bigint
         OR d.id = split_part(c.revert_message_id, ':', 1)::bigint AND split_part(c.revert_message_id, ':', 2)::integer > 0)
     AND (d.conversation_id = d.source OR own.conversation_id IS NULL AND c.kind <> 'external_mcp_run')
 UNION
-SELECT r.run_id AS conversation_id, r.run_id, r.cron_path, r.cron_run_at_unix_ns FROM shown_turns t JOIN located r USING (conversation_id)
-LEFT JOIN saved_turns s USING (id) WHERE s.id IS NULL`, "cron run sources", func(row rowScanner) (CronRunSource, error) {
+SELECT t.conversation_id, r.conversation_id, r.cron_path, r.cron_run_at_unix_ns FROM turns t JOIN located r USING (conversation_id) JOIN conversations c USING (conversation_id)
+WHERE c.retention = 'record' AND t.takes_lane AND (t.phase NOT IN ('waiting', 'done') OR t.terminal <> '')`, "cron run sources", func(row rowScanner) (CronRunSource, error) {
 		var (
 			source CronRunSource
 			at     int64
