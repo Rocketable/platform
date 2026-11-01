@@ -46,7 +46,7 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
 
   // A new reply on the remote, while a local page shows, notifies: the chat is in one of the remote's tabs.
   // The remote counts a chat viewed in the last 10 seconds as read (internal/rocketclaw/backend/store_dao.go).
-  await Bun.sleep(10_000);
+  expect(await page.evaluate(async (conversation: string) => (await fetch(`/test/view-expired?id=${encodeURIComponent(conversation)}`, { method: "POST" })).ok, id)).toBe(true);
   await page.evaluate(async ([url, conversation]: string[]) => { await fetch(`${url}/api/Prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: conversation, text: "Again" }) }); }, [remote, id]);
   await page.waitForFunction(() => (window as unknown as { shown: string[] }).shown.length > 0);
 
