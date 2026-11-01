@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -18,8 +19,10 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 	"tailscale.com/derp/derpserver"
 	"tailscale.com/net/netns"
+	"tailscale.com/net/stun"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tstest/integration/testcontrol"
 	"tailscale.com/types/key"
@@ -121,9 +124,36 @@ func TestTailnetLogin(t *testing.T) {
 }
 
 // startTestDERP serves a relay, as tsnet's tests do: a node counts as running only once
-// it reaches one. STUN is off; the node needs no direct paths here.
+// it reaches one. Local STUN replies let its network check finish without waiting for failed probes.
 func startTestDERP(t *testing.T) *tailcfg.DERPMap {
 	t.Helper()
+
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	var serving errgroup.Group
+	serving.Go(func() error {
+		var packet [1500]byte
+		for {
+			n, address, err := udp.ReadFromUDPAddrPort(packet[:])
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			tx, err := stun.ParseBindingRequest(packet[:n])
+			if err != nil {
+				return err
+			}
+			if _, err := udp.WriteToUDPAddrPort(stun.Response(tx, address), address); err != nil && !errors.Is(err, net.ErrClosed) {
+				return err
+			}
+		}
+	})
+	t.Cleanup(func() {
+		require.NoError(t, udp.Close())
+		require.NoError(t, serving.Wait())
+	})
 
 	relay := derpserver.New(key.NewNode(), logger.Discard)
 	t.Cleanup(func() { _ = relay.Close() })
@@ -139,6 +169,6 @@ func startTestDERP(t *testing.T) *tailcfg.DERPMap {
 
 	return &tailcfg.DERPMap{Regions: map[tailcfg.DERPRegionID]*tailcfg.DERPRegion{1: {
 		RegionID: 1, RegionCode: "test",
-		Nodes: []*tailcfg.DERPNode{{Name: "t1", RegionID: 1, HostName: "127.0.0.1", IPv4: "127.0.0.1", IPv6: "none", STUNPort: -1, DERPPort: derpPort, InsecureForTests: true}},
+		Nodes: []*tailcfg.DERPNode{{Name: "t1", RegionID: 1, HostName: "127.0.0.1", IPv4: "127.0.0.1", IPv6: "none", STUNPort: udp.LocalAddr().(*net.UDPAddr).Port, DERPPort: derpPort, InsecureForTests: true}},
 	}}}
 }
