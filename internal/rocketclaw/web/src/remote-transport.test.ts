@@ -13,6 +13,8 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
     Object.assign(window, { Notification: class { static permission = "granted"; onclick = null; constructor(title: string) { shown.push(title); } close() {} } });
   });
   const page = await context.newPage();
+  // Advance the page's polling and debounce timers; the database clock remains real.
+  await page.clock.install();
   await page.goto(`${local}/r/work/`);
   await page.getByRole("textbox").fill("Remote question");
   await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -35,11 +37,14 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await row.waitFor();
   // A filter asks every server; until its answer, the rows shown are the last answer's.
   await palette.getByPlaceholder("Search sessions").fill("agent:other");
+  await page.clock.fastForward(500);
   await row.waitFor({ state: "hidden" });
   await palette.getByPlaceholder("Search sessions").fill("agent:main");
+  await page.clock.fastForward(500);
   await row.waitFor();
   // Agent choices offer the remote's own agents too, under its name.
   await palette.getByPlaceholder("Search sessions").fill("agent:sc");
+  await page.clock.fastForward(500);
   await palette.getByRole("button").filter({ hasText: "scout" }).filter({ hasText: "work · gpt-6.1-sol" }).waitFor();
   await palette.getByPlaceholder("Search sessions").fill("");
   await page.keyboard.press("Escape");
@@ -48,13 +53,16 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   // The remote counts a chat viewed in the last 10 seconds as read (internal/rocketclaw/backend/store_dao.go).
   expect(await page.evaluate(async (conversation: string) => (await fetch(`/test/view-expired?id=${encodeURIComponent(conversation)}`, { method: "POST" })).ok, id)).toBe(true);
   await page.evaluate(async ([url, conversation]: string[]) => { await fetch(`${url}/api/Prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: conversation, text: "Again" }) }); }, [remote, id]);
+  await page.clock.fastForward(2_000);
   await page.waitForFunction(() => (window as unknown as { shown: string[] }).shown.length > 0);
 
   // A remote that stops answering keeps its rows, offline, until it answers again.
   expect(await page.evaluate(async () => (await fetch("/test/remote/down", { method: "POST" })).ok)).toBe(true);
   await page.keyboard.press("Control+p");
+  await page.clock.fastForward(2_000);
   await row.filter({ hasText: "offline" }).waitFor();
   expect(await page.evaluate(async () => (await fetch("/test/remote/up", { method: "POST" })).ok)).toBe(true);
+  await page.clock.fastForward(2_000);
   await row.filter({ hasNotText: "offline" }).waitFor();
   await page.keyboard.press("Escape");
 
@@ -106,6 +114,7 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   const query = page.getByRole("textbox", { name: "Search sessions" });
   expect(await query.inputValue()).toBe("Shelved");
   await query.fill("Shelved edit");
+  await page.clock.fastForward(500);
   for (let saved = false; !saved; await Bun.sleep(100)) {
     saved = await page.evaluate(async () => JSON.stringify((await (await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).topShelf).includes("Shelved edit"));
   }
@@ -129,10 +138,13 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await page.goto(`${local}/r/work/config`);
   await page.getByText(process.env.ROCKETCLAW_REMOTE_TEST_WORKSPACE!, { exact: true }).waitFor();
   // Config can render before Protocol answers; establish online before taking the remote offline.
-  await (await page.waitForResponse((response: { url(): string; ok(): boolean }) => response.url() === `${remote}/api/Protocol` && response.ok())).finished();
+  const online = page.waitForResponse((response: { url(): string; ok(): boolean }) => response.url() === `${remote}/api/Protocol` && response.ok());
+  await page.clock.fastForward(2_000);
+  await (await online).finished();
 
   // With the remote off, its page says so and a local space is still a choice away.
   expect(await page.evaluate(async () => (await fetch("/test/remote/down", { method: "POST" })).ok)).toBe(true);
+  await page.clock.fastForward(2_000);
   await page.getByText("work is offline; this page reopens when it is reachable.").waitFor();
   await page.getByRole("button", { name: /^Space: work \/ / }).click();
   await page.getByRole("group", { name: "Local" }).getByRole("menuitem", { name: "Main" }).click();
@@ -143,10 +155,12 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await page.goto(`${local}/r/work/agents`);
   await page.evaluate(() => Object.assign(window, { kept: true }));
   expect(await page.evaluate(async () => (await fetch("/test/version/work", { method: "POST" })).ok)).toBe(true);
+  await page.clock.fastForward(2_000);
   await page.getByText("work runs a different RocketClaw version; some actions may fail.").waitFor();
   await page.getByRole("heading", { name: "Agents" }).waitFor();
   expect(await page.evaluate(() => "kept" in window)).toBe(true);
   expect(await page.evaluate(async () => (await fetch("/test/version/local", { method: "POST" })).ok)).toBe(true);
+  await page.clock.fastForward(2_000);
   await page.waitForFunction(() => !("kept" in window));
 
   await page.goto(`${local}/r/gone/agents`);
