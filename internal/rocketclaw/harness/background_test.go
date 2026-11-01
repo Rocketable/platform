@@ -401,6 +401,8 @@ func TestTaskContinueNeedsTaskPermission(t *testing.T) {
 // keeps its type's permissions, and later steps and a resumed turn run as the new type. A steer naming the
 // running type changes nothing.
 func TestSteerSwitchesRunningSessionType(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name, steer, prompt, model string
 		restart, probes            bool

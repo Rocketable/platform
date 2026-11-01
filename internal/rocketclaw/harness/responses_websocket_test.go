@@ -274,6 +274,8 @@ func TestWebsocketStorageFailureDoesNotRetryOrReuseUnreadEvents(t *testing.T) {
 }
 
 func TestWebsocketObservationTerminalAndReceiveBoundaries(t *testing.T) {
+	t.Parallel()
+
 	for _, boundary := range []string{"failed", "incomplete", "empty", "eof", "cancel", "storage_cancel", "retry"} {
 		t.Run(boundary, func(t *testing.T) {
 			watchdog, stop := context.WithTimeout(t.Context(), 3*time.Second)
@@ -591,6 +593,8 @@ func TestNewResponsesAPICompactsOverHTTPWhenURLIsWebsocket(t *testing.T) {
 }
 
 func TestNewResponsesAPIMapsWebsocketError(t *testing.T) {
+	t.Parallel()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := testWebsocketUpgrader()
 
