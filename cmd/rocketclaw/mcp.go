@@ -194,21 +194,13 @@ func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (pro
 func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAgent, conversationID, managedConversationID string, content *protocol.InboundContent, metadata map[string]string, principal, externalConversationID string) (externalmcp.SessionResult, bool, error) {
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, content, true)
 
-	inbound.Metadata = maps.Clone(metadata)
-	delete(inbound.Metadata, protocol.InboundOriginMetadataKey)
-	delete(inbound.Metadata, protocol.InboundMediaMetadataKey)
-	delete(inbound.Metadata, protocol.InboundPrincipalMetadataKey)
-	delete(inbound.Metadata, protocol.InboundPrincipalNameMetadataKey)
-	delete(inbound.Metadata, protocol.InboundPrincipalEmailMetadataKey)
-	delete(inbound.Metadata, protocol.InboundSenderAgentMetadataKey)
+	inbound.ExternalMCPMetadata = map[string]string{}
+	maps.Copy(inbound.ExternalMCPMetadata, metadata)
+	inbound.ExternalMCPMetadata["external_conversation_id"] = externalConversationID
 
-	if inbound.Metadata == nil {
-		inbound.Metadata = map[string]string{}
-	}
 	if principal != "" {
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
 	}
-	inbound.Metadata["external_conversation_id"] = externalConversationID
 
 	inbound.ConversationID, inbound.SyncDestination = conversationID, managedConversationID
 

@@ -32,13 +32,10 @@ func (r *Runtime) OpenCodeMCP() http.Handler {
 	for name, server := range servers {
 		mcpServer := mcp.NewServer(&mcp.Implementation{Name: "rocketclaw", Version: "1.0.0"}, &mcp.ServerOptions{Instructions: openCodeMCPInstructions})
 
-		// Bridge pages hold their content: the coding server's files are not on this machine.
 		for _, tool := range r.openCodeTools("", "") {
 			tool.Parameters["type"] = "object"
-			delete(tool.Parameters["properties"].(map[string]any), "source")
-			description := strings.Replace(tool.Description, "content (text), content_base64 (binary), or source (a workspace file)", "content (text) or content_base64 (binary)", 1)
 
-			mcpServer.AddTool(&mcp.Tool{Name: strings.TrimPrefix(tool.Name, "rocketclaw_"), Description: description, InputSchema: tool.Parameters}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			mcpServer.AddTool(&mcp.Tool{Name: strings.TrimPrefix(tool.Name, "rocketclaw_"), Description: tool.Description, InputSchema: tool.Parameters}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 				out, err := r.callOpenCodeTool(ctx, name, server, tool.Name, request)
 				if err != nil {
 					out = err.Error()
@@ -75,13 +72,6 @@ func (r *Runtime) callOpenCodeTool(ctx context.Context, name string, server conf
 	id, _ := request.Params.Meta["ai.opencode/sessionID"].(string)
 	if id == "" {
 		return "", errors.New(`this call names no OpenCode session; RocketClaw reads it from _meta["ai.opencode/sessionID"]`)
-	}
-
-	var input struct {
-		Source string `json:"source"`
-	}
-	if json.Unmarshal(request.Params.Arguments, &input) == nil && input.Source != "" {
-		return "", errors.New("source is not available here: give the file's content or content_base64")
 	}
 
 	var conversation, space string
@@ -137,7 +127,7 @@ func (r *Runtime) openCodeTools(conversation, space string) []harness.Tool {
 		return harness.TextToolResult(string(data)), err
 	}
 
-	return append(pageTools(r.Sessions, nil, &harness.CustomShell{}, r.threads, conversation, space, conversation),
+	return append(pageSpace{sessions: r.Sessions, threads: r.threads, agent: conversation, space: space, conversation: conversation}.tools(),
 		harness.Tool{Name: "get_tags", Description: `Return this session's RocketClaw tags as {"tags":[...]}.`, Parameters: map[string]any{"properties": map[string]any{}}, Call: func(ctx context.Context, _ json.RawMessage, _ chan<- harness.ChatResponse) (harness.ToolResult, error) {
 			return reply(sessionTags(ctx, r.Sessions.db, conversation))
 		}},

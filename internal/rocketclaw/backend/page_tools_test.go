@@ -53,17 +53,28 @@ func TestPageTools(t *testing.T) {
 		return out
 	}
 
-	reporter := pageTools(store, root, &harness.CustomShell{}, threads, "reporter", "Billing", "")
+	reporter := pageSpace{sessions: store, threads: threads, agent: "reporter", space: "Billing"}.tools()
+	require.NotContains(t, reporter[0].Parameters["properties"], "source", "only native sessions read workspace files")
+	require.NotContains(t, reporter[0].Description, "source")
+
 	for agent, want := range map[string]string{"reporter": "https://rc.example/pages/Billing/reporter/dashboard/index.html", "main": "https://rc.example/pages/-/main/dashboard/index.html", "main/review": "https://rc.example/pages/-/main%2Freview/dashboard/index.html"} {
-		tools := pageTools(store, root, &harness.CustomShell{}, threads, agent, map[string]string{"reporter": "Billing"}[agent], "")
+		tools := pageSpace{sessions: store, threads: threads, agent: agent, space: map[string]string{"reporter": "Billing"}[agent]}.tools()
 		require.Equal(t, want, must(tools, "rocketclaw_store", map[string]string{"path": "dashboard/index.html", "content": "<p>" + agent + "</p>"}))
 	}
 
-	team := pageTools(store, root, &harness.CustomShell{}, threads, "reporter", "Billing Team", "")
+	team := pageSpace{sessions: store, threads: threads, agent: "reporter", space: "Billing Team"}.tools()
 	require.Equal(t, "https://rc.example/pages/Billing%20Team/reporter/a%20b/c.html", must(team, "rocketclaw_store", map[string]string{"path": "a b/c.html", "content": "x"}))
 
-	require.Equal(t, "https://rc.example/pages/Billing/reporter/chart.js", must(reporter, "rocketclaw_store", map[string]string{"path": "chart.js", "source": "chart.js"}))
+	// A native session's store also reads a workspace file; given content wins, and an empty file stores an empty page.
+	native := pageSpace{sessions: store, threads: threads, agent: "reporter", space: "Billing"}.nativeTools(root, &harness.CustomShell{})
+	require.Contains(t, native[0].Parameters["properties"], "source")
+	require.Equal(t, "https://rc.example/pages/Billing/reporter/chart.js", must(native, "rocketclaw_store", map[string]string{"path": "chart.js", "source": "chart.js"}))
 	require.JSONEq(t, `{"content_type":"text/javascript","content":"draw()"}`, must(reporter, "rocketclaw_read", map[string]string{"path": "chart.js"}))
+	must(native, "rocketclaw_store", map[string]string{"path": "given.txt", "content": "given", "source": "chart.js"})
+	require.JSONEq(t, `{"content_type":"text/plain","content":"given"}`, must(reporter, "rocketclaw_read", map[string]string{"path": "given.txt"}))
+	require.NoError(t, root.WriteFile("empty.txt", nil, 0o644))
+	require.Equal(t, "https://rc.example/pages/Billing/reporter/empty.txt", must(native, "rocketclaw_store", map[string]string{"path": "empty.txt", "source": "empty.txt"}))
+	require.JSONEq(t, `{"content_type":"text/plain"}`, must(reporter, "rocketclaw_read", map[string]string{"path": "empty.txt"}))
 
 	require.Equal(t, "https://rc.example/pages/Billing/reporter/logo.png", must(reporter, "rocketclaw_store", map[string]string{"path": "logo.png", "content_base64": base64.StdEncoding.EncodeToString([]byte{0xff, 0xfe})}))
 	require.JSONEq(t, `{"content_type":"image/png","content_base64":"//4="}`, must(reporter, "rocketclaw_read", map[string]string{"path": "logo.png"}))
@@ -98,7 +109,7 @@ func TestPageTools(t *testing.T) {
 		} `json:"keys"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(must(team, "rocketclaw_list", struct{}{})), &listed))
-	require.Len(t, listed.Files, 4)
+	require.Len(t, listed.Files, 6)
 	require.Equal(t, "a b/c.html", listed.Files[0].Path)
 	require.Equal(t, "text/html", listed.Files[0].ContentType)
 	require.Equal(t, 1, listed.Files[0].Size)
@@ -107,7 +118,7 @@ func TestPageTools(t *testing.T) {
 	require.Len(t, listed.Keys, 1)
 
 	// Tools for main see only main's files, never main/review's (AE7).
-	mainTools := pageTools(store, root, &harness.CustomShell{}, threads, "main", "", "")
+	mainTools := pageSpace{sessions: store, threads: threads, agent: "main"}.tools()
 	require.NoError(t, json.Unmarshal([]byte(must(mainTools, "rocketclaw_list", struct{}{})), &listed))
 	require.Len(t, listed.Files, 1)
 	require.Empty(t, listed.Keys)
@@ -145,7 +156,7 @@ func TestPageStoreReadsEasyFileView(t *testing.T) {
 
 	store := newTestSessionService(t)
 	threads := &threadBridgeManager{runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store}
-	pageStore := pageTools(store, workspace, &harness.CustomShell{Emulated: true, Dir: filepath.Join(dir, "folder")}, threads, "easy", "Ops", "")[0]
+	pageStore := pageSpace{sessions: store, threads: threads, agent: "easy", space: "Ops"}.nativeTools(workspace, &harness.CustomShell{Emulated: true, Dir: filepath.Join(dir, "folder")})[0]
 
 	_, err = pageStore.Call(t.Context(), json.RawMessage(`{"path":"config.json","source":"rocketclaw.json"}`), nil)
 	require.ErrorIs(t, err, fs.ErrNotExist, "a relative source starts from the agent's folder")

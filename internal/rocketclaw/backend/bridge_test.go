@@ -3321,7 +3321,7 @@ func TestRunTurnExposesPrincipalEnv(t *testing.T) {
 		if strings.HasPrefix(tc.conversationID, "external_mcp:") {
 			// The thread's metadata is saved once an External MCP turn ran.
 			seed := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "hello", true)
-			seed.ConversationID, seed.Metadata = tc.conversationID, map[string]string{"a": "first"}
+			seed.ConversationID, seed.ExternalMCPMetadata = tc.conversationID, map[string]string{"a": "first"}
 			_, err := runTestTurn(t.Context(), bridge, seed, "seed-"+tc.conversationID)
 			require.NoError(t, err)
 		}
@@ -3431,7 +3431,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 
 	msg := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "hello", true)
 	msg.ConversationID = bridge.config.ConversationID
-	msg.Metadata = map[string]string{"z": "last", "a": "first"}
+	msg.ExternalMCPMetadata = map[string]string{"z": "last", "a": "first"}
 
 	result, err := runTestTurn(context.Background(), bridge, msg, "turn-1")
 	require.NoError(t, err)
@@ -3445,7 +3445,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	assert.Equal(t, "This external MCP thread has metadata:\nROCKETCLAW_CONVERSATION_ID=\"external_mcp:planner:private\"\nROCKETCLAW_METADATA_A=\"first\"\nROCKETCLAW_METADATA_Z=\"last\"", metadata)
 	assert.Equal(t, "user", requestBody.Input[1].Role)
 
-	msg.Metadata = map[string]string{"a": "ignored", "later-key": "fresh"}
+	msg.ExternalMCPMetadata = map[string]string{"a": "ignored", "later-key": "fresh"}
 	_, err = runTestTurn(context.Background(), bridge, msg, "turn-2")
 	require.NoError(t, err)
 
@@ -3467,7 +3467,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	require.NotEmpty(t, requestBody.Input)
 	assert.Equal(t, "first|fresh|last", requestBody.Input[len(requestBody.Input)-1].Output)
 
-	msg.Metadata = map[string]string{"a": "ignored"}
+	msg.ExternalMCPMetadata = map[string]string{"a": "ignored"}
 	_, err = runTestTurn(context.Background(), bridge, msg, "turn-3")
 	require.NoError(t, err)
 
@@ -5320,7 +5320,7 @@ func TestTurnBoundPlatformTools(t *testing.T) {
 
 	origin := new(protocol.InboundMessage)
 	bridge := &Bridge{runtime: new(config.LockedConfig), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
-	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []harness.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{restartFunc: func(string) string { return "" }}), attachFilesTool(nil, &harness.CustomShell{}, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), sessionsWriteTool(bridge, origin, origin, "main", "main", harness.Agents{}), currentSessionIDTool("main")}, pageTools(bridge.config.SessionService, nil, &harness.CustomShell{}, nil, "main", "", ""))
+	tools := slices.Concat(bridge.rocketcodeConfig(t.TempDir(), nil).CustomTools, sessionTagTools(bridge.config.SessionService, "main"), []harness.Tool{bridge.scheduleMessageTool(origin), bridge.resetScheduledMessagesTool(origin), restartTool(&runtimeRestarterMock{restartFunc: func(string) string { return "" }}), attachFilesTool(nil, &harness.CustomShell{}, bridge.config.SessionService, "main", "turn-1"), askUserQuestionTool(&userQuestionAskerMock{}, origin), sessionsWriteTool(bridge, origin, origin, "main", "main", harness.Agents{}), currentSessionIDTool("main")}, pageSpace{sessions: bridge.config.SessionService, agent: "main"}.nativeTools(nil, &harness.CustomShell{}))
 
 	var bound []string
 

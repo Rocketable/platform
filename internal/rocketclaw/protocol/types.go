@@ -157,6 +157,9 @@ type InboundMessage struct {
 	ConversationID string
 	// Metadata carries source-supplied context; the Inbound*MetadataKey keys are RocketClaw's trusted provenance and routing hints.
 	Metadata map[string]string
+	// ExternalMCPMetadata is an External MCP caller's free-form metadata, which its turns see as
+	// ROCKETCLAW_METADATA_* variables. RocketClaw never reads it for routing.
+	ExternalMCPMetadata map[string]string
 	// Workflow, when it names a workflow, starts that workflow instead of an ordinary model turn.
 	Workflow WorkflowInvocation
 	// SyncDestination, when set, is a conversation that receives this turn: the turn waits in its queue,

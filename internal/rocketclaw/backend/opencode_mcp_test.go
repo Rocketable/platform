@@ -102,6 +102,7 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 		assert.NotContains(t, tool.Description, "source", tool.Name)
+		assert.NotContains(t, tool.InputSchema.(map[string]any)["properties"], "source", tool.Name)
 	}
 
 	assert.ElementsMatch(t, []string{"store", "read", "kv_store", "kv_read", "delete", "list", "get_tags", "toggle_tag"}, names)
@@ -147,6 +148,8 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 
 	out, failed = call("ses_a", "store", map[string]string{"path": "x.js", "source": "x.js"})
 	assert.True(t, failed, out)
+	assert.Contains(t, out, "has no content")
+	must("ses_a", "store", map[string]string{"path": "x.js", "content": "x()", "source": "x.js"})
 
 	large := strings.Repeat("x", 6<<20)
 	must("ses_a", "store", map[string]string{"path": "large.txt", "content_base64": base64.StdEncoding.EncodeToString([]byte(large))})
@@ -170,9 +173,10 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 		} `json:"keys"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(must("ses_a", "list", none)), &listed))
-	require.Len(t, listed.Files, 2)
+	require.Len(t, listed.Files, 3)
 	assert.Equal(t, "index.html", listed.Files[0].Path)
 	assert.Equal(t, "large.txt", listed.Files[1].Path)
+	assert.Equal(t, "x.js", listed.Files[2].Path)
 	require.Len(t, listed.Keys, 1)
 	assert.Equal(t, "rows", listed.Keys[0].Key)
 
