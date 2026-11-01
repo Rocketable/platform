@@ -14,6 +14,8 @@ import (
 )
 
 func TestShadowHistoryWaitingInventory(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	ctx := t.Context()
 	runtime := &Runtime{Sessions: store}
@@ -64,6 +66,8 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 }
 
 func TestShadowHistorySourcePagesAndChildRevision(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	ctx := t.Context()
 
@@ -175,6 +179,8 @@ ON b.shadow_parent = v.parent ORDER BY v.parent, v.turn_id, b.shadow_agent`)
 }
 
 func TestShadowHistoryIsAbsentFromOrdinaryEnumeration(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	ctx := t.Context()
 	runtime := &Runtime{Sessions: store}
@@ -226,6 +232,8 @@ func TestShadowHistoryIsAbsentFromOrdinaryEnumeration(t *testing.T) {
 }
 
 func TestShadowPublicMutationsAreReadOnly(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	ctx := t.Context()
 	manager, shutdown := newTestBridgeManager(t, store.definitions, store, make(chan *protocol.OutboundMessage, 16))
@@ -303,6 +311,8 @@ func TestShadowPublicMutationsAreReadOnly(t *testing.T) {
 }
 
 func TestShadowHistoryChangeSignals(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	ctx := t.Context()
 

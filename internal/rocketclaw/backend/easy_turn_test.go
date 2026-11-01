@@ -148,6 +148,8 @@ func TestEasyTurnShell(t *testing.T) {
 
 // An easy shadow's file view and shell show the uploads of the chat it shadows, read-only.
 func TestEasyShadowReadsParentUploads(t *testing.T) {
+	t.Parallel()
+
 	store, root := newShadowTestStore(t)
 	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
 

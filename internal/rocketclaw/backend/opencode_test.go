@@ -249,6 +249,8 @@ func remoteSidebar(t *testing.T, s *SessionService) []SidebarSession {
 }
 
 func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
 	fake := &fakeOpenCode{
@@ -389,6 +391,8 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 }
 
 func TestOpenCodeRenamesKeepRemoteAndLocalOrder(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
 	titles := make(chan string, 2)
@@ -461,6 +465,8 @@ SELECT count(*) FROM blocked JOIN sessions USING (pid)`, &blocked)
 }
 
 func TestOpenCodeRenameSurvivesEarlierPoll(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range []string{"renamed", ""} {
 		t.Run(name, func(t *testing.T) {
 			s := newOpenCodeTestService(t, "box")
@@ -510,6 +516,8 @@ func TestOpenCodeRenameSurvivesEarlierPoll(t *testing.T) {
 }
 
 func TestSyncOpenCodeMarksBackgroundWork(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
 	fake := &fakeOpenCode{
@@ -538,6 +546,8 @@ func TestSyncOpenCodeMarksBackgroundWork(t *testing.T) {
 // A root asks while it or a session under it has a pending form or permission request. A form owned
 // by no session, and a location whose list fails, mark nothing.
 func TestSyncOpenCodeMarksSessionsWaitingOnAPerson(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
 	fake := &fakeOpenCode{
@@ -575,6 +585,8 @@ func TestSyncOpenCodeMarksSessionsWaitingOnAPerson(t *testing.T) {
 
 // An OpenCode turn end marks the people whose stamped prompts it ran, once each (R13, R14, AE7).
 func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
 	fake := &fakeOpenCode{messages: map[string][]openCodeTestMessage{}}
@@ -700,6 +712,8 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 }
 
 func TestOpenCodeShellsFollowEvents(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
@@ -748,6 +762,8 @@ func TestOpenCodeShellsFollowEvents(t *testing.T) {
 }
 
 func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
 	fake := &fakeOpenCode{}
@@ -787,6 +803,8 @@ func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
 }
 
 func TestToggleManualTag(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
 	server := httptest.NewServer(&fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "", "/srv", 1000)}})
@@ -829,6 +847,8 @@ VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 }
 
 func TestOpenCodeMovesOldNamesToTheServer(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
 	fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "Alpha", "/srv/app", 2000), openCodeTestSession("ses_b", "Beta", "/srv/app", 1000)}}
@@ -868,6 +888,8 @@ func TestOpenCodeMovesOldNamesToTheServer(t *testing.T) {
 }
 
 func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
 	// Keep the address reserved so another fixture cannot turn a failed poll into a successful one.
@@ -904,6 +926,8 @@ func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
 // Remote sessions carry their selected agent and model; a RocketClaw chat's model is its agent's
 // configured one. model: matches part of a model, ranking chats with the whole model first.
 func TestSearchSessionsFiltersByServerAgentAndModel(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box", "lab")
 	ctx := t.Context()
 
@@ -965,6 +989,8 @@ func TestSearchSessionsFiltersByServerAgentAndModel(t *testing.T) {
 // A created session is listed at once in the space it was created in. An unknown space records
 // none; recording the session again fills a missing space, and later syncs keep it.
 func TestCreateOpenCodeSessionListsItAtOnce(t *testing.T) {
+	t.Parallel()
+
 	fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", 5000)}}
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
@@ -994,6 +1020,8 @@ func TestCreateOpenCodeSessionListsItAtOnce(t *testing.T) {
 // A page an OpenCode session owns reads back in the session's space, and goes with the session
 // when sync no longer finds it; a session RocketClaw does not list owns nothing.
 func TestOpenCodeSessionPagesGoWithTheirSession(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
 	fake := &fakeOpenCode{sessions: []openCodeSession{openCodeTestSession("ses_a", "", "/srv", 2000), openCodeTestSession("ses_b", "", "/srv", 1000)}}
@@ -1028,6 +1056,8 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 }
 
 func TestSidebarHidesUnconfiguredOpenCodeServers(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	_, err := s.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, pinned, remote_session)
 VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), FALSE, 'ses_a'),
@@ -1052,6 +1082,8 @@ VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 // A remote session's history stays on its server: deleting its entries is refused, and its row,
 // updated time included, stays as it was.
 func TestDeleteSessionRefusesRemoteSessions(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	_, err := s.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session)
 VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', 'title', '/srv', '2026-10-01T00:00:00Z', FALSE, now(), 'ses_a')`)
@@ -1066,6 +1098,8 @@ VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', 'title',
 }
 
 func TestOpenCodeAPITool(t *testing.T) {
+	t.Parallel()
+
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if user, password, ok := r.BasicAuth(); !ok || user != "opencode" || password != "pw" {
 			w.WriteHeader(http.StatusUnauthorized)

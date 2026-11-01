@@ -728,6 +728,8 @@ func TestSessionsWriteToolDescription(t *testing.T) {
 // turn, and posts who stopped it into the target's transcript. Only a stopped running turn gets a
 // reply, so only then does the result carry a queue_item_id. Every other write needs a prompt.
 func TestSessionsWriteStopWithoutPrompt(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store, bridges: map[string]directBridge{}}
 	bridge := runningTestBridge(t, store, manager, "web:target")
@@ -829,6 +831,8 @@ SELECT COUNT(*) FROM entries, running WHERE conversation_id = $1 AND turns > 0`,
 // steer, enqueue into, or stop its sessions. The calling agent counts, not the top-level turn's agent
 // main, and a refused write leaves nothing behind.
 func TestSessionsWriteRecipients(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
@@ -975,6 +979,8 @@ func TestSessionsWriteRecipients(t *testing.T) {
 // prompt as a system turn under the sender header, and the thread's reply posts where a Web input's
 // reply would. Under auto every write is reviewed.
 func TestSessionsWriteRunsInTurn(t *testing.T) {
+	t.Parallel()
+
 	const caller = "web:caller"
 
 	script := func(callID, code string) string {
@@ -1403,6 +1409,8 @@ func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 }
 
 func TestCheckSessionTarget(t *testing.T) {
+	t.Parallel()
+
 	s, _ := newSessionSearchFixture(t)
 	// A one-off cron run writes for its visible chat searchChatE, and the private External MCP turn holds
 	// its managed chat searchChatX.

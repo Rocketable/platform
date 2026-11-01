@@ -18,6 +18,8 @@ import (
 )
 
 func TestShadowReviewClearProducerHistory(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{ManagedConversationID: "visible", PrivateConversationID: "private", Agent: "main"}))
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"other": KindWebChat})
@@ -92,6 +94,8 @@ SELECT count(*) FROM `+table+` t LEFT JOIN shadows s USING (conversation_id) WHE
 }
 
 func TestShadowReviewClearRetainsPendingAttachments(t *testing.T) {
+	t.Parallel()
+
 	newBridge, store, _, finals := newResumeTestBridges(t, false)
 	crashed := newBridge()
 	id := crashed.config.ConversationID
@@ -125,6 +129,8 @@ func TestShadowReviewClearRetainsPendingAttachments(t *testing.T) {
 }
 
 func TestShadowReviewPayloadRelease(t *testing.T) {
+	t.Parallel()
+
 	for _, order := range []string{"parent finish first", "parent capture first", "child first", "concurrent", "failed", "stopped"} {
 		t.Run(order, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
@@ -227,6 +233,8 @@ func TestShadowReviewPayloadRelease(t *testing.T) {
 }
 
 func TestShadowReviewClearLiveProducer(t *testing.T) {
+	t.Parallel()
+
 	store, root := newShadowTestStore(t)
 	require.NoError(t, root.Remove(".rocketclaw/agents/main/z.md"))
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
