@@ -128,6 +128,12 @@ func sidebarSummaries(t *testing.T, s *SessionService) map[string]*protocol.Sess
 func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
 	t.Parallel()
 
+	workspace := t.TempDir()
+	service := newTestSessionServiceAt(t, workspace)
+	inspection, err := sql.Open("pgx", testStoreDSN(workspace))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, inspection.Close()) })
+
 	// Decoding is shared by every creation path; each path's writes and transaction start fail on their own lines.
 	for _, tc := range []struct{ creation, failure, message string }{
 		{"upsert", "orphan decode", "parse session summary history"},
@@ -139,14 +145,18 @@ func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
 		{"external MCP", "database unavailable", "database is closed"},
 	} {
 		t.Run(tc.creation+"/"+tc.failure, func(t *testing.T) {
-			workspace := t.TempDir()
-			service := newTestSessionServiceAt(t, workspace)
+			service := service
+			if tc.failure == "database unavailable" {
+				service = newTestSessionServiceAt(t, workspace)
+			}
+
+			t.Cleanup(func() {
+				_, err := inspection.Exec(`TRUNCATE entries, conversations RESTART IDENTITY CASCADE`)
+				require.NoError(t, err)
+			})
 			insertSessionEntryWithoutSummary(t, service, "history", testSessionEntry("orphan preview", "answer"))
 
-			inspection, err := sql.Open("pgx", testStoreDSN(workspace))
-
-			require.NoError(t, err)
-			defer func() { require.NoError(t, inspection.Close()) }()
+			var err error
 
 			switch tc.failure {
 			case "orphan decode":
@@ -159,6 +169,10 @@ func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
 				// A real database write rejection must roll back the earlier record/binding inserts.
 				_, err = inspection.ExecContext(t.Context(), `ALTER TABLE conversations ADD CONSTRAINT reject_summary CHECK (conversation_id <> 'history' OR preview IS NULL)`)
 				require.NoError(t, err)
+				t.Cleanup(func() {
+					_, err := inspection.Exec(`ALTER TABLE conversations DROP CONSTRAINT reject_summary`)
+					require.NoError(t, err)
+				})
 			case "database unavailable":
 				require.NoError(t, service.Stop())
 			}
@@ -193,11 +207,18 @@ func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
 func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing.T) {
 	t.Parallel()
 
+	workspace := t.TempDir()
+	service := newTestSessionServiceAt(t, workspace)
+
 	// CreateConversation initializes summaries through the same stateDAO path as External MCP registration.
 	for _, creation := range []string{"upsert", "external MCP"} {
 		t.Run(creation, func(t *testing.T) {
-			workspace := t.TempDir()
-			service := newTestSessionServiceAt(t, workspace)
+			t.Cleanup(func() {
+				_, err := service.db.Exec(`RESET lock_timeout; TRUNCATE entries, conversations RESTART IDENTITY CASCADE`)
+				require.NoError(t, err)
+				service.db.SetMaxOpenConns(0)
+				service.db.SetMaxIdleConns(2 * summaryReaders)
+			})
 			insertSessionEntryWithoutSummary(t, service, "history", testSessionEntryAt(time.Unix(2, 123456789).UTC(), "orphan preview"))
 
 			for _, id := range []string{"empty", "history"} {
