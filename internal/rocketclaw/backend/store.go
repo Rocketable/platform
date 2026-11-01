@@ -1392,7 +1392,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 		var (
 			sessions       []*SidebarSession
 			preview        sql.NullString
-			tags           []byte
+			tags           sql.RawBytes
 			updated        sql.NullTime
 			unread         sql.NullTime
 			work           sql.NullString

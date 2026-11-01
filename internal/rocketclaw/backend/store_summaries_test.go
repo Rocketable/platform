@@ -571,7 +571,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	require.Zero(t, service.db.Stats().InUse)
 }
 
-func TestSidebarSessionsPreviewAllocationBudget(t *testing.T) {
+func TestSidebarSessionsAllocationBudgets(t *testing.T) {
 	if os.Getenv("ROCKETCLAW_TEST_SIDEBAR_ALLOCATIONS") != "1" {
 		// The race detector randomly drops sync.Pool buffers; measure the store, not that churn.
 		executable := filepath.Join(t.TempDir(), "backend.test")
@@ -594,6 +594,45 @@ func TestSidebarSessionsPreviewAllocationBudget(t *testing.T) {
 	// Plain builds use about 5.1 MiB and 950 allocations; keep the former race-build margin.
 	require.Less(t, result.AllocedBytesPerOp(), int64(6<<20))
 	require.Less(t, result.AllocsPerOp(), int64(990))
+	result = testing.Benchmark(BenchmarkSidebarSessionTags)
+	require.Positive(t, result.N)
+	require.Less(t, result.AllocedBytesPerOp(), int64(6<<20))
+}
+
+func BenchmarkSidebarSessionTags(b *testing.B) {
+	service, err := NewSessionService(b.TempDir())
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, service.Stop()) })
+
+	tags := make(map[string]string, 32)
+
+	for i := range 32 {
+		id := fmt.Sprintf("tagged-%02d", i)
+		tags[id] = id + strings.Repeat("x", 64<<10)
+		require.NoError(b, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		_, err := service.AppendEntryID(b.Context(), id, testSessionEntry("question", "answer"))
+		require.NoError(b, err)
+		_, err = service.toggleSessionTag(b.Context(), id, tags[id], []string{tags[id]})
+		require.NoError(b, err)
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		var rows []SidebarSession
+
+		for row, err := range service.sidebarSessions(b.Context(), "", nil) {
+			require.NoError(b, err)
+
+			rows = append(rows, row)
+		}
+
+		require.Len(b, rows, len(tags))
+
+		for i := range rows {
+			require.Equal(b, []string{tags[rows[i].Conversation.ID]}, rows[i].Tags)
+		}
+	}
 }
 
 func BenchmarkSidebarSessions(b *testing.B) {
