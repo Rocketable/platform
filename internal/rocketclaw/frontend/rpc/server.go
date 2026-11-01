@@ -271,7 +271,12 @@ func sidebarSession(chat *backend.SidebarChat) *Session {
 		Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label(), External: row.External, WorkState: workStates[row.Work]}
 
 	if !row.StateSince.IsZero() {
-		session.StateSince, session.ArrivedAt = row.StateSince.Format(time.RFC3339Nano), row.ArrivedAt.Format(time.RFC3339Nano)
+		session.StateSince = row.StateSince.Format(time.RFC3339Nano)
+		session.ArrivedAt = session.StateSince
+		// Equal instants can format with different offsets, so compare the whole value.
+		if row.ArrivedAt != row.StateSince {
+			session.ArrivedAt = row.ArrivedAt.Format(time.RFC3339Nano)
+		}
 	}
 
 	if summary := row.Summary; summary != nil {
