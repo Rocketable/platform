@@ -292,7 +292,7 @@ func loadAgent(fsys fs.FS, filePath string, cfg AgentLoadConfig) (Agent, error) 
 		}
 	}
 
-	if agent.CustomShell, err = parseAgentShell(frontmatterField(frontmatterNode, "shell")); err != nil {
+	if err := parseAgentShell(frontmatterNode, &agent); err != nil {
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
 
@@ -377,24 +377,29 @@ func sanitizeAgentFrontmatter(frontmatterText string) string {
 	return strings.Join(lines, "\n")
 }
 
-// parseAgentShell reads the shell frontmatter field: an absolute program path, or emulated for the
-// embedding application's emulated shell.
-func parseAgentShell(field *yaml.Node) (CustomShell, error) {
+// parseAgentShell reads the shell frontmatter field, an absolute program path or emulated, and for emulated
+// the shell's other settings.
+func parseAgentShell(node *yaml.Node, agent *Agent) error {
+	field := frontmatterField(node, "shell")
 	if field == nil {
-		return CustomShell{}, nil
+		return nil
 	}
 
 	if field.Kind == yaml.ScalarNode && field.ShortTag() == "!!str" {
 		if field.Value == "emulated" {
-			return CustomShell{Emulated: true}, nil
+			agent.CustomShell = CustomShell{Emulated: true}
+
+			return parseEmulatedShell(node, agent)
 		}
 
 		if filepath.IsAbs(field.Value) {
-			return CustomShell{Path: field.Value}, nil
+			agent.CustomShell = CustomShell{Path: field.Value}
+
+			return nil
 		}
 	}
 
-	return CustomShell{}, errors.New("shell: must be an absolute path or emulated")
+	return errors.New("shell: must be an absolute path or emulated")
 }
 
 func parseAgentOutputSchema(schema *yaml.Node) (map[string]any, error) {

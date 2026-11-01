@@ -40,6 +40,7 @@ On start, you must always read:
 - For TypeScript and React code, react-doctor (run by `make lint` in `internal/rocketclaw/web`) wins over this file's rules on inlining one-use helpers and simplifying: keep a helper, hook, or component split that react-doctor needs, even with one caller. See `docs/solutions/best-practices/react-doctor-complexity-limit-shapes-web-components.md`.
 - Prefer the same abstraction in tests that production code uses.
 - Rocketable Platform targets Unix-like systems only: Linux and macOS. Do not add Windows-specific code paths or preserve Windows compatibility unless the human partner explicitly changes this policy.
+- RocketClaw (`cmd/rocketclaw`, `internal/rocketclaw`) runs on Linux only (amd64 and arm64). Do not add macOS or Windows code paths, build stubs or messages for it. On a Mac, every `make` target in `internal/rocketclaw` runs itself again in a Linux container (see its Makefile), so run RocketClaw's checks through `make` there; `go build`, `go vet` and `go test` of RocketClaw packages do not build on macOS.
 - In the final response, state whether README impact was considered and whether a README update was needed.
 
 ## Change Discipline
@@ -156,13 +157,14 @@ JOIN shadow_parents p USING (conversation_id);
 ## Verification
 
 - Before finalizing Go changes, run `gofmt` on touched files.
-- Before finalizing Go changes, run `go test ./...`.
+- Before finalizing Go changes, run `go test ./...` (on a Mac, RocketClaw's packages only through `make -C internal/rocketclaw test`, which runs them on Linux).
 - Before finalizing Go changes, run `make lint`.
 - Before finalizing Go changes, run `make test`.
 - If any required verification cannot be run, stop and report why instead of claiming success.
 
 ## RocketClaw-Specific Requirements
 
+- The emulated shell's Ubuntu image is pinned by `internal/rocketclaw/sandbox/snapshot.gen.go` and the `packages.<arch>.lock` files beside it. Never edit them by hand: `go generate ./internal/rocketclaw/sandbox` moves them to the newest Ubuntu snapshot (on a Mac too) and leaves them alone when no package changed. Commit what it writes.
 - The Web interface is RocketClaw's primary interface. Slack is a convenience surface with one job: answering @mentions from allowlisted users. Only mention threads post to Slack; cron reports and External MCP sessions are Web chats, and nothing else in Slack drives an agent.
 
 ## Harness-Specific Requirements

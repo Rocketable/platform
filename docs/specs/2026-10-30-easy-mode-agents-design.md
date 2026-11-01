@@ -67,7 +67,7 @@ Agent instructions.
 
 - No translation layer from easy to advanced files, or the reverse.
 - No migration of existing advanced files. Advanced keeps working unchanged, except for the `mode` validation and the global fixes listed under "Changes outside easy mode".
-- No network wildcards, CIDR ranges, or per-entry HTTP methods. Easy mode supports exactly what just-bash supports.
+- No network wildcards, CIDR ranges, or per-entry HTTP methods. Easy mode supports exactly what webfetch's rules express.
 - No network limits for `commands` programs or MCP servers.
 - No warning when an easy-style file forgets `mode: easy`. It loads as advanced and ignores the easy keys; this confusion goes away when easy becomes the default.
 
@@ -184,22 +184,22 @@ Each follows the easy-mode rule. Every use is reviewed by the approver.
 
 ## Files And The Emulated Shell
 
-- R28. Easy agents always use the emulated shell (just-bash). Host programs are reachable only through `commands`.
+- R28. Easy agents always use the emulated shell (real Bash in a bubblewrap sandbox, docs/specs/2026-11-01-linux-native-just-bash-spec.md; it replaced just-bash). Host programs are reachable only through `commands`.
 - R29. `workingDirectory` is required.
   - A relative path starts from RocketClaw's own working directory; an absolute path is used as written.
   - `$VAR`s may be used. An unset variable fails the command; it is never replaced by an empty string.
   - `ROCKETCLAW_CONVERSATION_ID` is made safe for a path where it is put into the path. The variable's own value does not change.
   - The existing check stays: the folder may not be or contain the workspace or `.rocketclaw`, nor lie inside `.rocketclaw`.
   - RocketClaw never deletes the folder.
-- R30. The file tools `read`, `glob`, `grep`, `apply_patch`, and `rocketclaw_attach_files_to_response` are limited to `workingDirectory`, so they see the same files as the shell. There are two read-only exceptions. Each is visible at its real host path to both the file tools and the emulated shell (just-bash `OverlayFs` with `readOnly: true`), so one path works everywhere:
+- R30. The file tools `read`, `glob`, `grep`, `apply_patch`, and `rocketclaw_attach_files_to_response` are limited to `workingDirectory`, so they see the same files as the shell. There are two read-only exceptions. Each is visible at its real host path to both the file tools and the emulated shell (a read-only bind mount), so one path works everywhere:
   - **Uploads.** Files people upload to an easy agent's chat are saved under `.rocketclaw` (for example `.rocketclaw/uploads/<chat>/<id>/<name>`) instead of the workspace `artifacts/uploads/`. Only the current chat's folder is visible; subagents see their top-level chat's folder. To change an upload, the agent copies it into `workingDirectory`.
-  - **Skills.** The folder of every skill the agent has, with all its reference files and scripts. Skill scripts run inside the emulator. A host program a script calls (`gh`, `jq`, …) works only if `commands` provides it under that name.
+  - **Skills.** The folder of every skill the agent has, with all its reference files and scripts. Skill scripts run inside the sandbox. A host program a script calls (`gh`, …) works only if the sandbox has it or `commands` provides it under that name.
 
-  Symlinks are not used for either exception. just-bash and `os.Root` both refuse paths through symlinks that leave their root, and allowing symlinks would let the agent create its own links out of the sandbox. A fixed `workingDirectory` shared by many chats also cannot hold one link per chat.
+  Symlinks are not used for either exception. The sandbox's mounts and `os.Root` both refuse paths through symlinks that leave their root, and allowing symlinks would let the agent create its own links out of the sandbox. A fixed `workingDirectory` shared by many chats also cannot hold one link per chat.
 - R31. The emulated shell sees only the `ROCKETCLAW_*` turn variables and `TMPDIR`. It never sees RocketClaw's process environment or any secret.
 - R32. `commands` programs run in host bash with RocketClaw's environment plus every `secretsARN` secret. Keeping secrets apart between commands is the agent author's job.
 - R33. ``!`…` `` lines in the body, and in the `SKILL.md` of any skill the agent loads, run unreviewed in host bash, outside the emulator, from the workspace folder, with RocketClaw's environment plus every `secretsARN` secret. Failures stay silent, as in advanced.
-- R34. `allowedNetworkTargets` limits the emulated shell (`curl`, JavaScript `fetch`, Python `jb_http`) and the `webfetch` tool, with identical rules: the same origin and prefix matching, redirect blocking, and resolved-address private-range check under `auto`. One shared table of test cases runs against both. `webfetch` has no private-address check today, so it needs one.
+- R34. `allowedNetworkTargets` limits the emulated shell (`curl`, its only network access) and the `webfetch` tool, with identical rules: both use one client: the same origin and prefix matching, redirect blocking, and resolved-address private-range check under `auto`. One shared table of test cases runs against both. `webfetch` has no private-address check today, so it needs one.
 
 ## Shadows
 
@@ -212,14 +212,12 @@ Each follows the easy-mode rule. Every use is reviewed by the approver.
 
 These were found while settling easy mode and apply to both formats.
 
-- R39. `ROCKETCLAW_CONVERSATION_ID` is set on every turn. Today only External MCP turns get it (`internal/rocketclaw/backend/bridge.go`, `turnShellEnv`). As a result the README example `workingDirectory: justbash/$ROCKETCLAW_CONVERSATION_ID` puts every non-MCP chat of an agent in the same `justbash/` folder.
+- R39. `ROCKETCLAW_CONVERSATION_ID` is set on every turn. Today only External MCP turns get it (`internal/rocketclaw/backend/bridge.go`, `turnShellEnv`). As a result the README example `workingDirectory: <folder>/$ROCKETCLAW_CONVERSATION_ID` puts every non-MCP chat of an agent in the same folder.
 - R40. Every permission review gets a trusted header written by RocketClaw, outside the transcript. It names the turn's source (web, slack, cron, mcp, scheduled message, agent) and, when known, the principal's name and email. Today the approver cannot tell a cron prompt from a person's request.
 - R41. Remove the `rocketclaw.json` `models` section and the Go-template model lookup (`{{ model "name" }}`, `Config.RenderAgentModel`). Every model is written by its real name everywhere: agent `model`, `subagents`, `approver.model`, and workflow `worker(model=…)`, which today accepts only `models` names. Remove the Web settings model list, the README and CHEATSHEET text and examples, and the tests that exercise the lookup. Agent files and workflows that still use short names must be rewritten with real model names.
 
 ## Known Facts Behind The Decisions
 
-- The advanced emulated shell receives RocketClaw's entire process environment (`harness/shell.go`, then `justbash/wrapper.ts`). R31 fixes this for easy agents; advanced is unchanged by this spec.
-- just-bash 3.6.0 supports exact origins and URL prefixes, one method list for all entries, full access, and resolved-address private-range denial. Its only extension point is the internal `_fetch` option.
 - Agent frontmatter is decoded into a generic map. Unknown keys are silently ignored in advanced files today.
 - RocketClaw never lists a provider's models.
 - Skill names are flat and unique (`^[a-z0-9]+(-[a-z0-9]+)*$`), each equal to its folder name. Folders may nest at any depth under `skills/`.

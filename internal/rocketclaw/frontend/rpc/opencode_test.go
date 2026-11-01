@@ -69,7 +69,7 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nHelp."), 0o600))
 
-	server := New(&mockBackend{JustBashInstallErrorFunc: noJustBashError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{})
+	server := New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{})
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
 	spaces, err := sessions.Spaces(t.Context())

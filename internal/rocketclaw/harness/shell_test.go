@@ -2,16 +2,15 @@ package harness
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -34,7 +33,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	require.NoError(t, root.WriteFile(".env.example", []byte("SECRET=example\n"), 0o644))
 
 	shellTemp := testShellTempConfig(t, root, outputDir)
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand{})
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand{}, &sandbox.Runtime{})
 	sss.forceKillTimeout = 10 * time.Millisecond
 
 	t.Run("rejects invalid commands before execution", func(t *testing.T) {
@@ -223,7 +222,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, fs.FileMode(0o700), info.Mode().Perm())
 
-		configured := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new", "TMPDIR=/not/rocketcode"}, DefaultShellCommand{})
+		configured := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new", "TMPDIR=/not/rocketcode"}, DefaultShellCommand{}, &sandbox.Runtime{})
 
 		result := configured.Bash(t.Context(), &CustomShell{}, bashParams{Command: `printf '%s\n%s' "$ROCKETCLAW_CONVERSATION_ID" "$TMPDIR"`, Description: "env precedence"})
 		require.True(t, result.Success, result.Output)
@@ -259,52 +258,17 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 			require.True(t, got.Success, got.Output)
 			require.Equal(t, fmt.Sprintf("argc=1 arg=ls pwd=%s tmp=%s", filepath.Join(realDir, "nested"), outputDir), got.Output)
 		})
-		t.Run("with a setup reads the setup line and the command on stdin", func(t *testing.T) {
-			require.NoError(t, root.WriteFile("setup.sh", []byte("#!/bin/sh\nprintf 'argc=%s\\n' \"$#\"; cat"), 0o755))
-
-			sss := newSandboxedShellSystem(root, &shellTemp, []string{"X=turn"}, DefaultShellCommand{})
-
-			got := sss.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "setup.sh"), Setup: json.RawMessage(`{"a":1}`)}, bashParams{Command: "echo $X"})
-			require.True(t, got.Success, got.Output)
-
-			argc, rest, _ := strings.Cut(got.Output, "\n")
-			line, command, _ := strings.Cut(rest, "\n")
-
-			require.Equal(t, "argc=0", argc)
-			require.Equal(t, "echo $X", command)
-
-			var setup struct {
-				Config json.RawMessage
-				Env    map[string]string
-			}
-			require.NoError(t, json.Unmarshal([]byte(line), &setup))
-			require.JSONEq(t, `{"a":1}`, string(setup.Config))
-			require.Equal(t, "turn", setup.Env["X"], "the env holds the turn's variables")
-			require.Equal(t, outputDir, setup.Env["TMPDIR"])
-			require.Equal(t, os.Getenv("HOME"), setup.Env["HOME"], "and RocketClaw's own")
-		})
-		t.Run("a shell confined to its own folder takes workdir there and is not path-checked", func(t *testing.T) {
-			require.NoError(t, root.WriteFile("confined.sh", []byte("#!/bin/sh\nread -r setup\nexec /bin/bash"), 0o755))
-
+		t.Run("an emulated shell without a sandbox refuses and never runs host bash", func(t *testing.T) {
 			folder, err := filepath.EvalSymlinks(t.TempDir())
 			require.NoError(t, err)
 
-			// The folder lies outside the sandbox root, as an easy agent's workingDirectory may.
-			require.NoError(t, os.WriteFile(filepath.Join(folder, "file.txt"), []byte("outside\n"), 0o600))
-			require.NoError(t, os.Mkdir(filepath.Join(folder, "sub"), 0o700))
+			got := sss.Bash(t.Context(), &CustomShell{Emulated: true, Dir: folder}, bashParams{Command: "touch ran-under-bash", Workdir: folder})
+			require.Contains(t, got.Output, "emulated shell")
+			require.Equal(t, "error", got.ErrorCode)
+			require.False(t, got.Success)
 
-			shell := CustomShell{Path: filepath.Join(dir, "confined.sh"), Setup: json.RawMessage(`{}`), Emulated: true, Dir: folder}
-
-			got := sss.Bash(t.Context(), &shell, bashParams{Command: "cat " + filepath.Join(folder, "file.txt") + " && pwd -P", Workdir: folder})
-			require.True(t, got.Success, got.Output)
-			require.Equal(t, "outside\n"+folder+"\n", got.Output)
-
-			got = sss.Bash(t.Context(), &shell, bashParams{Command: "pwd -P", Workdir: "sub"})
-			require.True(t, got.Success, got.Output)
-			require.Equal(t, filepath.Join(folder, "sub")+"\n", got.Output, "a relative workdir starts from the folder")
-
-			got = sss.Bash(t.Context(), &shell, bashParams{Command: "pwd -P"})
-			require.Equal(t, folder+"\n", got.Output, "the folder is the default workdir")
+			_, err = os.Stat(filepath.Join(folder, "ran-under-bash"))
+			require.ErrorIs(t, err, fs.ErrNotExist)
 		})
 		t.Run("missing program reports the start error without falling back to bash", func(t *testing.T) {
 			got := sss.Bash(t.Context(), &CustomShell{Path: filepath.Join(dir, "missing-shell")}, bashParams{Command: "touch ran-under-bash"})
@@ -388,7 +352,7 @@ func TestShellCommandOverride(t *testing.T) {
 	shell := &mockShellCommander{CommandFunc: func(string) (string, []string) {
 		return "/bin/sh", []string{"-c", "printf mocked"}
 	}}
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, shell)
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, shell, &sandbox.Runtime{})
 	got := sss.Bash(context.Background(), &CustomShell{}, bashParams{Command: "gh pr view 1", TimeoutMillisecond: 0})
 
 	require.Equal(t, "gh pr view 1", shell.CommandCalls()[0].Command)

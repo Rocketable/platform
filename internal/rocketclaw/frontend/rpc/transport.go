@@ -230,7 +230,7 @@ func (s *Server) identity(ctx context.Context) (*IdentityResponse, error) {
 		return nil, err
 	}
 
-	return &IdentityResponse{Username: username, Principal: principal, JustBashError: s.backend.JustBashInstallError()}, nil
+	return &IdentityResponse{Username: username, Principal: principal, SandboxError: s.backend.SandboxError()}, nil
 }
 
 func (s *Server) reload(ctx context.Context, request *ReloadRequest) (*ReloadResponse, error) {

@@ -21,6 +21,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/openai/openai-go/v3/responses"
 	"go.opentelemetry.io/otel"
@@ -38,6 +39,7 @@ type RawRunProgress struct {
 type workflowAgentRunner struct {
 	definition    *workflow.Definition
 	cfg           *config.Config
+	shells        *sandbox.Runtime // runs the workers' emulated shells
 	agent, parent string
 	journal       harness.Journal
 	root          *os.Root
@@ -58,7 +60,7 @@ type workflowWorkerStep struct {
 	Result json.RawMessage `json:"result"`
 }
 
-func newWorkflowAgentRunner(locked *config.LockedConfig, agent string, journal harness.Journal, logger *slog.Logger, customTools ...harness.Tool) (*workflowAgentRunner, error) {
+func newWorkflowAgentRunner(locked *config.LockedConfig, shells *sandbox.Runtime, agent string, journal harness.Journal, logger *slog.Logger, customTools ...harness.Tool) (*workflowAgentRunner, error) {
 	root, agents, skills, resolver, err := prepareRocketCode(locked, agent, logger, toolModeWorkflow)
 	if err != nil {
 		return nil, err
@@ -72,7 +74,7 @@ func newWorkflowAgentRunner(locked *config.LockedConfig, agent string, journal h
 		return nil, fmt.Errorf("create workflow shell temp parent dir: %w", err)
 	}
 
-	return &workflowAgentRunner{cfg: cfg, agent: agent, parent: parent, journal: journal, root: root, agents: agents, skills: skills, resolver: resolver, customTools: customTools}, nil
+	return &workflowAgentRunner{cfg: cfg, shells: shells, agent: agent, parent: parent, journal: journal, root: root, agents: agents, skills: skills, resolver: resolver, customTools: customTools}, nil
 }
 
 // Close releases prepared data ownership; an unprepared request has no
@@ -147,7 +149,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 		}
 	}()
 
-	runtimeConfig := harness.Config{AutoApproverModel: r.cfg.AutoApproverModel, ShellTempDir: filepath.Join(r.cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(r.cfg), RetainedResultDir: filepath.Join("retained", "unused"), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: harness.ObservabilityConfig{Enabled: r.cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.cfg.Instrumentation.HideInputs, HideOutputs: r.cfg.Instrumentation.HideOutputs}}, ChildSessions: harness.InertChildSessions{}, Journal: r.journal, BackgroundJobs: harness.InertBackgroundJobs{}, ShellCommand: harness.DefaultShellCommand{}}
+	runtimeConfig := harness.Config{AutoApproverModel: r.cfg.AutoApproverModel, ShellTempDir: filepath.Join(r.cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(r.cfg), RetainedResultDir: filepath.Join("retained", "unused"), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: harness.ObservabilityConfig{Enabled: r.cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.cfg.Instrumentation.HideInputs, HideOutputs: r.cfg.Instrumentation.HideOutputs}}, ChildSessions: harness.InertChildSessions{}, Journal: r.journal, BackgroundJobs: harness.InertBackgroundJobs{}, ShellCommand: harness.DefaultShellCommand{}, Sandbox: *r.shells}
 	runtimeConfig.CustomTools = r.customTools
 	runtimeConfig.ShellEnv, runtimeConfig.OriginHeader = r.shellEnv, r.originHeader
 

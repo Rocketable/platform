@@ -1,0 +1,42 @@
+// The emulated shell's relay protocol (docs/explainers/2026-11-01-emulated-shell-sandbox.md). One Unix-socket connection carries
+// one invocation as a stream of length-delimited Frames (google.golang.org/protobuf/encoding/protodelim).
+// Every guest-supplied text is bytes: argv and paths are arbitrary bytes on Linux, and proto3 strings
+// must be valid UTF-8.
+syntax = "proto3";
+
+package rocketclaw.sandbox.wire;
+
+option go_package = "github.com/Rocketable/platform/internal/rocketclaw/sandbox/wire";
+
+message Frame {
+  uint32 version = 1;
+  oneof body {
+    InvokeStart invoke_start = 2; // guest→host, first frame only
+    bytes stdin_chunk = 3;        // guest→host
+    StdinEOF stdin_eof = 4;       // guest→host
+    bytes stdout_chunk = 5;       // host→guest
+    bytes stderr_chunk = 6;       // host→guest
+    InvokeExit invoke_exit = 7;   // host→guest, last frame
+    Cancel cancel = 8;            // either way
+  }
+}
+
+// InvokeStart is entirely guest-controlled. There is deliberately no host environment field.
+message InvokeStart {
+  bytes exec_id = 1;            // claimed execution; the broker compares it with the socket's own
+  bytes name = 2;               // registered command name
+  bytes cwd = 3;                // guest path
+  repeated bytes args = 4;      // argv without the command name
+  repeated bytes guest_env = 5; // KEY=VALUE, untrusted metadata
+}
+
+message StdinEOF {}
+
+message InvokeExit {
+  uint32 code = 1;    // 0-255
+  bytes message = 2;  // sanitized text for the guest's stderr
+}
+
+message Cancel {
+  bytes reason = 1;
+}

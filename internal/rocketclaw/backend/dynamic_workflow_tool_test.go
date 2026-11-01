@@ -59,7 +59,7 @@ def main(args): return None
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
 
-	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}), log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}), config: Config{SessionService: &SessionService{}}, log: slog.New(slog.DiscardHandler)}
 
 	output := make(chan harness.ChatResponse, 4)
 	tool, ok := bridge.dynamicWorkflowTool(permissions, "main", "main", definitions, nil, "", &harness.CustomShell{})
@@ -138,7 +138,7 @@ def main(args):
 `)
 
 	root := openWorkspaceRoot(t, workspace)
-	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}), log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}), config: Config{SessionService: &SessionService{}}, log: slog.New(slog.DiscardHandler)}
 
 	// Nested run with turn-start definitions (same freeze as production Call).
 	definitions, err := workflow.Load(root, ".rocketclaw")
@@ -193,7 +193,7 @@ def main(args):
 
 	var logs strings.Builder
 
-	badBridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: bad}), log: slog.New(slog.NewTextHandler(&logs, nil))}
+	badBridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: bad}), config: Config{SessionService: &SessionService{}}, log: slog.New(slog.NewTextHandler(&logs, nil))}
 	_, ok = badBridge.maybeDynamicWorkflowTool(badRoot, &harness.Agent{Permission: star}, "main", "main", nil, "")
 	assert.False(t, ok)
 	assert.Contains(t, logs.String(), "load workflows")
@@ -311,11 +311,11 @@ func TestNestedWorkflowStepsSeeTurnEnvironment(t *testing.T) {
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
 
-	shell := harness.CustomShell{Path: filepath.Join(workspace, "shell.sh"), Setup: json.RawMessage(`{"folder":"/parent"}`), Emulated: true}
+	shell := harness.CustomShell{Emulated: true, Dir: t.TempDir()}
 
 	for _, tc := range []struct{ chat, agent, want string }{
 		{"advanced", "---\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n---\nPrompt\n", "T-1"},
-		{"easy", "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\n---\nPrompt\n", `{"config":{"folder":"/parent"}|T-1`},
+		{"easy", "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\n---\nPrompt\n", "emulated shell: sandbox not prepared"},
 	} {
 		writeMainAgentSkills(t, workspace, tc.agent)
 

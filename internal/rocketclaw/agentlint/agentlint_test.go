@@ -194,7 +194,7 @@ permission:
 ---
 editor
 `)
-	writeAgent(t, runtimeRoot, "emulated.md", "---\ndescription: emulated\nshell: emulated\n---\nemulated\n")
+	writeAgent(t, runtimeRoot, "emulated.md", "---\ndescription: emulated\nshell: emulated\nworkingDirectory: data\n---\nemulated\n")
 
 	result, err := Lint(runtimeRoot, &config.Config{Workspace: workspace})
 	require.NoError(t, err)
@@ -306,6 +306,7 @@ func TestAgentGraphDOTExpandsWildcardAndMarksCycles(t *testing.T) {
 description: alpha
 maxRecursion: 0
 shell: emulated
+workingDirectory: data
 permission:
   task:
     "hub": allow
