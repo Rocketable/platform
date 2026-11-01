@@ -12,12 +12,21 @@ import (
 )
 
 func TestSidebarChatAllocationBudget(t *testing.T) {
-	result := testing.Benchmark(BenchmarkSidebarChat)
-	require.Positive(t, result.N)
-	require.Zero(t, result.AllocsPerOp())
+	require.Zero(t, testing.AllocsPerRun(1000, sidebarChatAllocationCheck(t)))
 }
 
 func BenchmarkSidebarChat(b *testing.B) {
+	check := sidebarChatAllocationCheck(b)
+	b.ReportAllocs()
+
+	for b.Loop() {
+		check()
+	}
+}
+
+func sidebarChatAllocationCheck(tb testing.TB) func() {
+	tb.Helper()
+
 	cron := &protocol.CronRun{Path: "cron/Weekly report.md", At: time.Date(2001, time.January, 2, 3, 4, 5, 0, time.UTC)}
 	binding := ExternalMCPSessionState{ManagedConversationID: "sample-chat", Agent: "helper", OriginPairs: map[string]string{"topic": "Example", "note": "Sample"}}
 	cases := []struct {
@@ -34,47 +43,50 @@ func BenchmarkSidebarChat(b *testing.B) {
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Binding: binding, Run: cron}},
 	}
 
-	b.ReportAllocs()
-
-	for b.Loop() {
+	return func() {
 		for i := range cases {
 			tc := &cases[i]
 			row := SidebarSession{Conversation: protocol.Conversation{ID: "sample-chat"}, Origin: tc.facts}
 
-			chat, err := sidebarChat(b.Context(), noSlackLookups{}, nil, &row)
+			chat, err := sidebarChat(tb.Context(), noSlackLookups{}, nil, &row)
 			if err != nil || chat.Cron != tc.cron || chat.CronName != tc.stem || chat.Session.Conversation.ID != row.Conversation.ID {
-				b.Fatalf("sidebarChat = %#v, %v; want cron %t, stem %q", chat, err, tc.cron, tc.stem)
+				tb.Fatalf("sidebarChat = %#v, %v; want cron %t, stem %q", chat, err, tc.cron, tc.stem)
 			}
 		}
 	}
 }
 
 func TestDecideCronOriginAllocationBudget(t *testing.T) {
-	result := testing.Benchmark(BenchmarkDecideCronOrigin)
-	require.Positive(t, result.N)
-	require.LessOrEqual(t, result.AllocsPerOp(), int64(6))
+	require.LessOrEqual(t, testing.AllocsPerRun(1000, cronOriginAllocationCheck(t)), float64(6))
 }
 
 func BenchmarkDecideCronOrigin(b *testing.B) {
+	check := cronOriginAllocationCheck(b)
+	b.ReportAllocs()
+
+	for b.Loop() {
+		check()
+	}
+}
+
+func cronOriginAllocationCheck(tb testing.TB) func() {
+	tb.Helper()
+
 	facts := ChatOriginFacts{ConversationID: "example-chat", CreatingSource: "example-run", ProducerAgent: "Helper Ω",
 		Run: &protocol.CronRun{Path: "cron/Weekly %s.md", At: time.Date(2001, time.January, 2, 3, 4, 5, 0, time.UTC)}}
 
 	const want = "cron source: cron/weekly %s.md stem: weekly %s run kind: scheduled run id: example-run agent: helper ω ran at: 2001-01-02t03:04:05z"
 
-	b.ReportAllocs()
-
-	for b.Loop() {
+	return func() {
 		origin, text := DecideOrigin(&facts)
 		if origin.(cronOrigin).Stem != "Weekly %s" || text != want {
-			b.Fatalf("origin = %#v, text = %q", origin, text)
+			tb.Fatalf("origin = %#v, text = %q", origin, text)
 		}
 	}
 }
 
 func TestDecideExternalOriginAllocationBudget(t *testing.T) {
-	result := testing.Benchmark(BenchmarkDecideExternalOrigin)
-	require.Positive(t, result.N)
-	require.LessOrEqual(t, result.AllocsPerOp(), int64(9))
+	require.LessOrEqual(t, testing.AllocsPerRun(1000, externalOriginAllocationCheck(t)), float64(9))
 
 	facts := ChatOriginFacts{ConversationID: "sample-chat", Binding: ExternalMCPSessionState{ManagedConversationID: "sample-chat", Agent: "helper"}, ExternalConversationID: "sample-external"}
 	origin, text := DecideOrigin(&facts)
@@ -83,6 +95,17 @@ func TestDecideExternalOriginAllocationBudget(t *testing.T) {
 }
 
 func BenchmarkDecideExternalOrigin(b *testing.B) {
+	check := externalOriginAllocationCheck(b)
+	b.ReportAllocs()
+
+	for b.Loop() {
+		check()
+	}
+}
+
+func externalOriginAllocationCheck(tb testing.TB) func() {
+	tb.Helper()
+
 	facts := ChatOriginFacts{ConversationID: "sample-chat", Binding: ExternalMCPSessionState{
 		ManagedConversationID: "sample-chat", Agent: "Helper Ω", OriginPairs: map[string]string{"topic": "BILLING", "Path": "/Notes", "empty": "", "": "blank"},
 	}, ExternalConversationID: "sample-external"}
@@ -90,19 +113,17 @@ func BenchmarkDecideExternalOrigin(b *testing.B) {
 
 	const wantText = "external mcp external conversation: sample-external agent: helper ω =blank path=/notes empty= topic=billing"
 
-	b.ReportAllocs()
-
-	for b.Loop() {
+	return func() {
 		origin, text := DecideOrigin(&facts)
 
 		got := origin.(externalMCPOrigin)
 		if text != wantText || got.Agent != facts.Binding.Agent || got.ExternalConversationID != facts.ExternalConversationID || got.Kind != originExternalMCP || len(got.Pairs) != len(want) {
-			b.Fatalf("origin = %#v, text = %q", origin, text)
+			tb.Fatalf("origin = %#v, text = %q", origin, text)
 		}
 
 		for i, pair := range got.Pairs {
 			if pair != want[i] {
-				b.Fatalf("pair %d = %#v, want %#v", i, pair, want[i])
+				tb.Fatalf("pair %d = %#v, want %#v", i, pair, want[i])
 			}
 		}
 	}
