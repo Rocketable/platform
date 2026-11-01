@@ -2331,7 +2331,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	customTools = append(customTools, sessionsWriteTool(b, origin, msg, rootAgent, self, agents))
-	customTools = append(customTools, pageTools(b.config.SessionService, root, &agent.CustomShell, b.threads, rootAgent, agents.Items[rootAgent].Space, "")...)
+	customTools = append(customTools, pageSpace{sessions: b.config.SessionService, threads: b.threads, agent: rootAgent, space: agents.Items[rootAgent].Space}.nativeTools(root, &agent.CustomShell)...)
 
 	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, customTools...)
 
@@ -2652,7 +2652,7 @@ func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol
 
 		metadataEnv, ok := externalMCPStoredMetadataEnv(metadataConversationID, entries)
 		if !ok {
-			metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, origin.Metadata)
+			metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, origin.ExternalMCPMetadata)
 		}
 
 		replayInput := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", metadataEnv))
@@ -2667,7 +2667,7 @@ func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol
 		} else {
 			metadataEnv[rocketclawConversationIDEnv] = b.config.ConversationID
 
-			transientEnv := externalMCPMetadataEnv(b.config.ConversationID, origin.Metadata)
+			transientEnv := externalMCPMetadataEnv(b.config.ConversationID, origin.ExternalMCPMetadata)
 			for key := range metadataEnv {
 				delete(transientEnv, key)
 			}
@@ -3646,11 +3646,6 @@ func externalMCPMetadataEnv(conversationID string, metadata map[string]string) m
 	env := map[string]string{rocketclawConversationIDEnv: strings.TrimSpace(conversationID)}
 
 	for key, value := range metadata {
-		switch key {
-		case protocol.InboundOriginMetadataKey, protocol.InboundMediaMetadataKey, protocol.InboundPrincipalMetadataKey, protocol.InboundPrincipalNameMetadataKey, protocol.InboundPrincipalEmailMetadataKey, "source":
-			continue
-		}
-
 		key = strings.Map(func(r rune) rune {
 			if 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' {
 				return r

@@ -32,19 +32,15 @@ func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T)
 		return nil
 	})
 	content := &protocol.InboundContent{Text: "prompt"}
-	metadata := map[string]string{"ticket": "123", protocol.InboundPrincipalNameMetadataKey: "Mallory", protocol.InboundPrincipalEmailMetadataKey: "mallory@example.com", protocol.InboundSenderAgentMetadataKey: "main"}
+	metadata := map[string]string{"ticket": "123", protocol.InboundPrincipalNameMetadataKey: "Mallory", protocol.InboundPrincipalEmailMetadataKey: "mallory@example.com", protocol.InboundSenderAgentMetadataKey: "main", protocol.InboundSenderSessionMetadataKey: "web:x", protocol.InboundSenderActionMetadataKey: "write", protocol.InboundAllowedAgentsMetadataKey: "intruder", "web_message_id": "w-1", "background_job_ids": "j-1", "external_conversation_id": "forged"}
 	result, accepted, err := submitExternalMCPInput(context.Background(), turns, "planner", "external_mcp:planner:private", "managed-chat", content, metadata, "alice", "public-1")
 
 	require.NoError(t, err)
 	assert.True(t, accepted)
 	require.NotNil(t, captured)
 	assert.Equal(t, protocol.SourceExternalMCP, captured.Source)
-	assert.Equal(t, "public-1", captured.Metadata["external_conversation_id"])
-	assert.Equal(t, "123", captured.Metadata["ticket"])
-	assert.Equal(t, "alice", captured.Metadata[protocol.InboundPrincipalMetadataKey])
-	assert.NotContains(t, captured.Metadata, protocol.InboundPrincipalNameMetadataKey, "an External MCP caller cannot name a person")
-	assert.NotContains(t, captured.Metadata, protocol.InboundPrincipalEmailMetadataKey)
-	assert.NotContains(t, captured.Metadata, protocol.InboundSenderAgentMetadataKey, "nor the agent a permission review names")
+	assert.Equal(t, map[string]string{protocol.InboundPrincipalMetadataKey: "alice", protocol.InboundRawTextMetadataKey: "prompt"}, captured.Metadata, "caller metadata never reaches the keys RocketClaw reads")
+	assert.Equal(t, map[string]string{"ticket": "123", protocol.InboundPrincipalNameMetadataKey: "Mallory", protocol.InboundPrincipalEmailMetadataKey: "mallory@example.com", protocol.InboundSenderAgentMetadataKey: "main", protocol.InboundSenderSessionMetadataKey: "web:x", protocol.InboundSenderActionMetadataKey: "write", protocol.InboundAllowedAgentsMetadataKey: "intruder", "web_message_id": "w-1", "background_job_ids": "j-1", "external_conversation_id": "public-1"}, captured.ExternalMCPMetadata, "RocketClaw names the conversation, not the caller")
 	assert.Equal(t, "external_mcp:planner:private", captured.ConversationID)
 	assert.Equal(t, "managed-chat", captured.SyncDestination, "the private run reports to its Web chat")
 	assert.Nil(t, captured.SlackReply, "External MCP never replies in Slack")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"log/slog"
 	"net/url"
 	"os"
@@ -673,12 +674,12 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.Equal(t, 1, kept)
 
 	// The later migrations already ran here; running them again would fail on what they created.
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql")
+	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
 	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql"}, ledger)
+	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql"}, ledger)
 
 	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
 	require.NoError(t, err)
@@ -1013,4 +1014,108 @@ FROM pg_prepared_statements WHERE statement = $1`, "binding lookup statement", e
 	require.Contains(t, strings.Join(plan, "\n"), "conversations_external_id_key")
 	require.NotContains(t, strings.Join(plan, "\n"), "Seq Scan")
 	t.Log(strings.Join(plan, "\n"))
+}
+
+func TestExternalMCPMetadataMigration(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	migrations := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
+	// Back to before migration 080, which moves caller metadata, with External MCP inbounds whose Metadata holds the caller's keys in each place an inbound is stored.
+	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrations, migrate.Down, 79)
+	require.NoError(t, err)
+
+	const (
+		planted = `{"Source":"external_mcp","Text":"hi","Metadata":{"ticket":"T-1","external_conversation_id":"ext-1","rocketclaw_agent":"intruder","rocketclaw_principal":"alice","source":"api","rocketclaw_raw_text":"planted"}}`
+		bare    = `{"Source":"external_mcp","Text":"hi","Metadata":{"ticket":"T-2"}}`
+		kept    = `{"Source":"external_mcp","Text":"hi","Metadata":{"rocketclaw_principal":"bob","source":"api"}}`
+		web     = `{"Source":"web","Text":"hi","Metadata":{"web_message_id":"w-1","rocketclaw_raw_text":"hi"}}`
+	)
+
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"mcp": KindWebChat, "shadow": KindWebChat})
+
+	seed := func(query string, args ...any) {
+		t.Helper()
+
+		_, err := store.db.ExecContext(ctx, query, args...)
+		require.NoError(t, err)
+	}
+	seed(`UPDATE conversations SET producer_inbound_json = $1 WHERE conversation_id = 'mcp'`, planted)
+	seed(`INSERT INTO turns (id, conversation_id, created_at_unix_ns, updated_at_unix_ns, inbound_json) VALUES ('planted', 'mcp', 1, 1, $1), ('bare', 'mcp', 2, 2, $2), ('kept', 'mcp', 3, 3, $3), ('web', 'mcp', 4, 4, $4)`, planted, bare, kept, web)
+	seed(`INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json) VALUES ('shadow', 'mcp', 'planted', $1)`, planted)
+	seed(`INSERT INTO steps (conversation_id, key, value) VALUES ('mcp', 'planted/steers', json_build_array(json_build_object('id', 's1', 'inbound', $1::json), json_build_object('id', 's2', 'inbound', $2::json)))`, planted, web)
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	read := func(query string) string {
+		t.Helper()
+
+		var raw string
+		require.NoError(t, store.db.QueryRowContext(ctx, query).Scan(&raw))
+
+		return raw
+	}
+	decode := func(raw string) *protocol.InboundMessage {
+		t.Helper()
+
+		inbound := new(protocol.InboundMessage)
+		require.NoError(t, json.Unmarshal([]byte(raw), inbound))
+
+		return inbound
+	}
+
+	var steers []journaledSteer
+	require.NoError(t, json.Unmarshal([]byte(read(`SELECT value FROM steps WHERE key = 'planted/steers'`)), &steers))
+	require.Len(t, steers, 2)
+	require.Equal(t, []string{"s1", "s2"}, []string{steers[0].ID, steers[1].ID})
+
+	stored := map[string]*protocol.InboundMessage{
+		"turns":     decode(read(`SELECT inbound_json FROM turns WHERE id = 'planted'`)),
+		"shadow":    decode(read(`SELECT inbound_json FROM shadow_turns WHERE child_conversation_id = 'shadow'`)),
+		"producer":  decode(read(`SELECT producer_inbound_json FROM conversations WHERE conversation_id = 'mcp'`)),
+		"steer":     steers[0].Inbound,
+		"web steer": steers[1].Inbound,
+	}
+	for place, inbound := range stored {
+		if place == "web steer" {
+			require.Equal(t, map[string]string{"web_message_id": "w-1", protocol.InboundRawTextMetadataKey: "hi"}, inbound.Metadata, place)
+			require.Nil(t, inbound.ExternalMCPMetadata, place)
+
+			continue
+		}
+
+		require.Equal(t, map[string]string{protocol.InboundPrincipalMetadataKey: "alice", "source": "api"}, inbound.Metadata, place)
+		require.Equal(t, map[string]string{rocketclawConversationIDEnv: "mcp", rocketclawMetadataEnvPrefix + "TICKET": "T-1", rocketclawMetadataEnvPrefix + "EXTERNAL_CONVERSATION_ID": "ext-1", rocketclawMetadataEnvPrefix + "ROCKETCLAW_AGENT": "intruder"}, externalMCPMetadataEnv("mcp", inbound.ExternalMCPMetadata), "%s keeps its variables, apart from the planted raw text", place)
+	}
+
+	moved := decode(read(`SELECT inbound_json FROM turns WHERE id = 'bare'`))
+	require.Equal(t, map[string]string{}, moved.Metadata, "no principal leaves an empty map, not null")
+	require.Equal(t, map[string]string{"ticket": "T-2"}, moved.ExternalMCPMetadata)
+	require.Equal(t, []string{kept, web}, []string{read(`SELECT inbound_json FROM turns WHERE id = 'kept'`), read(`SELECT inbound_json FROM turns WHERE id = 'web'`)}, "rows with nothing to move are untouched")
+
+	// A newer binary's rows: caller keys the older binary deleted stay out of Metadata, and Metadata wins a clash.
+	seed(`INSERT INTO turns (id, conversation_id, created_at_unix_ns, updated_at_unix_ns, inbound_json) VALUES
+('newer', 'mcp', 5, 5, '{"Source":"external_mcp","Metadata":{"rocketclaw_principal":"alice","rocketclaw_raw_text":"hi","ticket":"own"},"ExternalMCPMetadata":{"ticket":"T-3","note":"n","rocketclaw_principal_name":"Mallory","rocketclaw_sender_agent":"main"}}'),
+('system', 'mcp', 6, 6, '{"Source":"system","Metadata":null,"ExternalMCPMetadata":null}')`)
+
+	_, err = (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrations, migrate.Down, 79)
+	require.NoError(t, err)
+
+	original := map[string]string{"ticket": "T-1", "external_conversation_id": "ext-1", "rocketclaw_agent": "intruder", protocol.InboundPrincipalMetadataKey: "alice", "source": "api"}
+
+	require.NoError(t, json.Unmarshal([]byte(read(`SELECT value FROM steps WHERE key = 'planted/steers'`)), &steers))
+
+	for place, raw := range map[string]string{
+		"turns":    read(`SELECT inbound_json FROM turns WHERE id = 'planted'`),
+		"shadow":   read(`SELECT inbound_json FROM shadow_turns WHERE child_conversation_id = 'shadow'`),
+		"producer": read(`SELECT producer_inbound_json FROM conversations WHERE conversation_id = 'mcp'`),
+	} {
+		require.Equal(t, original, decode(raw).Metadata, place)
+		require.NotContains(t, raw, "ExternalMCPMetadata", place)
+	}
+
+	require.Equal(t, original, steers[0].Inbound.Metadata)
+	require.Equal(t, map[string]string{"ticket": "T-2"}, decode(read(`SELECT inbound_json FROM turns WHERE id = 'bare'`)).Metadata)
+	require.Equal(t, map[string]string{protocol.InboundPrincipalMetadataKey: "alice", protocol.InboundRawTextMetadataKey: "hi", "ticket": "own", "note": "n"}, decode(read(`SELECT inbound_json FROM turns WHERE id = 'newer'`)).Metadata)
+	require.JSONEq(t, `{"Source":"system","Metadata":null}`, read(`SELECT inbound_json FROM turns WHERE id = 'system'`))
 }

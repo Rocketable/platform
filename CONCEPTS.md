@@ -216,7 +216,7 @@ A conversation an outside MCP client drives by sending prompts under its own con
 
 The key-value pairs an External MCP caller attaches to its session, which the agent sees both as a message in its context and as environment variables for its tools.
 
-The session's first turn records the pairs, together with the conversation's identity, in its Private Producer Conversation; later turns keep the recorded values and see new keys for that turn only. Turns in the session's Web chat read the same recorded pairs, with the conversation identity naming the chat, and a Subagent Session's turns read those of the top-level session and turn it works for, with its own conversation identity.
+The session's first turn records the pairs, together with the conversation's identity, in its Private Producer Conversation; later turns keep the recorded values and see new keys for that turn only. Turns in the session's Web chat read the same recorded pairs, with the conversation identity naming the chat, and a Subagent Session's turns read those of the top-level session and turn it works for, with its own conversation identity. The pairs are untrusted and kept apart from the routing and provenance facts RocketClaw records on a prompt, so whatever keys a caller sends, it cannot choose the agent, pose as a sender, or change how the turn is queued.
 
 ## Web Voice
 

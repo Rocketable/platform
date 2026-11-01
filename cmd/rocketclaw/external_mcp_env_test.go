@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -53,7 +54,8 @@ func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []
 }
 
 // An External MCP call and a later turn in its Web chat both run their shell commands with the
-// call's metadata, each under its own conversation ID.
+// call's metadata, each under its own conversation ID. The metadata cannot pick the agent, and
+// neither RocketClaw's raw text nor a Web turn's own metadata becomes a variable.
 func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{}`), 0o600))
@@ -66,7 +68,8 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	// The model runs one shell command per turn and records what it printed.
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Input []struct {
+			Instructions string `json:"instructions"`
+			Input        []struct {
 				Type   string `json:"type"`
 				Output string `json:"output"`
 			} `json:"input"`
@@ -80,11 +83,15 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 
+		if !strings.Contains(body.Instructions, "Planner prompt") || strings.Contains(body.Instructions, "Intruder prompt") {
+			t.Errorf("the turn did not run as planner: %s", body.Instructions)
+		}
+
 		response := `{"id":"resp_done","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_done","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"done","annotations":[]}]}]}`
 		if last := body.Input[len(body.Input)-1]; last.Type == "function_call_output" {
 			outputs = append(outputs, last.Output)
 		} else {
-			code := "def main():\n    return bash(command=" + strconv.Quote(`printf '%s|%s' "${ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID-unset}" "${ROCKETCLAW_CONVERSATION_ID-unset}"`) + ")\n"
+			code := "def main():\n    return bash(command=" + strconv.Quote(`printf '%s|%s|%s|%s|%s' "${ROCKETCLAW_METADATA_INTERCOM_CONVERSATION_ID-unset}" "${ROCKETCLAW_CONVERSATION_ID-unset}" "${ROCKETCLAW_METADATA_EXTERNAL_CONVERSATION_ID-unset}" "${ROCKETCLAW_METADATA_ROCKETCLAW_RAW_TEXT-unset}" "${ROCKETCLAW_METADATA_WEB_MESSAGE_ID-unset}"`) + ")\n"
 			args, err := json.Marshal(map[string]string{"code": code})
 			if err != nil {
 				t.Error(err)
@@ -125,7 +132,9 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	started := <-assembler.started
 
 	// Startup installs the workspace's runtime assets, so the agents are written after it.
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", "planner.md"), []byte("---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n---\nPrompt\n"), 0o600))
+	for name, prompt := range map[string]string{"planner": "Planner prompt", "intruder": "Intruder prompt"} {
+		require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", name+".md"), []byte("---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n---\n"+prompt+"\n"), 0o600))
+	}
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
 	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: started.server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
@@ -134,7 +143,7 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 
 	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{
 		"external_conversation_id": "ticket-1", "agent": "planner", "input": "reply to the customer",
-		"metadata": map[string]string{"intercom_conversation_id": "ic-42"},
+		"metadata": map[string]string{"intercom_conversation_id": "ic-42", "rocketclaw_agent": "intruder"},
 	}})
 	require.NoError(t, err)
 	require.False(t, result.IsError, "%s", result.Content[0].(*mcp.TextContent).Text)
@@ -144,7 +153,7 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	require.True(t, ok)
 
 	followUp := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "reply again", true)
-	followUp.ConversationID = binding.ManagedConversationID
+	followUp.ConversationID, followUp.Metadata = binding.ManagedConversationID, map[string]string{"web_message_id": "web-1"}
 	done := followUp.EnableResponseWait()
 	require.NoError(t, started.runtime.RunTurn(t.Context(), followUp))
 
@@ -157,5 +166,5 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	require.Equal(t, []string{"ic-42|" + binding.PrivateConversationID, "ic-42|" + binding.ManagedConversationID}, outputs)
+	require.Equal(t, []string{"ic-42|" + binding.PrivateConversationID + "|ticket-1|unset|unset", "ic-42|" + binding.ManagedConversationID + "|ticket-1|unset|unset"}, outputs)
 }

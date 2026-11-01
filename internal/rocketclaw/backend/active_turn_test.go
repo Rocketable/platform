@@ -1182,7 +1182,7 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 
 			msg := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "support ticket", true)
 			msg.ConversationID, msg.SyncDestination = privateID, managedID
-			msg.Metadata = map[string]string{"external_conversation_id": "ext-1"}
+			msg.ExternalMCPMetadata = map[string]string{"external_conversation_id": "ext-1"}
 
 			manager, _ := newTestBridgeManager(t, newBridge().runtime, service, finals)
 			if stored != "row" && stored != "queued" {
@@ -2392,12 +2392,12 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 	for _, tc := range []struct {
 		source                  protocol.Source
 		principal, agent, maker string
-		metadata                map[string]string
+		metadata, caller        map[string]string
 		env, origin             string
 	}{
-		{protocol.SourceWeb, "Alice", "main", "Alice", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, "Alice|alice@example.com|unset", `[Web principal="Alice <alice@example.com>"]`},
-		{protocol.SourceExternalMCP, "Bob", "main", "Bob", map[string]string{"ticket": "T-1"}, "unset|unset|T-1", `[ExternalMCP principal="Bob"]`},
-		{protocol.SourceSystem, "", "job", string(ThreadCreatedByCron), nil, "unset|unset|unset", "[Cron]"},
+		{protocol.SourceWeb, "Alice", "main", "Alice", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, nil, "Alice|alice@example.com|unset", `[Web principal="Alice <alice@example.com>"]`},
+		{protocol.SourceExternalMCP, "Bob", "main", "Bob", nil, map[string]string{"ticket": "T-1"}, "unset|unset|T-1", `[ExternalMCP principal="Bob"]`},
+		{protocol.SourceSystem, "", "job", string(ThreadCreatedByCron), nil, nil, "unset|unset|unset", "[Cron]"},
 	} {
 		t.Run(string(tc.source), func(t *testing.T) {
 			t.Parallel()
@@ -2446,6 +2446,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 				prompt := protocol.NewInboundMessage(tc.source, protocol.InboundKindPrompt, "hello", true)
 				prompt.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: tc.principal}
 				maps.Copy(prompt.Metadata, tc.metadata)
+				prompt.ExternalMCPMetadata = tc.caller
 				require.NoError(t, nt.bridge(t, manager, root).Submit(t.Context(), prompt))
 			}
 

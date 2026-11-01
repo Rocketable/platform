@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
 type pageToolInput struct {
@@ -27,7 +28,7 @@ type pageToolInput struct {
 	Value         json.RawMessage `json:"value"`
 }
 
-const pageStoreDescription = `Store a file as a Hosted Page of this agent, replacing any file at path, and return its shareable URL: <web origin>/pages/<agent space or ->/<agent>/<path>. Give path plus exactly one of content (text), content_base64 (binary), or source (a workspace file); content_type is optional and inferred from path's extension. Each file is capped at 10 MiB. Only people the RocketClaw Web admits can open the URL; a path ending in / serves its index.html.
+const pageStoreDescription = `Store a file as a Hosted Page of this agent, replacing any file at path, and return its shareable URL: <web origin>/pages/<agent space or ->/<agent>/<path>. Give path plus exactly one of content (text) or content_base64 (binary); content_type is optional and inferred from path's extension. Each file is capped at 10 MiB. Only people the RocketClaw Web admits can open the URL; a path ending in / serves its index.html.
 Pages run sandboxed with an opaque origin: they cannot fetch their own files or use localStorage or cookies. Start HTML with <meta charset="utf-8">. Load your own scripts and styles by relative URL as classic <script src> and <link> tags, not modules. CDN scripts, styles, and images load; pin exact versions. Any website can load script files, so keep secrets and data out of files: store data with rocketclaw_kv_store and read it in the page:
 const token = new URLSearchParams(location.hash.slice(1)).get("rc");
 function readData(key) {
@@ -43,37 +44,81 @@ function readData(key) {
 }
 Pages only read data; they cannot write it or read another agent's.`
 
-// pageTools builds the Hosted Page tools acting on agent's files and Page Data, linked under its space.
-// Pages they store belong to conversation when it is set, so they go with that session. A source file
-// is read as outboundAttachment reads it from root and shell.
-func pageTools(sessions *SessionService, root *os.Root, shell *harness.CustomShell, threads *threadBridgeManager, agent, space, conversation string) []harness.Tool {
-	pageURL := func(ctx context.Context, name string) (string, error) {
-		origin, err := threads.webOrigin(ctx)
+// pageSpace holds agent's Hosted Pages and Page Data, linked under its space. Pages it stores belong to
+// conversation when it is set, so they go with that session.
+type pageSpace struct {
+	sessions     *SessionService
+	threads      *threadBridgeManager
+	agent        string
+	space        string
+	conversation string
+}
+
+func (p pageSpace) url(ctx context.Context, name string) (string, error) {
+	origin, err := p.threads.webOrigin(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	segments := strings.Split(name, "/")
+	for i := range segments {
+		segments[i] = url.PathEscape(segments[i])
+	}
+
+	// The Web escapes the ":" of a session owner too, so both links open one tab.
+	return origin + "/pages/" + url.PathEscape(cmp.Or(p.space, "-")) + "/" + strings.ReplaceAll(url.PathEscape(p.agent), ":", "%3A") + "/" + strings.Join(segments, "/"), nil
+}
+
+func (p pageSpace) put(ctx context.Context, kind PageKind, name, contentType string, body []byte) error {
+	if !fs.ValidPath(name) || name == "." {
+		return fmt.Errorf("invalid page %s name %q: use a relative slash-separated path without empty, . or .. segments", kind, name)
+	}
+
+	if len(body) > 10<<20 {
+		return fmt.Errorf("page %s %q is %d bytes, over the 10 MiB limit", kind, name, len(body))
+	}
+
+	return p.sessions.PutPage(ctx, &Page{Agent: p.agent, Kind: kind, Name: name, ContentType: contentType, Body: body, Conversation: p.conversation})
+}
+
+func (p pageSpace) storeFile(ctx context.Context, name string, file *protocol.OutboundAttachment) (string, error) {
+	if err := p.put(ctx, PageFile, name, file.MIMEType, file.Data); err != nil {
+		return "", err
+	}
+
+	return p.url(ctx, name)
+}
+
+func (p pageSpace) nativeTools(root *os.Root, shell *harness.CustomShell) []harness.Tool {
+	tools := p.tools()
+	store := tools[0]
+	tools[0].Parameters["properties"].(map[string]any)["source"] = map[string]any{"type": "string"}
+	tools[0].Description += "\nInstead of content or content_base64, source may name a workspace file to store."
+	tools[0].Call = func(ctx context.Context, raw json.RawMessage, output chan<- harness.ChatResponse) (harness.ToolResult, error) {
+		var input pageToolInput
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return store.Call(ctx, raw, output)
+		}
+
+		file, err := outboundAttachment(root, shell, &outboundAttachmentInput{Path: input.Source, Name: input.Path, MIMEType: input.ContentType, Content: input.Content, ContentBase64: input.ContentBase64})
 		if err != nil {
-			return "", err
+			return harness.ToolResult{}, err
 		}
 
-		segments := strings.Split(name, "/")
-		for i := range segments {
-			segments[i] = url.PathEscape(segments[i])
+		out, err := p.storeFile(ctx, input.Path, &file)
+		if err != nil {
+			return harness.ToolResult{}, err
 		}
 
-		// The Web escapes the ":" of a session owner too, so both links open one tab.
-		return origin + "/pages/" + url.PathEscape(cmp.Or(space, "-")) + "/" + strings.ReplaceAll(url.PathEscape(agent), ":", "%3A") + "/" + strings.Join(segments, "/"), nil
+		return harness.TextToolResult(out), nil
 	}
-	put := func(ctx context.Context, kind PageKind, name, contentType string, body []byte) error {
-		if !fs.ValidPath(name) || name == "." {
-			return fmt.Errorf("invalid page %s name %q: use a relative slash-separated path without empty, . or .. segments", kind, name)
-		}
 
-		if len(body) > 10<<20 {
-			return fmt.Errorf("page %s %q is %d bytes, over the 10 MiB limit", kind, name, len(body))
-		}
+	return tools
+}
 
-		return sessions.PutPage(ctx, &Page{Agent: agent, Kind: kind, Name: name, ContentType: contentType, Body: body, Conversation: conversation})
-	}
+func (p pageSpace) tools() []harness.Tool {
 	get := func(ctx context.Context, kind PageKind, name string) (Page, error) {
-		page, ok, err := sessions.Page(ctx, agent, kind, name)
+		page, ok, err := p.sessions.Page(ctx, p.agent, kind, name)
 		if err == nil && !ok {
 			err = fmt.Errorf("page %s %q not found", kind, name)
 		}
@@ -98,17 +143,14 @@ func pageTools(sessions *SessionService, root *os.Root, shell *harness.CustomShe
 	}
 
 	return []harness.Tool{
-		tool("rocketclaw_store", pageStoreDescription, map[string]any{"path": str, "content": str, "content_base64": str, "source": str, "content_type": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
-			file, err := outboundAttachment(root, shell, &outboundAttachmentInput{Path: input.Source, Name: input.Path, MIMEType: input.ContentType, Content: input.Content, ContentBase64: input.ContentBase64})
+		tool("rocketclaw_store", pageStoreDescription, map[string]any{"path": str, "content": str, "content_base64": str, "content_type": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
+			// Without a path, outboundAttachment reads no file, so it needs no root or shell.
+			file, err := outboundAttachment(nil, nil, &outboundAttachmentInput{Name: input.Path, MIMEType: input.ContentType, Content: input.Content, ContentBase64: input.ContentBase64})
 			if err != nil {
 				return "", err
 			}
 
-			if err := put(ctx, PageFile, input.Path, file.MIMEType, file.Data); err != nil {
-				return "", err
-			}
-
-			return pageURL(ctx, input.Path)
+			return p.storeFile(ctx, input.Path, &file)
 		}),
 		tool("rocketclaw_read", "Return this agent's Hosted Page file at path as JSON with content_type and content, or content_base64 when it is not UTF-8 text.", map[string]any{"path": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
 			page, err := get(ctx, PageFile, input.Path)
@@ -136,7 +178,7 @@ func pageTools(sessions *SessionService, root *os.Root, shell *harness.CustomShe
 				return "", errors.New("value must be a JSON value")
 			}
 
-			return "stored " + input.Key, put(ctx, PageData, input.Key, "application/json", input.Value)
+			return "stored " + input.Key, p.put(ctx, PageData, input.Key, "application/json", input.Value)
 		}),
 		tool("rocketclaw_kv_read", "Return the JSON value this agent stored as Page Data at key.", map[string]any{"key": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
 			page, err := get(ctx, PageData, input.Key)
@@ -152,7 +194,7 @@ func pageTools(sessions *SessionService, root *os.Root, shell *harness.CustomShe
 				kind, name = PageData, input.Key
 			}
 
-			found, err := sessions.DeletePage(ctx, agent, kind, name)
+			found, err := p.sessions.DeletePage(ctx, p.agent, kind, name)
 			if err == nil && !found {
 				err = fmt.Errorf("page %s %q not found", kind, name)
 			}
@@ -160,7 +202,7 @@ func pageTools(sessions *SessionService, root *os.Root, shell *harness.CustomShe
 			return "deleted " + name, err
 		}),
 		tool("rocketclaw_list", "List this agent's Hosted Page files, with URLs, and Page Data keys as JSON.", map[string]any{}, func(ctx context.Context, _ *pageToolInput) (string, error) {
-			pages, err := sessions.Pages(ctx, agent)
+			pages, err := p.sessions.Pages(ctx, p.agent)
 			if err != nil {
 				return "", err
 			}
@@ -191,7 +233,7 @@ func pageTools(sessions *SessionService, root *os.Root, shell *harness.CustomShe
 					continue
 				}
 
-				link, err := pageURL(ctx, page.Name)
+				link, err := p.url(ctx, page.Name)
 				if err != nil {
 					return "", err
 				}
