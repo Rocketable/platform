@@ -3312,6 +3312,8 @@ func TestLooperResumesTurnCutOffMidCall(t *testing.T) {
 
 // A long turn's saves stay cheap: its 200th step writes about as many bytes as its 1st.
 func TestLooperTurnSavesWriteOnlyTheirNewItems(t *testing.T) {
+	t.Parallel()
+
 	const steps = 200
 
 	results := make([]*responses.Response, 0, steps+1)

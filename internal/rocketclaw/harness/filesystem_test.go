@@ -907,6 +907,8 @@ func TestApplyPatchAbsolutePaths(t *testing.T) {
 }
 
 func TestApplyPatchParity(t *testing.T) {
+	t.Parallel()
+
 	// OpenCode packages/opencode/src/patch/index.ts appends insertion-only
 	// hunks and tolerates a final blank context line absent from the file.
 	for _, tc := range []struct {
