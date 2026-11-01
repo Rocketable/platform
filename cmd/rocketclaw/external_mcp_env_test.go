@@ -121,7 +121,7 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	errRun := make(chan error, 1)
 
 	go func() {
-		errRun <- backend.Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), testLogger(), assembler)
+		errRun <- backend.Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), testLogger(), assembler, nil)
 	}()
 
 	t.Cleanup(func() {

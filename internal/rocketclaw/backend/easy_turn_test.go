@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
-	"github.com/Rocketable/platform/internal/rocketclaw/justbash"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
@@ -124,17 +122,15 @@ func TestEasyTurnShell(t *testing.T) {
 	require.Equal(t, t.Context(), fetcher.SecretStringCalls()[0].Ctx, "the turn's context stops the fetch")
 
 	shell := agents.Items["easy"].CustomShell
-	require.Equal(t, filepath.Join(workspace, ".rocketclaw", "justbash", "wrapper.ts"), shell.Path)
+	require.True(t, shell.Emulated)
 	require.Equal(t, filepath.Join(workspace, "data", "web:parent"), shell.Dir, "a subagent works in its top-level session's folder")
 
 	uploads := filepath.Join(workspace, ".rocketclaw", "uploads", "web:parent")
 	require.Equal(t, []string{filepath.Join(skillsRoot, "a"), uploads}, shell.ReadOnly, "skill b's folder shows inside skill a's")
 	require.DirExists(t, uploads, "the uploads folder exists to be shown")
 
-	var setup justbash.Setup
-	require.NoError(t, json.Unmarshal(shell.Setup, &setup))
-	require.Equal(t, justbash.Setup{Folder: shell.Dir, Commands: easy.Commands, Env: turnEnv, Secrets: map[string]string{"SECRET_KEY": "s3cr3t"}, ReadOnly: shell.ReadOnly}, setup)
-	require.Equal(t, setup.Secrets, shell.Secrets, "host-bash prompt expansion gets the secrets too")
+	require.Equal(t, easy.Commands, shell.Commands)
+	require.Equal(t, map[string]string{"SECRET_KEY": "s3cr3t"}, shell.Secrets, "secrets reach host commands and host-bash prompt expansion only")
 	require.Equal(t, "web:parent/sub", turnEnv[rocketclawConversationIDEnv], "the turn's own variables are unchanged")
 
 	require.NoError(t, b.setEasyShell(t.Context(), cfg, agents, skills, "advanced", turnEnv, "web:parent"))
@@ -163,7 +159,7 @@ func TestEasyShadowReadsParentUploads(t *testing.T) {
 	folder, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 
-	agents := harness.Agents{Items: map[string]harness.Agent{"easy": {Mode: harness.AgentModeEasy, WorkingDirectory: folder}}}
+	agents := harness.Agents{Items: map[string]harness.Agent{"easy": {Mode: harness.AgentModeEasy, CustomShell: harness.CustomShell{Emulated: true}, WorkingDirectory: folder}}}
 	b := &Bridge{shadow: true, config: Config{SessionService: store, Secrets: &secretFetcherMock{}}}
 	require.NoError(t, b.setEasyShell(t.Context(), &config.Config{Workspace: root.Name()}, agents, harness.Skills{}, "easy", map[string]string{rocketclawConversationIDEnv: child}, child))
 

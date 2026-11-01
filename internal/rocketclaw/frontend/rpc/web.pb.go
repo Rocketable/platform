@@ -5870,12 +5870,12 @@ func (*IdentityRequest) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{88}
 }
 
-// just_bash_error is why just-bash failed to install, empty when it did not fail.
+// sandbox_error is why emulated shells cannot run, empty when they can or no agent uses one.
 type IdentityResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
 	Principal     string                 `protobuf:"bytes,2,opt,name=principal,proto3" json:"principal,omitempty"`
-	JustBashError string                 `protobuf:"bytes,3,opt,name=just_bash_error,json=justBashError,proto3" json:"just_bash_error,omitempty"`
+	SandboxError  string                 `protobuf:"bytes,3,opt,name=sandbox_error,json=sandboxError,proto3" json:"sandbox_error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5924,9 +5924,9 @@ func (x *IdentityResponse) GetPrincipal() string {
 	return ""
 }
 
-func (x *IdentityResponse) GetJustBashError() string {
+func (x *IdentityResponse) GetSandboxError() string {
 	if x != nil {
-		return x.JustBashError
+		return x.SandboxError
 	}
 	return ""
 }
@@ -7820,11 +7820,11 @@ const file_web_proto_rawDesc = "" +
 	"\aentries\x18\x01 \x03(\v2\x15.rpc.SessionEntryDataR\aentries\"8\n" +
 	"\x1cDeleteSessionEntriesResponse\x12\x18\n" +
 	"\adeleted\x18\x01 \x01(\x03R\adeleted\"\x11\n" +
-	"\x0fIdentityRequest\"t\n" +
+	"\x0fIdentityRequest\"q\n" +
 	"\x10IdentityResponse\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1c\n" +
-	"\tprincipal\x18\x02 \x01(\tR\tprincipal\x12&\n" +
-	"\x0fjust_bash_error\x18\x03 \x01(\tR\rjustBashError\"'\n" +
+	"\tprincipal\x18\x02 \x01(\tR\tprincipal\x12#\n" +
+	"\rsandbox_error\x18\x03 \x01(\tR\fsandboxError\"'\n" +
 	"\rReloadRequest\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\"*\n" +
 	"\x0eReloadResponse\x12\x18\n" +

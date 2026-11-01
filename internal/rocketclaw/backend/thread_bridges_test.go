@@ -34,7 +34,7 @@ func TestRunRejectsInvalidAgentAtStartup(t *testing.T) {
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), nil)
+	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), nil, nil)
 	require.ErrorContains(t, err, "validate rocketcode definitions")
 	require.ErrorContains(t, err, "model: required non-empty string")
 }
@@ -51,7 +51,7 @@ func TestRunRejectsInvalidWorkflowAtStartup(t *testing.T) {
 
 	dsn, errDSN := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, errDSN)
-	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), nil)
+	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), nil, nil)
 	require.ErrorContains(t, err, "worker model must be a non-empty literal string or None")
 }
 

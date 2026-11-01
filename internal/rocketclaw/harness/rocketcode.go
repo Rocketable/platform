@@ -4,7 +4,6 @@ package harness
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
 	"go.opentelemetry.io/otel/trace"
@@ -26,60 +26,41 @@ type shellCommander interface {
 	Command(command string) (path string, args []string)
 }
 
-// CustomShell is the program that runs an agent's shell commands instead of bash, from the agent's
-// shell frontmatter.
+// CustomShell is what runs an agent's shell commands instead of host bash, from the agent's shell
+// frontmatter: a program, or the emulated shell (internal/rocketclaw/sandbox).
 type CustomShell struct {
-	// Path is the program. Without Setup it runs as <Path> <command>.
+	// Path is a program that runs as <Path> <command>.
 	Path string
-	// Setup, when set, makes Path take no arguments and read from stdin one JSON line,
-	// {"config": Setup, "env": the command's environment}, then the command.
-	Setup json.RawMessage
-	// Emulated means the agent asked for the embedding application's emulated shell (shell: emulated).
-	// The embedder fills in Path and Setup; until it does, the agent's shell commands do not run.
+	// Emulated means real Bash in the sandbox (shell: emulated, and every easy agent). The embedder sets Dir
+	// for each turn; until it does, the agent's shell commands do not run.
 	Emulated bool
-	// Dir, when set, is the folder the program confines commands to. A bash call runs there, or in its
-	// workdir taken from there, and skips the workspace path check: the program does the confining.
+	// Dir is the emulated shell's writable folder, shown at its host path. A bash call runs there, or in its
+	// workdir taken from there, and skips the workspace path check: the sandbox does the confining.
 	Dir string
-	// ReadOnly are folders, none inside another, the program shows read-only at their host paths besides Dir.
-	// An easy agent's file tools see Dir and these, as its shell does.
+	// ReadOnly are folders, none inside another, the emulated shell shows read-only at their host paths besides
+	// Dir. An easy agent's file tools see Dir and these, as its shell does.
 	ReadOnly []string
-	// Secrets are environment variables only host programs get: the program's host commands, through Setup,
-	// and an easy agent's prompt and skill expansion in host bash.
+	// Commands are the emulated shell's host commands: a name and the command line host bash runs, with the
+	// guest's arguments appended.
+	Commands map[string]string
+	// NetworkTargets limit the emulated shell's curl as they limit webfetch; nil means public addresses only.
+	NetworkTargets []string
+	// Secrets are environment variables only host programs get: the emulated shell's host commands, and an
+	// easy agent's prompt and skill expansion in host bash.
 	Secrets map[string]string
 }
 
-// withCustomShell runs command with an agent's customShell, or through shell when the agent declares
-// none. stdin is what the program reads, empty unless customShell has a Setup; env is its environment.
-// An emulated customShell without a Path returns an empty path, so the command fails instead of running
-// under bash.
-func withCustomShell(shell shellCommander, customShell *CustomShell, command string, env []string) (path string, args []string, stdin []byte) {
-	if customShell.Path == "" {
-		if customShell.Emulated {
-			return "", nil, nil
-		}
-
-		path, args = shell.Command(command)
-
-		return path, args, nil
+// withCustomShell runs command with an agent's customShell, or through shell when the agent declares none.
+// The emulated shell does not run a program: it returns an empty path so a caller that forgot it fails.
+func withCustomShell(shell shellCommander, customShell *CustomShell, command string) (path string, args []string) {
+	switch {
+	case customShell.Emulated:
+		return "", nil
+	case customShell.Path != "":
+		return customShell.Path, []string{command}
 	}
 
-	if customShell.Setup == nil {
-		return customShell.Path, []string{command}, nil
-	}
-
-	vars := make(map[string]string, len(env))
-	for _, kv := range env {
-		k, v, _ := strings.Cut(kv, "=")
-		vars[k] = v // Later entries win, as they do for exec.
-	}
-
-	// Setup is valid JSON by contract, so encoding cannot fail.
-	line, _ := json.Marshal(struct {
-		Config json.RawMessage   `json:"config"`
-		Env    map[string]string `json:"env"`
-	}{customShell.Setup, vars})
-
-	return customShell.Path, nil, append(append(line, '\n'), command...)
+	return shell.Command(command)
 }
 
 // Config contains runtime settings supplied by the embedding application.
@@ -119,6 +100,8 @@ type Config struct {
 	// Custom implementations must preserve the validated Bash syntax and semantics.
 	// An agent's shell frontmatter overrides it for that agent.
 	ShellCommand shellCommander
+	// Sandbox runs emulated shells. The zero value refuses them.
+	Sandbox      sandbox.Runtime
 	MCPServers   map[string]mcpclient.ServerConfig
 	MCPWorkspace string
 }
@@ -410,7 +393,9 @@ func NewWithModelResolver(
 
 	activeAgent = agents.Items[defaultAgent]
 
-	promptExpansion, err := newPromptExpansionEnvironment(root, shellTemp, shellEnv, config.ShellCommand)
+	sb := config.Sandbox
+
+	promptExpansion, err := newPromptExpansionEnvironment(root, shellTemp, shellEnv, config.ShellCommand, &sb)
 	if err != nil {
 		return nil, fmt.Errorf("initialize prompt expansion: %w", err)
 	}
@@ -425,7 +410,7 @@ func NewWithModelResolver(
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
 	agentForTools := &activeAgent
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
-	baseTools, shellSystem := newSandboxedTools(root, spillRel, shellTemp, shellEnv, config.ShellCommand)
+	baseTools, shellSystem := newSandboxedTools(root, spillRel, shellTemp, shellEnv, config.ShellCommand, &sb)
 
 	customTools, err := customLooperTools(config.CustomTools, baseTools)
 	if err != nil {

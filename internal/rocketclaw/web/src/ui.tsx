@@ -523,11 +523,11 @@ function WebAppUpdate() {
     return response.text();
   }, refetchInterval: 60_000, retry: false });
   const updated = index.data !== undefined && !(index.data.includes(script) && index.data.includes(styles));
-  const justBashError = useQuery({ ...queries.identity(), refetchInterval: 2000, retry: false }).data?.justBashError ?? "";
-  return <div className={cn("flex shrink-0 items-center gap-3 pr-12 pl-3 text-sm", (updated || justBashError !== "") && "border-b bg-muted py-1.5")}>
+  const sandboxError = useQuery({ ...queries.identity(), refetchInterval: 2000, retry: false }).data?.sandboxError ?? "";
+  return <div className={cn("flex shrink-0 items-center gap-3 pr-12 pl-3 text-sm", (updated || sandboxError !== "") && "border-b bg-muted py-1.5")}>
     <p role="status">{updated ? "A new version of RocketClaw is available." : ""}</p>
     {updated ? <Button size="sm" onClick={() => window.location.reload()}>Refresh</Button> : null}
-    {justBashError !== "" ? <p role="alert">just-bash install failed: {justBashError}</p> : null}
+    {sandboxError !== "" ? <p role="alert">Emulated shell unavailable: {sandboxError}</p> : null}
   </div>;
 }
 

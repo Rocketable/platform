@@ -194,9 +194,9 @@ func doWebFetchRequest(ctx context.Context, client *http.Client, rawURL, format 
 	return resp, nil
 }
 
-// easyWebFetchClient is the client of an easy agent's webfetch, which reaches what the agent's emulated shell
-// reaches (R34): with targets nil any public address, else only the URLs targets lists, redirects included.
-// Like just-bash's fetch, it uses no proxy.
+// easyWebFetchClient is the client of an easy agent's webfetch and of its emulated shell's curl, so both reach
+// the same (R34): with targets nil any public address, else only the URLs targets lists, redirects included.
+// It uses no proxy.
 func easyWebFetchClient(targets []string) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	// Every request, each redirect's too, asks Proxy first, and an error refuses it.
@@ -216,9 +216,9 @@ func easyWebFetchClient(targets []string) *http.Client {
 	return &http.Client{Transport: transport}
 }
 
-// publicAddressOnly, a dialer's Control, refuses address, the one a name resolved to as it is dialed, when
-// just-bash's denyPrivateRanges refuses it: the ranges isPrivateIp lists in just-bash 3.6.0's
-// src/network/allow-list.ts, an IPv4 address in IPv4-mapped, NAT64 or 6to4 form counting as itself.
+// publicAddressOnly, a dialer's Control, refuses address, the one a name resolved to as it is dialed, when it
+// is loopback, private, link-local (cloud metadata included), shared, documentation or reserved space, an IPv4
+// address in IPv4-mapped, NAT64 or 6to4 form counting as itself.
 func publicAddressOnly(_, address string, _ syscall.RawConn) error {
 	addrPort, err := netip.ParseAddrPort(address)
 	addr := addrPort.Addr().WithZone("").Unmap()
@@ -242,9 +242,9 @@ func publicAddressOnly(_, address string, _ syscall.RawConn) error {
 	return nil
 }
 
-// networkTargetAllowed reports whether targets, an easy agent's allowedNetworkTargets list, allows u by
-// just-bash 3.6.0's allow-list rules (matchesAllowListEntry in src/network/allow-list.ts) and the wrapper's
-// mapping: a host or host:port is its https and http origins, a URL is an origin and a path prefix.
+// networkTargetAllowed reports whether targets, an agent's allowedNetworkTargets list, allows u: a host or
+// host:port is its https and http origins, a URL is an origin and a path prefix. A prefix ending in "/"
+// allows the paths under it; any other allows itself and the paths below it, never "/v1x" for "/v1".
 func networkTargetAllowed(targets []string, u *url.URL) bool {
 	origin := func(u *url.URL) string {
 		port := u.Port()
@@ -279,9 +279,8 @@ func networkTargetAllowed(targets []string, u *url.URL) bool {
 	return false
 }
 
-// ambiguousPath reports whether just-bash keeps escaped path, a URL's, out of every path prefix because
-// decoding could change its separators. A dot segment counts too: just-bash resolves it before matching,
-// but Go sends it as written.
+// ambiguousPath reports whether escaped path, a URL's, stays out of every path prefix because decoding could
+// change its separators. A dot segment counts too: a server may resolve it, but Go sends it as written.
 func ambiguousPath(path string) bool {
 	if slices.ContainsFunc(strings.Split(path, "/"), func(segment string) bool { return segment == "." || segment == ".." }) {
 		return true

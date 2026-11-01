@@ -392,7 +392,7 @@ Prompt
 	t.Run("loads shell values", func(t *testing.T) {
 		result := LoadAgents(fstest.MapFS{
 			"sandboxed.md": testMapFile("---\ndescription: Sandboxed\nmodel: gpt-5.4\nshell: /opt/sandbox/enter\n---\nPrompt\n"),
-			"emulated.md":  testMapFile("---\ndescription: Emulated\nmodel: gpt-5.4\nshell: emulated\n---\nPrompt\n"),
+			"emulated.md":  testMapFile("---\ndescription: Emulated\nmodel: gpt-5.4\nshell: emulated\nworkingDirectory: work\ncommands:\n  deploy: ./deploy\nallowedNetworkTargets: [api.example.com]\n---\nPrompt\n"),
 			"host.md":      testMapFile("---\ndescription: Host\nmodel: gpt-5.4\n---\nPrompt\n"),
 			"fallback.md":  testMapFile("---\ndescription: Review: code\nmodel: gpt-5.4\nshell: /opt/sandbox/enter\nspace: Billing\n---\nPrompt\n"),
 		}, AgentLoadConfig{})
@@ -400,7 +400,11 @@ Prompt
 		require.Empty(t, result.Errors)
 		require.Equal(t, "Billing", result.Agents.Items["fallback"].Space, "space survives fallback sanitization")
 		require.Equal(t, CustomShell{Path: "/opt/sandbox/enter"}, result.Agents.Items["sandboxed"].CustomShell)
-		require.Equal(t, CustomShell{Emulated: true}, result.Agents.Items["emulated"].CustomShell)
+		emulated := result.Agents.Items["emulated"]
+		require.Equal(t, CustomShell{Emulated: true}, emulated.CustomShell, "the backend sets the folder up per turn")
+		require.Equal(t, "work", emulated.WorkingDirectory)
+		require.Equal(t, map[string]string{"deploy": "./deploy"}, emulated.Commands)
+		require.Equal(t, []string{"api.example.com"}, emulated.NetworkTargets)
 		require.Empty(t, result.Agents.Items["host"].CustomShell)
 		require.Equal(t, "Review: code", result.Agents.Items["fallback"].Description)
 		require.Equal(t, "/opt/sandbox/enter", result.Agents.Items["fallback"].CustomShell.Path)

@@ -592,7 +592,7 @@ func TestSessionMigrationsCancelPlanning(t *testing.T) {
 
 	var work errgroup.Group
 	work.Go(func() error {
-		return Run(ctx, &config.Config{Workspace: workspace, DatabaseURL: testStoreDSN(workspace)}, "", slog.New(slog.DiscardHandler), &frontendAssemblerMock{})
+		return Run(ctx, &config.Config{Workspace: workspace, DatabaseURL: testStoreDSN(workspace)}, "", slog.New(slog.DiscardHandler), &frontendAssemblerMock{}, nil)
 	})
 	require.Eventually(t, func() bool {
 		var n int

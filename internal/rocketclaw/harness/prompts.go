@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,10 +21,11 @@ type promptExpansionEnvironment struct {
 	shellTemp    shellTempConfig
 	env          []string
 	shellCommand shellCommander
+	sandbox      *sandbox.Runtime
 	customShell  CustomShell
 }
 
-func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env []string, shellCommand shellCommander) (promptExpansionEnvironment, error) {
+func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env []string, shellCommand shellCommander, rt *sandbox.Runtime) (promptExpansionEnvironment, error) {
 	var zero promptExpansionEnvironment
 
 	if root == nil {
@@ -44,7 +46,7 @@ func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env
 		return zero, fmt.Errorf("resolve prompt expansion root: %w", err)
 	}
 
-	return promptExpansionEnvironment{root: root, hostDir: hostDir, shellTemp: shellTemp, env: slices.Clone(env), shellCommand: shellCommand}, nil
+	return promptExpansionEnvironment{root: root, hostDir: hostDir, shellTemp: shellTemp, env: slices.Clone(env), shellCommand: shellCommand, sandbox: rt}, nil
 }
 
 func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, prompt string) string {
@@ -58,13 +60,19 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 		env := append(os.Environ(), e.env...)
 		env = append(env, "TMPDIR="+e.shellTemp.tmpDir)
 
-		shell, args, stdin := withCustomShell(e.shellCommand, &e.customShell, command, env)
-		cmd := exec.CommandContext(context.WithoutCancel(ctx), shell, args...)
+		// An emulated shell runs in its folder; like host bash here, only stdout counts, and no limit but the sandbox's.
+		if e.customShell.Emulated {
+			res, err := runEmulated(context.WithoutCancel(ctx), e.sandbox, &e.customShell, "exec 2>/dev/null\n"+command, e.customShell.Dir, e.env, env, emulatedExpansionTimeout)
+			if err != nil {
+				return ""
+			}
 
-		cmd.Dir, cmd.Env = e.hostDir, env
-		if stdin != nil {
-			cmd.Stdin = bytes.NewReader(stdin)
+			return string(res.Output)
 		}
+
+		shell, args := withCustomShell(e.shellCommand, &e.customShell, command)
+		cmd := exec.CommandContext(context.WithoutCancel(ctx), shell, args...)
+		cmd.Dir, cmd.Env = e.hostDir, env
 
 		var stdout bytes.Buffer
 

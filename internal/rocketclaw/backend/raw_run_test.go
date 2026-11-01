@@ -19,6 +19,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -81,7 +82,7 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	})
 
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Instrumentation: config.InstrumentationConfig{Enabled: true, HideInputs: true, HideOutputs: true}}
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(cfg), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(cfg), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
@@ -181,7 +182,7 @@ func TestWorkflowAgentRunnerUsesRootCustomShell(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(cfg), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(cfg), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
@@ -269,7 +270,7 @@ func TestWorkflowAgentRunnerTagLimits(t *testing.T) {
 	defer server.Close()
 
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(cfg), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler), sessionTagTools(service, "owning")...)
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(cfg), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler), sessionTagTools(service, "owning")...)
 
 	require.NoError(t, err)
 	defer func() { require.NoError(t, run.Close()) }()
@@ -350,7 +351,7 @@ func TestWorkflowPermissionReviewerTagGuidance(t *testing.T) {
 	}))
 	defer server.Close()
 
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler), sessionTagTools(service, "owning")...)
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler), sessionTagTools(service, "owning")...)
 
 	require.NoError(t, err)
 	defer func() { require.NoError(t, run.Close()) }()
@@ -397,7 +398,7 @@ func TestWorkflowAgentRunnerResolvesNamedProviderModel(t *testing.T) {
 		OpenAI:    config.OpenAIConfig{APIBaseURL: defaultServer.URL},
 		Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: workServer.URL}},
 	}
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(cfg), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(cfg), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
@@ -449,7 +450,7 @@ func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "review-model"}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "review-model"}), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
@@ -508,7 +509,7 @@ func TestWorkflowAgentRunnerKeepsEasyLimits(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "review-model"}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "review-model"}), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
@@ -569,7 +570,7 @@ func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing
 	}))
 	t.Cleanup(server.Close)
 
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
@@ -611,7 +612,7 @@ func TestWorkflowExplicitSkillWithoutAvailableSubjects(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
@@ -639,7 +640,7 @@ func TestWorkflowAgentRunnerReplaysOnlyMatchingRecordedWorker(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	journal := harness.TracelessJournal{Parent: conversationJournal{store: newTestSessionServiceAt(t, workspace), conversationID: "conversation", log: slog.New(slog.DiscardHandler)}}
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), "main", journal, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), &sandbox.Runtime{}, "main", journal, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
@@ -668,7 +669,7 @@ func TestWorkflowAgentRunnerRejectsInvalidOverridesAndStructuredOutput(t *testin
 	}))
 	t.Cleanup(server.Close)
 
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
@@ -695,7 +696,7 @@ func TestWorkflowAgentRunnerMissingPermissionEnvironment(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 	_, err = run.Run(t.Context(), &workflow.AgentRequest{Prompt: "work"})
@@ -742,7 +743,7 @@ func TestWorkflowAgentRunnerConcurrentDirectoriesAndCancellation(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
@@ -826,7 +827,7 @@ func TestWorkflowAgentRunnerReportsSetupFailures(t *testing.T) {
 				want = "create workflow shell temp parent dir"
 			}
 
-			runner, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+			runner, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace}), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 			require.ErrorContains(t, err, want)
 			require.Nil(t, runner)
 		})
@@ -883,7 +884,7 @@ func TestWorkflowAgentRunnerReturnsShellDirectoryCleanupError(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 
-			run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+			run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, run.Close()) })
 

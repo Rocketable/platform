@@ -129,7 +129,7 @@ func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversati
 		return "", fmt.Errorf("workflow %q is not configured", name)
 	}
 
-	agentRun, err := newWorkflowAgentRunner(b.runtime, agentName, harness.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, tagConversationID)...)
+	agentRun, err := newWorkflowAgentRunner(b.runtime, b.config.SessionService.shells.current(), agentName, harness.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, tagConversationID)...)
 	if err != nil {
 		return "", fmt.Errorf("prepare nested workflow agent runner: %w", err)
 	}
