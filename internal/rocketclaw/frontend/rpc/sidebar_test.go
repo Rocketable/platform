@@ -27,22 +27,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestSidebarRowSizeIndependentOfAgentCatalog(t *testing.T) {
-	server, ctx := sidebarChoicesFixture(t, 2)
-	rows := 0
-
-	require.NoError(t, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
-		for _, session := range message.(*ListSessionsResponse).Sessions {
-			require.Less(t, proto.Size(session), 256, "session rows must not repeat the agent catalog")
-
-			rows++
-		}
-
-		return nil
-	}}))
-	require.Equal(t, 2, rows)
-}
-
 func TestSidebarSessionTimestamps(t *testing.T) {
 	at := time.Date(2024, time.January, 2, 3, 4, 5, 123456789, time.UTC)
 	for _, tc := range []struct {
@@ -333,6 +317,7 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 		require.NoError(t, server.listSessions(&ListSessionsRequest{Since: since}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
 			response := message.(*ListSessionsResponse)
 			for _, session := range response.Sessions {
+				require.Less(t, proto.Size(session), 256, "session rows must not repeat the agent catalog")
 				sent = append(sent, session.Id)
 				rows[session.Id] = session
 			}
