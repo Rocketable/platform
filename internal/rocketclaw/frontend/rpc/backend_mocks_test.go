@@ -47,9 +47,6 @@ var _ frontend.Backend = &mockBackend{}
 //			EditQueueItemFunc: func(context1 context.Context, s string, s1 string, s2 string) (bool, error) {
 //				panic("mock out the EditQueueItem method")
 //			},
-//			JustBashInstallErrorFunc: func() string {
-//				panic("mock out the JustBashInstallError method")
-//			},
 //			MoveToBackgroundFunc: func(context1 context.Context, s string) (bool, error) {
 //				panic("mock out the MoveToBackground method")
 //			},
@@ -73,6 +70,9 @@ var _ frontend.Backend = &mockBackend{}
 //			},
 //			RunTurnFunc: func(context1 context.Context, inboundMessage *protocol.InboundMessage) error {
 //				panic("mock out the RunTurn method")
+//			},
+//			SandboxErrorFunc: func() string {
+//				panic("mock out the SandboxError method")
 //			},
 //			StageRevertFunc: func(context1 context.Context, s string, s1 string) (string, string, error) {
 //				panic("mock out the StageRevert method")
@@ -126,9 +126,6 @@ type mockBackend struct {
 	// EditQueueItemFunc mocks the EditQueueItem method.
 	EditQueueItemFunc func(context1 context.Context, s string, s1 string, s2 string) (bool, error)
 
-	// JustBashInstallErrorFunc mocks the JustBashInstallError method.
-	JustBashInstallErrorFunc func() string
-
 	// MoveToBackgroundFunc mocks the MoveToBackground method.
 	MoveToBackgroundFunc func(context1 context.Context, s string) (bool, error)
 
@@ -152,6 +149,9 @@ type mockBackend struct {
 
 	// RunTurnFunc mocks the RunTurn method.
 	RunTurnFunc func(context1 context.Context, inboundMessage *protocol.InboundMessage) error
+
+	// SandboxErrorFunc mocks the SandboxError method.
+	SandboxErrorFunc func() string
 
 	// StageRevertFunc mocks the StageRevert method.
 	StageRevertFunc func(context1 context.Context, s string, s1 string) (string, string, error)
@@ -246,9 +246,6 @@ type mockBackend struct {
 			// S2 is the s2 argument value.
 			S2 string
 		}
-		// JustBashInstallError holds details about calls to the JustBashInstallError method.
-		JustBashInstallError []struct {
-		}
 		// MoveToBackground holds details about calls to the MoveToBackground method.
 		MoveToBackground []struct {
 			// Context1 is the context1 argument value.
@@ -304,6 +301,9 @@ type mockBackend struct {
 			Context1 context.Context
 			// InboundMessage is the inboundMessage argument value.
 			InboundMessage *protocol.InboundMessage
+		}
+		// SandboxError holds details about calls to the SandboxError method.
+		SandboxError []struct {
 		}
 		// StageRevert holds details about calls to the StageRevert method.
 		StageRevert []struct {
@@ -365,7 +365,6 @@ type mockBackend struct {
 	lockCreateConversation      sync.RWMutex
 	lockDeleteQueueItem         sync.RWMutex
 	lockEditQueueItem           sync.RWMutex
-	lockJustBashInstallError    sync.RWMutex
 	lockMoveToBackground        sync.RWMutex
 	lockPendingQuestions        sync.RWMutex
 	lockPopQueueItem            sync.RWMutex
@@ -374,6 +373,7 @@ type mockBackend struct {
 	lockReload                  sync.RWMutex
 	lockReorderQueueItems       sync.RWMutex
 	lockRunTurn                 sync.RWMutex
+	lockSandboxError            sync.RWMutex
 	lockStageRevert             sync.RWMutex
 	lockStartGoal               sync.RWMutex
 	lockStashQueueItem          sync.RWMutex
@@ -699,33 +699,6 @@ func (mock *mockBackend) EditQueueItemCalls() []struct {
 	return calls
 }
 
-// JustBashInstallError calls JustBashInstallErrorFunc.
-func (mock *mockBackend) JustBashInstallError() string {
-	if mock.JustBashInstallErrorFunc == nil {
-		panic("mockBackend.JustBashInstallErrorFunc: method is nil but Backend.JustBashInstallError was just called")
-	}
-	callInfo := struct {
-	}{}
-	mock.lockJustBashInstallError.Lock()
-	mock.calls.JustBashInstallError = append(mock.calls.JustBashInstallError, callInfo)
-	mock.lockJustBashInstallError.Unlock()
-	return mock.JustBashInstallErrorFunc()
-}
-
-// JustBashInstallErrorCalls gets all the calls that were made to JustBashInstallError.
-// Check the length with:
-//
-//	len(mockedBackend.JustBashInstallErrorCalls())
-func (mock *mockBackend) JustBashInstallErrorCalls() []struct {
-} {
-	var calls []struct {
-	}
-	mock.lockJustBashInstallError.RLock()
-	calls = mock.calls.JustBashInstallError
-	mock.lockJustBashInstallError.RUnlock()
-	return calls
-}
-
 // MoveToBackground calls MoveToBackgroundFunc.
 func (mock *mockBackend) MoveToBackground(context1 context.Context, s string) (bool, error) {
 	if mock.MoveToBackgroundFunc == nil {
@@ -1011,6 +984,33 @@ func (mock *mockBackend) RunTurnCalls() []struct {
 	mock.lockRunTurn.RLock()
 	calls = mock.calls.RunTurn
 	mock.lockRunTurn.RUnlock()
+	return calls
+}
+
+// SandboxError calls SandboxErrorFunc.
+func (mock *mockBackend) SandboxError() string {
+	if mock.SandboxErrorFunc == nil {
+		panic("mockBackend.SandboxErrorFunc: method is nil but Backend.SandboxError was just called")
+	}
+	callInfo := struct {
+	}{}
+	mock.lockSandboxError.Lock()
+	mock.calls.SandboxError = append(mock.calls.SandboxError, callInfo)
+	mock.lockSandboxError.Unlock()
+	return mock.SandboxErrorFunc()
+}
+
+// SandboxErrorCalls gets all the calls that were made to SandboxError.
+// Check the length with:
+//
+//	len(mockedBackend.SandboxErrorCalls())
+func (mock *mockBackend) SandboxErrorCalls() []struct {
+} {
+	var calls []struct {
+	}
+	mock.lockSandboxError.RLock()
+	calls = mock.calls.SandboxError
+	mock.lockSandboxError.RUnlock()
 	return calls
 }
 

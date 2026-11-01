@@ -13,15 +13,15 @@ root_cause: logic_error
 resolution_type: code_fix
 severity: high
 related_components:
-  - internal/rocketclaw/justbash
-tags: [symlink, path-containment, sandbox, easy-mode, working-directory, just-bash, realpath, dangling-link]
+  - internal/rocketclaw/harness
+tags: [symlink, path-containment, sandbox, easy-mode, working-directory, emulated-shell, realpath, dangling-link]
 ---
 
 # Symlinks slipped past easy-agent folder checks that compared names, not real paths
 
 ## Problem
 
-An easy agent is confined to its `workingDirectory`, plus read-only uploads and skill folders. Its folder may not be, contain or lie inside the folders that define agents, skills, cron jobs, scripts and workflows, or the agent could rewrite its own rights. The checks that enforce this compared some paths by their real location and others by the name they were given. Wherever a symlink sat on the "name" side, the check gave the wrong answer. One change (PR #822, unmerged as of this writing) hit this three times: `resolveWorkingDirectory` compared the definitions folders by name and had no "contains" test, and the emulator's workdir check in `wrapper.ts` compared a real path with mount names.
+An easy agent is confined to its `workingDirectory`, plus read-only uploads and skill folders. Its folder may not be, contain or lie inside the folders that define agents, skills, cron jobs, scripts and workflows, or the agent could rewrite its own rights. The checks that enforce this compared some paths by their real location and others by the name they were given. Wherever a symlink sat on the "name" side, the check gave the wrong answer. One change (PR #822, unmerged as of this writing) hit this three times: `resolveWorkingDirectory` compared the definitions folders by name and had no "contains" test, and the emulated shell's workdir check compared a real path with mount names.
 
 ## Symptoms
 
@@ -34,7 +34,7 @@ An easy agent is confined to its `workingDirectory`, plus read-only uploads and 
 - **Resolving only the agent's folder and the workspace.** `resolveWorkingDirectory` already called `filepath.EvalSymlinks` on both, then compared the real folder with `filepath.Join(workspace, "agents")` and the other names. The definitions folders were never resolved, so a link out of the workspace was invisible to the check.
 - **Checking only "the folder lies inside a refused folder".** Once a refused folder can live outside the workspace, a working folder can also *contain* it (`/srv/shared` contains `/srv/shared/agents`). The old check had no reason to test that direction, because a folder that contains `<workspace>/agents` must contain the workspace, which was already refused.
 - **Falling back to the plain path when resolving fails.** The first idea was "resolve the folder if it exists, else use its name". A dangling link (`cron -> /srv/shared/cron`, target not yet made) fails to resolve, so the check would use `<workspace>/cron` and pass `/srv/shared`. The agent can then create `/srv/shared/cron` itself and write into the folder the `cron` link names.
-- **Comparing the shell's working directory with mount names.** In `wrapper.ts`, `process.cwd()` returns the real path (the OS resolves links), but read-only folders are mounted where they are named. A `within(process.cwd(), dir)` test against the named path fails for a linked folder; using the real path instead would make just-bash start in a path that is not mounted.
+- **Comparing the shell's working directory with mount names.** The OS reports a working directory by its real path (it resolves links), but the sandbox mounts read-only folders where they are named. A `within(cwd, dir)` test against the named path fails for a linked folder; using the real path instead would start the shell in a path that is not mounted.
 
 ## Solution
 
@@ -63,24 +63,24 @@ for _, name := range refused {
 - `os.Lstat` succeeds for a dangling link, so the link is resolved, the resolution fails, and the turn fails. Only a folder that truly does not exist is checked by its name, which is where it would be created.
 - `within(dir, folder)` adds the "contains" direction.
 
-Working directory in the emulator, `internal/rocketclaw/justbash/wrapper.ts:106-113`:
+Working directory in the emulated shell, `guestWorkdir` in `internal/rocketclaw/harness/emulated.go`:
 
-```ts
-// The OS reports the workdir's real path; a folder mounts where it is named.
-const cwd = (() => {
-  for (const dir of [folder, ...(config.readOnly ?? [])]) {
-    const real = realpathSync(dir);
-    if (within(process.cwd(), real)) return join(dir, relative(real, process.cwd()));
-  }
-  return easy ? fail(`workdir ${process.cwd()} is outside this agent's folders`) : folder;
-})();
+```go
+realCwd, err := filepath.EvalSymlinks(cwd)
+// ...
+for _, dir := range folders {
+	real, err := filepath.EvalSymlinks(dir)
+	if rel, errRel := filepath.Rel(real, realCwd); err == nil && errRel == nil && (rel == "." || filepath.IsLocal(rel)) {
+		return filepath.Join(dir, rel), true // the name the sandbox mounts
+	}
+}
 ```
 
-Tests: `TestResolveWorkingDirectory` (`internal/rocketclaw/backend/easy_turn_test.go:80-95`) covers a definitions folder linked out of the workspace (be, contain, inside) and a dangling link; `TestJustBash` covers "a workdir in a symlinked read-only folder is used" (`internal/rocketclaw/justbash/justbash_test.go:185`).
+Tests: `TestResolveWorkingDirectory` (`internal/rocketclaw/backend/easy_turn_test.go`) covers a definitions folder linked out of the workspace (be, contain, inside) and a dangling link; `TestGuestWorkdir` (`internal/rocketclaw/harness/emulated_test.go`) covers a workdir given by the real path of a linked read-only folder.
 
 ## Why This Works
 
-A containment check is only as strong as the weaker side of the comparison. `EvalSymlinks` on one side and a joined name on the other answers "is this name under that name", not "can this agent write there". Resolving both sides makes the answer about locations on disk. A dangling link must fail rather than fall back, because the fallback answers for a folder the agent can create next. Presentation is a separate step: just-bash mounts folders under their given names, so a real path is converted back into that name only after the check.
+A containment check is only as strong as the weaker side of the comparison. `EvalSymlinks` on one side and a joined name on the other answers "is this name under that name", not "can this agent write there". Resolving both sides makes the answer about locations on disk. A dangling link must fail rather than fall back, because the fallback answers for a folder the agent can create next. Presentation is a separate step: the sandbox mounts folders under their given names, so a real path is converted back into that name only after the check.
 
 ## Prevention
 
@@ -92,4 +92,4 @@ A containment check is only as strong as the weaker side of the comparison. `Eva
 
 ## Related Issues
 
-- `docs/solutions/best-practices/just-bash-runs-under-node-from-a-local-npm-install.md` (the wrapper this check lives in)
+- `internal/rocketclaw/harness/emulated.go` (`guestWorkdir`, where the shell's check lives)

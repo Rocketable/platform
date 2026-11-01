@@ -35,7 +35,7 @@ What did not explain it:
 `backend.Run` rebuilds the runtime directory at startup, so anything a test writes there first is gone by the time the server answers. Startup calls `skel.SyncInWithOverlays` (`internal/rocketclaw/backend/app.go:183`), which:
 
 1. unpacks the built-in agents and cron into the workspace's own `agents/` and `cron/` without overwriting existing files (`internal/rocketclaw/skel/skel.go:78`, `overwrite` is `false`);
-2. empties the runtime directory except a short keep list (`.rocketcode`, `attachments`, `justbash`, `auth.json`, `auth.json.lock`, `.auth.json-*` files, and, at startup only, the overlay clones; `resetRuntimeDirectory`, `skel.go:595`, called at `skel.go:88`);
+2. empties the runtime directory except a short keep list (`.rocketcode`, `attachments`, `sandbox`, `uploads`, `auth.json`, `auth.json.lock`, `.auth.json-*` files, and, at startup only, the overlay clones; `resetRuntimeDirectory`, `skel.go:595`, called at `skel.go:88`);
 3. rebuilds it from the built-in assets, then configured overlays, then last the workspace's `agents`, `skills`, `cron`, `scripts` and `workflows` directories, each overwriting what came before (`SyncEffectiveRuntimeAssets` at `skel.go:96`, `overlayWorkspaceIn` at `skel.go:401`).
 
 A reload (`skel.ReplaceRuntimeAssetsAfterValidation`, `internal/rocketclaw/backend/runtime.go:63`) runs steps 2 and 3 through a validated staging copy, so it wipes runtime-only fixtures too.
@@ -80,4 +80,4 @@ The remote is started with `serve("Remote reply", "scout")` and the local server
 
 - `docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md`: the setup these same `backend.Run` browser tests need in a fresh workspace.
 - `docs/solutions/best-practices/web-browser-tests-run-the-last-bundle-that-built.md`: another way a browser test checks something other than what its author thinks.
-- `docs/solutions/best-practices/rocketcode-strings-that-must-survive-the-harness-rename.md` and `docs/solutions/best-practices/just-bash-runs-under-node-from-a-local-npm-install.md`: other entries on the runtime directory's keep list.
+- `docs/solutions/best-practices/rocketcode-strings-that-must-survive-the-harness-rename.md`: another entry on the runtime directory's keep list.

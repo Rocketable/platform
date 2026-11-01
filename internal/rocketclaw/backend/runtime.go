@@ -11,6 +11,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 )
 
@@ -47,9 +48,10 @@ type Runtime struct {
 	eventsMu    sync.Mutex
 	subscribers map[chan protocol.Event]<-chan struct{}
 
-	// justBashMu is apart from reloadMu: the Web reads justBashErr while a reload installs.
-	justBashMu  sync.Mutex
-	justBashErr error
+	// sandboxMu is apart from reloadMu: the Web reads the sandbox while a reload prepares it.
+	sandboxMu  sync.Mutex
+	sandboxErr error            // why the agents could not be read for it
+	sandbox    *sandbox.Runtime // the sandbox the agents need, or nil
 }
 
 // Reload validates and replaces runtime assets, then refreshes External MCP agents and the cron jobs.
@@ -79,7 +81,7 @@ func (r *Runtime) Reload(reason string) (string, error) {
 		return "", fmt.Errorf("refresh cron jobs: %w", err)
 	}
 
-	r.installJustBash()
+	r.prepareSandbox()
 
 	return "rocketclaw runtime assets reloaded", nil
 }

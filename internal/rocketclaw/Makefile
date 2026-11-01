@@ -1,3 +1,31 @@
+# RocketClaw runs on Linux only. On a Mac, every target here runs again in a Linux container (linux.Containerfile)
+# in a Colima VM of its own, LINUX_PROFILE, which shares your home folder. Its first run starts the VM and builds
+# the image, which takes some minutes. Caches and the emulated shell's test image live in Docker volumes, the
+# latter because the Mac's folders are case-insensitive.
+ifeq ($(shell uname -s),Darwin)
+
+LINUX_PROFILE ?= rocketclaw-linux
+linux_docker := docker --context colima-$(LINUX_PROFILE)
+
+.DEFAULT_GOAL := run
+.PHONY: linux-container
+Makefile: ;
+
+%: linux-container
+	$(linux_docker) run --rm --privileged --network host -v $(HOME):$(HOME) -w $(CURDIR) \
+		-v /var/run/docker.sock:/var/run/docker.sock -v rocketclaw-linux-home:/home/dev \
+		-v rocketclaw-linux-sandbox:/sandbox -e SANDBOX_TEST_DIR=/sandbox \
+		rocketclaw-linux make $(MAKEOVERRIDES) $@
+
+# The VM is Ubuntu, whose AppArmor lets bubblewrap make user namespaces only with a profile saying so.
+linux-container:
+	colima status $(LINUX_PROFILE) >/dev/null 2>&1 || colima start $(LINUX_PROFILE) --activate=false --binfmt --cpu 6 --memory 8 --disk 100 --mount $(HOME):w
+	colima ssh -p $(LINUX_PROFILE) -- sudo sh -c 'printf "abi <abi/4.0>,\ninclude <tunables/global>\nprofile rocketclaw-bwrap /usr/bin/bwrap flags=(unconfined) {\n  userns,\n}\n" > /etc/apparmor.d/rocketclaw-bwrap && apparmor_parser -r /etc/apparmor.d/rocketclaw-bwrap'
+	$(linux_docker) build -q -t rocketclaw-linux --build-arg GO_VERSION=$$(awk '$$1 == "go" { print $$2 }' ../../go.mod) \
+		--build-arg UID=$$(id -u) - < linux.Containerfile >/dev/null
+
+else
+
 COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
 COVERAGE_REQUIRED ?= 91.8
@@ -21,11 +49,48 @@ oc-assets: .FORCE
 generate: web-assets oc-assets vendor
 	go generate ./skel ../../cmd/rocketclaw
 
+# Moves the emulated shell's guest image to the newest Ubuntu snapshot, for both architectures (the other one
+# runs under qemu-user emulation), and writes the new snapshot, locks and SBOMs when a package changed; commit
+# them. `go generate ./internal/rocketclaw/sandbox` runs this.
+sandbox-rootfs-update:
+	go run ./sandbox/rootfs
+
 lint: web-assets vendor
 	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run --fix ./...
 
+# RocketClaw is the emulated shell's guest relay inside the sandbox, so it carries no C code.
 build: generate lint
-	go build -o ../../bin/rocketclaw ../../cmd/rocketclaw
+	CGO_ENABLED=0 go build -o ../../bin/rocketclaw ../../cmd/rocketclaw
+
+# The emulated shell's acceptance tests, on Linux only, in a delegated cgroup of their own. A missing
+# prerequisite fails them. The guest image, built on the first run, and the test folders must be on a local
+# filesystem.
+SANDBOX_TEST_DIR ?= $(abspath ../../.tmp)/sandbox-test
+# -race needs cgo: SANDBOX_TEST_FLAGS=-race SANDBOX_TEST_CGO=1 (the binary then needs the rootfs's glibc).
+# SANDBOX_TEST_SCOPE starts the tests in a delegated cgroup; CI, without a user systemd, runs them as a
+# transient service under sudo, since only a service's cgroup is handed to its --uid. A shell stays there as
+# the tests' parent, as `go run`'s go command does for RocketClaw.
+# SANDBOX_TEST_COVERPROFILE, when set, writes the tests' coverage of COVERPKG there, for CI to merge.
+SANDBOX_TEST_FLAGS ?=
+SANDBOX_TEST_CGO ?= 0
+# In a container, such as the Linux a Mac runs these targets in, the cgroup make runs in is delegated to it
+# (linux.Containerfile): its processes move into a leaf, and the tests into a fresh sibling.
+ifneq ($(wildcard /.dockerenv),)
+SANDBOX_TEST_SCOPE ?= /bin/sh -c 'cg=/sys/fs/cgroup$$(cut -d: -f3 /proc/self/cgroup); mkdir -p $$cg/init $$cg/test-$$$$; for p in $$(cat $$cg/cgroup.procs); do echo $$p > $$cg/init/cgroup.procs 2>/dev/null || true; done; echo "+cpu +memory +pids" > $$cg/cgroup.subtree_control; echo $$$$ > $$cg/test-$$$$/cgroup.procs; exec "$$@"' sh
+endif
+SANDBOX_TEST_SCOPE ?= systemd-run --user --scope --quiet -p Delegate=yes
+SANDBOX_TEST_COVERPROFILE ?=
+sandbox-test:
+	rm -rf $(SANDBOX_TEST_DIR)/gocover
+	mkdir -p $(SANDBOX_TEST_DIR)/tmp $(SANDBOX_TEST_DIR)/gocover
+	CGO_ENABLED=$(SANDBOX_TEST_CGO) go test -c $(SANDBOX_TEST_FLAGS) $(if $(SANDBOX_TEST_COVERPROFILE),-cover -covermode=atomic -coverpkg=$(COVERPKG)) -o $(SANDBOX_TEST_DIR)/harness.test ./harness
+	cd harness && $(SANDBOX_TEST_SCOPE) /bin/sh -c '"$$@"; exit $$?' sh /usr/bin/env ROCKETCLAW_SANDBOX_REQUIRE=1 \
+		ROCKETCLAW_SANDBOX_DIR=$(SANDBOX_TEST_DIR)/sandbox TMPDIR=$(SANDBOX_TEST_DIR)/tmp \
+		$(if $(SANDBOX_TEST_COVERPROFILE),ROCKETCLAW_SANDBOX_GOCOVERDIR=$(SANDBOX_TEST_DIR)/gocover) \
+		$(SANDBOX_TEST_DIR)/harness.test -test.run 'TestEmulatedShell' -test.v -test.count 1 -test.timeout 30m \
+		$(if $(SANDBOX_TEST_COVERPROFILE),-test.coverprofile=$(abspath $(SANDBOX_TEST_COVERPROFILE)))
+# The guest relay's own coverage, which the tests copy out of each agent's folder, joins the profile.
+	$(if $(SANDBOX_TEST_COVERPROFILE),go tool covdata textfmt -i=$$(ls -d $(SANDBOX_TEST_DIR)/gocover/*/ | paste -sd, -) -o $(SANDBOX_TEST_DIR)/guest.out && tail -n +2 $(SANDBOX_TEST_DIR)/guest.out >> $(abspath $(SANDBOX_TEST_COVERPROFILE)))
 
 cloc:
 	@printf "Go cloc (cmd/rocketclaw and internal/rocketclaw)\n"
@@ -47,8 +112,12 @@ test: generate lint
 
 tests: test
 
+# As in CI, the emulated shell's acceptance tests add their coverage, of code only they reach, to the rest's.
 check-code-metrics:
-	$(MAKE) check-coverage
+	$(MAKE) coverage-profile
+	$(MAKE) sandbox-test SANDBOX_TEST_COVERPROFILE=.coverage-sandbox.out
+	tail -n +2 .coverage-sandbox.out >> $(COVERPROFILE)
+	$(MAKE) -o coverage-profile check-coverage
 	$(MAKE) check-cloc-budget
 
 check-cloc-budget:
@@ -120,3 +189,5 @@ go-mod-update:
 
 sync-opencode-testdata:
 	bash ./harness/scripts/sync-opencode-testdata.sh
+
+endif

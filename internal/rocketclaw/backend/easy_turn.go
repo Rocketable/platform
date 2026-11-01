@@ -16,16 +16,16 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
-	"github.com/Rocketable/platform/internal/rocketclaw/justbash"
 )
 
-// setEasyShell sets up the shell of agents' agent name, when it is easy, for a turn of the top-level
-// session self whose variables are turnEnv: just-bash in the folder its workingDirectory names for self,
-// so its subagents and workers share it, with its secrets for host commands only. It shows read-only the
-// uploads to self, or to the chat a shadow shadows, and the folders of the skills in skills it may use.
+// setEasyShell sets up the emulated shell of agents' agent name, when it is easy or sets shell: emulated,
+// for a turn of the top-level session self whose variables are turnEnv: the sandbox in the folder its
+// workingDirectory names for self, so its subagents and workers share it, with its secrets for host commands
+// only. It shows read-only the uploads to self, or to the chat a shadow shadows, and the folders of the
+// skills in skills it may use.
 func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents harness.Agents, skills harness.Skills, name string, turnEnv map[string]string, self string) error {
 	agent := agents.Items[name]
-	if agent.Mode != harness.AgentModeEasy {
+	if !agent.CustomShell.Emulated {
 		return nil
 	}
 
@@ -58,7 +58,8 @@ func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents ha
 		dirs = append(dirs, filepath.Join(skills.Root, filepath.FromSlash(path.Dir(skill.Location))))
 	}
 
-	// just-bash cannot mount a folder inside another, which shows it anyway. A folder sorts before those in it.
+	// A folder inside another shows through it anyway, so only the outer one is mounted. A folder sorts before
+	// those in it.
 	var readOnly []string
 
 	slices.Sort(dirs)
@@ -69,7 +70,7 @@ func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents ha
 		}
 	}
 
-	agent.CustomShell = justbash.EasyShell(&justbash.Setup{Folder: folder, Commands: agent.Commands, NetworkTargets: agent.NetworkTargets, Env: turnEnv, Secrets: secrets, ReadOnly: readOnly}, justBashDir(cfg))
+	agent.CustomShell = harness.CustomShell{Emulated: true, Dir: folder, ReadOnly: readOnly, Commands: agent.Commands, NetworkTargets: agent.NetworkTargets, Secrets: secrets}
 	agents.Items[name] = agent
 
 	return nil

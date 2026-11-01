@@ -283,7 +283,7 @@ func TestNewBindsBashToEachAgentCustomShell(t *testing.T) {
 		emulated.CustomShell = CustomShell{Emulated: true}
 
 		_, hosts := loop.PermissionReviewer.(*toolFactory).assembleTools(&emulated)
-		require.Equal(t, "shell command path is required", run(t, hosts["bash"]))
+		require.Equal(t, "emulated shell: the agent's folder is not set up for this turn", run(t, hosts["bash"]))
 	})
 }
 

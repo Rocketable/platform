@@ -197,7 +197,7 @@ func TestEasyWebFetchNetworkTargets(t *testing.T) {
 	}))
 	t.Cleanup(listed.Close)
 
-	data, err := os.ReadFile(filepath.Join("..", "justbash", "testdata", "network_targets.json"))
+	data, err := os.ReadFile(filepath.Join("testdata", "network_targets.json"))
 	require.NoError(t, err)
 
 	var rows []struct {

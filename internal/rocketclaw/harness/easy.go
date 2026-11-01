@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"gopkg.in/yaml.v3"
 )
 
@@ -69,11 +70,9 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 		key, shape string
 		target     any
 	}{
-		{"workingDirectory", "a string", &agent.WorkingDirectory},
 		{"maxRecursion", "an integer of 0 or more", &maxRecursion},
 		{"approver", "a mapping of model and prompt strings", &approver},
 		{"secretsARN", "a list of ARNs", &agent.SecretsARN},
-		{"commands", "a map from command name to command line", &agent.Commands},
 		{"tags", "a list of tag lists", &agent.TagGroups},
 	} {
 		if field := frontmatterField(node, section.key); field != nil && field.Decode(section.target) != nil {
@@ -81,16 +80,14 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 		}
 	}
 
-	if strings.TrimSpace(agent.WorkingDirectory) == "" {
-		return errors.New("workingDirectory: required non-empty string")
+	if err := parseEmulatedShell(node, agent); err != nil {
+		return err
 	}
 
 	if maxRecursion < 0 {
 		return errors.New("maxRecursion: must be an integer of 0 or more")
 	}
 
-	// The embedder sets up the emulated shell per turn; until it does, shell commands do not run.
-	agent.CustomShell = CustomShell{Emulated: true}
 	agent.MaxRecursion = &maxRecursion
 	agent.ApproverModel, agent.ApproverPrompt = strings.TrimSpace(approver.Model), approver.Prompt
 
@@ -116,10 +113,6 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 		if model != "" && !slices.Contains(cfg.Providers, provider) {
 			return fmt.Errorf("model %q: provider %q is not configured", model, provider)
 		}
-	}
-
-	if agent.NetworkTargets, err = easyNetworkTargets(frontmatterField(node, "allowedNetworkTargets")); err != nil {
-		return err
 	}
 
 	if field := frontmatterField(node, "delegatedFrom"); field != nil {
@@ -265,8 +258,40 @@ func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) (PermissionSet, e
 	return permission, nil
 }
 
-// easyNetworkTargets decodes allowedNetworkTargets node and refuses, when the file loads, the entries the
-// wrapper refuses on every command: its just-bash matches origins and URL prefixes only.
+// parseEmulatedShell reads the emulated shell's settings, which easy agents and shell: emulated agents share:
+// the required workingDirectory, the host commands, and the network targets. The embedder sets the shell up
+// per turn; until it does, shell commands do not run.
+func parseEmulatedShell(node *yaml.Node, agent *Agent) error {
+	if field := frontmatterField(node, "workingDirectory"); field != nil && field.Decode(&agent.WorkingDirectory) != nil {
+		return errors.New("workingDirectory: must be a string")
+	}
+
+	if strings.TrimSpace(agent.WorkingDirectory) == "" {
+		return errors.New("workingDirectory: required non-empty string")
+	}
+
+	if field := frontmatterField(node, "commands"); field != nil && field.Decode(&agent.Commands) != nil {
+		return errors.New("commands: must be a map from command name to command line")
+	}
+
+	for name := range agent.Commands {
+		if err := sandbox.CheckCommandName(name); err != nil {
+			return fmt.Errorf("commands: %w", err)
+		}
+	}
+
+	var err error
+	if agent.NetworkTargets, err = easyNetworkTargets(frontmatterField(node, "allowedNetworkTargets")); err != nil {
+		return err
+	}
+
+	agent.CustomShell = CustomShell{Emulated: true}
+
+	return nil
+}
+
+// easyNetworkTargets decodes allowedNetworkTargets node and refuses, when the file loads, what webfetch's
+// rules cannot express: they match hosts, origins and URL prefixes only.
 func easyNetworkTargets(node *yaml.Node) ([]string, error) {
 	targets, err := easyList(node, "allowedNetworkTargets")
 	for _, target := range targets {

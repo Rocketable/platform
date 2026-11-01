@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -52,16 +53,18 @@ type sandboxedShellSystem struct {
 	shellTemp        shellTempConfig
 	env              []string
 	shellCommand     shellCommander
+	sandbox          *sandbox.Runtime
 	forceKillTimeout time.Duration
 }
 
-func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, shellCommand shellCommander) *sandboxedShellSystem {
+func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, shellCommand shellCommander, rt *sandbox.Runtime) *sandboxedShellSystem {
 	return &sandboxedShellSystem{
 		mu:               sync.Mutex{},
 		root:             root,
 		shellTemp:        *shellTemp,
 		env:              slices.Clone(env),
 		shellCommand:     shellCommand,
+		sandbox:          rt,
 		forceKillTimeout: shellForceKillTimeout,
 	}
 }
@@ -137,25 +140,23 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 		return bashFailure(err.Error())
 	}
 
-	commandCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMillisecond)*time.Millisecond+shellTimeoutGrace)
-	defer cancel()
-
-	timedOut := false
+	timeout := time.Duration(timeoutMillisecond) * time.Millisecond
 
 	env := append(os.Environ(), sss.env...)
 	env = append(env, "TMPDIR="+sss.shellTemp.tmpDir)
 
-	shell, args, stdin := withCustomShell(sss.shellCommand, customShell, params.Command, env)
-	if strings.TrimSpace(shell) == "" {
-		return bashFailure("shell command path is required")
+	if customShell.Emulated {
+		return emulatedBashResult(runEmulated(ctx, sss.sandbox, customShell, params.Command, hostDir, sss.env, env, timeout))
 	}
 
+	commandCtx, cancel := context.WithTimeout(ctx, timeout+shellTimeoutGrace)
+	defer cancel()
+
+	timedOut := false
+
+	shell, args := withCustomShell(sss.shellCommand, customShell, params.Command)
 	cmd := exec.CommandContext(commandCtx, shell, args...)
-
 	cmd.Dir, cmd.Env = hostDir, env
-	if stdin != nil {
-		cmd.Stdin = bytes.NewReader(stdin)
-	}
 
 	// The command writes to a pipe this call owns, so a child that leaves the
 	// process group and keeps the output open cannot hold the call past its timeout.

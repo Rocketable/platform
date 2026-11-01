@@ -169,7 +169,7 @@ If the agent needs no tools, omit the `permission` block. Outbound MCP tools sta
 
 Account for these rocketcode runtime facts when designing agent instructions and permissions:
 
-- RocketCode targets Unix-like systems only: Linux and macOS. Do not add Windows-specific agent instructions unless the human explicitly asks for a policy change.
+- RocketCode runs on Linux only. Do not add macOS- or Windows-specific agent instructions unless the human explicitly asks for a policy change.
 - Built-in filesystem tools hard-deny env files such as `.env`, `.env.local`, and `.env.production` regardless of permissions. `.env.example` remains readable and editable.
 - Symlink aliases are rejected for direct read, edit, and search targets. Directory grep pre-filters files before invoking `rg`; built-in `rg` calls use `--no-config` and `--no-follow`.
 - The shell tool statically denies common direct env-file and external-path attempts such as `cat .env`, `cat ../outside`, and `cd /tmp`, but this is only a preflight guardrail, not an OS-enforced shell sandbox for dynamically generated paths.

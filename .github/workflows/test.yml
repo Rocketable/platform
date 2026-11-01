@@ -116,10 +116,6 @@ jobs:
           echo "f84757b07f425fe5cf11d87df6644691c644a5cd2348a2c670894272999d3ba7  $RUNNER_TEMP/rg.tar.gz" | sha256sum -c -
           sudo tar -xzf "$RUNNER_TEMP/rg.tar.gz" -C /usr/local/bin --strip-components 1 ripgrep-14.1.0-x86_64-unknown-linux-musl/rg
       - *setup-bun
-      # just-bash's wrapper is TypeScript that Node runs directly, which needs Node 22.18 or later.
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
       - *node-modules
       - run: bun install --frozen-lockfile
         working-directory: internal/rocketclaw/web
@@ -154,8 +150,34 @@ jobs:
           overwrite: true
       - *save-go-build
 
+  # The emulated shell's acceptance tests in a real sandbox (docs/specs/2026-11-01-linux-native-just-bash-spec.md
+  # §13). ROCKETCLAW_SANDBOX_REQUIRE makes a missing prerequisite fail rather than skip.
+  sandbox:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-go
+      # bubblewrap needs unprivileged user namespaces, which Ubuntu 24.04's AppArmor restricts; the sysctl is
+      # CI's short form of the profile a host gives bwrap (docs/explainers/2026-11-01-emulated-shell-sandbox.md).
+      # mmdebstrap, which builds the guest image in the first test run as a host's first start would (every CI
+      # run, so the build stays proven), brings its own profile but needs a subordinate uid range.
+      - name: Install bubblewrap and mmdebstrap
+        run: |
+          sudo apt-get install -y --no-install-recommends bubblewrap mmdebstrap uidmap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          grep -q "^$(id -un):" /etc/subuid || sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$(id -un)"
+      # The runner has no user systemd, so root runs the tests as a transient service owned by the runner user:
+      # a service's delegated cgroup is handed to its --uid, a scope's stays root's.
+      - run: make -C internal/rocketclaw sandbox-test SANDBOX_TEST_COVERPROFILE=coverage-sandbox.out SANDBOX_TEST_SCOPE="sudo systemd-run --quiet --wait --pipe --collect --same-dir -p Delegate=yes --uid=$(id -u) --gid=$(id -g)"
+      - run: make -C internal/rocketclaw sandbox-test SANDBOX_TEST_FLAGS=-race SANDBOX_TEST_CGO=1 SANDBOX_TEST_SCOPE="sudo systemd-run --quiet --wait --pipe --collect --same-dir -p Delegate=yes --uid=$(id -u) --gid=$(id -g)"
+      # Its coverage joins the rocketclaw shards' (the coverage job), since those skip these tests.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-sandbox
+          path: internal/rocketclaw/coverage-sandbox.out
+
   coverage:
-    needs: rocketclaw
+    needs: [rocketclaw, sandbox]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -208,7 +230,7 @@ jobs:
   core:
     name: test (core)
     if: always()
-    needs: [checks, funneld, rocketclaw, coverage]
+    needs: [checks, funneld, rocketclaw, sandbox, coverage]
     runs-on: ubuntu-latest
     steps:
       - &all-passed

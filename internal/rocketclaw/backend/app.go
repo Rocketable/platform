@@ -247,7 +247,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		questions: questions,
 	}
 
-	rt.installJustBash()
+	rt.prepareSandbox()
 
 	resumeJobs, err := background.recoverJobs(runCtx)
 	if err != nil {

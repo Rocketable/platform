@@ -1,0 +1,1751 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "rocketclaw-sandbox-rootfs-amd64",
+  "documentNamespace": "https://github.com/Rocketable/platform/sandbox-rootfs/20261031T000000Z/amd64",
+  "creationInfo": {
+    "created": "2026-10-31T00:00:00Z",
+    "creators": [
+      "Tool: internal/rocketclaw/sandbox/rootfs"
+    ]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-base-files",
+      "name": "base-files",
+      "versionInfo": "14ubuntu6.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/base-files@14ubuntu6.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-base-passwd",
+      "name": "base-passwd",
+      "versionInfo": "3.6.8",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/base-passwd@3.6.8?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-bash",
+      "name": "bash",
+      "versionInfo": "5.3-2ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/bash@5.3-2ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-bzip2",
+      "name": "bzip2",
+      "versionInfo": "1.0.8-6ubuntu0.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/bzip2@1.0.8-6ubuntu0.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-ca-certificates",
+      "name": "ca-certificates",
+      "versionInfo": "20260816ubuntu0.26.04.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/ca-certificates@20260816ubuntu0.26.04.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-coreutils-from-uutils",
+      "name": "coreutils-from-uutils",
+      "versionInfo": "0.0.0~ubuntu25",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/coreutils-from-uutils@0.0.0~ubuntu25?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-coreutils",
+      "name": "coreutils",
+      "versionInfo": "9.5-1ubuntu2+0.0.0~ubuntu25",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/coreutils@9.5-1ubuntu2+0.0.0~ubuntu25?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-dash",
+      "name": "dash",
+      "versionInfo": "0.5.12-12ubuntu3",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/dash@0.5.12-12ubuntu3?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-debconf",
+      "name": "debconf",
+      "versionInfo": "1.5.92",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/debconf@1.5.92?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-debianutils",
+      "name": "debianutils",
+      "versionInfo": "5.23.2build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/debianutils@5.23.2build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-diffutils",
+      "name": "diffutils",
+      "versionInfo": "1:3.12-1ubuntu0.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/diffutils@1:3.12-1ubuntu0.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-dpkg",
+      "name": "dpkg",
+      "versionInfo": "1.23.7ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/dpkg@1.23.7ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-file",
+      "name": "file",
+      "versionInfo": "1:5.46-5build2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/file@1:5.46-5build2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-findutils",
+      "name": "findutils",
+      "versionInfo": "4.10.0-3build2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/findutils@4.10.0-3build2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-gawk",
+      "name": "gawk",
+      "versionInfo": "1:5.3.2-1ubuntu1.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/gawk@1:5.3.2-1ubuntu1.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-gcc-16-base",
+      "name": "gcc-16-base",
+      "versionInfo": "16-20260322-1ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/gcc-16-base@16-20260322-1ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-gnu-coreutils",
+      "name": "gnu-coreutils",
+      "versionInfo": "9.7-3ubuntu2.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/gnu-coreutils@9.7-3ubuntu2.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-grep",
+      "name": "grep",
+      "versionInfo": "3.12-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/grep@3.12-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-gzip",
+      "name": "gzip",
+      "versionInfo": "1.14-1~exp2ubuntu1.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/gzip@1.14-1~exp2ubuntu1.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-hostname",
+      "name": "hostname",
+      "versionInfo": "3.25build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/hostname@3.25build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-init-system-helpers",
+      "name": "init-system-helpers",
+      "versionInfo": "1.69",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/init-system-helpers@1.69?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-jq",
+      "name": "jq",
+      "versionInfo": "1.8.1-4ubuntu2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/jq@1.8.1-4ubuntu2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libacl1",
+      "name": "libacl1",
+      "versionInfo": "2.3.2-2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libacl1@2.3.2-2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libada-url0-3",
+      "name": "libada-url0-3",
+      "versionInfo": "3.4.3-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libada-url0-3@3.4.3-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libattr1",
+      "name": "libattr1",
+      "versionInfo": "1:2.5.2-4ubuntu0.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libattr1@1:2.5.2-4ubuntu0.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libaudit-common",
+      "name": "libaudit-common",
+      "versionInfo": "1:4.1.2-1ubuntu0.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libaudit-common@1:4.1.2-1ubuntu0.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libaudit1",
+      "name": "libaudit1",
+      "versionInfo": "1:4.1.2-1ubuntu0.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libaudit1@1:4.1.2-1ubuntu0.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libblkid1",
+      "name": "libblkid1",
+      "versionInfo": "2.41.3-3ubuntu2.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libblkid1@2.41.3-3ubuntu2.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libbrotli1",
+      "name": "libbrotli1",
+      "versionInfo": "1.2.0-3ubuntu0.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libbrotli1@1.2.0-3ubuntu0.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libbz2-1.0",
+      "name": "libbz2-1.0",
+      "versionInfo": "1.0.8-6ubuntu0.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libbz2-1.0@1.0.8-6ubuntu0.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libc-bin",
+      "name": "libc-bin",
+      "versionInfo": "2.43-2ubuntu2.4",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libc-bin@2.43-2ubuntu2.4?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libc-gconv-modules-extra",
+      "name": "libc-gconv-modules-extra",
+      "versionInfo": "2.43-2ubuntu2.4",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libc-gconv-modules-extra@2.43-2ubuntu2.4?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libc6",
+      "name": "libc6",
+      "versionInfo": "2.43-2ubuntu2.4",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libc6@2.43-2ubuntu2.4?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libcap-ng0",
+      "name": "libcap-ng0",
+      "versionInfo": "0.8.5-4build5",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libcap-ng0@0.8.5-4build5?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libcares2",
+      "name": "libcares2",
+      "versionInfo": "1.34.6-1ubuntu0.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libcares2@1.34.6-1ubuntu0.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libcrypt1",
+      "name": "libcrypt1",
+      "versionInfo": "1:4.5.1-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libcrypt1@1:4.5.1-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libdb5.3t64",
+      "name": "libdb5.3t64",
+      "versionInfo": "5.3.28+dfsg2-10ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libdb5.3t64@5.3.28+dfsg2-10ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libdebconfclient0",
+      "name": "libdebconfclient0",
+      "versionInfo": "0.280ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libdebconfclient0@0.280ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libexpat1",
+      "name": "libexpat1",
+      "versionInfo": "2.7.4-1ubuntu0.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libexpat1@2.7.4-1ubuntu0.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libffi8",
+      "name": "libffi8",
+      "versionInfo": "3.5.2-4",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libffi8@3.5.2-4?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libgcc-s1",
+      "name": "libgcc-s1",
+      "versionInfo": "16-20260322-1ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libgcc-s1@16-20260322-1ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libgmp10",
+      "name": "libgmp10",
+      "versionInfo": "2:6.3.0+dfsg-5ubuntu2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libgmp10@2:6.3.0+dfsg-5ubuntu2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libgnutls30t64",
+      "name": "libgnutls30t64",
+      "versionInfo": "3.8.12-2ubuntu1.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libgnutls30t64@3.8.12-2ubuntu1.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libhogweed6t64",
+      "name": "libhogweed6t64",
+      "versionInfo": "3.10.2-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libhogweed6t64@3.10.2-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libicu78",
+      "name": "libicu78",
+      "versionInfo": "78.2-2ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libicu78@78.2-2ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libidn2-0",
+      "name": "libidn2-0",
+      "versionInfo": "2.3.8-4build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libidn2-0@2.3.8-4build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libjq1",
+      "name": "libjq1",
+      "versionInfo": "1.8.1-4ubuntu2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libjq1@1.8.1-4ubuntu2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libllhttp9.3",
+      "name": "libllhttp9.3",
+      "versionInfo": "9.3.3~really9.3.0+~cs12.11.8-3build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libllhttp9.3@9.3.3~really9.3.0+~cs12.11.8-3build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-liblzma5",
+      "name": "liblzma5",
+      "versionInfo": "5.8.3-1ubuntu0.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/liblzma5@5.8.3-1ubuntu0.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libmagic-mgc",
+      "name": "libmagic-mgc",
+      "versionInfo": "1:5.46-5build2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libmagic-mgc@1:5.46-5build2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libmagic1t64",
+      "name": "libmagic1t64",
+      "versionInfo": "1:5.46-5build2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libmagic1t64@1:5.46-5build2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libmd0",
+      "name": "libmd0",
+      "versionInfo": "1.1.0-2build4",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libmd0@1.1.0-2build4?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libmount1",
+      "name": "libmount1",
+      "versionInfo": "2.41.3-3ubuntu2.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libmount1@2.41.3-3ubuntu2.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libmpfr6",
+      "name": "libmpfr6",
+      "versionInfo": "4.2.2-3",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libmpfr6@4.2.2-3?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libncursesw6",
+      "name": "libncursesw6",
+      "versionInfo": "6.6+20251231-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libncursesw6@6.6+20251231-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libnettle8t64",
+      "name": "libnettle8t64",
+      "versionInfo": "3.10.2-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libnettle8t64@3.10.2-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libnghttp2-14",
+      "name": "libnghttp2-14",
+      "versionInfo": "1.68.0-2ubuntu0.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libnghttp2-14@1.68.0-2ubuntu0.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libnode127",
+      "name": "libnode127",
+      "versionInfo": "22.22.1+dfsg+~cs22.19.15-1ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libnode127@22.22.1+dfsg+~cs22.19.15-1ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libonig5",
+      "name": "libonig5",
+      "versionInfo": "6.9.10-1build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libonig5@6.9.10-1build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libp11-kit0",
+      "name": "libp11-kit0",
+      "versionInfo": "0.26.2-2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libp11-kit0@0.26.2-2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libpam-modules-bin",
+      "name": "libpam-modules-bin",
+      "versionInfo": "1.7.0-5ubuntu3.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libpam-modules-bin@1.7.0-5ubuntu3.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libpam-modules",
+      "name": "libpam-modules",
+      "versionInfo": "1.7.0-5ubuntu3.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libpam-modules@1.7.0-5ubuntu3.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libpam-runtime",
+      "name": "libpam-runtime",
+      "versionInfo": "1.7.0-5ubuntu3.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libpam-runtime@1.7.0-5ubuntu3.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libpam0g",
+      "name": "libpam0g",
+      "versionInfo": "1.7.0-5ubuntu3.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libpam0g@1.7.0-5ubuntu3.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libpcre2-8-0",
+      "name": "libpcre2-8-0",
+      "versionInfo": "10.46-1build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libpcre2-8-0@10.46-1build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libproc2-0",
+      "name": "libproc2-0",
+      "versionInfo": "2:4.0.4-9ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libproc2-0@2:4.0.4-9ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libpsl5t64",
+      "name": "libpsl5t64",
+      "versionInfo": "0.21.2-1.1build2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libpsl5t64@0.21.2-1.1build2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libpython3-stdlib",
+      "name": "libpython3-stdlib",
+      "versionInfo": "3.14.3-0ubuntu2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libpython3-stdlib@3.14.3-0ubuntu2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libpython3.14-minimal",
+      "name": "libpython3.14-minimal",
+      "versionInfo": "3.14.4-1ubuntu0.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libpython3.14-minimal@3.14.4-1ubuntu0.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libpython3.14-stdlib",
+      "name": "libpython3.14-stdlib",
+      "versionInfo": "3.14.4-1ubuntu0.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libpython3.14-stdlib@3.14.4-1ubuntu0.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libreadline8t64",
+      "name": "libreadline8t64",
+      "versionInfo": "8.3-4",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libreadline8t64@8.3-4?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libselinux1",
+      "name": "libselinux1",
+      "versionInfo": "3.9-4build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libselinux1@3.9-4build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libsimdjson29",
+      "name": "libsimdjson29",
+      "versionInfo": "4.2.4-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libsimdjson29@4.2.4-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libsimdutf31",
+      "name": "libsimdutf31",
+      "versionInfo": "8.0.0-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libsimdutf31@8.0.0-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libsmartcols1",
+      "name": "libsmartcols1",
+      "versionInfo": "2.41.3-3ubuntu2.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libsmartcols1@2.41.3-3ubuntu2.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libsqlite3-0",
+      "name": "libsqlite3-0",
+      "versionInfo": "3.46.1-9ubuntu0.3",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libsqlite3-0@3.46.1-9ubuntu0.3?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libssl3t64",
+      "name": "libssl3t64",
+      "versionInfo": "3.5.5-1ubuntu3.7",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libssl3t64@3.5.5-1ubuntu3.7?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libstdc--6",
+      "name": "libstdc++6",
+      "versionInfo": "16-20260322-1ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libstdc++6@16-20260322-1ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libsystemd0",
+      "name": "libsystemd0",
+      "versionInfo": "259.9-0ubuntu0.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libsystemd0@259.9-0ubuntu0.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libtasn1-6",
+      "name": "libtasn1-6",
+      "versionInfo": "4.21.0-2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libtasn1-6@4.21.0-2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libtinfo6",
+      "name": "libtinfo6",
+      "versionInfo": "6.6+20251231-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libtinfo6@6.6+20251231-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libudev1",
+      "name": "libudev1",
+      "versionInfo": "259.9-0ubuntu0.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libudev1@259.9-0ubuntu0.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libunistring5",
+      "name": "libunistring5",
+      "versionInfo": "1.3-2build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libunistring5@1.3-2build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libuuid1",
+      "name": "libuuid1",
+      "versionInfo": "2.41.3-3ubuntu2.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libuuid1@2.41.3-3ubuntu2.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libuv1t64",
+      "name": "libuv1t64",
+      "versionInfo": "1.51.0-2ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libuv1t64@1.51.0-2ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-libzstd1",
+      "name": "libzstd1",
+      "versionInfo": "1.5.7+dfsg-3",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/libzstd1@1.5.7+dfsg-3?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-mawk",
+      "name": "mawk",
+      "versionInfo": "1.3.4.20260129-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/mawk@1.3.4.20260129-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-media-types",
+      "name": "media-types",
+      "versionInfo": "14.0.0build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/media-types@14.0.0build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-ncurses-base",
+      "name": "ncurses-base",
+      "versionInfo": "6.6+20251231-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/ncurses-base@6.6+20251231-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-ncurses-bin",
+      "name": "ncurses-bin",
+      "versionInfo": "6.6+20251231-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/ncurses-bin@6.6+20251231-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-netbase",
+      "name": "netbase",
+      "versionInfo": "6.5build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/netbase@6.5build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-acorn",
+      "name": "node-acorn",
+      "versionInfo": "8.16.0+ds+~cs25.18.7-4",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-acorn@8.16.0+ds+~cs25.18.7-4?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-balanced-match",
+      "name": "node-balanced-match",
+      "versionInfo": "2.0.0-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-balanced-match@2.0.0-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-brace-expansion",
+      "name": "node-brace-expansion",
+      "versionInfo": "2.0.1+~1.1.0-2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-brace-expansion@2.0.1+~1.1.0-2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-cjs-module-lexer",
+      "name": "node-cjs-module-lexer",
+      "versionInfo": "1.2.3+dfsg-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-cjs-module-lexer@1.2.3+dfsg-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-corepack",
+      "name": "node-corepack",
+      "versionInfo": "0.24.0-5build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-corepack@0.24.0-5build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-debug",
+      "name": "node-debug",
+      "versionInfo": "4.4.3+~4.1.13-1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-debug@4.4.3+~4.1.13-1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-llhttp",
+      "name": "node-llhttp",
+      "versionInfo": "9.3.3~really9.3.0+~cs12.11.8-3build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-llhttp@9.3.3~really9.3.0+~cs12.11.8-3build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-lru-cache",
+      "name": "node-lru-cache",
+      "versionInfo": "10.0.1-3",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-lru-cache@10.0.1-3?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-minimatch",
+      "name": "node-minimatch",
+      "versionInfo": "9.0.3-6",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-minimatch@9.0.3-6?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-ms",
+      "name": "node-ms",
+      "versionInfo": "2.1.3+~cs0.7.31-3",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-ms@2.1.3+~cs0.7.31-3?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-semver",
+      "name": "node-semver",
+      "versionInfo": "7.6.1+~7.5.8-2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-semver@7.6.1+~7.5.8-2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-undici",
+      "name": "node-undici",
+      "versionInfo": "7.18.2+dfsg+~cs3.2.0-1build1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-undici@7.18.2+dfsg+~cs3.2.0-1build1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-node-xtend",
+      "name": "node-xtend",
+      "versionInfo": "4.0.2-3",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/node-xtend@4.0.2-3?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-nodejs",
+      "name": "nodejs",
+      "versionInfo": "22.22.1+dfsg+~cs22.19.15-1ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/nodejs@22.22.1+dfsg+~cs22.19.15-1ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-openssl-provider-legacy",
+      "name": "openssl-provider-legacy",
+      "versionInfo": "3.5.5-1ubuntu3.7",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/openssl-provider-legacy@3.5.5-1ubuntu3.7?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-openssl",
+      "name": "openssl",
+      "versionInfo": "3.5.5-1ubuntu3.7",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/openssl@3.5.5-1ubuntu3.7?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-perl-base",
+      "name": "perl-base",
+      "versionInfo": "5.40.1-7ubuntu0.3",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/perl-base@5.40.1-7ubuntu0.3?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-procps",
+      "name": "procps",
+      "versionInfo": "2:4.0.4-9ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/procps@2:4.0.4-9ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-python3-minimal",
+      "name": "python3-minimal",
+      "versionInfo": "3.14.3-0ubuntu2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/python3-minimal@3.14.3-0ubuntu2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-python3.14-minimal",
+      "name": "python3.14-minimal",
+      "versionInfo": "3.14.4-1ubuntu0.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/python3.14-minimal@3.14.4-1ubuntu0.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-python3.14",
+      "name": "python3.14",
+      "versionInfo": "3.14.4-1ubuntu0.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/python3.14@3.14.4-1ubuntu0.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-python3",
+      "name": "python3",
+      "versionInfo": "3.14.3-0ubuntu2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/python3@3.14.3-0ubuntu2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-readline-common",
+      "name": "readline-common",
+      "versionInfo": "8.3-4",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/readline-common@8.3-4?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-rust-coreutils",
+      "name": "rust-coreutils",
+      "versionInfo": "0.10.0-1ubuntu2~26.04.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/rust-coreutils@0.10.0-1ubuntu2~26.04.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-sed",
+      "name": "sed",
+      "versionInfo": "4.9-2ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/sed@4.9-2ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-sqlite3",
+      "name": "sqlite3",
+      "versionInfo": "3.46.1-9ubuntu0.3",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/sqlite3@3.46.1-9ubuntu0.3?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-sysvinit-utils",
+      "name": "sysvinit-utils",
+      "versionInfo": "3.15-5ubuntu1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/sysvinit-utils@3.15-5ubuntu1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tar",
+      "name": "tar",
+      "versionInfo": "1.35+dfsg-4ubuntu0.4",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/tar@1.35+dfsg-4ubuntu0.4?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-tzdata",
+      "name": "tzdata",
+      "versionInfo": "2026e-0ubuntu0.26.04.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/tzdata@2026e-0ubuntu0.26.04.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-util-linux",
+      "name": "util-linux",
+      "versionInfo": "2.41.3-3ubuntu2.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/util-linux@2.41.3-3ubuntu2.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-wget",
+      "name": "wget",
+      "versionInfo": "1.25.0-2ubuntu4.4",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/wget@1.25.0-2ubuntu4.4?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-xz-utils",
+      "name": "xz-utils",
+      "versionInfo": "5.8.3-1ubuntu0.1",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/xz-utils@5.8.3-1ubuntu0.1?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-zlib1g",
+      "name": "zlib1g",
+      "versionInfo": "1:1.3.dfsg+really1.3.1-1ubuntu3.2",
+      "downloadLocation": "NOASSERTION",
+      "supplier": "Organization: Canonical",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:deb/ubuntu/zlib1g@1:1.3.dfsg+really1.3.1-1ubuntu3.2?arch=amd64\u0026distro=ubuntu-26.04"
+        }
+      ]
+    }
+  ]
+}
