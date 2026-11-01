@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -199,6 +200,8 @@ func TestForkConversation(t *testing.T) {
 func TestForkConversationRollsBackFailedCopies(t *testing.T) {
 	t.Parallel()
 
+	sessions := newTestSessionService(t)
+
 	for _, test := range []struct {
 		name, constraint, message string
 	}{
@@ -210,10 +213,10 @@ func TestForkConversationRollsBackFailedCopies(t *testing.T) {
 		{"read only files", "", "copy fork attachment"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			workspace := t.TempDir()
-			sessions, err := NewSessionService(workspace)
+			// Retain migrations, not copied rows or orphan files from a failed fork.
+			_, err := sessions.db.ExecContext(t.Context(), `TRUNCATE attachments, entries, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+			sessions.attachments = filesystemAttachments{path: t.TempDir()}
 
 			runtime := &Runtime{Sessions: sessions}
 			require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "source", Agent: "main"}))
@@ -227,6 +230,10 @@ func TestForkConversationRollsBackFailedCopies(t *testing.T) {
 			if test.constraint != "" {
 				_, err = sessions.db.ExecContext(t.Context(), test.constraint)
 				require.NoError(t, err)
+				t.Cleanup(func() {
+					_, err := sessions.db.Exec(`ALTER TABLE ` + strings.Fields(test.constraint)[2] + ` DROP CONSTRAINT reject_fork`)
+					require.NoError(t, err)
+				})
 			} else {
 				storage := sessions.attachments.(filesystemAttachments)
 				root, err := os.OpenRoot(storage.path)

@@ -131,9 +131,13 @@ func TestShadowReviewClearRetainsPendingAttachments(t *testing.T) {
 func TestShadowReviewPayloadRelease(t *testing.T) {
 	t.Parallel()
 
+	store, _ := newShadowTestStore(t)
+
 	for _, order := range []string{"parent finish first", "parent capture first", "child first", "concurrent", "failed", "stopped"} {
 		t.Run(order, func(t *testing.T) {
-			store, _ := newShadowTestStore(t)
+			// Keep the migrated schema, but no prior case's history, bindings, or journals.
+			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
+			require.NoError(t, err)
 			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
 			bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
 			request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "admitted bytes", true)}
