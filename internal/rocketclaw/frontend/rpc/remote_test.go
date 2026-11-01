@@ -33,8 +33,8 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 	const suffix = "tail1234.ts.net"
 
 	// serve starts a RocketClaw whose model always says reply, with agents beside its built-in ones, and returns its Web RPC
-	// and workspace.
-	serve := func(reply string, agents ...string) (*grpc.ClientConn, string) {
+	// and configuration.
+	serve := func(reply string, agents ...string) (*grpc.ClientConn, *config.Config) {
 		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 			if !assert.NoError(t, err) {
@@ -102,7 +102,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-		return connection, cfg.Workspace
+		return connection, cfg
 	}
 
 	// The tailnet name a test server answers at.
@@ -137,7 +137,8 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		})
 	}
 
-	remoteRPC, remoteWorkspace := serve("Remote reply", "scout")
+	remoteRPC, remoteConfig := serve("Remote reply", "scout")
+	remoteDB := openTestTurns(t, remoteConfig.DatabaseURL).db
 	remote := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		off, handler := down, tailnet
@@ -155,6 +156,17 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 	localRPC, _ := serve("Local reply")
 	web := versioned("local", NewHTTPHandler(localRPC, config.SentryConfig{}, config.PostHogConfig{}, nil, "", remotes))
 	local := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/test/view-expired" {
+			var stale bool
+
+			err := remoteDB.QueryRowContext(r.Context(), `UPDATE web_tab_states SET viewed_at = now() - interval '11 seconds'
+WHERE username = 'alice' AND viewing = $1 RETURNING viewed_at < now() - interval '10 seconds'`, r.URL.Query().Get("id")).Scan(&stale)
+			assert.NoError(t, err)
+			assert.True(t, stale, "the remote chat's last view must have expired")
+
+			return
+		}
+
 		if state, ok := strings.CutPrefix(r.URL.Path, "/test/remote/"); ok {
 			mu.Lock()
 			down = state == "down"
@@ -180,5 +192,5 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 	tailnet = NewTailnetHandler(whois, []string{named("local", local)}, versioned("work", NewHTTPHandler(remoteRPC, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)))
 	mu.Unlock()
 
-	runWebTest(t, "src/remote-transport.test.ts", "ROCKETCLAW_REMOTE_TEST_LOCAL="+named("local", local), "ROCKETCLAW_REMOTE_TEST_REMOTE="+named("work", remote), "ROCKETCLAW_REMOTE_TEST_WORKSPACE="+remoteWorkspace, "ROCKETCLAW_REMOTE_TEST_SUFFIX="+suffix)
+	runWebTest(t, "src/remote-transport.test.ts", "ROCKETCLAW_REMOTE_TEST_LOCAL="+named("local", local), "ROCKETCLAW_REMOTE_TEST_REMOTE="+named("work", remote), "ROCKETCLAW_REMOTE_TEST_WORKSPACE="+remoteConfig.Workspace, "ROCKETCLAW_REMOTE_TEST_SUFFIX="+suffix)
 }
