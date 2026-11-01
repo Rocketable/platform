@@ -572,6 +572,8 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 }
 
 func TestSidebarSessionsAllocationBudgets(t *testing.T) {
+	t.Parallel()
+
 	if os.Getenv("ROCKETCLAW_TEST_SIDEBAR_ALLOCATIONS") != "1" {
 		// The race detector randomly drops sync.Pool buffers; measure the store, not that churn.
 		executable := filepath.Join(t.TempDir(), "backend.test")

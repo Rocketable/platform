@@ -80,6 +80,8 @@ func TestRuntimeRecordsExplicitConversationsWithoutResettingSelection(t *testing
 // destination once, the destination shows its history without copies, and its schedule changes
 // take effect there only when its turn succeeds (AE2).
 func TestRuntimeProducerReportsToDestination(t *testing.T) {
+	t.Parallel()
+
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		workspace := t.TempDir()

@@ -681,6 +681,8 @@ func TestBackgroundJobsListOwnAndDestinationJobs(t *testing.T) {
 }
 
 func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
+	t.Parallel()
+
 	cutoff := time.Unix(1_700_000_000, 0).UTC()
 	old := cutoff.Add(-time.Hour)
 

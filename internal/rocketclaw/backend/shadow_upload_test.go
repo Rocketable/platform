@@ -11,6 +11,8 @@ import (
 )
 
 func TestShadowConsumedUploadOwnership(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	ctx := t.Context()
 	seed := protocol.OutboundAttachment{ID: "seed", Name: "seed.txt", MIMEType: "text/plain", Data: []byte("seed")}

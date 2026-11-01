@@ -7,6 +7,8 @@ import (
 )
 
 func TestPages(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	ctx := t.Context()
 

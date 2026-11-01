@@ -30,6 +30,8 @@ BEGIN RAISE EXCEPTION 'shadow lifecycle write unavailable'; END $$`)
 }
 
 func TestShadowLifecycleAdmissionRollback(t *testing.T) {
+	t.Parallel()
+
 	for _, table := range []string{"conversations", "entries", "turns", "shadow_turns"} {
 		t.Run(table, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
@@ -80,6 +82,8 @@ func TestShadowLifecycleAdmissionRollback(t *testing.T) {
 }
 
 func TestShadowLifecycleClearRollback(t *testing.T) {
+	t.Parallel()
+
 	for _, step := range []struct{ table, event string }{
 		{"entries", "DELETE"}, {"conversations", "UPDATE"}, {"steps", "DELETE"},
 		{"shadow_turns", "DELETE"}, {"pending_attachment_deletions", "INSERT"},
@@ -127,6 +131,8 @@ func TestShadowLifecycleClearRollback(t *testing.T) {
 }
 
 func TestShadowLifecycleCaptureFailureAndRetry(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
@@ -187,6 +193,8 @@ func TestShadowLifecycleCaptureFailureAndRetry(t *testing.T) {
 }
 
 func TestShadowLifecycleDefinitionFailureAndRetry(t *testing.T) {
+	t.Parallel()
+
 	for _, failure := range []string{"invalid definition", "escaping directory", "unavailable workspace"} {
 		t.Run(failure, func(t *testing.T) {
 			store, root := newShadowTestStore(t)
@@ -244,6 +252,8 @@ func TestShadowLifecycleDefinitionFailureAndRetry(t *testing.T) {
 }
 
 func TestShadowLifecycleRevertRollback(t *testing.T) {
+	t.Parallel()
+
 	for _, step := range []struct{ table, event string }{
 		{"entries", "DELETE"}, {"conversations", "UPDATE"},
 		{"steps", "DELETE"},
@@ -299,6 +309,8 @@ func TestShadowLifecycleRevertRollback(t *testing.T) {
 }
 
 func TestShadowLifecycleSettlementFailureReleasesFamily(t *testing.T) {
+	t.Parallel()
+
 	for _, failure := range []string{"busy", "settlement failed", "canceled"} {
 		t.Run(failure, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
@@ -371,6 +383,8 @@ func TestShadowLifecycleSettlementFailureReleasesFamily(t *testing.T) {
 }
 
 func TestShadowLifecycleUnavailableStateDoesNotStartWork(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
@@ -420,6 +434,8 @@ func TestShadowLifecycleUnavailableStateDoesNotStartWork(t *testing.T) {
 }
 
 func TestShadowLifecycleDeferredCommitFailureAndRetry(t *testing.T) {
+	t.Parallel()
+
 	for _, operation := range []string{"capture", "claim", "clear", "revert", "finish"} {
 		t.Run(operation, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
@@ -486,6 +502,8 @@ CREATE CONSTRAINT TRIGGER reject_shadow_commit AFTER UPDATE ON shadow_turns DEFE
 }
 
 func TestShadowLifecycleFinishRollback(t *testing.T) {
+	t.Parallel()
+
 	for _, step := range []struct{ table, event string }{
 		{"shadow_turns", "UPDATE"}, {"entries", "INSERT"}, {"turns", "DELETE"},
 		{"turns", "UPDATE OF note"}, {"steps", "DELETE"},
@@ -552,6 +570,8 @@ func TestShadowLifecycleFinishRollback(t *testing.T) {
 // A shadow's running-turn inbound, which its subagents act for, names the parent's person but not
 // the parent's prompt principal.
 func TestShadowTurnNamesParentPerson(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
@@ -575,6 +595,8 @@ func TestShadowTurnNamesParentPerson(t *testing.T) {
 }
 
 func TestShadowLifecycleStopNotificationCancelsOwningTurn(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	parent := &Bridge{log: store.log, config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}

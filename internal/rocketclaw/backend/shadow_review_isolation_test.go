@@ -135,6 +135,8 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 }
 
 func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
+	t.Parallel()
+
 	store, root := newShadowTestStore(t)
 	cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name()})
 	constructed := 0

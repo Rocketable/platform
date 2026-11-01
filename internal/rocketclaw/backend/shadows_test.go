@@ -62,6 +62,8 @@ func newShadowTestStore(t *testing.T) (*SessionService, *os.Root) {
 }
 
 func TestShadowBindingsCreation(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	runtime := &Runtime{Sessions: store}
 
@@ -96,6 +98,8 @@ func TestShadowBindingsCreation(t *testing.T) {
 }
 
 func TestShadowActivationRollback(t *testing.T) {
+	t.Parallel()
+
 	for _, kind := range []string{"queue", "schedule", "note"} {
 		t.Run(kind, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
@@ -171,6 +175,8 @@ CREATE TRIGGER reject_activation BEFORE INSERT OR UPDATE OF inbound_json ON turn
 }
 
 func TestShadowSeedAndFork(t *testing.T) {
+	t.Parallel()
+
 	store, root := newShadowTestStore(t)
 	_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat})
 	require.NoError(t, err)
@@ -259,6 +265,8 @@ func TestShadowSeedAndFork(t *testing.T) {
 }
 
 func TestShadowClaimHead(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"visible": KindWebChat})
@@ -373,6 +381,8 @@ SELECT t.history_anchor_id, l.id FROM turns t CROSS JOIN last_entry l WHERE t.id
 }
 
 func TestShadowImplicitCreation(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	require.NoError(t, store.UpsertThread("cron:private", ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
 	require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{ManagedConversationID: "visible", PrivateConversationID: "mcp:private", Agent: "main"}))
@@ -396,6 +406,8 @@ func TestShadowImplicitCreation(t *testing.T) {
 }
 
 func TestShadowExecutionOwnerEntrypoints(t *testing.T) {
+	t.Parallel()
+
 	for _, entrypoint := range []string{"web", "cron", "scheduled", "goal continuation", "background wake"} {
 		t.Run(entrypoint, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
@@ -459,6 +471,8 @@ func TestShadowExecutionOwnerEntrypoints(t *testing.T) {
 }
 
 func TestShadowToolConstructionAndRealEffects(t *testing.T) {
+	t.Parallel()
+
 	for _, permission := range []string{"allow", "deny"} {
 		t.Run(permission, func(t *testing.T) {
 			store, root := newShadowTestStore(t)
@@ -577,6 +591,8 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 }
 
 func TestShadowConsumedBatchIsAtomic(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	parent := &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
@@ -659,6 +675,8 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 }
 
 func TestShadowLiveFinalDrain(t *testing.T) {
+	t.Parallel()
+
 	store, root := newShadowTestStore(t)
 	require.NoError(t, root.Remove(filepath.Join(config.DefaultRuntimeDir, "agents", "main", "z.md")))
 	require.NoError(t, root.MkdirAll(filepath.Join(config.DefaultRuntimeDir, "skills"), 0o700))
@@ -811,6 +829,8 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 }
 
 func TestShadowStoppedInitialInputParity(t *testing.T) {
+	t.Parallel()
+
 	for _, human := range []bool{true, false} {
 		t.Run(fmt.Sprintf("human=%t", human), func(t *testing.T) {
 			store, root := newShadowTestStore(t)
@@ -1003,6 +1023,8 @@ func TestShadowFirstReconciliationClear(t *testing.T) {
 }
 
 func TestShadowLiveHistoryMutation(t *testing.T) {
+	t.Parallel()
+
 	for _, mutation := range []string{"revert", "history clear", "external MCP removal"} {
 		t.Run(mutation, func(t *testing.T) {
 			store, root := newShadowTestStore(t)
@@ -1204,6 +1226,8 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 }
 
 func TestShadowAdmissionPinsAgent(t *testing.T) {
+	t.Parallel()
+
 	store, root := newShadowTestStore(t)
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
 	require.NoError(t, root.WriteFile(".rocketclaw/agents/other.md", []byte("---\nmodel: gpt-other\npermission: {}\n---\nOther prompt"), 0o600))
@@ -1259,6 +1283,8 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 }
 
 func TestShadowSiblingFailureIsIndependent(t *testing.T) {
+	t.Parallel()
+
 	store, root := newShadowTestStore(t)
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o700))
 
@@ -1321,6 +1347,8 @@ WHERE s.child_conversation_id IN ($1, $2) AND s.child_turn_id <> '' AND u.id IS 
 }
 
 func TestShadowCanonicalCaptureRecovery(t *testing.T) {
+	t.Parallel()
+
 	store, root := newShadowTestStore(t)
 	require.NoError(t, root.Remove(filepath.Join(config.DefaultRuntimeDir, "agents", "main", "z.md")))
 	require.NoError(t, root.MkdirAll(filepath.Join(config.DefaultRuntimeDir, "skills"), 0o700))
@@ -1464,6 +1492,8 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 }
 
 func TestShadowTerminalClosure(t *testing.T) {
+	t.Parallel()
+
 	for _, scenario := range []string{"attachment fallback", "preparation error", "obsolete goal", "stop"} {
 		t.Run(scenario, func(t *testing.T) {
 			store, root := newShadowTestStore(t)
@@ -1515,6 +1545,8 @@ func TestShadowTerminalClosure(t *testing.T) {
 }
 
 func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "start", true)}
@@ -1627,6 +1659,8 @@ func shadowLimitNote(t *testing.T, store *SessionService, b *Bridge) (note strin
 }
 
 func TestShadowStepLimit(t *testing.T) {
+	t.Parallel()
+
 	store, parent, children := startShadowStepTurn(t)
 	answered, limited := children["main/a"], children["main/z"]
 
@@ -1685,6 +1719,8 @@ func TestShadowStepLimit(t *testing.T) {
 }
 
 func TestShadowStepLimitRestartsAtPersonMessages(t *testing.T) {
+	t.Parallel()
+
 	store, parent, children := startShadowStepTurn(t)
 	limited := children["main/z"]
 
@@ -1721,6 +1757,8 @@ func TestShadowStepLimitRestartsAtPersonMessages(t *testing.T) {
 }
 
 func TestShadowWorkflowTurnsHaveNoShadows(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newShadowTestStore(t)
 	parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "$workflow audit", true)}
@@ -1788,6 +1826,8 @@ func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
 // Deleting a Web copy while its producer's family holds history locks waits for
 // them instead of deadlocking: both sides lock the family in the same order.
 func TestHistoryMutationSharesLockOrder(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name, producer, child string
 		lockRest              func(context.Context, *sql.Tx, string) error
