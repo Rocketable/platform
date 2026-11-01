@@ -46,21 +46,23 @@ func (r BashResult) String() string {
 }
 
 type sandboxedShellSystem struct {
-	mu           sync.Mutex
-	root         *os.Root
-	spillRel     string
-	shellTemp    shellTempConfig
-	env          []string
-	shellCommand shellCommander
+	mu               sync.Mutex
+	root             *os.Root
+	spillRel         string
+	shellTemp        shellTempConfig
+	env              []string
+	shellCommand     shellCommander
+	forceKillTimeout time.Duration
 }
 
 func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, shellCommand shellCommander) *sandboxedShellSystem {
 	return &sandboxedShellSystem{
-		mu:           sync.Mutex{},
-		root:         root,
-		shellTemp:    *shellTemp,
-		env:          slices.Clone(env),
-		shellCommand: shellCommand,
+		mu:               sync.Mutex{},
+		root:             root,
+		shellTemp:        *shellTemp,
+		env:              slices.Clone(env),
+		shellCommand:     shellCommand,
+		forceKillTimeout: shellForceKillTimeout,
 	}
 }
 
@@ -182,7 +184,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 			return fmt.Errorf("terminate command group: %w", err)
 		}
 
-		time.AfterFunc(shellForceKillTimeout, func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
+		time.AfterFunc(sss.forceKillTimeout, func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) })
 
 		return nil
 	}
@@ -208,7 +210,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 
 		select {
 		case <-copied:
-		case <-time.After(shellForceKillTimeout):
+		case <-time.After(sss.forceKillTimeout):
 			_ = outputReader.Close()
 
 			<-copied

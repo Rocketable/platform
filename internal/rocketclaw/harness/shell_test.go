@@ -35,6 +35,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 
 	shellTemp := testShellTempConfig(t, root, outputDir)
 	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand{})
+	sss.forceKillTimeout = 10 * time.Millisecond
 
 	t.Run("rejects invalid commands before execution", func(t *testing.T) {
 		for _, tc := range []struct {
