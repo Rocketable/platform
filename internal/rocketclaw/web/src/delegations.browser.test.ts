@@ -183,6 +183,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`delegation panel 
 }, 30_000);
 
 for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks at ${width}px`, async () => {
+  const started = performance.now();
   const { chromium: engine } = await import(playwright!);
   const call = (name: string, input: object | string, extra: Partial<CodeModeCall> = {}): CodeModeCall => ({ name, arguments: typeof input === "string" ? input : JSON.stringify(input), status: "ok", ...extra });
   const script = (id: string, input: object, extra: Partial<TranscriptEvent> = {}) => event("tool", `execute ${JSON.stringify(input)}`, { toolName: "execute", toolCallId: id, ...extra });
@@ -304,12 +305,32 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
       const view = document.querySelector(selector)?.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
       return !!view && view.scrollHeight > view.clientHeight && (view.scrollHeight - view.clientHeight - view.scrollTop <= 1) === end;
     }, [viewport, end]);
-    const shown = (id: string) => page.waitForFunction(([selector, id]: [string, string]) => {
+    page.on("console", (message: { text(): string }) => {
+      if (message.text().startsWith("Permission review answer viewport ")) console.info(message.text());
+    });
+    const shown = (id: string) => page.waitForFunction(([selector, id, observed]: [string, string, { last?: string }]) => {
       const node = document.querySelector(`${selector} [data-message-id="${id}"]`), view = node?.closest('[data-slot="message-scroller-viewport"]');
+      if (id === "24:1") {
+        const state = JSON.stringify([...document.querySelectorAll<HTMLElement>(selector)].map((transcript) => {
+          const viewport = transcript.closest<HTMLElement>('[data-slot="message-scroller-viewport"]');
+          return {
+            viewport: viewport?.getBoundingClientRect().toJSON(),
+            scrollTop: viewport?.scrollTop,
+            scrollHeight: viewport?.scrollHeight,
+            clientHeight: viewport?.clientHeight,
+            pendingScroll: viewport?.hasAttribute("data-pending-scroll"),
+            messages: [...transcript.querySelectorAll<HTMLElement>("[data-message-id]")].map((message) => ({ id: message.dataset.messageId, bounds: message.getBoundingClientRect().toJSON() })),
+          };
+        }));
+        if (state !== observed.last) {
+          console.info("Permission review answer viewport", state);
+          observed.last = state;
+        }
+      }
       if (!node || !view) return false;
       const box = node.getBoundingClientRect(), bounds = view.getBoundingClientRect();
       return box.top >= bounds.top && box.bottom <= bounds.bottom;
-    }, [viewport, id]);
+    }, [viewport, id, {}]);
     const params = () => Object.fromEntries(["delegation", "reason", "answer"].map((name) => [name, new URL(page.url()).searchParams.get(name)]));
     // Two calls with the same reason each open their own answer.
     await heredoc.getByRole("link", { name: "Open permission review", exact: true }).click();
@@ -320,6 +341,12 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`code mode blocks 
     const diff = row("call-a", "bash · git diff");
     await diff.locator('> [data-slot="trace-collapsible-trigger"]').click();
     await diff.getByRole("link", { name: "Open permission review", exact: true }).click();
+    console.info("Waiting for permission review answer", {
+      expected: "24:1",
+      elapsedMs: performance.now() - started,
+      url: page.url(),
+      errors,
+    });
     await shown("24:1");
     expect(params()).toEqual({ delegation: "chat/call-a-review-1", reason: "Reading the diff is in scope.", answer: "t-diff" });
     await page.goBack();
