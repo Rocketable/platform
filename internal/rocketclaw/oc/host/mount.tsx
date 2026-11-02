@@ -1,6 +1,6 @@
 import "@/runtime/polyfills"
 import "./scope.css"
-import { createMemoryHistory, MemoryRouter } from "@solidjs/router"
+import { MemoryRouter } from "@solidjs/router"
 import { createSignal } from "solid-js"
 import { render } from "solid-js/web"
 import { terminateWorkerPools } from "@opencode/session-ui/pierre/worker"
@@ -11,12 +11,13 @@ import { createWebPlatform } from "@/runtime/platform/web"
 import { ServerConnection } from "@/runtime/server/registry"
 import { useCommand } from "@/shell/commands/command"
 import { sessionHref } from "@/shell/routes/session"
+import { useDialog } from "@opencode/ui/context/dialog"
 import { tag } from "../manifest.json"
 import { terminateMarkdownWorker } from "../packages/session-ui/src/components/markdown-worker"
 import "./defaults"
 import { register, ViewContext, type View } from "./fences"
 import type { MountOptions, Mounted } from "./api"
-import { NavigationContext, ViewHistory } from "./navigation"
+import { createViewHistory, NavigationContext, ViewHistory } from "./navigation"
 import { SessionTab } from "./session-tab"
 import { ServerState } from "./state"
 import { Theme } from "./theme"
@@ -46,12 +47,18 @@ export function mount(element: HTMLElement, options: MountOptions): Mounted {
 
   const server: ServerConnection.Http = { type: "http", http: { url: options.url }, displayName: options.server }
   const key = ServerConnection.key(server)
-  const history = createMemoryHistory()
-  history.set({ value: sessionHref(key, options.sessionID), replace: true, scroll: false })
+  const history = createViewHistory(sessionHref(key, options.sessionID))
+  const [opened, setOpened] = createSignal(options.sessionID)
+  const [kept, setKept] = createSignal<string[]>()
   let palette = () => {}
+  let closeDialogs = () => {}
 
   const Palette = () => {
     palette = useCommand().show
+    const dialog = useDialog()
+    closeDialogs = () => {
+      for (let open = dialog.active; open; open = dialog.active) dialog.close(open.id)
+    }
 
     return null
   }
@@ -70,7 +77,7 @@ export function mount(element: HTMLElement, options: MountOptions): Mounted {
               >
                 <Palette />
                 <ViewHistory history={history} />
-                <SessionTab server={key} sessionID={options.sessionID} />
+                <SessionTab server={key} sessionID={opened()} keep={kept()} />
                 <VersionPill server={key} />
                 <ServerState server={key} name={options.server} />
               </AppInterface>
@@ -97,5 +104,14 @@ export function mount(element: HTMLElement, options: MountOptions): Mounted {
       terminateMarkdownWorker()
     },
     openPalette: () => palette(),
+    show(sessionID) {
+      // A dialog opened for the session the view leaves would otherwise stay open and act on it.
+      closeDialogs()
+      setOpened(sessionID)
+      history.show(sessionHref(key, sessionID))
+    },
+    keep(sessionIDs) {
+      setKept(sessionIDs)
+    },
   }
 }

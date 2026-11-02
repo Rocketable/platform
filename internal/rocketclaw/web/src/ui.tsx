@@ -1927,7 +1927,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               <ShortcutsPage show={route.shortcuts} />
               <HostedPage key={route.page} page={route.page} />
               <SkillPage name={route.skill} />
-              <RemoteSession key={route.remote} id={route.remote} />
+              {/* Keyed by server, so moving between one server's sessions keeps its view (RemoteSession). */}
+              <RemoteSession key={route.remote.split(":")[1] ?? ""} id={route.remote} />
               <TabPane show={showChat}>
                 <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
                   <Transcript id={conversation.id} drafts={drafts} scopeError={scopeError} onDraftChange={onDraftChange} onCreated={(id) => { tabs.create(id); setConversation((current) => ({ ...current, created: id })); }} />
@@ -2587,20 +2588,36 @@ function RemoteSession({ id }: { id: string }) {
   });
   const closeTab = useEffectEvent(() => tabs.close([rowPath({ id, kind: "REMOTE_OPENCODE" })]));
   const reportSession = useEffectEvent((other: string) => { remoteView.shown = other; setReported(true); });
+  // One view per server: switching between its sessions' tabs moves the view, as OpenCode's own app moves between
+  // sessions, so what OpenCode holds in memory carries over. Leaving for any other tab disposes it.
+  const view = useRef<{ mounted: Mounted; sessionID: string }>(undefined);
+  const open = [...new Set(tabs.state.tabs.flatMap((tab) => tab.path.startsWith("/oc/") ? [decodeSessionId(tab.path.slice(4))] : []).flatMap((other) => other.startsWith(`opencode:${server}:`) ? [other.slice(`opencode:${server}:`.length)] : []))].join("\n");
+  const show = useEffectEvent(() => {
+    if (!view.current) return;
+    if (view.current.sessionID !== sessionID) view.current.mounted.show(sessionID);
+    view.current.sessionID = sessionID;
+    view.current.mounted.keep(open ? open.split("\n") : []);
+    Object.assign(remoteView, { route: id, shown: sessionID, openPalette: view.current.mounted.openPalette });
+  });
+  // The view opens on the session shown when it mounts; later sessions move it.
+  const attach = useEffectEvent(({ mount }: OcModule) => {
+    view.current = { mounted: mount(container.current!, { server, url: `${serverURL() || location.origin}/oc/${server}`, sessionID, navigation: { openSession, newSession, forkSession, closeTab, reportSession } }), sessionID };
+    show();
+  });
   useEffect(() => {
     if (!ready) return;
-    let view: Mounted | undefined, gone = false;
-    void (import(/* @vite-ignore */ retries ? `${ocEntry}?retry=${retries}` : ocEntry) as Promise<OcModule>).then(({ mount }) => {
-      if (gone) return;
-      view = mount(container.current!, { server, url: `${serverURL() || location.origin}/oc/${server}`, sessionID, navigation: { openSession, newSession, forkSession, closeTab, reportSession } });
-      Object.assign(remoteView, { route: id, shown: sessionID, openPalette: view.openPalette });
+    let gone = false;
+    void (import(/* @vite-ignore */ retries ? `${ocEntry}?retry=${retries}` : ocEntry) as Promise<OcModule>).then((module) => {
+      if (!gone) attach(module);
     }, (error: Error) => setFailed(error.message));
     return () => {
       gone = true;
-      view?.dispose();
+      view.current?.mounted.dispose();
+      view.current = undefined;
       Object.assign(remoteView, { route: "", shown: "", openPalette: () => {} });
     };
-  }, [ready, id, server, sessionID, retries]);
+  }, [ready, server, retries]);
+  useEffect(() => show(), [id, sessionID, open]);
   if (!id) return null;
   if (!configured) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{sidebar.enumerationComplete ? "This OpenCode session is no longer available." : "Loading…"}</p>;
   if (!ready) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{server} is offline; this session reopens when it is reachable.</p>;
