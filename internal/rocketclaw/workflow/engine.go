@@ -482,7 +482,7 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 			}
 		}
 
-		if err := e.phaseCount(phase, 1, 1, 0); err != nil {
+		if err := e.phaseCount(phase, 1, 0); err != nil {
 			return nil, err
 		}
 
@@ -521,7 +521,7 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 		}
 
 		// The initial count installed this phase, and phases are never removed.
-		_ = e.phaseCount(phase, 0, -1, 1)
+		_ = e.phaseCount(phase, 0, 1)
 
 		if schema == starlark.None {
 			text, _ := starlark.AsString(decoded)
@@ -532,7 +532,7 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 	})
 }
 
-func (e *engine) phaseCount(name string, scheduled, running, complete int) error {
+func (e *engine) phaseCount(name string, scheduled, complete int) error {
 	e.mu.Lock()
 
 	state := e.phases[name]
@@ -551,7 +551,6 @@ func (e *engine) phaseCount(name string, scheduled, running, complete int) error
 	}
 
 	state.Scheduled += scheduled
-	state.Running += running
 	state.Complete += complete
 	e.mu.Unlock()
 
@@ -566,8 +565,6 @@ func (e *engine) finishPhase(name string, errRun error) {
 		e.mu.Unlock()
 		return
 	}
-
-	state.Running = 0
 
 	state.Status = protocol.PhaseComplete
 	if errRun != nil {
