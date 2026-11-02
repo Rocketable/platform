@@ -38,7 +38,7 @@ const (
 
 // PhaseUpdate records one workflow phase's status and call counts.
 type PhaseUpdate struct {
-	PhaseID, Name                string
-	Status                       PhaseStatus
-	Scheduled, Running, Complete int
+	PhaseID, Name       string
+	Status              PhaseStatus
+	Scheduled, Complete int
 }

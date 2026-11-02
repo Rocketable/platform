@@ -304,7 +304,7 @@ def main(args):
 		})
 	}
 
-	t.Run("explicit error clears running calls", func(t *testing.T) {
+	t.Run("explicit error keeps completed call count", func(t *testing.T) {
 		result, _ := Run(t.Context(), engineDefinitionWithPhases(t, []string{"work"}, `def work():
     agent("success")
     return agent("fail")
@@ -448,7 +448,7 @@ def main(args):
 		}
 
 		for _, phase := range result.Phases {
-			if phase.Status != protocol.PhaseSkipped || phase.Scheduled != 0 || phase.Running != 0 || phase.Complete != 0 {
+			if phase.Status != protocol.PhaseSkipped || phase.Scheduled != 0 || phase.Complete != 0 {
 				t.Fatalf("phase = %+v, want skipped with no calls", phase)
 			}
 		}
