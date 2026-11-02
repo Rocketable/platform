@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
@@ -800,47 +801,53 @@ func TestValidateRuntimeDefinitionsRefusesBadRoutines(t *testing.T) {
 }
 
 func TestOneOffAddedByRefreshFiresOnce(t *testing.T) {
-	workspace := t.TempDir()
-	runs, release := make(chan string, 10), make(chan struct{})
-	// The cron file's run lasts until released.
-	m := New(newCronConfig(t, workspace, "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		runs <- progress.Run.Path
+	store := newCronScheduleStore(t)
+	synctest.Test(t, func(t *testing.T) {
+		workspace := t.TempDir()
+		runs, release := make(chan string, 10), make(chan struct{})
+		// The cron file's run lasts until released.
+		m := New(newCronConfig(t, workspace, "."), ".", store, &runnerMock{RunFunc: func(_ context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+			runs <- progress.Run.Path
 
-		<-release
+			<-release
 
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
-	m.now = func() time.Time { return time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC) }
-	m.tickerInterval = 10 * time.Millisecond
-	require.NoError(t, m.Start(t.Context()))
+			return protocol.CronRunResult{}, nil
+		}}, slog.New(slog.DiscardHandler))
+		m.now = func() time.Time { return time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC) }
+		m.tickerInterval = 10 * time.Millisecond
+		require.NoError(t, m.Start(t.Context()))
 
-	// A past-due one-off added after start waits for the refresh a reload makes.
-	require.NoError(t, os.Mkdir(filepath.Join(workspace, "cron"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "cron", "launch.md"), []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\n---\nBody"), 0o644))
-	time.Sleep(10 * m.tickerInterval)
-	require.Empty(t, runs, "a one-off runs only once a refresh loads it")
-	require.NoError(t, m.Refresh())
+		// A past-due one-off added after start waits for the refresh a reload makes.
+		require.NoError(t, os.Mkdir(filepath.Join(workspace, "cron"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(workspace, "cron", "launch.md"), []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\n---\nBody"), 0o644))
+		time.Sleep(10 * m.tickerInterval)
+		synctest.Wait()
+		require.Empty(t, runs, "a one-off runs only once a refresh loads it")
+		require.NoError(t, m.Refresh())
 
-	select {
-	case path := <-runs:
-		require.Equal(t, "cron/launch.md", path)
-	case <-time.After(5 * time.Second):
-		t.Fatal("the one-off added by a refresh did not run")
-	}
+		select {
+		case path := <-runs:
+			require.Equal(t, "cron/launch.md", path)
+		case <-time.After(5 * time.Second):
+			t.Fatal("the one-off added by a refresh did not run")
+		}
 
-	// Scans and refreshes go on while the cron file still runs and exists.
-	require.NoError(t, m.Refresh())
-	time.Sleep(30 * m.tickerInterval)
-	close(release)
-	stopCronManager(t, m)
+		// Scans and refreshes go on while the cron file still runs and exists.
+		require.NoError(t, m.Refresh())
+		time.Sleep(30 * m.tickerInterval)
+		synctest.Wait()
+		close(release)
+		stopCronManager(t, m)
+		require.NoError(t, m.scanScheduled(t.Context()))
 
-	select {
-	case path := <-runs:
-		t.Fatalf("one-off %s fired again", path)
-	default:
-	}
+		select {
+		case path := <-runs:
+			t.Fatalf("one-off %s fired again", path)
+		default:
+		}
 
-	require.NoFileExists(t, filepath.Join(workspace, "cron", "launch.md"))
+		require.NoFileExists(t, filepath.Join(workspace, "cron", "launch.md"))
+	})
 }
 
 func TestStaleOneOffTimerRunsNothing(t *testing.T) {
@@ -853,40 +860,44 @@ func TestStaleOneOffTimerRunsNothing(t *testing.T) {
 		{"deleted", "", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			workspace := t.TempDir()
-			cronPath := filepath.Join(workspace, "cron", "launch.md")
-			require.NoError(t, os.Mkdir(filepath.Dir(cronPath), 0o755))
-			require.NoError(t, os.WriteFile(cronPath, []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\n---\nOld"), 0o644))
+			store := newCronScheduleStore(t)
+			synctest.Test(t, func(t *testing.T) {
+				workspace := t.TempDir()
+				cronPath := filepath.Join(workspace, "cron", "launch.md")
+				require.NoError(t, os.Mkdir(filepath.Dir(cronPath), 0o755))
+				require.NoError(t, os.WriteFile(cronPath, []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\n---\nOld"), 0o644))
 
-			runs := make(chan string, 10)
-			m := New(newCronConfig(t, workspace, "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(_ context.Context, _, prompt string, _ *backend.RawRunProgress) (protocol.CronRunResult, error) {
-				runs <- prompt
-				return protocol.CronRunResult{}, nil
-			}}, slog.New(slog.DiscardHandler))
-			m.now = func() time.Time { return time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Add(-200 * time.Millisecond) }
-			m.tickerInterval = 10 * time.Millisecond
-			require.NoError(t, m.Start(t.Context()))
+				runs := make(chan string, 10)
+				m := New(newCronConfig(t, workspace, "."), ".", store, &runnerMock{RunFunc: func(_ context.Context, _, prompt string, _ *backend.RawRunProgress) (protocol.CronRunResult, error) {
+					runs <- prompt
+					return protocol.CronRunResult{}, nil
+				}}, slog.New(slog.DiscardHandler))
+				m.now = func() time.Time { return time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Add(-200 * time.Millisecond) }
+				m.tickerInterval = 10 * time.Millisecond
+				require.NoError(t, m.Start(t.Context()))
 
-			// Changed before the old time comes.
-			if tc.edit == "" {
-				require.NoError(t, os.Remove(cronPath))
-			} else {
-				require.NoError(t, os.WriteFile(cronPath, []byte(tc.edit), 0o644))
-			}
+				// Changed before the old time comes.
+				if tc.edit == "" {
+					require.NoError(t, os.Remove(cronPath))
+				} else {
+					require.NoError(t, os.WriteFile(cronPath, []byte(tc.edit), 0o644))
+				}
 
-			require.NoError(t, m.Refresh())
+				require.NoError(t, m.Refresh())
 
-			time.Sleep(800 * time.Millisecond)
-			stopCronManager(t, m)
-			close(runs)
+				time.Sleep(800 * time.Millisecond)
+				synctest.Wait()
+				stopCronManager(t, m)
+				close(runs)
 
-			var got []string
-			for prompt := range runs {
-				got = append(got, prompt)
-			}
+				var got []string
+				for prompt := range runs {
+					got = append(got, prompt)
+				}
 
-			require.Equal(t, tc.want, got)
-			require.NotContains(t, m.armed, "cron/launch.md#0#2000-01-01T00:00:00Z", "a stale one-off is no longer armed")
+				require.Equal(t, tc.want, got)
+				require.NotContains(t, m.armed, "cron/launch.md#0#2000-01-01T00:00:00Z", "a stale one-off is no longer armed")
+			})
 		})
 	}
 }
