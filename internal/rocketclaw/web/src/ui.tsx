@@ -38,7 +38,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigger, TraceDescription, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
 import { cn } from "@/lib/utils";
 import type { Agent, AgentChoices, Attachment as AttachmentMeta, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, TopShelf, TranscriptEvent, VoiceSettings } from "@/types";
-import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import type { MountOptions, Mounted } from "../../oc/host/api";
 import {
@@ -468,15 +467,6 @@ const WarmTabs = memo(function WarmTabs({ cron, agents, skills, config }: { cron
       config: current.config || config,
     }));
   }, [cron, agents, skills, config]);
-  useEffect(() => {
-    return runPreload(
-      () => queryClient.prefetchQuery(queries.agents()),
-      () => queryClient.prefetchQuery(queries.skills()),
-      () => queryClient.prefetchQuery(queries.cronJobs()),
-      () => queryClient.prefetchQuery(queries.config()),
-      () => setWarm({ cron: true, agents: true, skills: true, config: true }),
-    );
-  }, []);
   const shown = { cron, agents, skills, config };
   return (["cron", "agents", "skills", "config"] as const).map((name) => {
     const Page = { cron: CronPage, agents: AgentsPage, skills: SkillsPage, config: ConfigPage }[name];
@@ -4604,7 +4594,9 @@ function SessionComposer({
   const revert = useContext(RevertActions)!;
   const { scrollToEnd, scrollToMessage } = useMessageScroller();
   const prompt = useMutation({ mutationFn: mutations.prompt, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
-  const agents = useQuery({ ...queries.agents({ conversationId: id }), refetchInterval: 2000 });
+  // No polling: on a slow link a 2 s refresh used a large share of the connection. Agent switches made here
+  // refetch it; changes made elsewhere arrive when the window regains focus or the session reopens.
+  const agents = useQuery(queries.agents({ conversationId: id }));
   const removeQueueItem = useMutation({ mutationFn: mutations.removeQueueItem, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const steerQueueItem = useMutation({ mutationFn: mutations.steerQueueItem, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const popQueueItem = useMutation({ mutationFn: mutations.popQueueItem, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["queue"] }) });
