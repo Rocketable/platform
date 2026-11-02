@@ -45,12 +45,19 @@ func (p finalsPublisher) PublishOutbound(_ context.Context, message *protocol.Ou
 // newResumeTestBridges returns a factory for bridges of one conversation that
 // survive a simulated restart, a provider whose request bodies are reported, and
 // the published finals. A blocked provider holds its first request until its context ends.
-func newResumeTestBridges(t *testing.T, blocked bool) (newBridge func() *Bridge, service *SessionService, requests chan string, finals chan *protocol.OutboundMessage) {
+func newResumeTestBridges(t *testing.T, blocked bool, databaseURL ...string) (newBridge func() *Bridge, service *SessionService, requests chan string, finals chan *protocol.OutboundMessage) {
 	t.Helper()
 
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	if len(databaseURL) > 0 {
+		root, err := os.OpenRoot(workspace)
+		require.NoError(t, err)
+		require.NoError(t, root.WriteFile(".test-database-url", []byte(databaseURL[0]), 0o600))
+		require.NoError(t, root.Close())
+	}
 
 	service = newTestSessionServiceAt(t, workspace)
 	requests, finals = make(chan string, 16), make(chan *protocol.OutboundMessage, 16)
@@ -920,13 +927,37 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, private, 1, "canonical turns never append to producer history")
 
+	var recoveryDSN []string
+
 	// Failures across startup, live, and due entry paths.
 	for _, state := range []string{"completed before Sync", "binding before projection", "existing Web", "reset cancels", "reset then future", "creation failure", "active creation failure", "live Sync failure", "due read failure"} {
 		t.Run(state, func(t *testing.T) {
-			newBridge, store, calls, outbounds := newResumeTestBridges(t, state == "active creation failure")
+			shared := state != "active creation failure"
+
+			var databaseURL []string
+			if shared {
+				databaseURL = recoveryDSN
+			}
+
+			newBridge, store, calls, outbounds := newResumeTestBridges(t, state == "active creation failure", databaseURL...)
 			store.db.SetMaxOpenConns(1)
 
 			runtime := newBridge().runtime
+			if shared {
+				recoveryDSN = []string{testStoreDSN(runtime.Clone().Workspace)}
+				_, err := store.db.ExecContext(t.Context(), `DELETE FROM entries; DELETE FROM turns; DELETE FROM steps; DELETE FROM schedules;
+DELETE FROM conversations WHERE conversation_id IN ('cron:pending', 'web:cron:pending')`)
+				require.NoError(t, err)
+				t.Cleanup(func() {
+					// Managers join first. Reserve the sole connection before closing this pool,
+					// so unjoined timer callbacks cannot write into the next case's schema.
+					conn, err := store.db.Conn(context.Background())
+					require.NoError(t, err)
+					require.NoError(t, store.Stop())
+					require.NoError(t, conn.Close())
+				})
+			}
+
 			if state == "completed before Sync" {
 				writeAgent(t, runtime.Clone().Workspace, "a-loaded", "---\ndescription: First loaded\nmodel: gpt-6.1-sol\npermission: {}\n---\nSorted fallback instructions\n")
 			}
@@ -1009,7 +1040,7 @@ SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(prod
 
 				assert.Empty(t, calls)
 				require.Empty(t, runningTestTurns(t, store), "delivery closed the original turn before the metadata read failed")
-				_, err = store.db.ExecContext(t.Context(), `DROP VIEW conversations; ALTER TABLE unavailable_conversations RENAME TO conversations; DROP FUNCTION unavailable_producer(json)`)
+				_, err = store.db.ExecContext(t.Context(), `DROP VIEW conversations; ALTER TABLE unavailable_conversations RENAME TO conversations; DROP FUNCTION unavailable_producer(json); DROP SEQUENCE handoff_reads`)
 				require.NoError(t, err)
 			} else if strings.HasSuffix(state, "failure") {
 				statement := `ALTER TABLE conversations ADD CONSTRAINT reject_handoff CHECK (conversation_id <> 'web:cron:pending') NOT VALID`
@@ -1020,23 +1051,28 @@ SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(prod
 					table = "turns"
 				}
 
-				_, err = store.db.ExecContext(t.Context(), statement)
-				require.NoError(t, err)
+				func() {
+					_, err = store.db.ExecContext(t.Context(), statement)
 
-				if strings.HasPrefix(state, "live ") {
-					bridge := newBridge()
-					bridge.config.ConversationID, bridge.threads = "cron:pending", manager
+					require.NoError(t, err)
+					defer func() {
+						_, err := store.db.ExecContext(context.Background(), "ALTER TABLE "+table+" DROP CONSTRAINT reject_handoff")
+						require.NoError(t, err)
+					}()
 
-					t.Cleanup(bridge.Stop)
-					bridge.handle(t.Context(), &bridgeRequest{inbound: inbound, turnID: "pending", delivery: delivery})
-					require.Empty(t, runningTestTurns(t, store))
-				} else {
-					require.ErrorContains(t, manager.StartPendingScheduledMessages(t.Context()), "reject_handoff")
-				}
+					if strings.HasPrefix(state, "live ") {
+						bridge := newBridge()
+						bridge.config.ConversationID, bridge.threads = "cron:pending", manager
 
-				assert.Empty(t, calls, "failed handoff must not run privately")
-				_, err = store.db.ExecContext(t.Context(), "ALTER TABLE "+table+" DROP CONSTRAINT reject_handoff")
-				require.NoError(t, err)
+						t.Cleanup(bridge.Stop)
+						bridge.handle(t.Context(), &bridgeRequest{inbound: inbound, turnID: "pending", delivery: delivery})
+						require.Empty(t, runningTestTurns(t, store))
+					} else {
+						require.ErrorContains(t, manager.StartPendingScheduledMessages(t.Context()), "reject_handoff")
+					}
+
+					assert.Empty(t, calls, "failed handoff must not run privately")
+				}()
 
 				if state == "active creation failure" {
 					// A due timer can start this request before the old process stops.
