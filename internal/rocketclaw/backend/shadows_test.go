@@ -58,7 +58,7 @@ func newShadowTestStore(t *testing.T) (*SessionService, *os.Root) {
 		require.NoError(t, root.WriteFile(file, []byte("---\nmodel: gpt-6.1-sol\n---\nPrompt "+name), 0o600))
 	}
 
-	return newTestSessionServiceAt(t, workspace), root
+	return newMigratedTestSessionServiceAt(t, workspace), root
 }
 
 func TestShadowBindingsCreation(t *testing.T) {
