@@ -1065,6 +1065,26 @@ SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(prod
 				return
 			}
 
+			if state == "creation failure" {
+				defer func() {
+					if !t.Failed() {
+						return
+					}
+
+					t.Logf("recovered handoff: provider_requests=%d finals=%d database=%+v", len(calls), len(outbounds), store.db.Stats())
+					// Bound diagnostic SQL, not the test timeout, so a busy pool cannot stall cleanup.
+					ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+					defer cancel()
+
+					rows, err := queryStrings(ctx, store.db, `SELECT format('turn id=%s conversation=%s phase=%s reason=%s due=%s outbound=%s', id, conversation_id, phase, reason, run_at_unix_ns, outbound_json IS NOT NULL)
+FROM turns WHERE conversation_id IN ('cron:pending', 'web:cron:pending')
+UNION ALL
+SELECT format('conversation id=%s reports_to=%s producer=%s', conversation_id, reports_to, producer_inbound_json IS NOT NULL)
+FROM conversations WHERE conversation_id IN ('cron:pending', 'web:cron:pending') ORDER BY 1`, "recovered cron handoff state")
+					t.Logf("recovered handoff rows=%v query_error=%v", rows, err)
+				}()
+			}
+
 			final := readFinal(t, outbounds)
 			assert.Equal(t, "web:cron:pending", final.ConversationID)
 
