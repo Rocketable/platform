@@ -18,21 +18,23 @@ test("transcript and entry HTTP proxy reach Go", async () => {
   expect(await call("Protocol")).toEqual({ protoSha256: hash });
   expect(await call("Identity")).toEqual({ username: "alice", principal: "alice", justBashError: "" });
   const batches = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`));
-  expect(batches.flatMap((batch) => batch.sessions.map((session) => session.id))).toEqual(["empty-web", id]);
-  expect(batches.at(-1)).toEqual({ sessions: [], owner: "alice", upstreamSuccess: true, opencodeServers: {}, agentTags: {}, version: expect.any(String), order: ["empty-web", id] });
-  // Since that version, an unchanged list sends no rows, only the order and a new version.
-  const since = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions?${new URLSearchParams({ since: batches.at(-1)!.version! })}`));
-  expect([since.flatMap((batch) => batch.sessions), since.at(-1)?.order]).toEqual([[], ["empty-web", id]]);
-  expect(since.at(-1)?.version).not.toBe(batches.at(-1)!.version);
-  const original = batches.flatMap((batch) => batch.sessions).find((session) => session.id === id)!;
+  expect(batches.flatMap((batch) => batch.sessions ?? []).map((session) => session.id)).toEqual(["empty-web", id]);
+  expect([batches[0], batches.at(-1)]).toEqual([{ owner: "alice" }, { upstreamSuccess: true, version: expect.any(String) }]);
+  // Since that version, an unchanged list sends no rows, only a new version naming the one it was sent since.
+  const version = batches.at(-1)!.version!;
+  const since = await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions?${new URLSearchParams({ since: version })}`));
+  expect(since.flatMap((batch) => batch.sessions ?? [])).toEqual([]);
+  expect(since.at(-1)).toEqual({ upstreamSuccess: true, version: expect.not.stringMatching(version), since: version });
+  const original = batches.flatMap((batch) => batch.sessions ?? []).find((session) => session.id === id)!;
   for (const details of [{ id, pinned: true }, { id, name: " Launch " }, { id, pinned: false }, { id, name: "" }]) {
     await call("UpdateSession", details);
-    const updated: Session[] = (await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).flatMap((batch) => batch.sessions);
+    const updated: Session[] = (await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).flatMap((batch) => batch.sessions ?? []);
     const session = updated.find((session) => session.id === id)!;
     expect(session.preview).toBe(original.preview);
     expect(session.updatedAt).toBe(original.updatedAt);
-    if (details.pinned !== undefined) expect(session.pinned).toBe(details.pinned);
-    if (details.name !== undefined) expect(session.name).toBe(details.name.trim());
+    // A listing leaves out default values: an unpinned or unnamed session has no pinned or name.
+    if (details.pinned !== undefined) expect(session.pinned ?? false).toBe(details.pinned);
+    if (details.name !== undefined) expect(session.name ?? "").toBe(details.name.trim());
   }
   const history: { messages: TranscriptEvent[] } = await call("History", { id: process.env.ROCKETCLAW_HISTORY_TEST_ID! });
   expect(history.messages[1]).toMatchObject({ model: "legacy-model", agent: "", origin: "canonical" });

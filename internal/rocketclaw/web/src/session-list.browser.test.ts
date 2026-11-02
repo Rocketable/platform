@@ -31,7 +31,7 @@ test("saved sidebar snapshots isolate owners and commit atomically", async () =>
       const path = "/session-list.js";
       const storage = await import(path);
       const rows = [{ id: "one", title: "kept", preview: "start\0" + "x".repeat(17 * 1024 * 1024) + "\0end", agent: "agent", tags: ["customer", "Needs review"], running: true }];
-      await storage.saveCompleteSessions("a", "v1", rows, await storage.loadSnapshotGeneration("a", "v1"));
+      await storage.saveCompleteSessions("a", "v1", { rows, version: "v1" }, await storage.loadSnapshotGeneration("a", "v1"));
       const put = IDBObjectStore.prototype.put;
       IDBObjectStore.prototype.put = function (...args) {
         const request = put.apply(this, args);
@@ -40,7 +40,7 @@ test("saved sidebar snapshots isolate owners and commit atomically", async () =>
       };
       let rejected = false;
       try {
-        await storage.saveCompleteSessions("a", "v1", [{ id: "replacement" }], await storage.loadSnapshotGeneration("a", "v1"));
+        await storage.saveCompleteSessions("a", "v1", { rows: [{ id: "replacement" }], version: "v2" }, await storage.loadSnapshotGeneration("a", "v1"));
       } catch {
         rejected = true;
       } finally {
@@ -58,14 +58,16 @@ test("saved sidebar snapshots isolate owners and commit atomically", async () =>
     const restored = await page.evaluate(async () => {
       const path = "/session-list.js";
       const storage = await import(path);
-      const rows = await storage.loadSavedSessions("a", "v1");
-      await storage.saveCompleteSessions("a", "v1", [], await storage.loadSnapshotGeneration("a", "v1"));
-      return { running: rows[0].running, fullPreview: rows[0].preview === "start\0" + "x".repeat(17 * 1024 * 1024) + "\0end", empty: await storage.loadSavedSessions("a", "v1") };
+      const { rows, version } = await storage.loadSavedSessions("a", "v1");
+      await storage.saveCompleteSessions("a", "v1", { rows: [], version: "v3" }, await storage.loadSnapshotGeneration("a", "v1"));
+      return { version, running: rows[0].running, fullPreview: rows[0].preview === "start\0" + "x".repeat(17 * 1024 * 1024) + "\0end", empty: await storage.loadSavedSessions("a", "v1") };
     });
+    // The saved listing keeps rows as listed, so a poll since its version leaves unchanged rows right.
     expect(restored).toEqual({
+      version: "v1",
       fullPreview: true,
-      running: false,
-      empty: [],
+      running: true,
+      empty: { rows: [], version: "v3" },
     });
   } finally {
     server.stop(true);
@@ -94,9 +96,10 @@ test("pending saves and owner switches cannot leak owners or overwrite newer sna
     const result = await page.evaluate(async () => {
       const modulePath = "/storage.js";
       const storage = await import(modulePath);
+      const saved = (rows: object[]) => ({ rows, version: "v" });
       const rows = [{ id: "synthetic", preview: "old synthetic preview", agent: "agent", title: "room" }];
       const activeGeneration = await storage.loadSnapshotGeneration("owner", "protocol");
-      await storage.saveCompleteSessions("owner", "protocol", rows, activeGeneration);
+      await storage.saveCompleteSessions("owner", "protocol", saved(rows), activeGeneration);
       const open = IDBFactory.prototype.open;
       const holdOpen = () => {
         const held = Promise.withResolvers<void>();
@@ -118,10 +121,10 @@ test("pending saves and owner switches cannot leak owners or overwrite newer sna
       };
 
       const switchGate = holdOpen();
-      const pendingOwnerSave = storage.saveCompleteSessions("owner", "protocol", [{ ...rows[0], preview: "switched-away preview" }], activeGeneration);
+      const pendingOwnerSave = storage.saveCompleteSessions("owner", "protocol", saved([{ ...rows[0], preview: "switched-away preview" }]), activeGeneration);
       await switchGate.held;
       storage.invalidatePendingSaves("owner", "protocol");
-      await storage.saveCompleteSessions("other", "protocol", [{ id: "other", preview: "other preview" }], await storage.loadSnapshotGeneration("other", "protocol"));
+      await storage.saveCompleteSessions("other", "protocol", saved([{ id: "other", preview: "other preview" }]), await storage.loadSnapshotGeneration("other", "protocol"));
       switchGate.release();
       await pendingOwnerSave;
 
@@ -139,22 +142,22 @@ test("pending saves and owner switches cannot leak owners or overwrite newer sna
         request.addEventListener("success", keepActive);
         return request;
       };
-      const activeSave = storage.saveCompleteSessions("owner", "protocol", [{ id: "synthetic", preview: "uncommitted owner preview" }], activeGeneration).catch(() => {});
+      const activeSave = storage.saveCompleteSessions("owner", "protocol", saved([{ id: "synthetic", preview: "uncommitted owner preview" }]), activeGeneration).catch(() => {});
       await writing.promise;
       storage.invalidatePendingSaves("owner", "protocol");
       holdTransaction = false;
       await activeSave;
       const olderGate = holdOpen();
-      const olderSave = storage.saveCompleteSessions("ordering", "protocol", [{ id: "row", preview: "older" }], 0);
+      const olderSave = storage.saveCompleteSessions("ordering", "protocol", saved([{ id: "row", preview: "older" }]), 0);
       await olderGate.held;
-      await storage.saveCompleteSessions("ordering", "protocol", [{ id: "row", preview: "newer" }], 0);
+      await storage.saveCompleteSessions("ordering", "protocol", saved([{ id: "row", preview: "newer" }]), 0);
       olderGate.release();
       await olderSave;
       const newest = await storage.loadSavedSessions("ordering", "protocol");
       return {
-        newest,
-        other: await storage.loadSavedSessions("other", "protocol"),
-        ownerAfterSwitch: await storage.loadSavedSessions("owner", "protocol"),
+        newest: newest.rows,
+        other: (await storage.loadSavedSessions("other", "protocol")).rows,
+        ownerAfterSwitch: (await storage.loadSavedSessions("owner", "protocol")).rows,
       };
     });
     expect(result).toEqual({
@@ -784,7 +787,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         const tx = db.transaction("snapshots", "readwrite");
         tx.oncomplete = () => resolve();
         tx.onabort = () => reject(tx.error);
-        tx.objectStore("snapshots").put([{ id: "kept", title: "room", preview: "Huge\n" + "start\0" + "x".repeat(17 * 1024 * 1024) + "\0needle-17mib", agent: "main" }], ["alice", "test-protocol"]);
+        tx.objectStore("snapshots").put({ rows: [{ id: "kept", title: "room", preview: "Huge\n" + "start\0" + "x".repeat(17 * 1024 * 1024) + "\0needle-17mib", agent: "main" }], version: "saved" }, ["alice", "test-protocol"]);
       });
       db.close();
     });
@@ -1315,9 +1318,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await page.reload();
     await page.waitForFunction(() => (window as unknown as { __openHeld: boolean }).__openHeld);
     await page.keyboard.press("Control+p");
-    await shown(sessionPalette, "merged-live");
+    // The saved list loads before the poll, whose since is the saved version.
+    const polls = ctrl.listCalls;
     await search.fill("will vanish");
     await hidden(sessionPalette, "will vanish");
+    await page.waitForTimeout(300);
+    expect(ctrl.listCalls).toBe(polls);
     await page.evaluate(() => (window as unknown as { __releaseOpen: () => void }).__releaseOpen());
     await shown(sessionPalette, "will vanish");
     await search.fill("");
@@ -1366,7 +1372,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await search.fill("");
     await shown(sessionPalette, "backfilled preview");
     await page.waitForFunction(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts > 0);
-    expect(await page.evaluate(snapshot, ["alice", "test-protocol"])).toEqual([row("kept", "backfilled preview")]);
+    expect(await page.evaluate(snapshot, ["alice", "test-protocol"])).toEqual({ rows: [row("kept", "backfilled preview")], version: "", remote: { servers: {}, agentTags: {} } });
     blocked = Promise.withResolvers();
     await page.reload();
     await openSessions(page);
@@ -1424,7 +1430,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await oldResponse;
     await shown(page, "bob preview");
     await hidden(page, "late alice preview");
-    expect(await page.evaluate(snapshot, ["bob", "test-protocol"])).toEqual([row("gone", "bob preview")]);
+    expect((await page.evaluate(snapshot, ["bob", "test-protocol"])).rows).toEqual([row("gone", "bob preview")]);
     await page.reload();
     await openSessions(page);
     await shown(sessionPalette, "bob preview");
@@ -1516,7 +1522,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
           await shown(storagePage, "prior committed preview");
           await storagePage.waitForFunction(() => (window as unknown as { __committed: boolean }).__committed);
           const prior = await storagePage.evaluate(snapshot, ["bob", ctrl.protocol]);
-          expect(prior).toEqual([row("live-storage-failure", "prior committed preview")]);
+          expect(prior.rows).toEqual([row("live-storage-failure", "prior committed preview")]);
           await storagePage.evaluate(() => {
             Object.defineProperty(window, "__quotaFailed", { value: false, writable: true });
             IDBObjectStore.prototype.put = function () {

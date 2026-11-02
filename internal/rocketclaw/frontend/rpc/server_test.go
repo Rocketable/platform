@@ -2889,6 +2889,11 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	require.NoError(t, stream.SendMsg(&ListSessionsRequest{}))
 	require.NoError(t, stream.CloseSend())
 
+	var start ListSessionsResponse
+	require.NoError(t, stream.RecvMsg(&start))
+	require.Equal(t, "alice", start.Owner, "the first message names the owner")
+	require.Empty(t, start.Sessions)
+
 	prefix := 0
 
 	for {
@@ -2901,7 +2906,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		}
 
 		require.False(t, batch.UpstreamSuccess)
-		require.Equal(t, "alice", batch.Owner)
+		require.Empty(t, batch.Owner)
 		require.Len(t, batch.Sessions, 1)
 
 		prefix++

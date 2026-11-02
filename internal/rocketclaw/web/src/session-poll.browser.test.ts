@@ -6,15 +6,15 @@ const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
-// Polls after the first send the version they hold and get only changed rows; the list keeps the rest in the
-// server's order and drops what the order no longer names.
+// Polls after the first send the version they hold and get only changed rows and the IDs removed since; the list
+// keeps the rest in the server's order. A reload holds the saved version, so it is not sent every row again.
 test("session list polls ask for changes since the version they hold", async () => {
   const { chromium: engine } = await import(playwright!);
-  const row = (id: string, preview: string): Session => ({ id, preview, title: "", agent: "main", updatedAt: new Date().toISOString() });
-  const listings: Record<string, { sessions: Session[]; version: string; order: string[] }> = {
-    "": { sessions: [row("a", "Alpha"), row("b", "Beta"), row("c", "Gamma")], version: "v1", order: ["a", "b", "c"] },
-    v1: { sessions: [row("b", "Beta again")], version: "v2", order: ["a", "b"] },
-    v2: { sessions: [], version: "v3", order: ["a", "b"] },
+  const row = (id: string, preview: string, updatedAt: string): Session => ({ id, preview, title: "", agent: "main", updatedAt });
+  const listings: Record<string, { sessions: Session[]; version: string; removed?: string[] }> = {
+    "": { sessions: [row("a", "Alpha", "2026-11-01T10:00:00Z"), row("b", "Beta", "2026-11-01T09:00:00Z"), row("c", "Gamma", "2026-11-01T08:00:00Z")], version: "v1" },
+    v1: { sessions: [row("b", "Beta again", "2026-11-01T10:00:00.5Z")], version: "v2", removed: ["c"] },
+    v2: { sessions: [], version: "v3" },
   };
   const since: string[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
@@ -22,9 +22,9 @@ test("session list polls ask for changes since the version they hold", async () 
     if (url.pathname === "/api/ListSessions") {
       const held = url.searchParams.get("since") ?? "";
       since.push(held);
-      const { sessions, version, order } = listings[held] ?? listings.v2;
-      const done: SessionBatch = { sessions: [], owner: "tester", upstreamSuccess: true, opencodeServers: {}, version, order };
-      return new Response([...sessions.map((session) => ({ sessions: [session], owner: "tester", upstreamSuccess: false })), done].map((batch) => `data: ${JSON.stringify(batch)}\n\n`).join("") + "event: complete\ndata: {}\n\n", { headers: { "Content-Type": "text/event-stream" } });
+      const { sessions, version, removed } = listings[held] ?? listings.v2;
+      const done: SessionBatch = { upstreamSuccess: true, version, ...held && { since: held, removed } };
+      return new Response([{ owner: "tester" }, ...sessions.map((session) => ({ sessions: [session] })), done].map((batch) => `data: ${JSON.stringify(batch)}\n\n`).join("") + "event: complete\ndata: {}\n\n", { headers: { "Content-Type": "text/event-stream" } });
     }
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
@@ -52,7 +52,12 @@ test("session list polls ask for changes since the version they hold", async () 
     await search.waitFor();
     const sessions = page.getByRole("button", { name: /^(Alpha|Beta|Gamma)/ });
     await page.getByRole("button", { name: /^Beta again/ }).waitFor();
-    expect(await sessions.allTextContents()).toEqual([expect.stringMatching(/^Alpha(?!.*again)/), expect.stringMatching(/^Beta again/)]);
+    expect(await sessions.allTextContents()).toEqual([expect.stringMatching(/^Beta again/), expect.stringMatching(/^Alpha/)]);
+
+    const polled = since.length;
+    await page.reload();
+    for (let tries = 0; tries < 400 && since.length < polled + 2; tries++) await Bun.sleep(20);
+    expect(since.slice(polled).filter((version) => version === "")).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

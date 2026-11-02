@@ -20,7 +20,9 @@ export type MessageMatch = { conversationId: string; message: TranscriptEvent; r
 export type SearchMessagesResponse = { matches?: MessageMatch[]; tagIds?: string[] };
 // Term offsets are UTF-16 positions in the sent query; an empty match field means only message text matched.
 export type SearchSessionsResponse = { terms: { key: string; text: string; start: number; end: number }[]; text: string; needle: string; matches: { conversationId: string; field: string; text: string; rocketclaw?: string }[]; messages: MessageMatch[]; mentionIds: string[]; principals?: string[] };
-export type SessionBatch = { sessions: Session[]; owner: string; upstreamSuccess: boolean; opencodeServers?: Remote["servers"]; agentTags?: Record<string, { tags?: string[] }>; version?: string; order?: string[] };
+// A listing leaves out default values: its first message carries owner and the server metadata, the completion
+// upstreamSuccess, version, and, when sent since a held version, that version and the IDs removed since.
+export type SessionBatch = { sessions?: Session[]; owner?: string; upstreamSuccess?: boolean; opencodeServers?: Remote["servers"]; agentTags?: Record<string, { tags?: string[] }>; version?: string; since?: string; removed?: string[] };
 export type AgentChoices = { agents: Agent[]; currentAgent: string };
 export type CronJob = { stem: string; status: string; lastRun: string; nextRun: string; schedule?: string; body?: string; agent?: string; upcoming?: string[]; origin?: string; space?: string };
 // VoiceSettings is the signed-in person's voice state, kept by the server; conversationId is empty when none is current.

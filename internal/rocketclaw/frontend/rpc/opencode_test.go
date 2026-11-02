@@ -109,13 +109,17 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	require.NoError(t, err)
 
 	var (
-		rows []*Session
-		done *ListSessionsResponse
+		rows        []*Session
+		first, done *ListSessionsResponse
 	)
 
 	require.NoError(t, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
 		response := message.(*ListSessionsResponse)
 		rows = append(rows, response.Sessions...)
+
+		if first == nil {
+			first = response
+		}
 
 		if response.UpstreamSuccess {
 			done = response
@@ -134,10 +138,11 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	assert.False(t, rows[0].GetOffline())
 	assert.Equal(t, "2026-10-22T10:00:00Z", rows[0].GetUnreadAt(), "a remote session carries the caller's mark")
 	assert.True(t, proto.Equal(&ListSessionsResponse{
-		Owner: "alice", UpstreamSuccess: true, Version: done.GetVersion(), Order: []string{created.Id},
+		Owner:           "alice",
 		OpencodeServers: map[string]string{"box": upstream.URL, "down": down.URL, "creds": "https://box.example:4096"},
 		AgentTags:       map[string]*TagChoices{"main": {Tags: []string{"customer", "internal"}}},
-	}, done), "%v", done)
+	}, first), "%v", first)
+	assert.True(t, proto.Equal(&ListSessionsResponse{UpstreamSuccess: true, Version: done.GetVersion()}, done), "%v", done)
 
 	// OpenCode v2 packages/app/src/session/commands/fork-dialog.tsx forks before a user message.
 	// The new conversation must exist before the tab saves, not only after the next remote poll.

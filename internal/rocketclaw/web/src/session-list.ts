@@ -60,9 +60,12 @@ export async function loadSnapshotGeneration(owner: string, protocol: string): P
   }
 }
 
+// A complete listing as saved: its rows as listed, the version the server named it by, and the server's metadata.
+export type SavedListing = { rows: Session[]; version: string; remote?: Remote };
+
 // The caller must confirm owner with the backend before reading saved rows.
 // IndexedDB supplies origin isolation; the key adds user and protocol isolation.
-export async function loadSavedSessions(owner: string, protocol: string): Promise<Session[] | undefined> {
+export async function loadSavedSessions(owner: string, protocol: string): Promise<SavedListing | undefined> {
   const epoch = snapshotEpoch(owner, protocol);
   const db = await openSnapshots();
   try {
@@ -72,7 +75,7 @@ export async function loadSavedSessions(owner: string, protocol: string): Promis
     return await new Promise((resolve, reject) => {
       const tx = db.transaction("snapshots", "readonly");
       const request = tx.objectStore("snapshots").get([owner, protocol]);
-      tx.oncomplete = () => resolve(epoch === snapshotEpoch(owner, protocol) ? request.result?.map((row: Session) => row.running || row.background ? { ...row, running: false, background: false } : row) : undefined);
+      tx.oncomplete = () => resolve(epoch === snapshotEpoch(owner, protocol) ? request.result : undefined);
       tx.onabort = () => reject(tx.error);
     });
   } finally {
@@ -82,7 +85,7 @@ export async function loadSavedSessions(owner: string, protocol: string): Promis
 
 // Only a successfully exhausted, summary-complete enumeration may be saved.
 // Resolve on transaction completion: request success alone is not a commit.
-export async function saveCompleteSessions(owner: string, protocol: string, rows: Session[], generation: number | undefined): Promise<void> {
+export async function saveCompleteSessions(owner: string, protocol: string, listing: SavedListing, generation: number | undefined): Promise<void> {
   if (generation === undefined) return; // Storage was unavailable before enumeration.
   invalidatePendingSaves(owner, protocol);
   const epoch = snapshotEpoch(owner, protocol);
@@ -101,7 +104,7 @@ export async function saveCompleteSessions(owner: string, protocol: string, rows
       request.onsuccess = () => {
         // Read/check/write share a transaction: a paused tab cannot overwrite
         // a deletion even if its BroadcastChannel notification is still queued.
-        if ((request.result ?? 0) === generation) store.put(rows, [owner, protocol]);
+        if ((request.result ?? 0) === generation) store.put(listing, [owner, protocol]);
       };
     });
   } finally {
@@ -114,14 +117,18 @@ export function mergeSessionRows(baseline: Session[], received: Session[]): Sess
   return [...received, ...baseline.filter((row) => !seen.has(row.id))];
 }
 
-// A listing made since a version the caller holds sends only the rows changed since; its order names every row, so
-// the held rows fill in the rest and a row missing from it is gone. Undefined when a row is in neither, which a full
-// listing repairs. A listing without an order is complete as received.
-export function listedRows(held: Session[], received: Session[], order: string[] | undefined): Session[] | undefined {
-  if (!order) return received;
-  const byID = new Map([...held, ...received].map((row) => [row.id, row]));
-  const rows = order.flatMap((id) => byID.get(id) ?? []);
-  return rows.length === order.length ? rows : undefined;
+const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+// A listing made since the held version sends only the rows changed since and names the rows removed since, so the
+// held rows fill in the rest, in the server's order (sidebarSessions): pinned first, then newest updatedAt to the
+// nanosecond, then ID. Any other listing sent every row, in that order.
+export function listedRows(held: SavedListing, result: Pick<EnumerationResult, "received" | "since" | "removed">): Session[] {
+  if (result.since !== held.version) return result.received;
+  const removed = new Set(result.removed);
+  const rows = mergeSessionRows(held.rows, result.received).filter((row) => !removed.has(row.id));
+  // RFC 3339 times in UTC compare as text once their fractions have nine digits.
+  const updated = new Map(rows.map((row) => [row, row.updatedAt?.replace(/(\.\d+)?Z$/, (_, fraction = ".") => `${fraction.padEnd(10, "0")}Z`) ?? ""]));
+  return rows.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || compare(updated.get(b)!, updated.get(a)!) || compare(a.id, b.id));
 }
 
 export function stripSessionHistory(rows: Session[], id: string): Session[] {
@@ -143,17 +150,21 @@ export type EnumerationResult = {
   // An owner mismatch or explicit authentication rejection requires live identity revalidation.
   mismatch: boolean;
   remote?: Remote;
-  // From the completion message: the listing's version and every session ID in order.
+  // From the completion message: the listing's version and, when sent since a held version, that version and the
+  // IDs removed since.
   version?: string;
-  order?: string[];
+  since?: string;
+  removed?: string[];
 };
 
+// onRemote receives the server's metadata from the listing's first message, before any row.
 export async function readSessionEnumeration(
   owner: string,
   batches: AsyncIterable<SessionBatch> | Promise<AsyncIterable<SessionBatch>>,
   baseline: () => Session[],
   onProgress: (rows: Session[]) => void,
   signal?: AbortSignal,
+  onRemote: (remote: Remote) => void = () => {},
 ): Promise<EnumerationResult> {
   const byID = new Map<string, Session>();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -164,7 +175,8 @@ export async function readSessionEnumeration(
   let mismatch = false;
   let remote: Remote | undefined;
   let version: string | undefined;
-  let order: string[] | undefined;
+  let since: string | undefined;
+  let removed: string[] | undefined;
   const cancel = () => clearTimeout(timer);
   const flush = () => {
     timer = undefined;
@@ -177,17 +189,19 @@ export async function readSessionEnumeration(
   try {
     for await (const batch of await batches) {
       if (signal?.aborted) break;
-      if (batch.owner !== owner) {
-        mismatch = true;
-        upstreamSuccess = false;
-        break;
-      }
-      for (const row of batch.sessions) byID.set(row.id, row);
-      upstreamSuccess = batch.upstreamSuccess;
-      if (upstreamSuccess) {
-        ({ version, order } = batch);
+      if (batch.owner !== undefined) {
+        if (batch.owner !== owner) {
+          mismatch = true;
+          upstreamSuccess = false;
+          break;
+        }
         remote = { servers: batch.opencodeServers ?? {}, agentTags: Object.fromEntries(Object.entries(batch.agentTags ?? {}).map(([agent, choices]) => [agent, choices.tags ?? []])) };
+        onRemote(remote);
       }
+      upstreamSuccess = batch.upstreamSuccess ?? false;
+      if (upstreamSuccess) ({ version, since, removed } = batch);
+      if (!batch.sessions) continue;
+      for (const row of batch.sessions) byID.set(row.id, row);
       dirty = true;
       // First useful row is immediate; subsequent display work coalesces over
       // 16 ms without awaiting the timer or slowing transport consumption.
@@ -207,5 +221,5 @@ export async function readSessionEnumeration(
     signal?.removeEventListener("abort", cancel);
   }
   flush();
-  return { received: [...byID.values()], upstreamSuccess, exhausted, mismatch, remote, version, order };
+  return { received: [...byID.values()], upstreamSuccess, exhausted, mismatch, remote, version, since, removed };
 }

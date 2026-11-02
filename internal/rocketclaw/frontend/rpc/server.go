@@ -181,28 +181,42 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		}
 	}
 
-	// One definitions load serves the remote tags, with errors checked before sending rows.
-	agents := sync.OnceValues(func() (harness.Agents, error) {
-		definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
-		if err != nil {
-			return harness.Agents{}, fmt.Errorf("load web agents: %w", err)
-		}
+	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	if err != nil {
+		return fmt.Errorf("load web agents: %w", err)
+	}
 
-		return definitions, nil
-	})
+	// The page needs these before any row: an OpenCode tab mounts once it knows its server.
+	first := &ListSessionsResponse{Owner: owner, OpencodeServers: make(map[string]string), AgentTags: make(map[string]*TagChoices)}
 
-	var since map[string]uint64
+	for name, server := range s.cfg.Clone().OpenCode {
+		// Only the origin: a configured URL may carry credentials. Config validation parsed it.
+		origin, _ := url.Parse(server.URL)
+		first.OpencodeServers[name] = origin.Scheme + "://" + origin.Host
+	}
+
+	for agent, tags := range backend.AgentTags(definitions) {
+		first.AgentTags[agent] = &TagChoices{Tags: tags}
+	}
+
+	if err := stream.SendMsg(first); err != nil {
+		return fmt.Errorf("send web session listing start: %w", err)
+	}
+
+	var (
+		since map[string]uint64
+		known bool
+	)
 
 	s.listingsMu.Lock()
 	for _, listing := range s.listings[owner] {
 		if listing.version == request.Since {
-			since = listing.rows
+			since, known = listing.rows, true
 		}
 	}
 	s.listingsMu.Unlock()
 
 	listing := sessionListing{version: rand.Text(), rows: map[string]uint64{}}
-	order := []string{}
 
 	var encoded []byte
 
@@ -211,22 +225,17 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 			return err
 		}
 
-		if _, err := agents(); err != nil {
-			return err
-		}
-
 		session := sidebarSession(&chat)
 		encoded, _ = proto.MarshalOptions{Deterministic: true}.MarshalAppend(encoded[:0], session) // A built Session always encodes.
 		fingerprint := fnv.New64a()
 		_, _ = fingerprint.Write(encoded)
 		listing.rows[session.Id] = fingerprint.Sum64()
-		order = append(order, session.Id)
 
 		if seen, ok := since[session.Id]; ok && seen == listing.rows[session.Id] {
 			continue
 		}
 
-		if err := stream.SendMsg(&ListSessionsResponse{Sessions: []*Session{session}, Owner: owner}); err != nil {
+		if err := stream.SendMsg(&ListSessionsResponse{Sessions: []*Session{session}}); err != nil {
 			return fmt.Errorf("send web session: %w", err)
 		}
 	}
@@ -236,22 +245,14 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	s.listings[owner] = s.listings[owner][max(0, len(s.listings[owner])-sessionListingsKept):]
 	s.listingsMu.Unlock()
 
-	done := &ListSessionsResponse{Owner: owner, UpstreamSuccess: true, OpencodeServers: make(map[string]string), Version: listing.version, Order: order}
-
-	for name, server := range s.cfg.Clone().OpenCode {
-		// Only the origin: a configured URL may carry credentials. Config validation parsed it.
-		origin, _ := url.Parse(server.URL)
-		done.OpencodeServers[name] = origin.Scheme + "://" + origin.Host
-	}
-
-	definitions, err := agents()
-	if err != nil {
-		return err
-	}
-
-	done.AgentTags = make(map[string]*TagChoices)
-	for agent, tags := range backend.AgentTags(definitions) {
-		done.AgentTags[agent] = &TagChoices{Tags: tags}
+	done := &ListSessionsResponse{UpstreamSuccess: true, Version: listing.version}
+	if known {
+		done.Since = request.Since
+		for _, id := range slices.Sorted(maps.Keys(since)) {
+			if _, ok := listing.rows[id]; !ok {
+				done.Removed = append(done.Removed, id)
+			}
+		}
 	}
 
 	if err := stream.SendMsg(done); err != nil {

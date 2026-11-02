@@ -1555,20 +1555,22 @@ func (*ClearRevertResponse) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{13}
 }
 
+// A listing streams its first message, then one message per sent row, then the completion.
 type ListSessionsResponse struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Sessions        []*Session             `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Sessions []*Session             `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
+	// The first message carries the owner, the remote servers, and per agent the tags people may set
+	// on its sessions, so a page need not wait for the rows. Remote OpenCode sessions take any tag.
 	Owner           string                 `protobuf:"bytes,2,opt,name=owner,proto3" json:"owner,omitempty"`
-	UpstreamSuccess bool                   `protobuf:"varint,3,opt,name=upstream_success,json=upstreamSuccess,proto3" json:"upstream_success,omitempty"`
-	// Sent with the completion message: remote servers, and per agent the tags people may set
-	// on its sessions. Remote OpenCode sessions take any tag.
+	UpstreamSuccess bool                   `protobuf:"varint,3,opt,name=upstream_success,json=upstreamSuccess,proto3" json:"upstream_success,omitempty"`                                                                          // Marks the completion message.
 	OpencodeServers map[string]string      `protobuf:"bytes,5,rep,name=opencode_servers,json=opencodeServers,proto3" json:"opencode_servers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Server name to its origin, for links to its sessions.
 	AgentTags       map[string]*TagChoices `protobuf:"bytes,6,rep,name=agent_tags,json=agentTags,proto3" json:"agent_tags,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// Also sent with the completion message: this listing's version, for the next request's since, and
-	// every session ID in list order. A row not sent is unchanged since that version; an ID missing
-	// from order is gone.
+	// The completion carries this listing's version, for the next request's since. When since names a
+	// listing the server still holds, it is echoed: only rows changed since were sent, and removed names
+	// the sessions gone since. Otherwise since is empty and every row was sent.
 	Version       string   `protobuf:"bytes,7,opt,name=version,proto3" json:"version,omitempty"`
-	Order         []string `protobuf:"bytes,8,rep,name=order,proto3" json:"order,omitempty"`
+	Removed       []string `protobuf:"bytes,9,rep,name=removed,proto3" json:"removed,omitempty"`
+	Since         string   `protobuf:"bytes,10,opt,name=since,proto3" json:"since,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1645,11 +1647,18 @@ func (x *ListSessionsResponse) GetVersion() string {
 	return ""
 }
 
-func (x *ListSessionsResponse) GetOrder() []string {
+func (x *ListSessionsResponse) GetRemoved() []string {
 	if x != nil {
-		return x.Order
+		return x.Removed
 	}
 	return nil
+}
+
+func (x *ListSessionsResponse) GetSince() string {
+	if x != nil {
+		return x.Since
+	}
+	return ""
 }
 
 type TagChoices struct {
@@ -7506,7 +7515,7 @@ const file_web_proto_rawDesc = "" +
 	"\x06prompt\x18\x02 \x01(\v2\x14.rpc.TranscriptEventR\x06prompt\"$\n" +
 	"\x12ClearRevertRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x15\n" +
-	"\x13ClearRevertResponse\"\xee\x03\n" +
+	"\x13ClearRevertResponse\"\x8e\x04\n" +
 	"\x14ListSessionsResponse\x12(\n" +
 	"\bsessions\x18\x01 \x03(\v2\f.rpc.SessionR\bsessions\x12\x14\n" +
 	"\x05owner\x18\x02 \x01(\tR\x05owner\x12)\n" +
@@ -7514,14 +7523,16 @@ const file_web_proto_rawDesc = "" +
 	"\x10opencode_servers\x18\x05 \x03(\v2..rpc.ListSessionsResponse.OpencodeServersEntryR\x0fopencodeServers\x12G\n" +
 	"\n" +
 	"agent_tags\x18\x06 \x03(\v2(.rpc.ListSessionsResponse.AgentTagsEntryR\tagentTags\x12\x18\n" +
-	"\aversion\x18\a \x01(\tR\aversion\x12\x14\n" +
-	"\x05order\x18\b \x03(\tR\x05order\x1aB\n" +
+	"\aversion\x18\a \x01(\tR\aversion\x12\x18\n" +
+	"\aremoved\x18\t \x03(\tR\aremoved\x12\x14\n" +
+	"\x05since\x18\n" +
+	" \x01(\tR\x05since\x1aB\n" +
 	"\x14OpencodeServersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aM\n" +
 	"\x0eAgentTagsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12%\n" +
-	"\x05value\x18\x02 \x01(\v2\x0f.rpc.TagChoicesR\x05value:\x028\x01J\x04\b\x04\x10\x05\" \n" +
+	"\x05value\x18\x02 \x01(\v2\x0f.rpc.TagChoicesR\x05value:\x028\x01J\x04\b\x04\x10\x05J\x04\b\b\x10\t\" \n" +
 	"\n" +
 	"TagChoices\x12\x12\n" +
 	"\x04tags\x18\x01 \x03(\tR\x04tags\"\xd8\x01\n" +

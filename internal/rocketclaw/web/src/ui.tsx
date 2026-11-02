@@ -46,8 +46,8 @@ import {
   loadSavedSessions,
   loadSnapshotGeneration,
   listedRows,
-  mergeSessionRows,
   readSessionEnumeration,
+  type SavedListing,
   saveCompleteSessions,
   SESSION_HISTORY_CHANNEL,
   searchIsAuthoritative,
@@ -614,9 +614,8 @@ function ServerSessions({ children }: { children: ReactNode }) {
   const [view, setView] = useState<SidebarView>({ rows: [], refreshing: false, enumerationComplete: false });
   const gen = useRef(0);
   const rowsRef = useRef<Session[]>([]);
-  const committed = useRef(false);
   // The last complete listing's version and rows; the next poll asks for only what changed since.
-  const listing = useRef<{ version: string; rows: Session[] }>({ version: "", rows: [] });
+  const listing = useRef<SavedListing>({ version: "", rows: [] });
   const ownerRef = useRef(owner);
   const protocolRef = useRef(scope);
   const bump = useCallback(() => {
@@ -627,7 +626,6 @@ function ServerSessions({ children }: { children: ReactNode }) {
     invalidatePendingSaves();
     gen.current += 1;
     rowsRef.current = [];
-    committed.current = false;
     listing.current = { version: "", rows: [] };
     setView({ rows: [], refreshing: false, enumerationComplete: false });
   }, []);
@@ -648,28 +646,20 @@ function ServerSessions({ children }: { children: ReactNode }) {
     const captured = gen.current;
     const currentOwner = owner;
     const currentProtocol = scope;
-    let stopped = false;
-    void loadSavedSessions(currentOwner, currentProtocol).then((saved) => {
-      if (stopped || captured !== gen.current || ownerRef.current !== currentOwner || committed.current || saved === undefined) {
-        return;
-      }
-      const merged = mergeSessionRows(saved, rowsRef.current);
-      rowsRef.current = merged;
-      setView((current) => ({ ...current, rows: merged }));
-    }, () => {});
-    return () => { stopped = true; };
-  }, [owner, scope, identityRejected, identityGeneration]);
-  useEffect(() => {
-    if (owner === undefined || scope === undefined || identityRejected) {
-      return;
-    }
-    const captured = gen.current;
-    const currentOwner = owner;
-    const currentProtocol = scope;
     const ac = new AbortController();
     const tick = async () => {
       if (ac.signal.aborted || captured !== gen.current) return;
       setView((current) => ({ ...current, refreshing: true, enumerationComplete: false }));
+      // With nothing shown yet, the saved listing shows at once and its version makes the poll send only changes.
+      if (!listing.current.version && !rowsRef.current.length) {
+        await loadSavedSessions(currentOwner, currentProtocol).then((saved) => {
+          if (saved === undefined || ac.signal.aborted || captured !== gen.current) return;
+          listing.current = saved;
+          // Saved activity is stale until the poll confirms it.
+          rowsRef.current = saved.rows.map((row) => row.running || row.background ? { ...row, running: false, background: false } : row);
+          setView((current) => ({ ...current, rows: rowsRef.current, remote: saved.remote }));
+        }, () => {});
+      }
       const snapshotGeneration = await loadSnapshotGeneration(currentOwner, currentProtocol).catch(() => undefined);
       if (ac.signal.aborted || captured !== gen.current) return;
       const viewing = document.hasFocus() && server() === name ? pathSession(pagePath()) : "";
@@ -681,25 +671,25 @@ function ServerSessions({ children }: { children: ReactNode }) {
         }
         rowsRef.current = merged;
         setView((current) => ({ ...current, rows: merged }));
-      }, ac.signal).then((result) => {
+      }, ac.signal, (remote) => {
+        // OpenCode tabs mount once they know their server, without waiting for the rows.
+        if (!ac.signal.aborted && captured === gen.current) setView((current) => ({ ...current, remote }));
+      }).then((result) => {
         if (ac.signal.aborted || captured !== gen.current) {
           return;
         }
-        const rows = shouldCommitSnapshot(result) ? listedRows(held.rows, result.received, result.order) : undefined;
+        const rows = shouldCommitSnapshot(result) ? listedRows(held, result) : undefined;
         if (result.mismatch) {
           reset();
           ownerRef.current = undefined;
           // A fast same-owner refetch can hide the intermediate pending state.
           void queryClient.resetQueries({ queryKey: [{ server: name }, "identity"] }).then(() => setIdentityGeneration((value) => value + 1));
         } else if (rows) {
-          listing.current = { version: result.version ?? "", rows };
-          committed.current = true;
+          listing.current = { version: result.version ?? "", rows, remote: result.remote };
           rowsRef.current = rows;
           setView({ rows, enumerationComplete: true, refreshing: false, remote: result.remote });
-          void saveCompleteSessions(currentOwner, currentProtocol, rows, snapshotGeneration).catch(() => {});
+          void saveCompleteSessions(currentOwner, currentProtocol, listing.current, snapshotGeneration).catch(() => {});
         } else {
-          // A listing that could not be rebuilt leaves the version, so the next poll gets every row.
-          if (shouldCommitSnapshot(result)) listing.current = { version: "", rows: [] };
           setView((current) => ({ ...current, enumerationComplete: false, refreshing: false, remote: result.remote ?? current.remote }));
         }
       }).then(() => {
@@ -717,7 +707,6 @@ function ServerSessions({ children }: { children: ReactNode }) {
     if (ownerRef.current !== owner || protocolRef.current !== scope) return;
     invalidatePendingSaves(owner, scope);
     bump();
-    committed.current = false;
     listing.current = { version: "", rows: [] };
     rowsRef.current = stripSessionHistory(rowsRef.current, id);
     setView((current) => ({ ...current, rows: rowsRef.current }));

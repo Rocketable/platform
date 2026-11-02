@@ -201,20 +201,22 @@ message StageRevertResponse { string revert_message_id = 1; TranscriptEvent prom
 message ClearRevertRequest { string id = 1; }
 message ClearRevertResponse {}
 
+// A listing streams its first message, then one message per sent row, then the completion.
 message ListSessionsResponse {
   repeated Session sessions = 1;
+  // The first message carries the owner, the remote servers, and per agent the tags people may set
+  // on its sessions, so a page need not wait for the rows. Remote OpenCode sessions take any tag.
   string owner = 2;
-  bool upstream_success = 3;
-  reserved 4;
-  // Sent with the completion message: remote servers, and per agent the tags people may set
-  // on its sessions. Remote OpenCode sessions take any tag.
+  bool upstream_success = 3; // Marks the completion message.
+  reserved 4, 8;
   map<string, string> opencode_servers = 5; // Server name to its origin, for links to its sessions.
   map<string, TagChoices> agent_tags = 6;
-  // Also sent with the completion message: this listing's version, for the next request's since, and
-  // every session ID in list order. A row not sent is unchanged since that version; an ID missing
-  // from order is gone.
+  // The completion carries this listing's version, for the next request's since. When since names a
+  // listing the server still holds, it is echoed: only rows changed since were sent, and removed names
+  // the sessions gone since. Otherwise since is empty and every row was sent.
   string version = 7;
-  repeated string order = 8;
+  repeated string removed = 9;
+  string since = 10;
 }
 
 message TagChoices {

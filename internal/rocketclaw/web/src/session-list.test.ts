@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { API } from "typescript/unstable/async";
 import { isFunctionDeclaration } from "typescript/unstable/ast/is";
 import { RPCError } from "./api";
-import type { Session, SessionBatch } from "./types";
+import type { Remote, Session, SessionBatch } from "./types";
 import {
   listedRows,
   mergeSessionRows,
@@ -66,7 +66,7 @@ test("only an unfinished operator as the last word is left out while typing", ()
 
 describe("session list reconciliation", () => {
   test("does not save when storage was unavailable before enumeration", async () => {
-    await expect(saveCompleteSessions("alice", "v1", [{ id: "new", preview: "fresh" }], undefined)).resolves.toBeUndefined();
+    await expect(saveCompleteSessions("alice", "v1", { rows: [{ id: "new", preview: "fresh" }], version: "v" }, undefined)).resolves.toBeUndefined();
   });
 
   test("keeps prior rows and replaces matching IDs in server prefix order", () => {
@@ -85,24 +85,38 @@ describe("session list reconciliation", () => {
     ]);
   });
 
-  test("rebuilds a listing made since a held version in the server's order", () => {
-    const held: Session[] = [{ id: "a", preview: "1" }, { id: "b", preview: "1" }, { id: "gone", preview: "1" }];
-    expect(listedRows(held, [{ id: "b", preview: "2" }, { id: "new", preview: "fresh" }], ["new", "b", "a"])).toEqual([
-      { id: "new", preview: "fresh" },
-      { id: "b", preview: "2" },
-      { id: "a", preview: "1" },
-    ]);
-    expect(listedRows(held, [], ["a", "unknown"])).toBeUndefined();
-    expect(listedRows(held, [{ id: "only" }], undefined)).toEqual([{ id: "only" }]);
+  test("rebuilds a listing made since the held version", () => {
+    const held = { version: "v1", rows: [{ id: "a", preview: "1", updatedAt: "2026-11-01T10:00:03Z" }, { id: "b", preview: "1", updatedAt: "2026-11-01T10:00:02Z" }, { id: "gone", preview: "1" }] };
+    const changed = [{ id: "b", preview: "2", updatedAt: "2026-11-01T10:00:04Z" }, { id: "new", preview: "fresh", updatedAt: "2026-11-01T10:00:01Z" }];
+    expect(listedRows(held, { received: changed, since: "v1", removed: ["gone"] })).toEqual([changed[0], held.rows[0], changed[1]]);
+    expect(listedRows(held, { received: [{ id: "only" }] }), "a listing since nothing held sent every row").toEqual([{ id: "only" }]);
+    expect(listedRows(held, { received: [{ id: "only" }], since: "v0" })).toEqual([{ id: "only" }]);
   });
 
-  test("reports the completion's version and order", async () => {
+  test("orders rows by the server's rule", () => {
+    // Pinned first, then newest to the nanosecond (Go trims trailing zeros), then ID; a row without a time is oldest.
+    const rows: Session[] = [
+      { id: "none" },
+      { id: "whole", updatedAt: "2026-11-01T10:00:00Z" },
+      { id: "b-ns", updatedAt: "2026-11-01T10:00:00.000000002Z" },
+      { id: "a-ns", updatedAt: "2026-11-01T10:00:00.000000002Z" },
+      { id: "tenth", updatedAt: "2026-11-01T10:00:00.1Z" },
+      { id: "pinned", pinned: true, updatedAt: "2026-01-01T00:00:00Z" },
+    ];
+    expect(listedRows({ version: "v1", rows: rows.slice(0, 3) }, { received: rows.slice(3), since: "v1" }).map((row) => row.id)).toEqual(["pinned", "tenth", "a-ns", "b-ns", "whole", "none"]);
+  });
+
+  test("reports the first message's metadata and the completion's changes", async () => {
+    const remotes: Remote[] = [];
     async function* batches() {
-      yield alice([{ id: "b" }]);
-      yield alice([], { upstreamSuccess: true, version: "v2", order: ["a", "b"] });
+      yield { owner: "alice", opencodeServers: { box: "https://box" }, agentTags: { main: { tags: ["bug"] }, bare: {} } };
+      expect(remotes).toEqual([{ servers: { box: "https://box" }, agentTags: { main: ["bug"], bare: [] } }]);
+      yield { sessions: [{ id: "b" }] };
+      yield { upstreamSuccess: true, version: "v2", since: "v1", removed: ["a"] };
     }
-    const result = await readSessionEnumeration("alice", batches(), () => [], () => {});
-    expect([result.version, result.order]).toEqual(["v2", ["a", "b"]]);
+    const result = await readSessionEnumeration("alice", batches(), () => [], () => {}, undefined, (remote) => remotes.push(remote));
+    expect(result).toEqual({ received: [{ id: "b" }], upstreamSuccess: true, exhausted: true, mismatch: false, remote: remotes[0], version: "v2", since: "v1", removed: ["a"] });
+    expect(remotes).toHaveLength(1);
   });
 
   test("commits only after success and exhaustion", () => {
@@ -134,7 +148,7 @@ describe("session list reconciliation", () => {
       (rows) => seen.push(rows),
     );
     expect(seen).toEqual([[{ id: "new", preview: "fresh" }, { id: "old", preview: "keep" }]]);
-    expect(result).toEqual({ received: [{ id: "new", preview: "fresh" }], upstreamSuccess: false, exhausted: false, mismatch: true });
+    expect(result).toEqual({ received: [{ id: "new", preview: "fresh" }], upstreamSuccess: false, exhausted: false, mismatch: true, remote: { servers: {}, agentTags: {} } });
     expect(shouldCommitSnapshot(result)).toBe(false);
 
     async function* lateFailure() {

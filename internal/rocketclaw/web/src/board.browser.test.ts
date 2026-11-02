@@ -39,7 +39,7 @@ function serve(board: string, lanes = fourLanes) {
         const sessions = url.searchParams.get("since") ? [...changed].map((id) => rows.get(id)!) : [...rows.values()];
         changed.clear();
         control.polls++;
-        const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${control.polls}`, order: [...rows.keys()] };
+        const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${control.polls}`, since: url.searchParams.get("since") || undefined };
         return new Response(`data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: false })}\n\ndata: ${JSON.stringify(done)}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
       }
       case "/api/Board": {
