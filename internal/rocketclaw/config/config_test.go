@@ -791,14 +791,11 @@ func TestLoadExternalMCPUsers(t *testing.T) {
 }
 
 func TestLoadExternalMCPUsersRejectsInvalidInputs(t *testing.T) {
-	_, err := LoadExternalMCPUsers(" \t ")
-	require.EqualError(t, err, "config path is required")
-
 	dir := t.TempDir()
 	fileParent := filepath.Join(dir, "not-dir")
 	require.NoError(t, os.WriteFile(fileParent, []byte("file"), 0o600))
 
-	_, err = LoadExternalMCPUsers(filepath.Join(fileParent, "rocketclaw.json"))
+	_, err := LoadExternalMCPUsers(filepath.Join(fileParent, "rocketclaw.json"))
 	require.ErrorContains(t, err, "stat external MCP users file")
 
 	configPath := filepath.Join(dir, "rocketclaw.json")

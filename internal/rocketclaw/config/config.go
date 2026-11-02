@@ -344,17 +344,7 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 
 // LoadExternalMCPUsers reads the optional rocketclaw.users.json file next to configPath.
 func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
-	configPath = strings.TrimSpace(configPath)
-	if configPath == "" {
-		return nil, errors.New("config path is required")
-	}
-
-	absPath, err := filepath.Abs(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve config path: %w", err)
-	}
-
-	usersPath := filepath.Join(filepath.Dir(absPath), "rocketclaw.users.json")
+	usersPath := filepath.Join(filepath.Dir(configPath), "rocketclaw.users.json")
 
 	info, err := os.Stat(usersPath)
 	if err != nil {
