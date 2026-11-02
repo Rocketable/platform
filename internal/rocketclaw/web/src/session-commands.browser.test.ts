@@ -268,7 +268,38 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     }, savedComposer);
     await page.reload();
     await composer.waitFor();
-    await page.waitForFunction((text: string) => document.querySelector("textarea")?.value === text, savedComposer);
+    try {
+      await page.waitForFunction((text: string) => document.querySelector("textarea")?.value === text, savedComposer);
+    } catch (error) {
+      try {
+        console.info("Composer draft restore after reload", JSON.stringify({
+          expected: savedComposer, fixtureTabs: tabs, errors,
+          browser: await page.evaluate(() => ({
+            url: location.href,
+            textareas: Array.from(document.querySelectorAll("textarea"), (node) => ({ id: node.id, placeholder: node.placeholder, text: node.value, disabled: node.matches(":disabled"), visible: node.getClientRects().length > 0 })),
+            tabs: Array.from(document.querySelectorAll('[role="tab"]'), (node) => ({ text: node.textContent, selected: node.getAttribute("aria-selected") })),
+            alerts: Array.from(document.querySelectorAll('[role="alert"]'), (node) => node.textContent),
+          })),
+        }, null, 2));
+        console.info("Stored composer drafts after reload", JSON.stringify(await page.evaluate(async () => {
+          const db = await new Promise<IDBDatabase>((resolve, reject) => {
+            const open = indexedDB.open("rocketclaw-drafts", 1);
+            open.onsuccess = () => resolve(open.result);
+            open.onerror = () => reject(open.error);
+            open.onblocked = () => reject(new Error("draft database open blocked"));
+          });
+          try {
+            return await new Promise<{ key: IDBValidKey; text: string }[]>((resolve, reject) => {
+              const tx = db.transaction("content"), store = tx.objectStore("content");
+              const keys = store.getAllKeys(), values = store.getAll();
+              tx.oncomplete = () => resolve(values.result.map((row: { text: string }, index: number) => ({ key: keys.result[index], text: row.text })));
+              tx.onerror = () => reject(tx.error);
+              tx.onabort = () => reject(tx.error);
+            });
+          } finally { db.close(); }
+        }).catch((error: unknown) => ({ error: String(error) })), null, 2));
+      } finally { throw error; }
+    }
     await page.keyboard.press("Meta+Shift+p");
     expect(await commands.getByRole("button").first().textContent()).toBe("Command: Start goal ($goal)");
     expect(await page.evaluate(() => JSON.parse(localStorage.getItem("command-history")!).filter((key: string) => key === "goal"))).toEqual(["goal"]);
