@@ -49,7 +49,7 @@ test("real child-only changes refresh paired shadow turns through the parent str
     // loop during this bounded observation window either. Send returns while the
     // parent turn is still delivering; its close re-reads History once more, so
     // observe from the closed turn after the page's reads settle.
-    while ((await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).some((batch) => batch.sessions.some((session) => session.id === "parent" && session.running))) await page.waitForTimeout(10);
+    while ((await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).some((batch) => batch.sessions?.some((session) => session.id === "parent" && session.running))) await page.waitForTimeout(10);
     for (let settled = -1; pendingReads || settled !== reads.length; await page.waitForTimeout(100)) settled = reads.length;
     const heldReads = reads.length;
     await page.waitForTimeout(300);

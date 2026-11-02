@@ -385,6 +385,9 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 
 	var body []byte
 
+	// A listing sends thousands of rows, so it leaves out default values, which the Web reads as such.
+	encoding := protojson.MarshalOptions{EmitDefaultValues: r.URL.Path != "/api/ListSessions"}
+
 	for {
 		if errors.Is(err, io.EOF) {
 			_, _ = io.WriteString(out, "event: complete\ndata: {}\n\n")
@@ -403,7 +406,7 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 
 		var errMarshal error
 
-		body, errMarshal = (protojson.MarshalOptions{EmitDefaultValues: true}).MarshalAppend(append(body[:0], "data: "...), response)
+		body, errMarshal = encoding.MarshalAppend(append(body[:0], "data: "...), response)
 		if errMarshal != nil {
 			err = errMarshal
 			continue

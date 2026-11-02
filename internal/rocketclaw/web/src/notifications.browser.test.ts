@@ -167,7 +167,7 @@ test("an open Dashboard in this space notifies when a session enters a lane mark
       const sessions = url.searchParams.get("since") ? [...changed].map((id) => rows.get(id)!) : [...rows.values()];
       changed.clear();
       polls++;
-      const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${polls}`, order: [...rows.keys()] };
+      const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${polls}`, since: url.searchParams.get("since") || undefined };
       return new Response(`data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: false })}\n\ndata: ${JSON.stringify(done)}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     }
     if (!url.pathname.startsWith("/api/")) {
@@ -295,7 +295,7 @@ test("sessions moving between a Dashboard's lanes because its lanes changed are 
       const sessions = url.searchParams.get("since") ? [...changed].map((id) => rows.get(id)!) : [...rows.values()];
       changed.clear();
       polls++;
-      const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${polls}`, order: [...rows.keys()] };
+      const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${polls}`, since: url.searchParams.get("since") || undefined };
       return new Response(`data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: false })}\n\ndata: ${JSON.stringify(done)}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     }
     if (!url.pathname.startsWith("/api/")) {
@@ -404,7 +404,7 @@ test("a lane listing only its newest 200 sessions notifies those arriving newer,
       const sessions = url.searchParams.get("since") ? [...changed].map((id) => rows.get(id)!) : [...rows.values()];
       changed.clear();
       polls++;
-      const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${polls}`, order: [...rows.keys()] };
+      const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${polls}`, since: url.searchParams.get("since") || undefined };
       return new Response(`data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: false })}\n\ndata: ${JSON.stringify(done)}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     }
     if (!url.pathname.startsWith("/api/")) {
@@ -475,7 +475,7 @@ test("a session the Board lists before the session list has it notifies once, fr
       const rows = [...(url.searchParams.get("since") ? changed : listed)].map((id) => sessions.get(id)!);
       changed.clear();
       polls++;
-      const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${polls}`, order: [...listed] };
+      const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${polls}`, since: url.searchParams.get("since") || undefined };
       return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: false })}\n\ndata: ${JSON.stringify(done)}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     }
     if (!url.pathname.startsWith("/api/")) {

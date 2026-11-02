@@ -81,7 +81,7 @@ func BenchmarkHTTPEventFraming(b *testing.B) {
 	b.Cleanup(func() { require.NoError(b, connection.Close()) })
 
 	request := httptest.NewRequest(http.MethodGet, "/api/ListSessions", http.NoBody)
-	body, err := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(message)
+	body, err := protojson.Marshal(message)
 	require.NoError(b, err)
 
 	want := []byte(strings.Repeat("data: "+string(body)+"\n\n", 8) + "event: complete\ndata: {}\n\n")
@@ -601,7 +601,7 @@ func TestHTTPStreams(t *testing.T) {
 			default:
 				require.True(t, response.Uncompressed, "the session list crosses the network compressed")
 				require.Contains(t, string(body), strings.Repeat("x", 100000))
-				require.Contains(t, string(body), `"sessions":[]`)
+				require.NotContains(t, string(body), `"upstreamSuccess"`, "a listing leaves out default values")
 				first, _, _ := strings.Cut(string(body), "\n")
 
 				var batch struct {

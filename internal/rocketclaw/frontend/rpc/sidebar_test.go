@@ -154,7 +154,7 @@ func TestSidebarSendFailures(t *testing.T) {
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
-	// This test-only limit rejects both the owner-bearing terminal and a session row.
+	// This test-only limit rejects the first message, which carries the owner.
 	transport := grpc.NewServer(grpc.MaxSendMsgSize(1))
 	New(&mockBackend{JustBashInstallErrorFunc: noJustBashError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
@@ -176,34 +176,17 @@ func TestSidebarSendFailures(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 
-	for _, tc := range []struct {
-		name     string
-		response *ListSessionsResponse
-	}{
-		{"empty completion", &ListSessionsResponse{Owner: "alice", UpstreamSuccess: true, Version: strings.Repeat("v", 26)}}, // rand.Text is 26 characters.
-		{"session row", &ListSessionsResponse{Owner: "alice", Sessions: []*Session{{Id: "web", Agent: "main", Label: "web"}}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.name == "session row" {
-				require.NoError(t, sessions.UpsertThread("web", backend.ThreadState{Agent: "main"}))
-				_, err := sessions.AppendEntryID(ctx, "web", &harness.SessionEntry{})
-				require.NoError(t, err)
-			}
+	stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/ListSessions")
+	require.NoError(t, err)
+	require.NoError(t, stream.SendMsg(&ListSessionsRequest{}))
+	require.NoError(t, stream.CloseSend())
 
-			stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/ListSessions")
-			require.NoError(t, err)
-			require.NoError(t, stream.SendMsg(&ListSessionsRequest{}))
-			require.NoError(t, stream.CloseSend())
+	var batch ListSessionsResponse
 
-			var batch ListSessionsResponse
-
-			err = stream.RecvMsg(&batch)
-			require.Equal(t, codes.ResourceExhausted, status.Code(err))
-			require.Equal(t, fmt.Sprintf("trying to send message larger than max (%d vs. 1)", proto.Size(tc.response)), status.Convert(err).Message())
-			require.Empty(t, batch.Sessions)
-			require.False(t, batch.UpstreamSuccess)
-		})
-	}
+	err = stream.RecvMsg(&batch)
+	require.Equal(t, codes.ResourceExhausted, status.Code(err))
+	require.Equal(t, fmt.Sprintf("trying to send message larger than max (%d vs. 1)", proto.Size(&ListSessionsResponse{Owner: "alice"})), status.Convert(err).Message())
+	require.Empty(t, batch.Owner)
 }
 
 func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
@@ -308,38 +291,50 @@ func TestListSessionsExternalArrival(t *testing.T) {
 	require.Equal(t, "1970-01-01T00:00:01Z", sessions[0].StateSince)
 }
 
-// A poll naming a listing the server still holds gets only the rows changed since; every listing ends
-// with all IDs in order, so the browser keeps unchanged rows and drops missing ones.
+// A poll naming a listing the server still holds gets only the rows changed since and the sessions
+// removed since, so the browser keeps unchanged rows and drops removed ones.
 func TestListSessionsSendsChangesSince(t *testing.T) {
 	server, ctx := sidebarChoicesFixture(t, 3)
 	rows := make(map[string]*Session) // Each chat's last sent row.
 	list := func(ctx context.Context, since string) (sent []string, done *ListSessionsResponse) {
+		var messages []*ListSessionsResponse
+
 		require.NoError(t, server.listSessions(&ListSessionsRequest{Since: since}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
 			response := message.(*ListSessionsResponse)
+			messages = append(messages, response)
+
 			for _, session := range response.Sessions {
 				require.Less(t, proto.Size(session), 256, "session rows must not repeat the agent catalog")
 				sent = append(sent, session.Id)
 				rows[session.Id] = session
 			}
 
-			if response.UpstreamSuccess {
-				done = response
-			}
-
 			return nil
 		}}))
+
+		first, done := messages[0], messages[len(messages)-1]
+		require.NotEmpty(t, first.Owner, "the first message names the owner")
+		require.NotNil(t, first.AgentTags, "the first message carries the agent tags")
+		require.Empty(t, first.Sessions)
+		require.True(t, done.UpstreamSuccess)
+
+		for _, message := range messages[1:] {
+			require.Empty(t, message.Owner, "only the first message names the owner")
+		}
 
 		return sent, done
 	}
 
 	sent, full := list(ctx, "")
-	require.ElementsMatch(t, []string{"chat-00", "chat-01", "chat-02"}, sent)
-	require.Equal(t, sent, full.Order, "the first listing sends every row, in order")
+	require.ElementsMatch(t, []string{"chat-00", "chat-01", "chat-02"}, sent, "the first listing sends every row")
+	require.Empty(t, full.Since)
+	require.Empty(t, full.Removed)
 	require.NotEmpty(t, full.Version)
 
 	sent, unchanged := list(ctx, full.Version)
 	require.Empty(t, sent, "nothing changed")
-	require.Equal(t, full.Order, unchanged.Order)
+	require.Equal(t, full.Version, unchanged.Since, "the listing names the version it sent changes since")
+	require.Empty(t, unchanged.Removed)
 	require.NotEqual(t, full.Version, unchanged.Version)
 
 	queuedAt := time.Now()
@@ -364,13 +359,42 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 
 	sent, deleted := list(ctx, renamed.Version)
 	require.Empty(t, sent)
-	require.ElementsMatch(t, []string{"chat-00", "chat-01"}, deleted.Order, "a deleted session leaves the order")
+	require.Equal(t, []string{"chat-02"}, deleted.Removed, "a deleted session is named as removed")
 
-	sent, _ = list(ctx, "unknown")
+	sent, unknown := list(ctx, "unknown")
 	require.Len(t, sent, 2, "an unknown version gets every row")
+	require.Empty(t, unknown.Since)
 
 	bob := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1", "rocketclaw-tailnet-login-bin", "bob@example.com", "rocketclaw-tailnet-name-bin", "Bob"))
 	sent, bobs := list(bob, deleted.Version)
-	require.NotEmpty(t, bobs.Order)
-	require.Equal(t, bobs.Order, sent, "another person's version gets every row")
+	require.Len(t, sent, 2, "another person's version gets every row")
+	require.Empty(t, bobs.Since)
+}
+
+// A refresh where nothing changed costs the same few bytes however many sessions there are.
+func TestQuietSessionRefreshSize(t *testing.T) {
+	server, ctx := sidebarChoicesFixture(t, 300)
+	list := func(since string) (size int, version string) {
+		require.NoError(t, server.listSessions(&ListSessionsRequest{Since: since}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
+			// The Web receives listing messages as protojson without default values.
+			response := message.(*ListSessionsResponse)
+			body, err := protojson.Marshal(response)
+			require.NoError(t, err)
+
+			size += len(body)
+			if response.UpstreamSuccess {
+				version = response.Version
+			}
+
+			return nil
+		}}))
+
+		return size, version
+	}
+
+	full, version := list("")
+	require.Greater(t, full, 2<<10)
+
+	quiet, _ := list(version)
+	require.LessOrEqual(t, quiet, 2<<10, "a quiet refresh must not grow with the session count")
 }

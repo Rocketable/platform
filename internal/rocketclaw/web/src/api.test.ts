@@ -2,7 +2,7 @@ import { expect, test, spyOn } from "bun:test";
 import { listSessions, mutations, queries, queryKeyHash, rpc } from "./api";
 import { at, pagePath } from "./navigation";
 import { readSessionEnumeration, shouldCommitSnapshot } from "./session-list";
-import type { HistoryView, SessionBatch } from "./types";
+import type { HistoryView, Session, SessionBatch } from "./types";
 
 const first: SessionBatch = { sessions: [{ id: "one", preview: "first", tags: ["customer", "quote\" 日本語"] }, { id: "older", preview: "no tag field" }], owner: "alice", upstreamSuccess: false };
 const terminal: SessionBatch = { sessions: [], owner: "alice", upstreamSuccess: true };
@@ -32,7 +32,7 @@ for (const outcome of ["success", "cancel", "post-terminal-cancel", "fail", "pos
   } });
   const abort = new AbortController();
   const seen = Promise.withResolvers<void>();
-  let rows = [] as typeof first.sessions;
+  let rows: Session[] = [];
   let failure: unknown;
   const terminalSeen = Promise.withResolvers<void>();
   const batches = async function* () {
@@ -47,7 +47,7 @@ for (const outcome of ["success", "cancel", "post-terminal-cancel", "fail", "pos
   const enumeration = readSessionEnumeration("alice", batches(), () => rows, (next) => { rows = next; seen.resolve(); });
   try {
     await seen.promise;
-    expect(rows).toEqual(first.sessions);
+    expect(rows).toEqual(first.sessions!);
     if (outcome === "post-terminal-cancel") await terminalSeen.promise;
     if (outcome.endsWith("cancel")) abort.abort();
     tail.resolve();
