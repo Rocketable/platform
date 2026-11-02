@@ -3722,7 +3722,6 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 	require.Len(t, newParams(mock), 2)
 	require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), `"role":"user"`)
 	require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), `"content":"don't touch the database"`)
-	require.Equal(t, TurnPhaseFinalAnswer, looper.Phase())
 	require.Len(t, turnSaves(t, sink), 4, "start, two provider responses, and one tool batch")
 }
 
@@ -3913,7 +3912,6 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 
 		mu.Lock()
 		require.Empty(t, phases)
-		require.Equal(t, TurnPhaseToolLoop, looper.Phase())
 		mu.Unlock()
 
 		release[0] <- struct{}{}
@@ -4021,7 +4019,6 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 	}
 
 	require.Equal(t, []TurnPhase{TurnPhaseFinalAnswer, TurnPhaseFinalAnswer}, phases)
-	require.Equal(t, TurnPhaseFinalAnswer, looper.Phase())
 }
 
 func responseWithMessage(id, text string) *responses.Response {

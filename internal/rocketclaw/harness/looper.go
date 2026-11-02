@@ -203,16 +203,6 @@ type looper struct {
 	spillMu      sync.Mutex
 	spillTurnID  string
 	spillResults map[string]string
-
-	phaseMu   sync.Mutex
-	turnPhase TurnPhase
-}
-
-func (l *looper) Phase() TurnPhase {
-	l.phaseMu.Lock()
-	defer l.phaseMu.Unlock()
-
-	return l.turnPhase
 }
 
 type permissionReviewer interface {
@@ -732,12 +722,6 @@ func (l *looper) Loop(
 	return nil
 }
 
-func (l *looper) setPhase(phase TurnPhase) {
-	l.phaseMu.Lock()
-	l.turnPhase = phase
-	l.phaseMu.Unlock()
-}
-
 func (l *looper) runTurn(
 	ctx context.Context,
 	output chan<- ChatResponse,
@@ -1080,11 +1064,6 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 	hadToolCalls = slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "function_call" })
 
 	compactionOnly = len(resp.Output) > 0 && !slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type != "compaction" })
-	if hadToolCalls {
-		l.setPhase(TurnPhaseToolLoop)
-	} else if !compactionOnly {
-		l.setPhase(TurnPhaseFinalAnswer)
-	}
 
 	toolOutputs, err = l.dispatchToolCalls(ctx, resp, reviewContext, doomLoop, output)
 	if err == nil {
