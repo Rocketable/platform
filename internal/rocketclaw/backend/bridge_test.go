@@ -2527,7 +2527,7 @@ func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
 		assert.Equal(t, workflowRunEntryType, entries[0].Entry.Type)
 		summary := workflowSummaryFromEntry(t, &entries[0].Entry)
 		assert.Equal(t, protocol.TerminalFailed, summary.Terminal)
-		assert.Equal(t, []workflowRunPhaseSummary{{Name: "work", Status: protocol.PhaseError}, {Name: "later", Status: protocol.PhaseSkipped}}, summary.Phases)
+		assert.Equal(t, []protocol.PhaseUpdate{{Name: "work", Status: protocol.PhaseError}, {Name: "later", Status: protocol.PhaseSkipped}}, summary.Phases)
 		assert.Equal(t, `phase "work" failed`, summary.Error)
 	})
 }
@@ -2648,7 +2648,7 @@ func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
 	require.Len(t, entries, 1)
 	summary := workflowSummaryFromEntry(t, &entries[0].Entry)
 	assert.Equal(t, protocol.TerminalStopped, summary.Terminal)
-	assert.Equal(t, []workflowRunPhaseSummary{{Name: "work", Status: protocol.PhaseError, Scheduled: 1}, {Name: "later", Status: protocol.PhaseSkipped}}, summary.Phases)
+	assert.Equal(t, []protocol.PhaseUpdate{{Name: "work", Status: protocol.PhaseError, Scheduled: 1}, {Name: "later", Status: protocol.PhaseSkipped}}, summary.Phases)
 	assert.Equal(t, "workflow stopped by user", summary.Error)
 	transcript, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
 	require.NoError(t, err)
