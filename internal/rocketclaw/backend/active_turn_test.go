@@ -920,10 +920,10 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, private, 1, "canonical turns never append to producer history")
 
-	// Failures: each entry path (startup, live, due) once, each with a different failing step.
-	for _, state := range []string{"completed before Sync", "binding before projection", "existing Web", "reset cancels", "reset then future", "creation failure", "live Sync failure", "due read failure"} {
+	// Failures across startup, live, and due entry paths.
+	for _, state := range []string{"completed before Sync", "binding before projection", "existing Web", "reset cancels", "reset then future", "creation failure", "active creation failure", "live Sync failure", "due read failure"} {
 		t.Run(state, func(t *testing.T) {
-			newBridge, store, calls, outbounds := newResumeTestBridges(t, false)
+			newBridge, store, calls, outbounds := newResumeTestBridges(t, state == "active creation failure")
 			store.db.SetMaxOpenConns(1)
 
 			runtime := newBridge().runtime
@@ -1038,11 +1038,19 @@ SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(prod
 				_, err = store.db.ExecContext(t.Context(), "ALTER TABLE "+table+" DROP CONSTRAINT reject_handoff")
 				require.NoError(t, err)
 
+				if state == "active creation failure" {
+					// A due timer can start this request before the old process stops.
+					require.NoError(t, manager.PickLaterWork(t.Context(), "cron:pending"))
+					require.Contains(t, <-calls, "original job")
+				}
+
 				if !strings.HasPrefix(state, "live ") {
 					// Lose the failed process: recovery uses only retained routing and effects.
 					shutdown()
 
 					manager, _ = newTestBridgeManager(t, runtime, store, outbounds)
+					// Match app startup: a timer may already have claimed the due turn.
+					require.NoError(t, manager.StartActiveTurns(t.Context()))
 				}
 			}
 
@@ -1065,7 +1073,7 @@ SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(prod
 				return
 			}
 
-			if state == "creation failure" {
+			if strings.HasSuffix(state, "creation failure") {
 				defer func() {
 					if !t.Failed() {
 						return
