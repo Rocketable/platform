@@ -2012,7 +2012,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 
 	if terminal == protocol.TerminalComplete {
 		assistant := workflowResult.Text
-		if workflowResult.Silent {
+		if assistant == "" {
 			assistant = nestedWorkflowSilentCompleteText
 		}
 
