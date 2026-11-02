@@ -27,6 +27,16 @@ export type MountOptions = {
 export type Mounted = {
   /** Unmounts the view and removes everything it added to the page. */
   dispose(): void
+  /**
+   * Moves the view to another session of its server, as OpenCode's own app moves between sessions, so what it holds
+   * in memory carries over. Open dialogs close, and Back stops at that session.
+   */
+  show(sessionID: string): void
+  /**
+   * The server's sessions open as RocketClaw tabs. They are the view's open tabs, so OpenCode keeps their transcripts
+   * and those of the 3 sessions it showed last, and lets the rest go.
+   */
+  keep(sessionIDs: string[]): void
   /** Opens OpenCode's command palette (R21). */
   openPalette(): void
 }

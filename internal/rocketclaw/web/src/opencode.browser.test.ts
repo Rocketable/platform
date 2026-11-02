@@ -463,11 +463,19 @@ test("remote sessions list, tag, go offline, and start", async () => {
     await Bun.sleep(300);
     expect(created()).toBe(before + 1);
 
-    // A session the conversation mentions opens in its own RocketClaw tab.
+    // A session the conversation mentions opens in its own RocketClaw tab. The view moves there instead of being
+    // built again, as OpenCode's own app moves between sessions, and moves back when the first tab is chosen.
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
+    await view.getByText("answer in ses_a").waitFor();
+    await view.evaluate((node: HTMLElement & { built?: number }) => { node.built = 1; });
     await view.locator(`button[data-session-id="${linked}"]`).click();
     await page.waitForURL(`${base}${route(`opencode:box:${linked}`)}`);
     await view.getByText(`answer in Session ${linked}`).waitFor();
+    await page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: "Alpha work", exact: true }).click();
+    await view.getByText("answer in ses_a").waitFor();
+    await Bun.sleep(200);
+    expect(await view.evaluate((node: HTMLElement & { built?: number }) => node.built)).toBe(1);
+    expect([await page.locator("[data-oc-view]:not([data-oc-portal])").count(), fake.streams]).toEqual([1, 1]);
     expect(errors).toEqual([]);
 
     // When the view's code fails to load, Retry loads it again without reloading the page.

@@ -2,7 +2,7 @@ import { afterEach, expect, mock, test } from "bun:test"
 import { observeViewerScheme } from "@opencode/session-ui/pierre/file-runtime"
 import { tag } from "../manifest.json"
 import type { Navigation } from "./api"
-import { fetch, reset, server, url } from "./test/server"
+import { fetch, linked, reset, server, url } from "./test/server"
 
 // happy-dom has no IndexedDB; the drafts live in memory for the whole file, so a remount finds them.
 const drafts = await import("@/runtime/persistence/drafts")
@@ -227,6 +227,78 @@ test("navigating into a child session stays in the view and reports the child", 
   await answered(view, "ses_child")
   expect(calls.reported.at(-1)).toBe("ses_child")
   expect(calls.opened).toEqual([])
+})
+
+test("moving the view to another session shows it in place on the same live stream, and closes an open palette", async () => {
+  const view = show()
+  await answered(view)
+  const streams = server.streams
+  press(document.body, "k", modK)
+  await until(() => palettes())
+
+  view.show(linked)
+  await answered(view, linked)
+  expect(view.root.textContent?.includes("answer in ses_a")).toBe(false)
+  expect(calls.reported.at(-1)).toBe(linked)
+  expect(server.streams).toBe(streams)
+  await until(() => palettes() === 0)
+})
+
+test("Back stops at the session the view was moved to", async () => {
+  const { createViewHistory } = await import("./navigation")
+  const history = createViewHistory("/a")
+  history.set({ value: "/a/child", scroll: false })
+  history.show("/b")
+  history.back()
+  expect(history.get()).toBe("/b")
+
+  history.set({ value: "/b/child", scroll: false })
+  history.back()
+  history.back()
+  expect(history.get()).toBe("/b")
+  history.forward()
+  expect(history.get()).toBe("/b/child")
+})
+
+test("each session keeps its own draft while the view moves between them", async () => {
+  const view = show()
+  await answered(view)
+  await type(view, "draft for a")
+  const composer = () => view.root.querySelector("[data-component=composer]")?.textContent ?? ""
+
+  view.show(linked)
+  await answered(view, linked)
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  expect(composer().includes("draft for a")).toBe(false)
+
+  view.show("ses_a")
+  await answered(view)
+  await until(() => composer().includes("draft for a"))
+})
+
+test("only the sessions open as RocketClaw tabs stay among the view's tabs, and pruning leaves the view in place", async () => {
+  // OpenCode's tab list, as it saves it for this browser window.
+  const tabs = () => {
+    for (let index = 0; index < localStorage.length; index++) {
+      const key = localStorage.key(index)!
+
+      if (key.endsWith(":tabs")) return localStorage.getItem(key) ?? ""
+    }
+
+    return ""
+  }
+  const view = show()
+  await answered(view)
+  view.show(linked)
+  await answered(view, linked)
+  await until(() => tabs().includes('"ses_a"'))
+
+  view.keep([linked])
+  await until(() => !tabs().includes('"ses_a"'))
+  expect(tabs().includes(`"${linked}"`)).toBe(true)
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  expect(calls.reported.at(-1)).toBe(linked)
+  expect(view.root.textContent?.includes(`answer in ${linked}`)).toBe(true)
 })
 
 test("the view's light/dark mode follows RocketClaw's dark class, and so does a diff viewer in it", async () => {
