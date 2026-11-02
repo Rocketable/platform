@@ -15,6 +15,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 )
@@ -246,28 +247,35 @@ SELECT definition FROM definitions ORDER BY definition`
 
 	_, err = first.AppendEntryID(t.Context(), "same", testSessionEntry("SECRET", "answer"))
 	require.NoError(t, err)
+	_, err = first.db.ExecContext(t.Context(), "SELECT pg_notify($1, 'first clone barrier')", channel)
+	require.NoError(t, err)
 	_, err = second.db.ExecContext(t.Context(), "SELECT pg_notify($1, 'second clone barrier')", channel)
 	require.NoError(t, err)
-	require.NoError(t, listeners[1].Raw(func(raw any) error {
-		n, err := raw.(*stdlib.Conn).Conn().WaitForNotification(t.Context())
-		require.NoError(t, err)
-		require.Equal(t, "second clone barrier", n.Payload, "the first clone's earlier write cannot notify the second")
 
-		return nil
-	}))
-	require.NoError(t, listeners[0].Raw(func(raw any) error {
-		n, err := raw.(*stdlib.Conn).Conn().WaitForNotification(t.Context())
-		require.NoError(t, err)
-		require.Equal(t, channel, n.Channel)
+	var notifications [2]*pgconn.Notification
 
-		var change protocol.ConversationChange
-		require.NoError(t, json.Unmarshal([]byte(n.Payload), &change))
-		require.Equal(t, "same", change.ConversationID)
-		require.NotEmpty(t, change.Revision)
-		require.NotContains(t, n.Payload, "SECRET")
+	for i, conn := range listeners {
+		require.NoError(t, conn.Raw(func(raw any) error {
+			var err error
 
-		return nil
-	}))
+			notifications[i], err = raw.(*stdlib.Conn).Conn().WaitForNotification(t.Context())
+			if err != nil {
+				return fmt.Errorf("wait for fixture notification: %w", err)
+			}
+
+			return nil
+		}))
+	}
+
+	require.Equal(t, "second clone barrier", notifications[1].Payload, "the first clone's earlier write cannot notify the second")
+	require.Equal(t, channel, notifications[0].Channel)
+	require.NotEqual(t, "first clone barrier", notifications[0].Payload, "the entry write must notify before its barrier")
+
+	var change protocol.ConversationChange
+	require.NoError(t, json.Unmarshal([]byte(notifications[0].Payload), &change))
+	require.Equal(t, "same", change.ConversationID)
+	require.NotEmpty(t, change.Revision)
+	require.NotContains(t, notifications[0].Payload, "SECRET")
 	entries, err := second.ObserveEntries(t.Context(), "same")
 	require.NoError(t, err)
 	require.Empty(t, entries)

@@ -180,7 +180,7 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 	require.Eventually(t, func() bool {
 		var blocked bool
 
-		err := store.db.QueryRowContext(t.Context(), `SELECT count(*) > 0 FROM pg_locks WHERE relation = 'conversations'::regclass AND NOT granted AND mode = 'AccessShareLock'`).Scan(&blocked)
+		err := store.db.QueryRowContext(t.Context(), `SELECT count(*) > 0 FROM pg_locks l JOIN pg_database d ON d.oid = l.database WHERE d.datname = current_database() AND l.relation = 'conversations'::regclass AND NOT l.granted AND l.mode = 'AccessShareLock'`).Scan(&blocked)
 
 		return err == nil && blocked
 	}, 3*time.Second, time.Millisecond)
@@ -233,7 +233,7 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 	require.Eventually(t, func() bool {
 		var blocked int
 
-		err := store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE relation = 'conversations'::regclass AND NOT granted AND mode = 'AccessShareLock'`).Scan(&blocked)
+		err := store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks l JOIN pg_database d ON d.oid = l.database WHERE d.datname = current_database() AND l.relation = 'conversations'::regclass AND NOT l.granted AND l.mode = 'AccessShareLock'`).Scan(&blocked)
 
 		return err == nil && blocked == 2
 	}, 3*time.Second, time.Millisecond)
