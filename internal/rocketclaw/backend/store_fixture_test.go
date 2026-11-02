@@ -25,8 +25,8 @@ func TestMain(m *testing.M) {
 
 	err := func() (errResult error) {
 		base := strings.TrimSpace(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
-		if base == "" {
-			// Unit tests without database fixtures still need no PostgreSQL.
+		if base == "" || os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL") != "" {
+			// Unit tests need no PostgreSQL; children reuse their parent's template.
 			code = m.Run()
 			return nil
 		}
