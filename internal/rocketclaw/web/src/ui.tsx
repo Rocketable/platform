@@ -1671,8 +1671,7 @@ function TopShelfTabs({ tabs, openMenu }: { tabs: ReturnType<typeof useTabs>; op
           else if (path) tabs.commands(path, sidebar.rows).find((item) => item.key === "shelve")?.run();
         }}>
         {list.map((tab, index) => shelf.collapsed && !active(tab) ? null : <div key={`${tab.server} ${tab.path}`} data-shelf={index}>
-          <ShelfRow tab={tab} rows={rows(tab)} description={`Top Shelf, ${whence(tab)}`} chosen={false} rule="Yellow" active={active(tab)} stop={active(tab) || (index === 0 && !list.some(active))} editing={false} endEdit={inert} promote={inert} close={() => unshelve(tab)} openMenu={(anchor) => openMenu(tab, anchor)} />
-          <p aria-hidden="true" className="-mt-1.5 truncate pb-1 pl-9 text-xs text-muted-foreground">{whence(tab)}</p>
+          <ShelfRow tab={tab} rows={rows(tab)} description={`Top Shelf, ${whence(tab)}`} detail={whence(tab)} chosen={false} rule="Yellow" active={active(tab)} stop={active(tab) || (index === 0 && !list.some(active))} editing={false} endEdit={inert} promote={inert} close={() => unshelve(tab)} openMenu={(anchor) => openMenu(tab, anchor)} />
         </div>)}
       </div>
     </div>
@@ -1742,7 +1741,8 @@ function tabActivity(session: Session) {
   return [[session.forkedFrom && "Forked session", activity, session.unreadAt && "Unread"].filter(Boolean).join(", "), Icon, session.running && !session.asking] as const;
 }
 
-function TabItem({ tab, description, chosen, rule, active, stop, shared, editing, endEdit, promote, close, openMenu }: { tab: Tab; description: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: MenuAnchor) => void }) {
+// A detail line, such as a Top Shelf tab's server and space, sits under the title inside the tab, so the row's highlight covers both.
+function TabItem({ tab, description, detail, chosen, rule, active, stop, shared, editing, endEdit, promote, close, openMenu }: { tab: Tab; description: string; detail?: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: MenuAnchor) => void }) {
   const sidebar = useContext(Sidebar);
   const id = pathSession(tab.path);
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
@@ -1758,8 +1758,10 @@ function TabItem({ tab, description, chosen, rule, active, stop, shared, editing
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className="flex min-w-0 flex-1" />}>
       <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={[description, activity, quiet].filter(Boolean).join(", ")} tabIndex={stop ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
         onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
-        <Icon aria-hidden="true" className="size-4 shrink-0" />
-        {editing ? <TabRename session={session} tab={tab} shared={shared} placeholder={title} endEdit={endEdit} /> : <><span className="truncate group-data-[unread=true]:font-bold group-data-[asking=true]:font-semibold group-data-[asking=true]:text-amber-600 dark:group-data-[asking=true]:text-amber-300 motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>{session.asking ? needsYou : null}</>}
+        <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 self-start" />
+        <span className="flex min-w-0 flex-1 flex-col"><span className="flex min-w-0 items-center gap-1.5">
+          {editing ? <TabRename session={session} tab={tab} shared={shared} placeholder={title} endEdit={endEdit} /> : <><span className="truncate group-data-[unread=true]:font-bold group-data-[asking=true]:font-semibold group-data-[asking=true]:text-amber-600 dark:group-data-[asking=true]:text-amber-300 motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>{session.asking ? needsYou : null}</>}
+        </span><span aria-hidden="true" className="truncate text-xs text-muted-foreground empty:hidden">{detail}</span></span>
       </div>
     </TooltipTrigger><TooltipContent side="bottom">{title}</TooltipContent></Tooltip>
     {quiet ? <span title={quiet} className="flex size-6 shrink-0 items-center justify-center text-muted-foreground"><BellOff aria-hidden="true" className="size-3.5" /></span> : null}

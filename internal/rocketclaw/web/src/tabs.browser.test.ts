@@ -787,7 +787,7 @@ test("collapsed group badges do not rescan sessions for each hidden tab", () => 
 
 test("an unread tab shows a bold title", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
-  const weight = (name: string) => tab(name).locator("span").evaluate((title: HTMLElement) => getComputedStyle(title).fontWeight);
+  const weight = (name: string) => tab(name).getByText(name, { exact: true }).evaluate((title: HTMLElement) => getComputedStyle(title).fontWeight);
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
   await openSaved(page, origin, href("foxtrot"), "Foxtrot", saved);
   expect(await weight("Foxtrot")).toBe("700");
@@ -817,7 +817,7 @@ test("a tab waiting on this person stops shimmering and needs them, as do its co
   expect(await page.title()).toBe("lab - RocketClaw");
   await openSaved(page, origin, href("golf"), "Golf", saved);
   expect(await tab("Golf").getAttribute("aria-description")).toBe("Space: Main, Needs your answer");
-  expect(await animation(tab("Golf").locator("span").first())).toBe("none");
+  expect(await animation(tab("Golf").getByText("Golf", { exact: true }))).toBe("none");
   expect(await tab("Golf").getByText("Needs you", { exact: true }).isVisible()).toBe(true);
   expect(await tab("Alpha").getByText("Needs you").count()).toBe(0);
   expect(await page.title()).toBe("(1) lab - RocketClaw");
