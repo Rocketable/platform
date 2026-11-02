@@ -38,7 +38,9 @@ const (
 
 // PhaseUpdate records one workflow phase's status and call counts.
 type PhaseUpdate struct {
-	PhaseID, Name       string
-	Status              PhaseStatus
-	Scheduled, Complete int
+	PhaseID   string      `json:"-"`
+	Name      string      `json:"name"`
+	Status    PhaseStatus `json:"status"`
+	Scheduled int         `json:"scheduled"`
+	Complete  int         `json:"complete"`
 }

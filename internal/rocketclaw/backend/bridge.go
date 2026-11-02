@@ -232,18 +232,11 @@ type runResult struct {
 }
 
 type workflowRunSummary struct {
-	Workflow string                    `json:"workflow"`
-	RunID    string                    `json:"run_id"`
-	Terminal protocol.Terminal         `json:"terminal"`
-	Phases   []workflowRunPhaseSummary `json:"phases"`
-	Error    string                    `json:"error,omitempty"`
-}
-
-type workflowRunPhaseSummary struct {
-	Name      string               `json:"name"`
-	Status    protocol.PhaseStatus `json:"status"`
-	Scheduled int                  `json:"scheduled"`
-	Complete  int                  `json:"complete"`
+	Workflow string                 `json:"workflow"`
+	RunID    string                 `json:"run_id"`
+	Terminal protocol.Terminal      `json:"terminal"`
+	Phases   []protocol.PhaseUpdate `json:"phases"`
+	Error    string                 `json:"error,omitempty"`
 }
 
 // NewConversation constructs a rocketcode bridge for one conversation.
@@ -1979,10 +1972,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, incoming *bridgeRequest, finis
 		terminal = protocol.TerminalFailed
 	}
 
-	summary := workflowRunSummary{Workflow: runner.definition.Name, RunID: turnID, Terminal: terminal, Phases: make([]workflowRunPhaseSummary, 0, len(workflowResult.Phases))}
-	for _, phase := range workflowResult.Phases {
-		summary.Phases = append(summary.Phases, workflowRunPhaseSummary{Name: phase.Name, Status: phase.Status, Scheduled: phase.Scheduled, Complete: phase.Complete})
-	}
+	summary := workflowRunSummary{Workflow: runner.definition.Name, RunID: turnID, Terminal: terminal, Phases: workflowResult.Phases}
 
 	switch terminal {
 	case protocol.TerminalComplete:
