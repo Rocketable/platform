@@ -45,7 +45,7 @@ type searchTestMatch struct {
 func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 	t.Helper()
 
-	s := newTestSessionService(t)
+	s := newMigratedTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 
 	daily, weekly := strings.TrimPrefix(searchChatD, "web:"), strings.TrimPrefix(searchChatE, "web:")
