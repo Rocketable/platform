@@ -37,7 +37,6 @@ import (
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
-	"github.com/Rocketable/platform/internal/rocketclaw/justbash"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
@@ -1901,7 +1900,7 @@ func (b *Bridge) prepareWorkflow(request *bridgeRequest) error {
 		return fmt.Errorf("workflow %q is not configured", msg.Workflow.Name)
 	}
 
-	runner, err := newWorkflowAgentRunner(b.runtime, cmp.Or(snapshot.Agent, b.agentSnapshot()), harness.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID))...)
+	runner, err := newWorkflowAgentRunner(b.runtime, b.config.SessionService.shells.current(), cmp.Or(snapshot.Agent, b.agentSnapshot()), harness.TracelessJournal{Parent: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}}, b.log, sessionTagTools(b.config.SessionService, cmp.Or(msg.SyncDestination, b.config.ConversationID))...)
 	if err != nil {
 		return fmt.Errorf("prepare workflow agent runner: %w", err)
 	}
@@ -2744,7 +2743,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 		})
 	}
 
-	return harness.Config{Model: "", AutoApproverModel: runtimeCfg.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: harness.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: harness.ObservabilityConfig{Enabled: runtimeCfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}}, ChildSessions: b, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: harness.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: harness.DefaultShellCommand{}, MCPServers: toMCPClientServers(runtimeCfg.MCPServers), MCPWorkspace: runtimeCfg.Workspace}
+	return harness.Config{Model: "", AutoApproverModel: runtimeCfg.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: harness.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: harness.ObservabilityConfig{Enabled: runtimeCfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}}, ChildSessions: b, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: harness.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: harness.DefaultShellCommand{}, Sandbox: *b.config.SessionService.shells.current(), MCPServers: toMCPClientServers(runtimeCfg.MCPServers), MCPWorkspace: runtimeCfg.Workspace}
 }
 
 // toMCPClientServers consumes the bridge's independent runtime snapshot.
@@ -2861,10 +2860,6 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 			err = fmt.Errorf("%s: %w", tagsKey, err)
 		} else if _, _, errRecipients := agentRecipients(&agent); errRecipients != nil {
 			err = fmt.Errorf("permission.rocketclaw.%s: %w", recipientSetting, errRecipients)
-		} else if shell, errShell := justbash.Shell(agent.Frontmatter, cfg.Workspace, filepath.Join(cfg.Workspace, cfg.RuntimeDirName()), justBashDir(cfg)); errShell != nil {
-			err = errShell
-		} else if shell.Emulated {
-			agent.CustomShell = shell
 		}
 
 		if err != nil {

@@ -84,8 +84,9 @@ func (s *runShutdown) start(reason string, restart bool) bool {
 	return started
 }
 
-// Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs.
-func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble FrontendAssembler) error {
+// Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs. sandboxRootfs is the
+// emulated shell's rootfs the binary embeds; without it emulated shells refuse.
+func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble FrontendAssembler, sandboxRootfs []byte) error {
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 
@@ -115,6 +116,8 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	if err != nil {
 		return fmt.Errorf("start rocketcode session service: %w", err)
 	}
+
+	rocketcodeSessions.shells.rootfs = sandboxRootfs
 
 	stateLogger.Info("started rocketclaw state store", "elapsed", time.Since(startedAt))
 
@@ -247,7 +250,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		questions: questions,
 	}
 
-	rt.installJustBash()
+	rt.prepareSandbox()
 
 	resumeJobs, err := background.recoverJobs(runCtx)
 	if err != nil {

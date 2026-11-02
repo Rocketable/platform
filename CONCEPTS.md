@@ -121,10 +121,10 @@ A sandbox capability the Code Mode script can call directly, as opposed to a mod
 
 ### Emulated Shell
 
-An agent's opt-in shell mode, always on for an Easy Agent, in which its shell commands run in a bash emulator instead of host bash.
-*Avoid:* just-bash shell
+An agent's opt-in shell mode, always on for an Easy Agent, in which its shell commands run in real Bash inside a Linux sandbox instead of host bash.
+*Avoid:* sandboxed bash, bubblewrap shell
 
-Each command runs in a fresh emulator process. Only the agent's declared working directory reaches the host disk, with an Easy Agent's uploads and skill folders read-only; everything else, temporary files included, lives in memory and is gone when the command ends. The commands can start only the host programs the agent approves, and those programs see only the host's environment, plus an Easy Agent's secrets, never variables the emulated script set. Network access follows the agent's allowed targets. An agent that asked for the Emulated Shell but never received one has its shell commands fail rather than fall back to host bash.
+Each command runs in a fresh sandbox with no network. Only the agent's declared working directory reaches the host disk writable, with its uploads and skill folders read-only; temporary files are the command's own and gone when it ends. The commands can start only the host programs the agent declares, and those programs see only the host's environment plus the agent's secrets, never variables the sandboxed script set. Its curl fetches through RocketClaw under the agent's allowed targets. An agent that asked for the Emulated Shell but cannot get one has its shell commands fail rather than fall back to host bash.
 
 ### Script Call Record
 

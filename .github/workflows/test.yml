@@ -13,9 +13,10 @@ env:
   ROCKETCLAW_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/rocketclaw_test?sslmode=disable
 
 jobs:
-  # Tests run against the committed generated files, so this job proves they are current.
-  checks:
-    runs-on: ubuntu-latest
+  # The emulated shell's rootfs, which Linux builds embed (cmd/rocketclaw/sandbox_rootfs.go). It changes only
+  # with its generator, package lock or keyring, so the cache keeps it across commits.
+  sandbox-rootfs:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - &setup-go
@@ -23,6 +24,39 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - id: cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            cmd/rocketclaw/sandbox-rootfs-amd64.tar.zst
+            cmd/rocketclaw/sandbox-rootfs-amd64.spdx.json
+          key: sandbox-rootfs-${{ hashFiles('internal/rocketclaw/sandbox/rootfs/**') }}
+      # mmdebstrap is not one of the programs Ubuntu 24.04's AppArmor lets create user namespaces.
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Build the rootfs
+        run: |
+          sudo apt-get install -y --no-install-recommends mmdebstrap uidmap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          make -C internal/rocketclaw sandbox-rootfs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sandbox-rootfs
+          path: |
+            cmd/rocketclaw/sandbox-rootfs-amd64.tar.zst
+            cmd/rocketclaw/sandbox-rootfs-amd64.spdx.json
+
+  # Tests run against the committed generated files, so this job proves they are current.
+  checks:
+    needs: sandbox-rootfs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-go
+      - &sandbox-rootfs
+        uses: actions/download-artifact@v8
+        with:
+          name: sandbox-rootfs
+          path: cmd/rocketclaw
       # setup-go keys its cache on go.sum alone and never refreshes it; main saves a fresh one per commit.
       # main builds from scratch so each saved cache holds one build: restoring before saving piles up
       # outputs Go trims only after 5 unused days.
@@ -94,6 +128,7 @@ jobs:
           key: go-${{ github.job }}-${{ github.sha }}
 
   rocketclaw:
+    needs: sandbox-rootfs
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -109,6 +144,7 @@ jobs:
       - uses: actions/checkout@v7
       - *setup-go
       - *restore-go-build
+      - *sandbox-rootfs
       # The same ripgrep 14.1.0 as Ubuntu 24.04's package, without its package mirror.
       - name: Install ripgrep
         run: |
@@ -116,10 +152,6 @@ jobs:
           echo "f84757b07f425fe5cf11d87df6644691c644a5cd2348a2c670894272999d3ba7  $RUNNER_TEMP/rg.tar.gz" | sha256sum -c -
           sudo tar -xzf "$RUNNER_TEMP/rg.tar.gz" -C /usr/local/bin --strip-components 1 ripgrep-14.1.0-x86_64-unknown-linux-musl/rg
       - *setup-bun
-      # just-bash's wrapper is TypeScript that Node runs directly, which needs Node 22.18 or later.
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
       - *node-modules
       - run: bun install --frozen-lockfile
         working-directory: internal/rocketclaw/web
@@ -154,8 +186,32 @@ jobs:
           overwrite: true
       - *save-go-build
 
+  # The emulated shell's acceptance tests in a real sandbox (docs/specs/2026-11-01-linux-native-just-bash-spec.md
+  # §13). ROCKETCLAW_SANDBOX_REQUIRE makes a missing prerequisite fail rather than skip.
+  sandbox:
+    needs: sandbox-rootfs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - *setup-go
+      - *sandbox-rootfs
+      # The same AppArmor allowance every RocketClaw host gives bubblewrap (docs/explainers/2026-11-01-emulated-shell-sandbox.md).
+      - name: Install bubblewrap
+        run: |
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile rocketclaw-bwrap /usr/bin/bwrap flags=(unconfined) {\n  userns,\n}\n' | sudo tee /etc/apparmor.d/rocketclaw-bwrap
+          sudo apparmor_parser -r /etc/apparmor.d/rocketclaw-bwrap
+      # The runner has no user systemd, so root starts the delegated scope as the runner user.
+      - run: make -C internal/rocketclaw sandbox-test SANDBOX_TEST_COVERPROFILE=coverage-sandbox.out SANDBOX_TEST_SCOPE="sudo systemd-run --scope --quiet -p Delegate=yes --uid=$(id -u) --gid=$(id -g)"
+      - run: make -C internal/rocketclaw sandbox-test SANDBOX_TEST_FLAGS=-race SANDBOX_TEST_CGO=1 SANDBOX_TEST_SCOPE="sudo systemd-run --scope --quiet -p Delegate=yes --uid=$(id -u) --gid=$(id -g)"
+      # Its coverage joins the rocketclaw shards' (the coverage job), since those skip these tests.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-sandbox
+          path: internal/rocketclaw/coverage-sandbox.out
+
   coverage:
-    needs: rocketclaw
+    needs: [rocketclaw, sandbox]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -208,7 +264,7 @@ jobs:
   core:
     name: test (core)
     if: always()
-    needs: [checks, funneld, rocketclaw, coverage]
+    needs: [sandbox-rootfs, checks, funneld, rocketclaw, sandbox, coverage]
     runs-on: ubuntu-latest
     steps:
       - &all-passed

@@ -9,10 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 )
 
-// Every path that loads agents gives a shell: emulated agent the just-bash wrapper as its shell.
-func TestLoadedJustBashAgentRunsThroughWrapper(t *testing.T) {
+// Every path that loads agents gives a shell: emulated agent the emulated shell, set up per turn, with its
+// workingDirectory and commands; one without a workingDirectory does not load.
+func TestLoadedEmulatedAgent(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
@@ -22,30 +24,30 @@ func TestLoadedJustBashAgentRunsThroughWrapper(t *testing.T) {
 
 	agents, _, err := LoadRuntimeDefinitions(config.NewLockedConfig(&config.Config{Workspace: workspace}), ".rocketclaw")
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(workspace, ".rocketclaw", "justbash", "wrapper.ts"), agents.Items["boxed"].CustomShell.Path)
-	require.JSONEq(t, `{"workspace":"`+workspace+`","runtimeDir":"`+filepath.Join(workspace, ".rocketclaw")+`","workingDirectory":"data","commands":{"hello":"printf hi"}}`, string(agents.Items["boxed"].CustomShell.Setup))
+	require.Equal(t, harness.CustomShell{Emulated: true}, agents.Items["boxed"].CustomShell)
+	require.Equal(t, "data", agents.Items["boxed"].WorkingDirectory)
+	require.Equal(t, map[string]string{"hello": "printf hi"}, agents.Items["boxed"].Commands)
 	require.Empty(t, agents.Items["plain"].CustomShell)
 
 	writeAgent(t, workspace, "bad", "---\ndescription: Bad\nmodel: gpt-6.1-sol\nshell: emulated\n---\nPrompt\n")
 
 	_, _, err = LoadRuntimeDefinitions(config.NewLockedConfig(&config.Config{Workspace: workspace}), ".rocketclaw")
-	require.ErrorContains(t, err, "bad.md: workingDirectory: required with shell: emulated")
+	require.ErrorContains(t, err, "bad.md: workingDirectory: required non-empty string")
 }
 
-// A failed install does not fail startup or reload; the Web shows why.
-func TestJustBashInstallErrorReachesWeb(t *testing.T) {
+// A sandbox that cannot run does not fail startup or reload; the Web shows why, once an agent needs it.
+func TestSandboxErrorReachesWeb(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "plain", "---\ndescription: Plain\nmodel: gpt-6.1-sol\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
-	rt := &Runtime{Cfg: config.NewLockedConfig(&config.Config{Workspace: workspace}), Log: slog.New(slog.DiscardHandler)}
-	rt.installJustBash()
-	require.Empty(t, rt.JustBashInstallError(), "no emulated agent, no install")
+	rt := &Runtime{Cfg: config.NewLockedConfig(&config.Config{Workspace: workspace}), Log: slog.New(slog.DiscardHandler), RunCtx: t.Context(), Sessions: &SessionService{}}
+	rt.prepareSandbox()
+	require.Empty(t, rt.SandboxError(), "no emulated agent, no sandbox")
 
 	writeAgent(t, workspace, "boxed", "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\n---\nPrompt\n")
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "justbash"), nil, 0o600)) // A file blocks the install directory.
-	rt.installJustBash()
-	require.Contains(t, rt.JustBashInstallError(), "install just-bash")
+	rt.prepareSandbox()
+	require.Contains(t, rt.SandboxError(), "prepare sandbox: ", "no sandbox here: this build embeds no rootfs, and off Linux there is none")
 }

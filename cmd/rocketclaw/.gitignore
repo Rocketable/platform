@@ -1,0 +1,2 @@
+# The emulated shell's rootfs and SBOM: go generate builds them (sandbox_rootfs.go).
+/sandbox-rootfs-*

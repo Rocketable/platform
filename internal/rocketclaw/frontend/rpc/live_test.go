@@ -119,7 +119,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 
 		var running errgroup.Group
 		running.Go(func() error {
-			return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly)
+			return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, nil)
 		})
 
 		t.Cleanup(func() {
@@ -382,7 +382,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
         (9007199254741001, 'chat', '{"type":"turn","replay_input":[{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\"]","content":"[Web principal=\"alice\"]\n\n  $skill exact\n"},{"type":"message","role":"assistant","content":"answer"}]}', '')`)
 	require.NoError(t, err)
 
-	engine := &mockBackend{JustBashInstallErrorFunc: noJustBashError}
+	engine := &mockBackend{SandboxErrorFunc: noSandboxError}
 	server := &Server{sessions: sessions, cfg: config.NewLockedConfig(cfg), backend: engine}
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 	initial, err := server.history(ctx, &HistoryRequest{Id: "chat", Limit: 1})
@@ -450,7 +450,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group
-	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
+	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, nil) })
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
 	rt := <-ready
@@ -534,7 +534,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group
-	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
+	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, nil) })
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
 	rt := <-ready

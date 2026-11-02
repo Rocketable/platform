@@ -78,7 +78,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 		running, ctxRunning := errgroup.WithContext(ctx)
-		running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
+		running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, nil) })
 		t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
 		var rt *backend.Runtime

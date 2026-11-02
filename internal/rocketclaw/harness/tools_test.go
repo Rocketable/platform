@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 )
@@ -48,7 +49,7 @@ func TestGlobGrepPermissionSubjects(t *testing.T) {
 	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
 	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, DefaultShellCommand{})
+	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, DefaultShellCommand{}, &sandbox.Runtime{})
 
 	globSubjects, err := tools["glob"].Subjects(json.RawMessage(`{"pattern":"**/*.go","path":"src"}`))
 	require.NoError(t, err)
@@ -82,7 +83,7 @@ func TestSandboxedToolParameterAliases(t *testing.T) {
 			require.NoError(t, root.WriteFile("note.txt", []byte("old\n"), 0o644))
 			require.NoError(t, root.WriteFile("other.txt", []byte("old\n"), 0o644))
 			require.NoError(t, root.Mkdir(".tmp", 0o755))
-			tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, filepath.Join(root.Name(), ".tmp")), nil, DefaultShellCommand{})
+			tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, filepath.Join(root.Name(), ".tmp")), nil, DefaultShellCommand{}, &sandbox.Runtime{})
 
 			for _, input := range []struct {
 				tool, want string
@@ -117,7 +118,7 @@ func TestWebFetchPermissionSubjectsMatchOpenCode(t *testing.T) {
 	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
 	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, DefaultShellCommand{})
+	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, DefaultShellCommand{}, &sandbox.Runtime{})
 
 	subjects, err := tools["webfetch"].Subjects(json.RawMessage(`{"url":"https://docs.example/path?q=1","format":"markdown"}`))
 
@@ -134,7 +135,7 @@ func TestWebSearchPermissionIsCoarse(t *testing.T) {
 	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
 	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, DefaultShellCommand{})
+	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, DefaultShellCommand{}, &sandbox.Runtime{})
 
 	loop := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "websearch", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}}}
 	tool := tools["websearch"]
@@ -151,7 +152,7 @@ func TestBashPermissionsCheckWholeScript(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.Mkdir(".tmp", 0o755))
-	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, filepath.Join(root.Name(), ".tmp")), nil, DefaultShellCommand{})
+	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, filepath.Join(root.Name(), ".tmp")), nil, DefaultShellCommand{}, &sandbox.Runtime{})
 	tool := tools["bash"]
 
 	loop := &looper{Journal: InertJournal{}, Permissions: parsePermissionYAML(t, `bash: {"scripts/cmd *": allow}`), Tools: tools, observations: &turnObservations{journal: InertJournal{}}}
@@ -387,7 +388,7 @@ func TestFunctionToolStrictSchemasRequireAllProperties(t *testing.T) {
 	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
 	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, DefaultShellCommand{})
+	tools, _ := newSandboxedTools(root, defaultSpillRel, testShellTempConfig(t, root, outputDir), nil, DefaultShellCommand{}, &sandbox.Runtime{})
 
 	requireToolRequiredProperties(t, tools["glob"].Definition.Parameters, []string{"path", "pattern"})
 	requireToolRequiredProperties(t, tools["grep"].Definition.Parameters, []string{"include", "path", "pattern"})

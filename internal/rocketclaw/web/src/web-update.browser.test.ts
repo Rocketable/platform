@@ -13,8 +13,8 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
   const styles = current.match(/href="(\/assets\/styles-[^"]+)"/)![1];
   // The index page the server answers with; undefined answers HTTP 500.
   let served: string | undefined = current;
-  // Why just-bash failed to install, as Identity reports it.
-  let justBashError = "";
+  // Why emulated shells cannot run, as Identity reports it.
+  let sandboxError = "";
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -23,7 +23,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     if (!url.pathname.startsWith("/api/")) return served === undefined ? new Response("down", { status: 500 }) : new Response(served, { headers: { "Content-Type": "text/html" } });
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "web-update" });
-      case "/api/Identity": return Response.json({ username: "tester", justBashError });
+      case "/api/Identity": return Response.json({ username: "tester", sandboxError });
       case "/api/ListConfig": return Response.json({ config: { workspace: "web-update" } });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListSkills": return Response.json({ skills: [] });
@@ -92,11 +92,11 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     await recheck();
     expect(await notice.count()).toBe(0);
 
-    // A failed just-bash install shows in the same bar until an install succeeds.
-    const alert = page.getByRole("alert").filter({ hasText: "just-bash install failed: npm install just-bash@3.6.0: ENOTFOUND" });
-    justBashError = "npm install just-bash@3.6.0: ENOTFOUND";
+    // An unavailable sandbox shows in the same bar until it becomes available.
+    const alert = page.getByRole("alert").filter({ hasText: "Emulated shell unavailable: prepare sandbox: bubblewrap is required" });
+    sandboxError = "prepare sandbox: bubblewrap is required";
     await alert.waitFor();
-    justBashError = "";
+    sandboxError = "";
     await alert.waitFor({ state: "detached" });
     expect(errors).toEqual([]);
   } finally {

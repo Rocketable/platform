@@ -107,7 +107,7 @@ func TestShadowsRealBackendBrowser(t *testing.T) {
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group
-	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
+	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, nil) })
 	t.Cleanup(func() {
 		unlockA()
 		unlockB()

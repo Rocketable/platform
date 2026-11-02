@@ -192,7 +192,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 	var running errgroup.Group
-	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
+	running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, nil) })
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
 	h.rt = <-ready

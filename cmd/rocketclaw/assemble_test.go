@@ -95,5 +95,5 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 
 			return done, nil, nil
 		},
-	}))
+	}, nil))
 }

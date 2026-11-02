@@ -47,9 +47,9 @@ type Runtime struct {
 	eventsMu    sync.Mutex
 	subscribers map[chan protocol.Event]<-chan struct{}
 
-	// justBashMu is apart from reloadMu: the Web reads justBashErr while a reload installs.
-	justBashMu  sync.Mutex
-	justBashErr error
+	// sandboxMu is apart from reloadMu: the Web reads sandboxErr while a reload prepares the sandbox.
+	sandboxMu  sync.Mutex
+	sandboxErr error
 }
 
 // Reload validates and replaces runtime assets, then refreshes External MCP agents and the cron jobs.
@@ -79,7 +79,7 @@ func (r *Runtime) Reload(reason string) (string, error) {
 		return "", fmt.Errorf("refresh cron jobs: %w", err)
 	}
 
-	r.installJustBash()
+	r.prepareSandbox()
 
 	return "rocketclaw runtime assets reloaded", nil
 }

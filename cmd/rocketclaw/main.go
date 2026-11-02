@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 )
 
 const (
@@ -36,6 +37,11 @@ type exitCodeError int
 func (e exitCodeError) Error() string { return "" }
 func (e exitCodeError) ExitCode() int { return int(e) }
 func main() {
+	// Inside an emulated shell's sandbox this binary is the guest relay, not RocketClaw.
+	if code, ok := sandbox.Guest(os.Args); ok {
+		os.Exit(code)
+	}
+
 	if err := run(os.Args[1:]); err != nil {
 		if message := strings.TrimSpace(err.Error()); message != "" {
 			fmt.Fprintf(os.Stderr, "%s\n", message)

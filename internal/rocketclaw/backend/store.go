@@ -106,6 +106,8 @@ type SessionService struct {
 	}
 	// spillDir is rocketcode's spill dir, which keeps conversations' retained background output.
 	spillDir string
+	// shells is the process's emulated shell sandbox, which every conversation's harness uses.
+	shells emulatedShells
 
 	lastTurnIDMu sync.Mutex
 	lastTurnID   int64

@@ -19,13 +19,45 @@ oc-assets: .FORCE
 	cd oc && bun install --frozen-lockfile && $(MAKE) build
 
 generate: web-assets oc-assets vendor
-	go generate ./skel ../../cmd/rocketclaw
+	go generate -skip sandbox/rootfs ./skel ../../cmd/rocketclaw
+
+# The emulated shell's rootfs, which Linux builds embed: minutes on Linux with mmdebstrap, nothing elsewhere.
+sandbox-rootfs:
+	cd ../../cmd/rocketclaw && go generate -run sandbox/rootfs .
+
+# Upgrading the guest: change snapshot or suite in sandbox/rootfs/main.go, run this on Linux (the other
+# architecture needs qemu-user-static), review the lock diffs and commit them with the change.
+sandbox-rootfs-update:
+	cd ../../cmd/rocketclaw && for arch in amd64 arm64; do \
+		go run ../../internal/rocketclaw/sandbox/rootfs -arch $$arch -out sandbox-rootfs-$$arch.tar.zst -update || exit 1; \
+	done
 
 lint: web-assets vendor
 	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run --fix ./...
 
+# RocketClaw is the emulated shell's guest relay inside the sandbox's rootfs, so it carries no C code.
 build: generate lint
-	go build -o ../../bin/rocketclaw ../../cmd/rocketclaw
+	CGO_ENABLED=0 go build -o ../../bin/rocketclaw ../../cmd/rocketclaw
+
+# The emulated shell's acceptance tests, on Linux only, in a delegated cgroup of their own. A missing
+# prerequisite fails them. The unpacked rootfs and test folders must be on a local filesystem.
+SANDBOX_TEST_DIR ?= $(abspath ../../.tmp)/sandbox-test
+# -race needs cgo: SANDBOX_TEST_FLAGS=-race SANDBOX_TEST_CGO=1 (the binary then needs the rootfs's glibc).
+# SANDBOX_TEST_SCOPE starts the tests in a delegated cgroup; CI, without a user systemd, uses sudo --uid.
+# SANDBOX_TEST_COVERPROFILE, when set, writes the tests' coverage of COVERPKG there, for CI to merge.
+SANDBOX_TEST_FLAGS ?=
+SANDBOX_TEST_CGO ?= 0
+SANDBOX_TEST_SCOPE ?= systemd-run --user --scope --quiet -p Delegate=yes
+SANDBOX_TEST_COVERPROFILE ?=
+sandbox-test:
+	test -f ../../cmd/rocketclaw/sandbox-rootfs-$$(go env GOARCH).tar.zst || $(MAKE) sandbox-rootfs
+	mkdir -p $(SANDBOX_TEST_DIR)/tmp
+	CGO_ENABLED=$(SANDBOX_TEST_CGO) go test -c $(SANDBOX_TEST_FLAGS) $(if $(SANDBOX_TEST_COVERPROFILE),-cover -covermode=atomic -coverpkg=$(COVERPKG)) -o $(SANDBOX_TEST_DIR)/harness.test ./harness
+	cd harness && $(SANDBOX_TEST_SCOPE) env ROCKETCLAW_SANDBOX_REQUIRE=1 \
+		ROCKETCLAW_SANDBOX_ROOTFS=$(abspath ../../cmd/rocketclaw)/sandbox-rootfs-$$(go env GOARCH).tar.zst \
+		ROCKETCLAW_SANDBOX_DIR=$(SANDBOX_TEST_DIR)/sandbox TMPDIR=$(SANDBOX_TEST_DIR)/tmp \
+		$(SANDBOX_TEST_DIR)/harness.test -test.run 'TestEmulatedShell' -test.v -test.count 1 \
+		$(if $(SANDBOX_TEST_COVERPROFILE),-test.coverprofile=$(abspath $(SANDBOX_TEST_COVERPROFILE)))
 
 cloc:
 	@printf "Go cloc (cmd/rocketclaw and internal/rocketclaw)\n"
