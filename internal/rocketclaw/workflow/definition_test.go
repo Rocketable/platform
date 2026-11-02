@@ -335,7 +335,7 @@ def main(args):
 		t.Fatalf("Run() error = %v", err)
 	}
 
-	if result.Text != "3" || result.Silent {
+	if result.Text != "3" {
 		t.Fatalf("Run() result = %+v, want computed default 3", result)
 	}
 }
@@ -364,7 +364,7 @@ func TestLoadDialectOptions(t *testing.T) {
 				t.Fatalf("Run() error = %v", err)
 			}
 
-			if result.Text != tt.want || result.Silent {
+			if result.Text != tt.want {
 				t.Fatalf("Run() result = %+v, want text %q", result, tt.want)
 			}
 		})

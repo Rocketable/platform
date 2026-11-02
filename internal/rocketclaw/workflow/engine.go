@@ -51,7 +51,6 @@ type AgentRunner interface {
 // Result is the rendered workflow result.
 type Result struct {
 	Text   string
-	Silent bool
 	Phases []protocol.PhaseUpdate
 }
 
@@ -139,11 +138,11 @@ func Run(ctx context.Context, definition *Definition, request RunRequest, agent 
 	}
 
 	if text, ok := value.(starlark.String); ok {
-		return Result{Text: string(text), Silent: text == ""}, nil
+		return Result{Text: string(text)}, nil
 	}
 
 	if value == starlark.None {
-		return Result{Silent: true}, nil
+		return Result{}, nil
 	}
 
 	return Result{Text: string(encoded)}, nil

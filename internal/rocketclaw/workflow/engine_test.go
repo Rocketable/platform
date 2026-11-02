@@ -37,7 +37,7 @@ def main(args):
 			t.Fatalf("Run() error = %v", err)
 		}
 
-		if result.Text != "answer" || result.Silent {
+		if result.Text != "answer" {
 			t.Fatalf("Run() result = %+v, want text answer", result)
 		}
 
@@ -127,10 +127,9 @@ def main(args): return agent("prompt", worker=w)
 
 	for _, tt := range []struct {
 		name, expression, wantText string
-		silent                     bool
 	}{
-		{name: "none", expression: "None", silent: true},
-		{name: "empty string", expression: `""`, silent: true},
+		{name: "none", expression: "None"},
+		{name: "empty string", expression: `""`},
 		{name: "string", expression: `"hello"`, wantText: "hello"},
 		{name: "bool", expression: "True", wantText: "true"},
 		{name: "integer", expression: "42", wantText: "42"},
@@ -143,8 +142,8 @@ def main(args): return agent("prompt", worker=w)
 				t.Fatalf("Run() error = %v", err)
 			}
 
-			if result.Text != tt.wantText || result.Silent != tt.silent {
-				t.Fatalf("Run() result = %+v, want text %q, silent %t", result, tt.wantText, tt.silent)
+			if result.Text != tt.wantText {
+				t.Fatalf("Run() result = %+v, want text %q", result, tt.wantText)
 			}
 		})
 	}

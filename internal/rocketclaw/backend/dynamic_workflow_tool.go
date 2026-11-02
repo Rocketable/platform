@@ -148,7 +148,7 @@ func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, tagConversati
 		return "", fmt.Errorf("run nested workflow %q: %w", name, errRun)
 	}
 
-	if result.Silent {
+	if result.Text == "" {
 		return nestedWorkflowSilentCompleteText, nil
 	}
 
