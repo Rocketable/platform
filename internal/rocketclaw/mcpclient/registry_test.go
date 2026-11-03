@@ -168,26 +168,6 @@ func TestSessionErrors(t *testing.T) {
 	}
 }
 
-func TestCloseIdempotent(t *testing.T) {
-	t.Parallel()
-
-	url := startTestHTTPServer(t, func(server *mcp.Server) {
-		mcp.AddTool(server, &mcp.Tool{Name: "echo", Description: "echo"}, func(_ context.Context, _ *mcp.CallToolRequest, in struct {
-			Message string `json:"message"`
-		}) (*mcp.CallToolResult, any, error) {
-			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: in.Message}}}, nil, nil
-		})
-	})
-
-	reg := New(t.TempDir(), map[string]ServerConfig{"demo": {URL: url}})
-
-	session := reg.Open()
-	_, err := session.CallTool(t.Context(), "demo", "echo", map[string]any{"message": "x"})
-	require.NoError(t, err)
-	require.NoError(t, session.Close())
-	require.NoError(t, session.Close())
-}
-
 func TestHTTPCallTool(t *testing.T) {
 	t.Parallel()
 
@@ -247,6 +227,9 @@ func TestHTTPCallTool(t *testing.T) {
 	require.ErrorContains(t, err, `call demo.missing:`)
 	require.ErrorContains(t, err, `unknown tool "missing"`)
 	assert.Empty(t, got)
+
+	require.NoError(t, session.Close())
+	require.NoError(t, session.Close())
 }
 
 func TestListToolsError(t *testing.T) {
