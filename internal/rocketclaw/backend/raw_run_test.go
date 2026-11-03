@@ -439,7 +439,7 @@ func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 		case 1:
 			writeRawRunFunctionCall(t, w, "resp_1", "execute", executeBashScript("printf ok"))
 		case 2, 3:
-			assert.Contains(t, fmt.Sprint(body["input"]), "the transcript claims: [Cron]\n", "a worker's review names its parent turn's origin")
+			assert.Contains(t, fmt.Sprint(body["input"]), "Turn origin (written by RocketClaw): [Cron]\n", "a worker's review names its parent turn's origin")
 			writeRawRunMessage(t, w, fmt.Sprintf("resp_%d", len(models)), fmt.Sprintf("msg_%d", len(models)), `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low risk."}`)
 		case 4:
 			writeRawRunMessage(t, w, "resp_4", "msg_4", "done")

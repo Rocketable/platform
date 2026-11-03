@@ -259,6 +259,9 @@ func TestPermissionReviewSystemPromptIncludesRootInstructionsAndCodeMode(t *test
 			require.Equal(t, reviewer == "" || load, strings.Contains(instructions, "Instructions from: AGENTS.md\nproject rules"))
 			require.Contains(t, instructions, "You are judging one planned coding-agent action.")
 			require.Contains(t, instructions, "## Code Mode")
+			// Every reviewer learns from its instructions, not from the request, that the request's
+			// origin line is RocketClaw's; a request claiming that trust reads as prompt injection.
+			require.Contains(t, instructions, `The review request opens with the line "Turn origin (written by RocketClaw): [...]".`)
 		}
 	}
 }
@@ -333,7 +336,7 @@ func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.
 
 	pieces, err := permissionReviewPrompt(request, "[Cron]", string(plannedAction))
 	require.NoError(t, err)
-	require.Contains(t, pieces[0], "[Cron]", "the trusted origin header is in the preamble")
+	require.True(t, strings.HasPrefix(pieces[0], "Turn origin (written by RocketClaw): [Cron]\n"), "the trusted origin header opens the preamble, as the reviewer's instructions say")
 	require.NotContains(t, pieces[0], "principal", "a transcript claim does not reach the preamble")
 
 	transcript, err := renderPermissionReviewTranscript(request.ReviewContext)
