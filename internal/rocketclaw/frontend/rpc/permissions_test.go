@@ -546,7 +546,7 @@ func TestSpacePermissionTurns(t *testing.T) {
 		return err == nil && !active
 	}, 10*time.Second, 10*time.Millisecond)
 
-	reader, cancel, peer := h.call(t, "ops-chat", "offer-ops")
+	reader, cancel, peer := h.call(t, "ops-chat", "offer-ops", "")
 	_, err = h.rt.SwitchConversationAgent("ops-chat", "main-agent")
 	require.NoError(t, err)
 	handOff(t, peer, "refused", "please continue")

@@ -15,9 +15,9 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCError } from "./api";
 import { draftContent } from "./drafts";
-import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
+import { failVoice, holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voicePage, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellOff, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, Hourglass, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
+import { BellOff, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, Hourglass, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PhoneOff, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -888,6 +888,65 @@ function CopyPageLink() {
   </div>;
 }
 
+// VoiceBar is the bottom bar's centre: its buttons, or, while this tab's call starts, runs, or shows how it ended,
+// the call's orb, which opens the Voice page on the call's server, its words, and one control to hang up or dismiss.
+// Hanging up also cancels a voice-home start still waiting for its conversation.
+// A live voice-home call tells the server it started on which page is on screen when it goes live,
+// so a page opened while it connected counts, and after every move. Only the Voice page announces
+// a voice-home call, so the bar announces every other call there.
+function VoiceBar({ children }: { children: ReactNode }) {
+  const voice = useVoice();
+  const { all } = useContext(Sidebar);
+  const username = useQuery(queries.identity()).data?.username ?? "";
+  const key = ["voiceCall", username, "start"];
+  const starting = useIsMutating({ mutationKey: key }) > 0;
+  const pathname = usePathname(), here = useServer();
+  const onVoicePage = pathname === "/voice";
+  const { kind, state: callState, conversationId, server: callServer } = voice;
+  useEffect(() => {
+    if (kind === "home" && callState === "live") void mutations.voiceSettings({ action: "PAGE", conversationId, page: voicePage(callServer!) }, callServer).catch(() => {});
+  }, [kind, callState, conversationId, callServer, pathname, here]);
+  if (callState === "idle" && !starting) return <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
+    <div className="flex w-max items-center gap-[var(--navigation-gap)]">{children}<VoiceMic username={username} /><CopyPageLink /></div>
+  </div>;
+  const state = starting ? "connecting" : callState;
+  const words = (starting ? voiceStatus.connecting : voice.error || voice.notice || voiceStatus[state]) + (kind === "session" && callState !== "idle" ? ` · ${callTitle(all, conversationId)}` : "");
+  const label = state === "error" ? "Dismiss voice message" : "Hang up voice";
+  return <div className="flex min-w-0 max-w-full items-center gap-[var(--navigation-gap)] justify-self-center">
+    <VoiceOrb state={state === "reconnecting" ? "connecting" : state} data-size="bar" aria-label="Open voice" title="Open voice" onClick={() => navigate("/voice", false, callServer)} />
+    <span role="status" aria-live={onVoicePage && kind === "home" ? "off" : "polite"} title={words} className="line-clamp-2 min-w-0 text-xs">{words}</span>
+    <Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" aria-label={label} title={label} onClick={() => {
+      const cache = queryClient.getMutationCache();
+      for (const mutation of cache.findAll({ mutationKey: key, status: "pending" })) {
+        (mutation.state.variables as VoiceStart).cancel.abort();
+        cache.remove(mutation);
+      }
+      stopVoice();
+    }}>
+      {state === "error" ? <X className="size-[var(--navigation-icon)]" /> : <PhoneOff className="size-[var(--navigation-icon)]" />}
+    </Button>
+  </div>;
+}
+
+// VoiceMic opens the Voice page and starts a voice-home call in the same press, so phones let the call make sound.
+// It waits out a Reset, as the Voice page's orb does, so a start never lands on the conversation Reset forgets.
+function VoiceMic({ username }: { username: string }) {
+  const { start, loading } = useVoiceSettings(username);
+  const settling = useIsMutating({ mutationKey: ["voiceCall", username] }) > 0;
+  return <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" disabled={loading || settling} />} aria-label="Voice" onClick={() => {
+    start.mutate({ cancel: new AbortController(), name: server() });
+    navigate("/voice");
+  }}>
+    <Mic className="size-[var(--navigation-icon)]" />
+  </TooltipTrigger><TooltipContent side="top">Voice</TooltipContent></Tooltip>;
+}
+
+// callTitle is the title of the session a composer call talks to.
+function callTitle(all: Session[], id: string) {
+  const session = all.find((row) => row.id === id);
+  return session ? sessionTitle(session) : "a session";
+}
+
 // Comparison columns share the existing panels' pointer/keyboard width policy.
 function useAsideWidth(side: "tabs" | "delegation" | "shadow") {
   const [edge, label, fallback, min, max] = side === "tabs" ? [1, "Resize tabs", 224, 192, 512] : [-1, `Resize ${side} panel`, 384, 288, Math.round(innerWidth * 0.6)];
@@ -932,7 +991,7 @@ type Space = { id: string; name: string };
 // last names each space's last active tab; sharedOrder is this person's order of Shared tabs by path.
 type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string; last: Record<string, string>; sharedOrder: string[] };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
-const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard] };
+const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard] };
 
 // A Search page is /search or a location under it, each its own tab; it is titled with its name, else the query it shows.
 const isSearch = (path: string) => /^\/search(\/|$)/.test(path);
@@ -1028,6 +1087,8 @@ function loadTabs(path: string, owner?: string, saved?: SavedTabs, shared: Saved
   // Only the load with the server's saved tabs knows the spaces, so it alone enters, and clears, the arriving space.
   if (saved && state.spaces.some((space) => space.id === arriving)) state.space = arriving;
   if (saved) arriving = "";
+  // The Voice page is not a tab, so a load there makes the space's last tab the active one behind it.
+  if (path === "/voice") return openTab(state, entry(state, state.space, shared), shared);
   const [link, target] = pageSpace(state, path);
   const tabs = state.tabs.some((tab) => tab.path === link) || isShared(shared, state.space, link) ? state.tabs : arrange([...state.tabs, { path: link, space: target, unplaced: pathSession(link) !== "" || undefined }]);
   return openTab({ ...state, tabs, active: link }, link, shared);
@@ -1140,10 +1201,11 @@ function useTabs() {
   const sync = useRef<{ saving: boolean; dirty: boolean; next?: TabState; applied?: TabState; base?: SavedTabs["state"]; revision: number; at?: number; server: string; shelf?: TopShelf }>({ saving: false, dirty: false, revision: 0, server: name });
   const spaceChange = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onSuccess: (view) => setState((current) => ({ ...current, spaces: view.spaces })), onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
   const sharing = useMutation({ mutationFn: (input: Parameters<typeof tabsCall>[1]) => tabsCall(name, input), onError: () => queryClient.invalidateQueries({ queryKey: [{ server: name }, "tabs"] }) });
-  if (state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname, reach));
+  // The Voice page is not a tab: showing it keeps the active tab, and the address.
+  if (pathname !== "/voice" && state.active !== pageSpace(state, pathname)[0]) setState(openTab(state, pathname, reach));
   // A page link whose space segment was rewritten shows the rewritten path, once the owner's spaces are known.
   useEffect(() => {
-    if (state.owner === undefined || state.active === pathname) return;
+    if (state.owner === undefined || state.active === pathname || pathname === "/voice") return;
     history.replaceState(history.state, "", serverPath(state.active) + location.search);
     dispatchEvent(new PopStateEvent("popstate"));
   }, [state.owner, state.active, pathname]);
@@ -1315,6 +1377,7 @@ function useTabs() {
     create: (id: string) => update((tabs) => tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), group: tab.group, space: tab.space, unplaced: true } : tab)),
     // Close, the group commands, and the moves act on paths, the selected tabs; sub names an item's submenu and its label there.
     commands: (path: string, rows: Session[], paths = new Set([path])): { key: string; label: string; sub?: { menu: string; label: string }; run: () => void }[] => {
+      if (path === "/voice") return [];
       const tab = state.tabs.find((item) => item.path === path), selected = state.tabs.filter((item) => paths.has(item.path));
       const birth = paths.size === 1 && state.spaces.find((space) => space.id === rows.find((row) => rowPath(row) === path)?.spaceId);
       // Shared changes act on this one tab, for everyone. A Shared tab that is not this person's offers only its removal,
@@ -1947,17 +2010,12 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
          <div className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-y-none bg-background">
             <BottomNavigation>
               <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} />
-              <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
-                <div className="flex w-max items-center gap-[var(--navigation-gap)]">
-                  <NewSessionButton newChat={newChat} openCode={(name) => setPalette((current) => ({ mode: "commands", key: current.key + 1, opencode: name }))} />
-                  {([["Search sessions and commands", Search, () => openPalette("sessions")], ["Voice", Mic, () => navigate("/voice")]] as const).map(([label, Icon, onClick]) => (
-                    <Tooltip key={label}><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label={label} onClick={onClick}>
-                      <Icon className="size-[var(--navigation-icon)]" />
-                    </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>
-                  ))}
-                  <CopyPageLink />
-                </div>
-              </div>
+              <VoiceBar>
+                <NewSessionButton newChat={newChat} openCode={(name) => setPalette((current) => ({ mode: "commands", key: current.key + 1, opencode: name }))} />
+                <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions and commands" onClick={() => openPalette("sessions")}>
+                  <Search className="size-[var(--navigation-icon)]" />
+                </TooltipTrigger><TooltipContent side="top">Search sessions and commands</TooltipContent></Tooltip>
+              </VoiceBar>
               <div className="justify-self-end"><ThemeToggle /></div>
             </BottomNavigation>
           <TabDrawer {...sidebar}><TabStrip tabs={tabs} newChat={newChat} /></TabDrawer>
@@ -4716,6 +4774,7 @@ function SessionComposer({
   // A call from a new session creates it with the shown agent, as Send does.
   const call = async (speaker: string) => {
     let sessionId = draft.sessionId;
+    const name = server();
     try {
       if (sessionId === "") {
         sessionId = await create.mutateAsync({ agent: selected });
@@ -4724,7 +4783,7 @@ function SessionComposer({
     } catch (err) {
       return setSendError(err instanceof Error ? err.message : "create failed");
     }
-    void startVoice(sessionId, speaker);
+    void startVoice(sessionId, speaker, "session", name);
   };
   const send = (delivery?: PromptDelivery) => {
     const command = /^\p{White_Space}*\$(fork|handoff|undo|redo)\p{White_Space}*$/u.exec(draft.text);
@@ -5343,10 +5402,10 @@ function VoicePage() {
   return <VoiceCall key={identity.data.username} username={identity.data.username} />;
 }
 
-// useOwnVoice is the tab's one call as seen from conversation id: idle unless the call is on id.
-function useOwnVoice(id: string): VoiceView {
+// useOwnVoice is the tab's one call as seen from conversation id: idle unless the call is on id and own.
+function useOwnVoice(id: string, own = true): VoiceView {
   const voice = useVoice();
-  return voice.conversationId === id ? voice : { state: "idle", conversationId: id, error: "", notice: "", captions: [] };
+  return own && voice.conversationId === id ? voice : { state: "idle", conversationId: id, error: "", notice: "", captions: [] };
 }
 
 function VoiceClock({ startedAt }: { startedAt: number }) {
@@ -5359,8 +5418,9 @@ function VoiceClock({ startedAt }: { startedAt: number }) {
   return ` · ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-// VoiceOrb is the Voice page's call button. It ebbs and flows while a call is active,
-// and swells with the voice model's speech through --level, set every frame.
+// VoiceOrb is the Voice page's call button, and the bottom bar's way back to that page.
+// It ebbs and flows while a call is active, and swells with the voice model's speech
+// through --level, set every frame.
 function VoiceOrb({ state, ...props }: { state: VoiceState } & ComponentProps<"button">) {
   const orb = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -5413,17 +5473,32 @@ function VoiceStage({ voice, compact, busy, loading, error, onPress }: { voice: 
     <VoiceOrb state={voice.state === "reconnecting" ? "connecting" : voice.state} data-size={compact ? "small" : "large"} aria-label={active ? "End voice call" : "Start voice call"} aria-pressed={active} disabled={busy || voice.state === "ending" || (!active && loading)} onClick={onPress} />
     <span role="status" aria-live="polite" className="text-sm tracking-wide text-muted-foreground">{voiceStatus[voice.state]}{voice.state === "live" ? <VoiceClock startedAt={voice.startedAt!} /> : null}</span>
     <span aria-live="polite" className="text-center text-sm">{voice.notice}</span>
+    <SessionCall />
     {error ? <p role="alert" className="text-center text-sm text-destructive">{error}</p> : null}
   </div>;
+}
+
+// SessionCall names the session a running composer call talks to, which the Voice page leaves alone.
+function SessionCall() {
+  const voice = useVoice();
+  const { all } = useContext(Sidebar);
+  if (voice.kind !== "session" || voice.state === "idle" || voice.state === "error") return null;
+  return <p className="text-center text-sm text-muted-foreground">Voice call on {callTitle(all, voice.conversationId)}</p>;
 }
 
 // useVoiceSettings is the person's voice conversation and settings, kept by the server and
 // the same on every device; update shows a change at once, keeps the server's answer, and
 // puts the old value back if the server refuses it. The page shows its own call's
-// conversation while that call runs, though another device moves the current one: changing
-// the shown id hangs the call up. A call that ended with an error keeps its message only.
+// conversation while that call runs, though another device moves the current one. Its own
+// call is this tab's voice-home call on the page's server, never a composer call.
+// A call that ended with an error keeps its message only.
+// start is the Voice page's and the bottom bar's: it always asks the server, so a conversation
+// another device reset is never called, and a start cancelled while it asks makes no call.
+// It keeps the server it was pressed on, name, wherever the person goes while it asks.
+type VoiceStart = { cancel: AbortController; name: string };
 function useVoiceSettings(username: string) {
-  const settings = useQuery(queries.voiceSettings(username));
+  const sidebar = useContext(Sidebar);
+  const settings = useQuery({ ...queries.voiceSettings(username), enabled: username !== "" });
   const saved = settings.data ?? { conversationId: "", agent: "", voice: "", transcript: false };
   const save = (next: VoiceSettings) => queryClient.setQueryData(queries.voiceSettings(username).queryKey, next);
   const version = useRef({ agent: 0, voice: 0, transcript: 0 });
@@ -5445,19 +5520,28 @@ function useVoiceSettings(username: string) {
       });
     },
   });
-  const [callId, setCallId] = useState("");
-  const call = useOwnVoice(callId);
-  const id = ["connecting", "reconnecting", "live", "ending"].includes(call.state) ? callId : saved.conversationId;
-  // The page owns its call: Reset and leaving the page hang it up.
-  useEffect(() => () => { if (voiceView().conversationId === id && voiceView().state !== "error") stopVoice(); }, [id]);
+  const call = useVoice(), here = useServer();
+  const home = call.kind === "home" && call.server === here;
+  const id = home && ["connecting", "reconnecting", "live", "ending"].includes(call.state) ? call.conversationId : saved.conversationId;
+  const voice = useOwnVoice(id, home);
+  const agents = useQuery(queries.agents(id ? { conversationId: id } : undefined));
+  const catalog = agents.data?.agents ?? [];
+  const selected = [id ? agents.data?.currentAgent : saved.agent || "main"].find((name) => catalog.some((item) => item.name === name)) ?? catalog[0]?.name ?? "";
+  const agentInfo = catalog.find((item) => item.name === selected);
+  const speaker = voiceChoice(agentInfo, saved.voice);
+  const start = useMutation({ mutationKey: ["voiceCall", username, "start"], mutationFn: async ({ cancel, name }: VoiceStart) => {
+    const next = await mutations.voiceSettings({ action: "START", agent: selected }, name);
+    if (server() === name) save(next); // The settings cache is the page's server's.
+    sidebar.invalidateQueries();
+    if (!cancel.signal.aborted) void startVoice(next.conversationId, speaker, "home", name);
+  }, onError: (error, { cancel, name }) => { if (!cancel.signal.aborted) failVoice(error.message, name); } });
   // Until the person's settings load, Start would create a conversation with defaults that overwrite them.
-  return { saved, save, update, id, setCallId, agent: saved.agent || "main", loading: settings.isPending, problem: call.error || settings.error?.message };
+  return { saved, update, id, home, voice, catalog, selected, agentInfo, speaker, start, loading: settings.isPending || agents.isPending, problem: (home && call.error) || settings.error?.message };
 }
 
 function VoiceCall({ username }: { username: string }) {
   const sidebar = useContext(Sidebar);
-  const { saved, save, update, id, setCallId, agent, loading, problem } = useVoiceSettings(username);
-  const voice = useOwnVoice(id);
+  const { saved, update, id, home, voice, catalog, selected, agentInfo, speaker, start, loading, problem } = useVoiceSettings(username);
   const [picking, setPicking] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const { mutate: saveSetting } = update;
@@ -5473,42 +5557,24 @@ function VoiceCall({ username }: { username: string }) {
       if (written) saveSetting({ transcript: true }); // A new call's transcript starts empty.
     });
   }, [id, saveSetting]);
-  const agents = useQuery(queries.agents(id ? { conversationId: id } : undefined));
-  const catalog = agents.data?.agents ?? [];
-  const selected = [id ? agents.data?.currentAgent : agent].find((name) => catalog.some((item) => item.name === name)) ?? catalog[0]?.name ?? "";
   const active = voice.state !== "idle" && voice.state !== "error";
-  const agentInfo = catalog.find((item) => item.name === selected);
   const voices = agentInfo?.voices ?? [];
-  const speaker = voiceChoice(agentInfo, saved.voice);
-  // Leaving cancels a start still creating its conversation.
-  const left = useRef(false);
-  useEffect(() => () => { left.current = true; }, []);
-  // Start always asks the server, so a conversation another device reset is never called.
-  const start = useMutation({ mutationKey: ["voiceCall", username], mutationFn: async () => {
-    const next = await mutations.voiceSettings({ action: "START", agent: selected });
-    save(next);
-    sidebar.invalidateQueries();
-    if (left.current) return;
-    setCallId(next.conversationId);
-    void startVoice(next.conversationId, speaker);
-  } });
   const pick = useMutation({ mutationFn: async (name: string) => {
     await update.mutateAsync({ agent: name });
     if (!id) return;
     await mutations.prompt({ id, text: `$agent ${name}` });
     await queryClient.invalidateQueries({ queryKey: ["agents"] });
   } });
-  // Only this page's call can be live here: the composer ends its call on leaving its session.
+  // Reset hangs up only the page's own call: a composer call carried here keeps running.
   const reset = useMutation({ mutationKey: ["voiceCall", username], mutationFn: async () => {
-    stopVoice();
-    setCallId("");
+    if (home) stopVoice();
     setConfirm(false);
     await mutations.voiceSettings({ action: "RESET", conversationId: id });
     await queryClient.invalidateQueries({ queryKey: ["voiceSettings"] });
   } });
   // Start and Reset never overlap, so a Start cannot land on the conversation a Reset is forgetting.
   const settling = useIsMutating({ mutationKey: ["voiceCall", username] }) > 0;
-  const error = [voice.error, problem, ...[start, pick, update, reset].map((mutation) => mutation.error?.message)].find(Boolean);
+  const error = [problem, ...[pick, update, reset].map((mutation) => mutation.error?.message)].find(Boolean);
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col gap-4 p-4">
       <PageTitle>Voice</PageTitle>
@@ -5524,7 +5590,7 @@ function VoiceCall({ username }: { username: string }) {
         </div>
       </div>
       {transcript ? <VoiceTranscript captions={voice.captions} /> : null}
-      <VoiceStage voice={voice} compact={transcript} busy={settling} loading={agents.isPending || loading} error={error} onPress={() => active ? stopVoice() : start.mutate()} />
+      <VoiceStage voice={voice} compact={transcript} busy={settling} loading={loading} error={error} onPress={() => active ? stopVoice() : start.mutate({ cancel: new AbortController(), name: server() })} />
       <Dialog open={confirm} onOpenChange={setConfirm}>
         <DialogContent>
           <DialogTitle>Reset voice conversation?</DialogTitle>
@@ -5541,15 +5607,12 @@ function VoiceCall({ username }: { username: string }) {
 
 // VoiceToggle calls with the session's agent, or with agent when the session is new.
 function VoiceToggle({ sessionId, agent, sending, call }: { sessionId: string; agent: string; sending: boolean; call: (speaker: string) => Promise<void> }) {
-  const route = useRoute();
   const { state, notice } = useOwnVoice(sessionId);
   const calling = state !== "idle" && state !== "error";
   const choices = useQuery(queries.agents({ conversationId: sessionId }));
   const identity = useQuery(queries.identity());
   const settings = useQuery({ ...queries.voiceSettings(identity.data?.username ?? ""), enabled: identity.isSuccess });
   const speaker = voiceChoice(choices.data?.agents.find((item) => item.name === (sessionId ? choices.data?.currentAgent : agent)), settings.data?.voice);
-  // The session pane stays mounted on page routes, so leaving the session ends its call as unmounting does.
-  useEffect(() => () => { if (voiceView().conversationId === sessionId) stopVoice(); }, [route.id, sessionId]);
   return <>
     <span aria-live="polite" title={notice} className="hidden max-w-48 truncate text-xs text-muted-foreground empty:absolute sm:inline">{notice}</span>
     <Tooltip><TooltipTrigger render={<Button type="button" variant={calling ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-7" disabled={!calling && sending} />} aria-label="Voice call" aria-pressed={calling} onClick={() => void (calling ? stopVoice() : call(speaker))}>

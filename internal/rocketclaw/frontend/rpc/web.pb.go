@@ -201,6 +201,9 @@ const (
 	VoiceSettingsAction_RESET VoiceSettingsAction = 2
 	// UPDATE stores the agent, voice and transcript fields that are set.
 	VoiceSettingsAction_UPDATE VoiceSettingsAction = 3
+	// PAGE makes page the page on screen of the caller's live voice-home call on conversation_id;
+	// it changes no other call.
+	VoiceSettingsAction_PAGE VoiceSettingsAction = 4
 )
 
 // Enum value maps for VoiceSettingsAction.
@@ -210,12 +213,14 @@ var (
 		1: "START",
 		2: "RESET",
 		3: "UPDATE",
+		4: "PAGE",
 	}
 	VoiceSettingsAction_value = map[string]int32{
 		"READ":   0,
 		"START":  1,
 		"RESET":  2,
 		"UPDATE": 3,
+		"PAGE":   4,
 	}
 )
 
@@ -6042,7 +6047,14 @@ type VoiceRequest struct {
 	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
 	Sdp            string                 `protobuf:"bytes,2,opt,name=sdp,proto3" json:"sdp,omitempty"`
 	// One of the agent's voices; empty uses the provider's default.
-	Voice         string `protobuf:"bytes,3,opt,name=voice,proto3" json:"voice,omitempty"`
+	Voice string `protobuf:"bytes,3,opt,name=voice,proto3" json:"voice,omitempty"`
+	// How long the person has said no words in this call so far; the call ends as
+	// quiet once that reaches 10 minutes.
+	QuietMs int64 `protobuf:"varint,4,opt,name=quiet_ms,json=quietMs,proto3" json:"quiet_ms,omitempty"`
+	// The page on screen for a call on the person's voice home: its path on this server, or its
+	// full address when it belongs to another; empty for a call on one session. Each hand-off of
+	// a call with a page names the page on screen.
+	Page          string `protobuf:"bytes,5,opt,name=page,proto3" json:"page,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6098,6 +6110,20 @@ func (x *VoiceRequest) GetVoice() string {
 	return ""
 }
 
+func (x *VoiceRequest) GetQuietMs() int64 {
+	if x != nil {
+		return x.QuietMs
+	}
+	return 0
+}
+
+func (x *VoiceRequest) GetPage() string {
+	if x != nil {
+		return x.Page
+	}
+	return ""
+}
+
 type VoiceSettingsRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Action         VoiceSettingsAction    `protobuf:"varint,1,opt,name=action,proto3,enum=rpc.VoiceSettingsAction" json:"action,omitempty"`
@@ -6105,6 +6131,7 @@ type VoiceSettingsRequest struct {
 	Agent          *string                `protobuf:"bytes,3,opt,name=agent,proto3,oneof" json:"agent,omitempty"`
 	Voice          *string                `protobuf:"bytes,4,opt,name=voice,proto3,oneof" json:"voice,omitempty"`
 	Transcript     *bool                  `protobuf:"varint,5,opt,name=transcript,proto3,oneof" json:"transcript,omitempty"`
+	Page           string                 `protobuf:"bytes,6,opt,name=page,proto3" json:"page,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -6172,6 +6199,13 @@ func (x *VoiceSettingsRequest) GetTranscript() bool {
 		return *x.Transcript
 	}
 	return false
+}
+
+func (x *VoiceSettingsRequest) GetPage() string {
+	if x != nil {
+		return x.Page
+	}
+	return ""
 }
 
 // VoiceSettingsResponse is the caller's voice settings; conversation_id is empty when none is current.
@@ -7341,7 +7375,8 @@ func (x *VoiceAnswer) GetRoute() string {
 	return ""
 }
 
-// reason is stopped, replaced, expired, safety, closed, lost or error.
+// reason is stopped, replaced, expired, safety, closed, lost, quiet or error;
+// quiet means the person said no words for 10 minutes.
 type VoiceEnded struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
@@ -7843,11 +7878,13 @@ const file_web_proto_rawDesc = "" +
 	"\rReloadRequest\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\"*\n" +
 	"\x0eReloadResponse\x12\x18\n" +
-	"\amessage\x18\x01 \x01(\tR\amessage\"_\n" +
+	"\amessage\x18\x01 \x01(\tR\amessage\"\x8e\x01\n" +
 	"\fVoiceRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x10\n" +
 	"\x03sdp\x18\x02 \x01(\tR\x03sdp\x12\x14\n" +
-	"\x05voice\x18\x03 \x01(\tR\x05voice\"\xef\x01\n" +
+	"\x05voice\x18\x03 \x01(\tR\x05voice\x12\x19\n" +
+	"\bquiet_ms\x18\x04 \x01(\x03R\aquietMs\x12\x12\n" +
+	"\x04page\x18\x05 \x01(\tR\x04page\"\x83\x02\n" +
 	"\x14VoiceSettingsRequest\x120\n" +
 	"\x06action\x18\x01 \x01(\x0e2\x18.rpc.VoiceSettingsActionR\x06action\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x19\n" +
@@ -7855,7 +7892,8 @@ const file_web_proto_rawDesc = "" +
 	"\x05voice\x18\x04 \x01(\tH\x01R\x05voice\x88\x01\x01\x12#\n" +
 	"\n" +
 	"transcript\x18\x05 \x01(\bH\x02R\n" +
-	"transcript\x88\x01\x01B\b\n" +
+	"transcript\x88\x01\x01\x12\x12\n" +
+	"\x04page\x18\x06 \x01(\tR\x04pageB\b\n" +
 	"\x06_agentB\b\n" +
 	"\x06_voiceB\r\n" +
 	"\v_transcript\"\x8c\x01\n" +
@@ -7976,13 +8014,14 @@ const file_web_proto_rawDesc = "" +
 	"\x0ePromptDelivery\x12\t\n" +
 	"\x05STEER\x10\x00\x12\t\n" +
 	"\x05QUEUE\x10\x01\x12\t\n" +
-	"\x05STASH\x10\x02*A\n" +
+	"\x05STASH\x10\x02*K\n" +
 	"\x13VoiceSettingsAction\x12\b\n" +
 	"\x04READ\x10\x00\x12\t\n" +
 	"\x05START\x10\x01\x12\t\n" +
 	"\x05RESET\x10\x02\x12\n" +
 	"\n" +
-	"\x06UPDATE\x10\x032\x90\x15\n" +
+	"\x06UPDATE\x10\x03\x12\b\n" +
+	"\x04PAGE\x10\x042\x90\x15\n" +
 	"\x03Web\x126\n" +
 	"\x10UploadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment(\x01\x128\n" +
 	"\x12DownloadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment0\x01\x12E\n" +

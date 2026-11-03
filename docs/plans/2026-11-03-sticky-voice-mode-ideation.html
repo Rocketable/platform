@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: Sticky voice mode</title>
+<style>
+  :root {
+    --bg: #fbfaf7; --fg: #1f2328; --muted: #57606a; --line: #d8dee4;
+    --card: #ffffff; --accent: #0b6bcb; --accent-bg: #e8f1fb;
+    --ok-bg: #e6f4ea; --ok-fg: #1a7f37; --warn-bg: #fff4e0; --warn-fg: #9a6700;
+    --bad-bg: #fde8e8; --bad-fg: #b42318; --code-bg: #f1f3f5;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  header h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 .5rem; }
+  .eyebrow { text-transform: uppercase; letter-spacing: .08em; font-size: .75rem; color: var(--muted); font-weight: 600; }
+  .sub { color: var(--muted); margin: .25rem 0; }
+  h2 { font-size: 1.45rem; margin: 2.75rem 0 .75rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 1.15rem; margin: 0 0 .5rem; }
+  h4 { font-size: .95rem; margin: 1.25rem 0 .35rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  code { background: var(--code-bg); padding: .05rem .3rem; border-radius: 4px; font-size: .88em; }
+  details.meta { margin: 1rem 0 0; font-size: .9rem; color: var(--muted); }
+  details.meta dl { display: grid; grid-template-columns: max-content 1fr; gap: .2rem 1rem; margin: .5rem 0 0; }
+  details.meta dt { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  details.meta dd { margin: 0; }
+  .callout { background: var(--accent-bg); border-radius: 8px; padding: .9rem 1.1rem; margin: 1.25rem 0; }
+  .callout p { margin: .25rem 0; }
+  ol.jump { padding-left: 1.4rem; }
+  ol.jump li { margin: .15rem 0; }
+  article.idea { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 1.25rem 1.35rem; margin: 1.25rem 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: .25rem 0 .75rem; }
+  .chip { border-radius: 999px; padding: .1rem .65rem; font-size: .8rem; font-weight: 600; background: var(--code-bg); color: var(--fg); }
+  .chip.axis { background: var(--accent-bg); color: var(--accent); }
+  .chip.high { background: var(--ok-bg); color: var(--ok-fg); }
+  .chip.med { background: var(--warn-bg); color: var(--warn-fg); }
+  dl.fields { margin: 0; }
+  dl.fields dt { font-weight: 700; margin-top: .75rem; }
+  dl.fields dd { margin: .15rem 0 0; }
+  dl.fields dd p { margin: .3rem 0; }
+  dl.fields dd ul { margin: .3rem 0; padding-left: 1.2rem; }
+  figure { margin: 1rem 0; overflow-x: auto; }
+  figure svg { display: block; max-width: 100%; height: auto; }
+  figcaption { font-size: .85rem; color: var(--muted); margin-top: .35rem; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+  th, td { text-align: left; vertical-align: top; padding: .5rem .6rem; border-bottom: 1px solid var(--line); }
+  th { background: var(--code-bg); }
+  section.grounding ul { padding-left: 1.2rem; }
+  section.grounding li { margin: .3rem 0; }
+  footer.composition-signal { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line); font-size: .85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <div class="eyebrow">Ideation</div>
+  <h1>Ideation: Sticky voice mode</h1>
+  <p class="sub"><time datetime="2026-11-03">2026-11-03</time></p>
+  <p class="sub"><strong>Focus:</strong> keep the voice call alive while moving around the app; make the conversation behind voice mode stickier; let voice take you through the sessions that need you; turn the bottom-bar mic into the orb; show your spoken words and the session together on the right.</p>
+</header>
+<details class="meta">
+  <summary>Document metadata</summary>
+  <dl>
+    <dt>date</dt><dd>2026-11-03</dd>
+    <dt>topic</dt><dd>sticky-voice-mode</dd>
+    <dt>mode</dt><dd>repo-grounded</dd>
+  </dl>
+</details>
+
+<div class="callout">
+  <p><strong>The short version.</strong> The call already lives outside the Voice page. The page hangs it up when you leave, because of one deliberate cleanup step. Removing that step and putting the orb in the bottom bar fixes the first complaint (ideas 1–2). The "not sticky" feeling comes mostly from a rule: a call is tied to one conversation for its whole life (idea 3). For navigation, OpenCode's voice in this repo already has working tools (<code>list_sessions</code>, <code>open_session</code>, <code>send_message</code>), so we can copy that design instead of inventing one (idea 4).</p>
+</div>
+
+<section id="grounding-context" class="grounding">
+  <h2>Grounding Context</h2>
+  <h4>Codebase Context</h4>
+  <ul>
+    <li><strong>Why leaving ends the call.</strong> The call (mic, WebRTC, reconnect loop) lives in a module-level store in <code>internal/rocketclaw/web/src/voice.ts</code> (lines 34–35), so it survives the page going away. But the Voice page hangs up when it closes: <code>ui.tsx:5418</code> says "The page owns its call: Reset and leaving the page hang it up." Calls started from a session's composer also hang up whenever the route changes (<code>ui.tsx:5519</code>). The original voice plan listed keeping the call alive across tabs as deferred work (<code>docs/plans/2026-10-10-1146-feat-web-voice-mode-plan.md:110</code>), and a browser test checks the current behaviour (<code>voice-page.browser.test.ts:270</code>).</li>
+    <li><strong>How the conversation behind voice is chosen.</strong> Voice Settings keeps one row per person on the server, including the current voice conversation. Start reuses it, and Reset clears it. But a call's conversation is fixed when the call starts (<code>frontend/rpc/voice.go:225</code>). Hand-offs and spoken replies only ever use that conversation (<code>voice.go:454</code>, <code>:612</code>). A call started from a session's composer goes to that session, skips Voice Settings and replaces your Voice page call (<code>ui.tsx:4691</code>, <code>voice.go:179-181</code>). Every reconnect starts a new OpenAI call that only gets the last 40 messages (<code>voice.go:194</code>). The 60-minute limit ends the call outright instead of reconnecting (<code>voice.ts:22</code>, <code>:31</code>, <code>:213</code>).</li>
+    <li><strong>What the voice model can do.</strong> It has no tools. Its instructions say "You cannot do any work yourself" (<code>voice_wire.go:23</code>), and it must hand every task to the conversation's agent. It is also told never to pass on an answer to a pending question (<code>voice_wire.go:27</code>). Nothing today lets the server or an agent move the browser to another page. The long-lived <code>/api/Voice</code> stream already sends events to the browser (answer, notice, reconnecting, reply, typed, ended; <code>voice.ts:186-206</code>), and in-app navigation is one function, <code>navigate(path)</code>.</li>
+    <li><strong>Bottom bar.</strong> The four centre buttons are New session, Search, Voice (mic) and Copy page link (<code>ui.tsx:1910-1915</code>). The mic only goes to <code>/voice</code>. The orb exists only on the Voice page (<code>VoiceOrb</code>, <code>ui.tsx:5331</code>).</li>
+    <li><strong>Transcript vs timeline.</strong> The Voice page shows this call's captions, which live only in browser memory with no timestamps (<code>voice.ts:9-12</code>). The real session timeline is a separate component, shown only on session pages. Each hand-off is saved as a user message wrapping what was said, but it currently shows as raw text in a plain bubble (<code>ui.tsx:3594</code>).</li>
+    <li><strong>Sessions that need you.</strong> These already exist as concepts: work state NEEDS_YOU, the search terms <code>is:waiting</code> and <code>is:unread</code>, the dashboard "Needs you" lane, and pending questions answered through <code>AnswerQuestion</code>.</li>
+    <li><strong>In-repo prior art.</strong> OpenCode's voice in <code>internal/rocketclaw/oc/packages/app/src/voice/</code> runs <code>gpt-live-1</code> with a "responses" delegate that has browser-side tools: <code>list_sessions</code>, <code>search_sessions</code>, <code>read_session</code>, <code>wait_for_session</code>, <code>create_session</code>, <code>send_message</code>, <code>open_session</code>, <code>interrupt_session</code> (<code>spec.ts</code>, <code>transport.ts:119-130</code>).</li>
+  </ul>
+  <h4>Past learnings</h4>
+  <ul>
+    <li>Keeping views mounted in the background broke several things before (single composer ref, scroll lookups by id, URL-sync effects, 0×0 hidden views), and all traffic shares one HTTP/2 connection (<code>docs/solutions/architecture-patterns/web-keep-alive-views-connection-budget.md</code>). Takeaway: don't keep the Voice page mounted. Let a small shell control own the call.</li>
+    <li><code>SessionApp</code> is at react-doctor's complexity limit. New UI branches go in small hooks or self-hiding components.</li>
+    <li>Tab state starts with a fake "main" space until the first load, so navigating straight after a space switch can land in the wrong space.</li>
+    <li>Remote OpenCode sessions must be driven through the <code>/oc/{server}/api/</code> proxy, never through the mounted OpenCode view.</li>
+  </ul>
+  <h4>External context</h4>
+  <ul>
+    <li>ChatGPT Voice (Nov 2025) moved voice into the chat itself, with text you can scroll while talking. Its "Voice in Work and Codex" (Jul 2026) uses voice as a control room over several agents, with one live call at a time.</li>
+    <li>The car-messaging pattern (Android Auto, CarPlay) goes: read, dictate, read back, then "send / change / cancel". Users complain when the read-back is removed.</li>
+    <li>In LiveKit's and Pipecat's designs, the agent calls named commands in the page, such as <code>navigate</code> or <code>set_input_value</code>. Navigation stays inside the single-page app, so the call keeps running.</li>
+    <li>OpenAI realtime sessions are capped at 60 minutes. Continuity has to be owned and reloaded by the app.</li>
+  </ul>
+</section>
+
+<section id="topic-axes">
+  <h2>Topic Axes</h2>
+  <ol>
+    <li><strong>Call lifetime in the app shell</strong>: where the call lives, what ends it, the bottom-bar orb.</li>
+    <li><strong>The voice home conversation and its rules</strong>: which conversation backs voice and how it stays put.</li>
+    <li><strong>Voice-driven navigation and triage</strong>: tools that move the screen and walk the sessions that need you.</li>
+    <li><strong>Speaking into another session</strong>: dictation vs commands, drafts, "send", answering questions.</li>
+    <li><strong>The combined view</strong>: your spoken words and the session in one pane.</li>
+  </ol>
+</section>
+
+<section id="ranked-ideas">
+  <h2>Ranked Ideas</h2>
+  <ol class="jump">
+    <li><a href="#idea-1">The call belongs to the app; the mic turns the bottom bar into the orb</a></li>
+    <li><a href="#idea-2">Calls outlive the 60-minute limit</a></li>
+    <li><a href="#idea-3">One voice home, one movable focus</a></li>
+    <li><a href="#idea-4">Copy OpenCode's voice tools so voice can move the screen</a></li>
+    <li><a href="#idea-5">The "needs you" walk: fixed list, composer as the draft, "send, next"</a></li>
+    <li><a href="#idea-6">Answer pending questions by voice, with a read-back</a></li>
+    <li><a href="#idea-7">One pane: the session's timeline with your spoken lines in between</a></li>
+  </ol>
+
+  <article class="idea" id="idea-1">
+    <h3>1. The call belongs to the app; the mic turns the bottom bar into the orb</h3>
+    <div class="chips"><span class="chip axis">Call lifetime in the app shell</span><span class="chip high">Confidence 90%</span><span class="chip">Complexity Low</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd><p>Delete the two cleanup steps that hang up on navigation: the Voice page's and the composer's. Then let the bottom bar read the call's state. When a call is live, the four centre buttons are replaced by the orb, and tapping the orb hangs up. Pressing the mic starts the call right where you are. The <code>/voice</code> page can stay as the place for settings (agent, voice, Reset) or move into a small menu on the orb. That is a smaller choice for later.</p>
+        <figure>
+          <svg viewBox="0 0 640 170" role="img" aria-label="Bottom bar today versus during a call">
+            <text x="10" y="22" font-size="13" fill="#57606a">Today</text>
+            <rect x="10" y="32" width="620" height="44" rx="10" fill="#ffffff" stroke="#d8dee4"/>
+            <rect x="22" y="42" width="40" height="24" rx="6" fill="#f1f3f5"/><text x="42" y="58" font-size="11" text-anchor="middle" fill="#57606a">Side</text>
+            <rect x="150" y="42" width="70" height="24" rx="6" fill="#f1f3f5"/><text x="185" y="58" font-size="11" text-anchor="middle">New</text>
+            <rect x="232" y="42" width="70" height="24" rx="6" fill="#f1f3f5"/><text x="267" y="58" font-size="11" text-anchor="middle">Search</text>
+            <rect x="314" y="42" width="70" height="24" rx="6" fill="#e8f1fb"/><text x="349" y="58" font-size="11" text-anchor="middle" fill="#0b6bcb">Mic</text>
+            <rect x="396" y="42" width="70" height="24" rx="6" fill="#f1f3f5"/><text x="431" y="58" font-size="11" text-anchor="middle">Link</text>
+            <rect x="578" y="42" width="40" height="24" rx="6" fill="#f1f3f5"/><text x="598" y="58" font-size="11" text-anchor="middle" fill="#57606a">Theme</text>
+            <text x="10" y="108" font-size="13" fill="#57606a">During a call (any page)</text>
+            <rect x="10" y="118" width="620" height="44" rx="10" fill="#ffffff" stroke="#d8dee4"/>
+            <rect x="22" y="128" width="40" height="24" rx="6" fill="#f1f3f5"/><text x="42" y="144" font-size="11" text-anchor="middle" fill="#57606a">Side</text>
+            <rect x="150" y="126" width="316" height="28" rx="14" fill="#0b6bcb"/>
+            <circle cx="172" cy="140" r="8" fill="#ffffff"/>
+            <text x="320" y="145" font-size="12" text-anchor="middle" fill="#ffffff">Listening… tap to hang up</text>
+            <rect x="578" y="128" width="40" height="24" rx="6" fill="#f1f3f5"/><text x="598" y="144" font-size="11" text-anchor="middle" fill="#57606a">Theme</text>
+          </svg>
+          <figcaption>The four centre buttons give way to the orb while a call runs. The call no longer depends on which page is open.</figcaption>
+        </figure>
+      </dd>
+      <dt>Axis</dt>
+      <dd>Call lifetime in the app shell</dd>
+      <dt>Basis</dt>
+      <dd><p><code>direct:</code> <code>ui.tsx:5418-5419</code>: "The page owns its call: Reset and leaving the page hang it up." followed by an unmount effect that calls <code>stopVoice()</code>; <code>ui.tsx:5519</code>: the composer's call ends on any route change; <code>voice.ts:34-35</code>: the call store is module-level and survives page unmounts; <code>ui.tsx:1910</code>: the mic is only <code>navigate("/voice")</code>.</p>
+        <p><code>external:</code> persistent call or player surfaces: Spotify's player bar, Google Meet's picture-in-picture on tab switch, Slack huddles in their own window.</p></dd>
+      <dt>Rationale</dt>
+      <dd>This fixes your first complaint mostly by deleting code. It avoids the keep-alive traps from past work because no page has to stay mounted, only a small control that reads a store that already exists. Once the page cleanup is gone, the orb in the bottom bar is the only way left to hang up, so it is required, not optional.</dd>
+      <dt>Downsides</dt>
+      <dd><ul>
+        <li>It reverses a deliberate earlier decision and flips an existing test (<code>voice-page.browser.test.ts:270</code>).</li>
+        <li>The tab-hidden-for-30-seconds rule (<code>voice.ts:113</code>) still ends calls when a phone screen locks. That needs its own decision if mobile matters.</li>
+        <li>The long-lived <code>/api/Voice</code> request now runs alongside every page. It carries only small events, since audio goes over WebRTC, so the risk to the shared connection looks low.</li>
+        <li>The bottom bar sits inside <code>SessionApp</code>, which is at its lint complexity limit. The orb has to be its own self-hiding component.</li>
+      </ul></dd>
+      <dt>Confidence</dt><dd>90%</dd>
+      <dt>Complexity</dt><dd>Low</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="idea-2">
+    <h3>2. Calls outlive the 60-minute limit</h3>
+    <div class="chips"><span class="chip axis">Call lifetime in the app shell</span><span class="chip high">Confidence 85%</span><span class="chip">Complexity Low</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd><p>Today a dropped connection reconnects automatically, but reaching OpenAI's time limit ends voice mode with "Call ended: time limit reached." Treat the time limit like a dropped connection: reconnect quietly on the same mic. Once the call survives navigation (idea 1), this is the next thing that will randomly end a long voice session.</p></dd>
+      <dt>Axis</dt>
+      <dd>Call lifetime in the app shell</dd>
+      <dt>Basis</dt>
+      <dd><p><code>direct:</code> <code>voice.ts:22</code> <code>expired: "Call ended: time limit reached."</code>; <code>voice.ts:31</code> <code>networkLosses = [lost, endings.lost, audioLost, timedOut]</code> (no <code>expired</code>); <code>voice.ts:213</code> returns without reconnecting when the error isn't in that list. The fact-checking agent confirmed all three.</p>
+        <p><code>external:</code> OpenAI realtime sessions are capped at 60 minutes, so any all-day voice mode has to span several calls.</p></dd>
+      <dt>Rationale</dt>
+      <dd>This is the cheapest "stickiness" fix, about one line. It turns voice mode from "one OpenAI call" into "something that lasts as long as you want".</dd>
+      <dt>Downsides</dt>
+      <dd>A new call only gets the last 40 saved messages. Whatever was said after the last hand-off is lost at the rollover, same as on a reconnect today. Fixing that properly needs a way to save voice lines without starting an agent turn (see rejected idea B2).</dd>
+      <dt>Confidence</dt><dd>85%</dd>
+      <dt>Complexity</dt><dd>Low</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="idea-3">
+    <h3>3. One voice home, one movable focus</h3>
+    <div class="chips"><span class="chip axis">The voice home conversation and its rules</span><span class="chip med">Confidence 70%</span><span class="chip">Complexity Medium</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd><p>Split "who I'm talking to" from "what I'm looking at". Every call talks to your voice home, the conversation already stored in Voice Settings. The live call also carries a <em>focus</em>: the session you're working on right now, which moves when you navigate or when voice moves you. The composer mic stops starting a rival call that replaces your home call. It just means "keep the call going, focus here". Focus, and later your position in a walk-through, can live in Voice Settings, so a reconnect or a reload comes back to the same place.</p>
+        <figure>
+          <svg viewBox="0 0 640 180" role="img" aria-label="One call linked to a fixed home conversation and a moving focus session">
+            <rect x="20" y="65" width="140" height="50" rx="10" fill="#0b6bcb"/>
+            <text x="90" y="95" font-size="13" text-anchor="middle" fill="#ffffff">Your voice call</text>
+            <rect x="300" y="15" width="320" height="50" rx="10" fill="#e8f1fb" stroke="#0b6bcb"/>
+            <text x="460" y="37" font-size="13" text-anchor="middle" fill="#0b6bcb">Voice home (fixed)</text>
+            <text x="460" y="55" font-size="11" text-anchor="middle" fill="#57606a">kept in Voice Settings, same on every device</text>
+            <rect x="300" y="115" width="320" height="50" rx="10" fill="#ffffff" stroke="#9a6700" stroke-dasharray="5 4"/>
+            <text x="460" y="137" font-size="13" text-anchor="middle" fill="#9a6700">Focus (moves)</text>
+            <text x="460" y="155" font-size="11" text-anchor="middle" fill="#57606a">the session you're working on right now</text>
+            <line x1="160" y1="82" x2="296" y2="42" stroke="#0b6bcb" stroke-width="2"/>
+            <line x1="160" y1="98" x2="296" y2="138" stroke="#9a6700" stroke-width="2" stroke-dasharray="5 4"/>
+          </svg>
+          <figcaption>Today a call has only one fixed conversation. With this change there is still one call, now with a home that stays put and a focus that follows you.</figcaption>
+        </figure>
+      </dd>
+      <dt>Axis</dt>
+      <dd>The voice home conversation and its rules</dd>
+      <dt>Basis</dt>
+      <dd><p><code>direct:</code> <code>voice.go:225</code> sets the call's <code>conversationID</code> once at start; <code>voice.go:612</code> watches only that conversation; <code>ui.tsx:4691</code> <code>startVoice(sessionId, speaker)</code> starts a call on the composer's own session; <code>voice.go:179-181</code> ends the older call as "replaced". <code>CONCEPTS.md</code> (Voice Session) says a call is "attached to one conversation".</p>
+        <p><code>reasoned:</code> whether voice feels sticky currently depends on where you pressed the mic. Keeping home and focus separate makes the home stable and still lets you act on other sessions.</p></dd>
+      <dt>Rationale</dt>
+      <dd>You suspected "the implementation is right but the rules are wrong", and this is the rule at fault. Ideas 4–7 all need a call that can work on another session without dropping its home.</dd>
+      <dt>Downsides</dt>
+      <dd><ul>
+        <li>It rewrites the Voice Session definition in <code>CONCEPTS.md</code>.</li>
+        <li>On the server, changing focus means re-checking that you can see the session, restarting the reply watcher, and resetting the "typed before the call" bookkeeping, which assumes one conversation (<code>voice.go:500-518</code>).</li>
+        <li>Remote OpenCode sessions can't be written to the same way local ones can.</li>
+      </ul></dd>
+      <dt>Confidence</dt><dd>70%</dd>
+      <dt>Complexity</dt><dd>Medium</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="idea-4">
+    <h3>4. Copy OpenCode's voice tools so voice can move the screen</h3>
+    <div class="chips"><span class="chip axis">Voice-driven navigation and triage</span><span class="chip med">Confidence 65%</span><span class="chip">Complexity Medium–High</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd><p>Give the voice side a small set of session tools modelled on OpenCode's voice in this repo: list or search sessions, read one, open one (moves your screen), send a message, interrupt. The quick ones ("open", "next") run without waiting a full agent turn, so the walk-through feels instant. Real work still goes to the agent. If a tool has to run on the server instead, it moves your screen through one new event on the <code>/api/Voice</code> stream the browser already reads, which calls <code>navigate(path)</code>.</p></dd>
+      <dt>Axis</dt>
+      <dd>Voice-driven navigation and triage</dd>
+      <dt>Basis</dt>
+      <dd><p><code>direct:</code> <code>internal/rocketclaw/oc/packages/app/src/voice/transport.ts:119-130</code> runs <code>gpt-live-1</code> with <code>delegation: { type: "responses", responses: { …, tools } }</code>; <code>spec.ts</code> defines <code>list_sessions</code>, <code>search_sessions</code>, <code>read_session</code>, <code>wait_for_session</code>, <code>create_session</code>, <code>send_message</code>, <code>open_session</code>, <code>interrupt_session</code>. In contrast, RocketClaw's voice has no tools: <code>voice_wire.go:23</code> "You cannot do any work yourself.", and the session sets only <code>Delegation.Type = "client"</code> (<code>voice_wire.go:128-140</code>). <code>voice.ts:186-206</code> already handles typed server events on the voice stream.</p>
+        <p><code>external:</code> LiveKit's concierge example has the agent call <code>router.push</code> in the page, and the call survives. Pipecat's <code>ui-command</code> set (<code>navigate</code>, <code>set_input_value</code>).</p></dd>
+      <dt>Rationale</dt>
+      <dd>"Send, let's go to the next" only works if "next" is fast. A full agent turn per step breaks the rhythm. Copying a design that already runs in this repo is cheaper and safer than inventing one, and it gives RocketClaw its first controlled way for voice to move the browser.</dd>
+      <dt>Downsides</dt>
+      <dd><ul>
+        <li>Unknown: whether RocketClaw's ChatGPT sign-in route accepts the "responses" delegation with tools, or only "client". This needs a quick probe before committing.</li>
+        <li>It changes the voice model's core instruction.</li>
+        <li>A wrong "open" or "send" is now possible, so it needs ideas 5 and 6 for safety.</li>
+        <li>Moving the screen must wait for the first tab-state load, or it lands in the placeholder "main" space.</li>
+      </ul></dd>
+      <dt>Confidence</dt><dd>65%</dd>
+      <dt>Complexity</dt><dd>Medium–High</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="idea-5">
+    <h3>5. The "needs you" walk: fixed list, composer as the draft, "send, next"</h3>
+    <div class="chips"><span class="chip axis">Speaking into another session</span><span class="chip med">Confidence 60%</span><span class="chip">Complexity Medium</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd><p>When you say "let's go through what needs me", take one snapshot of the sessions that need you, in the same order as the dashboard's "Needs you" lane, and walk through it with a cursor. At each session, voice gives a one-line summary. Whatever you dictate goes into that session's real composer as a visible draft, not straight into the session. "Send" submits the draft the normal way, "send, next" submits it and moves on, and "change it" or "cancel" edit or clear it. Because the list is fixed, sessions don't jump around or get repeated as you answer them.</p>
+        <figure>
+          <svg viewBox="0 0 700 170" role="img" aria-label="Loop: freeze list, open, summarise, dictate into draft, read back, send and next">
+            <rect x="10" y="40" width="100" height="46" rx="8" fill="#e8f1fb"/><text x="60" y="60" font-size="11" text-anchor="middle">Freeze the</text><text x="60" y="75" font-size="11" text-anchor="middle">"needs you" list</text>
+            <rect x="130" y="40" width="100" height="46" rx="8" fill="#ffffff" stroke="#d8dee4"/><text x="180" y="67" font-size="11" text-anchor="middle">Open session</text>
+            <rect x="250" y="40" width="100" height="46" rx="8" fill="#ffffff" stroke="#d8dee4"/><text x="300" y="67" font-size="11" text-anchor="middle">One-line summary</text>
+            <rect x="370" y="40" width="100" height="46" rx="8" fill="#ffffff" stroke="#d8dee4"/><text x="420" y="60" font-size="11" text-anchor="middle">Dictate into</text><text x="420" y="75" font-size="11" text-anchor="middle">the draft</text>
+            <rect x="490" y="40" width="90" height="46" rx="8" fill="#ffffff" stroke="#d8dee4"/><text x="535" y="67" font-size="11" text-anchor="middle">Read back</text>
+            <rect x="600" y="40" width="90" height="46" rx="8" fill="#e6f4ea"/><text x="645" y="60" font-size="11" text-anchor="middle" fill="#1a7f37">"send,</text><text x="645" y="75" font-size="11" text-anchor="middle" fill="#1a7f37">next"</text>
+            <line x1="110" y1="63" x2="126" y2="63" stroke="#57606a" stroke-width="1.5"/>
+            <line x1="230" y1="63" x2="246" y2="63" stroke="#57606a" stroke-width="1.5"/>
+            <line x1="350" y1="63" x2="366" y2="63" stroke="#57606a" stroke-width="1.5"/>
+            <line x1="470" y1="63" x2="486" y2="63" stroke="#57606a" stroke-width="1.5"/>
+            <line x1="580" y1="63" x2="596" y2="63" stroke="#57606a" stroke-width="1.5"/>
+            <polyline points="645,86 645,120 180,120 180,90" fill="none" stroke="#1a7f37" stroke-width="1.5"/>
+            <polygon points="175,92 185,92 180,86" fill="#1a7f37"/>
+            <text x="412" y="142" font-size="11" text-anchor="middle" fill="#1a7f37">next session on the frozen list</text>
+          </svg>
+          <figcaption>Nothing is sent until you say "send", and the draft is on screen the whole time.</figcaption>
+        </figure>
+      </dd>
+      <dt>Axis</dt>
+      <dd>Speaking into another session</dd>
+      <dt>Basis</dt>
+      <dd><p><code>direct:</code> drafts already exist per session in the browser (<code>ui.tsx:4674-4676</code>), and the mounted composer has a ref (<code>ui.tsx:1816</code>). <code>is:waiting</code>, <code>is:unread</code> and the "Needs you" lane already exist. The voice prompt already asks for faithful wording (<code>voice_wire.go:24</code>).</p>
+        <p><code>external:</code> car messaging (Android Auto, CarPlay): dictate, read back, then "send it / change it / cancel". Users complain when the read-back is removed. OpenAI notes its transcripts are not word-for-word.</p>
+        <p><code>reasoned:</code> a live "needs you" list changes as you answer sessions, so "next" on a live list skips or repeats. A snapshot is the only stable meaning of "next".</p></dd>
+      <dt>Rationale</dt>
+      <dd>This is your example, step by step. The visible draft is the main protection against a misheard transcript being sent, and it reuses the composer's normal send instead of a hidden voice-only path.</dd>
+      <dt>Downsides</dt>
+      <dd><ul>
+        <li>Drafts live only in the browser, so the server can't reach them. Filling the draft needs a browser-side tool (idea 4) or an event on the voice stream.</li>
+        <li>Deciding exactly when "send" is a command and when it's part of what you're dictating is the hard part. Reacting directly to words in the transcript risks running an action twice and misfires on late or inexact transcripts, so the voice model should decide, guided by its instructions.</li>
+        <li>Remote OpenCode sessions need the <code>/oc/</code> proxy path.</li>
+      </ul></dd>
+      <dt>Confidence</dt><dd>60%</dd>
+      <dt>Complexity</dt><dd>Medium</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="idea-6">
+    <h3>6. Answer pending questions by voice, with a read-back</h3>
+    <div class="chips"><span class="chip axis">Speaking into another session</span><span class="chip med">Confidence 60%</span><span class="chip">Complexity Medium</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd><p>Many sessions that "need you" are blocked on a question. Today voice reads the question out and then says "respond in the app", so a hands-free walk stops at nearly every stop. Allow a spoken answer for the focused session: voice repeats it in one sentence ("Answering 'Yes, migrate' on Deploy fix. OK?") and, once you confirm, submits it through the existing <code>AnswerQuestion</code>.</p></dd>
+      <dt>Axis</dt>
+      <dd>Speaking into another session</dd>
+      <dt>Basis</dt>
+      <dd><p><code>direct:</code> <code>voice_wire.go:27</code> "ask the person to respond in the app. Never hand off an answer to the agent's question."; <code>voice.go:492</code> "I need your input. Please respond in the app."; <code>CONCEPTS.md</code> (Voice Hand-off): "A pending question is announced once and answered in the app, never by a hand-off."</p>
+        <p><code>external:</code> read-back before acting (car messaging, pilot read-back). Practitioner advice on ChatGPT's agent voice: restate the interpretation in one sentence and approve each action separately.</p></dd>
+      <dt>Rationale</dt>
+      <dd>This is a clear case of a rule that made sense for a call stuck on one conversation but blocks the walk you described. A visible, read-back answer arguably still counts as "answered in the app".</dd>
+      <dt>Downsides</dt>
+      <dd>It changes a written safety rule. A wrong answer to a permission or form question can cost more than a wrong chat message, so some question types (permissions) might stay app-only.</dd>
+      <dt>Confidence</dt><dd>60%</dd>
+      <dt>Complexity</dt><dd>Medium</dd>
+    </dl>
+  </article>
+
+  <article class="idea" id="idea-7">
+    <h3>7. One pane: the session's timeline with your spoken lines in between</h3>
+    <div class="chips"><span class="chip axis">The combined view</span><span class="chip med">Confidence 65%</span><span class="chip">Complexity Medium</span></div>
+    <dl class="fields">
+      <dt>Description</dt>
+      <dd><p>In voice mode, the right-hand pane shows the existing timeline of the focused session (or the voice home), with what you and the voice said placed between its messages in time order. When voice moves you to another session, a small divider shows it ("→ moved to Deploy fix"). Two things make this possible. First, give each caption a timestamp; today captions have none. Second, render saved hand-off messages as readable "you said / voice said" lines instead of the raw wrapper text they show as now.</p>
+        <figure>
+          <svg viewBox="0 0 420 230" role="img" aria-label="Example of one pane mixing spoken lines and session messages">
+            <rect x="10" y="10" width="400" height="210" rx="10" fill="#ffffff" stroke="#d8dee4"/>
+            <rect x="24" y="22" width="250" height="28" rx="8" fill="#e8f1fb"/><text x="34" y="41" font-size="11" fill="#0b6bcb">You (spoken) · Let's go through what needs me</text>
+            <rect x="146" y="58" width="250" height="28" rx="8" fill="#f1f3f5"/><text x="156" y="77" font-size="11">Voice · 3 sessions. First: Deploy fix</text>
+            <line x1="24" y1="104" x2="120" y2="104" stroke="#9a6700" stroke-dasharray="3 3"/><text x="210" y="108" font-size="11" text-anchor="middle" fill="#9a6700">→ moved to Deploy fix</text><line x1="300" y1="104" x2="396" y2="104" stroke="#9a6700" stroke-dasharray="3 3"/>
+            <rect x="146" y="120" width="250" height="28" rx="8" fill="#fff4e0"/><text x="156" y="139" font-size="11">Agent · Should I run the migration?</text>
+            <rect x="24" y="156" width="250" height="28" rx="8" fill="#e8f1fb"/><text x="34" y="175" font-size="11" fill="#0b6bcb">You (spoken) · Yes. Send, next.</text>
+            <text x="210" y="208" font-size="10" text-anchor="middle" fill="#57606a">one timeline, ordered by time</text>
+          </svg>
+          <figcaption>Illustrative only. Spoken lines and the session's own messages share one timeline.</figcaption>
+        </figure>
+      </dd>
+      <dt>Axis</dt>
+      <dd>The combined view</dd>
+      <dt>Basis</dt>
+      <dd><p><code>direct:</code> <code>voice.ts:9</code> <code>VoiceCaption = { id; role; text; written? }</code> has no time field, and captions "live only in memory" (<code>voice.ts:10</code>). <code>ui.tsx:5493</code> shows only this call's captions on the Voice page, and the session is one click away ("Open conversation", <code>ui.tsx:5488</code>), which today hangs up. Hand-offs are saved with a <code>&lt;transcript_delta&gt;</code> of both sides' lines (<code>voice.go:444-447</code>) but render as a plain bubble (<code>ui.tsx:3594</code>).</p>
+        <p><code>external:</code> ChatGPT Voice (Nov 2025) moved voice into the chat as scrollable text while you talk. OpenCode's in-repo <code>session/timeline/voice-delegation.ts</code> already parses hand-offs inside a timeline.</p></dd>
+      <dt>Rationale</dt>
+      <dd>Without it you're talking to a session you can't see. Reusing the existing timeline instead of building a new view keeps this mostly rendering work, and the saved part survives reloads.</dd>
+      <dt>Downsides</dt>
+      <dd><ul>
+        <li>Saved hand-offs hold at most the last 4 KB of speech, and nothing after the last hand-off is saved. The live tail only shows on the device making the call.</li>
+        <li>Showing a second timeline in a side pane runs into the "one mounted timeline" assumptions from past work (scroll lookups by id, the single composer ref).</li>
+        <li>OpenAI can deliver your words after the voice has started replying, so time order is approximate.</li>
+      </ul></dd>
+      <dt>Confidence</dt><dd>65%</dd>
+      <dt>Complexity</dt><dd>Medium</dd>
+    </dl>
+  </article>
+</section>
+
+<section id="rejection-summary">
+  <h2>Rejection Summary</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>#</th><th>Idea</th><th>Reason Rejected</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Remove the <code>/voice</code> page entirely; the mic starts the call</td><td>Folded into idea 1 as an option. Where the settings live is a framing choice, not a separate move.</td></tr>
+      <tr><td>2</td><td>"Pocket mode": your other tabs and devices follow the live call's focus</td><td>Nobody asked for it, moving several screens at once would surprise people, and it bends the one-call rule. Fails the meeting test.</td></tr>
+      <tr><td>3</td><td>Save every spoken turn into the home conversation</td><td>Hand-offs are saved as "steer" messages, so saving chatter the same way would start agent turns, and any saved user text not marked as voice mutes the voice model (<code>voice.go:662-664</code>). Each hand-off's <code>&lt;transcript_delta&gt;</code> already gives the agent that speech, so it would be duplicated. It needs a new note kind that doesn't start a turn, which is better as a later follow-up to ideas 2 and 7.</td></tr>
+      <tr><td>4</td><td>No voice home at all: the call's conversation follows whatever is on screen</td><td>Contradicts your ask for a stickier home. Spoken "next" would go to the on-screen session's agent, which can't navigate. Better as a brainstorm variant of idea 3.</td></tr>
+      <tr><td>5</td><td>Navigate automatically whenever the agent looks a session up</td><td>Refuted. <code>rocketclaw_sessions_get_url</code> exists to make links (<code>session_tools.go:655-657</code>), so a summary of five sessions would flip the screen five times. The tools also run with no live call at all.</td></tr>
+      <tr><td>6</td><td>Send voice hand-offs straight into the focused session</td><td>Can't reach remote OpenCode sessions (<code>StashQueueItem</code> vs the <code>/oc/</code> proxy) and needs a fresh visibility check on each switch. Ideas 4 and 5 cover this through tools and the visible draft.</td></tr>
+      <tr><td>7</td><td>Fixed command words ("send", "next") matched directly against the transcript</td><td>Transcripts arrive late and aren't word-for-word, and the voice model would also react, so actions could run twice. Kept as a risk note in idea 5.</td></tr>
+      <tr><td>8</td><td>"The timeline already interleaves" — delete the live captions</td><td>Overclaims. Hand-offs render as raw text today, are capped at 4 KB, and miss everything after the last hand-off, and deleting captions loses the live view. The workable part is folded into idea 7.</td></tr>
+      <tr><td>9</td><td>Timeline split into one section per session visited</td><td>A presentation variant of idea 7 with no separate basis.</td></tr>
+      <tr><td>10</td><td>Combo: shell call + focus + navigation event</td><td>This is ideas 1 + 3 + 4 taken together, i.e. the suggested order of work, not a separate idea.</td></tr>
+      <tr><td>11</td><td>Combo: frozen list + draft + command words + voice answers</td><td>Its parts survive as ideas 5 and 6. The command-word part was rejected (row 7).</td></tr>
+      <tr><td>12</td><td>Combo: durable voice mode across drops, rollovers and devices</td><td>Built on rows 2 and 3, both rejected. The cheap part survives as idea 2, and focus in Voice Settings is part of idea 3.</td></tr>
+      <tr><td>13</td><td>Combo: saved chatter makes the timeline the full combined view</td><td>Inherits the problems in rows 3 and 8.</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<footer class="composition-signal">Composed 2026-11-03T16:15Z from the user's request in this session (sticky voice mode: keep the call across navigation, stickier underlying session, voice navigation tools, bottom-bar orb, combined transcript pane).</footer>
+</main>
+</body>
+</html>

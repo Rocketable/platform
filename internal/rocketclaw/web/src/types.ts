@@ -35,7 +35,7 @@ export type ConfigView = { workspace?: string; overlays?: string[]; slackChannel
 export type SlackNamesResponse = { names?: Record<string, string> };
 // The first Voice frame carries the answer SDP and its wire dialect; notices may follow; a call ends with at most one ended frame.
 export type VoiceRoute = "public" | "codex";
-export type VoiceEndReason = "stopped" | "replaced" | "expired" | "safety" | "closed" | "lost" | "error";
+export type VoiceEndReason = "stopped" | "replaced" | "expired" | "safety" | "closed" | "lost" | "quiet" | "error";
 export type VoiceEvent = { answer?: { sdp: string; route: VoiceRoute }; notice?: string; typed?: boolean; reply?: string; reconnecting?: boolean; ended?: { reason: VoiceEndReason } };
 // SearchPage is a Search tab's name and its searches, active naming the shown one by id. A Dashboard's board names its
 // style, and its searches are lanes, notify marking one whose new sessions notify.

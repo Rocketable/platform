@@ -145,8 +145,9 @@ see [Voice](#voice).
 
 ## Voice
 
-The **Voice** page (`/voice`, also in the bottom navigation and the command
-palette) holds the signed-in person's voice conversation. RocketClaw keeps it, with the
+The **Voice** page (`/voice`, also in the command palette, and opened by the bottom
+navigation's microphone, which starts a call there in the same press) holds the
+signed-in person's voice conversation. RocketClaw keeps it, with the
 person's agent, voice and transcript choice, on the server: the same on every device
 and through restarts, and never shared with another person, even in one browser. Pick an agent and tap the orb to talk; tap it again to hang up. While a call is
 active the orb slowly ebbs and flows, its inner light swirls around a glowing heart,
@@ -154,8 +155,8 @@ and two orbit rings spin around it; it swells and brightens with the voice model
 speech, measured in the browser from the incoming audio. With reduced motion it stays still. The first
 tap creates the conversation and later visits, on any device, reuse it; each tap asks
 the server first, so a conversation another device reset is never called. Picking another agent
-while idle switches the conversation's agent with `$agent`. **Reset** hangs up and
-forgets the conversation on every device, asking first while its turn runs, so the
+while idle switches the conversation's agent with `$agent`. **Reset** hangs up the
+page's call and forgets the conversation on every device, asking first while its turn runs, so the
 next call begins a fresh one; the old one stays in the session list and search until
 ordinary cleanup (an empty one is removed at the next restart), and a running turn
 keeps running there. A call already live on another device keeps its conversation
@@ -167,21 +168,42 @@ conversation, and reset. The row stays on one line: on phones the agent picker d
 its robot icon, and a long agent name is shortened. The page shows the call state, elapsed time and notices
 under the orb. **Show transcript** swaps the big orb for live captions (not saved)
 shown as a chat, with a small orb at the bottom that still starts and ends the call;
-the choice is kept with the person's voice settings. Leaving the page hangs up, and cancels a start
-still in progress; a conversation it already created stays.
+the choice is kept with the person's voice settings. Leaving the page keeps the call
+running, even one still starting. While a composer call runs, the page names that
+call's session under the orb and Reset leaves it alone; tapping the orb starts a call
+here that replaces it, and if that start fails the composer call keeps running with
+the failure as its notice. While a Reset is still answered, neither the orb nor the
+bottom bar's microphone starts a call.
 The screen stays awake while the Voice page is open or a call runs.
 
 Each session's composer has a voice button, on every screen size, that starts and
 ends a call on that session. It is not dictation: nothing is typed into the composer.
 On New session it first creates the session with the shown agent, as the first send
-does, then calls on it. Leaving the session ends its call.
+does, then calls on it. The call keeps running after you leave the session.
 
 A tab runs one call at a time, and each person has one live call: starting voice
 anywhere else, on any conversation, ends their older call with "Voice moved to another
 device or tab." Other people's calls, even on the same conversation, keep running.
-A call also ends when the page closes or stays hidden for 30 seconds. There are no
-idle or no-speech timers. A hand-off the agent could not accept shows a notice, and
-the call continues.
+A call keeps running while the person moves around the app, and keeps the RocketClaw
+server it started on, even when the page moves to another server's view. A hidden
+tab keeps its call. A call ends when the page closes or reloads; an update that
+changes RocketClaw's protocol reloads open pages, so it ends their calls. A call also
+ends after 10 minutes in which the person said no words, with a falling tone and
+"Call ended: nothing was said for 10 minutes." Only the person's own transcribed
+words count: the voice model speaking and the agent's replies do not. The server
+keeps that clock while it holds the call, and each new call after a lost connection
+tells it how long the person has been quiet, so the clock goes on; once 10 minutes
+pass between tries, the browser ends the call instead of reconnecting. A hand-off
+the agent could not accept shows a notice, and the call continues.
+
+While a call is starting, running, or has ended with a message, the bottom bar shows
+its orb on every page in place of the bar's centre buttons. Beside the orb is the
+call's state, notice or message, with the session's name for a composer call.
+Tapping the orb opens the Voice page on the server the call started on. The one
+button beside it hangs up, cancels a start still in progress, or dismisses the
+message. A start that fails shows its message there until dismissed. A start keeps the
+server it was pressed on, even if the person moves to another server's view before it
+is answered.
 
 Every call keeps going through dead zones. A call that loses its connection (the
 audio connection fails, the page loses RocketClaw, RocketClaw loses OpenAI, or the
@@ -192,9 +214,16 @@ back or is hung up; the status reads "Reconnecting…" meanwhile. A falling two-
 tone marks the loss, a short tick plays every 5 seconds while reconnecting, and a
 rising two-note tone marks the call coming back. Each new call is a fresh OpenAI
 call that starts from the conversation's recent messages, so talk never handed off
-to the agent is not carried over. Other failures, such as another device taking
-the call, OpenAI ending it, or a refused credential, end the call with a message
-and are not retried.
+to the agent is not carried over. OpenAI ending the call at its time limit starts a
+new call the same way. Other failures, such as another device taking the call,
+OpenAI ending it for another reason, or a refused credential, end the call with a
+message and are not retried.
+
+Each hand-off of a call started on the Voice page or from the bottom bar tells the
+agent the page on screen at that moment, with the session's title on a session
+page; a composer call's hand-offs do not. A page on the call's own server is named by
+its path there, and any other page by its full address, so a call on a remote never
+takes a local page for one of its own.
 
 The agent's final reply to a hand-off is spoken once, as written. A reply over
 about 990 tokens is not spoken: the voice says it is on the screen, and the Voice
@@ -425,9 +454,12 @@ offline, and one on another protocol keeps working with a notice.
 ## Tabs
 
 Tabs follow editor semantics.
-Sessions and pages (New session, Search, Voice, Cron, Agents, Skills, Settings) open in
+Sessions and pages (New session, Search, Cron, Agents, Skills, Settings) open in
 one strip, and a location never appears in two tabs. The URL always names the
-active tab.
+active tab, except on the Voice page, which is not a tab: opening or reloading it
+adds no tab and keeps the previous tab active and the space's last tab, and the
+palette offers no Shared or Top Shelf commands for it. Voice tabs saved earlier,
+including Shared, Top Shelf, and a space's last tab, are dropped.
 
 - **Opening.** Opening a location that is not already open (New session,
   Search results, links, footer buttons, page commands, the palette) gives it a
@@ -692,7 +724,8 @@ desktop uses 32px targets and 4px gaps. Screens narrower than 22rem keep 48px
 targets but tighten gaps and side padding to 4px. Icons are 24px in all layouts.
 The sidebar toggle sits at the bar's left end and the theme toggle at its right end;
 between them, centered, are New session, Search sessions and commands, Voice, and
-Copy page link.
+Copy page link. While a voice call starts, runs, or shows how it ended, the call's
+orb takes their place (see [Voice](#voice)).
 When remote RocketClaws or OpenCode servers are configured, New session opens a
 menu of where to start one, with the page's own server highlighted so Enter starts
 it there. The menu names the local server by the first label of the page's host
@@ -1258,8 +1291,11 @@ delta read from the last applied revision; opening or reconnecting also catches 
   including External MCP agent refresh. It starts no agent turn, does not restart
   the process, and does not reread configuration. A refresh failure is reported
   after the assets have been replaced; it does not roll them back.
-- `POST /api/Voice` takes `{"conversationId":"<visible-id>","sdp":"<offer>","voice":"<name>"}`
-  (`voice` optional, one of the agent's `voices` from `ListAgents`) and
+- `POST /api/Voice` takes `{"conversationId":"<visible-id>","sdp":"<offer>","voice":"<name>","quietMs":<ms>,"page":"<path>"}`
+  (`voice` optional, one of the agent's `voices` from `ListAgents`; `quietMs` how long
+  the person has said no words in the call so far; `page` the page on screen, its path
+  on that server or its full address when it belongs to another, sent only for a call
+  on the person's voice home) and
   answers with SSE: `{"answer":{"sdp","route"}}`, any `{"notice":"…"}` frames, then
   one `{"ended":{"reason"}}`.
   Errors before the answer are JSON errors. The call lasts as long as the request;

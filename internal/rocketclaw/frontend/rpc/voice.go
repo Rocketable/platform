@@ -35,6 +35,8 @@ func (e voiceEndError) Error() string {
 // The loop also writes notices to the browser's stream, which the handler writes only before and after the loop.
 type voiceCall struct {
 	server                              *Server
+	cancel                              context.CancelCauseFunc // ends the call, as the person's newer call does
+	page                                string                  // the page on screen of a voice-home call, empty for a session call; server.voiceMu guards it
 	dialect                             voiceDialect
 	header                              http.Header
 	id                                  string // the OpenAI session or call
@@ -48,6 +50,7 @@ type voiceCall struct {
 	latest                string          // the newest hand-off
 	unsent                [][]byte        // appends from the first failed write on, for the next sideband
 	inputs                map[string]bool // the conversation's input ids; nil until the first snapshot
+	heard                 time.Time       // when the person last said words; 10 minutes later the call ends
 }
 
 // voiceTurn is one transcript turn reduced to the text a call may send.
@@ -98,6 +101,12 @@ func (s *Server) voiceSettings(ctx context.Context, request *VoiceSettingsReques
 
 			err = s.sessions.UpdateVoiceSettings(ctx, username, request.Agent, request.Voice, request.Transcript)
 		}
+	case VoiceSettingsAction_PAGE:
+		s.voiceMu.Lock()
+		if call := s.voiceCalls[username]; call != nil && call.page != "" && call.conversationID == request.ConversationId {
+			call.page = request.Page
+		}
+		s.voiceMu.Unlock()
 	}
 
 	if err == nil && settings.ConversationID == "" {
@@ -177,19 +186,20 @@ func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 	callCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
-	own := &cancel
+	// A request that names the page on screen starts a voice-home call.
+	call := &voiceCall{server: s, cancel: cancel, page: request.Page, dialect: dialect, stream: stream, conversationID: id, principal: principal, username: username}
 
 	s.voiceMu.Lock()
 	if older := s.voiceCalls[username]; older != nil {
-		(*older)(voiceEndError("replaced"))
+		older.cancel(voiceEndError("replaced"))
 	}
 
-	s.voiceCalls[username] = own
+	s.voiceCalls[username] = call
 	s.voiceMu.Unlock()
 
 	defer func() {
 		s.voiceMu.Lock()
-		if s.voiceCalls[username] == own {
+		if s.voiceCalls[username] == call {
 			delete(s.voiceCalls, username)
 		}
 		s.voiceMu.Unlock()
@@ -226,7 +236,7 @@ func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 		cancel(err)
 	}
 
-	call := &voiceCall{server: s, dialect: dialect, header: header, id: callID, conn: conn, stream: stream, conversationID: id, principal: principal, username: username}
+	call.header, call.id, call.conn, call.heard = header, callID, conn, time.Now().Add(-time.Duration(request.QuietMs)*time.Millisecond)
 	snapshots := make(chan voiceSnapshot)
 
 	calls, groupCtx := errgroup.WithContext(callCtx)
@@ -320,6 +330,8 @@ func (c *voiceCall) loop(ctx context.Context, calls *errgroup.Group, snapshots <
 			} else if errors.Is(context.Cause(ctx), context.Canceled) {
 				reason = "stopped"
 			}
+		case <-time.After(time.Until(c.heard.Add(10 * time.Minute))):
+			reason = "quiet"
 		case snapshot := <-live:
 			c.update(snapshot)
 		case event, ok := <-events:
@@ -405,6 +417,10 @@ func (c *voiceCall) hear(ctx context.Context, event voiceEvent) error {
 		if done || event.text != "" {
 			c.final[role] = done
 		}
+
+		if role == "user" && strings.TrimSpace(event.text) != "" {
+			c.heard = time.Now()
+		}
 	case voiceEventHandOff:
 		if c.seen[event.id] {
 			return nil // A re-delivered hand-off would carry rebuilt text that admission refuses as different.
@@ -423,6 +439,7 @@ func (c *voiceCall) hear(ctx context.Context, event voiceEvent) error {
 // (codex-rs core/src/context/realtime_delegation.rs): the request in <input>, and the
 // lines said since the previous hand-off in <transcript_delta>. Public hand-offs carry
 // no text, so their lines are the request too. A hand-off with nothing to send is ignored.
+// Beyond the Codex format, a voice-home call's hand-off names the page on screen in <page>.
 // It is admitted in arrival order without waiting for its turn; a stopping bridge
 // ends the call, and any other refusal sends the browser a notice.
 func (c *voiceCall) handOff(ctx context.Context, event voiceEvent) error {
@@ -448,6 +465,30 @@ func (c *voiceCall) handOff(ctx context.Context, event voiceEvent) error {
 	message := "<realtime_delegation>\n  <input>" + voiceDelegationField(input, false) + "</input>\n"
 	if said != "" {
 		message += "  <transcript_delta>" + voiceDelegationField(said, true) + "</transcript_delta>\n"
+	}
+
+	c.server.voiceMu.Lock()
+	page := c.page
+	c.server.voiceMu.Unlock()
+
+	if page != "" {
+		// A session page also names the session's title, as the Web titles it; a path that names
+		// no session here, or a failed read, leaves the path alone.
+		if strings.HasPrefix(page, "/s/") {
+			var title string
+
+			for chat, err := range c.server.sessions.SidebarChats(context.WithoutCancel(ctx), c.username, c.server.channels, []string{backend.TabConversation(page)}) {
+				if err == nil {
+					session := sidebarSession(&chat)
+					preview, _, _ := strings.Cut(session.Preview, "\n")
+					title = " (" + cmp.Or(session.Name, preview, session.Label) + ")"
+				}
+			}
+
+			page += title
+		}
+
+		message += "  <page>" + voiceDelegationField(page, false) + "</page>\n"
 	}
 
 	message += "</realtime_delegation>"

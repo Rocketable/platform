@@ -82,6 +82,14 @@ export async function searchAll(servers: string[], input: object, signal: AbortS
   return { ...found[0], matches: found.flatMap((reply) => reply.matches), messages: found.flatMap((reply) => reply.messages), mentionIds: [...new Set(found.flatMap((reply) => reply.mentionIds))], principals: [...new Set(found.flatMap((reply) => reply.principals ?? []))] };
 }
 
+// The Voice page is not a tab, so a Tabs reply drops Voice tabs saved as this person's, Shared, on the Top Shelf, or
+// as a space's last tab.
+function noVoice({ state, shared, topShelf, ...reply }: SavedTabs): SavedTabs {
+  const kept = ({ path }: { path: string }) => path !== "/voice";
+  return { ...reply, state: { ...state, tabs: state.tabs.filter(kept), last: Object.fromEntries(Object.entries(state.last).filter(([, path]) => kept({ path }))) },
+    shared: shared?.filter(kept), topShelf: topShelf && { ...topShelf, tabs: topShelf.tabs?.filter(kept) } };
+}
+
 export const queries = {
   searchMessages: (query: string) => ({ queryKey: ["searchMessages", query], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<SearchMessagesResponse>("SearchMessages", { query }, signal)).matches }),
   slackName: (id: string) => ({ queryKey: ["slackName", id], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<SlackNamesResponse>("SlackNames", { ids: [id] }, signal)).names?.[id] ?? null, retry: false, staleTime: (query: { state: { data: string | null | undefined } }) => query.state.data ? 8 * 60 * 60 * 1000 : 60_000 }),
@@ -100,7 +108,7 @@ export const queries = {
   queue: (input: { id: string }) => ({ queryKey: ["queue", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ items: QueueItem[] }>("ListQueue", input, signal)).items }),
   // The server answers for the signed-in person; the username keeps one person's settings out of another's cache.
   voiceSettings: (username: string) => ({ queryKey: ["voiceSettings", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<VoiceSettings>("VoiceSettings", {}, signal) }),
-  tabs: (username: string, name = server()) => ({ queryKey: [{ server: name }, "tabs", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<SavedTabs>("Tabs", {}, signal, name) }),
+  tabs: (username: string, name = server()) => ({ queryKey: [{ server: name }, "tabs", username], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<SavedTabs>("Tabs", {}, signal, name).then(noVoice) }),
 };
 
 export const mutations = {
@@ -119,6 +127,6 @@ export const mutations = {
   moveToBackground: (input: { conversationId: string }) => rpc("MoveToBackground", input),
   stopBackgroundJob: (input: { conversationId: string; jobId: string }) => rpc("StopBackgroundJob", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
-  voiceSettings: (input: { action: "START" | "RESET" | "UPDATE"; conversationId?: string; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
-  tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; mute?: SavedTabs["mutes"][number]; unmute?: string; topShelf?: TopShelf }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),
+  voiceSettings: (input: { action: "START" | "RESET" | "UPDATE" | "PAGE"; conversationId?: string; agent?: string; voice?: string; transcript?: boolean; page?: string }, name = server()) => rpc<VoiceSettings>("VoiceSettings", input, undefined, name),
+  tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; mute?: SavedTabs["mutes"][number]; unmute?: string; topShelf?: TopShelf }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name).then(noVoice),
 };

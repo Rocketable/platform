@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { RPCError, sse } from "./api";
-import { serverURL } from "./navigation";
+import { pagePath, server, serverURL } from "./navigation";
 import type { Agent, VoiceEndReason, VoiceEvent, VoiceRoute } from "./types";
 
 export type VoiceState = "idle" | "connecting" | "reconnecting" | "live" | "ending" | "error";
@@ -9,7 +9,9 @@ export type VoiceState = "idle" | "connecting" | "reconnecting" | "live" | "endi
 export type VoiceCaption = { id: number; role: "user" | "assistant"; text: string; written?: boolean };
 // Captions live only in memory; startedAt is set when the call goes live.
 // A notice is a note during the call, such as a refused hand-off; the newest replaces it.
-export type VoiceView = { state: VoiceState; conversationId: string; error: string; notice: string; captions: VoiceCaption[]; startedAt?: number };
+// kind says whether the call talks to the person's voice home or to one session; server is
+// the RocketClaw it started on, as server() names it, and every reconnect goes there.
+export type VoiceView = { state: VoiceState; conversationId: string; kind?: "home" | "session"; server?: string; error: string; notice: string; captions: VoiceCaption[]; startedAt?: number };
 
 // Data-channel events that carry caption text, per wire dialect (docs/investigations/2026-10-10-gpt-live-wire-probe.md).
 const captionEvents: Record<VoiceRoute, Record<string, VoiceCaption["role"]>> = {
@@ -23,12 +25,14 @@ const endings: Record<VoiceEndReason, string> = {
   safety: "Call ended by OpenAI safety.",
   closed: "OpenAI ended the call.",
   lost: "Lost the connection to OpenAI.",
+  quiet: "Call ended: nothing was said for 10 minutes.",
   error: "The call failed on the server.",
 };
 const lost = "Connection to RocketClaw ended.";
 const reconnecting = "Reconnecting to the agent…";
 const audioLost = "Voice call failed: audio connection lost.", timedOut = "Voice connection timed out.";
-const networkLosses = [lost, endings.lost, audioLost, timedOut];
+// OpenAI's time limit reconnects too: speech since the last request is lost, the call goes on.
+const networkLosses = [lost, endings.lost, endings.expired, audioLost, timedOut];
 class VoiceFailure extends Error {}
 
 let view: VoiceView = { state: "idle", conversationId: "", error: "", notice: "", captions: [] };
@@ -71,6 +75,17 @@ export function stopVoice() {
   else publish({ state: "idle", error: "" });
 }
 
+// failVoice shows error from a voice-home call on the RocketClaw name that failed before it began:
+// as a notice on this tab's running call, which keeps going, or else as that call's ending.
+export function failVoice(error: string, name: string) {
+  if (current) publish({ notice: error });
+  else publish({ state: "error", conversationId: "", kind: "home", server: name, error, notice: "", captions: [], startedAt: undefined });
+}
+
+// voicePage is the page on screen as the RocketClaw name reads it: its path there, or its full
+// address when the page belongs to another server, so no server takes another's page for its own.
+export const voicePage = (name: string) => server() === name ? pagePath() : location.origin + location.pathname;
+
 // tone plays notes, in Hz, one after another for 150 ms each.
 function tone(sound: AudioContext, ...notes: number[]) {
   for (const [i, note] of notes.entries()) {
@@ -97,24 +112,20 @@ function failureMessage(failure: unknown) {
 }
 
 // startVoice runs one call on the conversation and settles when it ends.
-// A tab has at most one call: starting another hangs up the current one first.
-export async function startVoice(conversationId: string, voice = "") {
+// A tab has at most one call: starting another hangs up the current one first. name is the
+// RocketClaw the call talks to; a caller that awaited first reads it before its await.
+export async function startVoice(conversationId: string, voice = "", kind: NonNullable<VoiceView["kind"]> = "session", name = server()) {
   current?.stop();
   const abort = new AbortController();
-  let hidden: ReturnType<typeof setTimeout> | undefined, opening: ReturnType<typeof setTimeout> | undefined, ticking: ReturnType<typeof setInterval> | undefined;
+  let opening: ReturnType<typeof setTimeout> | undefined, ticking: ReturnType<typeof setInterval> | undefined;
   const call = { stop: () => {
     set({ state: "ending" });
     abort.abort();
   } };
   current = call;
   const set = (next: Partial<VoiceView>) => { if (current === call) publish(next); };
-  const onVisibility = () => {
-    clearTimeout(hidden);
-    if (document.visibilityState === "hidden") hidden = setTimeout(call.stop, 30_000);
-  };
-  set({ state: "connecting", conversationId, error: "", notice: "", captions: [], startedAt: undefined });
+  set({ state: "connecting", conversationId, kind, server: name, error: "", notice: "", captions: [], startedAt: undefined });
   addEventListener("pagehide", call.stop);
-  document.addEventListener("visibilitychange", onVisibility);
   const audio = document.createElement("audio");
   audio.autoplay = true;
   // Made while handling the press, so phones let it run; it measures the model's speech.
@@ -122,6 +133,8 @@ export async function startVoice(conversationId: string, voice = "") {
   let mic: MediaStream | undefined, peer: RTCPeerConnection | undefined, error = "";
   // After a typed message the voice stays muted, as in Codex, until it answers speech heard since.
   let meter: AnalyserNode | undefined, heard = false;
+  // When the person last said words, in wall time, so time with the page suspended counts as quiet.
+  let words = Date.now();
   try {
     if (!isSecureContext) throw new VoiceFailure("Voice needs a secure page: open RocketClaw over HTTPS or localhost.");
     mic = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => { throw new VoiceFailure("Microphone access was denied."); });
@@ -163,6 +176,7 @@ export async function startVoice(conversationId: string, voice = "") {
         const role = names[event.type], last = view.captions.at(-1);
         if (!role) return;
         const text = event.delta ?? event.item!.text;
+        if (role === "user" && text.trim()) words = Date.now();
         // As Codex resume_realtime_speaker_for: the first reply begun after the person spoke unmutes.
         if (audio.muted && text.trim()) {
           if (role === "user") heard = true;
@@ -180,10 +194,12 @@ export async function startVoice(conversationId: string, voice = "") {
         signal.addEventListener("abort", resolve, { once: true });
         setTimeout(resolve, 3_000);
       });
-      const init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationId, sdp: pc.localDescription!.sdp, voice }), signal };
+      // A voice-home call names the page on screen, so each hand-off can say what the person sees.
+      const page = kind === "home" ? voicePage(name) : undefined;
+      const init = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationId, sdp: pc.localDescription!.sdp, voice, quietMs: Date.now() - words, page }), signal };
       try {
         error = lost;
-        for await (const event of sse<VoiceEvent>(`${serverURL()}/api/Voice`, init)) {
+        for await (const event of sse<VoiceEvent>(`${serverURL(name)}/api/Voice`, init)) {
           if (event.answer) {
             names = captionEvents[event.answer.route];
             await pc.setRemoteDescription({ type: "answer", sdp: event.answer.sdp });
@@ -210,6 +226,8 @@ export async function startVoice(conversationId: string, voice = "") {
       }
       pc.close();
       clearTimeout(opening);
+      // The server ends a quiet call it still holds; one it lost, or a woken page, ends here instead of reconnecting.
+      if (networkLosses.includes(error) && Date.now() - words >= 600_000) error = endings.quiet;
       if (abort.signal.aborted || !networkLosses.includes(error)) return;
       if (!ticking) {
         tone(sound, 660, 440);
@@ -230,15 +248,18 @@ export async function startVoice(conversationId: string, voice = "") {
     for (const track of mic?.getTracks() ?? []) track.stop();
     peer?.close();
     audio.srcObject = null;
-    void sound.close();
     if (current === call) speech = undefined;
-    clearTimeout(hidden);
     clearTimeout(opening);
     clearInterval(ticking);
     removeEventListener("pagehide", call.stop);
-    document.removeEventListener("visibilitychange", onVisibility);
     set(error ? { state: "error", error, notice: "" } : { state: "idle", notice: "" });
     if (current === call) current = undefined;
+    // Closing the audio would cut the quiet ending's tone short.
+    if (error === endings.quiet) {
+      tone(sound, 440, 330);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    void sound.close();
   }
 }
 

@@ -25,7 +25,7 @@ test("personal save replies retain intervening Shared edits and mutes, including
     queryClient.setQueryData(key, initial);
     const response = Promise.withResolvers<Response>();
     const fetchMock = spyOn(globalThis, "fetch").mockImplementation(Object.assign(() => response.promise, { preconnect: fetch.preconnect }));
-    const reply: SavedTabs = { ...initial, revision: "2", stale, state: { ...initial.state, last: { main: "/voice" } }, shared: [{ space: "main", path: "/voice" }], mutes: [{ path: "/s/old", until: "" }] };
+    const reply: SavedTabs = { ...initial, revision: "2", stale, state: { ...initial.state, last: { main: "/cron" } }, shared: [{ space: "main", path: "/cron" }], mutes: [{ path: "/s/old", until: "" }] };
     const current: SavedTabs = { ...initial, shared: changed === "shared" ? [{ space: "main", path: "/search/new" }] : initial.shared, mutes: changed === "mutes" ? [{ path: "/s/new", until: "" }] : initial.mutes };
     try {
       const pending = tabsCall("", state ? { state: initial.state, revision: 1 } : { mute: { path: "/s/old", until: "" } });

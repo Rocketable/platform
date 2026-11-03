@@ -57,7 +57,7 @@ type Server struct {
 
 	// voiceCalls holds each person's live voice call by username; their newer call replaces it.
 	voiceMu    sync.Mutex
-	voiceCalls map[string]*context.CancelCauseFunc
+	voiceCalls map[string]*voiceCall
 
 	// listings holds each person's latest session listings by username, oldest first, so a poll
 	// naming one it holds receives only the rows changed since.
@@ -107,7 +107,7 @@ type CronJobs interface {
 // New builds the Web handlers. The host must restrict RPC access to the trusted Web proxy:
 // the metadata carries the browser IP, not an independently authenticated network peer.
 func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, voiceCalls: map[string]*context.CancelCauseFunc{}, listings: map[string][]sessionListing{}}
+	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, voiceCalls: map[string]*voiceCall{}, listings: map[string][]sessionListing{}}
 }
 
 // ListSessionEntries returns ordered entry identifiers and metadata.

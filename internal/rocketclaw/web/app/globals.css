@@ -458,6 +458,16 @@
   .voice-orb[data-size="small"]::before {
     filter: blur(6px);
   }
+  .voice-orb[data-size="bar"] {
+    width: var(--navigation-button);
+    flex-shrink: 0;
+    box-shadow:
+      0 0 calc(0.4rem + var(--level) * 0.75rem) calc(var(--level) * 0.15rem) oklch(0.72 0.19 220 / calc(0.3 + var(--level) * 0.6)),
+      inset 0 0 0.4rem oklch(0.08 0.04 275 / 0.85);
+  }
+  .voice-orb[data-size="bar"]::before {
+    filter: blur(3px);
+  }
   .voice-orb::before {
     content: "";
     position: absolute;

@@ -1182,6 +1182,59 @@ test("spaces show only their own tabs, return to their last tab, follow opened t
   expect(button.y + button.height).toBeLessThanOrEqual(list.y);
 }), 60_000);
 
+test("the Voice page is not a tab: opening or reloading it keeps the space's tabs and last tab, and saved Voice tabs are gone", () => withPage({}, async (page, origin, _prompts, saved) => {
+  // A remote RocketClaw named in the page shows the Top Shelf; it is unreachable.
+  await page.route("**/*", async (route: any) => {
+    if (route.request().url().includes("/far/")) return route.abort();
+    if (route.request().resourceType() !== "document") return route.continue();
+    const response = await route.fetch();
+    await route.fulfill({ response, body: (await response.text()).replace("</head>", `<script id="rocketclaws" type="application/json">${JSON.stringify([{ name: "far", url: `${origin}/far` }])}</script></head>`) });
+  });
+  const sent: string[] = [];
+  page.on("request", (request: any) => { if (request.url().endsWith("/api/Tabs")) sent.push(request.postData() ?? ""); });
+  // Saved while the Voice page was a tab: this person's Voice tab and last tabs, a Shared Voice tab, and a shelved one.
+  saved.spaces.push({ id: "side", name: "Side" });
+  saved.state = { tabs: [{ path: href("alpha"), space: "side" }, { path: "/voice", space: "side" }, { path: href("bravo"), space: "main" }], groups: [], space: "side", last: { side: "/voice", main: "/voice" }, sharedOrder: [] };
+  saved.shared = [{ space: "side", path: "/voice" }];
+  Object.assign(saved, { topShelf: { tabs: [{ space: "side", path: "/voice" }] } });
+  const loaded = async () => {
+    await page.getByRole("button", { name: "Space: Side" }).waitFor();
+    // The tab shows its session's id until the session list names it.
+    await strip(page).getByRole("tab", { name: "Alpha", exact: true }).waitFor();
+    expect(await names(page)).toEqual(["Alpha"]);
+    expect(await shared(page).getByRole("tab").count()).toBe(0);
+    expect(await page.getByRole("tablist", { name: "Top Shelf" }).getByRole("tab").count()).toBe(0);
+  };
+  await page.goto(`${origin}${href("alpha")}`);
+  await loaded();
+  await until(() => saved.revision > 0);
+  expect(saved.state.tabs.map((tab) => tab.path)).toEqual([href("alpha"), href("bravo")]);
+  expect(saved.state.last).toEqual({ side: href("alpha") });
+
+  // Opening it from a session tab leaves the session the space's last tab, and its palette offers no tab sharing.
+  await page.keyboard.press("Control+Shift+p");
+  await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Voice", exact: true }).click();
+  await page.waitForURL(`${origin}/voice`);
+  expect(await names(page)).toEqual(["Alpha"]);
+  await page.keyboard.press("Control+Shift+p");
+  const palette = page.getByRole("dialog", { name: "Run command" });
+  await palette.getByRole("button", { name: "Voice", exact: true }).waitFor();
+  for (const name of ["Tabs: Add to Shared", "Tabs: Add to Top Shelf"]) expect(await palette.getByRole("button", { name, exact: true }).count()).toBe(0);
+  await page.keyboard.press("Escape");
+  await palette.waitFor({ state: "hidden" });
+
+  // A reload keeps the address and adds no tab, and the space still returns to its session.
+  await page.reload();
+  await loaded();
+  expect(page.url()).toBe(`${origin}/voice`);
+  await chooseSpace(page, "Main", "menuitemradio");
+  await page.waitForURL(`**${href("bravo")}`);
+  await chooseSpace(page, "Side", "menuitemradio");
+  await page.waitForURL(`**${href("alpha")}`);
+  expect(sent.filter((body) => body.includes("/voice"))).toEqual([]);
+  expect(saved.state.last).toEqual({ side: href("alpha"), main: href("bravo") });
+}), 30_000);
+
 test("New session offers every agent, and a space shows its own and spaceless cron jobs, ignoring case", () => withPage({}, async (page, origin, _prompts, saved) => {
   const agents = async () => {
     await page.getByRole("button", { name: "Choose agent", exact: true }).click();

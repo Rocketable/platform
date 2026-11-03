@@ -272,7 +272,12 @@ stored but cannot be downloaded; garbage collection is not part of this transpor
 `Voice(VoiceRequest) -> stream VoiceEvent` runs one GPT-Live call for exactly as
 long as its request lives. HTTP serves it only as `POST /api/Voice`, so
 `CrossOriginProtection` blocks cross-site starts; it is not a GET stream route. The
-body is `{"conversationId":"<visible-id>","sdp":"<offer>","voice":"<name>"}`; `voice`
+body is `{"conversationId":"<visible-id>","sdp":"<offer>","voice":"<name>","quietMs":<ms>,"page":"<path>"}`.
+`quietMs` is how long the person has said no words in this call so far, so the
+no-words clock goes on across reconnects. `page`, the page on screen (its path on this
+server, or its full address when it belongs to another), is sent only by a call on the
+person's voice home; a call on one session leaves it
+empty. `voice`
 is optional and must be one the default `openai` provider offers (`ListAgents` lists them per
 agent, the default first: Codex's voices on `chatgpt`, the public API's on `api_key`),
 else the call is refused with `InvalidArgument`. The handler checks
@@ -281,7 +286,7 @@ independently of the conversation agent's model (`api_key` uses the public API a
 uses the saved login on Codex's fixed internal URLs), creates the call, and attaches
 its sideband socket before answering. SSE frames are `{"answer":{"sdp":"…","route":"public"|"codex"}}`
 first, then any `{"notice":"…"}` frames, then one `{"ended":{"reason":"…"}}` with
-reason `stopped`, `replaced`, `expired`, `safety`, `closed`, `lost`, or `error`. A
+reason `stopped`, `replaced`, `expired`, `safety`, `closed`, `lost`, `quiet`, or `error`. A
 notice reports a hand-off the agent refused; the call continues. Errors before the
 answer are ordinary JSON errors: `NotFound` for an unrecorded conversation, and
 `FailedPrecondition` (HTTP 400, code 9) for missing credentials, a failed ChatGPT
@@ -293,7 +298,11 @@ scheme, host, or port.
 
 Each person (the caller's username) has one live call across all conversations; the
 newest wins, and the older stream ends with `replaced`. Different people's calls on
-one conversation run side by side. The server has no idle or no-speech timers.
+one conversation run side by side. The server ends a call as `quiet` once the person
+has said no words for 10 minutes, counting the request's `quietMs`; only the
+person's own transcribed words reset that clock, not the voice model's speech or
+the agent's replies. The browser starts a new call on the same conversation after
+`expired`, as after a lost connection.
 Aborting the request ends the call: over a live sideband the server sends `session.close` and waits up to 3 s;
 it then hangs up a public session that did not confirm, and closes the socket. The
 handler returns right after `ended`. OpenAI's `session.closed` ends the call as
@@ -304,9 +313,11 @@ reads and changes the caller's voice settings: their current voice conversation,
 agent for their next one, their voice, and the transcript view. The action is `READ`
 (the default), `START` (returns the current conversation, or creates one with `agent`
 as `CreateSession` would), `RESET` (forgets the current conversation while it is still
-`conversationId`), or `UPDATE` (stores the `agent`, `voice` and `transcript` fields that
+`conversationId`), `UPDATE` (stores the `agent`, `voice` and `transcript` fields that
 are set; an agent the caller cannot choose or a voice no route offers is
-`InvalidArgument`). Every action answers with the caller's whole settings row, and
+`InvalidArgument`), or `PAGE` (makes `page` the page on screen of the caller's live
+voice-home call when that call is on `conversationId`; it ignores other calls and
+changes no stored setting). Every action answers with the caller's whole settings row, and
 `conversationId` is empty when none is current. Startup cleanup never deletes a
 person's current voice conversation; after `RESET`, ordinary cleanup applies.
 
@@ -332,7 +343,11 @@ since the previous hand-off in `<transcript_delta>` (`user:`/`assistant:` lines;
 request is added as a user line unless already said), XML-escaped and each cut to
 4 KiB behind a "…" (the request keeps its start, the transcript its end). Public
 hand-offs carry no request text, so that conversation is the request too. A hand-off with nothing to send is ignored, and talk after the last
-hand-off is not stored. A stopping runtime ends the call as `error`.
+hand-off is not stored. A stopping runtime ends the call as `error`. Beyond the Codex
+format, a hand-off of a voice-home call (one whose request carried `page`) ends with
+`<page>`: the page on screen when the hand-off arrived, as the request or
+the latest `VoiceSettings` `PAGE` for that call set it, followed for a `/s/` path by
+the session's title in parentheses, escaped and cut like the other fields.
 
 Nothing is sent to the voice model while the agent works. When a turn this call
 handed off finishes, its final reply is sent once, as written, unless it is over

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -226,15 +227,15 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	return h
 }
 
-// call starts alice's Voice call on conversation id and returns its SSE reader past the answer, a cancel
-// that aborts the request, and the call's sideband.
-func (h *voiceHarness) call(t *testing.T, id, sdp string) (*bufio.Reader, context.CancelFunc, *voicePeer) {
+// call starts alice's Voice call on conversation id, a voice-home call when page is set, and returns its
+// SSE reader past the answer, a cancel that aborts the request, and the call's sideband.
+func (h *voiceHarness) call(t *testing.T, id, sdp, page string) (*bufio.Reader, context.CancelFunc, *voicePeer) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
-	body, err := json.Marshal(map[string]string{"conversationId": id, "sdp": sdp, "voice": "cedar"})
+	body, err := json.Marshal(map[string]string{"conversationId": id, "sdp": sdp, "voice": "cedar", "page": page})
 	require.NoError(t, err)
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, h.url+"/api/Voice", bytes.NewReader(body))
@@ -393,7 +394,7 @@ func (h *voiceHarness) prompt(group *errgroup.Group, text string) {
 func TestVoice(t *testing.T) {
 	h := startVoiceHarness(t)
 	if !t.Run("voice transport is independent of the agent provider", func(t *testing.T) {
-		_, cancel, peer := h.call(t, "worker", "offer-worker")
+		_, cancel, peer := h.call(t, "worker", "offer-worker", "")
 		assert.Contains(t, peer.create, `"instructions":"You are the voice of worker,`)
 		handOff(t, peer, "worker-request", "please check the result")
 		assert.Contains(t, <-h.requests, `"model":"test-model"`)
@@ -516,7 +517,7 @@ func TestVoice(t *testing.T) {
 	}
 
 	if !t.Run("call", func(t *testing.T) {
-		_, cancel, peer := h.call(t, "main", "offer-1")
+		_, cancel, peer := h.call(t, "main", "offer-1", "")
 		assert.Contains(t, peer.create, `"sdp":"offer-1"`)
 		assert.Contains(t, peer.create, `"voice":"cedar"`, "the call speaks with the chosen voice")
 
@@ -525,14 +526,25 @@ func TestVoice(t *testing.T) {
 		h.ended(t)
 		assert.Empty(t, h.hangups, "a confirmed close needs no hangup")
 
-		reader, _, peer := h.call(t, "main", "offer-2")
+		reader, _, peer := h.call(t, "main", "offer-2", "")
 		peer.send(t, `{"type":"session.closed","reason":"expired"}`)
 		assert.JSONEq(t, `{"ended":{"reason":"expired"}}`, strings.TrimPrefix(frame(t, reader), "data: "))
 		assert.Equal(t, "event: complete\ndata: {}", frame(t, reader))
 		assert.Empty(t, peer.all(t), "an expired session gets no close")
 
+		// The no-words clock goes on from the quiet time the request carries.
+		response, err := http.Post(h.url+"/api/Voice", "application/json", strings.NewReader(`{"conversationId":"main","sdp":"offer-quiet","quietMs":600000}`))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = response.Body.Close() })
+
+		reader = bufio.NewReader(response.Body)
+		assert.JSONEq(t, `{"answer":{"sdp":"answer-offer-quiet","route":"public"}}`, strings.TrimPrefix(frame(t, reader), "data: "))
+		<-h.creates
+		assert.JSONEq(t, `{"ended":{"reason":"quiet"}}`, strings.TrimPrefix(frame(t, reader), "data: "))
+		assert.Equal(t, []string{voiceCloseMessage}, (<-h.peers).all(t))
+
 		// A dropped public sideband ends the call as lost, without a reconnect, and hangs up (KTD4).
-		reader, _, peer = h.call(t, "main", "offer-lost")
+		reader, _, peer = h.call(t, "main", "offer-lost", "")
 		peer.mu.Lock()
 		require.NoError(t, peer.conn.Close())
 		peer.mu.Unlock()
@@ -542,11 +554,11 @@ func TestVoice(t *testing.T) {
 		assert.Empty(t, h.peers)
 
 		// A newer call replaces the older one while its hand-off turn runs (R20); the turn finishes (R17).
-		first, _, older := h.call(t, "main", "offer-3")
+		first, _, older := h.call(t, "main", "offer-3", "")
 		handOff(t, older, "c1", "please run the tests")
 		assert.Contains(t, <-h.requests, "please run the tests")
 
-		_, cancel, newer := h.call(t, "main", "offer-4")
+		_, cancel, newer := h.call(t, "main", "offer-4", "")
 		assert.JSONEq(t, `{"ended":{"reason":"replaced"}}`, strings.TrimPrefix(frame(t, first), "data: "))
 		assert.Equal(t, "event: complete\ndata: {}", frame(t, first), "the replaced call's stream ends without waiting for its hand-off turn")
 		assert.Equal(t, []string{voiceCloseMessage}, older.all(t))
@@ -566,7 +578,7 @@ func TestVoice(t *testing.T) {
 	if !t.Run("hand-offs", func(t *testing.T) {
 		const lint = "Lint passed:\n```\nok\n```"
 
-		_, cancel, peer := h.call(t, "main", "offer-a")
+		_, cancel, peer := h.call(t, "main", "offer-a", "")
 		handOff(t, peer, "d1", "please run the tests")
 		assert.Contains(t, <-h.requests, "please run the tests")
 
@@ -643,10 +655,71 @@ func TestVoice(t *testing.T) {
 
 		h.ended(t)
 
-		_, _, next := h.call(t, "main", "offer-b")
+		_, _, next := h.call(t, "main", "offer-b", "")
 		assert.Contains(t, next.create, `"Lint passed:\n`+"```"+`\nok\n`+"```"+`"`, "a new call is seeded with the conversation as written (R13, R14)")
 		assert.Contains(t, next.create, `user: please run the tests`, "the seed keeps the person's requests")
 		assert.NotContains(t, next.create, "CANARY_TOOL_RESULT")
+	}) {
+		return
+	}
+
+	if !t.Run("page on screen", func(t *testing.T) {
+		h.ended(t)
+
+		ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+		_, err := h.rt.Sessions.UpdateConversationDetails(ctx, "main", nil, new("Deploy fix"))
+		require.NoError(t, err)
+
+		show := func(conversation, page string) {
+			t.Helper()
+
+			_, err := h.server.voiceSettings(ctx, &VoiceSettingsRequest{Action: VoiceSettingsAction_PAGE, ConversationId: conversation, Page: page})
+			require.NoError(t, err)
+		}
+		ask := func(peer *voicePeer, id, text, reply string) {
+			t.Helper()
+			handOff(t, peer, id, text)
+			assert.Contains(t, <-h.requests, text)
+
+			h.replies <- voiceModelText("r"+id, reply)
+
+			peer.expect(t, reply)
+		}
+
+		// A voice-home call names the page on screen when each request arrives.
+		_, cancel, peer := h.call(t, "main", "offer-home", "/voice")
+		ask(peer, "p1", "summarise this session", "Summary.")
+
+		// Only the person's live voice-home call, on its own conversation, takes a new page.
+		show("main", "/s/"+base64.RawURLEncoding.EncodeToString([]byte("main")))
+		show("worker", "/agents")
+		ask(peer, "p2", "and this one", "Second.")
+		show("main", "/pages/a<b>&c")
+		ask(peer, "p3", "and that page", "Third.")
+		cancel()
+		h.ended(t)
+
+		// A call on one session takes no page and names none.
+		_, cancel, peer = h.call(t, "main", "offer-session", "")
+
+		show("main", "/agents")
+		ask(peer, "p4", "just this session", "Fourth.")
+		cancel()
+
+		var texts []string
+
+		for _, message := range h.messages(t) {
+			if message.Role == "user" && strings.HasPrefix(message.InputId, "p") {
+				texts = append(texts, message.Text)
+			}
+		}
+
+		assert.Equal(t, []string{
+			voiceDelegationOn("/voice", "user: summarise this session", "user: summarise this session"),
+			voiceDelegationOn("/s/bWFpbg (Deploy fix)", "assistant: On it.\nuser: and this one", "assistant: On it.\nuser: and this one"),
+			voiceDelegationOn("/pages/a&lt;b&gt;&amp;c", "assistant: On it.\nuser: and that page", "assistant: On it.\nuser: and that page"),
+			voiceDelegation("user: just this session", "user: just this session"),
+		}, texts)
 	}) {
 		return
 	}
@@ -672,7 +745,7 @@ func TestVoice(t *testing.T) {
 		}, 10*time.Second, 10*time.Millisecond)
 
 		// A question pending before the call gets one session-wide notice (R12).
-		_, cancel, peer := h.call(t, "main", "offer-q")
+		_, cancel, peer := h.call(t, "main", "offer-q", "")
 		notice := spoken("", "I need your input. Please respond in the app.\n\nShip?\nOptions: Yes")
 		assert.Equal(t, notice, peer.expect(t, "Ship?"))
 
@@ -855,8 +928,8 @@ func TestVoice(t *testing.T) {
 			require.NoError(t, h.rt.CreateConversation(t.Context(), protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
 		}
 
-		phone, hangUpPhone, _ := h.call(t, "second", "offer-phone")
-		desk, hangUpDesk, alice := h.call(t, "shared", "offer-desk")
+		phone, hangUpPhone, _ := h.call(t, "second", "offer-phone", "")
+		desk, hangUpDesk, alice := h.call(t, "shared", "offer-desk", "")
 		assert.JSONEq(t, `{"ended":{"reason":"replaced"}}`, strings.TrimPrefix(frame(t, phone), "data: "), "a person's new call on another conversation ends their older one")
 		hangUpPhone()
 

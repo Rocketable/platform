@@ -658,6 +658,13 @@ message VoiceRequest {
   string sdp = 2;
   // One of the agent's voices; empty uses the provider's default.
   string voice = 3;
+  // How long the person has said no words in this call so far; the call ends as
+  // quiet once that reaches 10 minutes.
+  int64 quiet_ms = 4;
+  // The page on screen for a call on the person's voice home: its path on this server, or its
+  // full address when it belongs to another; empty for a call on one session. Each hand-off of
+  // a call with a page names the page on screen.
+  string page = 5;
 }
 
 enum VoiceSettingsAction {
@@ -668,6 +675,9 @@ enum VoiceSettingsAction {
   RESET = 2;
   // UPDATE stores the agent, voice and transcript fields that are set.
   UPDATE = 3;
+  // PAGE makes page the page on screen of the caller's live voice-home call on conversation_id;
+  // it changes no other call.
+  PAGE = 4;
 }
 
 message VoiceSettingsRequest {
@@ -676,6 +686,7 @@ message VoiceSettingsRequest {
   optional string agent = 3;
   optional string voice = 4;
   optional bool transcript = 5;
+  string page = 6;
 }
 
 // VoiceSettingsResponse is the caller's voice settings; conversation_id is empty when none is current.
@@ -837,7 +848,8 @@ message VoiceAnswer {
   string route = 2;
 }
 
-// reason is stopped, replaced, expired, safety, closed, lost or error.
+// reason is stopped, replaced, expired, safety, closed, lost, quiet or error;
+// quiet means the person said no words for 10 minutes.
 message VoiceEnded {
   string reason = 1;
 }

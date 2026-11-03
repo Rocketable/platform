@@ -95,7 +95,7 @@ func startVoiceLoop(t *testing.T, auth string, engine *mockBackend, stream *mock
 	stream.ContextFunc = func() context.Context {
 		return metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-tailnet-login-bin", "alice@example.com", "rocketclaw-tailnet-name-bin", "alice"))
 	}
-	call := &voiceCall{server: &Server{backend: engine, cfg: new(config.LockedConfig)}, dialect: dialect, id: "call", conn: conn, stream: stream, conversationID: "chat", principal: "alice", username: "alice@example.com"}
+	call := &voiceCall{server: &Server{backend: engine, cfg: new(config.LockedConfig)}, dialect: dialect, id: "call", conn: conn, stream: stream, conversationID: "chat", principal: "alice", username: "alice@example.com", heard: time.Now()}
 	ctx, cancel := context.WithCancelCause(t.Context())
 
 	calls, groupCtx := errgroup.WithContext(ctx)
@@ -136,7 +136,6 @@ func TestVoiceLoopEnds(t *testing.T) {
 					require.NoError(t, peer.WriteMessage(websocket.TextMessage, []byte(event)))
 				}
 
-				time.Sleep(time.Hour) // No timer ends a silent call (R16).
 				synctest.Wait()
 
 				switch {
@@ -183,9 +182,63 @@ func TestVoiceLoopEnds(t *testing.T) {
 	}
 }
 
+// Only the person's own words reset the no-words clock; the call ends as quiet 10 minutes after them.
+func TestVoiceLoopQuiet(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		event string // what the sideband reports at minute 9
+		reply bool   // the agent also answers the hand-off at minute 9
+		end   time.Duration
+	}{
+		{name: "silent", end: 10 * time.Minute},
+		{name: "the person speaks", event: `{"type":"session.input_transcript.delta","delta":"still here"}`, end: 19 * time.Minute},
+		{name: "the agent replies and the voice reads it out", event: `{"type":"session.output_transcript.delta","delta":"Here is the reply."}`, reply: true, end: 10 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				snapshots := make(chan voiceSnapshot)
+				engine := &mockBackend{SandboxErrorFunc: noSandboxError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
+				started := time.Now()
+				peer, _, _, wait := startVoiceLoop(t, "api_key", engine, &mockServerStream{SendMsgFunc: func(any) error { return nil }}, snapshots, nil)
+
+				for _, event := range []string{`{"type":"session.input_transcript.delta","delta":"go"}`, `{"type":"session.delegation.created","delegation":{"id":"d1"}}`} {
+					require.NoError(t, peer.WriteMessage(websocket.TextMessage, []byte(event)))
+				}
+
+				time.Sleep(9 * time.Minute)
+
+				if tc.event != "" {
+					require.NoError(t, peer.WriteMessage(websocket.TextMessage, []byte(tc.event)))
+				}
+
+				if tc.reply {
+					snapshots <- voiceSnapshot{turns: []voiceTurn{{key: "t1", inputs: []string{"d1"}, reply: "Done."}}}
+
+					_, data, err := peer.ReadMessage()
+					require.NoError(t, err)
+					assert.Equal(t, spoken("d1", "Done."), string(data))
+				}
+
+				_, data, err := peer.ReadMessage()
+				require.NoError(t, err)
+				assert.JSONEq(t, voiceCloseMessage, string(data))
+				assert.Equal(t, tc.end, time.Since(started))
+
+				require.NoError(t, peer.WriteMessage(websocket.TextMessage, []byte(`{"type":"session.closed"}`)))
+				assert.Equal(t, voiceEndError("quiet"), wait())
+			})
+		})
+	}
+}
+
 // voiceDelegation is a hand-off as Codex wraps it (codex-rs core/src/context/realtime_delegation.rs).
 func voiceDelegation(input, delta string) string {
 	return "<realtime_delegation>\n  <input>" + input + "</input>\n  <transcript_delta>" + delta + "</transcript_delta>\n</realtime_delegation>"
+}
+
+// voiceDelegationOn is a voice-home hand-off: the Codex wrapping, then the page on screen.
+func voiceDelegationOn(page, input, delta string) string {
+	return strings.TrimSuffix(voiceDelegation(input, delta), "</realtime_delegation>") + "  <page>" + page + "</page>\n</realtime_delegation>"
 }
 
 func TestVoiceLoopHandOffs(t *testing.T) {

@@ -224,11 +224,11 @@ The session's first turn records the pairs, together with the conversation's ide
 
 A live spoken call between a person on the Web and OpenAI's voice model, attached to one conversation.
 
-Audio flows between the browser and OpenAI; RocketClaw creates the call with the default Provider's credentials, independently of the conversation agent's Provider, and holds its control connection while the browser's request stays open. The call ends when that request ends, or earlier when RocketClaw or OpenAI ends it, and records why; it has no idle or no-speech timers. With a ChatGPT sign-in RocketClaw reconnects a dropped control connection; with an API key a drop ends the call as lost. A person has at most one live Voice Session: starting another, on any conversation or device, ends their older one, while other people's sessions, even on the same conversation, keep running. Ending a Voice Session never stops the conversation's turns.
+Audio flows between the browser and OpenAI; RocketClaw creates the call with the default Provider's credentials, independently of the conversation agent's Provider, and holds its control connection while the browser's request stays open. The call ends when that request ends, or earlier when RocketClaw or OpenAI ends it, and records why. RocketClaw ends it after 10 minutes in which the person said no words; only the person's own transcribed words count. The call keeps running while the person moves around the Web, and stays with the RocketClaw it started on. With a ChatGPT sign-in RocketClaw reconnects a dropped control connection; with an API key a drop ends the call as lost. A person has at most one live Voice Session: starting another, on any conversation or device, ends their older one, while other people's sessions, even on the same conversation, keep running. Ending a Voice Session never stops the conversation's turns.
 
 ### Voice Settings
 
-One person's Web voice state, kept by the server and the same on every device: their current voice conversation for the Voice page, the agent for their next one, their voice, and whether the Voice page shows the transcript.
+One person's Web voice state, kept by the server and the same on every device: their current voice conversation for the Voice page (their voice home), the agent for their next one, their voice, and whether the Voice page shows the transcript.
 
 Two people never share Voice Settings, even in one browser. Retention cleanup never deletes a person's current voice conversation, even with no messages; Reset forgets it, and ordinary cleanup applies after that. A call uses the person's voice when the default Provider offers it, and that Provider's default voice otherwise.
 
@@ -236,7 +236,7 @@ Two people never share Voice Settings, even in one browser. Retention cleanup ne
 
 A task the voice model passes to the conversation's agent during a Voice Session.
 
-Each one becomes a Web user message marked as voice, holding the request and what the person and the voice model said since the previous hand-off, taken the moment the hand-off arrives. Hand-offs are admitted in arrival order without waiting for the agent. Nothing about the agent's work reaches the voice model while it runs; the final reply of a turn the session handed off is spoken once, as written, unless it is too long to speak or a message typed later in the call supersedes it. A pending question is announced once and answered in the app, never by a hand-off. Not to be confused with a Delegation History, which is work a tool call delegated inside the harness.
+Each one becomes a Web user message marked as voice, holding the request and what the person and the voice model said since the previous hand-off, taken the moment the hand-off arrives. A hand-off from a call on the person's voice home also names the page on screen, with the session's title on a session page. Hand-offs are admitted in arrival order without waiting for the agent. Nothing about the agent's work reaches the voice model while it runs; the final reply of a turn the session handed off is spoken once, as written, unless it is too long to speak or a message typed later in the call supersedes it. A pending question is announced once and answered in the app, never by a hand-off. Not to be confused with a Delegation History, which is work a tool call delegated inside the harness.
 
 ## Web Spaces
 
