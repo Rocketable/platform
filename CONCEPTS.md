@@ -252,6 +252,12 @@ A named, colored run of one person's adjacent tabs in one Space, which can be co
 
 A group sits where its first tab is and lives in that tab's Space; moving it to another Space moves all its tabs. It goes away when its last tab closes or leaves it, unless the person keeps it: a kept group stays where it was, across reloads and devices, offers a new session inside it while empty and expanded, and goes once it is both empty and no longer kept. The Shared Group and the Top Shelf are groups with rules of their own.
 
+### Preview Tab
+
+The one italic tab a Web window shows while the person arrows through the session palette, holding the highlighted session.
+
+It belongs to that window alone: it is never saved, it never becomes the tab its space returns to, and other windows' tab changes leave it where it is unless they open that same session or delete its space. Choosing the session keeps it as an ordinary tab; dismissing the palette, typing, or running a command closes it. Only sessions that would open in the current space are previewed.
+
 ### Shared Group
 
 The one grey tab group named Shared that every space has, shown first in the Web sidebar. Its tabs are the same for every Web user, and anyone can add a tab to it or remove one, which removes it for everyone. A tab can be in a space's Shared Group and in a person's own tabs at once. Its order and collapsing it are each person's own; tabs a person has not placed follow, oldest added first. Deleting a space moves its Shared Group's tabs into the first remaining space's.
@@ -260,7 +266,7 @@ The one grey tab group named Shared that every space has, shown first in the Web
 
 A Web tab for searching sessions, one of as many as a person opens, each with its own address.
 
-It holds its own searches, shown as tabs inside the page, and can be named; unnamed, it is titled by the query it shows. Its name and searches are the person's own and are saved with their tabs, so they follow the page into groups and other spaces and across devices. Added to a space's Shared Group, it becomes one page everyone in that space sees and edits, its searches and which one is shown included, while the person's own copy stays as it was; whoever takes it out of Shared keeps that one page as their own, together with any searches of their own copy. A Search page never opens as a preview tab, Escape does not close it, and closing its tab discards it. The Web's session search palette finds every space's Search pages by name or query once something is typed.
+It holds its own searches, shown as tabs inside the page, and can be named; unnamed, it is titled by the query it shows. Its name and searches are the person's own and are saved with their tabs, so they follow the page into groups and other spaces and across devices. Added to a space's Shared Group, it becomes one page everyone in that space sees and edits, its searches and which one is shown included, while the person's own copy stays as it was; whoever takes it out of Shared keeps that one page as their own, together with any searches of their own copy. Escape does not close a Search page, and closing its tab discards it. The Web's session search palette finds every space's Search pages by name or query once something is typed.
 
 ### Remote OpenCode Session
 
@@ -352,6 +358,7 @@ A running turn saves each item of its record once, as a step of its own, instead
 ## Flagged ambiguities
 
 - "'turn' is used for both a conversation's running turn and a harness model loop — these are distinct."
+- "'preview tab' once meant a saved tab that the next opened location replaced; it now means only the palette's Preview Tab, and every other opened location gets an ordinary tab."
 
 ## Retired
 

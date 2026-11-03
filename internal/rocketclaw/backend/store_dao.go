@@ -356,7 +356,6 @@ DELETE FROM web_spaces USING others WHERE web_spaces.id = $1`, id)
 // JSON, which only the Web reads, and nil for other tabs.
 type Tab struct {
 	Path         string
-	Preview      bool
 	Group, Space string
 	Search       []byte
 }
@@ -435,9 +434,9 @@ func (s *SessionService) TabState(ctx context.Context, username string) (TabStat
 		return TabState{}, 0, fmt.Errorf("decode shared order: %w", err)
 	}
 
-	state.Tabs, err = queryRows(ctx, tx, `SELECT path, preview, group_id, space, search FROM web_tabs WHERE username = $1 AND position IS NOT NULL ORDER BY position`, "tabs", func(row rowScanner) (Tab, error) {
+	state.Tabs, err = queryRows(ctx, tx, `SELECT path, group_id, space, search FROM web_tabs WHERE username = $1 AND position IS NOT NULL ORDER BY position`, "tabs", func(row rowScanner) (Tab, error) {
 		var tab Tab
-		return tab, row.Scan(&tab.Path, &tab.Preview, &tab.Group, &tab.Space, &tab.Search)
+		return tab, row.Scan(&tab.Path, &tab.Group, &tab.Space, &tab.Search)
 	}, username)
 	if err != nil {
 		return TabState{}, 0, err
@@ -483,7 +482,6 @@ WHERE web_tab_states.revision = $3`, username, state.Space, revision, lastSpaces
 
 	var (
 		paths, conversations, groups, spaces, searches []string
-		previews                                       []bool
 		groupIDs, names, colors                        []string
 		collapsed                                      []bool
 	)
@@ -502,8 +500,7 @@ WHERE web_tab_states.revision = $3`, username, state.Space, revision, lastSpaces
 			tab.Search = pages[i].Search
 		}
 
-		paths, conversations, groups, spaces = append(paths, tab.Path), append(conversations, TabConversation(tab.Path)), append(groups, tab.Group), append(spaces, tab.Space)
-		previews, searches = append(previews, tab.Preview), append(searches, string(tab.Search))
+		paths, conversations, groups, spaces, searches = append(paths, tab.Path), append(conversations, TabConversation(tab.Path)), append(groups, tab.Group), append(spaces, tab.Space), append(searches, string(tab.Search))
 	}
 
 	for _, group := range state.Groups {
@@ -515,7 +512,7 @@ WHERE web_tab_states.revision = $3`, username, state.Space, revision, lastSpaces
 ), closed AS (
     DELETE FROM web_tabs WHERE username = $1 AND unread_at IS NULL
 )
-UPDATE web_tabs SET position = NULL, preview = FALSE, group_id = '', space = '', search = NULL
+UPDATE web_tabs SET position = NULL, group_id = '', space = '', search = NULL
 WHERE username = $1 AND unread_at IS NOT NULL`, username); err != nil {
 		return false, err
 	}
@@ -525,16 +522,16 @@ WHERE username = $1 AND unread_at IS NOT NULL`, username); err != nil {
     INSERT INTO web_tab_groups (username, id, position, name, color, collapsed)
     SELECT $1, id, n - 1, name, color, collapsed FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[]) WITH ORDINALITY AS g(id, name, color, collapsed, n)
 ), incoming AS (
-    SELECT COALESCE(`+tabPathSQL+`, t.path) AS path, c.conversation_id, t.n - 1 AS position, t.preview, t.group_id, t.space, NULLIF(t.search, '')::jsonb AS search
-    FROM unnest($6::text[], $7::text[], $8::boolean[], $9::text[], $10::text[], $11::text[]) WITH ORDINALITY AS t(path, conversation_id, preview, group_id, space, search, n)
+    SELECT COALESCE(`+tabPathSQL+`, t.path) AS path, c.conversation_id, t.n - 1 AS position, t.group_id, t.space, NULLIF(t.search, '')::jsonb AS search
+    FROM unnest($6::text[], $7::text[], $8::text[], $9::text[], $10::text[]) WITH ORDINALITY AS t(path, conversation_id, group_id, space, search, n)
     LEFT JOIN conversations c ON c.conversation_id = t.conversation_id
     WHERE t.conversation_id = '' OR c.conversation_id IS NOT NULL
 )
-INSERT INTO web_tabs (username, path, conversation_id, position, preview, group_id, space, search)
-SELECT DISTINCT ON (path) $1, path, conversation_id, position, preview, group_id, space, search FROM incoming ORDER BY path, position
+INSERT INTO web_tabs (username, path, conversation_id, position, group_id, space, search)
+SELECT DISTINCT ON (path) $1, path, conversation_id, position, group_id, space, search FROM incoming ORDER BY path, position
 ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversation_id, position = excluded.position,
-    preview = excluded.preview, group_id = excluded.group_id, space = excluded.space, search = excluded.search`,
-		username, groupIDs, names, colors, collapsed, paths, conversations, previews, groups, spaces, searches); err != nil {
+    group_id = excluded.group_id, space = excluded.space, search = excluded.search`,
+		username, groupIDs, names, colors, collapsed, paths, conversations, groups, spaces, searches); err != nil {
 		return false, err
 	}
 

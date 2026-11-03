@@ -691,13 +691,12 @@ message Space {
   string name = 2;
 }
 
-// One of a person's Web tabs: its location, preview, group, and space ids, and a Search page's content.
+// One of a person's Web tabs: its location, group, and space ids, and a Search page's content.
 message Tab {
-  reserved 2;
-  reserved "pinned";
+  reserved 2, 3;
+  reserved "pinned", "preview";
 
   string path = 1;
-  bool preview = 3;
   string group = 4;
   string space = 5;
   SearchPage search = 6;

@@ -76,7 +76,7 @@ func TestTabs(t *testing.T) {
 	// /search is the ops space's last tab, though closed. A Search page keeps its name, board style, and searches with
 	// their notify marks.
 	saved := &TabState{
-		Tabs: []*Tab{{Path: "/", Space: "main"}, {Path: "/s/YQ", Group: "g", Space: "main"}, {Path: "/s/Yg", Preview: true, Space: "ops"},
+		Tabs: []*Tab{{Path: "/", Space: "main"}, {Path: "/s/YQ", Group: "g", Space: "main"}, {Path: "/s/Yg", Space: "ops"},
 			{Path: "/search/a", Space: "ops", Search: &SearchPage{Name: "Triage", Board: "kanban", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}, {Id: "2", Name: "Mine", Query: "principal:alice", Notify: true}}, Active: "2"}}},
 		Groups: []*TabGroup{{Id: "g", Name: "Work", Color: "Blue", Collapsed: true}},
 		Space:  "main",

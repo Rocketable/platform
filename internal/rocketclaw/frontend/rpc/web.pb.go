@@ -6287,11 +6287,10 @@ func (x *Space) GetName() string {
 	return ""
 }
 
-// One of a person's Web tabs: its location, preview, group, and space ids, and a Search page's content.
+// One of a person's Web tabs: its location, group, and space ids, and a Search page's content.
 type Tab struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
-	Preview       bool                   `protobuf:"varint,3,opt,name=preview,proto3" json:"preview,omitempty"`
 	Group         string                 `protobuf:"bytes,4,opt,name=group,proto3" json:"group,omitempty"`
 	Space         string                 `protobuf:"bytes,5,opt,name=space,proto3" json:"space,omitempty"`
 	Search        *SearchPage            `protobuf:"bytes,6,opt,name=search,proto3" json:"search,omitempty"`
@@ -6334,13 +6333,6 @@ func (x *Tab) GetPath() string {
 		return x.Path
 	}
 	return ""
-}
-
-func (x *Tab) GetPreview() bool {
-	if x != nil {
-		return x.Preview
-	}
-	return false
 }
 
 func (x *Tab) GetGroup() string {
@@ -7864,13 +7856,12 @@ const file_web_proto_rawDesc = "" +
 	"transcript\"+\n" +
 	"\x05Space\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\x96\x01\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\x8b\x01\n" +
 	"\x03Tab\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
-	"\apreview\x18\x03 \x01(\bR\apreview\x12\x14\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
 	"\x05group\x18\x04 \x01(\tR\x05group\x12\x14\n" +
 	"\x05space\x18\x05 \x01(\tR\x05space\x12'\n" +
-	"\x06search\x18\x06 \x01(\v2\x0f.rpc.SearchPageR\x06searchJ\x04\b\x02\x10\x03R\x06pinned\"|\n" +
+	"\x06search\x18\x06 \x01(\v2\x0f.rpc.SearchPageR\x06searchJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x06pinnedR\apreview\"|\n" +
 	"\n" +
 	"SearchPage\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12,\n" +

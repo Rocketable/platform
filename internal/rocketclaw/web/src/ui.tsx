@@ -968,36 +968,29 @@ function arrange(tabs: Tab[]) {
   return tabs.toSorted((a, b) => rank(a) - rank(b));
 }
 
-// A tab joining a group moves after its last member, into the group's space; a tab from another space becomes permanent.
 function join(tabs: Tab[], path: string, group: string, space: string) {
   const rest = tabs.filter((tab) => tab.path !== path), tab = tabs.find((item) => item.path === path);
-  return rest.toSpliced(rest.findLastIndex((item) => item.group === group) + 1, 0, { ...tab, path, preview: tab?.space === space && tab.preview, group, space });
+  return rest.toSpliced(rest.findLastIndex((item) => item.group === group) + 1, 0, { ...tab, path, group, space });
 }
 
 // New session is one location, so the space that opens it takes its tab, out of any group.
-// Like every tab moved between spaces, it becomes permanent, so each space keeps at most one preview tab.
 function home(tabs: Tab[], space: string) {
   return tabs.some((tab) => tab.path === "/") ? tabs.map((tab) => tab.path === "/" && tab.space !== space ? { path: "/", space } : tab) : [...tabs, { path: "/", space }];
 }
 
-// An opened location replaces the current space's preview tab, or else opens right of the active tab, inside the active tab's group.
-// A permanent open leaves the preview tab alone and makes an already open tab permanent.
-// Activating any other tab enters its space, where it becomes the last active tab, and expands its group.
-// A session opens where the link points, marked unplaced until TabSettling moves it to the space it was born in.
-// A location shared in the current space opens there without a tab of this person's, even if they have one elsewhere.
-// A Search page always opens permanent, so opening one of its results never replaces it.
-function openTab(state: TabState, link: string, shared: SavedTabs["shared"], preview = true, search?: SearchPageState): TabState {
+function openTab(state: TabState, link: string, shared: SavedTabs["shared"], preview = false, search?: SearchPageState): TabState {
   const [path, target] = pageSpace(state, link);
-  preview &&= !isSearch(path);
-  if (isShared(shared, state.space, path)) return { ...state, active: path, last: { ...state.last, [state.space]: path } };
-  const open = state.tabs.find((tab) => tab.path === path), current = open && path !== "/" ? open.space! : target;
-  const slot = preview ? state.tabs.findIndex((tab) => tab.preview && tab.space === current) : -1;
+  const inShared = isShared(shared, state.space, path), open = state.tabs.find((tab) => tab.path === path);
+  const slot = preview && !open && !inShared ? state.tabs.findIndex((tab) => tab.preview) : -1;
+  if (slot < 0) state = { ...state, tabs: state.tabs.filter((tab) => !tab.preview || tab.path === path) };
+  const current = inShared ? state.space : open && path !== "/" ? open.space! : target, last = preview ? state.last : { ...state.last, [current]: path };
+  if (inShared) return { ...state, active: path, last };
   const group = state.tabs.find((tab) => tab.path === state.active && tab.space === current)?.group;
   const at = slot >= 0 ? slot : state.tabs.findIndex((tab) => tab.path === state.active) + 1 || state.tabs.length;
   const added = state.tabs.toSpliced(at, Number(slot >= 0), { path, preview, group, space: current, unplaced: pathSession(path) !== "" || undefined, search });
-  return { ...state, active: path, space: current, last: { ...state.last, [current]: path },
+  return { ...state, active: path, space: current, last,
     groups: state.groups.map((item) => item.id === open?.group && path !== state.active ? { ...item, collapsed: false } : item),
-    tabs: !open ? arrange(group && state.tabs[at]?.group !== group ? join(added, path, group, current) : added) : path === "/" ? home(state.tabs, current) : preview ? state.tabs : state.tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab) };
+    tabs: !open ? arrange(group && state.tabs[at]?.group !== group ? join(added, path, group, current) : added) : path === "/" ? home(state.tabs, current) : state.tabs };
 }
 
 // Entering a space returns to its last active tab, which may be a Shared one, else its first tab, else New session.
@@ -1006,14 +999,11 @@ function entry(state: Pick<TabState, "tabs" | "last">, space: string, shared: Sa
   return there.some((tab) => tab.path === last) || isShared(shared, space, last) ? last : there[0]?.path ?? "/";
 }
 
-// Leaving deleted space doomed moves its tabs, made permanent, and their groups to the first remaining space, as the server
-// does its Shared tabs.
 function leave(state: TabState, doomed: string, spaces: Space[]): TabState {
-  return { ...state, spaces, space: spaces[0].id, tabs: state.tabs.map((tab) => tab.space === doomed ? permanent(tab, spaces[0].id) : tab) };
+  return { ...state, spaces, space: spaces[0].id, tabs: state.tabs.map((tab) => tab.space === doomed ? relocate(tab, spaces[0].id) : tab) };
 }
 
-// A tab moved to space as a permanent tab keeps everything else it holds.
-const permanent = ({ preview: _preview, unplaced: _unplaced, ...tab }: Tab, space: string): Tab => ({ ...tab, space });
+const relocate = ({ preview: _preview, unplaced: _unplaced, ...tab }: Tab, space: string): Tab => ({ ...tab, space });
 
 // The server's saved tabs; tabs left in a lost space or group belong to the first space and no group, and a lost group's
 // placeholder goes.
@@ -1027,7 +1017,6 @@ function savedTabs(owner?: string, saved?: Pick<SavedTabs, "spaces" | "state">):
 // A space chosen on another server's branch of the space tree, or a Top Shelf tab's, which its first load enters.
 let arriving = "";
 
-// The URL is the active tab, so a reload keeps it and any other URL not shared in the space opens as a permanent tab.
 function loadTabs(path: string, owner?: string, saved?: SavedTabs, shared: SavedTabs["shared"] = []): TabState {
   const state = savedTabs(owner, saved);
   // Only the load with the server's saved tabs knows the spaces, so it alone enters, and clears, the arriving space.
@@ -1038,11 +1027,10 @@ function loadTabs(path: string, owner?: string, saved?: SavedTabs, shared: Saved
   return openTab({ ...state, tabs, active: link }, link, shared);
 }
 
-// The saved form drops groups without members, except "shared", which holds whether this person collapsed Shared.
-const savedState = (state: TabState): SavedTabs["state"] => ({
-  tabs: state.tabs.map(({ path, preview, group, space, search }) => ({ path, preview, group, space, search })), groups: state.groups.filter((group) => group.id === "shared" || state.tabs.some((tab) => tab.group === group.id)),
-  space: state.space, last: state.last, sharedOrder: state.sharedOrder,
-});
+const savedState = (state: TabState): SavedTabs["state"] => {
+  const tabs = state.tabs.flatMap(({ path, preview, group, space, search }) => preview ? [] : [{ path, group, space, search }]);
+  return { tabs, groups: state.groups.filter((group) => group.id === "shared" || tabs.some((tab) => tab.group === group.id)), space: state.space, last: state.last, sharedOrder: state.sharedOrder };
+};
 
 const noShared: SavedTabs["shared"] = [], noMutes: SavedTabs["mutes"] = [], noShelf: TopShelf = {}, noRows: Session[] = [];
 type ShelfTab = NonNullable<TopShelf["tabs"]>[number];
@@ -1116,7 +1104,7 @@ function mergeList<T>(base: T[], local: T[], server: T[], key: (item: T) => stri
 function mergeTabs(base: SavedTabs["state"], local: SavedTabs["state"], server: SavedTabs["state"]): SavedTabs["state"] {
   const shared = (list: SavedTabs["state"]["tabs"], other: SavedTabs["state"]["tabs"]) => list.flatMap((tab) => other.some((item) => item.path === tab.path) ? [tab.path] : []).join("\n");
   return {
-    tabs: mergeList(base.tabs, local.tabs, server.tabs, (tab) => tab.path, (tab) => [tab.path, !!tab.preview, tab.group ?? "", tab.space ?? "", JSON.stringify(tab.search ?? null)].join("\n"), shared(local.tabs, base.tabs) !== shared(base.tabs, local.tabs) || shared(server.tabs, base.tabs) === shared(base.tabs, server.tabs)),
+    tabs: mergeList(base.tabs, local.tabs, server.tabs, (tab) => tab.path, (tab) => [tab.path, tab.group ?? "", tab.space ?? "", JSON.stringify(tab.search ?? null)].join("\n"), shared(local.tabs, base.tabs) !== shared(base.tabs, local.tabs) || shared(server.tabs, base.tabs) === shared(base.tabs, server.tabs)),
     groups: mergeList(base.groups, local.groups, server.groups, (group) => group.id, (group) => [group.id, group.name, group.color, !!group.collapsed].join("\n"), false),
     space: local.space !== base.space ? local.space : server.space,
     sharedOrder: JSON.stringify(local.sharedOrder) !== JSON.stringify(base.sharedOrder) ? local.sharedOrder : server.sharedOrder,
@@ -1182,19 +1170,23 @@ function useTabs() {
       return;
     }
     [queue.base, queue.revision] = [saved.data.state, revision];
-    const next = savedTabs(owner, { spaces: saved.data.spaces, state: mergeTabs(base!, savedState(state), saved.data.state) }), open = inShared ? { space: state.space } : next.tabs.find((tab) => tab.path === state.active);
-    const merged = { ...next, tabs: next.tabs.map((tab) => ({ ...tab, unplaced: state.tabs.find((item) => item.path === tab.path)?.unplaced })), active: state.active, space: open?.space ?? (next.spaces.some((item) => item.id === state.space) ? state.space : next.spaces[0].id) };
+    const next = savedTabs(owner, { spaces: saved.data.spaces, state: mergeTabs(base!, savedState(state), saved.data.state) }), preview = state.tabs.find((tab) => tab.preview);
+    const placed: Tab[] = next.tabs.map((tab) => ({ ...tab, unplaced: state.tabs.find((item) => item.path === tab.path)?.unplaced }));
+    const tabs = preview && !placed.some((tab) => tab.path === preview.path) && next.spaces.some((item) => item.id === preview.space) ? arrange(placed.toSpliced(state.tabs.indexOf(preview), 0, preview)) : placed;
+    const open = inShared ? { space: state.space } : tabs.find((tab) => tab.path === state.active);
+    const merged = { ...next, tabs, active: state.active, space: open?.space ?? (next.spaces.some((item) => item.id === state.space) ? state.space : next.spaces[0].id) };
     queue.applied = queue.dirty ? undefined : merged;
     setState(merged);
     if (!open) navigate(entry(merged, merged.space, reach));
   }, [saved.data, saved.dataUpdatedAt, owner, state, pathname, reach, shelf]);
-  // Each change saves the whole state, made from the saved revision, one save at a time, the newest waiting change next.
-  // A failed save is not undone: the next change or reload saves it again. A save refused because another window saved
-  // first answers with that newer state, which the reload above merges in and saves again.
+  // Each change to the saved form saves the whole state, made from the saved revision, one save at a time, the newest
+  // waiting change next. A failed save is not undone: the next change or reload saves it again. A save refused because
+  // another window saved first answers with that newer state, which the reload above merges in and saves again.
   const flush = () => {
     const queue = sync.current, sent = savedState(queue.next!);
-    queue.saving = true;
     queue.next = undefined;
+    if (JSON.stringify(sent) === JSON.stringify(queue.base)) return void (queue.dirty = false);
+    queue.saving = true;
     void tabsCall(queue.server, { state: sent, revision: queue.revision }).then((reply) => {
       if (reply.stale) return;
       [queue.base, queue.revision] = [sent, Number(reply.revision)];
@@ -1211,8 +1203,7 @@ function useTabs() {
     queue.next = state;
     if (!queue.saving) flush();
   }, [state]);
-  // Moving a tab makes it permanent and takes it out of its group; moving the active tab follows it to its new space.
-  const moveTo = (paths: Set<string>, space: string) => setState((current) => openTab({ ...current, tabs: current.tabs.map((tab) => paths.has(tab.path) ? { ...permanent(tab, space), group: undefined } : tab) }, current.active, reach));
+  const moveTo = (paths: Set<string>, space: string) => setState((current) => openTab({ ...current, tabs: current.tabs.map((tab) => paths.has(tab.path) ? { ...relocate(tab, space), group: undefined } : tab) }, current.active, reach));
   // An unplaced session moves to the space it was born in once its row names it; an unknown new space is fetched first.
   // A background window holds stale tabs, so it waits until it is focused and has reloaded.
   const settle = (rows: Session[]) => {
@@ -1260,11 +1251,10 @@ function useTabs() {
     queryClient.setQueriesData<SavedTabs>({ queryKey: [{ server: name }, "tabs"] }, (old) => old && { ...old, shared: reply.shared });
     if (theirs) saveShared(space, path, theirs, rebase(base, page, theirs));
   } });
-  // The tab is opened with the navigation, in one render, so the URL never shows it as a preview first.
-  const open = (path: string, query = "", space?: string, list = reach, search?: SearchPageState) => flushSync(() => { setState((current) => openTab(space ? { ...current, space } : current, path, list, false, search)); navigate(path + query); });
+  const open = (path: string, query = "", space?: string, preview = false, list = reach, search?: SearchPageState) => flushSync(() => { setState((current) => openTab(space ? { ...current, space } : current, path, list, preview, search)); navigate(path + query, preview); });
   const addSearch = (page: SearchPageState, inShared: boolean) => {
     const path = freshSearch(), id = (i: number) => `${path.slice("/search/".length)}-${i}`, search = { ...page, searches: page.searches.map((item, i) => ({ ...item, id: id(i) })), active: id(page.searches.findIndex((item) => item.id === page.active)) };
-    return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, reply.shared) }) : open(path, "", undefined, reach, search);
+    return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, false, reply.shared) }) : open(path, "", undefined, false, reach, search);
   };
   return {
     state, strip, shown, groups, here, shared, mutes, pathname, close, enter, edit, editor, setEditor, settle, snoozing, setSnoozing, mute, open, addSearch, pending: spaceChange.isPending,
@@ -1288,7 +1278,6 @@ function useTabs() {
       const doomed = state.space, reply = await spaceChange.mutateAsync({ deleteSpace: doomed });
       setState((current) => openTab(leave(current, doomed, reply.spaces), current.active, [...reply.shared, ...shelved(reply.spaces, reply.spaces[0].id)]));
     },
-    promote: (path: string) => { if (state.tabs.some((tab) => tab.path === path && tab.preview)) update((tabs) => tabs.map((tab) => tab.path === path ? { ...tab, preview: false } : tab)); },
     // Cmd/Ctrl+[ and ], and their palette commands, step through this space's Shared rows, then its tabs, each tab once,
     // wrapping.
     step: (back: boolean) => {
@@ -1374,8 +1363,7 @@ function useTabs() {
         : { key: "keep", label: "Keep group when empty", run: () => update((tabs) => join(tabs, keeper(id), id, state.space)) },
       { key: "ungroup", label: "Ungroup", run: () => regroup((tab) => tab.group === id && !isKeeper(tab)) },
       { key: "close", label: "Close group", run: () => close(state.tabs.flatMap((tab) => tab.group === id ? [tab.path] : [])) },
-      // A group moves whole, keeping its name, color, and collapsed state; its tabs become permanent, and the active tab follows.
-      ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move group to "${space.name}"`, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? permanent(tab, space.id) : tab) }, state.active, reach)) })),
+      ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move group to "${space.name}"`, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? relocate(tab, space.id) : tab) }, state.active, reach)) })),
     ],
   };
 }
@@ -1507,7 +1495,7 @@ function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { pat
 
 function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat: () => void }) {
   const { rows } = useContext(Sidebar);
-  const { state, strip, shown, groups, pathname, close, promote, move, moveGroup, commands, edit, editor, setEditor, groupCommands, newInGroup } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
+  const { state, strip, shown, groups, pathname, close, move, moveGroup, commands, edit, editor, setEditor, groupCommands, newInGroup } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
   const [menu, setMenu] = useState<{ path: string; anchor: MenuAnchor; shared?: boolean; shelf?: ShelfTab }>();
   const [editing, setEditing] = useState<string>();
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
@@ -1603,7 +1591,7 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
               <span className="flex items-center gap-1.5 py-2 pr-3 pl-3"><SquarePen aria-hidden="true" className="size-4 shrink-0" />New session</span>
             </button>
           // A collapsed group still shows its active tab.
-          : group?.collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} description={[chosen && "In selection", `${group ? `Group ${groupName(group)}, ` : ""}Space: ${space}`].filter(Boolean).join(", ")} chosen={chosen} rule={group?.color} active={tab.path === pathname} stop={tab.path === stop} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />,
+          : group?.collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} description={[chosen && "In selection", `${group ? `Group ${groupName(group)}, ` : ""}Space: ${space}`].filter(Boolean).join(", ")} chosen={chosen} rule={group?.color} active={tab.path === pathname} stop={tab.path === stop} editing={tab.path === editing} endEdit={() => setEditing(undefined)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />,
         ];
       })}
     </div>
@@ -1639,7 +1627,7 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
 // Shared shows the space's Shared tabs, the same for everyone, in this person's order, above their tabs, and hides while
 // it has none. It is a list of its own, so the handlers of theirs never act on a Shared row; only its menu changes it for
 // everyone, and dragging a row onto another or Shift+Arrow reorders it for this person alone.
-function SharedTabs({ tabs: { state, here, shared, pathname, promote, toggleShared, moveShared }, space, editing, endEdit, openMenu }: { tabs: ReturnType<typeof useTabs>; space?: string; editing?: string; endEdit: () => void; openMenu: (path: string, anchor: MenuAnchor) => void }) {
+function SharedTabs({ tabs: { state, here, shared, pathname, toggleShared, moveShared }, space, editing, endEdit, openMenu }: { tabs: ReturnType<typeof useTabs>; space?: string; editing?: string; endEdit: () => void; openMenu: (path: string, anchor: MenuAnchor) => void }) {
   const collapsed = state.groups.some((group) => group.id === "shared" && group.collapsed), stop = here.includes(pathname) ? pathname : here[0];
   // Like a collapsed group, collapsed Shared goes bold while any of its tabs is unread for this person, and says it
   // needs you while any of their sessions waits on this person.
@@ -1660,7 +1648,7 @@ function SharedTabs({ tabs: { state, here, shared, pathname, promote, toggleShar
         // Only Shared rows drop here, and nowhere else.
         onDragOver={(event) => { if (event.dataTransfer.types.includes(sharedDrag)) event.preventDefault(); }}
         onDrop={(event) => { const to = pathOf(event); if (to) moveShared(event.dataTransfer.getData(sharedDrag), to); }}>
-        {here.map((path) => collapsed && path !== pathname ? null : <TabItem key={path} tab={{ path, search: sharedTab(shared, state.space, path)?.search }} shared description={`Shared, Space: ${space}`} chosen={false} rule="Grey" active={path === pathname} stop={path === stop} editing={editing === `shared:${path}`} endEdit={endEdit} promote={() => promote(path)} close={inert} openMenu={(anchor) => openMenu(path, anchor)} />)}
+        {here.map((path) => collapsed && path !== pathname ? null : <TabItem key={path} tab={{ path, search: sharedTab(shared, state.space, path)?.search }} shared description={`Shared, Space: ${space}`} chosen={false} rule="Grey" active={path === pathname} stop={path === stop} editing={editing === `shared:${path}`} endEdit={endEdit} close={inert} openMenu={(anchor) => openMenu(path, anchor)} />)}
       </div>
     </div>
     <div className="mx-2.5 mt-1 h-px shrink-0 bg-border" />
@@ -1718,7 +1706,7 @@ function TopShelfTabs({ tabs, openMenu }: { tabs: ReturnType<typeof useTabs>; op
           else if (path) tabs.commands(path, sidebar.rows).find((item) => item.key === "shelve")?.run();
         }}>
         {list.map((tab, index) => shelf.collapsed && !active(tab) ? null : <div key={`${tab.server} ${tab.path}`} data-shelf={index}>
-          <ShelfRow tab={tab} rows={rows(tab)} description={`Top Shelf, ${whence(tab)}`} detail={whence(tab)} chosen={false} rule="Yellow" active={active(tab)} stop={active(tab) || (index === 0 && !list.some(active))} editing={false} endEdit={inert} promote={inert} close={() => unshelve(tab)} openMenu={(anchor) => openMenu(tab, anchor)} />
+          <ShelfRow tab={tab} rows={rows(tab)} description={`Top Shelf, ${whence(tab)}`} detail={whence(tab)} chosen={false} rule="Yellow" active={active(tab)} stop={active(tab) || (index === 0 && !list.some(active))} editing={false} endEdit={inert} close={() => unshelve(tab)} openMenu={(anchor) => openMenu(tab, anchor)} />
         </div>)}
       </div>
     </div>
@@ -1789,7 +1777,7 @@ function tabActivity(session: Session) {
 }
 
 // A detail line, such as a Top Shelf tab's server and space, sits under the title inside the tab, so the row's highlight covers both.
-function TabItem({ tab, description, detail, chosen, rule, active, stop, shared, editing, endEdit, promote, close, openMenu }: { tab: Tab; description: string; detail?: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; editing: boolean; endEdit: () => void; promote: () => void; close: () => void; openMenu: (anchor: MenuAnchor) => void }) {
+function TabItem({ tab, description, detail, chosen, rule, active, stop, shared, editing, endEdit, close, openMenu }: { tab: Tab; description: string; detail?: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; editing: boolean; endEdit: () => void; close: () => void; openMenu: (anchor: MenuAnchor) => void }) {
   const sidebar = useContext(Sidebar);
   const id = pathSession(tab.path);
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
@@ -1804,7 +1792,7 @@ function TabItem({ tab, description, detail, chosen, rule, active, stop, shared,
     {rule && <span className={cn("pointer-events-none my-1.5 ml-1 w-0.5 shrink-0 self-stretch", groupColors[rule])} />}
     <Tooltip disabled={editing}><TooltipTrigger delay={500} render={<div className="flex min-w-0 flex-1" />}>
       <div ref={ref} role="tab" aria-selected={active} aria-label={title} aria-description={[description, activity, quiet].filter(Boolean).join(", ")} tabIndex={stop ? 0 : -1} className={cn("flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 py-2 pr-1 pl-3 text-sm [:last-child>&]:pr-3 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring aria-[selected=false]:text-muted-foreground", tab.preview && "italic")}
-        onClick={() => { if (!active) navigate(tab.path); }} onDoubleClick={promote}>
+        onClick={() => { if (!active) navigate(tab.path); }}>
         <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0 self-start" />
         <span className="flex min-w-0 flex-1 flex-col"><span className="flex min-w-0 items-center gap-1.5">
           {editing ? <TabRename session={session} tab={tab} shared={shared} placeholder={title} endEdit={endEdit} /> : <><span className="truncate group-data-[unread=true]:font-bold group-data-[asking=true]:font-semibold group-data-[asking=true]:text-amber-600 dark:group-data-[asking=true]:text-amber-300 motion-safe:group-data-[running=true]:shimmer motion-reduce:group-data-[running=true]:shimmer-still dark:in-aria-selected:shimmer-color-foreground/40">{title}</span>{session.asking ? needsYou : null}</>}
@@ -2372,9 +2360,6 @@ function usePalettePage<T extends { key: string }>(items: T[], pick: string, key
 function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode }: { drafts: Map<string, ComposerDraft>; mode: PaletteMode | undefined; setMode: (mode: PaletteMode | undefined) => void; newChat: () => void; keyCommands: { key: string; label: string; run: () => void }[]; opencode?: string }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
-  // Arrowing onto a session shows it in the preview tab. The palette remounts per opening and keeps acting on the
-  // location it opened at, returning there when dismissed and before running a choice. Typing, or pressing a
-  // command, returns there first, so commands render, and run, with that location's state.
   const at = () => pagePath() + location.search + location.hash;
   const tabs = useContext(TabActions);
   const [origin] = useState(() => ({ path: pagePath(), href: at(), space: tabs.state.spaces.find((space) => space.id === tabs.state.space)! }));
@@ -2384,8 +2369,8 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   const peek = (session?: Session) => {
     const path = session ? rowPath(session) : "", tab = tabs.state.tabs.find((item) => item.path === path);
     const here = session && (session.rocketclaw ?? "") === server() && (tab ? tab.space === tabs.state.space : !session.spaceId || session.spaceId === tabs.state.space);
-    const target = here ? path : origin.href;
-    if (target !== at()) navigate(target, true);
+    if (!here) back();
+    else if (path !== at()) tabs.open(path, "", undefined, true);
   };
   const tabCommands = tabs.commands(origin.path, sidebar.rows).map((item) => ({ ...item, key: `tab-${item.key}`, label: `Tabs: ${item.label}` }));
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
@@ -4656,7 +4641,6 @@ function SessionComposer({
 }) {
   const identity = useQuery(queries.identity());
   const { setCommand } = useContext(SessionCommands);
-  const { promote } = useContext(TabActions);
   const scope = useContext(DraftScope)!;
   const revert = useContext(RevertActions)!;
   const { scrollToEnd, scrollToMessage } = useMessageScroller();
@@ -4682,14 +4666,12 @@ function SessionComposer({
   });
   const [, setTyped] = useState(0);
   // Typing redraws only this composer; a whole-app redraw per keystroke made long chats lag.
-  // A draft or a send keeps the preview tab.
   const setText = (value: string) => {
     draft.text = value;
     draft.edit++;
     setTyped((count) => count + 1);
     const error = draft.persistenceError ?? "";
     void persistComposerDraft(draft)?.finally(() => { if (draft.persistenceError !== error) onDraftChange(); });
-    promote(id ? sessionPath(id) : "/");
   };
   const setFiles = (value: PendingFile[]) => { draft.files = value; draft.edit++; onDraftChange(); };
   const setAgent = (value: string) => { draft.agent = value; draft.edit++; onDraftChange(); };
@@ -4729,7 +4711,6 @@ function SessionComposer({
     let sessionId = draft.sessionId;
     try {
       if (sessionId === "") {
-        promote("/");
         sessionId = await create.mutateAsync({ agent: selected });
         goSession(sessionId);
       }
@@ -4750,7 +4731,6 @@ function SessionComposer({
     // A pending question takes Send's text as its custom answer instead of queueing it behind the waiting turn.
     const answering = question.take(delivery, setText);
     if (answering) return answering;
-    promote(id ? sessionPath(id) : "/");
     return sendComposer({
       draft,
       onDraftChange,
