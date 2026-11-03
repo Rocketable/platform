@@ -474,46 +474,6 @@ func TestExecuteParseFailureDoesNotRunHost(t *testing.T) {
 	assert.Contains(t, err.Error(), "unexpected newline")
 }
 
-func TestExecuteNestedToolEmitsThinkingDiagnostic(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = root.Close() })
-	require.NoError(t, root.WriteFile("a.txt", []byte("hello"), 0o600))
-
-	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("read", "*"))
-
-	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, nil)}
-	agent := &Agent{Permission: permissions}
-	model, hosts := factory.assembleTools(agent)
-
-	output := make(chan ChatResponse, 8)
-	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
-	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: output, callID: ""})
-
-	run := model[executeToolName]
-	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return read(filePath=\"a.txt\")\n"}`), output, emptyToolCallMetadata())
-	require.NoError(t, err)
-	assert.Contains(t, result.Output, "hello")
-	close(output)
-
-	var sawNested bool
-
-	for item := range output {
-		if item.Tool != nil && item.Tool.Phase == toolDiagnosticPhaseCall && item.Tool.Name == executeNestedToolPrefix+"read" {
-			sawNested = true
-
-			assert.Contains(t, string(item.Tool.Arguments), "a.txt")
-		}
-	}
-
-	assert.True(t, sawNested, "expected nested execute → read diagnostic")
-}
-
 func TestExecuteNestedConcurrencyPrefixesThinkingDiagnostic(t *testing.T) {
 	t.Parallel()
 
@@ -555,45 +515,6 @@ func TestExecuteNestedConcurrencyPrefixesThinkingDiagnostic(t *testing.T) {
 	}, names)
 }
 
-func TestExecuteNestedSearchEmitsThinkingDiagnostic(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = root.Close() })
-
-	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("read", "*"))
-
-	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, nil)}
-	agent := &Agent{Permission: permissions}
-	model, hosts := factory.assembleTools(agent)
-
-	output := make(chan ChatResponse, 8)
-	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
-	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: output, callID: ""})
-
-	run := model[executeToolName]
-	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return search(query=\"context7\")\n"}`), output, emptyToolCallMetadata())
-	require.NoError(t, err)
-	assert.Contains(t, result.Output, "items")
-	close(output)
-
-	var sawNested bool
-
-	for item := range output {
-		if item.Tool != nil && item.Tool.Phase == toolDiagnosticPhaseCall && item.Tool.Name == executeNestedToolPrefix+"search" {
-			sawNested = true
-
-			assert.Contains(t, string(item.Tool.Arguments), "context7")
-		}
-	}
-
-	assert.True(t, sawNested, "expected nested execute → search diagnostic")
-}
-
 func TestExecuteNestedToolDiagnosticNotDroppedWhenOutputFull(t *testing.T) {
 	t.Parallel()
 
@@ -618,26 +539,30 @@ func TestExecuteNestedToolDiagnosticNotDroppedWhenOutputFull(t *testing.T) {
 
 	done := make(chan struct{})
 
-	var nestedName string
+	var nested []ToolDiagnostic
 
 	go func() {
 		defer close(done)
 
 		for item := range output {
-			if item.Tool != nil && item.Tool.Name == executeNestedToolPrefix+"read" {
-				nestedName = item.Tool.Name
-				return
+			if item.Tool != nil && item.Tool.Phase == toolDiagnosticPhaseCall {
+				nested = append(nested, *item.Tool)
 			}
 		}
 	}()
 
 	run := model[executeToolName]
-	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return read(filePath=\"a.txt\")\n"}`), output, emptyToolCallMetadata())
+	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return [read(filePath=\"a.txt\"), search(query=\"context7\")]\n"}`), output, emptyToolCallMetadata())
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "hello")
+	assert.Contains(t, result.Output, "items")
 	close(output)
 	<-done
-	assert.Equal(t, executeNestedToolPrefix+"read", nestedName)
+	require.Len(t, nested, 2)
+	assert.Equal(t, executeNestedToolPrefix+"read", nested[0].Name)
+	assert.Contains(t, string(nested[0].Arguments), "a.txt")
+	assert.Equal(t, executeNestedToolPrefix+"search", nested[1].Name)
+	assert.Contains(t, string(nested[1].Arguments), "context7")
 }
 
 func TestMCPServerVisibility(t *testing.T) {
