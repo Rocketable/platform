@@ -3601,10 +3601,9 @@ func reviewOriginHeader(origin *protocol.InboundMessage) string {
 		provenance.origin = "Cron"
 	}
 
-	provenance.principal = cmp.Or(origin.Metadata[protocol.InboundPrincipalNameMetadataKey], provenance.principal)
-	if email := strings.TrimSpace(origin.Metadata[protocol.InboundPrincipalEmailMetadataKey]); email != "" {
-		provenance.principal = strings.TrimSpace(provenance.principal + " <" + email + ">")
-	}
+	// The person is named exactly as the transcript names them: a reviewer told to trust only this header reads
+	// any other spelling, even one with the email added, as someone else claiming to be them.
+	provenance.principal = cmp.Or(provenance.principal, origin.Metadata[protocol.InboundPrincipalNameMetadataKey])
 
 	if agent := origin.Metadata[protocol.InboundSenderAgentMetadataKey]; agent != "" {
 		provenance.sender = "agent " + agent
