@@ -537,171 +537,174 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
-	target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
-	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: discardPublisher{}, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: true, requestCh: make(chan bridgeRequest, 2)}
-	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{conversationID: bridge}}
-	active := &turnCompletion{done: make(chan struct{})}
-	bridge.activeCompletion = active
-
-	for _, text := range []string{"first", "drop", "last"} {
-		inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, &protocol.InboundContent{Text: text, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
-		inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: text + " author"}
-		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: text}
-		require.NoError(t, bridge.Submit(t.Context(), inbound))
-	}
-
-	items, err := manager.queueItems(conversationID)
-	require.NoError(t, err)
-	require.Len(t, items, 3)
-
-	for i, text := range []string{"first", "drop", "last"} {
-		require.NotEmpty(t, items[i].ID)
-		require.Equal(t, protocol.InboundKindSteer, items[i].Kind)
-		require.Equal(t, text, items[i].Message)
-		require.Equal(t, text+" author", items[i].Principal)
-		require.Equal(t, target.ChannelID, items[i].SlackChannel)
-		require.Equal(t, text, items[i].SlackTS)
-	}
-
-	dropped := bridge.steers[1].completion
-	removed, err := manager.deleteQueueItem(t.Context(), conversationID, items[1].ID)
-	require.NoError(t, err)
-	require.True(t, removed)
-	require.ErrorIs(t, dropped.err, context.Canceled)
-
-	select {
-	case <-dropped.done:
-	default:
-		t.Fatal("dropped request still waiting for completion")
-	}
-
-	select {
-	case <-active.done:
-		t.Fatal("dropping a waiting steer ended the active turn")
-	default:
-	}
-
-	inputs := testDrainInputs(t, bridge, harness.TurnPhaseToolLoop)
-	require.Len(t, inputs, 2)
-
-	for i, text := range []string{"first", "last"} {
-		require.Contains(t, inputs[i].Texts[0], text+" author")
-		require.Equal(t, []harness.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"Zmlyc3Q=", "bGFzdA=="}[i]}}, inputs[i].Attachments)
-	}
-
-	itemsAfter, err := manager.queueItems(conversationID)
-	require.NoError(t, err)
-	require.Empty(t, itemsAfter)
-
-	for _, item := range items {
-		removed, err := manager.deleteQueueItem(t.Context(), conversationID, item.ID)
-		require.NoError(t, err)
-		require.False(t, removed, "consumed or dropped steer cannot be dropped again")
-	}
-
-	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
-
-	content := protocol.InboundContent{Text: "$skill stop \"typed args\"  Next", TextAttachments: []string{"acquired text file", "acquired forwarded thread"}, Attachments: []protocol.InboundAttachment{{Name: "original.png", MIMEType: "image/png", Data: []byte("original")}}}
-	queued := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &content, true)
-	queued.Metadata[protocol.InboundPrincipalMetadataKey] = "original author"
-	queued.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: "promoted"}
-	require.NoError(t, manager.stashQueueItem(t.Context(), conversationID, &protocol.ThreadQueueItem{ID: "q1", Message: content.Text, Content: content, Source: queued.Source, SlackReply: queued.SlackReply, Principal: "original author", SlackChannel: target.ChannelID, SlackTS: "promoted"}))
-
-	var (
-		promotions [2]bool
-		group      errgroup.Group
-	)
-	for i := range promotions {
-		group.Go(func() error {
-			var err error
-
-			promotions[i], err = manager.promoteQueueItem(t.Context(), conversationID, "q1")
-
-			return err
-		})
-	}
-
-	require.NoError(t, group.Wait())
-	require.NotEqual(t, promotions[0], promotions[1], "only one competing promotion may claim the enqueue")
-
-	itemsAfter, err = manager.queueItems(conversationID)
-	require.NoError(t, err)
-	require.Len(t, itemsAfter, 1)
-	require.Equal(t, protocol.InboundKindSteer, itemsAfter[0].Kind)
-	require.Equal(t, "original author", itemsAfter[0].Principal)
-
-	promoted := bridge.steers[bridge.steersRead].inbound
-	require.Equal(t, queued.Source, promoted.Source)
-	require.Equal(t, queued.Text, promoted.Text)
-	require.Equal(t, queued.SlackReply, promoted.SlackReply)
-	inputs = testDrainInputs(t, bridge, harness.TurnPhaseToolLoop)
-	require.Len(t, inputs, 1)
-	require.Equal(t, &harness.PromptInputDirectSkill{Name: "stop", Arguments: "\"typed args\"  Next"}, inputs[0].DirectSkill)
-	require.Contains(t, inputs[0].Texts[0], "original author")
-	require.Contains(t, inputs[0].Texts[0], "acquired text file\n\nacquired forwarded thread")
-	require.Equal(t, []harness.Attachment{{MIME: "image/png", Filename: "original.png", URL: "data:image/png;base64,b3JpZ2luYWw="}}, inputs[0].Attachments)
-	_, claimed, err := (stateDAO{db: store.db}).claimThreadQueueItem(t.Context(), conversationID, "q1")
-	require.NoError(t, err)
-	require.False(t, claimed, "normal consumption cannot claim the promoted enqueue")
+	// Database connections opened outside the bubble crash the test binary when used in it.
 	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		bridge.requestCh = make(chan bridgeRequest, 1)
-		bridge.stopCh = make(chan struct{})
-		bridge.log = slog.New(slog.DiscardHandler)
-		require.NoError(t, bridge.submitEnqueuedItem(ctx, &protocol.ThreadQueueItem{ID: "q1", Message: "stale queue snapshot"}))
+		store := newTestSessionService(t)
+		target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
+		conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
+		bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: discardPublisher{}, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: true, requestCh: make(chan bridgeRequest, 2)}
+		manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{conversationID: bridge}}
+		active := &turnCompletion{done: make(chan struct{})}
+		bridge.activeCompletion = active
 
-		var group errgroup.Group
-		group.Go(func() error {
-			bridge.loop(ctx)
-			return nil
-		})
-		synctest.Wait()
-		require.Empty(t, bridge.requestCh)
-		require.True(t, bridge.inputOpen, "stale queue consumption must not start or end a turn")
-		cancel()
-		require.NoError(t, group.Wait())
-	})
-
-	for _, inputOpen := range []bool{true, false} {
-		bridge = &Bridge{log: slog.New(slog.DiscardHandler), bus: discardPublisher{}, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: inputOpen, requestCh: make(chan bridgeRequest, 1)}
-
-		manager.bridges[conversationID] = bridge
-		for _, id := range []string{"before", "attachment", "after"} {
-			require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Source: protocol.SourceWeb, Principal: "goal_continuation", Content: protocol.InboundContent{TextAttachments: []string{"$docs-helper attachment-only"}}}))
+		for _, text := range []string{"first", "drop", "last"} {
+			inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindSteer, &protocol.InboundContent{Text: text, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
+			inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: text + " author"}
+			inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: text}
+			require.NoError(t, bridge.Submit(t.Context(), inbound))
 		}
 
-		promoted, err := manager.promoteQueueItem(t.Context(), conversationID, "attachment")
+		items, err := manager.queueItems(conversationID)
 		require.NoError(t, err)
-		require.True(t, promoted)
+		require.Len(t, items, 3)
 
-		if inputOpen {
-			inputs := testDrainInputs(t, bridge, harness.TurnPhaseToolLoop)
-			require.Len(t, inputs, 1)
-			require.Nil(t, inputs[0].DirectSkill)
-			require.Contains(t, inputs[0].Texts[0], "goal_continuation")
-			require.Contains(t, inputs[0].Texts[0], "$docs-helper attachment-only")
-		} else {
-			inbound := (<-bridge.requestCh).inbound
-			require.Equal(t, "goal_continuation", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
-			require.Nil(t, inboundDirectSkill(inbound))
-			require.Empty(t, inbound.Metadata[protocol.InboundRawTextMetadataKey])
-			require.Contains(t, inbound.Text, "$docs-helper attachment-only")
+		for i, text := range []string{"first", "drop", "last"} {
+			require.NotEmpty(t, items[i].ID)
+			require.Equal(t, protocol.InboundKindSteer, items[i].Kind)
+			require.Equal(t, text, items[i].Message)
+			require.Equal(t, text+" author", items[i].Principal)
+			require.Equal(t, target.ChannelID, items[i].SlackChannel)
+			require.Equal(t, text, items[i].SlackTS)
 		}
 
-		remaining, err := store.ThreadQueueForConversation(conversationID)
+		dropped := bridge.steers[1].completion
+		removed, err := manager.deleteQueueItem(t.Context(), conversationID, items[1].ID)
 		require.NoError(t, err)
-		require.Len(t, remaining, 2)
-		require.Equal(t, "before", remaining[0].ID)
-		require.Equal(t, "after", remaining[1].ID)
+		require.True(t, removed)
+		require.ErrorIs(t, dropped.err, context.Canceled)
 
-		for _, item := range remaining {
+		select {
+		case <-dropped.done:
+		default:
+			t.Fatal("dropped request still waiting for completion")
+		}
+
+		select {
+		case <-active.done:
+			t.Fatal("dropping a waiting steer ended the active turn")
+		default:
+		}
+
+		inputs := testDrainInputs(t, bridge, harness.TurnPhaseToolLoop)
+		require.Len(t, inputs, 2)
+
+		for i, text := range []string{"first", "last"} {
+			require.Contains(t, inputs[i].Texts[0], text+" author")
+			require.Equal(t, []harness.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"Zmlyc3Q=", "bGFzdA=="}[i]}}, inputs[i].Attachments)
+		}
+
+		itemsAfter, err := manager.queueItems(conversationID)
+		require.NoError(t, err)
+		require.Empty(t, itemsAfter)
+
+		for _, item := range items {
 			removed, err := manager.deleteQueueItem(t.Context(), conversationID, item.ID)
 			require.NoError(t, err)
-			require.True(t, removed)
+			require.False(t, removed, "consumed or dropped steer cannot be dropped again")
 		}
-	}
+
+		require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+
+		content := protocol.InboundContent{Text: "$skill stop \"typed args\"  Next", TextAttachments: []string{"acquired text file", "acquired forwarded thread"}, Attachments: []protocol.InboundAttachment{{Name: "original.png", MIMEType: "image/png", Data: []byte("original")}}}
+		queued := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindEnqueue, &content, true)
+		queued.Metadata[protocol.InboundPrincipalMetadataKey] = "original author"
+		queued.SlackReply = &protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID, MessageTS: "promoted"}
+		require.NoError(t, manager.stashQueueItem(t.Context(), conversationID, &protocol.ThreadQueueItem{ID: "q1", Message: content.Text, Content: content, Source: queued.Source, SlackReply: queued.SlackReply, Principal: "original author", SlackChannel: target.ChannelID, SlackTS: "promoted"}))
+
+		var (
+			promotions [2]bool
+			group      errgroup.Group
+		)
+		for i := range promotions {
+			group.Go(func() error {
+				var err error
+
+				promotions[i], err = manager.promoteQueueItem(t.Context(), conversationID, "q1")
+
+				return err
+			})
+		}
+
+		require.NoError(t, group.Wait())
+		require.NotEqual(t, promotions[0], promotions[1], "only one competing promotion may claim the enqueue")
+
+		itemsAfter, err = manager.queueItems(conversationID)
+		require.NoError(t, err)
+		require.Len(t, itemsAfter, 1)
+		require.Equal(t, protocol.InboundKindSteer, itemsAfter[0].Kind)
+		require.Equal(t, "original author", itemsAfter[0].Principal)
+
+		promoted := bridge.steers[bridge.steersRead].inbound
+		require.Equal(t, queued.Source, promoted.Source)
+		require.Equal(t, queued.Text, promoted.Text)
+		require.Equal(t, queued.SlackReply, promoted.SlackReply)
+		inputs = testDrainInputs(t, bridge, harness.TurnPhaseToolLoop)
+		require.Len(t, inputs, 1)
+		require.Equal(t, &harness.PromptInputDirectSkill{Name: "stop", Arguments: "\"typed args\"  Next"}, inputs[0].DirectSkill)
+		require.Contains(t, inputs[0].Texts[0], "original author")
+		require.Contains(t, inputs[0].Texts[0], "acquired text file\n\nacquired forwarded thread")
+		require.Equal(t, []harness.Attachment{{MIME: "image/png", Filename: "original.png", URL: "data:image/png;base64,b3JpZ2luYWw="}}, inputs[0].Attachments)
+		_, claimed, err := (stateDAO{db: store.db}).claimThreadQueueItem(t.Context(), conversationID, "q1")
+		require.NoError(t, err)
+		require.False(t, claimed, "normal consumption cannot claim the promoted enqueue")
+		{
+			ctx, cancel := context.WithCancel(t.Context())
+			bridge.requestCh = make(chan bridgeRequest, 1)
+			bridge.stopCh = make(chan struct{})
+			bridge.log = slog.New(slog.DiscardHandler)
+			require.NoError(t, bridge.submitEnqueuedItem(ctx, &protocol.ThreadQueueItem{ID: "q1", Message: "stale queue snapshot"}))
+
+			var group errgroup.Group
+			group.Go(func() error {
+				bridge.loop(ctx)
+				return nil
+			})
+			synctest.Wait()
+			require.Empty(t, bridge.requestCh)
+			require.True(t, bridge.inputOpen, "stale queue consumption must not start or end a turn")
+			cancel()
+			require.NoError(t, group.Wait())
+		}
+
+		for _, inputOpen := range []bool{true, false} {
+			bridge = &Bridge{log: slog.New(slog.DiscardHandler), bus: discardPublisher{}, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: inputOpen, requestCh: make(chan bridgeRequest, 1)}
+
+			manager.bridges[conversationID] = bridge
+			for _, id := range []string{"before", "attachment", "after"} {
+				require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ID: id, ConversationID: conversationID, Source: protocol.SourceWeb, Principal: "goal_continuation", Content: protocol.InboundContent{TextAttachments: []string{"$docs-helper attachment-only"}}}))
+			}
+
+			promoted, err := manager.promoteQueueItem(t.Context(), conversationID, "attachment")
+			require.NoError(t, err)
+			require.True(t, promoted)
+
+			if inputOpen {
+				inputs := testDrainInputs(t, bridge, harness.TurnPhaseToolLoop)
+				require.Len(t, inputs, 1)
+				require.Nil(t, inputs[0].DirectSkill)
+				require.Contains(t, inputs[0].Texts[0], "goal_continuation")
+				require.Contains(t, inputs[0].Texts[0], "$docs-helper attachment-only")
+			} else {
+				inbound := (<-bridge.requestCh).inbound
+				require.Equal(t, "goal_continuation", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+				require.Nil(t, inboundDirectSkill(inbound))
+				require.Empty(t, inbound.Metadata[protocol.InboundRawTextMetadataKey])
+				require.Contains(t, inbound.Text, "$docs-helper attachment-only")
+			}
+
+			remaining, err := store.ThreadQueueForConversation(conversationID)
+			require.NoError(t, err)
+			require.Len(t, remaining, 2)
+			require.Equal(t, "before", remaining[0].ID)
+			require.Equal(t, "after", remaining[1].ID)
+
+			for _, item := range remaining {
+				removed, err := manager.deleteQueueItem(t.Context(), conversationID, item.ID)
+				require.NoError(t, err)
+				require.True(t, removed)
+			}
+		}
+	})
 }
 
 func TestRuntimeRunTurnCancelPublishesEmptyComplete(t *testing.T) {
