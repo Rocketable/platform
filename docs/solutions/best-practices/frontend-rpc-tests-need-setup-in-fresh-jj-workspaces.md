@@ -1,7 +1,7 @@
 ---
 title: Frontend RPC Tests Need Setup in Every Fresh JJ Workspace
 date: 2026-10-29
-last_updated: 2026-10-30
+last_updated: 2026-11-03
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/frontend/rpc
 problem_type: developer_experience
@@ -16,6 +16,8 @@ applies_when:
   - Many backend and cmd tests fail at once with connection refused on the ROCKETCLAW_TEST_DATABASE_URL port
   - Starting a Docker PostgreSQL for ROCKETCLAW_TEST_DATABASE_URL that several full runs in one session will share
   - About to run make lint and go test at the same time, in parallel tool calls or in separate workers
+  - Running one RocketClaw Go package's tests on a Mac without a make target, through the rocketclaw-linux container
+  - Regenerating frontend/rpc after editing internal/rocketclaw/web/proto/web.proto on a Mac
 symptoms:
   - "bun test output in frontend/rpc says Could not resolve \"@sentry/react\" (web packages not installed)"
   - "After installing them, the same tests fail with error: Cannot find package 'undefined' from '.../internal/rocketclaw/web/src/<name>-transport.test.ts'"
@@ -50,6 +52,10 @@ tags:
   - tmpfs
   - vendor
   - make-lint
+  - colima
+  - linux-container
+  - protoc
+  - go-generate
 ---
 
 # Frontend RPC Tests Need Setup in Every Fresh JJ Workspace
@@ -113,6 +119,15 @@ Three documented limits stack up on a container that one session reuses:
 
 On the easy-mode agents run (2026-10-30), the container was started with `docker run ... postgres:18` and no other options. The first full run passed. During a worker's later runs, `/dev/shm` reached 96% and PostgreSQL failed with SQLSTATE 53100 `No space left on device`. The container was recreated with `--shm-size=1g` and `-c max_connections=300`. A later worker then reported that "the disk filled up". The container was gone, and every database package failed with `connection refused`. The Mac had 90 GiB free. Nobody checked the VM disk at the time, so treat the VM-disk explanation as the likely cause, not a measured one. Two changes stopped the failures: keeping the data directory on a 3 GB `--tmpfs`, and recreating the container before each full run. After that, every full run that did not overlap with `make lint` (next section) passed, and so did `make test`. A 3 GB tmpfs holds two full runs, not three.
 
+### On a Mac, RocketClaw's Go tests run in the Linux VM
+
+RocketClaw runs on Linux only, so `go test` and `go vet` of its packages do not build on macOS. Every `make` target in `internal/rocketclaw` re-runs itself in the `rocketclaw-linux` image on the Colima profile of the same name (`internal/rocketclaw/Makefile:5`–`20`). That covers full runs, but a quick loop on one package, such as `go test ./frontend/rpc -run TestVoice`, has no `make` target. Running the image by hand has two traps:
+
+- The image's entrypoint needs the Docker socket mount. Without `-v /var/run/docker.sock:/var/run/docker.sock`, it stops at once with `chmod: cannot access '/var/run/docker.sock'`, before any Go runs. Copy every `-v` and `-e` from the Makefile's `%:` rule.
+- The test database must run on that VM's Docker. The container runs with `--network host` on the `colima-rocketclaw-linux` VM. A PostgreSQL started by `pg_fresh` on the Mac's default Docker context lives in a different VM, so `127.0.0.1:<port>` inside the container cannot reach it. Without the URL, database tests fail with `ROCKETCLAW_TEST_DATABASE_URL is required`.
+
+Regenerating the Web protocol is the reverse case. `frontend/rpc` builds `web.pb.go` and `protocol.gen.go` from `internal/rocketclaw/web/proto/web.proto` with `protoc` (`internal/rocketclaw/frontend/rpc/server.go:3`–`4`). The `rocketclaw-linux` image has neither `protoc` nor `protoc-gen-go`, and `make generate` does not cover `frontend/rpc` (`internal/rocketclaw/Makefile:49`–`50`). So run `go generate` for it on the Mac, which only runs `protoc` and needs no RocketClaw package to build. Then diff the generated files to check that only the new fields and the hash changed. On the voice-stays-on run (2026-11-03), `go generate` and the generated-file diff both worked this way, with `protoc` from Homebrew and `protoc-gen-go` in `~/go/bin`.
+
 ### `make lint` rewrites what `go test` compiles
 
 Root `make lint` runs `make lint` in `internal/rocketclaw`. That target depends on `web-assets` (`bun install` and `bun run build`) and on `vendor` (`go mod tidy` and `go mod vendor`) (`internal/rocketclaw/Makefile:11`–`16`, `24`). `go mod vendor` deletes and rewrites `vendor/`. Some tests also run the Go toolchain while they run: `buildStdioHelper` calls `go build` (`internal/rocketclaw/mcpclient/registry_test.go:371`). So a test package that started cleanly can still break mid-run.
@@ -166,6 +181,26 @@ Source `.tmp/test-env.sh` and run `pg_fresh` before every full `go test ./...` a
 
 The container is named for this workspace on purpose. Several agent sessions on one machine run their own test containers side by side, and a URL that points at a container this workspace did not start can stop answering partway through a run. On the remote-RocketClaws run (2026-10-30), the container behind `127.0.0.1:32832` disappeared between two full runs. `docker ps -a` no longer listed it, while other sessions' containers kept running. Root `make test` then failed `internal/rocketclaw/backend`, and `go test ./...` failed many `cmd/rocketclaw` tests, all with `connection refused`, which read like a regression. Starting a workspace-owned container on the same port, with `--shm-size=1g`, made both `make test` and `go test ./...` pass again. Pick a free port, and remove the container with `docker rm -f -v "${PWD##*/}-pg"` when the workspace is done.
 
+On a Mac, add a database on the Linux VM and a runner for one package to the same file. A short port and container name are fine, because the VM's network is separate from the Mac's:
+
+```sh
+cat >> .tmp/test-env.sh <<'EOF'
+linux_docker="docker --context colima-rocketclaw-linux"
+pg_fresh_linux() {
+  $linux_docker rm -f -v "${PWD##*/}-pg" >/dev/null 2>&1
+  $linux_docker run -d --name "${PWD##*/}-pg" --network host --shm-size=1g --tmpfs /var/lib/postgresql:rw,size=3g -e POSTGRES_USER=pg -e POSTGRES_PASSWORD=pg -e POSTGRES_DB=pg postgres:18 -c port=55461 -c max_connections=300 -c fsync=off >/dev/null || return
+  until $linux_docker exec "${PWD##*/}-pg" pg_isready -U pg -h 127.0.0.1 -p 55461 >/dev/null 2>&1; do sleep 1; done
+}
+# linux_go <absolute dir> <go args…>, for example: linux_go "$PWD/internal/rocketclaw" test ./frontend/rpc -run TestVoice -count=1
+linux_go() {
+  dir=$1; shift
+  $linux_docker run --rm --privileged --network host -v "$HOME:$HOME" -w "$dir" -v /var/run/docker.sock:/var/run/docker.sock -v rocketclaw-linux-home:/home/dev -v rocketclaw-linux-sandbox:/sandbox -e SANDBOX_TEST_DIR=/sandbox -e ROCKETCLAW_TEST_DATABASE_URL="postgres://pg:pg@127.0.0.1:55461/pg?sslmode=disable" rocketclaw-linux go "$@"
+}
+EOF
+```
+
+`linux_go` runs from the repo root because it takes an absolute path. After editing `web.proto`, run `PATH="$HOME/go/bin:$PATH" go generate ./internal/rocketclaw/frontend/rpc` on the Mac, not through `linux_go`.
+
 Run `make lint` and `go test` one after the other, never at the same time. That means no parallel tool calls, no background jobs, and no worker running one while the coordinator runs the other. `make test` already runs lint and generate before its own tests.
 
 The tmpfs uses the Colima VM's memory (12 GiB on this Mac as of this writing), not its disk. Recreating the container is what frees it. `-c fsync=off` is safe because the data is thrown away anyway. `-c max_connections=300` came from the same session, but no failure showed that it was needed.
@@ -182,6 +217,9 @@ Read these messages this way:
 | SQLSTATE 53100 `No space left on device` from PostgreSQL | The container's `/dev/shm` is too small; recreate it with `pg_fresh` |
 | `dial tcp 127.0.0.1:<port>: connect: connection refused` across many database packages | The container behind `ROCKETCLAW_TEST_DATABASE_URL` is gone or full. Check `docker ps -a`. If the URL pointed at a container this workspace did not start, switch to the workspace-owned one from the setup above. If it was yours, the VM disk or the tmpfs probably filled up: check the VM with `cd ~ && colima ssh -- df -h /`, and if the container still runs, `docker exec "${PWD##*/}-pg" df -h /var/lib/postgresql`. Then run `pg_fresh` |
 | `not marked as explicit in vendor/modules.txt`, or `open ../../../vendor/...: no such file or directory` | `make lint` (or `make generate`) was rewriting `vendor/` while the tests ran; wait for it to finish and rerun |
+| `chmod: cannot access '/var/run/docker.sock'` from a hand-run `rocketclaw-linux` container | The Docker socket mount is missing; use `linux_go`, or copy the Makefile's mounts |
+| `ROCKETCLAW_TEST_DATABASE_URL is required` inside the Linux container | No database on the `colima-rocketclaw-linux` VM; run `pg_fresh_linux` and use `linux_go` |
+| `exec: "protoc": executable file not found` from `go generate` in the Linux container | The image has no `protoc`; run `go generate ./internal/rocketclaw/frontend/rpc` on the Mac |
 
 ## Why This Matters
 
