@@ -652,7 +652,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{
 		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
-		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_mutes", "web_top_shelves", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
+		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_mutes", "web_top_shelves", "web_closed_tabs", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
 	}, tables)
 }
 
@@ -2596,6 +2596,74 @@ func TestWebTabMutes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/Yw false"}, mutes("alice"), "muting again replaces a snooze; unmuting or deleting the session clears a mute")
 	assert.Equal(t, []string{"/s/YQ true"}, mutes("bob"))
+}
+
+func TestWebClosedTabs(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"a": KindWebChat, "b": KindWebChat})
+
+	revisions := map[string]int64{}
+	save := func(username string, tabs ...Tab) {
+		t.Helper()
+
+		saved, err := store.SaveTabState(ctx, username, &TabState{Tabs: tabs, Space: "main"}, revisions[username])
+		require.NoError(t, err)
+		require.True(t, saved)
+
+		revisions[username]++
+	}
+	closed := func(username string) []string {
+		t.Helper()
+
+		tabs, err := store.ClosedTabs(ctx, username)
+		require.NoError(t, err)
+
+		out := make([]string, 0, len(tabs))
+		for _, tab := range tabs {
+			out = append(out, fmt.Sprint(tab.Path, " ", tab.Space, " ", tab.Search != nil))
+		}
+
+		return out
+	}
+
+	page := `{"name": "Triage"}`
+	a, b, cron, search := Tab{Path: "/s/YQ", Space: "main"}, Tab{Path: "/s/Yg", Space: "ops"}, Tab{Path: "/cron", Space: "main"}, Tab{Path: "/search/x", Space: "main", Search: []byte(page)}
+	save("alice", Tab{Path: "/", Space: "main"}, Tab{Path: "group:g", Group: "g", Space: "main"}, a, b, search, cron)
+	save("alice", Tab{Path: "/s/a", Space: "main"}, b, search)
+	save("alice", Tab{Path: "/s/a", Space: "main"}, b)
+	assert.Equal(t, []string{"/search/x main true", "/cron main false"}, closed("alice"),
+		"newest closed first, keeping space and page; New session, a kept group's placeholder, and a tab saved under another spelling are not closed")
+
+	tabs, err := store.ClosedTabs(ctx, "alice")
+	require.NoError(t, err)
+	assert.JSONEq(t, page, string(tabs[0].Search))
+
+	saved, err := store.SaveTabState(ctx, "alice", &TabState{Space: "main"}, 0)
+	require.NoError(t, err)
+	require.False(t, saved)
+	assert.Equal(t, []string{"/search/x main true", "/cron main false"}, closed("alice"), "a refused save closes nothing")
+	save("alice", a, cron)
+	assert.Equal(t, []string{"/s/Yg ops false", "/search/x main true"}, closed("alice"), "a reopened tab is no longer closed")
+	assert.Empty(t, closed("bob"), "each person's closed tabs are their own")
+
+	_, err = store.db.ExecContext(ctx, `DELETE FROM conversations WHERE conversation_id = 'b'`)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/search/x main true"}, closed("alice"), "deleting a session deletes its closed tab")
+
+	pages := make([]Tab, 50)
+	for i := range pages {
+		pages[i] = Tab{Path: fmt.Sprint("/pages/main/agent/", i), Space: "main"}
+	}
+
+	save("alice", pages...)
+	save("alice")
+
+	got := closed("alice")
+	assert.Len(t, got, 50, "only the newest 50 stay")
+	assert.NotContains(t, got, "/search/x main true")
 }
 
 // Each conversation-creating path stores what it creates and whether Web lists it, and Web lists,

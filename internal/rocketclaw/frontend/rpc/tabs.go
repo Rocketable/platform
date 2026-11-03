@@ -15,9 +15,6 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// tabs saves the caller's tab state, changes one space, adds, removes, or edits Shared tabs, or mutes or
-// unmutes one session tab for the caller, then returns every space, the caller's saved state, every Shared
-// tab, and the caller's live mutes. New session and sessions people may not open are never shared or muted.
 func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse, error) {
 	username, _, err := s.principal(ctx)
 	if err != nil {
@@ -36,6 +33,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		mutes    []backend.TabMute
 		shelf    []byte
 		state    backend.TabState
+		closed   []backend.Tab
 		response = &TabsResponse{Stale: (request.State != nil && !saved) || refused}
 	)
 
@@ -57,6 +55,10 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 
 	if err == nil {
 		shelf, err = s.sessions.TopShelf(ctx, username)
+	}
+
+	if err == nil {
+		closed, err = s.sessions.ClosedTabs(ctx, username)
 	}
 
 	if err == nil && shelf != nil {
@@ -82,6 +84,10 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 
 	if err == nil {
 		response.Unshared, err = searchPage(unshared)
+	}
+
+	if err == nil {
+		response.Closed, err = webTabs(closed)
 	}
 
 	if err != nil {
@@ -238,15 +244,21 @@ func sharedTabs(shared []backend.SharedTab) ([]*SharedTab, error) {
 // tabState is the backend's saved state as the Web reads it.
 func tabState(state *backend.TabState) (out *TabState, err error) {
 	out = &TabState{Space: state.Space, Last: state.Last, SharedOrder: state.SharedOrder}
-	for _, tab := range state.Tabs {
-		page, errPage := searchPage(tab.Search)
-		err = errors.Join(err, errPage)
-
-		out.Tabs = append(out.Tabs, &Tab{Path: tab.Path, Group: tab.Group, Space: tab.Space, Search: page})
-	}
+	out.Tabs, err = webTabs(state.Tabs)
 
 	for _, group := range state.Groups {
 		out.Groups = append(out.Groups, &TabGroup{Id: group.ID, Name: group.Name, Color: group.Color, Collapsed: group.Collapsed})
+	}
+
+	return out, err
+}
+
+func webTabs(saved []backend.Tab) (out []*Tab, err error) {
+	for _, tab := range saved {
+		page, errPage := searchPage(tab.Search)
+		err = errors.Join(err, errPage)
+
+		out = append(out, &Tab{Path: tab.Path, Group: tab.Group, Space: tab.Space, Search: page})
 	}
 
 	return out, err
