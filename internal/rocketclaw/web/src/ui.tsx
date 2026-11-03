@@ -823,6 +823,36 @@ function SidebarToggle({ open, toggle }: { open: boolean; toggle: () => void }) 
   </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>;
 }
 
+// New session starts one on this page's server. With other RocketClaws or OpenCode servers it opens a menu of where to
+// start one, with this server highlighted so Enter starts it there: another RocketClaw opens its New session page, and
+// an OpenCode server the palette's folder picker.
+function NewSessionButton({ newChat, openCode }: { newChat: () => void; openCode: (name: string) => void }) {
+  const here = useServer();
+  const claws = ["", ...rocketclaws().map((remote) => remote.name)].filter((name) => name !== here);
+  const codes = Object.keys(useContext(Sidebar).remote?.servers ?? {}).toSorted();
+  // Base UI focuses the popup itself on a mouse open, highlighting no item; this server's item takes that focus
+  // instead, which highlights it, so Enter starts it and arrows move from it.
+  const native = useRef<HTMLDivElement>(null);
+  // The local server has no configured name, so it goes by the page's host: its first label, or a whole IP address.
+  const host = location.hostname, local = /^[\d.]+$|:/.test(host) ? host : host.split(".")[0];
+  const menu = claws.length > 0 || codes.length > 0;
+  const button = <Button variant="ghost" size="icon" aria-label="New session" className="size-[var(--navigation-button)] shrink-0" />;
+  const pen = <Tooltip><TooltipTrigger render={menu ? <Menu.Trigger render={button} /> : button} onClick={menu ? undefined : newChat}>
+    <SquarePen className="size-[var(--navigation-icon)]" />
+  </TooltipTrigger><TooltipContent side="top">New session</TooltipContent></Tooltip>;
+  if (!menu) return pen;
+  const groups = [["RocketClaw", [here, ...claws], (name: string) => name === here ? newChat() : navigate("/", false, name)], ["OpenCode", codes, openCode]] as const;
+  return <DropdownMenu>
+    {pen}
+    <DropdownMenuContent side="top" className="w-auto min-w-44" onFocus={(event) => { if (event.target === event.currentTarget) native.current!.focus(); }}>
+      {groups.map(([group, names, open]) => names.length ? <Menu.Group key={group}>
+        <Menu.GroupLabel className="px-1.5 py-1 text-xs text-muted-foreground">{group}</Menu.GroupLabel>
+        {names.map((name) => <Menu.Item key={name} ref={group === "RocketClaw" && name === here ? native : undefined} className="flex cursor-default items-center rounded-md px-1.5 py-1 text-sm outline-none focus:bg-accent focus:text-accent-foreground" onClick={() => open(name)}>{name || local}</Menu.Item>)}
+      </Menu.Group> : null)}
+    </DropdownMenuContent>
+  </DropdownMenu>;
+}
+
 function CopyPageLink() {
   const pathname = usePathname();
   const [result, setResult] = useState<{ pathname: string; status?: "copied" | "error" }>();
@@ -1820,7 +1850,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   // The screen stays on while the Voice page is open or a call runs.
   const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
   useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
-  const [palette, setPalette] = useState<{ mode: PaletteMode | undefined; key: number }>({ mode: undefined, key: 0 });
+  const [palette, setPalette] = useState<{ mode: PaletteMode | undefined; key: number; opencode?: string }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
   const drafts = useMemo(() => new Map<string, ComposerDraft>(), [scope]);
   const [, setDraftVersion] = useState(0);
@@ -1901,13 +1931,14 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
           <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabSettling /><TabNotifications /><BoardNotifications />
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
             {tabs.snoozing ? <SnoozeDialog path={tabs.snoozing} /> : null}
-            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} keyCommands={keyCommands(tabs.step, sidebar.toggle, sidebar.medium)} />
+            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} keyCommands={keyCommands(tabs.step, sidebar.toggle, sidebar.medium)} opencode={palette.opencode} />
          <div className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-y-none bg-background">
             <BottomNavigation>
               <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} />
               <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
                 <div className="flex w-max items-center gap-[var(--navigation-gap)]">
-                  {([["New session", SquarePen, newChat], ["Search sessions and commands", Search, () => openPalette("sessions")], ["Voice", Mic, () => navigate("/voice")]] as const).map(([label, Icon, onClick]) => (
+                  <NewSessionButton newChat={newChat} openCode={(name) => setPalette((current) => ({ mode: "commands", key: current.key + 1, opencode: name }))} />
+                  {([["Search sessions and commands", Search, () => openPalette("sessions")], ["Voice", Mic, () => navigate("/voice")]] as const).map(([label, Icon, onClick]) => (
                     <Tooltip key={label}><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label={label} onClick={onClick}>
                       <Icon className="size-[var(--navigation-icon)]" />
                     </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>
@@ -2277,10 +2308,10 @@ type PaletteMode = keyof typeof paletteCopy;
 // "Sessions: New on <server>" turns the palette into a folder picker for a remote OpenCode
 // session: a typed folder, or one of that server's sessions' folders, those the person picked most recently first,
 // since agents also start sessions there.
-function useRemoteCreation(query: string, close: () => void, restart: () => void, copy: { title: string; desc: string; placeholder: string }, recent: string[]) {
+function useRemoteCreation(query: string, close: () => void, restart: () => void, copy: { title: string; desc: string; placeholder: string }, recent: string[], initial?: string) {
   const sidebar = useContext(Sidebar);
   const tabs = useContext(TabActions);
-  const [server, setServer] = useState<string>();
+  const [server, setServer] = useState(initial);
   const create = useMutation({ mutationFn: mutations.createSession, onSuccess: (created) => { sidebar.invalidateQueries(); close(); tabs.open(rowPath({ id: created, kind: "REMOTE_OPENCODE" })); } });
   const typed = query.trim();
   const rank = (directory: string) => recent.indexOf(`folder-${directory}`) + 1 || Infinity;
@@ -2321,7 +2352,7 @@ function usePalettePage<T extends { key: string }>(items: T[], pick: string, key
   };
 }
 
-function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { drafts: Map<string, ComposerDraft>; mode: PaletteMode | undefined; setMode: (mode: PaletteMode | undefined) => void; newChat: () => void; keyCommands: { key: string; label: string; run: () => void }[] }) {
+function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode }: { drafts: Map<string, ComposerDraft>; mode: PaletteMode | undefined; setMode: (mode: PaletteMode | undefined) => void; newChat: () => void; keyCommands: { key: string; label: string; run: () => void }[]; opencode?: string }) {
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
   // Arrowing onto a session shows it in the preview tab. The palette remounts per opening and keeps acting on the
@@ -2393,7 +2424,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands }: { draft
     },
   });
   // The folder picker leaves session search, so typed folders are never sent as a search.
-  const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(""); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent);
+  const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(""); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent, opencode);
   const cronJobs = cronInSpace(jobs.data, useInSpace());
   const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, cronJobs, newChat, tabs, (cron) => { setQuery(""); setPick(""); setMode(cron); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...timeline, ...outputs], recent, origin.space));
   // Draw more rows only as scrolling or the keyboard needs them; every choice stays reachable.
