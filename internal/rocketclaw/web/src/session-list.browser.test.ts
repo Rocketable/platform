@@ -286,8 +286,14 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       await sessions.getByRole("button", { name: "Help: Keyboard Shortcuts", exact: true }).click();
       await page.waitForURL("**/shortcuts");
       const shortcutList = page.getByRole("list", { name: "Keyboard shortcuts" });
-      expect(await shortcutList.getByRole("listitem").evaluateAll((items: Element[]) => items.map((item) => [...item.querySelectorAll("kbd")].map((key) => key.textContent)))).toEqual([
-        [modifier, "P"], [modifier, "Shift", "P"], [modifier, alternate, "N"], [modifier, "["], [modifier, "]"], [modifier, "B"], ["Escape"], [modifier, "Enter"], [modifier, alternate, "Enter"]]);
+      const shortcutKeys: string[][] = await shortcutList.getByRole("listitem").evaluateAll((items: Element[]) => items.map((item) => [...item.querySelectorAll("kbd")].map((key) => key.textContent!)));
+      expect(shortcutKeys).toEqual([
+        [modifier, "P"], [modifier, "Shift", "P"], [modifier, alternate, "N"], [modifier, "["], [modifier, "]"], [modifier, alternate, "T"], [modifier, "B"], ["Escape"], [modifier, "Enter"], [modifier, alternate, "Enter"]]);
+      // Chromium keeps new and closed tabs, windows and tab cycling for itself and never hands these keys to a page
+      // (kReservedCommandIds, chrome/browser/ui/accelerator_table.cc). Headless test browsers do hand them over, so a test
+      // pressing one passes while the real key does nothing; RocketClaw adds Alt instead, as in mod+Alt+N.
+      const reserved = ["T", "W", "N", "Tab"].flatMap((key) => [`${modifier}+${key}`, `${modifier}+Shift+${key}`]);
+      expect(shortcutKeys.map((keys) => keys.join("+")).filter((keys) => reserved.includes(keys))).toEqual([]);
       await page.getByRole("dialog").waitFor({ state: "detached" });
       await page.keyboard.press("Escape"); // A page tab closes with Escape.
       await page.waitForURL((url: URL) => url.pathname !== "/shortcuts");
@@ -951,7 +957,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
     expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "Cron: Timeline", "Help: Keyboard Shortcuts", "List Agents", "List Skills", "New dashboard",
-      "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Next⌘]", "Tabs: Previous⌘[", "Tabs: Toggle sidebar⌘B",
+      "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Next⌘]", "Tabs: Previous⌘[", "Tabs: Recently closed", "Tabs: Toggle sidebar⌘B",
       // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
       "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
       "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded.", "Voice"]);
@@ -966,7 +972,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await search.fill("tabs: close");
     await sessionPalette.getByRole("button", { name: "Tabs: Close", exact: true }).waitFor();
     // An exact match leads; recent then alphabetical contiguous matches follow, ahead of the sessions, and the Search hand-off comes last.
-    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close", "Tabs: Close others", "Tabs: Close all", "Tabs: Close to the right", "Search in this space for 'tabs: close'", "Search everywhere for 'tabs: close'"]);
+    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close", "Tabs: Close others", "Tabs: Close all", "Tabs: Close to the right", "Tabs: Recently closed", "Search in this space for 'tabs: close'", "Search everywhere for 'tabs: close'"]);
     expect(await sessionPalette.locator("ul > li > button").first().textContent()).toBe("Tabs: Close");
     await search.fill("tabs: close t");
     await sessionPalette.getByRole("button", { name: "Tabs: Close all", exact: true }).waitFor({ state: "detached" });

@@ -416,7 +416,9 @@ server and space. Opening one on its own server works like a Shared tab: it
 shows the page in its space with no tab, and a shelved Search page edits the
 shelf's copy unless the person has a tab of it there. One on another server is
 opened by entering that server's view in the tab's space. With remotes, a first
-load waits for the shelf, so reloading a shelved page adds no tab.
+load waits for the shelf, so reloading a shelved page adds no tab. Deleting a
+session from the Web takes it off the shelf, and the local server leaves its own
+sessions that no longer exist out of every reply, however they were deleted.
 
 The local server's protocol change reloads the page. A remote that never
 answered shows why it is unavailable, one that stopped answering shows it is
@@ -466,6 +468,14 @@ active tab.
   New session alone does not close. Closing with the × button or the menu moves
   keyboard focus to the selected tab. A page that is only in Shared has no close
   button, and Escape leaves it open.
+- **Recently closed.** The server keeps your last 50 closed tabs, newest first,
+  with the space each was in and a Search page's searches; New session is never
+  one. **Tabs: Recently closed** in the command palette opens the `/closed` page,
+  which lists them with their spaces. Choosing one reopens it in its space, or in
+  the current space when that space is gone, and Cmd/Ctrl+Alt+T (or **Tabs:
+  Reopen closed tab**) reopens the newest, in a remote OpenCode session too, whose
+  New terminal command has no default key for that reason. A reopened tab leaves the list, and so
+  does a deleted session's tab. A preview tab is never saved, so it never lists.
 - **Remote OpenCode sessions.** A remote session's tab shows OpenCode's own
   session view, copied into RocketClaw at `internal/rocketclaw/oc/` and mounted in
   the page with no frame. It reaches its server through the Web's
@@ -868,14 +878,14 @@ failed search shows an error with Retry, and the next keystroke also retries.
 Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
 **Sessions: New**, **Sessions: Search**, **New dashboard**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
 **List Agents**, **List Skills**, **Settings**, **Tabs: Previous**, **Tabs: Next**,
-and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
-works (the desktop sidebar, not the narrow-screen drawer). In both palettes a command bound to a
+**Tabs: Recently closed**, and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
+works (the desktop sidebar, not the narrow-screen drawer), and **Tabs: Reopen closed tab** while a tab is closed. In both palettes a command bound to a
 key shows it on the right of its row, OpenCode style: **⌘ Option N** on Mac or
 **Ctrl Alt N** elsewhere for **Sessions: New**, **⌘ [** and **⌘ ]** for the tab
-commands, and **⌘ B** for the sidebar toggle. Unbound commands have no shortcut
+commands, **⌘ Option T** for reopening, and **⌘ B** for the sidebar toggle. Unbound commands have no shortcut
 hint. **Help: Keyboard Shortcuts** opens the read-only `/shortcuts` page, which
 lists every shortcut from the same list: the palette keys, new session, tab
-stepping, the sidebar toggle, Escape on a page tab, and the message box's steer
+stepping and reopening, the sidebar toggle, Escape on a page tab, and the message box's steer
 and stash keys.
 Timeline detail levels are also available, from `Timeline: Messages only` through
 `Timeline: Everything`.

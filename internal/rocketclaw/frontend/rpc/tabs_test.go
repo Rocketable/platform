@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"log/slog"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -121,6 +122,15 @@ func TestTabs(t *testing.T) {
 	assert.True(t, proto.Equal(next, response.State), "the save answers with the saved state")
 	assert.Equal(t, int64(2), response.Revision)
 	assert.Equal(t, []string{"/s/YQ 0 f", "/s/Yg  t", "/s/Yw  t"}, aliceTabs())
+
+	closed := map[string]*Tab{}
+	for _, tab := range response.Closed {
+		closed[tab.Path] = tab
+	}
+
+	assert.Len(t, closed, 2)
+	assert.True(t, proto.Equal(saved.Tabs[2], closed["/s/Yg"]))
+	assert.True(t, proto.Equal(saved.Tabs[3], closed["/search/a"]))
 
 	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
@@ -274,12 +284,14 @@ func TestTabs(t *testing.T) {
 	// A Top Shelf is the caller's own: each save replaces it whole, and every reply carries it.
 	assert.Nil(t, response.TopShelf, "nothing shelved yet")
 
-	shelf := &TopShelf{Tabs: []*ShelfTab{{Server: "work", Space: "main", Path: "/s/eA"}, {Path: "/search/1", Space: "main", Search: &SearchPage{Name: "x"}}}, Collapsed: true}
+	shelf := &TopShelf{Tabs: []*ShelfTab{{Server: "work", Space: "main", Path: "/s/eA"}, {Path: "/s/YQ", Space: "main"}, {Path: "/s/Yg", Space: "main"}, {Path: "/search/1", Space: "main", Search: &SearchPage{Name: "x"}}}, Collapsed: true}
 	_, err = call("127.0.0.1", &TabsRequest{TopShelf: shelf})
 	require.NoError(t, err)
 	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
-	assert.True(t, proto.Equal(shelf, response.TopShelf), "%v", response.TopShelf)
+
+	shelf.Tabs = slices.Delete(shelf.Tabs, 2, 3)
+	assert.True(t, proto.Equal(shelf, response.TopShelf), "b's deleted session leaves the shelf: %v", response.TopShelf)
 	response, err = call("192.0.2.2", &TabsRequest{})
 	require.NoError(t, err)
 	assert.Nil(t, response.TopShelf, "another person's shelf is not theirs")
