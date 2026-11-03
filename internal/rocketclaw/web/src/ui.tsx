@@ -958,6 +958,9 @@ function pageSpace(state: Pick<TabState, "spaces" | "space">, path: string): [st
 // Group colors light enough for black text in both themes.
 const groupColors: Record<string, string> = { Grey: "bg-gray-400", Blue: "bg-blue-400", Red: "bg-red-400", Yellow: "bg-yellow-400", Green: "bg-green-400", Pink: "bg-pink-400", Purple: "bg-purple-400", Cyan: "bg-cyan-400", Orange: "bg-orange-400" };
 const groupName = (group: TabGroup) => group.name || `${group.color} group`;
+// A group kept when empty holds a placeholder among its tabs, so it stays where it was after its last tab goes. Only the
+// strip draws it, as New session in the emptied group; tab commands, closing, and stepping never see it.
+const keeper = (group: string) => `group:${group}`, isKeeper = (tab: Tab) => tab.path.startsWith("group:");
 
 // Each group sits where its first member is, so its tabs stay adjacent.
 function arrange(tabs: Tab[]) {
@@ -999,7 +1002,7 @@ function openTab(state: TabState, link: string, shared: SavedTabs["shared"], pre
 
 // Entering a space returns to its last active tab, which may be a Shared one, else its first tab, else New session.
 function entry(state: Pick<TabState, "tabs" | "last">, space: string, shared: SavedTabs["shared"]) {
-  const there = state.tabs.filter((tab) => tab.space === space), last = state.last[space];
+  const there = state.tabs.filter((tab) => tab.space === space && !isKeeper(tab)), last = state.last[space];
   return there.some((tab) => tab.path === last) || isShared(shared, space, last) ? last : there[0]?.path ?? "/";
 }
 
@@ -1012,11 +1015,12 @@ function leave(state: TabState, doomed: string, spaces: Space[]): TabState {
 // A tab moved to space as a permanent tab keeps everything else it holds.
 const permanent = ({ preview: _preview, unplaced: _unplaced, ...tab }: Tab, space: string): Tab => ({ ...tab, space });
 
-// The server's saved tabs; tabs left in a lost space or group belong to the first space and no group.
+// The server's saved tabs; tabs left in a lost space or group belong to the first space and no group, and a lost group's
+// placeholder goes.
 function savedTabs(owner?: string, saved?: Pick<SavedTabs, "spaces" | "state">): TabState {
   const spaces = saved?.spaces ?? [{ id: "main", name: "Main" }], known = (id?: string) => spaces.some((space) => space.id === id);
   const groups = saved?.state.groups ?? [];
-  const tabs = (saved?.state.tabs ?? []).map(({ group, space, ...tab }) => ({ ...tab, group: groups.some((item) => item.id === group) ? group : undefined, space: known(space) ? space : spaces[0].id }));
+  const tabs = (saved?.state.tabs ?? []).map(({ group, space, ...tab }) => ({ ...tab, group: groups.some((item) => item.id === group) ? group : undefined, space: known(space) ? space : spaces[0].id })).filter((tab) => tab.group || !isKeeper(tab));
   return { owner, tabs: arrange(tabs), active: "", groups, spaces, space: known(saved?.state.space) ? saved!.state.space : spaces[0].id, last: saved?.state.last ?? {}, sharedOrder: saved?.state.sharedOrder ?? [] };
 }
 
@@ -1227,9 +1231,9 @@ function useTabs() {
   const update = (change: (tabs: Tab[]) => Tab[]) => setState((current) => ({ ...current, tabs: arrange(change(current.tabs)) }));
   const regroup = (match: (tab: Tab) => boolean, group?: string) => update((tabs) => tabs.map((tab) => match(tab) ? { ...tab, group } : tab));
   const edit = (id: string, change: Partial<TabGroup>) => setState((current) => ({ ...current, groups: current.groups.map((group) => group.id === id ? { ...group, ...change } : group) }));
-  // The strip and menus show only the current space's tabs and groups.
-  const shown = state.tabs.filter((tab) => tab.space === state.space);
-  const groups = state.groups.filter((group) => shown.some((tab) => tab.group === group.id));
+  // The strip and menus show only the current space's tabs and groups; shown leaves out kept groups' placeholders.
+  const strip = state.tabs.filter((tab) => tab.space === state.space), shown = strip.filter((tab) => !isKeeper(tab));
+  const groups = state.groups.filter((group) => strip.some((tab) => tab.group === group.id));
   // Closing the active tab activates the target, else its right neighbour, else its left one, in this space; an emptied space gets New session.
   // Only this person's tabs here close, so a tab only in Shared stays open.
   const close = (paths: string[], target?: string) => {
@@ -1246,6 +1250,8 @@ function useTabs() {
     if (path !== pathname) navigate(path);
   };
   const mute = (path: string, until: string) => sharing.mutate({ mute: { path, until } });
+  // New session is one location, so a new tab in a group moves it into the group and its space.
+  const newInGroup = (id: string) => { update((tabs) => join(tabs, "/", id, state.space)); navigate("/"); };
   // A Shared Search page's edit saves only onto the page it was made from. Refused because someone changed the page
   // meanwhile, it is made again onto theirs, keeping their searches and this person's change.
   const saveShared = (space: string, path: string, base: SearchPageState | undefined, page: SearchPageState) => sharing.mutate({ editShared: { space, path, base, search: page } }, { onSuccess: (reply) => {
@@ -1261,7 +1267,7 @@ function useTabs() {
     return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, reply.shared) }) : open(path, "", undefined, reach, search);
   };
   return {
-    state, shown, groups, here, shared, mutes, pathname, close, enter, edit, editor, setEditor, settle, snoozing, setSnoozing, mute, open, addSearch, pending: spaceChange.isPending,
+    state, strip, shown, groups, here, shared, mutes, pathname, close, enter, edit, editor, setEditor, settle, snoozing, setSnoozing, mute, open, addSearch, pending: spaceChange.isPending,
     // A moved Shared row moves for this person alone; their order keeps only paths still shared somewhere.
     moveShared: (from: string, to: string) => setState((current) => ({ ...current, sharedOrder: [...new Set([...moveQueueId(here, from, to), ...current.sharedOrder])].filter((path) => shared.some((tab) => tab.path === path)) })),
     // Collapsing Shared is this person's choice for every space, kept as the member-less group "shared".
@@ -1359,10 +1365,14 @@ function useTabs() {
         ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move to "${space.name}"`, sub: { menu: "Move to space", label: space.name }, run: () => moveTo(paths, space.id) })),
       ];
     },
-    // New session is one location, so New tab in group moves it into the group and its space.
+    newInGroup,
+    // Ungrouping or closing a kept group's tabs leaves it empty; no longer kept, an empty group goes.
     groupCommands: (id: string) => [
-      { key: "new", label: "New tab in group", run: () => { update((tabs) => join(tabs, "/", id, state.space)); navigate("/"); } },
-      { key: "ungroup", label: "Ungroup", run: () => regroup((tab) => tab.group === id) },
+      { key: "new", label: "New tab in group", run: () => newInGroup(id) },
+      state.tabs.some((tab) => tab.path === keeper(id))
+        ? { key: "unkeep", label: "Don't keep group when empty", run: () => update((tabs) => tabs.filter((tab) => tab.path !== keeper(id))) }
+        : { key: "keep", label: "Keep group when empty", run: () => update((tabs) => join(tabs, keeper(id), id, state.space)) },
+      { key: "ungroup", label: "Ungroup", run: () => regroup((tab) => tab.group === id && !isKeeper(tab)) },
       { key: "close", label: "Close group", run: () => close(state.tabs.flatMap((tab) => tab.group === id ? [tab.path] : [])) },
       // A group moves whole, keeping its name, color, and collapsed state; its tabs become permanent, and the active tab follows.
       ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move group to "${space.name}"`, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? permanent(tab, space.id) : tab) }, state.active, reach)) })),
@@ -1497,7 +1507,7 @@ function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { pat
 
 function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat: () => void }) {
   const { rows } = useContext(Sidebar);
-  const { state, shown, groups, pathname, close, promote, move, moveGroup, commands, edit, editor, setEditor, groupCommands } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
+  const { state, strip, shown, groups, pathname, close, promote, move, moveGroup, commands, edit, editor, setEditor, groupCommands, newInGroup } = tabs, space = state.spaces.find((item) => item.id === state.space)?.name;
   const [menu, setMenu] = useState<{ path: string; anchor: MenuAnchor; shared?: boolean; shelf?: ShelfTab }>();
   const [editing, setEditing] = useState<string>();
   const pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
@@ -1546,10 +1556,11 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
         event.dataTransfer.setData(group ? "application/x-rocketclaw-group" : "application/x-rocketclaw-tab", group ?? pathOf(event)!);
       }}
       onDragOver={(event) => { if (!event.dataTransfer.types.some((type) => type === sharedDrag || type === shelfDrag)) event.preventDefault(); }}
-      // A group header stands for its first tab, the only drop target a collapsed group shows.
+      // A group header stands for its first tab, the only drop target a collapsed group shows, or an empty kept group's
+      // placeholder, so a tab dropped there joins it.
       onDrop={(event) => {
         const header = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group, group = event.dataTransfer.getData("application/x-rocketclaw-group");
-        const path = pathOf(event) ?? shown.find((tab) => !!header && tab.group === header)?.path;
+        const path = pathOf(event) ?? strip.find((tab) => !!header && tab.group === header)?.path;
         if (path && group) moveGroup(group, path);
         else if (path) move(event.dataTransfer.getData("application/x-rocketclaw-tab"), path);
       }}
@@ -1560,21 +1571,21 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
         }
         tabKeys(event, pathname, (path, anchor) => setMenu({ path, anchor }), move);
       }}>
-      {shown.flatMap((tab, index) => {
+      {strip.flatMap((tab, index) => {
         const group = groups.find((item) => item.id === tab.group);
         const openEditor = () => setEditor({ id: group!.id, open: true }), chosen = tab.path !== pathname && selection.has(tab.path);
         // A collapsed group's name goes bold, like an unread tab's title, while any of its tabs is unread, and it
         // says it needs you while any of their sessions waits on this person. Only its header uses these badges.
-        const hidden = group?.collapsed && shown[index - 1]?.group !== group.id ? rows.filter((row) => shown.some((item) => item.group === group.id && row.id === pathSession(item.path))) : [];
+        const hidden = group?.collapsed && strip[index - 1]?.group !== group.id ? rows.filter((row) => shown.some((item) => item.group === group.id && row.id === pathSession(item.path))) : [];
         const unread = hidden.some((row) => row.unreadAt), asking = hidden.some((row) => row.asking);
         return [
-          group && shown[index - 1]?.group !== group.id ? <div key={group.id} data-group={group.id} draggable className="flex shrink-0 items-center pt-1" onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
+          group && strip[index - 1]?.group !== group.id ? <div key={group.id} data-group={group.id} draggable className="flex shrink-0 items-center pt-1" onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
             <button type="button" aria-expanded={!group.collapsed} aria-label={groupName(group)} className="flex h-7 min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => edit(group.id, { collapsed: !group.collapsed })}
               onKeyDown={(event) => {
                 if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") { event.preventDefault(); openEditor(); }
                 // Shift+Arrow moves the group past the tab or group next to it.
                 const button = event.currentTarget, step = event.shiftKey ? arrows[event.key] : 0;
-                const neighbor = step && shown[step < 0 ? shown.findIndex((item) => item.group === group.id) - 1 : shown.findLastIndex((item) => item.group === group.id) + 1];
+                const neighbor = step && strip[step < 0 ? strip.findIndex((item) => item.group === group.id) - 1 : strip.findLastIndex((item) => item.group === group.id) + 1];
                 if (!neighbor) return;
                 event.preventDefault();
                 flushSync(() => moveGroup(group.id, neighbor.path));
@@ -1585,8 +1596,14 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
             {asking ? needsYou : null}
             <button type="button" aria-label={`Edit ${groupName(group)}`} className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={openEditor}><Ellipsis className="size-3.5" /></button>
           </div> : null,
+          // An expanded empty kept group offers New session, which starts one in the group.
+          isKeeper(tab) ? group!.collapsed || shown.some((item) => item.group === group!.id) ? null
+            : <button key={tab.path} type="button" data-tab={tab.path} aria-label={`New session in ${groupName(group!)}`} className="flex shrink-0 items-center rounded-md text-sm text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring" onClick={() => newInGroup(group!.id)}>
+              <span className={cn("pointer-events-none my-1.5 ml-1 w-0.5 shrink-0 self-stretch", groupColors[group!.color])} />
+              <span className="flex items-center gap-1.5 py-2 pr-3 pl-3"><SquarePen aria-hidden="true" className="size-4 shrink-0" />New session</span>
+            </button>
           // A collapsed group still shows its active tab.
-          group?.collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} description={[chosen && "In selection", `${group ? `Group ${groupName(group)}, ` : ""}Space: ${space}`].filter(Boolean).join(", ")} chosen={chosen} rule={group?.color} active={tab.path === pathname} stop={tab.path === stop} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />,
+          : group?.collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} description={[chosen && "In selection", `${group ? `Group ${groupName(group)}, ` : ""}Space: ${space}`].filter(Boolean).join(", ")} chosen={chosen} rule={group?.color} active={tab.path === pathname} stop={tab.path === stop} editing={tab.path === editing} endEdit={() => setEditing(undefined)} promote={() => promote(tab.path)} close={() => { flushSync(() => close([tab.path])); selected().focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />,
         ];
       })}
     </div>
