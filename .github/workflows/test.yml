@@ -123,14 +123,16 @@ jobs:
       - *node-modules
       - run: bun install --frozen-lockfile
         working-directory: internal/rocketclaw/web
-      - uses: actions/cache@v6
+      - &playwright-cache
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/ms-playwright
             ~/.cache/playwright-core
           key: playwright-1.63.0-no-shell
       # No --with-deps: the runner's preinstalled Google Chrome already brought Chromium's system libraries.
-      - name: Install Playwright and Chromium for browser tests
+      - &playwright
+        name: Install Playwright and Chromium for browser tests
         run: |
           dir="$HOME/.cache/playwright-core"
           [ -d "$dir/node_modules/playwright-core" ] || (mkdir -p "$dir" && cd "$dir" && bun add playwright-core@1.63.0)
@@ -152,6 +154,11 @@ jobs:
           name: coverage-${{ matrix.shard }}
           path: internal/rocketclaw/coverage-${{ matrix.shard }}.out
           overwrite: true
+      # Some tests in these packages measure a build without -race or coverage, so they compile one. Unless
+      # the saved cache holds it, the shard that runs such a test compiles it from scratch, for up to two minutes.
+      - if: github.ref == 'refs/heads/main' && strategy.job-index == 0
+        working-directory: internal/rocketclaw
+        run: go test -c -race=false -cover=false -o "$RUNNER_TEMP/" ./backend ./frontend/rpc
       - *save-go-build
 
   coverage:
@@ -172,36 +179,32 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
-    # The image carries Chromium and its system libraries, so no shard installs them from Ubuntu's
-    # package mirror, which sometimes takes minutes. Its version must match playwright-core below.
-    container: mcr.microsoft.com/playwright:v1.63.0-noble
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v7
-      # setup-bun unpacks Bun with unzip, which the image lacks; npm installs the same release.
-      - run: npm install -g bun@1.4.4
+      - *setup-bun
       - *node-modules
       - run: bun install --frozen-lockfile
         working-directory: internal/rocketclaw/web
-      - name: Locate Playwright and Chromium for browser tests
-        run: |
-          dir="$HOME/.cache/playwright-core"
-          mkdir -p "$dir" && cd "$dir" && bun add playwright-core@1.63.0
-          echo "ROCKETCLAW_PLAYWRIGHT_MODULE=$dir/node_modules/playwright-core" >> "$GITHUB_ENV"
-          echo "ROCKETCLAW_CHROMIUM=$(bun -e 'console.log(require("playwright-core").chromium.executablePath())')" >> "$GITHUB_ENV"
+      - *playwright-cache
+      - *playwright
       # The Sentry test reads the source maps the build writes.
       - run: bun run build
         working-directory: internal/rocketclaw/web
       # Transport tests need the live PostgreSQL/provider fixtures owned by Go, so the rocketclaw job runs them.
+      # Every shard computes the same split: heaviest file first, each to the least-loaded shard, weighed by
+      # its CI seconds in .github/web-test-seconds.tsv (an unlisted file weighs 1). A stale list only unbalances.
       # Two browser files at a time on four cores, because timing-sensitive browser tests time out when starved.
       - name: Web tests
         working-directory: internal/rocketclaw/web
         run: >-
-          find ./src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" | sort |
-          awk -v n=${{ strategy.job-total }} -v i=${{ matrix.shard }} 'NR % n == i' |
+          find src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" |
+          awk 'NR == FNR { seconds[$2] = $1; next } { w = $0 in seconds ? seconds[$0] : 1; print w, $0 }' ../../../.github/web-test-seconds.tsv - |
+          sort -k1,1nr -k2,2 |
+          awk -v n=${{ strategy.job-total }} -v i=${{ matrix.shard }} '{ m = 0; for (s = 1; s < n; s++) if (load[s] < load[m]) m = s; load[m] += $1 } m == i { print $2 }' |
           xargs -n 1 -P 2 bun test
 
   # The merge-queue ruleset requires the "test (core)" and "test (web)" checks.
