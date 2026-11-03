@@ -760,6 +760,9 @@ func TestRoutinesRunAsCronDefinitions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, protocol.OneOffCronjob{RelativePath: "agents/marketing.md#30m", Agent: "marketing", Space: "Ops", Prompt: "Scheduled run (30m).\n\n" + cronReplyInstruction}, job)
 
+	_, err = m.LoadOneOffCronjob("marketing · 1h")
+	require.ErrorContains(t, err, `load one-off cronjob: no routine "marketing · 1h"`)
+
 	// Reordering keeps each routine's identity, so neither next-due time resets.
 	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 	require.NoError(t, store.SyncCronSchedules(m.scheduledStates(definitions, start)))
@@ -774,6 +777,10 @@ func TestRoutinesRunAsCronDefinitions(t *testing.T) {
 	after, err := store.DueCronSchedules(start.Add(24 * time.Hour))
 	require.NoError(t, err)
 	require.Equal(t, before, after)
+	require.NoError(t, os.WriteFile(agentPath, []byte(easyRoutineAgent+"  - every 30min\n---\nPrompt\n"), 0o644))
+
+	_, err = m.LoadOneOffCronjob("marketing · 30m")
+	require.ErrorContains(t, err, `load one-off cronjob: agents/marketing.md: routines: schedule "every 30min": invalid cron expression`)
 }
 
 func TestValidateRuntimeDefinitionsRefusesBadRoutines(t *testing.T) {
