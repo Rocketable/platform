@@ -2049,7 +2049,7 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 	nt.waitIdle(t, manager, report)
 	assert.Equal(t, []string{"turn-cron/call/a consumed true"}, noteStates(t, nt.service))
 
-	assert.Contains(t, reviewPrompt(t, <-reviews), "the transcript claims: [Cron]\n", "a cron run's wake is reviewed as cron")
+	assert.Contains(t, reviewPrompt(t, <-reviews), "Turn origin (written by RocketClaw): [Cron]\n", "a cron run's wake is reviewed as cron")
 }
 
 func reviewPrompt(t *testing.T, body string) string {
@@ -2531,7 +2531,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.env, string(env), "the subagent's shell sees the top-level turn's person and metadata")
 
-			assert.Contains(t, reviewPrompt(t, <-reviews), "the transcript claims: "+tc.origin+"\n", "the subagent's review names the top-level turn's origin")
+			assert.Contains(t, reviewPrompt(t, <-reviews), "Turn origin (written by RocketClaw): "+tc.origin+"\n", "the subagent's review names the top-level turn's origin")
 		})
 	}
 }
