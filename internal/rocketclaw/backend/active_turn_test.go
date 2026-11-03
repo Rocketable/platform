@@ -2459,7 +2459,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 		metadata, caller        map[string]string
 		env, origin             string
 	}{
-		{protocol.SourceWeb, "Alice", "main", "Alice", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, nil, "Alice|alice@example.com|unset", `[Web principal="Alice <alice@example.com>"]`},
+		{protocol.SourceWeb, "Alice", "main", "Alice", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, nil, "Alice|alice@example.com|unset", `[Web principal="Alice"]`},
 		{protocol.SourceExternalMCP, "Bob", "main", "Bob", nil, map[string]string{"ticket": "T-1"}, "unset|unset|T-1", `[ExternalMCP principal="Bob"]`},
 		{protocol.SourceSystem, "", "job", string(ThreadCreatedByCron), nil, nil, "unset|unset|unset", "[Cron]"},
 	} {

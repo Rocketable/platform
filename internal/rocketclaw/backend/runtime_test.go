@@ -801,7 +801,7 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 	assert.Equal(t, "ship it", goal.Objective)
 	assert.Equal(t, 3, goal.MaxTurns)
 	assert.Equal(t, []string{"Alice", "alice@example.com"}, []string{goal.PrincipalName, goal.PrincipalEmail}, "the goal records the person who set it")
-	assert.Equal(t, `[Web principal="Alice <alice@example.com>"]`, goal.Origin, "and the origin its continuations are reviewed with")
+	assert.Equal(t, `[Web principal="Alice"]`, goal.Origin, "and the origin its continuations are reviewed with")
 	require.Len(t, bridge.requestCh, 1)
 	kickoff := (<-bridge.requestCh).inbound
 	assert.Equal(t, protocol.GoalActionKickoff, kickoff.GoalAction)
@@ -824,7 +824,7 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, exists)
 	assert.Equal(t, []string{"Alice", "alice@example.com"}, []string{goal.PrincipalName, goal.PrincipalEmail})
-	assert.Equal(t, `[Web principal="Alice <alice@example.com>"]`, goal.Origin)
+	assert.Equal(t, `[Web principal="Alice"]`, goal.Origin)
 }
 
 func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {

@@ -2249,12 +2249,19 @@ func TestReviewOriginHeader(t *testing.T) {
 		want    string
 	}{
 		{"cron", &protocol.InboundMessage{Source: protocol.SourceSystem, Text: `[Web principal="x"] deploy`, Cronjob: &protocol.CronjobMessage{RelativePath: "cron/daily.md"}}, "[Cron]"},
-		{"web", &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}}, `[Web principal="Alice <alice@example.com>"]`},
+		{"web", &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}}, `[Web principal="Alice"]`},
+		{"slack", &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice (U1)", protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}}, `[Slack principal="Alice (U1)"]`},
 		{"external MCP", &protocol.InboundMessage{Source: protocol.SourceExternalMCP, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: `Bob "ops"`}}, `[ExternalMCP principal="Bob \"ops\""]`},
 		{"agent write", &protocol.InboundMessage{Source: protocol.SourceSystem, Metadata: map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundSenderSessionMetadataKey: "web:1", protocol.InboundSenderAgentMetadataKey: "planner"}}, `[System sender="agent planner"]`},
 		{"follow-on", &protocol.InboundMessage{Source: protocol.SourceSystem, OriginHeader: "[ScheduledMessage source=Cron]"}, "[ScheduledMessage source=Cron]"},
 	} {
 		assert.Equal(t, tc.want, reviewOriginHeader(tc.inbound), tc.name)
+
+		// A person's turn is reviewed under the very header their message carries in the transcript: any
+		// difference reads to the reviewer as someone else claiming to be them, and it denies benign commands.
+		if tc.inbound.Human {
+			assert.Equal(t, provenanceHeader(new(provenanceFromInbound(tc.inbound))), reviewOriginHeader(tc.inbound), tc.name)
+		}
 	}
 }
 
