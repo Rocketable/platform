@@ -36,7 +36,6 @@ type broker struct {
 	mu          sync.Mutex
 	invocations int
 	conns       map[*net.UnixConn]struct{}
-	closed      bool
 	wg          sync.WaitGroup
 }
 
@@ -49,7 +48,7 @@ func (b *broker) serve(ctx context.Context) {
 		}
 
 		b.mu.Lock()
-		if b.closed {
+		if b.conns == nil {
 			b.mu.Unlock()
 
 			_ = conn.Close()
@@ -79,12 +78,13 @@ func (b *broker) serve(ctx context.Context) {
 // still running is abandoned with its context cancelled (spec §6.5).
 func (b *broker) close() {
 	b.mu.Lock()
-	b.closed = true
 	_ = b.ln.Close()
 
 	for c := range b.conns {
 		_ = c.Close()
 	}
+
+	b.conns = nil
 	b.mu.Unlock()
 
 	b.wg.Wait()
