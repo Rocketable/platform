@@ -605,27 +605,26 @@ func TestStoppedBridgeLeavesDueScheduleUnclaimed(t *testing.T) {
 func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
-	require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 3}))
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
-
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-
-	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
-	assert.Empty(t, bridge.requestCh)
-
-	items, err := store.ThreadQueueForConversation(conversationID)
-	require.NoError(t, err)
-	require.Len(t, items, 1)
-
+	// Database connections opened outside the bubble crash the test binary when used in it.
 	synctest.Test(t, func(t *testing.T) {
+		store := newTestSessionService(t)
+		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+		recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
+		require.NoError(t, store.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 3}))
+		require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
+
+		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+
+		require.NoError(t, bridge.pickLaterWork(t.Context(), false))
+		assert.Empty(t, bridge.requestCh)
+
+		items, err := store.ThreadQueueForConversation(conversationID)
+		require.NoError(t, err)
+		require.Len(t, items, 1)
+
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 
-		bridge.requestCh = make(chan bridgeRequest, 1)
-		bridge.stopCh = make(chan struct{})
 		require.NoError(t, bridge.submitEnqueuedItem(ctx, &items[0]))
 
 		var group errgroup.Group
@@ -965,11 +964,13 @@ func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 
 	bridge := new(Bridge)
 	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: newTestSessionService(t)}
+	bridge.config = Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}}
 	result := runResult{turnID: "turn-1", attachments: []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}}
 
 	for _, errDelivery := range []error{nil, errors.New("delivery failed")} {
 		synctest.Test(t, func(t *testing.T) {
+			// Database connections opened outside the bubble crash the test binary when used in it.
+			bridge.config.SessionService = newTestSessionService(t)
 			rt := new(Runtime)
 			bridge.bus = rt
 			events := rt.Subscribe(t.Context())
