@@ -248,6 +248,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	done := &ListSessionsResponse{UpstreamSuccess: true, Version: listing.version}
 	if known {
 		done.Since = request.Since
+
 		for _, id := range slices.Sorted(maps.Keys(since)) {
 			if _, ok := listing.rows[id]; !ok {
 				done.Removed = append(done.Removed, id)

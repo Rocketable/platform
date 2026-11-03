@@ -382,6 +382,7 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 			require.NoError(t, err)
 
 			size += len(body)
+
 			if response.UpstreamSuccess {
 				version = response.Version
 			}
