@@ -144,6 +144,8 @@ jobs:
         run: until docker exec postgres pg_isready -h 127.0.0.1 -U postgres -d rocketclaw_test; do sleep 1; done
       - name: Coverage shard
         working-directory: internal/rocketclaw
+        env:
+          GOFLAGS: -v
         run: |
           tests=$(grep -rhoE '^func Test[A-Za-z0-9_]*\(' --include='*_test.go' ../../cmd/rocketclaw . | sed -E 's/^func (.*)\(/\1/' | grep -vx TestMain | sort -u | awk -v n=${{ strategy.job-total }} -v i=${{ matrix.shard }} 'NR % n == i' | paste -sd'|' -)
           make coverage-profile COVERPROFILE=coverage-${{ matrix.shard }}.out GOTESTRUN="^($tests)\$\$"
