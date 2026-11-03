@@ -679,7 +679,14 @@ targets but tighten gaps and side padding to 4px. Icons are 24px in all layouts.
 The sidebar toggle sits at the bar's left end and the theme toggle at its right end;
 between them, centered, are New session, Search sessions and commands, Voice, and
 Copy page link.
-Cmd/Ctrl+Alt+N opens a new session. The magnifying glass beside New session opens
+When remote RocketClaws or OpenCode servers are configured, New session opens a
+menu of where to start one, with the page's own server highlighted so Enter starts
+it there. The menu names the local server by the first label of the page's host
+(`hally` for `hally.tail1234.ts.net`), or by the whole address for an IP address.
+Another RocketClaw opens its New session page, and an OpenCode server opens the
+palette's folder picker, as **Sessions: New on <server>** does.
+Cmd/Ctrl+Alt+N opens a new session on the page's server, without the menu.
+The magnifying glass beside New session opens
 the palette, like Cmd/Ctrl+P. The **Sessions: Search** command opens
 the Search page. Each search has its own editable tab, saved in this browser for
 the confirmed user. Click another tab to switch searches; click the selected tab

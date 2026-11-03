@@ -68,6 +68,8 @@ function start() {
       case "/api/Protocol": return Response.json({ protoSha256: "opencode" });
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
+      // New session needs the config to scope its draft.
+      case "/api/ListConfig": return Response.json({ config: {} });
       case "/api/CreateSession":
         await creates.hold;
         if (failCreate) { failCreate = false; return Response.json({ code: 14, message: "box did not answer" }, { status: 503 }); }
@@ -416,6 +418,21 @@ test("remote sessions list, tag, go offline, and start", async () => {
     const folders = page.getByRole("button", { name: /^\// });
     await folders.first().waitFor();
     expect(await folders.allTextContents()).toEqual(["/repo", "/srv/old"]);
+    await page.keyboard.press("Escape");
+    // With an OpenCode server, a click on the footer's New session opens a menu with this server highlighted, named by
+    // the page's host, here a whole IP address: Enter starts a session here, and the next item, box, opens the same picker.
+    const newSession = page.getByRole("button", { name: "New session", exact: true });
+    const highlighted = (name: string) => page.getByRole("menuitem", { name, exact: true }).and(page.locator(":focus")).waitFor();
+    await newSession.click();
+    await highlighted("127.0.0.1");
+    await page.keyboard.press("Enter");
+    await page.waitForURL(`${base}/`);
+    await newSession.click();
+    await highlighted("127.0.0.1");
+    await page.keyboard.press("ArrowDown");
+    await highlighted("box");
+    await page.keyboard.press("Enter");
+    await folders.first().waitFor();
     await page.keyboard.press("Escape");
     await page.evaluate(() => localStorage.setItem("command-history", JSON.stringify(["folder-/srv/old"])));
     await page.keyboard.press("Control+Shift+p");

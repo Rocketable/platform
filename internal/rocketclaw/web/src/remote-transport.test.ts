@@ -30,6 +30,16 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   // On the local server, the palette lists the remote chat under its server's name, and a filter finds it there.
   await page.goto(`${local}/`);
   await page.getByRole("textbox").waitFor();
+  // The footer's New session menu starts one on a remote, where the remote is the highlighted choice, and from there on
+  // the local server, named by the first label of the page's host.
+  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await page.getByRole("menuitem", { name: "work", exact: true }).click();
+  await page.waitForURL((url: URL) => url.pathname === "/r/work/");
+  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await page.getByRole("menuitem", { name: "work", exact: true }).and(page.locator(":focus")).waitFor();
+  await page.getByRole("menuitem", { name: "local", exact: true }).click();
+  await page.waitForURL((url: URL) => url.pathname === "/");
+  await page.getByRole("textbox").waitFor();
   await page.keyboard.press("Control+p");
   const palette = page.getByRole("dialog", { name: "Go to session" });
   // The fake provider also names the chat, after its reply.
