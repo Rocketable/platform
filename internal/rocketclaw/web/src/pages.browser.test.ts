@@ -93,7 +93,7 @@ test("a page's shared link and its Page Index link share one tab, and a - link o
   await page.waitForURL(`${origin}/pages/billing/reporter/index.html`);
   await go(page, "/pages/Billing/reporter/index.html");
   await page.waitForURL(`${origin}/pages/billing/reporter/index.html`);
-  expect(await names(page)).toEqual(["New session", "reporter · index.html"]);
+  expect(await names(page)).toEqual(["New session", "Pages", "reporter · index.html"]);
 
   await go(page, "/pages/-/main/index.html");
   await page.waitForURL(`${origin}/pages/billing/main/index.html`);

@@ -114,6 +114,13 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
 const strip = (page: any) => page.getByRole("tablist", { name: "Open tabs" });
 const names = (page: any) => strip(page).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
 const italic = (tab: any) => tab.evaluate((node: HTMLElement) => getComputedStyle(node).fontStyle === "italic");
+// The open palette hides the strip from role queries, so tabs are read as names, an italic one marked "*".
+const behind = (page: any) => page.locator('[aria-label="Open tabs"] [role="tab"]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => `${node.getAttribute("aria-label")}${getComputedStyle(node).fontStyle === "italic" ? "*" : ""}`));
+// The palette focuses its input after it shows its rows; arrows pressed before then are lost.
+async function paletteReady(page: any) {
+  await page.getByRole("dialog", { name: "Go to session" }).getByRole("button").filter({ hasText: "Echo" }).waitFor();
+  await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Search sessions and commands");
+}
 const animation = (locator: any) => locator.evaluate((node: Element) => getComputedStyle(node).animationName);
 // Group headers are the strip's only controls that report aria-expanded.
 const order = (page: any) => strip(page).locator('[role="tab"], [aria-expanded]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
@@ -159,7 +166,7 @@ async function sharedMenu(page: any, name: string) {
   return page.getByRole("menuitem").allInnerTexts();
 }
 
-test("preview tabs, promotion, close commands, middle-click, and drag survive reload", () => withPage({}, async (page, origin, prompts, saved) => {
+test("each opened location keeps a tab; close commands, middle-click, and drag survive reload", () => withPage({}, async (page, origin, prompts, saved) => {
   await page.goto(`${origin}/`);
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   await tab("New session").waitFor();
@@ -169,46 +176,28 @@ test("preview tabs, promotion, close commands, middle-click, and drag survive re
   expect(await names(page)).toEqual(["hello"]);
   expect(prompts.map((prompt) => prompt.id)).toEqual(["fresh"]);
 
+  await follow(page, "bravo");
+  await tab("hello").click();
+  await page.waitForURL(`**${href("fresh")}`);
   await follow(page, "alpha");
   await follow(page, "bravo");
-  expect(await names(page)).toEqual(["hello", "Bravo"]);
-  expect(await italic(tab("Bravo"))).toBe(true);
-  expect(await italic(tab("hello"))).toBe(false);
-  await tab("Bravo").dblclick();
-  expect(await italic(tab("Bravo"))).toBe(false);
-  expect(await tab("Bravo").evaluate((node: HTMLElement) => document.activeElement === node && getComputedStyle(node).outlineStyle)).toBe("none");
-  await follow(page, "alpha");
-  expect(await names(page)).toEqual(["hello", "Bravo", "Alpha"]);
-  expect(await italic(tab("Alpha"))).toBe(true);
-  await page.getByPlaceholder("Message or $command").fill("keep me");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('[role="tab"][aria-selected="true"]')!).fontStyle !== "italic");
-
+  expect(await names(page)).toEqual(["hello", "Alpha", "Bravo"]);
+  expect(await italic(tab("Alpha"))).toBe(false);
   await follow(page, "charlie");
-  expect(await italic(tab("Charlie"))).toBe(true);
-  await page.getByPlaceholder("Message or $command").fill("unsent draft");
-  expect(await italic(tab("Charlie"))).toBe(false);
   await follow(page, "delta");
-  expect(await names(page)).toEqual(["hello", "Bravo", "Alpha", "Charlie", "Delta"]);
+  expect(await names(page)).toEqual(["hello", "Alpha", "Bravo", "Charlie", "Delta"]);
   await menu(page, "Bravo", "Close to the right");
-  expect(await names(page)).toEqual(["hello", "Bravo"]);
+  expect(await names(page)).toEqual(["hello", "Alpha", "Bravo"]);
   await page.waitForURL(`**${href("bravo")}`);
   await openFromPalette(page, "Charlie");
   await menu(page, "Bravo", "Close others");
   expect(await names(page)).toEqual(["Bravo"]);
   expect(await tab("Bravo").getAttribute("aria-selected")).toBe("true");
 
-  // The palette opens a permanent tab, beside the preview tab, and makes an open preview tab permanent.
   await follow(page, "charlie");
-  await openFromPalette(page, "Delta");
-  await page.waitForURL(`**${href("delta")}`);
-  expect(await names(page)).toEqual(["Bravo", "Charlie", "Delta"]);
-  expect(await italic(tab("Delta"))).toBe(false);
-  expect(await italic(tab("Charlie"))).toBe(true);
-  await page.keyboard.press("Control+p");
-  await page.getByRole("dialog", { name: "Go to session" }).getByRole("button").filter({ hasText: "Charlie" }).click();
+  await follow(page, "delta");
+  await tab("Charlie").click();
   await page.waitForURL(`**${href("charlie")}`);
-  expect(await italic(tab("Charlie"))).toBe(false);
   await tab("Charlie").click({ button: "middle" });
   await page.waitForURL(`**${href("delta")}`);
   expect(await names(page)).toEqual(["Bravo", "Delta"]);
@@ -224,7 +213,6 @@ test("preview tabs, promotion, close commands, middle-click, and drag survive re
   await page.reload();
   await tab("Bravo").waitFor();
   expect(await names(page)).toEqual(["Charlie", "Bravo"]);
-  expect(await italic(tab("Charlie"))).toBe(true);
   expect(await tab("Charlie").getAttribute("aria-selected")).toBe("true");
 
   await menu(page, "Charlie", "Close all");
@@ -235,36 +223,30 @@ test("preview tabs, promotion, close commands, middle-click, and drag survive re
   expect(page.url()).toBe(`${origin}/`);
 }), 60_000);
 
-test("arrowing through the palette previews sessions in this space; Escape returns, Enter keeps", () => withPage({}, async (page, origin) => {
+test("arrowing through the palette previews sessions in this space; Escape returns and closes the preview, Enter keeps", () => withPage({}, async (page, origin) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const palette = page.getByRole("dialog", { name: "Go to session" });
   const step = async (key: string, id: string) => { await page.keyboard.press(key); await page.waitForURL(`**${href(id)}`); };
-  // The palette focuses its input after it shows its rows; arrows pressed before then are lost.
-  const focused = async () => {
-    await palette.getByRole("button").filter({ hasText: "Echo" }).waitFor();
-    await page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Search sessions and commands");
-  };
-  // The open palette hides the strip from role queries, so tabs are read as names, an italic one marked "*".
-  const behind = () => page.locator('[aria-label="Open tabs"] [role="tab"]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => `${node.getAttribute("aria-label")}${getComputedStyle(node).fontStyle === "italic" ? "*" : ""}`));
   await page.goto(`${origin}${href("alpha")}`);
   await tab("Alpha").waitFor();
   const depth = await page.evaluate(() => history.length);
   await page.keyboard.press("Control+p");
-  await focused();
+  await paletteReady(page);
   await step("ArrowDown", "bravo");
   await step("ArrowDown", "charlie");
-  expect(await behind()).toEqual(["Alpha", "Charlie*"]);
+  expect(await behind(page)).toEqual(["Alpha", "Charlie*"]);
   await step("ArrowDown", "delta");
-  expect(await behind()).toEqual(["Alpha", "Delta*"]);
+  expect(await behind(page)).toEqual(["Alpha", "Delta*"]);
   // Echo was born in another space, so its row shows where the palette opened.
   await step("ArrowDown", "alpha");
   await step("ArrowUp", "delta");
   await step("Escape", "alpha");
   await palette.waitFor({ state: "hidden" });
   expect(await page.evaluate(() => history.length)).toBe(depth);
+  expect(await names(page)).toEqual(["Alpha"]);
 
   await page.keyboard.press("Control+p");
-  await focused();
+  await paletteReady(page);
   for (const id of ["bravo", "charlie", "delta"]) await step("ArrowDown", id);
   await page.keyboard.press("Enter");
   await palette.waitFor({ state: "hidden" });
@@ -274,14 +256,42 @@ test("arrowing through the palette previews sessions in this space; Escape retur
   await page.goBack();
   await page.waitForURL(`**${href("alpha")}`);
 
-  // Typing returns to where the palette opened, so a command acts on that tab.
   await page.keyboard.press("Control+p");
-  await focused();
+  await paletteReady(page);
+  for (const id of ["bravo", "charlie", "delta"]) await step("ArrowDown", id);
+  expect(await behind(page)).toEqual(["Alpha", "Delta"]);
+  await step("Escape", "alpha");
+  await palette.waitFor({ state: "hidden" });
+
+  await page.keyboard.press("Control+p");
+  await paletteReady(page);
   await step("ArrowDown", "bravo");
   await page.keyboard.type("Tabs: Close");
   await page.waitForURL(`**${href("alpha")}`);
-  await step("Enter", "bravo");
-  expect(await names(page)).toEqual(["Bravo", "Delta"]);
+  await step("Enter", "delta");
+  expect(await names(page)).toEqual(["Delta"]);
+}), 30_000);
+
+test("a palette preview stays in its window: never saved, and kept while other windows' changes arrive", () => withPage({}, async (page, origin, _prompts, saved) => {
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  const before = saved.revision;
+  await page.keyboard.press("Control+p");
+  await paletteReady(page);
+  await page.keyboard.press("ArrowDown");
+  await page.waitForURL(`**${href("bravo")}`);
+  // A save would follow the preview's render at once; none comes.
+  await page.waitForTimeout(300);
+  expect(saved.revision).toBe(before);
+  expect(saved.state).toMatchObject({ tabs: [{ path: href("alpha") }], last: { main: href("alpha") } });
+
+  [saved.state.tabs, saved.revision] = [[...saved.state.tabs, { path: href("charlie"), space: "main" }], saved.revision + 1];
+  await focus(page);
+  await page.locator('[aria-label="Open tabs"] [role="tab"][aria-label="Charlie"]').waitFor({ state: "attached" });
+  expect(await behind(page)).toEqual(["Alpha", "Bravo*", "Charlie"]);
+  expect(page.url()).toEndWith(href("bravo"));
+  await page.keyboard.press("Escape");
+  await page.waitForURL(`**${href("alpha")}`);
+  expect(await names(page)).toEqual(["Alpha", "Charlie"]);
 }), 30_000);
 
 for (const width of [1280, 320]) test(`copy page link across pages at ${width}px`, () => withPage({ viewport: { width, height: 800 }, hasTouch: width === 320, permissions: ["clipboard-read", "clipboard-write"] }, async (page, origin) => {
@@ -1217,21 +1227,12 @@ test("New session offers every agent, and a space shows its own and spaceless cr
   expect(await dashboard()).toEqual(["daily", "opsreport", "retired"]);
 }), 60_000);
 
-test("Search pages are tabs of their own: never preview, renamed in place, shared as one page, grouped and moved with their searches", () => withPage({}, async (page, origin, _prompts, saved) => {
+test("Search pages are tabs of their own: renamed in place, shared as one page, grouped and moved with their searches", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const query = page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true });
   await openSaved(page, origin, "/search/one", "Search", saved);
-  // An unnamed page is titled by its query, and a result opening a session does not replace it.
   await query.fill("deploys");
   await tab("deploys").waitFor();
-  await follow(page, "alpha");
-  expect(await names(page)).toEqual(["deploys", "Alpha"]);
-  expect(await italic(tab("deploys"))).toBe(false);
-  // Another page opened in the app takes a tab of its own beside the preview tab, which the next result replaces.
-  await page.evaluate(() => { history.pushState(null, "", "/search/two"); dispatchEvent(new PopStateEvent("popstate")); });
-  await tab("Search").waitFor();
-  await follow(page, "bravo");
-  expect(await names(page)).toEqual(["deploys", "Bravo", "Search"]);
 
   await menu(page, "deploys", "Rename search");
   const field = page.getByRole("textbox", { name: "Search page name", exact: true });
@@ -1375,12 +1376,13 @@ for (const width of [1280, 390]) test(`palette search handoffs stay in their ope
     }
     await route.fulfill({ response, json: reply });
   });
-  await input.fill("Alpha");
-  await input.press("ArrowUp");
-  await input.press("ArrowDown");
-  await page.waitForURL(`**${href("alpha")}`);
+  // Browsing the palette saves nothing, so collapsing Shared makes the personal save that is held.
+  await page.keyboard.press("Escape");
+  if (width === 390) await page.getByRole("button", { name: "Show sidebar", exact: true }).click();
+  await page.getByRole("button", { name: "Shared", exact: true }).click();
   await held.promise;
-  await input.fill("needle");
+  if (width === 390) await page.keyboard.press("Escape");
+  await open();
   await page.waitForURL((url: URL) => url.pathname === broad);
   await input.press("End");
   await input.press("ArrowUp");

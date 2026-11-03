@@ -205,7 +205,7 @@ func tabState(state *backend.TabState) (out *TabState, err error) {
 		page, errPage := searchPage(tab.Search)
 		err = errors.Join(err, errPage)
 
-		out.Tabs = append(out.Tabs, &Tab{Path: tab.Path, Preview: tab.Preview, Group: tab.Group, Space: tab.Space, Search: page})
+		out.Tabs = append(out.Tabs, &Tab{Path: tab.Path, Group: tab.Group, Space: tab.Space, Search: page})
 	}
 
 	for _, group := range state.Groups {
@@ -219,7 +219,7 @@ func tabState(state *backend.TabState) (out *TabState, err error) {
 func savedTabState(state *TabState) *backend.TabState {
 	saved := &backend.TabState{Space: state.Space, Last: state.Last, SharedOrder: state.SharedOrder}
 	for _, tab := range state.Tabs {
-		saved.Tabs = append(saved.Tabs, backend.Tab{Path: tab.Path, Preview: tab.Preview, Group: tab.Group, Space: tab.Space, Search: searchJSON(tab.Search)})
+		saved.Tabs = append(saved.Tabs, backend.Tab{Path: tab.Path, Group: tab.Group, Space: tab.Space, Search: searchJSON(tab.Search)})
 	}
 
 	for _, group := range state.Groups {

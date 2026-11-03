@@ -80,7 +80,7 @@ function start() {
         const body: { data: { id: string } } = await forked.json();
         return Response.json({ id: `opencode:box:${body.data.id}` });
       }
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), preview: true, space: "main" }], groups: [], space: "main", last: {} } });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), space: "main" }], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });

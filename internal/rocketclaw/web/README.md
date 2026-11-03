@@ -429,19 +429,16 @@ Sessions and pages (New session, Search, Voice, Cron, Agents, Skills, Settings) 
 one strip, and a location never appears in two tabs. The URL always names the
 active tab.
 
-- **Preview tab.** Opening a location that is not already open (Search
-  results, links, footer buttons, page commands) shows it in the single preview
-  tab, drawn in italics. The next such open replaces it; with no preview tab, the
-  new one opens right of the active tab. Double-clicking the tab, or typing a draft
-  or sending a message in it, makes it permanent. A session chosen in the
-  palette opens as a permanent tab right of the active tab, leaving the preview tab
-  in place, or makes its already open tab permanent. Arrowing through the palette's
-  sessions shows each in the preview tab, without adding history entries; a session
-  that would open in another space is skipped. The palette's commands act on the
+- **Opening.** Opening a location that is not already open (New session,
+  Search results, links, footer buttons, page commands, the palette) gives it a
+  tab of its own, right of the active tab. Arrowing through the palette's
+  sessions shows each in one preview tab, drawn in italics and never saved,
+  without adding history entries; a session that would open in another space is
+  skipped. Choosing the session keeps it as an ordinary tab; anything else closes
+  the preview tab. The palette's commands act on the
   location it opened at: typing or pressing a command returns there first, and
-  dismissing the palette returns there too. A deep link or reload opens its location
-  as a permanent tab. Sending the first message from New session turns that tab
-  into the new session's tab.
+  dismissing the palette returns there too. Sending the first message from New
+  session turns that tab into the new session's tab.
 - **Context menu.** Right-click a tab, press Shift+F10 or the menu key on a focused
   tab, or use the **…** button on the active tab (for touch) to reach Close,
   Close others, Close to the right, and Close all. Session tabs also offer **Rename session**, which edits the name in
@@ -549,10 +546,8 @@ active tab.
   lists each other space, and moving the active tab follows it; the command
   palette offers the same moves as **Tabs: Move to "<space>"**. Moving a tab is
   your own: it moves only in your tabs. Deleting a space moves its tabs to the
-  first space; the last space cannot be deleted. A tab
-  moved between spaces becomes permanent, so each space keeps at most one preview
-  tab. Close others, Close to the
-  right, Close all, Cmd/Ctrl+[ and ], and the preview tab act only within the
+  first space; the last space cannot be deleted. Close others, Close to the
+  right, Close all, and Cmd/Ctrl+[ and ] act only within the
   current space. Screen readers hear each tab's group, if any, and space
   as its description, such as “Group Work, Space: Main”.
 - **Agents and crons in spaces.** An agent or cron whose frontmatter sets
@@ -634,7 +629,7 @@ active tab.
   tab, tapping outside, Escape, or a swipe left closes it. A swipe that starts on
   a text field, a slider, or something that scrolls sideways is left to that element.
 - **Storage.** The server keeps each person's tabs, so they follow you to every
-  device: open tabs, their order, the preview flag, each tab's group and
+  device: open tabs, their order, each tab's group and
   space, the groups' names, colors, and collapsed state, the current space, and each
   space's last active tab. Each change saves the whole state,
   one save at a time. A save made from tabs older than another window's save is
@@ -653,9 +648,9 @@ active tab.
   `localStorage` are not carried over. Titles and running state come live from
   the session list; a session missing from it shows its ID.
 
-Tradeoffs: preview replacement keeps the strip short without manual closing, but
-an item opened once and left unpromoted vanishes on the next open, which can
-surprise people. Unlike browser-style tabs there is no
+Tradeoffs: every opened location keeps its tab until closed, so nothing vanishes
+unexpectedly, but the strip grows until Close others, Close to the right, or Close
+all trims it. Unlike browser-style tabs there is no
 per-tab Back/Forward or reopen-closed-tab. Unlike grouped tabs there are no
 agent/age lines. Spaces hide every other space's tabs, which keeps one task in
 focus but means a tab in another space is reached through the space menu, the

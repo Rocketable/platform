@@ -1907,13 +1907,6 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         await closed(name);
         await toChat();
       }
-      await openPage("Cron");
-      await navPage.waitForURL(`${origin}/cron`);
-      await openPage("Skills");
-      await navPage.waitForURL(`${origin}/skills`);
-      expect(await navTabs.getByRole("tab", { name: "Cron", exact: true }).count()).toBe(0); // Skills replaced the Cron preview tab.
-      await navPage.keyboard.press("Escape");
-      await closed("Skills");
       await toChat();
       if (width === 390) await navPage.keyboard.press("Escape");
       expect(await navPage.getByPlaceholder("Message or $command").inputValue()).toBe("keep this chat draft");
