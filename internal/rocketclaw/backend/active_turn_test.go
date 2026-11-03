@@ -220,7 +220,8 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	crashed := newBridge()
 	conversationID := crashed.config.ConversationID
-	require.NoError(t, service.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 5}))
+	// One finished turn and one continuation exhaust the goal before we inspect it.
+	require.NoError(t, service.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 2}))
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	msg.GoalAction, msg.ConversationID = protocol.GoalActionContinue, conversationID
@@ -256,13 +257,14 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	assert.Equal(t, "turn-finished", final.TurnID)
 	assert.JSONEq(t, `{"ChannelID":"C123","MessageTS":"555.1"}`, string(final.ReplyState), "delivery edits the turn's recorded placeholder")
 
-	goal, _, err := service.Goal(conversationID)
-	require.NoError(t, err)
-	assert.Equal(t, 1, goal.TurnsUsed, "redelivery does not account the goal again")
-
 	continued := readFinal(t, finals)
 	assert.Equal(t, "answer", continued.Text, "the goal continues once after the redelivered turn")
 	assert.Len(t, requests, 1, "only the continuation calls the model")
+
+	goal, _, err := service.Goal(conversationID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, goal.TurnsUsed, "only the finished turn and its continuation account the goal")
+	assert.Equal(t, GoalStatusBudgetExhausted, goal.Status)
 }
 
 // A runner that missed its turn's stop and saves and finishes afterwards leaves the stopped turn as
