@@ -134,6 +134,9 @@ func fakeMmdebstrap(t *testing.T) {
 	bin := t.TempDir()
 	require.NoError(t, os.Symlink(self, filepath.Join(bin, "mmdebstrap")))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// The fake tool finishes its tar synchronously; only its exit sleep is unnecessary. The test process's
+	// race runtime is already initialized, so its exit grace and race detection stay unchanged.
+	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
 }
 
 // The build turns mmdebstrap's tar into the guest image: devices gone, setuid dropped, directories owner-
