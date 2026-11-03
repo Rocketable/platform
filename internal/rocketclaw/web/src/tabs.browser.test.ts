@@ -668,7 +668,7 @@ test("narrow screens show the tabs in a drawer opened by the footer's sidebar bu
   expect(new URL(page.url()).pathname).toBe("/config");
 }), 60_000);
 
-test("running tab title shimmers without shifting", () => withPage({}, async (page, origin) => {
+test("tab status icons and running titles keep their layout and shimmer in both themes", () => withPage({}, async (page, origin) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const title = (name: string) => tab(name).getByText(name, { exact: true });
   const indent = (name: string) => title(name).evaluate((node: HTMLElement) => node.getBoundingClientRect().left - node.parentElement!.getBoundingClientRect().left);
@@ -686,30 +686,7 @@ test("running tab title shimmers without shifting", () => withPage({}, async (pa
   expect(await indent("Delta")).toBe(await indent("Alpha"));
   expect(await strip(page).getByRole("img", { name: "Turn running" }).count()).toBe(0);
   expect(await animation(tab("Delta").locator("svg"))).toBe("none");
-}), 60_000);
 
-test("an idle tab with background work shows an hourglass; a running turn keeps the chat icon", () => withPage({}, async (page, origin) => {
-  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
-  await page.goto(`${origin}${href("delta")}`);
-  await tab("Delta").waitFor();
-  await page.goto(`${origin}${href("echo")}`);
-  await tab("Echo").and(page.locator('[aria-description$="Background work running"]')).waitFor();
-  expect(await tab("Echo").getAttribute("aria-description")).toEndWith("Background work running");
-  expect(await tab("Echo").locator("svg").getAttribute("class")).toContain("lucide-hourglass");
-  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
-  expect(await tab("Delta").locator("svg").getAttribute("class")).toContain("lucide-message-square");
-}), 60_000);
-
-test("a forked tab shows a fork glyph in place of the chat icon", () => withPage({}, async (page, origin) => {
-  const tab = strip(page).getByRole("tab", { name: "Hotel", exact: true });
-  await page.goto(`${origin}${href("hotel")}`);
-  await tab.and(page.locator('[aria-description$="Forked session"]')).waitFor();
-  expect(await tab.getAttribute("aria-description")).toBe("Space: Main, Forked session");
-  expect(await tab.locator("svg").getAttribute("class")).toContain("lucide-git-fork");
-}), 60_000);
-
-test("the shimmer visibly sweeps the selected and other running titles in both themes", () => withPage({}, async (page, origin) => {
-  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const sweep = async (name: string) => {
     const title = tab(name).getByText(name, { exact: true });
     const levels: number[] = [];
@@ -731,11 +708,6 @@ test("the shimmer visibly sweeps the selected and other running titles in both t
     }
     return Math.max(...levels) - Math.min(...levels);
   };
-  await page.goto(`${origin}${href("alpha")}`);
-  await tab("Alpha").waitFor();
-  await page.goto(`${origin}${href("delta")}`);
-  await tab("Alpha").waitFor();
-  await page.mouse.move(640, 600);
   // Only a selected title in dark mode dims under the band; each state and each scheme is swept once.
   await page.emulateMedia({ colorScheme: "dark" });
   expect(await sweep("Delta")).toBeGreaterThan(8);
@@ -743,6 +715,18 @@ test("the shimmer visibly sweeps the selected and other running titles in both t
   await page.waitForURL(`**${href("alpha")}`);
   await page.emulateMedia({ colorScheme: "light" });
   expect(await sweep("Delta")).toBeGreaterThan(8);
+
+  await page.goto(`${origin}${href("echo")}`);
+  await tab("Echo").and(page.locator('[aria-description$="Background work running"]')).waitFor();
+  expect(await tab("Echo").getAttribute("aria-description")).toEndWith("Background work running");
+  expect(await tab("Echo").locator("svg").getAttribute("class")).toContain("lucide-hourglass");
+  expect(await tab("Delta").getAttribute("aria-description")).toBe("Space: Main, Turn running");
+  expect(await tab("Delta").locator("svg").getAttribute("class")).toContain("lucide-message-square");
+
+  await page.goto(`${origin}${href("hotel")}`);
+  await tab("Hotel").and(page.locator('[aria-description$="Forked session"]')).waitFor();
+  expect(await tab("Hotel").getAttribute("aria-description")).toBe("Space: Main, Forked session");
+  expect(await tab("Hotel").locator("svg").getAttribute("class")).toContain("lucide-git-fork");
 }), 60_000);
 
 test("with reduced motion a running tab's title shows a still gradient", () => withPage({ reducedMotion: "reduce" }, async (page, origin) => {
