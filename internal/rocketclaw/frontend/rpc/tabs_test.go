@@ -119,6 +119,15 @@ func TestTabs(t *testing.T) {
 	assert.Equal(t, int64(2), response.Revision)
 	assert.Equal(t, []string{"/s/YQ 0 f", "/s/Yg  t", "/s/Yw  t"}, aliceTabs())
 
+	closed := map[string]*Tab{}
+	for _, tab := range response.Closed {
+		closed[tab.Path] = tab
+	}
+
+	assert.Len(t, closed, 2)
+	assert.True(t, proto.Equal(saved.Tabs[2], closed["/s/Yg"]))
+	assert.True(t, proto.Equal(saved.Tabs[3], closed["/search/a"]))
+
 	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&TabState{Tabs: []*Tab{{Path: "/s/YQ", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/s/YQ"}}, response.State))
