@@ -37,7 +37,7 @@ export function invalidatePendingSaves(owner?: string, protocol?: string) {
 
 function openSnapshots(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("rocketclaw-session-list", 1);
+    const request = indexedDB.open("rocketclaw-session-list-v2", 1);
     request.onupgradeneeded = () => request.result.createObjectStore("snapshots");
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);

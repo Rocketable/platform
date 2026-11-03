@@ -173,6 +173,60 @@ test("pending saves and owner switches cannot leak owners or overwrite newer sna
 
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
+test("sidebar listing objects stay separate from older clients' row arrays", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const listings: string[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/blank") return new Response("<!doctype html><title>Cache setup</title>", { headers: { "Content-Type": "text/html" } });
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/Identity") return Response.json({ username: "alice" });
+    if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "cache-format" });
+    if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
+    if (url.pathname === "/api/ListSessions") {
+      listings.push(url.searchParams.get("since") ?? "");
+      return new Response(`data: ${JSON.stringify({ owner: "alice", sessions: [{ id: "fresh", name: "Fresh list" }], upstreamSuccess: true, version: "fresh" })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    }
+    if (url.pathname === "/api/Tabs") return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+    if (url.pathname.startsWith("/api/")) return Response.json({});
+    return new Response(Bun.file(path.join(dist, url.pathname.startsWith("/assets/") ? url.pathname : "index.html")));
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const context = await browser.newContext();
+    const older = await context.newPage();
+    const page = await context.newPage();
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(error.message));
+    const origin = `http://127.0.0.1:${server.port}`;
+    await older.goto(`${origin}/blank`);
+    await older.evaluate(async () => {
+      const request = indexedDB.open("rocketclaw-session-list", 1);
+      request.onupgradeneeded = () => request.result.createObjectStore("snapshots");
+      const db = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+      const tx = db.transaction("snapshots", "readwrite");
+      tx.objectStore("snapshots").put([{ id: "old", name: "Old cached list" }], ["alice", "cache-format"]);
+      await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error); });
+      // Keep an older page's connection open while the current app starts.
+      Object.defineProperty(window, "oldSnapshotDB", { value: db });
+    });
+    await page.goto(origin);
+    await page.getByRole("button", { name: "Search sessions and commands", exact: true }).click({ timeout: 5000 });
+    const palette = page.getByRole("dialog");
+    await palette.getByText("Fresh list", { exact: true }).waitFor({ timeout: 5000 });
+    expect(await palette.getByText("Old cached list", { exact: true }).count()).toBe(0);
+    expect(listings[0]).toBe("");
+    expect(errors).toEqual([]);
+    expect(await older.evaluate(async () => {
+      const db = (window as unknown as { oldSnapshotDB: IDBDatabase }).oldSnapshotDB;
+      const tx = db.transaction("snapshots", "readonly");
+      const request = tx.objectStore("snapshots").get(["alice", "cache-format"]);
+      await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onabort = () => reject(tx.error); });
+      return request.result;
+    })).toEqual([{ id: "old", name: "Old cached list" }]);
+  } finally { await browser.close(); server.stop(true); }
+}, 30_000);
+
 for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["Linux x86_64", "Ctrl", "Alt"]]) {
   test(`actual App command hints match existing bindings on ${platform}`, async () => {
     const { chromium: engine } = await import(playwright!);
@@ -702,7 +756,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(await page.getByText(text, { exact: true }).count()).toBe(0);
   };
   const snapshot = async ([owner, protocol]: string[]) => {
-    const request = indexedDB.open("rocketclaw-session-list", 1);
+    const request = indexedDB.open("rocketclaw-session-list-v2", 1);
     const db = await new Promise<IDBDatabase>((resolve) => { request.onsuccess = () => resolve(request.result); });
     try {
       const tx = db.transaction("snapshots", "readonly");
@@ -778,7 +832,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await hidden(page, "Huge");
     await page.evaluate(async () => {
       const db = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open("rocketclaw-session-list", 1);
+        const request = indexedDB.open("rocketclaw-session-list-v2", 1);
         request.onupgradeneeded = () => request.result.createObjectStore("snapshots");
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
