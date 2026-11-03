@@ -211,34 +211,25 @@ func TestNewUsesResolverCompactThreshold(t *testing.T) {
 
 	client := openai.NewClient()
 	cfg := testConfig(dir)
+
 	cfg.CompactThreshold = 11111
-	loop, err := NewWithModelResolver(testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
-		return &client, ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol", CompactThreshold: 80000}, nil
-	}), cfg, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Model: "work/gpt-6.1-sol", Prompt: "prompt"},
-	}}, Skills{Items: map[string]Skill{}}, "main", nil)
+	for _, tc := range []struct {
+		origin ProviderOrigin
+		model  string
+		want   int64
+	}{
+		{ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol", CompactThreshold: 80000}, "work/gpt-6.1-sol", 80000},
+		{ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, "gpt-6.1-sol", 11111},
+	} {
+		loop, err := NewWithModelResolver(testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
+			return &client, tc.origin, nil
+		}), cfg, root, Agents{Items: map[string]Agent{
+			"main": {Name: "main", Model: tc.model, Prompt: "prompt"},
+		}}, Skills{Items: map[string]Skill{}}, "main", nil)
 
-	require.NoError(t, err)
-	require.Equal(t, int64(80000), loop.CompactThreshold)
-}
-
-func TestNewUsesConfigCompactThresholdWhenResolverOmitsIt(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	client := openai.NewClient()
-	cfg := testConfig(dir)
-	cfg.CompactThreshold = 11111
-	loop, err := NewWithModelResolver(testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
-		return &client, ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, nil
-	}), cfg, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Model: "gpt-6.1-sol", Prompt: "prompt"},
-	}}, Skills{Items: map[string]Skill{}}, "main", nil)
-
-	require.NoError(t, err)
-	require.Equal(t, int64(11111), loop.CompactThreshold)
+		require.NoError(t, err, tc.model)
+		require.Equal(t, tc.want, loop.CompactThreshold, tc.model)
+	}
 }
 
 func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
