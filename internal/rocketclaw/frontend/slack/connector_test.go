@@ -51,29 +51,29 @@ func TestSlackImageHelpers(t *testing.T) {
 }
 
 func TestSplitSlackResponseTextBoundaries(t *testing.T) {
-	assert.Nil(t, splitSlackText("", slackPreferredChunkSize, slackTextLimit))
-	assert.Equal(t, []string{"short"}, splitSlackText("short", slackPreferredChunkSize, slackTextLimit))
+	assert.Nil(t, splitSlackText("", slackTextLimit))
+	assert.Equal(t, []string{"short"}, splitSlackText("short", slackTextLimit))
 
 	withoutBoundary := strings.Repeat("x", slackTextLimit+3)
-	chunks := splitSlackText(withoutBoundary, slackPreferredChunkSize, slackTextLimit)
+	chunks := splitSlackText(withoutBoundary, slackTextLimit)
 	require.Len(t, chunks, 2)
 	assert.Len(t, []rune(chunks[0]), slackTextLimit)
 	assert.Equal(t, "xxx", chunks[1])
 
-	paragraphBoundary := strings.Repeat("a", slackPreferredChunkSize-3) + "\n\n" + strings.Repeat("b", slackTextLimit)
-	chunks = splitSlackText(paragraphBoundary, slackPreferredChunkSize, slackTextLimit)
+	paragraphBoundary := strings.Repeat("a", 3200-3) + "\n\n" + strings.Repeat("b", slackTextLimit)
+	chunks = splitSlackText(paragraphBoundary, slackTextLimit)
 	require.Len(t, chunks, 2)
 	assert.True(t, strings.HasSuffix(chunks[0], "\n\n"))
 	assert.Equal(t, strings.Repeat("b", slackTextLimit), chunks[1])
 
-	lateBoundary := strings.Repeat("a", slackPreferredChunkSize) + " " + strings.Repeat("b", slackTextLimit)
-	chunks = splitSlackText(lateBoundary, slackPreferredChunkSize, slackTextLimit)
+	lateBoundary := strings.Repeat("a", 3200) + " " + strings.Repeat("b", slackTextLimit)
+	chunks = splitSlackText(lateBoundary, slackTextLimit)
 	require.Len(t, chunks, 2)
-	assert.Len(t, []rune(chunks[0]), slackPreferredChunkSize+1)
+	assert.Len(t, []rune(chunks[0]), 3200+1)
 
 	for _, symbol := range []string{"&", "<", ">"} {
 		text := strings.Repeat("é"+symbol+" ", 1200)
-		chunks := splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
+		chunks := splitSlackText(text, slackBlockTextLimit)
 		assert.Equal(t, text, strings.Join(chunks, ""))
 
 		for _, chunk := range chunks {

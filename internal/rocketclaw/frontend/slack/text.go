@@ -19,16 +19,16 @@ func slackGoalHeaderText(turnNumber, maxTurns int, complete bool) string {
 	return "🏁 Pursuing Goal..."
 }
 
-func splitSlackText(text string, preferredLimit, hardLimit int) []string {
+func splitSlackText(text string, limit int) []string {
 	runes := []rune(text)
 	if len(runes) == 0 {
 		return nil
 	}
 
-	chunks := make([]string, 0, len(runes)/preferredLimit+1)
+	chunks := make([]string, 0, len(runes)/limit+1)
 	for len(runes) > 0 {
 		// Slack escapes these characters when returning blocks; budget that form so a footer edit still fits.
-		size, preferredEnd, hardEnd := 0, 0, 0
+		size, hardEnd := 0, 0
 
 		for i, r := range runes {
 			width := 1
@@ -40,27 +40,22 @@ func splitSlackText(text string, preferredLimit, hardLimit int) []string {
 				width = len("&lt;")
 			}
 
-			if size+width > hardLimit {
+			if size+width > limit {
 				break
 			}
 
 			size += width
 
 			hardEnd = i + 1
-			if size <= preferredLimit {
-				preferredEnd = hardEnd
-			}
 		}
 
-		if hardEnd == len(runes) && size < hardLimit {
+		if hardEnd == len(runes) && size < limit {
 			chunks = append(chunks, string(runes))
 			break
 		}
 
 		end := hardEnd
-		if bound := slackBoundary(runes[:preferredEnd]); bound > 0 {
-			end = bound
-		} else if bound := slackBoundary(runes[:hardEnd]); bound > 0 {
+		if bound := slackBoundary(runes[:hardEnd]); bound > 0 {
 			end = bound
 		}
 
