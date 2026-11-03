@@ -1023,6 +1023,48 @@ test("tab group editor moves New session in, ungroups, and closes; collapsed gro
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
 }), 60_000);
 
+test("a group kept when empty stays in place through reload, offers New session, and takes dropped tabs", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const fresh = strip(page).getByRole("button", { name: "New session in Work", exact: true });
+  const command = (name: string) => strip(page).getByRole("button", { name: "Edit Work", exact: true }).click().then(() => page.getByRole("button", { name, exact: true }).click());
+  for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"], ["delta", "Delta"]]) await openSaved(page, origin, href(id), name, saved);
+  await menu(page, "Bravo", "Add to group", "New group");
+  await page.keyboard.type("Work");
+  await page.keyboard.press("Escape");
+  await menu(page, "Charlie", "Add to group", "Work");
+  await command("Keep group when empty");
+  expect(await order(page)).toEqual(["Alpha", "Work", "Bravo", "Charlie", "Delta"]);
+  expect(await fresh.count()).toBe(0);
+
+  // Emptied by a close and a drag out, it stays where it was, and so it reloads.
+  await menu(page, "Bravo", "Close");
+  await tab("Charlie").dragTo(tab("Alpha"));
+  expect(await order(page)).toEqual(["Charlie", "Alpha", "Work", "Delta"]);
+  await until(() => saved.state.tabs.length === 4 && !saved.state.tabs.some((item) => item.path === href("charlie") && item.group));
+  await page.reload();
+  await fresh.waitFor();
+  expect(await order(page)).toEqual(["Charlie", "Alpha", "Work", "Delta"]);
+
+  // A tab dropped on it joins it; closing the group's tabs keeps it, and its New session starts one inside it.
+  await tab("Delta").dragTo(fresh);
+  expect(await tab("Delta").getAttribute("aria-description")).toStartWith("Group Work, ");
+  expect(await fresh.count()).toBe(0);
+  await command("Close group");
+  await page.waitForURL(`**${href("alpha")}`);
+  expect(await order(page)).toEqual(["Charlie", "Alpha", "Work"]);
+  await fresh.click();
+  await page.waitForURL(`${origin}/`);
+  expect(await order(page)).toEqual(["Charlie", "Alpha", "Work", "New session"]);
+  expect(await tab("New session").getAttribute("aria-description")).toBe("Group Work, Space: Main");
+
+  // No longer kept, it goes once empty, like any group.
+  await command("Don't keep group when empty");
+  expect(await order(page)).toEqual(["Charlie", "Alpha", "Work", "New session"]);
+  await menu(page, "New session", "Remove from group");
+  expect(await order(page)).toEqual(["Charlie", "Alpha", "New session"]);
+  await until(() => !saved.state.groups.some((group) => group.name === "Work") && !saved.state.tabs.some((item) => item.path.startsWith("group:")));
+}), 60_000);
+
 test("spaces show only their own tabs, return to their last tab, follow opened tabs, and survive reload", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const space = page.getByRole("button", { name: /^Space: / });

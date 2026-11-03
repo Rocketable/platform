@@ -246,6 +246,12 @@ A named place in the Web that holds tabs, shared by everyone.
 
 The server keeps one list, oldest first, with names unique ignoring case, and the last one cannot be deleted. An agent or cron definition names its space by name; tabs and sessions refer to a space by its ID, so a rename keeps them in it. Where each tab sits, and which space a person is in, is that person's own and follows them across devices; only the space's Shared Group is the same for everyone.
 
+### Tab Group
+
+A named, colored run of one person's adjacent tabs in one Space, which can be collapsed to its header.
+
+A group sits where its first tab is and lives in that tab's Space; moving it to another Space moves all its tabs. It goes away when its last tab closes or leaves it, unless the person keeps it: a kept group stays where it was, across reloads and devices, offers a new session inside it while empty and expanded, and goes once it is both empty and no longer kept. The Shared Group and the Top Shelf are groups with rules of their own.
+
 ### Shared Group
 
 The one grey tab group named Shared that every space has, shown first in the Web sidebar. Its tabs are the same for every Web user, and anyone can add a tab to it or remove one, which removes it for everyone. A tab can be in a space's Shared Group and in a person's own tabs at once. Its order and collapsing it are each person's own; tabs a person has not placed follow, oldest added first. Deleting a space moves its Shared Group's tabs into the first remaining space's.

@@ -520,8 +520,14 @@ active tab.
   colored chip with the name, or a color dot when unnamed. Clicking it collapses
   or expands the group. Right-click, Shift+F10, or the header's **…** button opens
   the editor: name (saved on Enter or leaving the field), nine colors, **New tab
-  in group** (moves New session into the group, or opens it there), **Ungroup**,
-  and **Close group**, which closes the members by the usual close rules. Members
+  in group** (moves New session into the group, or opens it there), **Keep group
+  when empty** (or **Don't keep group when empty**), **Ungroup**,
+  and **Close group**, which closes the members by the usual close rules. A
+  group goes when its last tab does, unless it is kept: a kept group stays
+  where it was, across reloads and devices, and shows a **New session** row
+  that starts a new session in it. A tab dropped on that row or on the group's
+  header joins it. Ungroup and Close group leave a kept group empty; no longer
+  kept, an empty group goes. Members
   sit under the header behind a colored rule. A tab opened while
   a grouped tab is active joins that group. A collapsed group still shows its
   active tab, and activating any hidden tab, including with Cmd/Ctrl+[ and ],
@@ -637,7 +643,8 @@ active tab.
   lost. The server keeps one row per tab and per group. A session's tab is saved
   only while the session exists, and deleting a session removes its tab for
   everyone. Groups with no tabs are dropped, except the entry that keeps whether
-  you collapsed Shared, tabs whose space is gone join the
+  you collapsed Shared. A kept group holds its place with a hidden tab row whose
+  path is `group:<id>`, which no tab command sees. Tabs whose space is gone join the
   first space keeping their group, and tabs whose group is gone leave it. A
   window reloads them when it becomes visible or regains focus: it takes in
   changes made elsewhere, merged with its own unsaved ones, but stays on its own
