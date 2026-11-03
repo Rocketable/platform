@@ -29,11 +29,11 @@ import (
 )
 
 const (
-	slackFileDownloadTimeout                                     = 30 * time.Second
-	maxSlackImageDownloadBytes                                   = 16 << 20
-	slackTextLimit, slackBlockTextLimit, slackPreferredChunkSize = 3800, 3000, 3200
-	slackAdoptHistoryLimit                                       = 50
-	slackImmediatePlaceholder                                    = "_Thinking..._"
+	slackFileDownloadTimeout            = 30 * time.Second
+	maxSlackImageDownloadBytes          = 16 << 20
+	slackTextLimit, slackBlockTextLimit = 3800, 3000
+	slackAdoptHistoryLimit              = 50
+	slackImmediatePlaceholder           = "_Thinking..._"
 )
 
 var errSlackDownloadLimitExceeded = errors.New("slack file download exceeded size limit")
@@ -410,7 +410,7 @@ func slackReplyDestination(replyTarget *protocol.SlackReplyTarget) (channelID, t
 
 func titledMessageLayout(header, fallback, text string) (fallbackText string, blocks []slack.Block, overflow []string) {
 	header = slackTruncatedText(header, 150, "...")
-	bodyChunks := splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
+	bodyChunks := splitSlackText(text, slackBlockTextLimit)
 	// One of Slack's 50 blocks stays free for the footer.
 	rootBodyCount := min(len(bodyChunks), 47)
 

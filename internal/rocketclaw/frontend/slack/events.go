@@ -35,7 +35,7 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 						text = "(attachments)"
 					}
 
-					for _, chunk := range splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit) {
+					for _, chunk := range splitSlackText(text, slackBlockTextLimit) {
 						blocks := []slack.Block{
 							slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, "📡 web", false, false)),
 							slack.NewDividerBlock(),
