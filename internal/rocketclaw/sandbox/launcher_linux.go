@@ -278,12 +278,7 @@ func memfd(name string, data []byte) (*os.File, error) {
 	}
 
 	f := os.NewFile(uintptr(fd), name)
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("memfd %s: %w", name, err)
-	}
-
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
+	if _, err := f.WriteAt(data, 0); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("memfd %s: %w", name, err)
 	}
