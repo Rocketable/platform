@@ -12,6 +12,8 @@ test("real HTTP Revert commits only retained context and converges across viewer
     for (const page of [first, second]) page.on("pageerror", (error: Error) => errors.push(error.message));
     await Promise.all([first.goto(`${url}/s/${btoa("chat")}`), second.goto(`${url}/s/${btoa("chat")}`)]);
     await second.locator("textarea").fill("Other viewer draft");
+    // Keep Chromium's animation frames active for the viewer receiving pointer actions.
+    await first.bringToFront();
     await first.getByRole("button", { name: "Add files", exact: true }).click();
     await first.locator('input[type="file"]').setInputFiles({ name: "old-draft.txt", mimeType: "text/plain", buffer: Buffer.from("replace me") });
     await first.locator("textarea").fill("Keep my draft");
