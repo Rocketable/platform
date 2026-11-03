@@ -114,6 +114,17 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     const page = await browser.newPage({ viewport: { width, height }, isMobile: width < 640, hasTouch: width < 640 });
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
+    // Draft hydration needs both scope requests before it can read IndexedDB.
+    const draftScopeRequests = new Map<{ url(): string }, string>();
+    page.on("request", (request: { url(): string }) => {
+      if (/\/api\/(Identity|ListConfig)$/.test(request.url())) draftScopeRequests.set(request, "pending");
+    });
+    page.on("requestfinished", (request: { url(): string }) => {
+      if (draftScopeRequests.has(request)) draftScopeRequests.set(request, "finished");
+    });
+    page.on("requestfailed", (request: { url(): string; failure(): { errorText: string } }) => {
+      if (draftScopeRequests.has(request)) draftScopeRequests.set(request, request.failure().errorText);
+    });
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
     const headerMessage = page.locator('[data-message-id="1:0"]');
     const copyButton = headerMessage.getByRole("button", { name: "Copy message", exact: true, includeHidden: true });
@@ -266,6 +277,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       const rows = await new Promise<{ text: string }[]>((resolve) => { const request = db.transaction("content").objectStore("content").getAll(); request.onsuccess = () => resolve(request.result); });
       db.close(); return rows.some((row) => row.text === text);
     }, savedComposer);
+    draftScopeRequests.clear();
     await page.reload();
     await composer.waitFor();
     try {
@@ -274,6 +286,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
       try {
         console.info("Composer draft restore after reload", JSON.stringify({
           expected: savedComposer, fixtureTabs: tabs, errors,
+          draftScopeRequests: [...draftScopeRequests].map(([request, status]) => ({ url: request.url(), status })),
           browser: await page.evaluate(() => ({
             url: location.href,
             textareas: Array.from(document.querySelectorAll("textarea"), (node) => ({ id: node.id, placeholder: node.placeholder, text: node.value, disabled: node.matches(":disabled"), visible: node.getClientRects().length > 0 })),
