@@ -812,6 +812,8 @@ message TabsResponse {
   // unshared is the Search page a Search tab taken out of Shared held.
   SearchPage unshared = 7;
   TopShelf top_shelf = 8;
+  // closed is the caller's last 50 closed tabs, newest first, each with the space it was in and a Search tab's page.
+  repeated Tab closed = 9;
 }
 
 // The first event answers the browser's SDP offer; the last ends the call.

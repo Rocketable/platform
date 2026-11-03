@@ -555,7 +555,7 @@ func (s *SessionService) TabState(ctx context.Context, username string) (TabStat
 }
 
 // SaveTabState replaces username's saved Web tab state when it was made from the saved revision,
-// and reports whether it did.
+// and reports whether it did. Tabs it closes join the ones ClosedTabs lists.
 // Saves never write unread_at: a closed tab stays while unread. A session
 // tab names its conversation under the path marks use, and one of a session that does not exist is
 // dropped.
@@ -611,6 +611,34 @@ WHERE web_tab_states.revision = $3`, username, state.Space, revision, lastSpaces
 		groupIDs, names, colors, collapsed = append(groupIDs, group.ID), append(names, group.Name), append(colors, group.Color), append(collapsed, group.Collapsed)
 	}
 
+	recorded, err := execRows(ctx, tx, "record closed tabs", `WITH incoming AS (
+    SELECT COALESCE(`+tabPathSQL+`, t.path) AS path
+    FROM unnest($2::text[], $3::text[]) AS t(path, conversation_id)
+    LEFT JOIN conversations c ON c.conversation_id = t.conversation_id
+), reopened AS (
+    DELETE FROM web_closed_tabs w USING incoming i WHERE w.username = $1 AND w.path = i.path
+), closing AS (
+    SELECT o.path, o.conversation_id, o.space, o.search FROM web_tabs o
+    LEFT JOIN incoming i ON i.path = o.path
+    WHERE o.username = $1 AND o.position IS NOT NULL AND i.path IS NULL AND o.path <> '/' AND NOT starts_with(o.path, 'group:')
+)
+INSERT INTO web_closed_tabs (username, path, conversation_id, space, search, closed_at)
+SELECT $1, path, conversation_id, space, search, now() FROM closing
+ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversation_id, space = excluded.space,
+    search = excluded.search, closed_at = excluded.closed_at`, username, paths, conversations)
+	if err != nil {
+		return false, err
+	}
+
+	if recorded > 0 {
+		if _, err := execState(ctx, tx, "trim closed tabs", `WITH ranked AS (
+    SELECT path, row_number() OVER (ORDER BY closed_at DESC, path) AS n FROM web_closed_tabs WHERE username = $1
+)
+DELETE FROM web_closed_tabs w USING ranked r WHERE w.username = $1 AND w.path = r.path AND r.n > 50`, username); err != nil {
+			return false, err
+		}
+	}
+
 	if _, err := execState(ctx, tx, "clear tab state", `WITH groups AS (
     DELETE FROM web_tab_groups WHERE username = $1
 ), closed AS (
@@ -644,6 +672,14 @@ ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversati
 	}
 
 	return true, nil
+}
+
+// ClosedTabs lists username's closed tabs, newest closed first, as SaveTabState keeps them; they have no group.
+func (s *SessionService) ClosedTabs(ctx context.Context, username string) ([]Tab, error) {
+	return queryRows(ctx, s.db, `SELECT path, space, search FROM web_closed_tabs WHERE username = $1 ORDER BY closed_at DESC, path`, "closed tabs", func(row rowScanner) (Tab, error) {
+		var tab Tab
+		return tab, row.Scan(&tab.Path, &tab.Space, &tab.Search)
+	}, username)
 }
 
 // SharedTab is one tab in a space's Shared group, which every Web user sees. Search is a Search tab's one
@@ -738,6 +774,11 @@ func (s *SessionService) TopShelf(ctx context.Context, username string) ([]byte,
 	}
 
 	return shelf, err
+}
+
+// ExistingConversations returns those of ids that name a conversation.
+func (s *SessionService) ExistingConversations(ctx context.Context, ids []string) ([]string, error) {
+	return queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE conversation_id = ANY($1)`, "existing conversations", ids)
 }
 
 // SaveTopShelf replaces username's Top Shelf with shelf, as the Web saves it.

@@ -17,7 +17,7 @@ import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCErro
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellOff, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, Hourglass, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
+import { BellOff, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -451,6 +451,7 @@ function useRoute() {
     voice: pathname === "/voice",
     pages: pathname === "/pages",
     shortcuts: pathname === "/shortcuts",
+    closed: pathname === "/closed",
     // A page path keeps its escaped agent and file path after the space segment.
     page: pathname.startsWith("/pages/") ? pathname.split("/").slice(3).join("/") : "",
     id: pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "",
@@ -932,7 +933,7 @@ type Space = { id: string; name: string };
 // last names each space's last active tab; sharedOrder is this person's order of Shared tabs by path.
 type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string; last: Record<string, string>; sharedOrder: string[] };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
-const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard] };
+const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard], "/closed": ["Recently closed", History] };
 
 // A Search page is /search or a location under it, each its own tab; it is titled with its name, else the query it shows.
 const isSearch = (path: string) => /^\/search(\/|$)/.test(path);
@@ -1038,7 +1039,8 @@ const savedState = (state: TabState): SavedTabs["state"] => {
   return { tabs, groups: state.groups.filter((group) => group.id === "shared" || tabs.some((tab) => tab.group === group.id)), space: state.space, last: state.last, sharedOrder: state.sharedOrder };
 };
 
-const noShared: SavedTabs["shared"] = [], noMutes: SavedTabs["mutes"] = [], noShelf: TopShelf = {}, noRows: Session[] = [];
+type ClosedTab = NonNullable<SavedTabs["closed"]>[number];
+const noShared: SavedTabs["shared"] = [], noMutes: SavedTabs["mutes"] = [], noClosed: ClosedTab[] = [], noShelf: TopShelf = {}, noRows: Session[] = [];
 type ShelfTab = NonNullable<TopShelf["tabs"]>[number];
 
 // This person's Top Shelf, kept by the local server, from the saved tabs its view or its session list fetches;
@@ -1074,8 +1076,6 @@ const isShared = (shared: SavedTabs["shared"], space: string, path: string) => !
 // A tab's mute, or its snooze until it ends; the next Tabs reply drops an ended snooze.
 const muteOf = (mutes: SavedTabs["mutes"], path: string) => mutes.find((mute) => mute.path === path && (!mute.until || Date.parse(mute.until) > Date.now()));
 
-// Every Tabs reply carries every space's Shared tabs and this person's mutes, which replace the cached ones when they
-// changed, unless a personal save raced a cache change; this person's tabs are left to the revision merge in useTabs.
 // received sees the reply before the cache takes it. name is the server the tabs belong to, which a reply arriving
 // after the page moved to another server still updates.
 async function tabsCall(name: string, input: Parameters<typeof mutations.tabs>[0], received?: (reply: SavedTabs) => void) {
@@ -1088,7 +1088,8 @@ async function tabsCall(name: string, input: Parameters<typeof mutations.tabs>[0
     const shared = input.state && old.shared !== before?.shared ? old.shared : reply.shared;
     const mutes = input.state && old.mutes !== before?.mutes ? old.mutes : reply.mutes;
     if (reply.stale) return input.state ? { ...reply, shared, mutes } : undefined;
-    return JSON.stringify([old.shared, old.mutes]) !== JSON.stringify([shared, mutes]) ? { ...old, shared, mutes } : undefined;
+    const { closed } = reply;
+    return JSON.stringify([old.shared, old.mutes, old.closed]) !== JSON.stringify([shared, mutes, closed]) ? { ...old, shared, mutes, closed } : undefined;
   });
   return reply;
 }
@@ -1123,7 +1124,7 @@ function useTabs() {
   const identity = useQuery(queries.identity());
   const owner = identity.data?.username;
   const saved = useQuery({ ...queries.tabs(owner ?? "", name), enabled: owner !== undefined });
-  const shared = saved.data?.shared ?? noShared, mutes = saved.data?.mutes ?? noMutes, shelf = useTopShelf();
+  const shared = saved.data?.shared ?? noShared, mutes = saved.data?.mutes ?? noMutes, closed = saved.data?.closed ?? noClosed, shelf = useTopShelf();
   const pathname = usePathname() || "/";
   const [state, setState] = useState(() => loadTabs(pathname));
   // This server's Top Shelf tabs open like Shared ones, without a tab; one of a deleted space opens in space. The spaces
@@ -1263,7 +1264,22 @@ function useTabs() {
     return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, false, reply.shared) }) : open(path, "", undefined, false, reach, search);
   };
   return {
-    state, strip, shown, groups, here, shared, mutes, pathname, close, enter, edit, editor, setEditor, settle, snoozing, setSnoozing, mute, open, addSearch, pending: spaceChange.isPending,
+    state, strip, shown, groups, here, shared, mutes, closed, pathname, close, enter, edit, editor, setEditor, settle, snoozing, setSnoozing, mute, open, addSearch, pending: spaceChange.isPending,
+    deleted: (path: string) => {
+      close([path]);
+      const shelved = shelf?.tabs?.find((tab) => (tab.server ?? "") === name && tab.path === path);
+      if (shelved) unshelve(shelved);
+    },
+    reopen: ({ path, space, search }: ClosedTab = closed[0]) => {
+      const known = state.spaces.find((item) => item.id === space)?.id;
+      flushSync(() => {
+        setState((current) => {
+          const next = openTab(known ? { ...current, space: known } : current, path, reach, false, search);
+          return known ? { ...next, tabs: next.tabs.map((tab) => tab.path === path ? { ...tab, unplaced: undefined } : tab) } : next;
+        });
+        navigate(path);
+      });
+    },
     // A moved Shared row moves for this person alone; their order keeps only paths still shared somewhere.
     moveShared: (from: string, to: string) => setState((current) => ({ ...current, sharedOrder: [...new Set([...moveQueueId(here, from, to), ...current.sharedOrder])].filter((path) => shared.some((tab) => tab.path === path)) })),
     // Collapsing Shared is this person's choice for every space, kept as the member-less group "shared".
@@ -1783,13 +1799,16 @@ function tabActivity(session: Session) {
   return [[session.forkedFrom && "Forked session", activity, session.unreadAt && "Unread"].filter(Boolean).join(", "), Icon, session.running && !session.asking] as const;
 }
 
+const tabLabel = (tab: Pick<Tab, "path" | "search">, session: Session, SessionIcon: typeof Search): [string, typeof Search] =>
+  isSearch(tab.path) ? [searchTitle(tab.search), Search] : pageTab(tab.path) ?? [sessionTitle(session), SessionIcon];
+
 // A detail line, such as a Top Shelf tab's server and space, sits under the title inside the tab, so the row's highlight covers both.
 function TabItem({ tab, description, detail, chosen, rule, active, stop, shared, editing, endEdit, close, openMenu }: { tab: Tab; description: string; detail?: string; chosen: boolean; rule?: string; active: boolean; stop: boolean; shared?: boolean; editing: boolean; endEdit: () => void; close: () => void; openMenu: (anchor: MenuAnchor) => void }) {
   const sidebar = useContext(Sidebar);
   const id = pathSession(tab.path);
   const session = sidebar.rows.find((row) => row.id === id) ?? { id };
   const [activity, SessionIcon, working] = tabActivity(session);
-  const [label, Icon] = isSearch(tab.path) ? [searchTitle(tab.search), Search] : pageTab(tab.path) ?? [sessionTitle(session), SessionIcon];
+  const [label, Icon] = tabLabel(tab, session, SessionIcon);
   const title = useCleanText(label), mute = muteOf(useContext(TabActions).mutes, tab.path);
   const quiet = mute && (mute.until ? `Snoozed until ${new Date(mute.until).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}` : "Muted");
   const ref = useRef<HTMLDivElement>(null);
@@ -1858,7 +1877,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = ![route.cron, route.timeline, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.pages, route.shortcuts, route.page, route.remote].some(Boolean);
+  const showChat = ![route.cron, route.timeline, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.pages, route.shortcuts, route.closed, route.page, route.remote].some(Boolean);
   // The screen stays on while the Voice page is open or a call runs.
   const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
   useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
@@ -1909,6 +1928,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     const action = mod && !event.altKey && event.code === "KeyP" ? () => openPalette(event.shiftKey ? "commands" : "sessions")
       : sidebar.medium && plain && event.code === "KeyB" ? sidebar.toggle
       : mod && event.altKey && !event.shiftKey && event.code === "KeyN" ? newChat
+      : mod && event.altKey && !event.shiftKey && event.code === "KeyT" && tabs.closed.length ? tabs.reopen
       : plain && (event.code === "BracketLeft" || event.code === "BracketRight") ? () => tabs.step(event.code === "BracketLeft")
       : undefined;
     if (!action) return;
@@ -1943,7 +1963,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
           <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabSettling /><TabNotifications /><BoardNotifications />
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
             {tabs.snoozing ? <SnoozeDialog path={tabs.snoozing} /> : null}
-            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} keyCommands={keyCommands(tabs.step, sidebar.toggle, sidebar.medium)} opencode={palette.opencode} />
+            <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} keyCommands={keyCommands(tabs, sidebar.toggle, sidebar.medium)} opencode={palette.opencode} />
          <div className="flex min-h-0 flex-1 flex-col overflow-hidden overscroll-y-none bg-background">
             <BottomNavigation>
               <SidebarToggle open={sidebar.open} toggle={sidebar.toggle} />
@@ -1970,6 +1990,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               {route.voice ? <VoicePage /> : null}
               <PageIndex show={route.pages} />
               <ShortcutsPage show={route.shortcuts} />
+              <ClosedTabsPage show={route.closed} />
               <HostedPage key={route.page} page={route.page} />
               <SkillPage name={route.skill} />
               {/* Keyed by server, so moving between one server's sessions keeps its view (RemoteSession). */}
@@ -1987,9 +2008,9 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   );
 }
 
-// The palette runs the shortcuts' own actions; the sidebar toggle is listed only while Cmd/Ctrl+B works.
-function keyCommands(step: (back: boolean) => void, toggle: () => void, medium: boolean) {
-  return [{ key: "tab-previous", label: "Tabs: Previous", run: () => step(true) }, { key: "tab-next", label: "Tabs: Next", run: () => step(false) }, ...medium ? [{ key: "tab-sidebar", label: "Tabs: Toggle sidebar", run: toggle }] : []];
+function keyCommands({ step, closed, reopen }: ReturnType<typeof useTabs>, toggle: () => void, medium: boolean) {
+  return [{ key: "tab-previous", label: "Tabs: Previous", run: () => step(true) }, { key: "tab-next", label: "Tabs: Next", run: () => step(false) },
+    ...closed.length ? [{ key: "tab-reopen", label: "Tabs: Reopen closed tab", run: reopen }] : [], ...medium ? [{ key: "tab-sidebar", label: "Tabs: Toggle sidebar", run: toggle }] : []];
 }
 
 // Pick date & time snoozes a tab's notifications until a local date and time, starting at tomorrow 9:00; a time
@@ -2196,7 +2217,7 @@ function paletteRows(
     { key: "dashboard", label: "New dashboard", run: () => tabs.addSearch(newDashboard, true) },
     { key: "run-cron", label: "Cron: Run", keep: true, run: () => openCron("cron") },
     { key: "cron-timeline", label: "Cron: Timeline", keep: true, run: () => openCron("timeline") },
-    ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["shortcuts", "Help: Keyboard Shortcuts"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
+    ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["closed", "Tabs: Recently closed"], ["shortcuts", "Help: Keyboard Shortcuts"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
   ].filter((item) => tier(item.label) < 3).sort((a, b) => {
     // Better matches come first. Within a tier, recently run commands lead, except Timeline levels, which always keep the Config slider's order.
@@ -2512,6 +2533,7 @@ const shortcuts = [
   { id: "new", label: "New session", keys: ["mod", "Alt", "N"] },
   { id: "tab-previous", label: "Previous tab", keys: ["mod", "["] },
   { id: "tab-next", label: "Next tab", keys: ["mod", "]"] },
+  { id: "tab-reopen", label: "Reopen the last closed tab", keys: ["mod", "Alt", "T"] },
   { id: "tab-sidebar", label: "Show or hide the tab sidebar", where: "Tabs in the left sidebar, on a wide window", keys: ["mod", "B"] },
   { id: "page-close", label: "Close the tab", where: "Pages other than sessions and Search pages", keys: ["Escape"] },
   { id: "message-steer", label: "Steer the running turn", where: "Message box, while a turn runs", keys: ["mod", "Enter"] },
@@ -2532,6 +2554,28 @@ function ShortcutsPage({ show }: { show: boolean }) {
       {shortcuts.map(({ id, label, where }) => <li key={id} className="flex items-center justify-between gap-4 py-2"><span>{label}{where ? <span className="block text-xs text-muted-foreground">{where}</span> : null}</span><Keys id={id} /></li>)}
     </ul>
   </div>;
+}
+
+function ClosedTabsPage({ show }: { show: boolean }) {
+  const { closed, state } = useContext(TabActions);
+  if (!show) return null;
+  return <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
+    <PageTitle>Recently closed</PageTitle>
+    {closed.length ? null : <p className="text-sm text-muted-foreground">No closed tabs</p>}
+    <ul aria-label="Recently closed tabs" className="flex flex-col gap-1">
+      {closed.map((tab) => <li key={tab.path}><ClosedTabRow tab={tab} space={state.spaces.find((item) => item.id === tab.space)?.name} /></li>)}
+    </ul>
+  </div>;
+}
+
+function ClosedTabRow({ tab, space }: { tab: ClosedTab; space?: string }) {
+  const { reopen } = useContext(TabActions), id = pathSession(tab.path);
+  const [label, Icon] = tabLabel(tab, useContext(Sidebar).rows.find((row) => row.id === id) ?? { id }, MessageSquare);
+  const title = useCleanText(label);
+  return <button type="button" className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => reopen(tab)}>
+    <Icon aria-hidden="true" className="size-4 shrink-0" /><span className="min-w-0 flex-1 truncate">{title}</span>
+    {space ? <span className="shrink-0 text-xs text-muted-foreground">{space}</span> : null}
+  </button>;
 }
 
 function paletteEmpty(mode: PaletteMode | undefined, sidebar: SidebarView, search: ReturnType<typeof useSessionSearch>, loadingJobs: boolean, folders?: string) {
@@ -2629,7 +2673,7 @@ function RemoteSession({ id }: { id: string }) {
     creating.current = true;
     create.mutate({ opencodeServer: server, directory, spaceId: tabs.state.space }, { onSettled: () => { creating.current = false; } });
   });
-  const closeTab = useEffectEvent(() => tabs.close([rowPath({ id, kind: "REMOTE_OPENCODE" })]));
+  const closeTab = useEffectEvent(() => tabs.deleted(rowPath({ id, kind: "REMOTE_OPENCODE" })));
   const reportSession = useEffectEvent((other: string) => { remoteView.shown = other; setReported(true); });
   // One view per server: switching between its sessions' tabs moves the view, as OpenCode's own app moves between
   // sessions, so what OpenCode holds in memory carries over. Leaving for any other tab disposes it.
@@ -2781,7 +2825,7 @@ function DeleteSessionDialog({ id }: { id: string }) {
       const response = await fetch(`${serverURL()}/oc/${session.server}/api/session/${session.remoteSessionId}`, { method: "DELETE" });
       if (!response.ok) throw new Error(`${session.server} did not delete the session (HTTP ${response.status}).`);
     },
-    onSuccess: () => { tabs.close([rowPath(session)]); sidebar.invalidateQueries(); setCommand(undefined); },
+    onSuccess: () => { tabs.deleted(rowPath(session)); sidebar.invalidateQueries(); setCommand(undefined); },
   });
   return <Dialog open onOpenChange={(open) => { if (!open && !remove.isPending) setCommand(undefined); }}>
     <DialogContent>

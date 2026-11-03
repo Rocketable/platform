@@ -16,9 +16,6 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// tabs saves the caller's tab state, changes one space, adds, removes, or edits Shared tabs, or mutes or
-// unmutes one session tab for the caller, then returns every space, the caller's saved state, every Shared
-// tab, and the caller's live mutes. New session and sessions people may not open are never shared or muted.
 func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse, error) {
 	username, _, err := s.principal(ctx)
 	if err != nil {
@@ -49,6 +46,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		mutes    []backend.TabMute
 		shelf    []byte
 		state    backend.TabState
+		closed   []backend.Tab
 		response = &TabsResponse{Stale: (request.State != nil && !saved) || refused}
 	)
 
@@ -72,9 +70,17 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		shelf, err = s.sessions.TopShelf(ctx, username)
 	}
 
+	if err == nil {
+		closed, err = s.sessions.ClosedTabs(ctx, username)
+	}
+
 	if err == nil && shelf != nil {
 		response.TopShelf = &TopShelf{}
 		err = (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(shelf, response.TopShelf)
+	}
+
+	if err == nil && response.TopShelf != nil {
+		response.TopShelf.Tabs, err = s.liveShelfTabs(ctx, response.TopShelf.Tabs)
 	}
 
 	if err == nil && !saved {
@@ -91,6 +97,10 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 
 	if err == nil {
 		response.Unshared, err = searchPage(unshared)
+	}
+
+	if err == nil {
+		response.Closed, err = webTabs(closed)
 	}
 
 	if err != nil {
@@ -189,6 +199,38 @@ func (s *Server) muteTab(ctx context.Context, username string, mute *TabMute) er
 	return nil
 }
 
+func (s *Server) liveShelfTabs(ctx context.Context, tabs []*ShelfTab) ([]*ShelfTab, error) {
+	conversation := func(tab *ShelfTab) string {
+		if tab.Server != "" {
+			return ""
+		}
+
+		return backend.TabConversation(tab.Path)
+	}
+
+	var ids []string
+
+	for _, tab := range tabs {
+		if id := conversation(tab); id != "" {
+			ids = append(ids, id)
+		}
+	}
+
+	if len(ids) == 0 {
+		return tabs, nil
+	}
+
+	live, err := s.sessions.ExistingConversations(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("read top shelf sessions: %w", err)
+	}
+
+	return slices.DeleteFunc(tabs, func(tab *ShelfTab) bool {
+		id := conversation(tab)
+		return id != "" && !slices.Contains(live, id)
+	}), nil
+}
+
 // tabMutes is mutes as the Web reads them, with each snooze's end as an RFC 3339 time in UTC.
 func tabMutes(mutes []backend.TabMute) []*TabMute {
 	out := make([]*TabMute, 0, len(mutes))
@@ -223,15 +265,21 @@ func sharedTabs(shared []backend.SharedTab) ([]*SharedTab, error) {
 // tabState is the backend's saved state as the Web reads it.
 func tabState(state *backend.TabState) (out *TabState, err error) {
 	out = &TabState{Space: state.Space, Last: state.Last, SharedOrder: state.SharedOrder}
-	for _, tab := range state.Tabs {
-		page, errPage := searchPage(tab.Search)
-		err = errors.Join(err, errPage)
-
-		out.Tabs = append(out.Tabs, &Tab{Path: tab.Path, Group: tab.Group, Space: tab.Space, Search: page})
-	}
+	out.Tabs, err = webTabs(state.Tabs)
 
 	for _, group := range state.Groups {
 		out.Groups = append(out.Groups, &TabGroup{Id: group.ID, Name: group.Name, Color: group.Color, Collapsed: group.Collapsed})
+	}
+
+	return out, err
+}
+
+func webTabs(saved []backend.Tab) (out []*Tab, err error) {
+	for _, tab := range saved {
+		page, errPage := searchPage(tab.Search)
+		err = errors.Join(err, errPage)
+
+		out = append(out, &Tab{Path: tab.Path, Group: tab.Group, Space: tab.Space, Search: page})
 	}
 
 	return out, err

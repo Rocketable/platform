@@ -258,6 +258,10 @@ The one italic tab a Web window shows while the person arrows through the sessio
 
 It belongs to that window alone: it is never saved, it never becomes the tab its space returns to, and other windows' tab changes leave it where it is unless they open that same session or delete its space. Choosing the session keeps it as an ordinary tab; dismissing the palette, typing, or running a command closes it. Only sessions that would open in the current space are previewed.
 
+### Closed Tab
+
+One of the last 50 tabs a person closed, which the server keeps, newest first, with the Space it was in and a Search Page's searches, so the Web's Recently closed page or Cmd/Ctrl+Alt+T reopens it there, or in the current space when that Space is gone. New session and Preview Tabs never become one; reopening it or deleting its session takes it off the list.
+
 ### Shared Group
 
 The one grey tab group named Shared that every space has, shown first in the Web sidebar. Its tabs are the same for every Web user who can see its space, and any of them can add a tab to it or remove one, which removes it for everyone. A tab can be in a space's Shared Group and in a person's own tabs at once. Its order and collapsing it are each person's own; tabs a person has not placed follow, oldest added first. Deleting a space moves its Shared Group's tabs into the first remaining space's.
@@ -266,7 +270,7 @@ The one grey tab group named Shared that every space has, shown first in the Web
 
 A Web tab for searching sessions, one of as many as a person opens, each with its own address.
 
-It holds its own searches, shown as tabs inside the page, and can be named; unnamed, it is titled by the query it shows. Its name and searches are the person's own and are saved with their tabs, so they follow the page into groups and other spaces and across devices. Added to a space's Shared Group, it becomes one page everyone in that space sees and edits, its searches and which one is shown included, while the person's own copy stays as it was; whoever takes it out of Shared keeps that one page as their own, together with any searches of their own copy. Escape does not close a Search page, and closing its tab discards it. The Web's session search palette finds every space's Search pages by name or query once something is typed.
+It holds its own searches, shown as tabs inside the page, and can be named; unnamed, it is titled by the query it shows. Its name and searches are the person's own and are saved with their tabs, so they follow the page into groups and other spaces and across devices. Added to a space's Shared Group, it becomes one page everyone in that space sees and edits, its searches and which one is shown included, while the person's own copy stays as it was; whoever takes it out of Shared keeps that one page as their own, together with any searches of their own copy. Escape does not close a Search page, and closing its tab discards it unless it is reopened as a Closed Tab. The Web's session search palette finds every space's Search pages by name or query once something is typed.
 
 ### Remote OpenCode Session
 
@@ -284,7 +288,7 @@ Another RocketClaw server declared in the local server's configuration, whose ch
 
 ### Top Shelf
 
-One person's own tab group above the space picker, shown only when the local RocketClaw has Remote RocketClaws, holding tabs from any server. It is the same in every space and on every server, and opening one of its tabs shows that page on its own server and in its own space without creating a tab, as a Shared Group tab opens; a Search Page opened from it is edited in place. Tabs join, leave and reorder as in any group, and each names the server and space it comes from.
+One person's own tab group above the space picker, shown only when the local RocketClaw has Remote RocketClaws, holding tabs from any server. It is the same in every space and on every server, and opening one of its tabs shows that page on its own server and in its own space without creating a tab, as a Shared Group tab opens; a Search Page opened from it is edited in place. Tabs join, leave and reorder as in any group, and each names the server and space it comes from. A deleted session leaves it.
 
 ### Birth Space
 
