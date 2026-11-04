@@ -1324,12 +1324,16 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n    ask_user_question: allow\n---\nPrompt\n")
 
 	asked, withdrawn := make(chan string, 1), make(chan error, 1)
+	question := make(chan struct{})
+	releaseQuestion := sync.OnceFunc(func() { close(question) })
 	asker := &userQuestionAskerMock{AskUserQuestionFunc: func(ctx context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 		asked <- req.ID
 
 		<-ctx.Done() // The Web asker withdraws an unanswered question when its wait is cancelled.
 
 		withdrawn <- context.Cause(ctx)
+
+		<-question // Keep the execute pending until its call reports the move.
 
 		return protocol.AskUserQuestionAnswer{}, ctx.Err()
 	}}
@@ -1350,6 +1354,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	nt.service.jobs = registry
 
 	runTestManager(t, manager)
+	t.Cleanup(releaseQuestion) // Release before manager shutdown joins the pending call.
 
 	rt := &Runtime{threads: manager, Sessions: nt.service, background: registry}
 	prompt := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "ship it", true)
@@ -1382,6 +1387,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	assert.Contains(t, body, "The script is running in the background (job ID: "+executeID+")")
 	assert.Contains(t, body, "The subagent is working in the background (job ID: "+taskID+")")
 	assert.Equal(t, "[System]\n\n"+fmt.Sprintf(movedNote, "- execute: ask (job ID: "+executeID+")\n- task: research (job ID: "+taskID+")\n"), lastRequestMessage(t, body))
+	releaseQuestion()
 	readFinal(t, nt.finals)
 
 	jobs := func() []string {
