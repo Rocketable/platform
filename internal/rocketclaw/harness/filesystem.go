@@ -127,10 +127,7 @@ func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResu
 		return ToolResult{Output: message, Attachments: []Attachment{attachment}}
 	}
 
-	result, errScan := readLines(content, offset)
-	if errScan != nil {
-		return TextToolResult("failed to read file: " + filename)
-	}
+	result := readLines(content, offset)
 
 	if result.count < offset && (result.count != 0 || offset != 1) {
 		return TextToolResult(fmt.Sprintf("Offset %d is out of range for this file (%d lines)", offset, result.count))
@@ -156,7 +153,7 @@ func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResu
 	return TextToolResult(output.String())
 }
 
-func readLines(content []byte, offset int) (readResult, error) {
+func readLines(content []byte, offset int) readResult {
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 	scanner.Buffer(make([]byte, 0, 64*1024), max(len(content)+2, 64*1024))
 
@@ -175,11 +172,7 @@ func readLines(content []byte, offset int) (readResult, error) {
 		raw = append(raw, scanner.Text())
 	}
 
-	if err := scanner.Err(); err != nil {
-		return readResult{}, fmt.Errorf("scan file lines: %w", err)
-	}
-
-	return readResult{raw: raw, count: count}, nil
+	return readResult{raw: raw, count: count}
 }
 
 func (sfs *sandboxedFileSystem) ApplyPatch(patchText string) string {
