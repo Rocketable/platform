@@ -24,6 +24,7 @@ On start, you must always read:
 - https://pkg.go.dev/iter
 - https://dmitri.shuralyov.com/idiomatic-go/entries/2
 - https://go.dev/blog/context-and-structs
+- https://go.dev/blog/jsonv2
 
 ## General Workflow
 
