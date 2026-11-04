@@ -71,6 +71,9 @@ var _ frontend.Backend = &BackendMock{}
 //			RunTurnFunc: func(context1 context.Context, inboundMessage *protocol.InboundMessage) error {
 //				panic("mock out the RunTurn method")
 //			},
+//			RunningAgentFunc: func(s string) string {
+//				panic("mock out the RunningAgent method")
+//			},
 //			SandboxErrorFunc: func() string {
 //				panic("mock out the SandboxError method")
 //			},
@@ -149,6 +152,9 @@ type BackendMock struct {
 
 	// RunTurnFunc mocks the RunTurn method.
 	RunTurnFunc func(context1 context.Context, inboundMessage *protocol.InboundMessage) error
+
+	// RunningAgentFunc mocks the RunningAgent method.
+	RunningAgentFunc func(s string) string
 
 	// SandboxErrorFunc mocks the SandboxError method.
 	SandboxErrorFunc func() string
@@ -302,6 +308,11 @@ type BackendMock struct {
 			// InboundMessage is the inboundMessage argument value.
 			InboundMessage *protocol.InboundMessage
 		}
+		// RunningAgent holds details about calls to the RunningAgent method.
+		RunningAgent []struct {
+			// S is the s argument value.
+			S string
+		}
 		// SandboxError holds details about calls to the SandboxError method.
 		SandboxError []struct {
 		}
@@ -373,6 +384,7 @@ type BackendMock struct {
 	lockReload                  sync.RWMutex
 	lockReorderQueueItems       sync.RWMutex
 	lockRunTurn                 sync.RWMutex
+	lockRunningAgent            sync.RWMutex
 	lockSandboxError            sync.RWMutex
 	lockStageRevert             sync.RWMutex
 	lockStartGoal               sync.RWMutex
@@ -984,6 +996,38 @@ func (mock *BackendMock) RunTurnCalls() []struct {
 	mock.lockRunTurn.RLock()
 	calls = mock.calls.RunTurn
 	mock.lockRunTurn.RUnlock()
+	return calls
+}
+
+// RunningAgent calls RunningAgentFunc.
+func (mock *BackendMock) RunningAgent(s string) string {
+	if mock.RunningAgentFunc == nil {
+		panic("BackendMock.RunningAgentFunc: method is nil but Backend.RunningAgent was just called")
+	}
+	callInfo := struct {
+		S string
+	}{
+		S: s,
+	}
+	mock.lockRunningAgent.Lock()
+	mock.calls.RunningAgent = append(mock.calls.RunningAgent, callInfo)
+	mock.lockRunningAgent.Unlock()
+	return mock.RunningAgentFunc(s)
+}
+
+// RunningAgentCalls gets all the calls that were made to RunningAgent.
+// Check the length with:
+//
+//	len(mockedBackend.RunningAgentCalls())
+func (mock *BackendMock) RunningAgentCalls() []struct {
+	S string
+} {
+	var calls []struct {
+		S string
+	}
+	mock.lockRunningAgent.RLock()
+	calls = mock.calls.RunningAgent
+	mock.lockRunningAgent.RUnlock()
 	return calls
 }
 

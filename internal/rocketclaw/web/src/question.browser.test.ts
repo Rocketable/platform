@@ -101,3 +101,47 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web quest
     server.stop(true);
   }
 }, 30_000);
+
+test("a limited person cannot answer a question of an agent outside their spaces", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const calls: { path: string; text?: string }[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "chat", agent: "main-agent", running: true }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (!url.pathname.startsWith("/api/")) {
+      const file = Bun.file(path.join(dist, url.pathname));
+      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    }
+    const input = await request.json() as { id: string; text?: string };
+    switch (url.pathname) {
+      case "/api/Protocol": return Response.json({ protoSha256: "question" });
+      case "/api/Identity": return Response.json({ username: "tester", limited: true });
+      case "/api/ListConfig": return Response.json({ config: { workspace: "question" } });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "ops-agent" }], currentAgent: "main-agent" });
+      case "/api/ListSkills": return Response.json({ skills: [] });
+      case "/api/ListQueue": return Response.json({ items: [] });
+      case "/api/Prompt": case "/api/AnswerQuestion": calls.push({ path: url.pathname, text: input.text }); return Response.json({ privateText: "" });
+      case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], pendingQuestions: [{ id: "q1", question: "Ship it?", details: "", multiple: false, options: [{ label: "Yes", value: "yes", description: "" }] }], messages: [], revision: "q1", reset: true, entryKeys: [], running: true, start: "0", more: false });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "ops", name: "Ops" }], state: { tabs: [], groups: [], space: "ops", last: {} } });
+      default: return Response.json({});
+    }
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("chat").replace(/=+$/, "")}`);
+    const composer = page.locator("textarea");
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "ops-agent" }).waitFor();
+    expect(await composer.getAttribute("placeholder")).toBe("Queue a follow-up · ⌘⏎ steers");
+    expect(await page.getByRole("form", { name: "Question" }).count()).toBe(0);
+    await composer.fill("hello");
+    await composer.press("Enter");
+    for (const started = Date.now(); calls.length < 2 && Date.now() - started < 5_000;) await Bun.sleep(10);
+    expect(calls).toEqual([{ path: "/api/Prompt", text: "$agent ops-agent" }, { path: "/api/Prompt", text: "hello" }]);
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);

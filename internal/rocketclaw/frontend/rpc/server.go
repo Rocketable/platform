@@ -74,6 +74,9 @@ type sessionListing struct {
 // sessionListingsKept bounds the listings kept per person, one for each tab or device polling at once.
 const sessionListingsKept = 8
 
+// errOpenCodeClosed refuses OpenCode to people limited to spaces: it gives full control of its server, shell included.
+var errOpenCodeClosed = status.Error(codes.PermissionDenied, "OpenCode is closed to people limited to spaces")
+
 type searchFlight struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
@@ -170,7 +173,7 @@ func (s *Server) DeleteSessionEntries(ctx context.Context, request *SessionEntri
 func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerStream) error {
 	ctx := stream.Context()
 
-	owner, _, err := s.principal(ctx)
+	owner, limit, err := s.spaceLimit(ctx)
 	if err != nil {
 		return err
 	}
@@ -189,14 +192,18 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	// The page needs these before any row: an OpenCode tab mounts once it knows its server.
 	first := &ListSessionsResponse{Owner: owner, OpencodeServers: make(map[string]string), AgentTags: make(map[string]*TagChoices)}
 
-	for name, server := range s.cfg.Clone().OpenCode {
-		// Only the origin: a configured URL may carry credentials. Config validation parsed it.
-		origin, _ := url.Parse(server.URL)
-		first.OpencodeServers[name] = origin.Scheme + "://" + origin.Host
+	if !limit.Limited() {
+		for name, server := range s.cfg.Clone().OpenCode {
+			// Only the origin: a configured URL may carry credentials. Config validation parsed it.
+			origin, _ := url.Parse(server.URL)
+			first.OpencodeServers[name] = origin.Scheme + "://" + origin.Host
+		}
 	}
 
 	for agent, tags := range backend.AgentTags(definitions) {
-		first.AgentTags[agent] = &TagChoices{Tags: tags}
+		if limit.AllowsAgent(agent) {
+			first.AgentTags[agent] = &TagChoices{Tags: tags}
+		}
 	}
 
 	if err := stream.SendMsg(first); err != nil {
@@ -302,20 +309,25 @@ func sidebarSession(chat *backend.SidebarChat) *Session {
 type historyRevision = backend.HistoryInventory
 
 func (s *Server) history(ctx context.Context, request *HistoryRequest) (*HistoryResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil {
 		return nil, err
 	}
 
 	// Cron producer history is readable without granting chat or mutation access.
-	_, cronTrace, err := s.sessions.CronRun(ctx, request.Id)
+	path, cronTrace, err := s.sessions.CronRun(ctx, request.Id)
 	if err != nil {
 		return nil, fmt.Errorf("resolve web cron trace: %w", err)
 	}
 
 	if !cronTrace {
-		if err := s.readableConversation(ctx, request.Id); err != nil {
-			return nil, err
-		}
+		err = s.readableConversation(ctx, request.Id)
+	} else {
+		err = s.cronInLimit(limit, cronfrontend.Stem(path))
+	}
+
+	if err != nil {
+		return nil, err
 	}
 
 	var previous historyRevision
@@ -986,7 +998,8 @@ func (s *Server) humanConversation(ctx context.Context, id string) (bool, error)
 }
 
 func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1001,11 +1014,18 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 	}
 
 	response := &ListCronJobsResponse{}
+	spaces := map[string]string{}
 
 	for i := range jobs {
 		job := &jobs[i]
 
 		row := &CronJob{Stem: cronfrontend.Stem(job.RelativePath), Schedule: strings.Join(job.Schedules, ", "), Body: job.Body, Agent: job.Agent, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
+
+		spaces[row.Stem] = row.Space
+		if !limit.AllowsSpaceName(row.Space) {
+			continue
+		}
+
 		for _, at := range job.Upcoming {
 			row.Upcoming = append(row.Upcoming, at.Format(time.RFC3339Nano))
 		}
@@ -1026,6 +1046,10 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 	runs := map[string]*CronJob{}
 
 	for _, source := range sources {
+		if !limit.AllowsSpaceName(spaces[cronfrontend.Stem(source.Run.Path)]) {
+			continue
+		}
+
 		row, ok := runs[source.SourceConversationID]
 		if !ok {
 			row = &CronJob{Stem: cronfrontend.Stem(source.Run.Path), Status: "ran", LastRun: source.Run.At.Format("2006-01-02T15:04:05.000000000Z"), Origin: source.SourceConversationID}
@@ -1045,7 +1069,7 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 }
 
 func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*RunCronJobResponse, error) {
-	principal, _, err := s.principal(ctx)
+	principal, limit, err := s.spaceLimit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1060,8 +1084,13 @@ func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*R
 		return nil, fmt.Errorf("load web cron agents: %w", err)
 	}
 
+	space := cmp.Or(job.Space, agents.Items[job.Agent].Space)
+	if !limit.AllowsSpaceName(space) || !limit.AllowsAgent(job.Agent) {
+		return nil, fmt.Errorf("run web cron job: %w", status.Error(codes.PermissionDenied, "this cron or its agent is outside your spaces"))
+	}
+
 	id := rand.Text()
-	if err := s.backend.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: job.Agent, CreatedBy: principal, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}); err != nil {
+	if err := s.backend.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: job.Agent, CreatedBy: principal, Space: space}); err != nil {
 		return nil, fmt.Errorf("create web cron conversation: %w", err)
 	}
 
@@ -1120,7 +1149,8 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 }
 
 func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1140,7 +1170,8 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 	}
 
 	for _, channel := range cfg.Slack.Channels {
-		view.SlackChannels = append(view.SlackChannels, &ConfigChannel{Channel: channel.Channel, Agents: slices.Clone(channel.Agents)})
+		agents := slices.DeleteFunc(slices.Clone(channel.Agents), func(name string) bool { return !limit.AllowsAgent(name) })
+		view.SlackChannels = append(view.SlackChannels, &ConfigChannel{Channel: channel.Channel, Agents: agents})
 	}
 
 	return &ListConfigResponse{Config: view}, nil
@@ -1166,7 +1197,8 @@ func (s *Server) listWorkflows(ctx context.Context) (*ListWorkflowsResponse, err
 }
 
 func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*ListSkillsResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1181,7 +1213,7 @@ func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*L
 
 	if request.Agent != "" {
 		agent, ok := agents.Items[request.Agent]
-		if !ok {
+		if !ok || !limit.AllowsAgent(request.Agent) {
 			return response, nil
 		}
 
@@ -1200,7 +1232,8 @@ func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*L
 }
 
 func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1237,7 +1270,7 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 		}
 	}
 
-	allowed = sameSpace(definitions, response.CurrentAgent, allowed)
+	allowed = sameSpace(definitions, response.CurrentAgent, slices.DeleteFunc(allowed, func(name string) bool { return !limit.AllowsAgent(name) }))
 	cfg := s.cfg.Clone()
 
 	// Keep the allowed order: Slack channels list their default agent first.
@@ -1299,15 +1332,20 @@ func sameSpace(agents harness.Agents, current string, allowed []string) []string
 	return same
 }
 
-// agentChoices lists the primary agents a conversation offers: those its Slack thread's channel
-// allows, else every one.
+// agentChoices lists the primary agents a conversation offers the caller: those its Slack thread's
+// channel allows, else every one.
 func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) {
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web agents: %w", err)
 	}
 
-	choices := definitions.PrimaryNames()
+	choices := slices.DeleteFunc(definitions.PrimaryNames(), func(name string) bool { return !limit.AllowsAgent(name) })
 
 	channel, _, err := s.sessions.SlackThread(ctx, id)
 	if err != nil {
@@ -1327,12 +1365,16 @@ func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) 
 }
 
 func (s *Server) createSession(ctx context.Context, request *CreateSessionRequest) (*CreateSessionResponse, error) {
-	principal, _, err := s.principal(ctx)
+	principal, limit, err := s.spaceLimit(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	if name := request.OpencodeServer; name != "" {
+		if limit.Limited() {
+			return nil, fmt.Errorf("create opencode session: %w", errOpenCodeClosed)
+		}
+
 		server, ok := s.cfg.Clone().OpenCode[name]
 		if !ok {
 			return nil, fmt.Errorf("create opencode session: %w", status.Error(codes.InvalidArgument, "select a configured OpenCode server"))
@@ -1364,6 +1406,12 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 		}
 
 		return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.InvalidArgument, "source must be a recorded cron run"))
+	}
+
+	if run {
+		if err := s.cronInLimit(limit, cronfrontend.Stem(path)); err != nil {
+			return nil, err
+		}
 	}
 
 	choices, err := s.agentChoices(ctx, source)
@@ -1464,29 +1512,7 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	}
 
 	if len(words) > 0 && words[0] == "$agent" {
-		choices, err := s.sessionAgentChoices(ctx, request.Id)
-		if err != nil {
-			return nil, err
-		}
-
-		if len(words) == 1 {
-			return &PromptResponse{PrivateText: strings.Join(choices, ", ")}, nil
-		}
-
-		if len(words) != 2 || !slices.Contains(choices, words[1]) {
-			return nil, fmt.Errorf("web agent: %w", status.Error(codes.InvalidArgument, "agent is not currently allowed"))
-		}
-
-		switched, err := s.backend.SwitchConversationAgent(request.Id, words[1])
-		if err != nil {
-			return nil, fmt.Errorf("switch web agent: %w", err)
-		}
-
-		if !switched {
-			return nil, fmt.Errorf("web agent: %w", status.Error(codes.NotFound, "conversation is not recorded"))
-		}
-
-		return &PromptResponse{PrivateText: "Agent: " + words[1]}, nil
+		return s.agentReply(ctx, request.Id, words)
 	}
 
 	if len(words) == 1 && strings.EqualFold(words[0], "$workflow") {
@@ -1521,6 +1547,10 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 
 	if goal.Objective != "" {
 		kind = protocol.InboundKindPrompt
+	}
+
+	if err := s.turnFeedable(ctx, request.Id, kind == protocol.InboundKindSteer); err != nil {
+		return nil, err
 	}
 
 	content, err := s.uploadContent(ctx, request.Id, text, request.AttachmentIds)
@@ -1565,6 +1595,33 @@ func webGoal(text string, words []string) (goal protocol.GoalRequest, prompt, re
 	goal, rejection = protocol.ParseGoalRequest(strings.TrimPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), words[0]))
 
 	return goal, goal.Objective, rejection
+}
+
+// agentReply answers $agent privately with the session's agent choices, or switches the session to the one named.
+func (s *Server) agentReply(ctx context.Context, id string, words []string) (*PromptResponse, error) {
+	choices, err := s.sessionAgentChoices(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(words) == 1 {
+		return &PromptResponse{PrivateText: strings.Join(choices, ", ")}, nil
+	}
+
+	if len(words) != 2 || !slices.Contains(choices, words[1]) {
+		return nil, fmt.Errorf("web agent: %w", status.Error(codes.InvalidArgument, "agent is not currently allowed"))
+	}
+
+	switched, err := s.backend.SwitchConversationAgent(id, words[1])
+	if err != nil {
+		return nil, fmt.Errorf("switch web agent: %w", err)
+	}
+
+	if !switched {
+		return nil, fmt.Errorf("web agent: %w", status.Error(codes.NotFound, "conversation is not recorded"))
+	}
+
+	return &PromptResponse{PrivateText: "Agent: " + words[1]}, nil
 }
 
 // workflowListReply answers a bare $workflow privately with the saved workflows.
@@ -1663,6 +1720,13 @@ func (s *Server) queueItem(ctx context.Context, method string, request *QueueIte
 
 	if strings.TrimSpace(request.ItemId) == "" {
 		return nil, fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "queue item ID is required"))
+	}
+
+	if method != "RemoveQueueItem" {
+		// Only a promoted item joins the running turn; a released or edited one runs as a later turn.
+		if err := s.turnFeedable(ctx, request.Id, method == "SteerQueueItem"); err != nil {
+			return nil, err
+		}
 	}
 
 	var (
@@ -1787,6 +1851,10 @@ func (s *Server) answerQuestion(ctx context.Context, request *AnswerQuestionRequ
 		return nil, err
 	}
 
+	if err := s.turnFeedable(ctx, request.ConversationId, true); err != nil {
+		return nil, err
+	}
+
 	err := s.backend.AnswerQuestion(ctx, request.ConversationId, request.AskId, protocol.AskUserQuestionAnswer{Selected: request.Selected, Custom: request.Custom})
 	if notPending, ok := errors.AsType[*backend.QuestionNotPendingError](err); ok {
 		err = status.Error(codes.NotFound, notPending.Error())
@@ -1808,8 +1876,41 @@ func (s *Server) promptable(ctx context.Context, id string) error {
 	return s.visibleConversation(ctx, id)
 }
 
+// turnFeedable refuses a caller the config's permissions limit when session id's current agent is outside their
+// spaces, or, when joins marks input that joins the turn running there (a steer or an answer), when that turn's
+// agent is: the turn keeps the agent it started with after a switch. Input that waits for a later turn runs with
+// the current agent. Its refusal is a bare status, whose message a Voice notice shows.
+func (s *Server) turnFeedable(ctx context.Context, id string, joins bool) error {
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil || !limit.Limited() {
+		return err
+	}
+
+	thread, _, err := s.sessions.Thread(id)
+	if err != nil {
+		return fmt.Errorf("read web session agent: %w", err)
+	}
+
+	if !limit.AllowsAgent(thread.Agent) {
+		return status.Errorf(codes.PermissionDenied, "agent %s is outside your spaces; switch to one of yours with $agent", thread.Agent)
+	}
+
+	// A turn that starts after this check runs the agent current then, which the check saw unless an unrestricted
+	// person switched it in between; checking inside the backend's admission would close that gap.
+	if !joins {
+		return nil
+	}
+
+	if running := s.backend.RunningAgent(id); running != "" && !limit.AllowsAgent(running) {
+		return status.Errorf(codes.PermissionDenied, "agent %s is running a turn outside your spaces; wait for it, or end it with $stop", running)
+	}
+
+	return nil
+}
+
 func (s *Server) visibleConversation(ctx context.Context, id string) error {
-	if _, _, err := s.principal(ctx); err != nil {
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil {
 		return err
 	}
 
@@ -1842,6 +1943,19 @@ func (s *Server) visibleConversation(ctx context.Context, id string) error {
 
 	if !visible {
 		return fmt.Errorf("web queue: %w", status.Error(codes.PermissionDenied, "private conversation"))
+	}
+
+	if !limit.Limited() {
+		return nil
+	}
+
+	top, err := s.sessions.TopLevelSession(ctx, id)
+	if err != nil {
+		return fmt.Errorf("resolve web conversation visibility: %w", err)
+	}
+
+	if !limit.AllowsSession(&top) {
+		return fmt.Errorf("web conversation: %w", status.Error(codes.PermissionDenied, "this session is outside your spaces"))
 	}
 
 	return nil
@@ -1899,6 +2013,37 @@ func (s *Server) principal(ctx context.Context) (username, principal string, err
 	}
 
 	return s.tailscaleUsername(ctx, ip)
+}
+
+func (s *Server) spaceLimit(ctx context.Context) (username string, limit backend.SpaceLimit, err error) {
+	username, _, err = s.principal(ctx)
+	if err != nil {
+		return "", backend.SpaceLimit{}, err
+	}
+
+	limit, err = s.sessions.SpaceLimitFor(ctx, s.cfg.Clone().PermittedSpaces(username))
+	if err != nil {
+		return "", backend.SpaceLimit{}, fmt.Errorf("read web space limit: %w", err)
+	}
+
+	return username, limit, nil
+}
+
+func (s *Server) cronInLimit(limit backend.SpaceLimit, stem string) error {
+	if !limit.Limited() {
+		return nil
+	}
+
+	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	if err != nil {
+		return fmt.Errorf("load web cron agents: %w", err)
+	}
+
+	if job, errLoad := s.cronjobs.LoadOneOffCronjob(stem); errLoad != nil || !limit.AllowsSpaceName(cmp.Or(job.Space, agents.Items[job.Agent].Space)) {
+		return fmt.Errorf("web cron: %w", status.Error(codes.PermissionDenied, "this cron is outside your spaces"))
+	}
+
+	return nil
 }
 
 func (s *Server) tailscaleUsername(ctx context.Context, ip netip.Addr) (username, principal string, err error) {

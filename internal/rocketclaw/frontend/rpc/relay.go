@@ -14,6 +14,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, servers map[string]config.OpenCodeConfig) {
@@ -34,6 +35,11 @@ func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, servers map
 			identity := &IdentityResponse{}
 			if err := connection.Invoke(r.Context(), "/rpc.Web/Identity", &IdentityRequest{}, identity); err != nil {
 				httpRPCError(w, err)
+				return
+			}
+
+			if identity.GetLimited() {
+				http.Error(w, status.Convert(errOpenCodeClosed).Message(), http.StatusForbidden)
 				return
 			}
 

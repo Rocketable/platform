@@ -292,6 +292,23 @@ func (r *Runtime) SwitchConversationAgent(conversationID, agent string) (bool, e
 	return switched, nil
 }
 
+// RunningAgent returns the agent of the turn running in conversationID, empty when none runs. A steer
+// joins that turn even when the conversation switched agents after it started.
+func (r *Runtime) RunningAgent(conversationID string) string {
+	r.threads.mu.Lock()
+	defer r.threads.mu.Unlock()
+
+	running, ok := r.threads.bridges[conversationID].(*Bridge)
+	if !ok {
+		return ""
+	}
+
+	running.mu.Lock()
+	defer running.mu.Unlock()
+
+	return running.activeAttribution.Agent
+}
+
 // MentionThread treats a slack-thread: conversation that earlier versions created for a cron
 // report or bound to an External MCP session as a report thread; the prefix keeps cron's own
 // web: chats out.

@@ -446,8 +446,8 @@ refuses any request, WebSocket upgrades included, whose `Origin` is another site
 and sends OpenCode its own origin so OpenCode's terminal origin check still holds.
 Cookies cross in neither direction, OpenCode's sign-in challenge never reaches the
 browser, and every proxied response is sandboxed, so a file opened directly never
-runs as RocketClaw. Everyone the Web admits gets full control of every configured
-OpenCode server, including its shell. The proxy writes the admitted username into
+runs as RocketClaw. Everyone the Web admits, except people limited to spaces (below),
+gets full control of every configured OpenCode server, including its shell. The proxy writes the admitted username into
 each prompt's message `metadata` as `rocketclaw_username`, replacing any value the
 client sent. The field only attributes turns for unread marks and notifications and
 must never gate access: anyone the Web admits can bypass the proxy through
@@ -529,6 +529,61 @@ Lookup failures leave that display field empty. For Tailscale identification, th
 RocketClaw process's PATH and connected to its local service.
 `Protocol` exposes only the schema hash to the trusted local proxy and requires
 no browser identity.
+
+### Space limits
+
+The config's `permissions` limit each login it lists to the spaces listed for it
+(see [Space permissions](../../../../README.md#space-permissions) for the config
+and what such a person sees). `spaceLimit` reads the caller's `backend.SpaceLimit`
+on each request. For a login `permissions` does not list, it is the zero value, which limits nothing and reads no database
+or agent files, so those people's replies are unchanged. A limit holds the
+person's space names and IDs and the agents whose `space:` names one of them.
+`AllowsSession` admits a top-level session born in one of those spaces, or with
+no Birth Space whose current agent is theirs, and never a remote OpenCode session.
+
+The checks sit where requests already pass:
+
+- Listings: backend `sidebarSessions` drops rows outside the limit after reading
+  them, so `ListSessions`, `SearchSessions`, and `Board` need no code of their own.
+  `SearchSessions` offers only the principals of the chats it read for the caller.
+  `SearchMessages` keeps only hits in chats `SidebarChats` lists for the caller,
+  and its shared-search key names the caller only for a limited person.
+- One session: `visibleConversation` reads the top-level conversation by parent
+  link (`TopLevelSession`) and checks its Birth Space, agent, and kind. Shadows
+  reach it through `readableConversation`. History of a cron trace checks the
+  cron's space instead (`cronInLimit`): its own `space`, else its agent's.
+- Agent choice: `agentChoices` and `ListAgents` drop agents outside the limit, which
+  covers `CreateSession`, `ForkSession`, `VoiceSettings`, and `$agent`. `sameSpace`
+  still offers every remaining choice when the current agent is outside the
+  limit, so `$agent` can switch the session back.
+- Turns: `turnFeedable` refuses a prompt with content (`$goal`, steer, queue,
+  stash), `SteerQueueItem`, `PopQueueItem`, `EditQueueItem`, `AnswerQuestion`, and
+  `Handoff` when the session's current agent is outside the limit. A steer
+  prompt, `SteerQueueItem`, `AnswerQuestion`, and a voice hand-off join the turn
+  running there, which keeps the agent it started with after a switch, so they
+  are also refused while that turn's agent is outside the limit. Queued, stashed,
+  released, and edited items wait for a turn of their own, so they are taken. `$stop`, `$agent`, and `RemoveQueueItem` need only
+  a visible session. Voice checks when the call starts and at each hand-off; a
+  refused hand-off sends a notice and its lines wait for a later one.
+- Handlers outside those paths check for themselves: `Tabs` (only the person's
+  spaces and Shared tabs, and creates missing listed spaces), `GetPage` and
+  `ListPages`, `ListCronJobs` and `RunCronJob` (the cron's space and its agent),
+  `ListSessions`' first frame (no OpenCode servers, only their agents' tags),
+  `ListConfig`'s Slack channel agents, `ListSkills`' `agent`, and `Reload`, because
+  reloaded agent files can widen a limit.
+
+New refusals are `PermissionDenied` (HTTP 403) with a plain message. Pages keep
+`NotFound`. `CreateSession`, `ForkSession`, and `$agent` refuse an agent outside
+the limit with the codes they already use for an agent they do not offer. The
+`turnFeedable` check runs when the request arrives: if an unrestricted person
+switches the agent before a queued item starts, the item runs with the new agent.
+
+`Identity` sets the optional `limited` field, true, only for a limited person;
+for everyone else it stays absent. The Web reads it to hide the space menu's
+**New space**, **Rename space**, and **Delete space**. OpenCode is closed to limited
+people because the relay gives full control of the server, shell included: the
+`/oc/` relay refuses a limited identity with 403 before proxying, and the
+OpenCode branches of `CreateSession` and `ForkSession` refuse them.
 
 ## Verify without a live Slack runtime
 

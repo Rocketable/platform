@@ -519,6 +519,19 @@ func TestTailscaleIdentityCache(t *testing.T) {
 	})
 }
 
+// searchWaiters counts the callers waiting on server's shared searches.
+func searchWaiters(server *Server) int {
+	server.searchMu.Lock()
+	defer server.searchMu.Unlock()
+
+	waiting := 0
+	for _, flight := range server.searches {
+		waiting += flight.waiters
+	}
+
+	return waiting
+}
+
 func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -530,6 +543,7 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 	release := make(chan struct{})
 	server := &Server{
 		sessions: sessions,
+		cfg:      new(config.LockedConfig),
 		channels: &mockChannels{SlackTagsMatchingFunc: func(ctx context.Context, _ string) []string {
 			started <- ctx
 
@@ -561,12 +575,7 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 		second <- err
 	}()
 
-	require.Eventually(t, func() bool {
-		server.searchMu.Lock()
-		defer server.searchMu.Unlock()
-
-		return server.searches["alpha"].waiters == 2
-	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return searchWaiters(server) == 2 }, time.Second, time.Millisecond)
 	cancelFirst()
 	require.ErrorIs(t, <-first, context.Canceled)
 	require.NoError(t, scanCtx.Err(), "the other waiter still needs the scan")
@@ -625,6 +634,7 @@ func TestSearchMessagesMatchesSlackTagNames(t *testing.T) {
 	matching := map[string][]string{"cs-operators": {"S0BA868QQ90"}, "alan": {"U05MD4PEVHN"}}
 	server := &Server{
 		sessions: sessions,
+		cfg:      new(config.LockedConfig),
 		channels: &mockChannels{SlackTagsMatchingFunc: func(_ context.Context, needle string) []string {
 			return matching[needle]
 		}},
@@ -697,12 +707,7 @@ func TestSearchSessionsSharedFlightCancellation(t *testing.T) {
 		return done
 	}
 	waiters := func() {
-		require.Eventually(t, func() bool {
-			server.searchMu.Lock()
-			defer server.searchMu.Unlock()
-
-			return server.searches[fmt.Sprintf(" %d \"alice\" tag:A x", backend.SearchMessages)].waiters == 2
-		}, time.Second, time.Millisecond)
+		require.Eventually(t, func() bool { return searchWaiters(server) == 2 }, time.Second, time.Millisecond)
 	}
 	principal := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
 	firstCtx, cancelFirst := context.WithCancel(principal)
@@ -3703,12 +3708,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			second <- result{response, err}
 		}()
 
-		require.Eventually(t, func() bool {
-			server.searchMu.Lock()
-			defer server.searchMu.Unlock()
-
-			return server.searches["unique shared search text"].waiters == 2
-		}, time.Second, time.Millisecond)
+		require.Eventually(t, func() bool { return searchWaiters(server) == 2 }, time.Second, time.Millisecond)
 		cancelFirst()
 		require.ErrorIs(t, (<-first).err, context.Canceled)
 
@@ -3746,12 +3746,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			second <- result{response, err}
 		}()
 
-		require.Eventually(t, func() bool {
-			server.searchMu.Lock()
-			defer server.searchMu.Unlock()
-
-			return server.searches["unique shared search text"].waiters == 2
-		}, time.Second, time.Millisecond)
+		require.Eventually(t, func() bool { return searchWaiters(server) == 2 }, time.Second, time.Millisecond)
 		close(release)
 
 		for _, call := range []result{<-first, <-second} {

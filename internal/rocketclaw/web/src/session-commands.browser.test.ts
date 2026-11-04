@@ -625,3 +625,46 @@ test("handoff hits and queued items format tags and markup", async () => {
     server.stop(true);
   }
 }, 30_000);
+
+test("handoff's new session starts with main when offered, else the first offered agent", async () => {
+  const { chromium: engine } = await import(playwright!);
+  let offered: string[] = [];
+  const created: (string | undefined)[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "source", agent: offered[0], name: "Source" }], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (!url.pathname.startsWith("/api/")) {
+      const file = Bun.file(path.join(dist, url.pathname));
+      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    }
+    const input = await request.json() as { conversationId?: string; agent?: string };
+    switch (url.pathname) {
+      case "/api/Protocol": return Response.json({ protoSha256: "handoff-agent" });
+      case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/ListConfig": return Response.json({ config: { workspace: "/workspace" } });
+      case "/api/ListAgents": return Response.json({ agents: offered.map((name) => ({ name })), currentAgent: input.conversationId ? offered[0] : "" });
+      case "/api/History": return Response.json({ messages: [], origin: "", revision: "1", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
+      case "/api/Handoff": return Response.json({ document: "doc" });
+      case "/api/CreateSession": created.push(input.agent); return Response.json({ id: "created" });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {} } });
+      default: return Response.json({});
+    }
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    for (const agents of [["assistant", "main"], ["ops-agent"]]) {
+      offered = agents;
+      await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
+      await page.locator("textarea").fill("$handoff");
+      await page.locator("textarea").press("Enter");
+      await page.getByRole("dialog", { name: "Session handoff" }).getByRole("button", { name: "Start new session", exact: true }).click();
+      await page.waitForURL("**/s/" + btoa("created").replace(/=+$/, ""));
+    }
+    expect(created).toEqual(["main", "ops-agent"]);
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);

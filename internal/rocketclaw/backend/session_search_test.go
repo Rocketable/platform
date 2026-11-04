@@ -21,6 +21,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -752,6 +753,140 @@ SELECT 'bulk-' || lpad(n::text, 3, '0'), 'main', '', 'web_chat', TRUE, 'preview'
 
 		require.Equal(t, tc.want, got, "%s %q", tc.space, tc.dashboards)
 	}
+}
+
+func TestSpaceLimit(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	workspace := s.definitions.Clone().Workspace
+
+	for name, space := range map[string]string{"ops-agent": "space: ops\n", "main-agent": "space: Main\n", "loose": ""} {
+		writeAgent(t, workspace, name, "---\nmodel: gpt-6.1-sol\n"+space+"---\nHelp.")
+	}
+
+	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
+		cfg.OpenCode = map[string]config.OpenCodeConfig{"box": {}}
+		cfg.Permissions = map[string][]string{"alice@example.com": {"Ops"}, "carol@example.com": {"Ops", "main"}}
+
+		return nil
+	}))
+
+	cfg := s.definitions.Clone()
+
+	open, err := s.SpaceLimitFor(ctx, cfg.PermittedSpaces("bob@example.com"))
+	require.NoError(t, err)
+	require.Equal(t, SpaceLimit{}, open)
+
+	limit, err := s.SpaceLimitFor(ctx, cfg.PermittedSpaces("Alice@Example.com"))
+	require.NoError(t, err)
+	require.True(t, limit.Limited())
+	require.True(t, limit.AllowsAgent("ops-agent"))
+	require.False(t, limit.AllowsAgent("main-agent"))
+	require.False(t, limit.AllowsAgent("loose"))
+	require.True(t, limit.AllowsSpaceName("OPS"))
+	require.False(t, limit.AllowsSpaceName("Main"))
+
+	spaces, err := s.Spaces(ctx)
+	require.NoError(t, err)
+	require.Len(t, spaces, 1, "building the limit creates no space")
+
+	var group errgroup.Group
+	for range 2 {
+		group.Go(func() error { return s.CreateLimitSpaces(ctx, []string{"Ops"}) })
+	}
+
+	require.NoError(t, group.Wait())
+	require.NoError(t, s.CreateLimitSpaces(ctx, nil))
+
+	spaces, err = s.Spaces(ctx)
+	require.NoError(t, err)
+	require.Len(t, spaces, 2)
+	require.Equal(t, []string{"Main", "Ops"}, []string{spaces[0].Name, spaces[1].Name})
+
+	mainID, ops := spaces[0].ID, spaces[1].ID
+	limit, err = s.SpaceLimitFor(ctx, cfg.PermittedSpaces("alice@example.com"))
+	require.NoError(t, err)
+	require.True(t, limit.AllowsSpaceID(ops))
+	require.False(t, limit.AllowsSpaceID(mainID))
+	require.True(t, open.AllowsSpaceID(mainID))
+
+	for _, chat := range []struct{ id, agent, space string }{
+		{"ops-born", "ops-agent", "Ops"},
+		{"main-born", "main-agent", "Main"},
+		{"ops-unborn", "ops-agent", ""},
+		{"loose-unborn", "loose", ""},
+		{"switched", "main-agent", "Ops"},
+	} {
+		require.NoError(t, s.recordConversation(ctx, protocol.Conversation{ID: chat.id, Agent: chat.agent, Space: chat.space}, conversationFacts{kind: KindWebChat}))
+		_, err := s.AppendEntryID(ctx, chat.id, testReplayEntry(fmt.Sprintf(`{"type":"message","role":"user","prompt_header":%s,"content":"needle"}`, jsonString(fmt.Sprintf("[Web principal=%q]", "Writer "+chat.id)))))
+		require.NoError(t, err)
+	}
+
+	_, err = s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, title, directory, last_updated, running, synced_at, space_id)
+VALUES ('opencode:box:ops', '', '', 'remote', FALSE, 'remote', 'box', 'ops', 'needle', '/repo', now(), FALSE, now(), $1)`, ops)
+	require.NoError(t, err)
+	require.NoError(t, s.startSubagent(ctx, "ops-born", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "main-agent"}))
+
+	sorted := func(chats []SidebarChat) []string {
+		ids := make([]string, 0, len(chats))
+		for _, chat := range chats {
+			ids = append(ids, chat.Session.Conversation.ID)
+		}
+
+		slices.Sort(ids)
+
+		return ids
+	}
+
+	theirs, every := []string{"ops-born", "ops-unborn", "switched"}, []string{"loose-unborn", "main-born", "opencode:box:ops", "ops-born", "ops-unborn", "switched"}
+	both := []string{"main-born", "ops-born", "ops-unborn", "switched"}
+
+	for username, want := range map[string][]string{"ALICE@example.com": theirs, "bob@example.com": every, "carol@example.com": both} {
+		var listed []SidebarChat
+
+		for chat, err := range s.SidebarChats(ctx, username, noSlackLookups{}, nil) {
+			require.NoError(t, err)
+
+			listed = append(listed, chat)
+		}
+
+		require.Equal(t, want, sorted(listed), username)
+	}
+
+	search, err := s.SearchSessions(ctx, "alice@example.com", "needle", SearchMessages, noSlackLookups{})
+	require.NoError(t, err)
+
+	matched := make([]SidebarChat, 0, len(search.Matches))
+	for _, match := range search.Matches {
+		matched = append(matched, match.Chat)
+	}
+
+	require.Equal(t, theirs, sorted(matched))
+	require.Equal(t, []string{"Writer ops-born", "Writer ops-unborn", "Writer switched"}, search.Principals)
+
+	search, err = s.SearchSessions(ctx, "bob@example.com", "needle", SearchMessages, noSlackLookups{})
+	require.NoError(t, err)
+	require.Equal(t, []string{"Writer loose-unborn", "Writer main-born", "Writer ops-born", "Writer ops-unborn", "Writer switched"}, search.Principals)
+
+	for _, tc := range []struct {
+		username, space string
+		want            []string
+	}{
+		{"alice@example.com", ops, theirs},
+		{"bob@example.com", ops, []string{"loose-unborn", "opencode:box:ops", "ops-born", "ops-unborn", "switched"}},
+		{"alice@example.com", mainID, []string{}},
+		{"carol@example.com", mainID, []string{"main-born"}},
+	} {
+		board, err := s.Board(ctx, tc.username, tc.space, [][]string{{""}}, noSlackLookups{})
+		require.NoError(t, err)
+		require.Equal(t, tc.want, sorted(board[0][0].Chats), "%s %s", tc.username, tc.space)
+	}
+
+	top, err := s.TopLevelSession(ctx, "ops-born/call-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{ops, "ops-agent", string(KindWebChat)}, []string{top.SpaceID, top.Conversation.Agent, string(top.Kind)})
 }
 
 // BenchmarkSessionBoard sorts 1,000 chats into the default lanes of a new Dashboard.

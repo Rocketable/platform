@@ -310,6 +310,110 @@ func (s *SessionService) Spaces(ctx context.Context) ([]Space, error) {
 	})
 }
 
+// SpaceLimit is the reach of a person the config's permissions list: the spaces listed for them, and
+// the agents whose space names one of those, ignoring case. Its zero value limits nothing.
+type SpaceLimit struct {
+	names, ids, agents []string
+}
+
+// SpaceLimitFor returns the reach of a person limited to spaces, the space names the config's permissions
+// list for them. For no spaces it is the zero SpaceLimit, read without touching the database or agent files.
+// It creates nothing: a listed space that does not exist yet admits no space ID.
+func (s *SessionService) SpaceLimitFor(ctx context.Context, spaces []string) (SpaceLimit, error) {
+	limit := SpaceLimit{names: spaces}
+	if !limit.Limited() {
+		return limit, nil
+	}
+
+	cfg := s.definitions.Clone()
+
+	stored, err := s.Spaces(ctx)
+	if err != nil {
+		return SpaceLimit{}, err
+	}
+
+	agents, _, err := LoadRuntimeDefinitions(s.definitions, cfg.RuntimeDirName())
+	if err != nil {
+		return SpaceLimit{}, fmt.Errorf("load agents for space limit: %w", err)
+	}
+
+	for _, space := range stored {
+		if limit.AllowsSpaceName(space.Name) {
+			limit.ids = append(limit.ids, space.ID)
+		}
+	}
+
+	for name := range agents.Items {
+		if space := agents.Items[name].Space; space != "" && limit.AllowsSpaceName(space) {
+			limit.agents = append(limit.agents, name)
+		}
+	}
+
+	return limit, nil
+}
+
+// CreateLimitSpaces creates the spaces named names that do not exist yet. Concurrent calls all succeed.
+func (s *SessionService) CreateLimitSpaces(ctx context.Context, names []string) error {
+	_, err := execState(ctx, s.db, "create limit spaces", `INSERT INTO web_spaces (name) SELECT unnest($1::text[]) ON CONFLICT ((lower(name))) DO NOTHING`, names)
+	return err
+}
+
+// Limited reports whether the config's permissions list the person.
+func (l SpaceLimit) Limited() bool { return len(l.names) > 0 }
+
+// AllowsAgent reports whether the person may see and use agent.
+func (l SpaceLimit) AllowsAgent(agent string) bool {
+	return !l.Limited() || slices.Contains(l.agents, agent)
+}
+
+// AllowsSpaceID reports whether the person may see space id.
+func (l SpaceLimit) AllowsSpaceID(id string) bool {
+	return !l.Limited() || slices.Contains(l.ids, id)
+}
+
+// AllowsSpaceName reports whether the person may see the space named name, ignoring case.
+func (l SpaceLimit) AllowsSpaceName(name string) bool {
+	return !l.Limited() || slices.ContainsFunc(l.names, func(listed string) bool { return strings.EqualFold(listed, name) })
+}
+
+// AllowsSession reports whether the person may see top-level session: one born in their space, or, born
+// in none, one whose current agent is theirs. Remote OpenCode sessions are never theirs.
+func (l SpaceLimit) AllowsSession(session *SidebarSession) bool {
+	switch {
+	case !l.Limited():
+		return true
+	case session.Kind == KindRemote:
+		return false
+	case session.SpaceID != "":
+		return slices.Contains(l.ids, session.SpaceID)
+	default:
+		return slices.Contains(l.agents, session.Conversation.Agent)
+	}
+}
+
+// TopLevelSession returns the top-level conversation conversationID nests under by parent link, or
+// conversationID itself at the top, with only its Birth Space ID, current agent, and kind. A
+// conversation that is not recorded returns the zero SidebarSession.
+func (s *SessionService) TopLevelSession(ctx context.Context, conversationID string) (SidebarSession, error) {
+	var session SidebarSession
+
+	err := s.db.QueryRowContext(ctx, `WITH RECURSIVE starts AS (
+    SELECT $1::text AS id
+), `+ancestorsSQL+`, top AS (
+    SELECT conversation_id FROM ancestors ORDER BY depth DESC LIMIT 1
+)
+SELECT COALESCE(c.space_id, ''), c.agent, c.kind FROM top JOIN conversations c USING (conversation_id)`, conversationID).Scan(&session.SpaceID, &session.Conversation.Agent, &session.Kind)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SidebarSession{}, nil
+	}
+
+	if err != nil {
+		return SidebarSession{}, fmt.Errorf("read top-level session: %w", err)
+	}
+
+	return session, nil
+}
+
 // CreateSpace adds a space named name.
 func (s *SessionService) CreateSpace(ctx context.Context, name string) error {
 	return spaceNameError(execState(ctx, s.db, "create space", `INSERT INTO web_spaces (name) VALUES ($1)`, name))
@@ -451,7 +555,7 @@ func (s *SessionService) TabState(ctx context.Context, username string) (TabStat
 }
 
 // SaveTabState replaces username's saved Web tab state when it was made from the saved revision,
-// and reports whether it did. Tabs it closes join the ones ClosedTabs lists.
+// and reports whether it did.
 // Saves never write unread_at: a closed tab stays while unread. A session
 // tab names its conversation under the path marks use, and one of a session that does not exist is
 // dropped.
@@ -507,34 +611,6 @@ WHERE web_tab_states.revision = $3`, username, state.Space, revision, lastSpaces
 		groupIDs, names, colors, collapsed = append(groupIDs, group.ID), append(names, group.Name), append(colors, group.Color), append(collapsed, group.Collapsed)
 	}
 
-	recorded, err := execRows(ctx, tx, "record closed tabs", `WITH incoming AS (
-    SELECT COALESCE(`+tabPathSQL+`, t.path) AS path
-    FROM unnest($2::text[], $3::text[]) AS t(path, conversation_id)
-    LEFT JOIN conversations c ON c.conversation_id = t.conversation_id
-), reopened AS (
-    DELETE FROM web_closed_tabs w USING incoming i WHERE w.username = $1 AND w.path = i.path
-), closing AS (
-    SELECT o.path, o.conversation_id, o.space, o.search FROM web_tabs o
-    LEFT JOIN incoming i ON i.path = o.path
-    WHERE o.username = $1 AND o.position IS NOT NULL AND i.path IS NULL AND o.path <> '/' AND NOT starts_with(o.path, 'group:')
-)
-INSERT INTO web_closed_tabs (username, path, conversation_id, space, search, closed_at)
-SELECT $1, path, conversation_id, space, search, now() FROM closing
-ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversation_id, space = excluded.space,
-    search = excluded.search, closed_at = excluded.closed_at`, username, paths, conversations)
-	if err != nil {
-		return false, err
-	}
-
-	if recorded > 0 {
-		if _, err := execState(ctx, tx, "trim closed tabs", `WITH ranked AS (
-    SELECT path, row_number() OVER (ORDER BY closed_at DESC, path) AS n FROM web_closed_tabs WHERE username = $1
-)
-DELETE FROM web_closed_tabs w USING ranked r WHERE w.username = $1 AND w.path = r.path AND r.n > 50`, username); err != nil {
-			return false, err
-		}
-	}
-
 	if _, err := execState(ctx, tx, "clear tab state", `WITH groups AS (
     DELETE FROM web_tab_groups WHERE username = $1
 ), closed AS (
@@ -568,14 +644,6 @@ ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversati
 	}
 
 	return true, nil
-}
-
-// ClosedTabs lists username's closed tabs, newest closed first, as SaveTabState keeps them; they have no group.
-func (s *SessionService) ClosedTabs(ctx context.Context, username string) ([]Tab, error) {
-	return queryRows(ctx, s.db, `SELECT path, space, search FROM web_closed_tabs WHERE username = $1 ORDER BY closed_at DESC, path`, "closed tabs", func(row rowScanner) (Tab, error) {
-		var tab Tab
-		return tab, row.Scan(&tab.Path, &tab.Space, &tab.Search)
-	}, username)
 }
 
 // SharedTab is one tab in a space's Shared group, which every Web user sees. Search is a Search tab's one
@@ -670,11 +738,6 @@ func (s *SessionService) TopShelf(ctx context.Context, username string) ([]byte,
 	}
 
 	return shelf, err
-}
-
-// ExistingConversations returns those of ids that name a conversation.
-func (s *SessionService) ExistingConversations(ctx context.Context, ids []string) ([]string, error) {
-	return queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE conversation_id = ANY($1)`, "existing conversations", ids)
 }
 
 // SaveTopShelf replaces username's Top Shelf with shelf, as the Web saves it.

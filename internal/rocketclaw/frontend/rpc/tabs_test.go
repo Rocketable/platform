@@ -1,14 +1,17 @@
 package rpc
 
 import (
+	"context"
+	"encoding/base64"
 	"log/slog"
-	"slices"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -33,7 +36,7 @@ func TestTabs(t *testing.T) {
 	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "a", Agent: "main"}))
 
 	db := openTestTurns(t, dsn).db
-	server := &Server{sessions: sessions}
+	server := &Server{sessions: sessions, cfg: new(config.LockedConfig)}
 	call := func(ip string, request *TabsRequest) (*TabsResponse, error) {
 		return server.tabs(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", ip)), request)
 	}
@@ -118,15 +121,6 @@ func TestTabs(t *testing.T) {
 	assert.True(t, proto.Equal(next, response.State), "the save answers with the saved state")
 	assert.Equal(t, int64(2), response.Revision)
 	assert.Equal(t, []string{"/s/YQ 0 f", "/s/Yg  t", "/s/Yw  t"}, aliceTabs())
-
-	closed := map[string]*Tab{}
-	for _, tab := range response.Closed {
-		closed[tab.Path] = tab
-	}
-
-	assert.Len(t, closed, 2)
-	assert.True(t, proto.Equal(saved.Tabs[2], closed["/s/Yg"]))
-	assert.True(t, proto.Equal(saved.Tabs[3], closed["/search/a"]))
 
 	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
@@ -280,14 +274,12 @@ func TestTabs(t *testing.T) {
 	// A Top Shelf is the caller's own: each save replaces it whole, and every reply carries it.
 	assert.Nil(t, response.TopShelf, "nothing shelved yet")
 
-	shelf := &TopShelf{Tabs: []*ShelfTab{{Server: "work", Space: "main", Path: "/s/eA"}, {Path: "/s/YQ", Space: "main"}, {Path: "/s/Yg", Space: "main"}, {Path: "/search/1", Space: "main", Search: &SearchPage{Name: "x"}}}, Collapsed: true}
+	shelf := &TopShelf{Tabs: []*ShelfTab{{Server: "work", Space: "main", Path: "/s/eA"}, {Path: "/search/1", Space: "main", Search: &SearchPage{Name: "x"}}}, Collapsed: true}
 	_, err = call("127.0.0.1", &TabsRequest{TopShelf: shelf})
 	require.NoError(t, err)
 	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
-
-	shelf.Tabs = slices.Delete(shelf.Tabs, 2, 3)
-	assert.True(t, proto.Equal(shelf, response.TopShelf), "b's deleted session leaves the shelf: %v", response.TopShelf)
+	assert.True(t, proto.Equal(shelf, response.TopShelf), "%v", response.TopShelf)
 	response, err = call("192.0.2.2", &TabsRequest{})
 	require.NoError(t, err)
 	assert.Nil(t, response.TopShelf, "another person's shelf is not theirs")
@@ -296,4 +288,83 @@ func TestTabs(t *testing.T) {
 	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "an emptied shelf stays empty: %v", response.TopShelf)
+}
+
+func TestTabsSpaceLimit(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Permissions: map[string][]string{"alice": {"Ops"}}}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	root, err := os.OpenRoot(cfg.Workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(cfg.RuntimeDirName()+"/agents", 0o700))
+	require.NoError(t, root.WriteFile(cfg.RuntimeDirName()+"/agents/ops-agent.md", []byte("---\nmodel: gpt-6.1-sol\nspace: Ops\n---\nHelp."), 0o600))
+
+	server := &Server{sessions: sessions, cfg: config.NewLockedConfig(cfg)}
+	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	bob := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.2"))
+	read := func(ctx context.Context) (spaces, shared []string) {
+		t.Helper()
+
+		response, err := server.tabs(ctx, &TabsRequest{})
+		require.NoError(t, err)
+
+		for _, space := range response.Spaces {
+			spaces = append(spaces, space.Name)
+		}
+
+		for _, tab := range response.Shared {
+			shared = append(shared, tab.Path)
+		}
+
+		return spaces, shared
+	}
+
+	before, err := sessions.Spaces(t.Context())
+	require.NoError(t, err)
+	require.Len(t, before, 1)
+
+	spaces, _ := read(alice)
+	require.Equal(t, []string{"Ops"}, spaces, "Ops is created for her")
+
+	after, err := sessions.Spaces(t.Context())
+	require.NoError(t, err)
+	require.Len(t, after, 2)
+
+	mainID, opsID := after[0].ID, after[1].ID
+	path := func(id string) string { return "/s/" + base64.RawURLEncoding.EncodeToString([]byte(id)) }
+
+	rt := &backend.Runtime{Sessions: sessions}
+	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "ops-chat", Agent: "ops-agent", Space: "Ops"}))
+	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "main-chat", Agent: "ops-agent", Space: "Main"}))
+
+	_, err = server.tabs(bob, &TabsRequest{Share: &SharedTab{Space: mainID, Path: path("main-chat")}})
+	require.NoError(t, err)
+	_, err = server.tabs(alice, &TabsRequest{Share: &SharedTab{Space: opsID, Path: path("ops-chat")}})
+	require.NoError(t, err)
+
+	for _, request := range []*TabsRequest{
+		{CreateSpace: "Support"},
+		{RenameSpace: &Space{Id: opsID, Name: "Ops 2"}},
+		{DeleteSpace: opsID},
+		{Share: &SharedTab{Space: mainID, Path: "/search/1"}},
+		{EditShared: &SharedTab{Space: mainID, Path: path("main-chat")}},
+		{Unshare: &SharedTab{Space: mainID, Path: path("main-chat")}},
+	} {
+		_, err := server.tabs(alice, request)
+		require.Equal(t, codes.PermissionDenied, status.Code(err), "%v", request)
+	}
+
+	spaces, shared := read(alice)
+	require.Equal(t, []string{"Ops"}, spaces)
+	require.Equal(t, []string{path("ops-chat")}, shared)
+
+	spaces, shared = read(bob)
+	require.Equal(t, []string{"Main", "Ops"}, spaces)
+	require.Equal(t, []string{path("main-chat"), path("ops-chat")}, shared)
 }

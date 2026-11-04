@@ -50,6 +50,12 @@
       "password": "set-me"
     }
   },
+  "permissions": {
+    "contractor@example.com": [
+      "Support",
+      "Ops"
+    ]
+  },
   "slack": {
     "bot_token": "xoxb-...",
     "app_token": "xapp-...",

@@ -588,6 +588,39 @@ func TestValidateRocketClaws(t *testing.T) {
 	}
 }
 
+func TestPermittedSpaces(t *testing.T) {
+	cfg := loadTestConfig(t, `{
+	  "workspace": ".",
+	  "openai": {"api_key": "test-key"},
+	  "permissions": {"Alice@Example.com": ["Ops", "Support"], "bob@example.com": ["Ops"]},
+	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}
+	}`)
+
+	assert.Equal(t, []string{"Ops", "Support"}, cfg.PermittedSpaces("alice@example.com"))
+	assert.Equal(t, []string{"Ops"}, cfg.PermittedSpaces("BOB@example.com"))
+	assert.Nil(t, cfg.PermittedSpaces("carol@example.com"))
+	assert.Nil(t, cfg.PermittedSpaces(""))
+
+	for _, tt := range []struct {
+		name        string
+		permissions map[string][]string
+		wantErr     string
+	}{
+		{name: "blank login", permissions: map[string][]string{"": {"Ops"}}, wantErr: `permissions[""]: login must not be blank or start or end with spaces`},
+		{name: "padded login", permissions: map[string][]string{" alice": {"Ops"}}, wantErr: `permissions[" alice"]: login must not be blank or start or end with spaces`},
+		{name: "same login ignoring case", permissions: map[string][]string{"alice": {"Ops"}, "ALICE": {"Main"}}, wantErr: `permissions["alice"]: another entry has that login, ignoring case`},
+		{name: "no spaces", permissions: map[string][]string{"alice": {}}, wantErr: `permissions["alice"]: list at least one space`},
+		{name: "blank space", permissions: map[string][]string{"alice": {"Ops", " "}}, wantErr: `permissions["alice"]: space names must not be blank or start or end with spaces`},
+		{name: "padded space", permissions: map[string][]string{"alice": {" Ops"}}, wantErr: `permissions["alice"]: space names must not be blank or start or end with spaces`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Permissions = tt.permissions
+			require.EqualError(t, cfg.Validate(), tt.wantErr)
+		})
+	}
+}
+
 func TestLoadOmitsMCPServers(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",

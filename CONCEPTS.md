@@ -242,7 +242,7 @@ Each one becomes a Web user message marked as voice, holding the request and wha
 
 ### Space
 
-A named place in the Web that holds tabs, shared by everyone.
+A named place in the Web that holds tabs, shared by everyone except people whose Space Limit leaves it out.
 
 The server keeps one list, oldest first, with names unique ignoring case, and the last one cannot be deleted. An agent or cron definition names its space by name; tabs and sessions refer to a space by its ID, so a rename keeps them in it. Where each tab sits, and which space a person is in, is that person's own and follows them across devices; only the space's Shared Group is the same for everyone.
 
@@ -258,19 +258,15 @@ The one italic tab a Web window shows while the person arrows through the sessio
 
 It belongs to that window alone: it is never saved, it never becomes the tab its space returns to, and other windows' tab changes leave it where it is unless they open that same session or delete its space. Choosing the session keeps it as an ordinary tab; dismissing the palette, typing, or running a command closes it. Only sessions that would open in the current space are previewed.
 
-### Closed Tab
-
-One of the last 50 tabs a person closed, which the server keeps, newest first, with the Space it was in and a Search Page's searches, so the Web's Recently closed page or Cmd/Ctrl+Alt+T reopens it there, or in the current space when that Space is gone. New session and Preview Tabs never become one; reopening it or deleting its session takes it off the list.
-
 ### Shared Group
 
-The one grey tab group named Shared that every space has, shown first in the Web sidebar. Its tabs are the same for every Web user, and anyone can add a tab to it or remove one, which removes it for everyone. A tab can be in a space's Shared Group and in a person's own tabs at once. Its order and collapsing it are each person's own; tabs a person has not placed follow, oldest added first. Deleting a space moves its Shared Group's tabs into the first remaining space's.
+The one grey tab group named Shared that every space has, shown first in the Web sidebar. Its tabs are the same for every Web user who can see its space, and any of them can add a tab to it or remove one, which removes it for everyone. A tab can be in a space's Shared Group and in a person's own tabs at once. Its order and collapsing it are each person's own; tabs a person has not placed follow, oldest added first. Deleting a space moves its Shared Group's tabs into the first remaining space's.
 
 ### Search Page
 
 A Web tab for searching sessions, one of as many as a person opens, each with its own address.
 
-It holds its own searches, shown as tabs inside the page, and can be named; unnamed, it is titled by the query it shows. Its name and searches are the person's own and are saved with their tabs, so they follow the page into groups and other spaces and across devices. Added to a space's Shared Group, it becomes one page everyone in that space sees and edits, its searches and which one is shown included, while the person's own copy stays as it was; whoever takes it out of Shared keeps that one page as their own, together with any searches of their own copy. Escape does not close a Search page, and closing its tab discards it unless it is reopened as a Closed Tab. The Web's session search palette finds every space's Search pages by name or query once something is typed.
+It holds its own searches, shown as tabs inside the page, and can be named; unnamed, it is titled by the query it shows. Its name and searches are the person's own and are saved with their tabs, so they follow the page into groups and other spaces and across devices. Added to a space's Shared Group, it becomes one page everyone in that space sees and edits, its searches and which one is shown included, while the person's own copy stays as it was; whoever takes it out of Shared keeps that one page as their own, together with any searches of their own copy. Escape does not close a Search page, and closing its tab discards it. The Web's session search palette finds every space's Search pages by name or query once something is typed.
 
 ### Remote OpenCode Session
 
@@ -280,7 +276,7 @@ A session on a configured OpenCode coding server that RocketClaw keeps a synced 
 
 A Search Page shown as a board in one of several styles, whose searches are its lanes, tracking the work of the space its tab sits in.
 
-Each session in that space appears once, in the first lane it matches. A session without a Birth Space counts in its agent's space, or in every space when its agent has none. A new Dashboard starts in the space's Shared Group, and any Dashboard or Search Page can be duplicated. While a Dashboard is open in a person's current space, a session entering a lane marked for notification raises a desktop notification for that person.
+Each session in that space appears once, in the first lane it matches. A session without a Birth Space counts in its agent's space, or in every space when its agent has none; a person with a Space Limit never sees such a session. A new Dashboard starts in the space's Shared Group, and any Dashboard or Search Page can be duplicated. While a Dashboard is open in a person's current space, a session entering a lane marked for notification raises a desktop notification for that person.
 
 ### Remote RocketClaw
 
@@ -288,13 +284,19 @@ Another RocketClaw server declared in the local server's configuration, whose ch
 
 ### Top Shelf
 
-One person's own tab group above the space picker, shown only when the local RocketClaw has Remote RocketClaws, holding tabs from any server. It is the same in every space and on every server, and opening one of its tabs shows that page on its own server and in its own space without creating a tab, as a Shared Group tab opens; a Search Page opened from it is edited in place. Tabs join, leave and reorder as in any group, and each names the server and space it comes from. A deleted session leaves it.
+One person's own tab group above the space picker, shown only when the local RocketClaw has Remote RocketClaws, holding tabs from any server. It is the same in every space and on every server, and opening one of its tabs shows that page on its own server and in its own space without creating a tab, as a Shared Group tab opens; a Search Page opened from it is edited in place. Tabs join, leave and reorder as in any group, and each names the server and space it comes from.
 
 ### Birth Space
 
 The Space a session was born in.
 
 It is its agent's space, or for a cron's sessions the cron's, else the cron agent's, else for a Web session, or a remote OpenCode session created from the Web, the space the person was in; a forked remote session takes its source's. A named space that does not exist yet is created with the session. A session opens in its Birth Space; a person may move its tab elsewhere and later restore it. Deleting the space clears it. Sessions from before Birth Spaces, and those started outside the Web other than cron report chats, have none.
+
+### Space Limit
+
+The reach of a person the config's `permissions` maps to one or more Spaces: those Spaces, the sessions in them, and the agents whose `space:` names one of them. A person `permissions` does not list has no Space Limit and reaches everything.
+
+A session is in a Space when its Birth Space is that Space, or, with no Birth Space, when its current agent's `space:` names it. Subagent Sessions and permission-review histories follow their top-level session, Shadow Sessions their parent, and cron run traces their cron's space. A Remote OpenCode Session is never within a Space Limit. A limited person takes a turn only while the session's current agent is theirs, and steers or answers a running turn only while that turn's agent is theirs too; a session someone switched to an outside agent stays readable to them, and they can switch it back. A Space Limit applies to people in the Web only, not to agents: an agent in the Space still acts with its own permissions.
 
 ### Unread
 
@@ -306,7 +308,7 @@ A session's per-person mark that a turn the person sent a Web message into has e
 
 A file an agent published, served by RocketClaw under a URL that names the agent's space, the agent, and the file path.
 
-It belongs to the agent, not to a space: when the agent's space changes, its pages move with it and links under the old space name redirect. Only people the Web admits can open one. Page scripts run walled off from RocketClaw and can only read their own agent's Page Data.
+It belongs to the agent, not to a space: when the agent's space changes, its pages move with it and links under the old space name redirect. Only people the Web admits can open one, and a person with a Space Limit only when the page's space is in it. Page scripts run walled off from RocketClaw and can only read their own agent's Page Data.
 
 An agent in a remote OpenCode session publishes through its coding server's MCP bridge instead. Such a page belongs to that session, which stands in for the agent: it lives in the session's Birth Space, and it is deleted with the session's RocketClaw copy or with that space. A session with no Birth Space cannot publish pages.
 
@@ -316,7 +318,7 @@ An agent's JSON key-value entries, which the agent reads and writes and its Host
 
 ### Page Index
 
-The list of Hosted Pages a Web space shows: HTML pages of agents whose space matches the space's name, ignoring case, plus agents with no space, and HTML pages of remote OpenCode sessions in that space.
+The list of Hosted Pages a Web space shows: HTML pages of agents whose space matches the space's name, ignoring case, plus agents with no space, except for a person with a Space Limit, and HTML pages of remote OpenCode sessions in that space.
 
 ## Process layout
 

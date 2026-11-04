@@ -124,7 +124,7 @@ const setup: Plugin.Setup<typeof Terminal> = (ctx) => {
       description: ctx.t("command.new.description"),
       group: ctx.t("command.category"),
       section: "terminal",
-      // rocketclaw: no default keybind; Ctrl+Alt+T reopens RocketClaw's last closed tab (upstream packages/gui-plugins/src/terminal/renderer.tsx)
+      bind: "ctrl+alt+t",
       editable: true,
       enabled: enabled(),
       run() {
