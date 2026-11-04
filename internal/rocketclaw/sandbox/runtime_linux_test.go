@@ -218,6 +218,35 @@ func TestBuildImage(t *testing.T) {
 	require.ErrorIs(t, err, exec.ErrNotFound, "no mmdebstrap")
 }
 
+// A package cache carried over from an older lock keeps only the packages the new image installs.
+func TestBuildImagePrunesPackageCache(t *testing.T) {
+	fakeMmdebstrap(t)
+
+	cache := t.TempDir()
+	t.Setenv("ROCKETCLAW_SANDBOX_PACKAGE_CACHE", cache)
+
+	archives := filepath.Join(cache, "archives")
+	require.NoError(t, os.Mkdir(archives, 0o755))
+
+	for _, name := range []string{"bash_5.3-2ubuntu1_amd64.deb", "zlib1g_1%3a1.3_amd64.deb", "bash_5.2-1_amd64.deb", "gone_2_all.deb", "lock"} {
+		require.NoError(t, os.WriteFile(filepath.Join(archives, name), nil, 0o644))
+	}
+
+	_, _, err := BuildImage(t.Context(), Snapshot, "amd64", filepath.Join(t.TempDir(), "rootfs"))
+	require.NoError(t, err)
+
+	left, err := os.ReadDir(archives)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(left))
+	for _, e := range left {
+		names = append(names, e.Name())
+	}
+
+	require.Equal(t, []string{"bash_5.3-2ubuntu1_amd64.deb", "lock", "zlib1g_1%3a1.3_amd64.deb"}, names)
+	require.DirExists(t, filepath.Join(cache, "lists"))
+}
+
 // While mmdebstrap fails, as it does when Ubuntu's archive is flaky, the build tries again after growing pauses
 // and says why and when, then carries on once a try works. A failure no retry fixes, no mmdebstrap at all,
 // returns at once.

@@ -228,9 +228,13 @@ func TestEmulatedShellLimits(t *testing.T) {
 
 	wg.Wait()
 
-	// E10: host commands per shell command are bounded.
-	// Under -race each relay starts slowly, so this one gets more than the default two minutes.
+	// E10: host commands per shell command are bounded. It counts rather than races, and under -race each of
+	// its 129 relays starts slowly, so the -race run leaves it to the other.
+	if raceEnabled {
+		return
+	}
+
 	bounded := newEmulated(t, map[string]string{"nop": "true"}, nil, nil)
-	got = bounded.sss.Bash(t.Context(), &bounded.shell, bashParams{Command: "for i in $(seq 140); do nop || { echo stopped at $i; break; }; done", Workdir: bounded.shell.Dir, TimeoutMillisecond: 600000})
+	got = bounded.sss.Bash(t.Context(), &bounded.shell, bashParams{Command: "for i in $(seq 140); do nop || { echo stopped at $i; break; }; done", Workdir: bounded.shell.Dir})
 	require.Contains(t, got.Output, "stopped at 129")
 }

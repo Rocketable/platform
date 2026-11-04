@@ -7,7 +7,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -75,34 +77,61 @@ func BuildImage(ctx context.Context, snapshot, arch, dst string) (installed []st
 	// ROCKETCLAW_SANDBOX_PACKAGE_MIRROR, when set, is an Ubuntu mirror tried first for the packages, as CI
 	// sets the one beside its runners; the snapshot serves the indexes, and whatever packages the mirror lacks.
 	// apt checks each package against the snapshot's signed indexes, so the versions stay pinned. Like the
-	// keyring, the mirror list goes in /tmp.
+	// keyring, the mirror list goes in /tmp; apt names its indexes after the source, so the list is named by
+	// its contents, and a package cache's indexes match the next build's.
 	source := mirror
 	if fast := os.Getenv("ROCKETCLAW_SANDBOX_PACKAGE_MIRROR"); fast != "" {
-		list, err := os.CreateTemp("/tmp", "rocketclaw-mirrors-*.list")
+		content := fmt.Sprintf("%s\tpriority:1 type:deb\n%s/\tpriority:2\n", fast, mirror)
+		sum := sha256.Sum256([]byte(content))
+		name := "/tmp/rocketclaw-mirrors-" + hex.EncodeToString(sum[:8]) + ".list"
+
+		list, err := os.CreateTemp("/tmp", "rocketclaw-mirrors-*.tmp")
 		if err != nil {
 			return nil, "", fmt.Errorf("write mirror list: %w", err)
 		}
-		defer func() { _ = os.Remove(list.Name()) }()
 
-		_, err = fmt.Fprintf(list, "%s\tpriority:1 type:deb\n%s/\tpriority:2\n", fast, mirror)
-		if err = errors.Join(err, list.Chmod(0o644), list.Close()); err != nil {
+		_, err = list.WriteString(content)
+		if err = errors.Join(err, list.Chmod(0o644), list.Close(), os.Rename(list.Name(), name)); err != nil {
+			_ = os.Remove(list.Name())
 			return nil, "", fmt.Errorf("write mirror list: %w", err)
 		}
 
-		source = "mirror+file:" + list.Name()
+		source = "mirror+file:" + name
+	}
+
+	args := []string{"--mode=unshare", "--variant=essential", "--arch=" + arch, "--format=tar",
+		"--keyring=" + key.Name(), "--aptopt=Acquire::Check-Valid-Until false", "--aptopt=Acquire::Retries 5",
+		// Pipelined requests crawl through some networks' proxies, as on GitHub's runners, whose own apt has
+		// pipelining off.
+		"--aptopt=Acquire::http::Pipeline-Depth 0"}
+
+	// ROCKETCLAW_SANDBOX_PACKAGE_CACHE, when set, is a folder that keeps the downloaded packages and indexes
+	// between builds, as CI sets it, so a build fetches only the archive's signed InRelease files, which apt
+	// checks the kept files against. mmdebstrap's cleanup leaves them out of the image.
+	cache := os.Getenv("ROCKETCLAW_SANDBOX_PACKAGE_CACHE")
+	if cache != "" {
+		if cache, err = filepath.Abs(cache); err == nil {
+			err = errors.Join(os.MkdirAll(filepath.Join(cache, "archives"), 0o755), os.MkdirAll(filepath.Join(cache, "lists"), 0o755))
+		}
+
+		if err != nil {
+			return nil, "", fmt.Errorf("create package cache: %w", err)
+		}
+
+		args = append(args, "--skip=essential/unlink",
+			`--setup-hook=mkdir -p "$1"/var/cache/apt/archives/ "$1"/var/lib/apt/lists/`,
+			"--setup-hook=sync-in '"+filepath.Join(cache, "archives")+"' /var/cache/apt/archives/",
+			"--setup-hook=sync-in '"+filepath.Join(cache, "lists")+"' /var/lib/apt/lists/",
+			"--customize-hook=sync-out /var/cache/apt/archives '"+filepath.Join(cache, "archives")+"'",
+			"--customize-hook=sync-out /var/lib/apt/lists '"+filepath.Join(cache, "lists")+"'")
 	}
 
 	var output bytes.Buffer
 
-	cmd := exec.CommandContext(ctx, "mmdebstrap", "--mode=unshare", "--variant=essential", "--arch="+arch, "--format=tar",
-		"--keyring="+key.Name(), "--aptopt=Acquire::Check-Valid-Until false", "--aptopt=Acquire::Retries 5",
-		// Pipelined requests crawl through some networks' proxies, as on GitHub's runners, whose own apt has
-		// pipelining off.
-		"--aptopt=Acquire::http::Pipeline-Depth 0",
-		"--include="+packages, suite, raw,
+	cmd := exec.CommandContext(ctx, "mmdebstrap", append(args, "--include="+packages, suite, raw,
 		fmt.Sprintf("deb %s %s main universe", source, suite),
 		fmt.Sprintf("deb %s %s-updates main universe", source, suite),
-		fmt.Sprintf("deb %s %s-security main universe", source, suite))
+		fmt.Sprintf("deb %s %s-security main universe", source, suite))...)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("SOURCE_DATE_EPOCH=%d", epoch.Unix()), "TMPDIR=/tmp")
 	cmd.Stdout, cmd.Stderr = &output, &output
 
@@ -110,7 +139,36 @@ func BuildImage(ctx context.Context, snapshot, arch, dst string) (installed []st
 		return nil, "", &BuildError{Err: err, Output: output.Bytes()}
 	}
 
-	return extract(raw, dst)
+	if installed, release, err = extract(raw, dst); err == nil && cache != "" {
+		err = pruneCache(filepath.Join(cache, "archives"), installed)
+	}
+
+	return installed, release, err
+}
+
+// pruneCache deletes the cached packages the image no longer installs, so a cache carried over from an
+// older lock keeps only what the next build needs.
+func pruneCache(archives string, installed []string) error {
+	debs, err := filepath.Glob(filepath.Join(archives, "*.deb"))
+	if err != nil {
+		return fmt.Errorf("list package cache: %w", err)
+	}
+
+	for _, deb := range debs {
+		// apt names a package name_version_arch.deb, with the epoch's colon escaped.
+		name, rest, _ := strings.Cut(strings.TrimSuffix(filepath.Base(deb), ".deb"), "_")
+		version, _, _ := strings.Cut(rest, "_")
+
+		if slices.Contains(installed, name+"="+strings.ReplaceAll(version, "%3a", ":")) {
+			continue
+		}
+
+		if err := os.Remove(deb); err != nil {
+			return fmt.Errorf("prune package cache: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // BuildError is a failed mmdebstrap. Its message is the first error line of the output, which is long and
