@@ -64,7 +64,7 @@ build: generate lint
 
 # The emulated shell's acceptance tests, on Linux only, in a delegated cgroup of their own. A missing
 # prerequisite fails them. The guest image, built on the first run, and the test folders must be on a local
-# filesystem.
+# filesystem. The image's packages and indexes stay in its packages folder, for the next build.
 SANDBOX_TEST_DIR ?= $(abspath ../../.tmp)/sandbox-test
 # -race needs cgo: SANDBOX_TEST_FLAGS=-race SANDBOX_TEST_CGO=1 (the binary then needs the rootfs's glibc).
 # SANDBOX_TEST_SCOPE starts the tests in a delegated cgroup; CI, without a user systemd, runs them as a
@@ -88,6 +88,7 @@ sandbox-test:
 	cd harness && $(SANDBOX_TEST_SCOPE) /bin/sh -c '"$$@"; exit $$?' sh /usr/bin/env ROCKETCLAW_SANDBOX_REQUIRE=1 \
 		ROCKETCLAW_SANDBOX_DIR=$(SANDBOX_TEST_DIR)/sandbox TMPDIR=$(SANDBOX_TEST_DIR)/tmp \
 		$(if $(SANDBOX_TEST_PACKAGE_MIRROR),ROCKETCLAW_SANDBOX_PACKAGE_MIRROR=$(SANDBOX_TEST_PACKAGE_MIRROR)) \
+		ROCKETCLAW_SANDBOX_PACKAGE_CACHE=$(SANDBOX_TEST_DIR)/packages \
 		$(if $(SANDBOX_TEST_COVERPROFILE),ROCKETCLAW_SANDBOX_GOCOVERDIR=$(SANDBOX_TEST_DIR)/gocover) \
 		$(SANDBOX_TEST_DIR)/harness.test -test.run 'TestEmulatedShell' -test.v -test.count 1 -test.timeout 30m \
 		$(if $(SANDBOX_TEST_COVERPROFILE),-test.coverprofile=$(abspath $(SANDBOX_TEST_COVERPROFILE)))

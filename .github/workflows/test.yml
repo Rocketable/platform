@@ -177,6 +177,18 @@ jobs:
           sudo apt-get install -y --no-install-recommends bubblewrap mmdebstrap uidmap
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           grep -q "^$(id -un):" /etc/subuid || sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$(id -un)"
+      - *restore-go-build
+      # The image's packages and indexes carry over between runs, so a build fetches only the snapshot's signed
+      # InRelease files; the image itself is still built every run. A new lock starts from the last cache.
+      - uses: actions/cache@v6
+        with:
+          path: .tmp/sandbox-test/packages
+          key: sandbox-packages-${{ runner.arch }}-${{ hashFiles('internal/rocketclaw/sandbox/packages.*.lock') }}
+          restore-keys: sandbox-packages-${{ runner.arch }}-
+      # The -race tests compile while the first run builds the image, so the second run finds them built.
+      - name: Compile the -race tests in the background
+        working-directory: internal/rocketclaw
+        run: CGO_ENABLED=1 nohup go test -c -race -o "$RUNNER_TEMP/race.test" ./harness > "$RUNNER_TEMP/race-compile.log" 2>&1 &
       # The runner has no user systemd, so root runs the tests as a transient service owned by the runner user:
       # a service's delegated cgroup is handed to its --uid, a scope's stays root's.
       - run: make -C internal/rocketclaw sandbox-test SANDBOX_TEST_COVERPROFILE=coverage-sandbox.out SANDBOX_TEST_SCOPE="sudo systemd-run --quiet --wait --pipe --collect --same-dir -p Delegate=yes --uid=$(id -u) --gid=$(id -g)"
@@ -186,6 +198,7 @@ jobs:
         with:
           name: coverage-sandbox
           path: internal/rocketclaw/coverage-sandbox.out
+      - *save-go-build
 
   coverage:
     needs: [rocketclaw, sandbox]
