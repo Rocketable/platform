@@ -113,24 +113,22 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 
 	scoped := *f
 
-	if agent != nil {
-		scopedAgent := *agent
-		scopedAgent.Permission = f.shellTemp.effectivePermissions(scopedAgent.Permission)
-		agent = &scopedAgent
-		scoped.promptExpansion = f.promptExpansion.forAgent(agent)
+	scopedAgent := *agent
+	scopedAgent.Permission = f.shellTemp.effectivePermissions(scopedAgent.Permission)
+	agent = &scopedAgent
+	scoped.promptExpansion = f.promptExpansion.forAgent(agent)
 
-		if agent.CustomShell.Path != "" || agent.CustomShell.Emulated {
-			tools["bash"] = bashTool(f.shellSystem, &agent.CustomShell)
+	if agent.CustomShell.Path != "" || agent.CustomShell.Emulated {
+		tools["bash"] = bashTool(f.shellSystem, &agent.CustomShell)
+	}
+
+	if agent.Mode == AgentModeEasy {
+		easy := makeSandboxedTools(&easyFiles{shell: agent.CustomShell}, f.shellSystem)
+		for _, name := range []string{"read", "apply_patch", "glob", "grep"} {
+			tools[name] = easy[name]
 		}
 
-		if agent.Mode == AgentModeEasy {
-			easy := makeSandboxedTools(&easyFiles{shell: agent.CustomShell}, f.shellSystem)
-			for _, name := range []string{"read", "apply_patch", "glob", "grep"} {
-				tools[name] = easy[name]
-			}
-
-			tools["webfetch"] = webFetchTool(easyWebFetchClient(agent.NetworkTargets))
-		}
+		tools["webfetch"] = webFetchTool(easyWebFetchClient(agent.NetworkTargets))
 	}
 
 	scoped.agent = agent
@@ -143,7 +141,7 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 	}
 
 	// A subagent that names its tools has only those; execute, which runs them, comes below.
-	if agent != nil && agent.Tools != nil {
+	if agent.Tools != nil {
 		maps.DeleteFunc(tools, func(name string, _ looperTool) bool { return !slices.Contains(agent.Tools, name) })
 	}
 
@@ -254,15 +252,11 @@ func toolVisible(agent *Agent, name string, tool *looperTool) bool {
 
 	if len(tool.VisibilitySubjects) > 0 {
 		for _, subject := range tool.VisibilitySubjects {
-			if agent != nil && slices.Contains([]PermissionAction{permissionAllow, permissionAuto}, agent.Permission.evaluate(permission, subject).Action) {
+			if slices.Contains([]PermissionAction{permissionAllow, permissionAuto}, agent.Permission.evaluate(permission, subject).Action) {
 				return true
 			}
 		}
 
-		return false
-	}
-
-	if agent == nil {
 		return false
 	}
 

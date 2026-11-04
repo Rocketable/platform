@@ -205,12 +205,6 @@ func TestTaskTool(t *testing.T) {
 func TestTaskToolPermissionDefaults(t *testing.T) {
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
 
-	t.Run("startup agent denies tools by default", func(t *testing.T) {
-		tools, _ := factory.assembleTools(nil)
-
-		require.Empty(t, tools)
-	})
-
 	t.Run("tasked subagent denies tools by default", func(t *testing.T) {
 		agent := testAgentWithPermission(PermissionSet{Buckets: nil})
 		agent.Name = "plain"
