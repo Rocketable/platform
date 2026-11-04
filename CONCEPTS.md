@@ -284,7 +284,7 @@ Another RocketClaw server declared in the local server's configuration, whose ch
 
 ### Top Shelf
 
-One person's own tab group above the space picker, shown only when the local RocketClaw has Remote RocketClaws, holding tabs from any server. It is the same in every space and on every server, and opening one of its tabs shows that page on its own server and in its own space without creating a tab, as a Shared Group tab opens; a Search Page opened from it is edited in place. Tabs join, leave and reorder as in any group, and each names the server and space it comes from.
+One person's own tab group above the space picker, shown only when the local RocketClaw has Remote RocketClaws, holding tabs from any server. It is the same in every space and on every server, and opening one of its tabs shows that page on its own server and in its own space without creating a tab, as a Shared Group tab opens; a Search Page opened from it is edited in place. Tabs join, leave and reorder as in any group, and each names the server and space it comes from. A deleted session leaves it.
 
 ### Birth Space
 

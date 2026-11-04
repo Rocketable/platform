@@ -416,7 +416,9 @@ server and space. Opening one on its own server works like a Shared tab: it
 shows the page in its space with no tab, and a shelved Search page edits the
 shelf's copy unless the person has a tab of it there. One on another server is
 opened by entering that server's view in the tab's space. With remotes, a first
-load waits for the shelf, so reloading a shelved page adds no tab.
+load waits for the shelf, so reloading a shelved page adds no tab. Deleting a
+session from the Web takes it off the shelf, and the local server leaves its own
+sessions that no longer exist out of every reply, however they were deleted.
 
 The local server's protocol change reloads the page. A remote that never
 answered shows why it is unavailable, one that stopped answering shows it is

@@ -1257,6 +1257,11 @@ function useTabs() {
   };
   return {
     state, strip, shown, groups, here, shared, mutes, pathname, close, enter, edit, editor, setEditor, settle, snoozing, setSnoozing, mute, open, addSearch, pending: spaceChange.isPending,
+    deleted: (path: string) => {
+      close([path]);
+      const shelved = shelf?.tabs?.find((tab) => (tab.server ?? "") === name && tab.path === path);
+      if (shelved) unshelve(shelved);
+    },
     // A moved Shared row moves for this person alone; their order keeps only paths still shared somewhere.
     moveShared: (from: string, to: string) => setState((current) => ({ ...current, sharedOrder: [...new Set([...moveQueueId(here, from, to), ...current.sharedOrder])].filter((path) => shared.some((tab) => tab.path === path)) })),
     // Collapsing Shared is this person's choice for every space, kept as the member-less group "shared".
@@ -2620,7 +2625,7 @@ function RemoteSession({ id }: { id: string }) {
     creating.current = true;
     create.mutate({ opencodeServer: server, directory, spaceId: tabs.state.space }, { onSettled: () => { creating.current = false; } });
   });
-  const closeTab = useEffectEvent(() => tabs.close([rowPath({ id, kind: "REMOTE_OPENCODE" })]));
+  const closeTab = useEffectEvent(() => tabs.deleted(rowPath({ id, kind: "REMOTE_OPENCODE" })));
   const reportSession = useEffectEvent((other: string) => { remoteView.shown = other; setReported(true); });
   // One view per server: switching between its sessions' tabs moves the view, as OpenCode's own app moves between
   // sessions, so what OpenCode holds in memory carries over. Leaving for any other tab disposes it.
@@ -2772,7 +2777,7 @@ function DeleteSessionDialog({ id }: { id: string }) {
       const response = await fetch(`${serverURL()}/oc/${session.server}/api/session/${session.remoteSessionId}`, { method: "DELETE" });
       if (!response.ok) throw new Error(`${session.server} did not delete the session (HTTP ${response.status}).`);
     },
-    onSuccess: () => { tabs.close([rowPath(session)]); sidebar.invalidateQueries(); setCommand(undefined); },
+    onSuccess: () => { tabs.deleted(rowPath(session)); sidebar.invalidateQueries(); setCommand(undefined); },
   });
   return <Dialog open onOpenChange={(open) => { if (!open && !remove.isPending) setCommand(undefined); }}>
     <DialogContent>

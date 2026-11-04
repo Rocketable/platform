@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"time"
 	"unicode/utf8"
 
@@ -61,6 +62,10 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	if err == nil && shelf != nil {
 		response.TopShelf = &TopShelf{}
 		err = (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(shelf, response.TopShelf)
+	}
+
+	if err == nil && response.TopShelf != nil {
+		response.TopShelf.Tabs, err = s.liveShelfTabs(ctx, response.TopShelf.Tabs)
 	}
 
 	if err == nil && !saved {
@@ -165,6 +170,38 @@ func (s *Server) muteTab(ctx context.Context, username string, mute *TabMute) er
 	}
 
 	return nil
+}
+
+func (s *Server) liveShelfTabs(ctx context.Context, tabs []*ShelfTab) ([]*ShelfTab, error) {
+	conversation := func(tab *ShelfTab) string {
+		if tab.Server != "" {
+			return ""
+		}
+
+		return backend.TabConversation(tab.Path)
+	}
+
+	var ids []string
+
+	for _, tab := range tabs {
+		if id := conversation(tab); id != "" {
+			ids = append(ids, id)
+		}
+	}
+
+	if len(ids) == 0 {
+		return tabs, nil
+	}
+
+	live, err := s.sessions.ExistingConversations(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("read top shelf sessions: %w", err)
+	}
+
+	return slices.DeleteFunc(tabs, func(tab *ShelfTab) bool {
+		id := conversation(tab)
+		return id != "" && !slices.Contains(live, id)
+	}), nil
 }
 
 // tabMutes is mutes as the Web reads them, with each snooze's end as an RFC 3339 time in UTC.
