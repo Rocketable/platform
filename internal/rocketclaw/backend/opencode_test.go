@@ -541,28 +541,19 @@ func TestSyncOpenCodeMarksBackgroundWork(t *testing.T) {
 
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 	assert.False(t, slices.ContainsFunc(remoteSidebar(t, s), func(row SidebarSession) bool { return row.Background }))
-}
 
-// A root asks while it or a session under it has a pending form or permission request. A form owned
-// by no session, and a location whose list fails, mark nothing.
-func TestSyncOpenCodeMarksSessionsWaitingOnAPerson(t *testing.T) {
-	t.Parallel()
+	_, err := s.db.ExecContext(ctx, `DELETE FROM conversations`)
+	require.NoError(t, err)
 
-	s := newOpenCodeTestService(t, "box")
-	ctx := t.Context()
-	fake := &fakeOpenCode{
-		sessions:  []openCodeSession{openCodeTestSession("ses_a", "", "/srv/app", 3000), openCodeTestSession("ses_b", "", "/srv/app", 2000), openCodeTestSession("ses_c", "", "/srv/api", 1000)},
-		parents:   map[string]string{"ses_c_child": "ses_c"},
-		locations: []string{"/srv/app", "/srv/api", "/srv/broken"},
-		pending: map[string]map[string][]string{
-			"/api/form":               {"/srv/app": {"ses_a", "global"}, "/srv/api": {}},
-			"/api/permission/request": {"/srv/app": {}, "/srv/api": {"ses_c_child"}},
-		},
+	// A root asks while it or a child has a pending form or permission request. A form owned
+	// by no session, and a location whose list fails, mark nothing.
+	fake.sessions = fake.sessions[:3]
+	fake.locations = []string{"/srv/app", "/srv/api", "/srv/broken"}
+	fake.pending = map[string]map[string][]string{
+		"/api/form":               {"/srv/app": {"ses_a", "global"}, "/srv/api": {}},
+		"/api/permission/request": {"/srv/app": {}, "/srv/api": {"ses_c_child"}},
 	}
-	server := httptest.NewServer(fake)
-	t.Cleanup(server.Close)
 
-	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
 	asking := func() []bool {
 		require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
