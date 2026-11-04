@@ -688,6 +688,8 @@ func TestTranscriptObservationReportsUnavailableStorage(t *testing.T) {
 	require.ErrorContains(t, journal.Save(t.Context(), "turn", json.RawMessage(`{}`)), "save turn step")
 	_, _, err = journal.Load(t.Context(), "turn")
 	require.ErrorContains(t, err, "load turn step")
+	_, err = s.TurnProgress(t.Context(), "main", "turn")
+	require.ErrorContains(t, err, "read turn progress")
 	_, err = s.finishTurn(t.Context(), "turn", &turnFinish{conversationID: strings.TrimSpace("main"), outbound: protocol.NewOutboundMessage("main", "")})
 	require.ErrorContains(t, err, "begin turn finish")
 

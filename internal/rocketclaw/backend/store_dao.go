@@ -1288,6 +1288,85 @@ func (s *SessionService) HasActiveTurn(ctx context.Context, conversationID strin
 	return active, nil
 }
 
+// TurnProgress reports whether turnID of conversationID still runs, whether the conversation waits
+// on a Web question, and the turn's latest 50 execute and task calls, titled by their description.
+func (s *SessionService) TurnProgress(ctx context.Context, conversationID, turnID string) (protocol.TurnProgress, error) {
+	var (
+		progress protocol.TurnProgress
+		raw      []byte
+	)
+
+	rowID, _, _ := strings.Cut(turnID, "/")
+
+	err := s.db.QueryRowContext(ctx, `WITH questions AS (
+    SELECT count(*) AS waiting FROM steps q
+    LEFT JOIN steps a ON a.conversation_id = q.conversation_id AND a.key = left(q.key, -length('`+webQuestionStep+`')) || '/answer'
+    WHERE q.conversation_id = $1 AND q.key LIKE '%`+webQuestionStep+`' AND a.key IS NULL
+)
+SELECT t.phase NOT IN ('waiting', 'done'), q.waiting > 0, COALESCE(t.output_trace_json::text, '[]')
+FROM turns t CROSS JOIN questions q WHERE t.conversation_id = $1 AND t.id = $2`, conversationID, rowID).Scan(&progress.Running, &progress.Asking, &raw)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && !progress.Running {
+		return protocol.TurnProgress{}, nil
+	}
+
+	if err != nil {
+		return protocol.TurnProgress{}, fmt.Errorf("read turn progress: %w", err)
+	}
+
+	progress.Steps, err = queryRows(ctx, s.db, `WITH items AS MATERIALIZED (
+    SELECT key, value::jsonb AS item FROM steps WHERE conversation_id = $1 AND starts_with(key, $2)
+), calls AS (
+    SELECT key, item->>'call_id' AS call_id, item->>'name' AS name, item->>'arguments' AS arguments FROM items
+    WHERE item->>'type' = 'function_call' AND item->>'name' IN ('execute', 'task')
+    ORDER BY key DESC LIMIT 50
+)
+SELECT call_id, name, CASE WHEN pg_input_is_valid(arguments, 'jsonb') THEN COALESCE(arguments::jsonb->>'description', '') ELSE '' END
+FROM calls ORDER BY key`, "turn steps", func(row rowScanner) (protocol.TurnStep, error) {
+		var (
+			step        protocol.TurnStep
+			name, title string
+		)
+
+		if err := row.Scan(&step.ID, &name, &title); err != nil {
+			return step, fmt.Errorf("scan turn step: %w", err)
+		}
+
+		step.Title = cmp.Or(strings.TrimSpace(title), name)
+
+		return step, nil
+	}, conversationID, turnID+"/"+string(harness.TurnReplayInput)+"/")
+	if err != nil || len(progress.Steps) == 0 {
+		return progress, err
+	}
+
+	var trace []json.RawMessage
+	if err := json.Unmarshal(raw, &trace); err != nil {
+		return protocol.TurnProgress{}, fmt.Errorf("read turn progress: %w", err)
+	}
+
+	states := map[string]harness.PublicProgressState{}
+
+	observed := harness.PublicProgressFromTrace(trace)
+	for i := range observed {
+		states[observed[i].ID] = observed[i].State
+	}
+
+	for i := range progress.Steps {
+		switch states[progress.Steps[i].ID] {
+		case harness.PublicProgressCompleted, harness.PublicProgressBackground:
+			progress.Steps[i].State = protocol.TurnStepDone
+		case harness.PublicProgressFailed, harness.PublicProgressBlocked, harness.PublicProgressStopped:
+			progress.Steps[i].State = protocol.TurnStepFailed
+		case harness.PublicProgressWorking, harness.PublicProgressReview:
+			progress.Steps[i].State = protocol.TurnStepRunning
+		default:
+			progress.Steps[i].State = protocol.TurnStepRunning
+		}
+	}
+
+	return progress, nil
+}
+
 // finishTurn moves a running row to delivering in one transaction with its
 // history, goal accounting, Completion Note claims, and journal cleanup that
 // keeps Background Jobs' steps, and returns the outbound to
@@ -1330,13 +1409,8 @@ WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2`, finish.conver
 		return nil, inputPersistenceError{cause: fmt.Errorf("close mirrored input: %w", err)}
 	}
 
-	moved, err := execRows(ctx, tx, "finish active turn", `WITH reply AS (
-    SELECT 'ReplyState' AS key, value FROM steps WHERE conversation_id = $7 AND key = $8
-), final AS (
-    SELECT json_object_agg(key, COALESCE(r.value, p.value)) AS outbound FROM json_each($3::json) p FULL JOIN reply r USING (key)
-)
-UPDATE turns SET phase = $2, terminal = $4, updated_at_unix_ns = $5, outbound_json = f.outbound FROM final f
-WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntryNUL(outbound)), finish.terminal, timeUnixNano(time.Now()), turnRunning, finish.conversationID, protocol.ReplyStepKey(turnID))
+	moved, err := execRows(ctx, tx, "finish active turn", `UPDATE turns SET phase = $2, terminal = $4, updated_at_unix_ns = $5, outbound_json = $3::json
+WHERE id = $1 AND phase = $6`, turnID, turnDelivering, string(removeSessionEntryNUL(outbound)), finish.terminal, timeUnixNano(time.Now()), turnRunning)
 	if err != nil {
 		return nil, err
 	}

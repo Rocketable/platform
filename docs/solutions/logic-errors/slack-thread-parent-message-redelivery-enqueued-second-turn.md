@@ -1,7 +1,7 @@
 ---
 title: Slack Mention Redelivery Must Start At Most One Turn
 date: 2026-08-26
-last_updated: 2026-10-26
+last_updated: 2026-11-04
 category: docs/solutions/logic-errors/
 module: internal/rocketclaw/frontend/slack
 problem_type: logic_error
@@ -48,15 +48,15 @@ All of this is history. The connector code it names has been removed.
 
 Slack intake is now mention-only, and duplicates are refused at one durable point.
 
-1. The connector handles only channel renames, `AppMentionEvent` and `AgentSessionStoppedEvent` (`internal/rocketclaw/frontend/slack/connector.go:1011-1020`). Plain messages, including the parent `message` redelivery, never reach the router. Nothing else in Slack drives an agent.
-2. `handleAppMentionEvent` (`internal/rocketclaw/frontend/slack/connector.go:1074-1162`) builds the inbound message and calls `threadRouter.SubmitMention` (line 1146). It adds the robot reaction only when the mention is accepted (lines 1158-1161). A refused redelivery returns `false, nil`, so it gets no reaction and no failure reply.
+1. The connector's `handleEventsAPI` (`internal/rocketclaw/frontend/slack/connector.go`) handles only channel renames, `AppMentionEvent`, `AgentSessionStoppedEvent` and `AgentSessionTitleChangedEvent`. Plain messages, including the parent `message` redelivery, never reach the router. Nothing else in Slack drives an agent.
+2. `handleAppMentionEvent` (same file) builds the inbound message and calls `threadRouter.SubmitMention`. Before submitting, it sets the thread's agent session to `processing`, but only when no turn of the thread is running; a redelivery during a turn leaves the status alone (see [the agent session status learning](../architecture-patterns/slack-agent-session-status-follows-the-running-turn.md)). A refused redelivery returns `false, nil`, so it gets no failure reply, and `settleSession` sets the thread back to `active` unless one of its turns is running.
 3. `threadBridgeManager.SubmitMention` (`internal/rocketclaw/backend/thread_bridges.go:317-373`) makes the Thread Queue item ID `"slack:" + channel + ":" + message ts` (line 319). Inside one State Store transaction, holding the session history lock, it checks for that ID in two places: any model turn row (`turns` with `takes_lane`, whether waiting, running or finished) and saved history (`entries` whose `replay_input` carries that `input_id`) (SQL at lines 337-344). If it finds the ID, it returns `false, nil` (lines 348-349) and writes nothing.
 
 Tests that pin this behavior:
 
-- `TestHandleAppMentionEventRedeliveryReactsOnce` (`internal/rocketclaw/frontend/slack/connector_test.go:2923-2952`) sends the root mention, the parent `message` and a threaded reply mention, twice each. It expects four `SubmitMention` calls (the two parent messages never reach the router) and exactly two robot reactions.
-- `TestHandleEventsAPIIgnoresMessagesAndReactions` (`internal/rocketclaw/frontend/slack/connector_test.go:2861-2879`) shows that a parent `message` with `ts == thread_ts`, a plain reply, a reaction and an edited mention cause no router call.
-- `TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce` (`internal/rocketclaw/backend/thread_bridges_test.go:223-289`) refuses a redelivery in each state: while the mention waits, mid-turn, after a restart, and after its turn has finished. It also checks that a mention never steers the running turn.
+- `TestHandleAppMentionEventRedeliveryStartsOnce` (`internal/rocketclaw/frontend/slack/connector_test.go`) sends the root mention, the parent `message` and a threaded reply mention, twice each. It expects four `SubmitMention` calls (the two parent messages never reach the router), and each refused redelivery sets the idle thread back to `active`.
+- `TestHandleEventsAPIIgnoresMessagesAndReactions` (`internal/rocketclaw/frontend/slack/connector_test.go`) shows that a parent `message` with `ts == thread_ts`, a plain reply, a reaction and an edited mention cause no router call.
+- `TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce` (`internal/rocketclaw/backend/thread_bridges_test.go:216-282`) refuses a redelivery in each state: while the mention waits, mid-turn, after a restart, and after its turn has finished. It also checks that a mention never steers the running turn.
 
 ## Why This Works
 
@@ -64,7 +64,7 @@ Both historical bugs had the same cause: the connector decided whether an event 
 
 ## Prevention
 
-- Dedupe Slack redeliveries at the durable boundary, keyed by Slack's message `ts`. Never dedupe with in-memory connector state such as maps, stacks or "turn active" flags.
+- Dedupe Slack redeliveries at the durable boundary, keyed by Slack's message `ts`. Never decide whether an event is new work from in-memory connector state such as maps, stacks or "turn active" flags. In-memory state may decide only what Slack shows, such as the agent session status.
 - Any new Slack entry point that can create work must go through `SubmitMention` and its `slack:<channel>:<message ts>` ID. Do not write to the Thread Queue directly from the connector.
 - Do not take "`thread_ts` is set" to mean "this is a reply". Slack also sets `thread_ts` on the thread parent.
 - Do not add Slack event types to the switch in `handleEventsAPI` without deciding how their redeliveries are deduped. A plain-message handler would bring back the parent-redelivery path.
@@ -74,5 +74,6 @@ Both historical bugs had the same cause: the connector decided whether an event 
 ## Related Issues
 
 - [Saved queue never started after restart](saved-queue-never-started-after-restart.md): the same Thread Queue rows after a restart.
+- [A Slack mention thread's agent session status follows its running turn](../architecture-patterns/slack-agent-session-status-follows-the-running-turn.md): the same mention entry point, for the status Slack shows rather than the work admitted.
 - Historical fixes, now removed: [PR #1](https://github.com/Rocketable/platform/pull/1) (idempotent stack initialization) and [PR #16](https://github.com/Rocketable/platform/pull/16) (mid-turn parent message swallowed).
 - `CONCEPTS.md`: Thread Queue, Managed Slack Thread and Root Slack Mention. Buffered Follow-Up, Slack Steer and Enqueued Slack Message are listed there as historical.

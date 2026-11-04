@@ -601,7 +601,7 @@ func TestTurnCleanupKeepsBackgroundJournal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"turn-1/call/a/task"}, testTurnStepKeys(t, store, "main"))
 
-	require.NoError(t, store.SaveTurnStep(ctx, "main", "turn-1/reply", json.RawMessage(`{}`)))
+	require.NoError(t, store.SaveTurnStep(ctx, "main", "turn-1/answer", json.RawMessage(`{}`)))
 	require.NoError(t, store.closeTurn(ctx, "turn-1"))
 	require.Equal(t, []string{"turn-1/call/a/task"}, testTurnStepKeys(t, store, "main"), "running jobs keep their journals")
 }

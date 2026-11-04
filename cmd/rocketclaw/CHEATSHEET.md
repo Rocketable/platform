@@ -23,20 +23,27 @@ While idle, sending starts a turn. During active work, web Send queues and web C
 
 In the Slack app's **Event Subscriptions**, subscribe to the bot event [`app_mention`](https://docs.slack.dev/reference/events/app_mention) (scope `app_mentions:read`), plus the rename events below. RocketClaw no longer handles message events, so the `message.channels`, `message.groups`, `message.im`, and `message.mpim` subscriptions are not needed and can be removed.
 
-Under **OAuth & Permissions**, keep `chat:write` for replies, `reactions:write` for the 🤖 marker, `files:read` and `files:write` for attachments, and `channels:history` to read a thread RocketClaw takes over and natively forwarded threads. When an `@` row covers private channels or group DMs, also keep `groups:history` and `mpim:history`. Reinstall the app after changing scopes.
+Under **OAuth & Permissions**, keep `chat:write` for replies, `reactions:write` for the ✅ goal marker, `files:read` and `files:write` for attachments, and `channels:history` to read a thread RocketClaw takes over and natively forwarded threads. When an `@` row covers private channels or group DMs, also keep `groups:history` and `mpim:history`. Reinstall the app after changing scopes.
 
 RocketClaw no longer uses Slack interactivity, so **Interactivity & Shortcuts** can be turned off. RocketClaw ignores presses on buttons posted by earlier versions.
 
-## Slack Native Stop
+## Slack Agent Sessions
 
-While a mention turn runs, Slack can show its native working state with a Stop button. That uses Slack's [agent sessions](https://docs.slack.dev/ai/agent-sessions), which only apps declared as agents can create:
+RocketClaw shows a mention thread's work with Slack's [agent sessions](https://docs.slack.dev/ai/agent-sessions): Slack's working state and Stop button, and a checklist of the turn's steps. Only apps declared as agents can create sessions, so set the app up as one:
 
 1. In the app settings, open **Agents** in the sidebar and turn on the Agent messaging experience (manifest `features.agent_view`). This cannot be undone. It adds the `assistant:write` scope; reinstall the app.
-2. Under **Event Subscriptions**, subscribe to the bot event [`agent_session_stopped`](https://docs.slack.dev/reference/events/agent_session_stopped). Without it, Slack shows a working line with no Stop button.
+2. Under **Event Subscriptions**, subscribe to the bot events [`agent_session_stopped`](https://docs.slack.dev/reference/events/agent_session_stopped) and [`agent_session_title_changed`](https://docs.slack.dev/reference/events/agent_session_title_changed). Without the first, Slack shows a working line with no Stop button; without the second, renames in Slack stay in Slack.
 
-RocketClaw sets a mention turn's thread to `processing` when the turn starts, and again when it resumes after a restart. It sets `active` when the turn ends, however it ends. Stop from a user on the channel row's allowlist ends the turn and stops the thread's active goal, like Web `$stop`; queued mentions stay queued, and the reply's footer says `stopped`. A press from anyone else changes nothing. A Stop that arrives after a newer turn started interrupts nothing. Only turns started by a Slack mention get the working state: report threads, Web-started turns, goal continuations, and background wakes get none. The 🤖 reaction still marks each accepted mention.
+When a mention arrives in a thread with no running turn, RocketClaw sets the thread to `processing` before handing the mention on; a mention during a running turn leaves its status as it is. The call that creates the thread's session titles it with the mention text and names its sender as initiator. A mention that starts no turn, because the router refused it or nothing picked it up, sets the thread back to `active` unless one of its turns is running. Every turn in a mention thread, whichever surface started it (a mention, Web, a goal continuation, or a background wake), sets `processing` when it starts and again when it resumes after a restart, and sets `active` when it ends, however it ends. While it runs, RocketClaw reads the turn's progress every 3 seconds:
 
-Slack ends the working state after one hour, and RocketClaw does not renew it, so a longer turn loses its Stop button; stop it in Web through the footer link. A workspace without agent sessions answers `feature_disabled` or `not_authorized`. RocketClaw logs that and runs the turn normally, without Stop; the footer link is then the way to stop it.
+- While a question the turn asked in Web waits for an answer, the thread is `suspended` (Slack shows it needs someone), and `processing` again once it is answered.
+- `processing` is re-sent every 50 minutes, so Slack's one-hour limit never ends it.
+- Once the turn runs a script (`execute`) or delegates to a subagent (`task`), a checklist message lists each one by the description its call gave, as working, done, or failed, edited as they change. When the turn ends, the checklist says Done, Failed, or Stopped. A turn without scripts or subagents posts no checklist; a turn that resumes after a restart posts a fresh one.
+- A turn that no longer runs, because its final never reached Slack, ends its session: the thread goes `active` and its checklist says Ended.
+
+The turn's answer posts as a new reply when it ends. Report threads get no session calls. Stop from a user on the channel row's allowlist ends the running turn and stops the thread's active goal, like Web `$stop`; queued mentions stay queued, and the answer's footer says `stopped`. A press from anyone else changes nothing. A Stop that arrives after a newer turn started interrupts nothing. A refused session call is only logged.
+
+The thread's session title and its Web chat's name follow each other. Renaming the chat in Web renames the session in Slack (a blank Web name leaves Slack's title as it is). Slack lets channel members rename a session from Slack's agent sessions list; a rename there by a user on the channel row's allowlist renames the Web chat, and anyone else's stays in Slack.
 
 Before turning on `agent_view`, note that it makes the app's Messages tab an agent chat, and RocketClaw never answers there: it ignores 1:1 DMs. **App Home** → **Show Tabs** → **Messages Tab** (manifest `features.app_home.messages_tab_enabled`) turns that tab off. Slack's docs don't say whether an agent app may keep the tab off, or whether channel-thread sessions still work with it off, so check in your workspace.
 
@@ -59,7 +66,7 @@ Add `users:read.email` too, then reinstall the app, so a Slack mention's turn ge
 | Take over a thread | Mention the bot inside a thread RocketClaw does not know. | Adopts that thread. Bare `@bot` is enough. Includes the newest 50 prior texts. Ignored when RocketClaw posted the thread's root. |
 | Continue a conversation | Mention the bot again in a thread it answers in. | Next turn of that thread's conversation; only the mention is added. Replies without a mention start nothing. |
 | Mention while the agent works | Mention the bot during a running turn. | Waits and runs as the next turn; it never steers. Mentions also wait behind an active goal. Each mention is accepted once, even if Slack delivers it again. |
-| Stop a running turn | Press Slack's Stop on a running mention turn, or use **Stop turn** or `$stop` in Web. | Slack's Stop needs agent sessions (see Slack Native Stop) and an allowlisted user. Report threads and Web-started turns have no Slack stop control. |
+| Stop a running turn | Press Slack's Stop on a running turn in a mention thread, or use **Stop turn** or `$stop` in Web. | Slack's Stop needs agent sessions (see Slack Agent Sessions) and an allowlisted user. Report threads have no Slack stop control. |
 | Old report thread | A Slack thread an earlier version posted a cron report or External MCP session into. | Read-only: replies and mentions are ignored. Its conversation is a Web chat now. |
 | External MCP conversation | Call `session_prompt` with an external conversation ID and an agent; a `slack_channel` field is ignored. | The ID owns one private MCP session and one Web chat, both run by the agent the first call named. The MCP agent stays fixed. The Web chat shows MCP history; MCP history does not show what people add in Web. Nothing is posted to Slack. |
 
@@ -105,7 +112,7 @@ Fan-out is flat: nested `parallel` or `pipeline` calls are rejected. A run allow
 
 Prompt shell expansion is disabled for workflow worker instructions, input prompts, and loaded skill bodies, so syntax such as `` !`command` `` remains literal. This is intentional to preserve the workflow permission boundary.
 
-Return the human-visible value directly from `main`: strings render directly, other JSON-compatible values render as JSON, and only `None` or `""` is silent. Parallel workers share one checkout; assign disjoint file ownership and integrate shared files sequentially. Slack shows one in-progress placeholder and the final result, without workflow progress cards. Intermediate values do not enter managed history. `$stop` is terminal. A daemon restart resumes the run without repeating completed workers.
+Return the human-visible value directly from `main`: strings render directly, other JSON-compatible values render as JSON, and only `None` or `""` is silent. Parallel workers share one checkout; assign disjoint file ownership and integrate shared files sequentially. Slack shows its working state and then the final result, without workflow progress cards. Intermediate values do not enter managed history. `$stop` is terminal. A daemon restart resumes the run without repeating completed workers.
 
 `workflow_button` belongs to Slack Workflow Builder. RocketClaw saved workflows do not use it.
 
@@ -232,7 +239,6 @@ RocketClaw reads no reactions. These are markers it posts:
 
 | Emoji | Reaction Name | Meaning |
 | --- | --- | --- |
-| `🤖` | `robot_face` | Added when RocketClaw accepts a mention; removed after final response delivery. |
 | `✅` | `white_check_mark` | Added when a goal in a Slack thread's conversation reaches `complete`. |
 | `🏁` |  | Goal header RocketClaw posts while a goal is running. |
 | `📡` | `satellite_antenna` | `📡 web` heads Web input mirrored into a Slack thread. |

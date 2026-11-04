@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
 // Ensure that channelFactsStoreMock does implement channelFactsStore.
@@ -39,6 +41,12 @@ var _ channelFactsStore = &channelFactsStoreMock{}
 //			SlackThreadFunc: func(ctx context.Context, conversationID string) (string, string, error) {
 //				panic("mock out the SlackThread method")
 //			},
+//			TurnProgressFunc: func(ctx context.Context, conversationID string, turnID string) (protocol.TurnProgress, error) {
+//				panic("mock out the TurnProgress method")
+//			},
+//			UpdateConversationDetailsFunc: func(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error) {
+//				panic("mock out the UpdateConversationDetails method")
+//			},
 //		}
 //
 //		// use mockedchannelFactsStore in code that requires channelFactsStore
@@ -63,6 +71,12 @@ type channelFactsStoreMock struct {
 
 	// SlackThreadFunc mocks the SlackThread method.
 	SlackThreadFunc func(ctx context.Context, conversationID string) (string, string, error)
+
+	// TurnProgressFunc mocks the TurnProgress method.
+	TurnProgressFunc func(ctx context.Context, conversationID string, turnID string) (protocol.TurnProgress, error)
+
+	// UpdateConversationDetailsFunc mocks the UpdateConversationDetails method.
+	UpdateConversationDetailsFunc func(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -120,13 +134,35 @@ type channelFactsStoreMock struct {
 			// ConversationID is the conversationID argument value.
 			ConversationID string
 		}
+		// TurnProgress holds details about calls to the TurnProgress method.
+		TurnProgress []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ConversationID is the conversationID argument value.
+			ConversationID string
+			// TurnID is the turnID argument value.
+			TurnID string
+		}
+		// UpdateConversationDetails holds details about calls to the UpdateConversationDetails method.
+		UpdateConversationDetails []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ConversationID is the conversationID argument value.
+			ConversationID string
+			// Pinned is the pinned argument value.
+			Pinned *bool
+			// Name is the name argument value.
+			Name *string
+		}
 	}
-	lockChannelFact       sync.RWMutex
-	lockLoadTurnStep      sync.RWMutex
-	lockRecordChannelFact sync.RWMutex
-	lockSaveTurnStep      sync.RWMutex
-	lockSlackChannelIDs   sync.RWMutex
-	lockSlackThread       sync.RWMutex
+	lockChannelFact               sync.RWMutex
+	lockLoadTurnStep              sync.RWMutex
+	lockRecordChannelFact         sync.RWMutex
+	lockSaveTurnStep              sync.RWMutex
+	lockSlackChannelIDs           sync.RWMutex
+	lockSlackThread               sync.RWMutex
+	lockTurnProgress              sync.RWMutex
+	lockUpdateConversationDetails sync.RWMutex
 }
 
 // ChannelFact calls ChannelFactFunc.
@@ -366,5 +402,89 @@ func (mock *channelFactsStoreMock) SlackThreadCalls() []struct {
 	mock.lockSlackThread.RLock()
 	calls = mock.calls.SlackThread
 	mock.lockSlackThread.RUnlock()
+	return calls
+}
+
+// TurnProgress calls TurnProgressFunc.
+func (mock *channelFactsStoreMock) TurnProgress(ctx context.Context, conversationID string, turnID string) (protocol.TurnProgress, error) {
+	if mock.TurnProgressFunc == nil {
+		panic("channelFactsStoreMock.TurnProgressFunc: method is nil but channelFactsStore.TurnProgress was just called")
+	}
+	callInfo := struct {
+		Ctx            context.Context
+		ConversationID string
+		TurnID         string
+	}{
+		Ctx:            ctx,
+		ConversationID: conversationID,
+		TurnID:         turnID,
+	}
+	mock.lockTurnProgress.Lock()
+	mock.calls.TurnProgress = append(mock.calls.TurnProgress, callInfo)
+	mock.lockTurnProgress.Unlock()
+	return mock.TurnProgressFunc(ctx, conversationID, turnID)
+}
+
+// TurnProgressCalls gets all the calls that were made to TurnProgress.
+// Check the length with:
+//
+//	len(mockedchannelFactsStore.TurnProgressCalls())
+func (mock *channelFactsStoreMock) TurnProgressCalls() []struct {
+	Ctx            context.Context
+	ConversationID string
+	TurnID         string
+} {
+	var calls []struct {
+		Ctx            context.Context
+		ConversationID string
+		TurnID         string
+	}
+	mock.lockTurnProgress.RLock()
+	calls = mock.calls.TurnProgress
+	mock.lockTurnProgress.RUnlock()
+	return calls
+}
+
+// UpdateConversationDetails calls UpdateConversationDetailsFunc.
+func (mock *channelFactsStoreMock) UpdateConversationDetails(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error) {
+	if mock.UpdateConversationDetailsFunc == nil {
+		panic("channelFactsStoreMock.UpdateConversationDetailsFunc: method is nil but channelFactsStore.UpdateConversationDetails was just called")
+	}
+	callInfo := struct {
+		Ctx            context.Context
+		ConversationID string
+		Pinned         *bool
+		Name           *string
+	}{
+		Ctx:            ctx,
+		ConversationID: conversationID,
+		Pinned:         pinned,
+		Name:           name,
+	}
+	mock.lockUpdateConversationDetails.Lock()
+	mock.calls.UpdateConversationDetails = append(mock.calls.UpdateConversationDetails, callInfo)
+	mock.lockUpdateConversationDetails.Unlock()
+	return mock.UpdateConversationDetailsFunc(ctx, conversationID, pinned, name)
+}
+
+// UpdateConversationDetailsCalls gets all the calls that were made to UpdateConversationDetails.
+// Check the length with:
+//
+//	len(mockedchannelFactsStore.UpdateConversationDetailsCalls())
+func (mock *channelFactsStoreMock) UpdateConversationDetailsCalls() []struct {
+	Ctx            context.Context
+	ConversationID string
+	Pinned         *bool
+	Name           *string
+} {
+	var calls []struct {
+		Ctx            context.Context
+		ConversationID string
+		Pinned         *bool
+		Name           *string
+	}
+	mock.lockUpdateConversationDetails.RLock()
+	calls = mock.calls.UpdateConversationDetails
+	mock.lockUpdateConversationDetails.RUnlock()
 	return calls
 }

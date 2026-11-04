@@ -112,7 +112,7 @@ func sidebarChoicesFixture(tb testing.TB, count int) (*Server, context.Context) 
 		require.NoError(tb, err)
 	}
 
-	return New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}), metadata.NewIncomingContext(tb.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	return New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{RenameThreadSessionFunc: func(context.Context, string, string) {}}, &mockCronJobs{}), metadata.NewIncomingContext(tb.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
 }
 
 func TestSidebarFingerprintAllocationBudget(t *testing.T) {

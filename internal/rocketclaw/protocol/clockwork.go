@@ -1,10 +1,7 @@
 // Package protocol defines shared RocketClaw event contracts.
 package protocol
 
-import (
-	"context"
-	"slices"
-)
+import "context"
 
 // OutboundPublisher completes connector delivery of one outbound message.
 type OutboundPublisher interface {
@@ -31,7 +28,7 @@ func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 		Complete:   message.Complete,
 		SlackReply: Clone(message.SlackReply), Attachments: CloneOutboundAttachments(message.Attachments),
 		GoalTurn: message.GoalTurn, GoalComplete: message.GoalComplete, GoalActive: message.GoalActive,
-		GoalTurnNumber: message.GoalTurnNumber, GoalMaxTurns: message.GoalMaxTurns, Source: message.Source, Terminal: message.Terminal,
-		Cronjob: Clone(message.Cronjob), ReplyState: slices.Clone(message.ReplyState),
+		GoalTurnNumber: message.GoalTurnNumber, GoalMaxTurns: message.GoalMaxTurns, Terminal: message.Terminal,
+		Cronjob: Clone(message.Cronjob),
 	}
 }
