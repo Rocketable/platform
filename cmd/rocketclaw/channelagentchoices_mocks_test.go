@@ -24,6 +24,9 @@ var _ rpc.ChannelAgentChoices = &mockWebChannels{}
 //			ChannelAgentChoicesFunc: func(context1 context.Context, s string) ([]string, error) {
 //				panic("mock out the ChannelAgentChoices method")
 //			},
+//			RenameThreadSessionFunc: func(ctx context.Context, conversationID string, name string)  {
+//				panic("mock out the RenameThreadSession method")
+//			},
 //			SidebarChannelAgentChoicesFunc: func(context1 context.Context, s string) (string, []string, error) {
 //				panic("mock out the SidebarChannelAgentChoices method")
 //			},
@@ -43,6 +46,9 @@ type mockWebChannels struct {
 	// ChannelAgentChoicesFunc mocks the ChannelAgentChoices method.
 	ChannelAgentChoicesFunc func(context1 context.Context, s string) ([]string, error)
 
+	// RenameThreadSessionFunc mocks the RenameThreadSession method.
+	RenameThreadSessionFunc func(ctx context.Context, conversationID string, name string)
+
 	// SidebarChannelAgentChoicesFunc mocks the SidebarChannelAgentChoices method.
 	SidebarChannelAgentChoicesFunc func(context1 context.Context, s string) (string, []string, error)
 
@@ -60,6 +66,15 @@ type mockWebChannels struct {
 			Context1 context.Context
 			// S is the s argument value.
 			S string
+		}
+		// RenameThreadSession holds details about calls to the RenameThreadSession method.
+		RenameThreadSession []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// ConversationID is the conversationID argument value.
+			ConversationID string
+			// Name is the name argument value.
+			Name string
 		}
 		// SidebarChannelAgentChoices holds details about calls to the SidebarChannelAgentChoices method.
 		SidebarChannelAgentChoices []struct {
@@ -84,6 +99,7 @@ type mockWebChannels struct {
 		}
 	}
 	lockChannelAgentChoices        sync.RWMutex
+	lockRenameThreadSession        sync.RWMutex
 	lockSidebarChannelAgentChoices sync.RWMutex
 	lockSlackNames                 sync.RWMutex
 	lockSlackTagsMatching          sync.RWMutex
@@ -122,6 +138,46 @@ func (mock *mockWebChannels) ChannelAgentChoicesCalls() []struct {
 	mock.lockChannelAgentChoices.RLock()
 	calls = mock.calls.ChannelAgentChoices
 	mock.lockChannelAgentChoices.RUnlock()
+	return calls
+}
+
+// RenameThreadSession calls RenameThreadSessionFunc.
+func (mock *mockWebChannels) RenameThreadSession(ctx context.Context, conversationID string, name string) {
+	if mock.RenameThreadSessionFunc == nil {
+		panic("mockWebChannels.RenameThreadSessionFunc: method is nil but ChannelAgentChoices.RenameThreadSession was just called")
+	}
+	callInfo := struct {
+		Ctx            context.Context
+		ConversationID string
+		Name           string
+	}{
+		Ctx:            ctx,
+		ConversationID: conversationID,
+		Name:           name,
+	}
+	mock.lockRenameThreadSession.Lock()
+	mock.calls.RenameThreadSession = append(mock.calls.RenameThreadSession, callInfo)
+	mock.lockRenameThreadSession.Unlock()
+	mock.RenameThreadSessionFunc(ctx, conversationID, name)
+}
+
+// RenameThreadSessionCalls gets all the calls that were made to RenameThreadSession.
+// Check the length with:
+//
+//	len(mockedChannelAgentChoices.RenameThreadSessionCalls())
+func (mock *mockWebChannels) RenameThreadSessionCalls() []struct {
+	Ctx            context.Context
+	ConversationID string
+	Name           string
+} {
+	var calls []struct {
+		Ctx            context.Context
+		ConversationID string
+		Name           string
+	}
+	mock.lockRenameThreadSession.RLock()
+	calls = mock.calls.RenameThreadSession
+	mock.lockRenameThreadSession.RUnlock()
 	return calls
 }
 

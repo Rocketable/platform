@@ -95,6 +95,7 @@ type ChannelAgentChoices interface {
 	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
 	SlackNames(context.Context, []string) map[string]string
 	SlackTagsMatching(context.Context, string) []string
+	RenameThreadSession(ctx context.Context, conversationID, name string)
 }
 
 // CronJobs uses the process's existing Cron manager for reads and execution.
@@ -1143,6 +1144,10 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 
 	if !updated {
 		return nil, fmt.Errorf("update web conversation: %w", status.Error(codes.NotFound, "conversation is not recorded"))
+	}
+
+	if request.Name != nil {
+		s.channels.RenameThreadSession(ctx, request.Id, *request.Name)
 	}
 
 	return &UpdateSessionResponse{}, nil

@@ -139,9 +139,9 @@ Slack has one job: quick help when an allowed user mentions the bot. Everything 
 
 Under `slack.channels`, map each channel to a list of agents and the Slack user IDs allowed to use them. A row named `@` is not a channel: it gives agents and allowed users for mentions in any other channel or group DM the bot is already in.
 
-Only a mention from an allowed user starts work. Messages without a mention, including replies in threads the bot answers in, reactions, and edited messages start nothing, and 1:1 DMs never start work. A top-level mention in a configured channel starts a new thread answered by the channel's first agent; a top-level mention with no text, file, or forward is ignored. A mention in a thread the bot does not know takes that thread over and reads up to 50 earlier messages. A mention in a thread the bot already answers in is that conversation's next turn and adds only the mention itself. It waits for running work and active goals instead of steering them. Mentions keep their files and forwarded threads. The bot marks each accepted mention with 🤖 and accepts it once, even if Slack delivers it again. If it cannot read the thread or take the request, it replies with a short error.
+Only a mention from an allowed user starts work. Messages without a mention, including replies in threads the bot answers in, reactions, and edited messages start nothing, and 1:1 DMs never start work. A top-level mention in a configured channel starts a new thread answered by the channel's first agent; a top-level mention with no text, file, or forward is ignored. A mention in a thread the bot does not know takes that thread over and reads up to 50 earlier messages. A mention in a thread the bot already answers in is that conversation's next turn and adds only the mention itself. It waits for running work and active goals instead of steering them. Mentions keep their files and forwarded threads. Slack shows the thread working as soon as the bot accepts a mention, and the bot accepts each mention once, even if Slack delivers it again. If it cannot read the thread or take the request, it replies with a short error.
 
-While it works, Slack shows one placeholder message, then the final answer and any files. Mention replies end with a footer: the agent, its state (working, done, failed, or stopped), and an Open in Web link.
+While a turn runs, the thread shows Slack's own working state with a Stop button, or that it needs someone while a question the turn asked in Web waits. A turn that runs scripts or subagents posts one checklist of them, updated as each finishes. When the turn ends, its answer and any files post as new replies. The answer ends with a footer: the agent, how the turn ended (done, failed, or stopped), and an Open in Web link. A turn without an answer posts the footer alone.
 
 Slack threads that earlier versions posted cron reports or MCP sessions into are read-only: the bot ignores every reply and mention in them. Their conversations are Web chats now; keep working there.
 
@@ -155,9 +155,19 @@ Set up the Slack app with the bot event `app_mention` and these bot scopes, then
 
 The `message.*` event subscriptions and Interactivity are no longer used and can be removed.
 
-Slack's own Stop button needs two more steps: turn the app into an agent (**Agents** in the app settings, manifest `features.agent_view`), which cannot be undone, and subscribe to the bot event `agent_session_stopped`. Then each turn a mention started shows Slack's working state until it ends, and Stop from an allowed user ends the turn and its goal, like Web `$stop`. Slack drops the working state after one hour, and RocketClaw does not renew it. A workspace without agent sessions logs the refusal and runs turns normally; stop them from the footer's Web link. `agent_view` also adds an agent chat to the app's Messages tab that RocketClaw never answers.
+The bot uses Slack's agent sessions, which need two more steps: turn the app into an agent (**Agents** in the app settings, manifest `features.agent_view`), which cannot be undone, and subscribe to the bot events `agent_session_stopped` and `agent_session_title_changed`. Then every turn in a mention thread, whichever surface started it, shows Slack's working state until it ends, renewed before Slack's one-hour limit, and Stop from an allowed user ends the turn and its goal, like Web `$stop`. The thread's session in Slack is titled after the mention that created it, and renaming it, in Web or by an allowed user in Slack, renames it in both. `agent_view` also adds an agent chat to the app's Messages tab that RocketClaw never answers.
 
 See the [cheatsheet](cmd/rocketclaw/CHEATSHEET.md) for the full Slack app setup.
+
+Release note for Slack agent sessions:
+
+- Slack's agent sessions are now required (see above). Without them, a mention thread shows no working state and has no Stop.
+- Mentions no longer get a 🤖 reaction or a *Thinking...* message. Slack shows the thread working at once, and the answer posts as a new reply when the turn ends instead of replacing a placeholder.
+- Turns in a mention thread started from Web, by a goal continuation, or by a background wake also show the working state, and Slack's Stop stops them.
+- A turn that runs longer than an hour keeps its working state and Stop. A turn whose final never reached Slack no longer looks like it is working forever.
+- While a Web question waits, the thread shows that it needs someone.
+- A turn that runs scripts or subagents posts one checklist of them, edited as they finish.
+- Subscribe the app to `agent_session_title_changed`: session titles now follow Web chat names both ways.
 
 Release note for mention-only Slack:
 

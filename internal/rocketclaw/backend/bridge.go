@@ -3254,7 +3254,7 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text s
 
 	outbound.Complete = complete
 	if msg != nil {
-		outbound.Cronjob, outbound.Source = msg.Cronjob, msg.Source
+		outbound.Cronjob = msg.Cronjob
 
 		if msg.Workflow.Name == "" {
 			goal, goalOK, err := b.config.SessionService.Goal(b.config.ConversationID)

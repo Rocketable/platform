@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"context"
-	"encoding/json"
 	"mime"
 	"path/filepath"
 	"slices"
@@ -184,6 +183,28 @@ type SlackReplyTarget struct{ ChannelID, MessageTS, ThreadTS string }
 // TextConversationTarget identifies a conversation/message in the configured primary text connector.
 type TextConversationTarget struct{ ChannelID, MessageID, ThreadID string }
 
+// TurnProgress is what a turn shows people while it runs.
+type TurnProgress struct {
+	Running, Asking bool
+	Steps           []TurnStep
+}
+
+// TurnStep is one script or subagent delegation of a turn, titled with the label its call gave people.
+type TurnStep struct {
+	ID, Title string
+	State     TurnStepState
+}
+
+// TurnStepState is how far a turn's step has got.
+type TurnStepState string
+
+// Turn step states.
+const (
+	TurnStepRunning TurnStepState = "running"
+	TurnStepDone    TurnStepState = "done"
+	TurnStepFailed  TurnStepState = "failed"
+)
+
 // AskUserQuestionOption is one native UI choice for ask_user_question.
 type AskUserQuestionOption struct{ Label, Value, Description string }
 
@@ -224,14 +245,8 @@ type OutboundMessage struct {
 	Attachments                        []OutboundAttachment
 	GoalTurn, GoalComplete, GoalActive bool
 	GoalTurnNumber, GoalMaxTurns       int
-	// Source is the source of the inbound that started the turn.
-	Source Source
 	// Terminal is how a final's turn ended: complete, failed, or stopped.
 	Terminal Terminal
-	// ReplyState is the connector's recorded reply attachment for TurnID, copied
-	// from the turn's journal when the turn finishes, so a delivery after a restart
-	// edits the original placeholder.
-	ReplyState json.RawMessage `json:",omitempty"`
 }
 
 // NewInboundMessage constructs an unrouted inbound message.
@@ -311,9 +326,6 @@ func (m *InboundMessage) CompleteResponseWithAttachments(text string, attachment
 		close(ch)
 	})
 }
-
-// ReplyStepKey is the journal key of a turn's recorded reply attachment.
-func ReplyStepKey(turnID string) string { return turnID + "/reply" }
 
 // NewOutboundMessage constructs an outbound message for one explicit conversation.
 func NewOutboundMessage(conversationID, text string) *OutboundMessage {

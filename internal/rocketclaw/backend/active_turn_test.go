@@ -230,9 +230,6 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	outbound := crashed.newOutboundMessage(msg, "turn-finished", "finished answer", true)
 	outbound.Attachments = []protocol.OutboundAttachment{{ID: "finished-report", Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}
 	require.NoError(t, service.SaveAttachment(t.Context(), conversationID, "", &outbound.Attachments[0], false))
-	outbound.ReplyState = json.RawMessage(`{"ChannelID":"C456","MessageTS":"777.2"}`)
-
-	require.NoError(t, service.SaveTurnStep(t.Context(), conversationID, protocol.ReplyStepKey("turn-finished"), []byte(`{"ChannelID":"C123","MessageTS":"555.1"}`)))
 	_, err := service.finishTurn(t.Context(), "turn-finished", &turnFinish{conversationID: strings.TrimSpace(conversationID), accountGoal: true, outbound: outbound})
 	require.NoError(t, err)
 
@@ -255,7 +252,6 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	assert.Equal(t, "finished answer", final.Text)
 	assert.Equal(t, outbound.Attachments, final.Attachments)
 	assert.Equal(t, "turn-finished", final.TurnID)
-	assert.JSONEq(t, `{"ChannelID":"C123","MessageTS":"555.1"}`, string(final.ReplyState), "delivery edits the turn's recorded placeholder")
 
 	continued := readFinal(t, finals)
 	assert.Equal(t, "answer", continued.Text, "the goal continues once after the redelivered turn")
@@ -325,8 +321,6 @@ func TestFinishTurnKeepsLargeAttachment(t *testing.T) {
 	outbound.Attachments = []protocol.OutboundAttachment{{ID: "large-file", Name: "file.bin", Data: bytes.Repeat([]byte{0x61}, 192<<20)}}
 	require.NoError(t, service.SaveAttachment(t.Context(), inbound.ConversationID, "", &outbound.Attachments[0], false))
 
-	require.NoError(t, service.SaveTurnStep(t.Context(), inbound.ConversationID, protocol.ReplyStepKey("attachment-turn"), []byte(`{"ChannelID":"C789","MessageTS":"888.3"}`)))
-
 	_, err := service.finishTurn(t.Context(), "attachment-turn", &turnFinish{conversationID: strings.TrimSpace(inbound.ConversationID), outbound: outbound})
 	require.NoError(t, err)
 	stored, found, err := service.headTurn(t.Context(), inbound.ConversationID)
@@ -337,7 +331,6 @@ func TestFinishTurnKeepsLargeAttachment(t *testing.T) {
 	require.Len(t, stored.outbound.Attachments, 1)
 	assert.Equal(t, outbound.Attachments[0].Name, stored.outbound.Attachments[0].Name)
 	assert.True(t, bytes.Equal(outbound.Attachments[0].Data, stored.outbound.Attachments[0].Data))
-	assert.JSONEq(t, `{"ChannelID":"C789","MessageTS":"888.3"}`, string(stored.outbound.ReplyState))
 }
 
 // AE9: $stop on a workflow row waiting to resume posts one stopped final and never runs it.
@@ -2629,5 +2622,47 @@ func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 
 			nt.waitIdle(t, manager, nt.conversationID)
 		})
+	}
+}
+
+func TestTurnProgress(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	progress := func(id, state string) json.RawMessage {
+		return json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"` + id + `","parent_id":"turn-1/response","kind":"tool","state":"` + state + `"}}`)
+	}
+	require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: "turn-1", ConversationKey: "chat", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":"check login"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"call-1","name":"execute","arguments":"{\"description\":\" Run login scenario \",\"code\":\"x\"}"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"call-2","name":"read","arguments":"{}"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"call-3","name":"task","arguments":"{\"description\":\"Review results\"}"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"call-4","name":"execute","arguments":"not json"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"call-5","name":"task","arguments":"{\"description\":\"Pending\"}"}`),
+	}, OutputTrace: []json.RawMessage{progress("call-1", "completed"), progress("call-2", "completed"), progress("call-3", "blocked"), progress("call-4", "working")}}))
+	require.NoError(t, s.SaveTurnStep(ctx, "chat", "turn-1/call/q"+webQuestionStep, json.RawMessage(`{}`)))
+
+	got, err := s.TurnProgress(ctx, "chat", "turn-1")
+	require.NoError(t, err)
+	assert.Equal(t, protocol.TurnProgress{Running: true, Asking: true, Steps: []protocol.TurnStep{
+		{ID: "call-1", Title: "Run login scenario", State: protocol.TurnStepDone},
+		{ID: "call-3", Title: "Review results", State: protocol.TurnStepFailed},
+		{ID: "call-4", Title: "execute", State: protocol.TurnStepRunning},
+		{ID: "call-5", Title: "Pending", State: protocol.TurnStepRunning},
+	}}, got, "a call with no progress record yet is running")
+
+	require.NoError(t, s.SaveTurnStep(ctx, "chat", "turn-1/call/q/answer", json.RawMessage(`{}`)))
+	got, err = s.TurnProgress(ctx, "chat", "turn-1")
+	require.NoError(t, err)
+	assert.False(t, got.Asking, "an answered question no longer waits")
+
+	_, err = s.db.ExecContext(ctx, `UPDATE turns SET phase = 'done' WHERE id = 'turn-1'`)
+	require.NoError(t, err)
+
+	for _, turnID := range []string{"turn-1", "turn-2"} {
+		got, err = s.TurnProgress(ctx, "chat", turnID)
+		require.NoError(t, err)
+		assert.Equal(t, protocol.TurnProgress{}, got)
 	}
 }

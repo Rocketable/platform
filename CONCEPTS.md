@@ -8,7 +8,7 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 
 A Slack thread that RocketClaw persists as a conversation owned by a selected agent. In Slack, only mentions start its turns; replies without a mention start nothing.
 
-A Managed Slack Thread has one active turn at a time. A mention received during that turn waits in the Thread Queue and runs as the next turn; it never steers. Web can also work in the conversation: Web input it consumes and every reply are posted into the thread. A second Slack delivery of an accepted mention is not a new send.
+A Managed Slack Thread has one active turn at a time. A mention received during that turn waits in the Thread Queue and runs as the next turn; it never steers. Web can also work in the conversation: Web input it consumes and every reply are posted into the thread. A second Slack delivery of an accepted mention is not a new send. While any of its turns runs, whichever surface started it, Slack shows the thread as working, or as needing someone while the turn waits for an answer in Web, and an allowlisted user's Stop in Slack ends that turn; besides the turn's checklist and any Web input it consumes, nothing is posted until its answer arrives as a new reply.
 
 ### Root Slack Mention
 
@@ -28,7 +28,7 @@ A configured Slack channel entry named `@` that supplies agents and an allowlist
 
 A Slack thread an earlier version posted a cron report or an External MCP session into: its conversation, now a Web chat created by cron or bound to the session, or an unrecorded thread whose root RocketClaw's own bot posted. The last case covers threads whose record expired.
 
-A Report Thread is read-only. RocketClaw ignores every reply and mention in it, with no reaction and no reply, and posts nothing more into it. Read-only means RocketClaw ignores input, not that Slack locks the thread. Work on it continues in Web.
+A Report Thread is read-only. RocketClaw ignores every reply and mention in it, showing no working state and posting no reply, and posts nothing more into it. Read-only means RocketClaw ignores input, not that Slack locks the thread. Work on it continues in Web.
 
 ### Thread Queue
 

@@ -1121,7 +1121,7 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, "C1", channel)
 
 		return channelChoices, nil
-	}}
+	}, RenameThreadSessionFunc: func(context.Context, string, string) {}}
 	channelTitle := "triage"
 	channels.SidebarChannelAgentChoicesFunc = func(_ context.Context, channel string) (string, []string, error) {
 		if channel == "C2" {
@@ -1385,6 +1385,10 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, proto.Equal(loaded, preserved))
 	}
+
+	renames := channels.RenameThreadSessionCalls()
+	require.Len(t, renames, 2, "each saved rename reaches Slack")
+	assert.Equal(t, []string{id, "Launch notes", id, ""}, []string{renames[0].ConversationID, renames[0].Name, renames[1].ConversationID, renames[1].Name})
 
 	_, err = invoke[UpdateSessionResponse](t.Context(), connection, "UpdateSession", &UpdateSessionRequest{Id: id, Pinned: new(true)})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))

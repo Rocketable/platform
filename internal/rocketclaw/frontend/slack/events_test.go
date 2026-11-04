@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +33,7 @@ func TestStartEventsRoutesAndAcknowledgesSubscription(t *testing.T) {
 	messages := []*protocol.OutboundMessage{
 		{ConversationID: "web:private", Text: "not for Slack", Complete: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "CWRONG", MessageTS: "9.9"}},
 		// A Web turn's reply in a mention thread carries the mention footer.
-		{ConversationID: "slack-thread:C123:111.0", TurnID: "turn-web", Agent: "main", Text: "first answer", Complete: true, Source: protocol.SourceWeb, Terminal: protocol.TerminalComplete},
+		{ConversationID: "slack-thread:C123:111.0", TurnID: "turn-web", Agent: "main", Text: "first answer", Complete: true, Terminal: protocol.TerminalComplete},
 		{ConversationID: "slack-thread:C456:222.0", Agent: "main", Text: "second answer", Complete: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "CWRONG", ThreadTS: "9.0", MessageTS: "222.1"}},
 	}
 
@@ -67,10 +68,7 @@ func TestStartEventsRoutesAndAcknowledgesSubscription(t *testing.T) {
 }
 
 func TestStartEventsAcknowledgesDeliveryFailureAfterAborting(t *testing.T) {
-	var (
-		paths   []string
-		deleted []url.Values
-	)
+	var paths []string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths = append(paths, r.URL.Path)
@@ -79,13 +77,12 @@ func TestStartEventsAcknowledgesDeliveryFailureAfterAborting(t *testing.T) {
 		}
 
 		switch r.URL.Path {
-		case "/chat.update":
-			_, err := w.Write([]byte(`{"ok":false,"error":"update_failed"}`))
+		case "/chat.postMessage":
+			_, err := w.Write([]byte(`{"ok":false,"error":"post_failed"}`))
 			assert.NoError(t, err)
-		case "/chat.delete":
-			deleted = append(deleted, cloneValues(r.PostForm))
-			fallthrough
-		case "/reactions.remove":
+		case "/agents.sessions.setStatus":
+			assert.Equal(t, "active", r.PostForm.Get("status"))
+
 			_, err := w.Write([]byte(`{"ok":true}`))
 			assert.NoError(t, err)
 		default:
@@ -95,7 +92,7 @@ func TestStartEventsAcknowledgesDeliveryFailureAfterAborting(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), inertThreadRouter{})
-	connector.replies["turn-1"] = slackReplyState{ChannelID: "C123", MessageTS: "answer-1"}
+	connector.sessions["turn-1"] = &slackSession{conversationID: "slack-thread:C123:111.0", poll: time.NewTimer(time.Hour)}
 	event := protocol.Event{
 		Message:         &protocol.OutboundMessage{ConversationID: "slack-thread:C123:111.0", TurnID: "turn-1", Agent: "main", Text: "answer", Complete: true},
 		Acknowledgement: make(chan error, 1),
@@ -107,12 +104,23 @@ func TestStartEventsAcknowledgesDeliveryFailureAfterAborting(t *testing.T) {
 	done := connector.StartEvents(t.Context(), backend)
 	<-done
 	require.Len(t, event.Acknowledgement, 1)
-	require.ErrorContains(t, <-event.Acknowledgement, "update_failed")
-	assert.Equal(t, []string{"/chat.update", "/chat.delete", "/reactions.remove"}, paths)
-	require.Len(t, deleted, 1)
-	assert.Equal(t, "C123", deleted[0].Get("channel"))
-	assert.Equal(t, "answer-1", deleted[0].Get("ts"))
-	assert.NotContains(t, connector.replies, "turn-1")
+	require.ErrorContains(t, <-event.Acknowledgement, "post_failed")
+	assert.Equal(t, []string{"/chat.postMessage", "/agents.sessions.setStatus"}, paths)
+	assert.Empty(t, connector.sessions)
+}
+
+func TestStartEventsAcknowledgesThreadLookupFailure(t *testing.T) {
+	connector := newTestConnector("http://127.0.0.1")
+	connector.facts.(*channelFactsStoreMock).SlackThreadFunc = func(context.Context, string) (string, string, error) {
+		return "", "", assert.AnError
+	}
+	event := protocol.Event{Message: &protocol.OutboundMessage{ConversationID: "slack-thread:C123:111.0", TurnID: "turn-1", Text: "answer", Complete: true}, Acknowledgement: make(chan error, 1)}
+	backend := &backendMock{SubscribeFunc: func(context.Context) iter.Seq[protocol.Event] {
+		return slices.Values([]protocol.Event{event})
+	}}
+
+	<-connector.StartEvents(t.Context(), backend)
+	require.ErrorIs(t, <-event.Acknowledgement, assert.AnError)
 }
 
 func TestStartEventsAcknowledgesConsumedInputFailure(t *testing.T) {

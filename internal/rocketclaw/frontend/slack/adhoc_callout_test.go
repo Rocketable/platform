@@ -18,7 +18,7 @@ import (
 )
 
 func TestHandleAppMentionEventStartsUnmappedChannelWithAtFallback(t *testing.T) {
-	router := newMentionRouter(false, nil)
+	router := newMentionRouter(false)
 
 	server := newAdhocSlackServer(t, "random", nil)
 	defer server.Close()
@@ -37,7 +37,7 @@ func TestHandleAppMentionEventStartsUnmappedChannelWithAtFallback(t *testing.T) 
 }
 
 func TestHandleAppMentionEventUnmappedRootAgentDoesNotSwitch(t *testing.T) {
-	router := newMentionRouter(false, nil)
+	router := newMentionRouter(false)
 
 	server := newAdhocSlackServer(t, "random", nil)
 	defer server.Close()
@@ -57,7 +57,7 @@ func TestHandleAppMentionEventUnmappedRootAgentDoesNotSwitch(t *testing.T) {
 }
 
 func TestHandleAppMentionEventGroupDMUsesAtFallback(t *testing.T) {
-	router := newMentionRouter(false, nil)
+	router := newMentionRouter(false)
 
 	server := newAdhocSlackServer(t, "mpdm-users", nil)
 	defer server.Close()
@@ -75,7 +75,7 @@ func TestHandleAppMentionEventGroupDMUsesAtFallback(t *testing.T) {
 func TestHandleAppMentionEventAdoptsUnknownThreadWithHistory(t *testing.T) {
 	var writes []string
 
-	router := newMentionRouter(false, nil)
+	router := newMentionRouter(false)
 
 	server := newAdhocSlackServer(t, "random", []map[string]any{
 		{"ts": "171234.0001", "user": "U555", "text": "old", "blocks": slack.Blocks{BlockSet: []slack.Block{
@@ -104,11 +104,11 @@ func TestHandleAppMentionEventAdoptsUnknownThreadWithHistory(t *testing.T) {
 	assert.Contains(t, started[0].Inbound.Text, "State: New")
 	assert.Contains(t, started[0].Inbound.Text, "keep-1")
 	assert.Equal(t, "$review jump in", started[0].Inbound.Metadata[protocol.InboundRawTextMetadataKey])
-	assert.Equal(t, []string{"/reactions.add " + slackRobotReaction + " 171234.9999"}, writes, "the placeholder waits for the turn to start")
+	assert.Equal(t, []string{"/agents.sessions.setStatus processing 171234.0001"}, writes, "the thread shows working at once")
 }
 
 func TestHandleAppMentionEventAdoptsBareThreadMention(t *testing.T) {
-	router := newMentionRouter(false, nil)
+	router := newMentionRouter(false)
 
 	server := newAdhocSlackServer(t, "triage", []map[string]any{
 		{"ts": "171234.0001", "user": "U555", "text": "parent"},
@@ -137,7 +137,7 @@ func TestHandleAppMentionEventIgnoresThreadUnderBotRoot(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var writes []string
 
-			router := newMentionRouter(false, nil)
+			router := newMentionRouter(false)
 
 			server := newAdhocSlackServer(t, "random", []map[string]any{
 				{"ts": "171234.0001", "user": "U999", "bot_id": "B999", "text": root},
@@ -157,7 +157,7 @@ func TestHandleAppMentionEventIgnoresThreadUnderBotRoot(t *testing.T) {
 func TestHandleAppMentionEventRepliesWhenHistoryFetchFails(t *testing.T) {
 	var writes []string
 
-	router := newMentionRouter(false, nil)
+	router := newMentionRouter(false)
 
 	server := newAdhocSlackServer(t, "random", []map[string]any{{"ok": false, "error": "internal_error"}}, &writes)
 	defer server.Close()
@@ -179,7 +179,7 @@ func TestHandleAppMentionEventAdoptHistoryKeepsNewestFifty(t *testing.T) {
 
 	replies = append(replies, map[string]any{"ts": "171234.9999", "user": "U123", "text": "<@U999> jump in"})
 
-	router := newMentionRouter(false, nil)
+	router := newMentionRouter(false)
 
 	server := newAdhocSlackServer(t, "random", replies)
 	defer server.Close()
@@ -195,20 +195,19 @@ func TestHandleAppMentionEventAdoptHistoryKeepsNewestFifty(t *testing.T) {
 	assert.Contains(t, started[0].Inbound.Text, "keep")
 }
 
-// A refused mention gets the failure reply; a committed one keeps the 🤖 even when its pickup failed.
 func TestHandleAppMentionEventRepliesWhenSubmitFails(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		accepted bool
 		writes   []string
 	}{
-		{name: "refused", writes: []string{"/chat.postMessage I couldn't take that request: " + assert.AnError.Error() + " 171234.0001"}},
-		{name: "committed", accepted: true, writes: []string{"/reactions.add " + slackRobotReaction + " 171234.9999"}},
+		{name: "refused", writes: []string{"/agents.sessions.setStatus processing 171234.0001", "/agents.sessions.setStatus active 171234.0001", "/chat.postMessage I couldn't take that request: " + assert.AnError.Error() + " 171234.0001"}},
+		{name: "committed", accepted: true, writes: []string{"/agents.sessions.setStatus processing 171234.0001", "/agents.sessions.setStatus active 171234.0001"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var writes []string
 
-			router := newMentionRouter(false, nil)
+			router := newMentionRouter(false)
 			router.SubmitMentionFunc = func(context.Context, string, protocol.TextConversationTarget, *protocol.InboundMessage) (bool, error) {
 				return tt.accepted, assert.AnError
 			}
@@ -226,7 +225,7 @@ func TestHandleAppMentionEventRepliesWhenSubmitFails(t *testing.T) {
 }
 
 func TestHandleAppMentionEventIgnoresUnallowlistedAtHail(t *testing.T) {
-	router := newMentionRouter(false, nil)
+	router := newMentionRouter(false)
 
 	server := newAdhocSlackServer(t, "random", nil)
 	defer server.Close()
@@ -241,7 +240,7 @@ func TestHandleAppMentionEventIgnoresUnallowlistedAtHail(t *testing.T) {
 }
 
 func TestHandleAppMentionEventIgnoresDirectMessageWithAtRow(t *testing.T) {
-	router := newMentionRouter(false, nil)
+	router := newMentionRouter(false)
 	connector := newAdhocConnector("http://127.0.0.1", router)
 	ev := newSlackAppMentionEvent()
 	ev.Channel = "D123"
@@ -251,7 +250,7 @@ func TestHandleAppMentionEventIgnoresDirectMessageWithAtRow(t *testing.T) {
 }
 
 func TestHandleAppMentionEventBareRootStillIgnored(t *testing.T) {
-	router := newMentionRouter(false, nil)
+	router := newMentionRouter(false)
 
 	server := newAdhocSlackServer(t, "random", nil)
 	defer server.Close()
@@ -277,7 +276,7 @@ func newAdhocSlackServer(t *testing.T, channelName string, replies []map[string]
 				return
 			}
 
-			*writes[0] = append(*writes[0], strings.Join([]string{r.URL.Path, r.PostForm.Get("text") + r.PostForm.Get("name"), r.PostForm.Get("thread_ts") + r.PostForm.Get("timestamp")}, " "))
+			*writes[0] = append(*writes[0], strings.Join([]string{r.URL.Path, r.PostForm.Get("text") + r.PostForm.Get("name") + r.PostForm.Get("status"), r.PostForm.Get("thread_ts") + r.PostForm.Get("timestamp")}, " "))
 		}
 
 		switch r.URL.Path {
@@ -292,11 +291,9 @@ func newAdhocSlackServer(t *testing.T, channelName string, replies []map[string]
 			}
 
 			writeJSON(t, w, map[string]any{"ok": true, "messages": replies, "has_more": false})
-		case "/chat.postMessage", "/chat.update":
+		case "/chat.postMessage":
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
-		case "/chat.delete":
-			writeJSON(t, w, map[string]any{"ok": true})
-		case "/reactions.add", "/reactions.remove":
+		case "/agents.sessions.setStatus":
 			writeJSON(t, w, map[string]any{"ok": true})
 		case "/users.info":
 			writeJSON(t, w, map[string]any{"ok": true})

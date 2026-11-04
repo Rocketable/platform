@@ -907,7 +907,6 @@ func TestPublishFinalPreservesTurnID(t *testing.T) {
 	assert.Equal(t, "hello back", final.Text)
 	assert.True(t, final.Complete)
 	assert.Equal(t, protocol.TerminalComplete, final.Terminal)
-	assert.Equal(t, protocol.SourceSlack, final.Source, "the final names the source that started its turn")
 	require.NoError(t, group.Wait())
 }
 
