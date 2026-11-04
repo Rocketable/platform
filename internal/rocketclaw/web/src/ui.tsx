@@ -448,7 +448,6 @@ function useRoute() {
     page: pathname.startsWith("/pages/") ? pathname.split("/").slice(3).join("/") : "",
     id: pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "",
     remote: pathname.startsWith("/oc/") ? decodeSessionId(pathname.slice(4)) : "",
-    goSession: (sessionId: string) => navigate(sessionPath(sessionId)),
   };
 }
 
@@ -4215,13 +4214,12 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
   const preview = useQuery({ ...queries.history({ id }), enabled: previewing });
   const previewLines = useMemo(() => previewing && preview.data ? historyLines(preview.data.messages) : undefined, [previewing, preview.data]);
   const draft = useComposerDraft(id, drafts, onDraftChange);
-  const route = useRoute();
   // This Transcript stays mounted, hidden, on other pages; a created chat opens once the new-chat page shows again.
   useLayoutEffect(() => {
     if (pagePath() === "/" && id === "" && draft.sessionId !== "" && drafts.get("") === draft) {
       drafts.delete("");
       onCreated(draft.sessionId);
-      route.goSession(draft.sessionId);
+      navigate(sessionPath(draft.sessionId));
     }
   });
   const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, shadows, more, start, loadEarlier, movable, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
@@ -5104,12 +5102,11 @@ function CronMarker({ label, tooltip, pct, ran, onClick }: { label: string; tool
 }
 
 function CronChatLink({ job, className, children }: { job: CronJob; className: string; children: ReactNode }) {
-  const route = useRoute();
   const sidebar = useContext(Sidebar);
   const open = useMutation({ mutationFn: mutations.createSession, onSuccess: (id) => {
     sidebar.invalidateQueries();
     void queryClient.invalidateQueries({ queryKey: ["cronJobs"] });
-    route.goSession(id);
+    navigate(sessionPath(id));
   } });
   return job.nextRun ? <Link href={sessionPath(job.nextRun)} className={className}>{children}</Link> : <>
     <button type="button" className={className} disabled={open.isPending} onClick={() => open.mutate({ sourceConversationId: job.origin })}>{open.isPending ? "Opening chat…" : children}</button>
@@ -5248,7 +5245,6 @@ function CronJournal({ runs, gaps, picked, setPicked, inline }: { runs: CronJob[
 
 // Runs a cron after a confirmation, then opens its chat; its button spins until the run finishes.
 function useCronRun() {
-  const route = useRoute();
   const run = useMutation({ mutationFn: mutations.runCron, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["cronJobs"] }); } });
   const [confirmStem, setConfirmStem] = useState("");
   const confirmTrigger = useRef<HTMLButtonElement>(null);
@@ -5264,7 +5260,7 @@ function useCronRun() {
         <div className="mt-6 flex justify-end gap-2">
           <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
           <Button onClick={() => {
-            run.mutate({ stem: confirmStem }, { onSuccess: (id, { stem }) => { if (id === "") return; firstMessages.set(id, stem); route.goSession(id); } });
+            run.mutate({ stem: confirmStem }, { onSuccess: (id, { stem }) => { if (id === "") return; firstMessages.set(id, stem); navigate(sessionPath(id)); } });
             setConfirmStem("");
           }}>Run</Button>
         </div>
