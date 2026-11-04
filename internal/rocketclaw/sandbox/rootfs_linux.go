@@ -72,14 +72,37 @@ func BuildImage(ctx context.Context, snapshot, arch, dst string) (installed []st
 	epoch, _ := time.Parse("20060102T150405Z", snapshot)
 	mirror := "https://snapshot.ubuntu.com/ubuntu/" + snapshot
 
+	// ROCKETCLAW_SANDBOX_PACKAGE_MIRROR, when set, is an Ubuntu mirror tried first for the packages, as CI
+	// sets the one beside its runners; the snapshot serves the indexes, and whatever packages the mirror lacks.
+	// apt checks each package against the snapshot's signed indexes, so the versions stay pinned. Like the
+	// keyring, the mirror list goes in /tmp.
+	source := mirror
+	if fast := os.Getenv("ROCKETCLAW_SANDBOX_PACKAGE_MIRROR"); fast != "" {
+		list, err := os.CreateTemp("/tmp", "rocketclaw-mirrors-*.list")
+		if err != nil {
+			return nil, "", fmt.Errorf("write mirror list: %w", err)
+		}
+		defer func() { _ = os.Remove(list.Name()) }()
+
+		_, err = fmt.Fprintf(list, "%s\tpriority:1 type:deb\n%s/\tpriority:2\n", fast, mirror)
+		if err = errors.Join(err, list.Chmod(0o644), list.Close()); err != nil {
+			return nil, "", fmt.Errorf("write mirror list: %w", err)
+		}
+
+		source = "mirror+file:" + list.Name()
+	}
+
 	var output bytes.Buffer
 
 	cmd := exec.CommandContext(ctx, "mmdebstrap", "--mode=unshare", "--variant=essential", "--arch="+arch, "--format=tar",
 		"--keyring="+key.Name(), "--aptopt=Acquire::Check-Valid-Until false", "--aptopt=Acquire::Retries 5",
+		// Pipelined requests crawl through some networks' proxies, as on GitHub's runners, whose own apt has
+		// pipelining off.
+		"--aptopt=Acquire::http::Pipeline-Depth 0",
 		"--include="+packages, suite, raw,
-		fmt.Sprintf("deb %s %s main universe", mirror, suite),
-		fmt.Sprintf("deb %s %s-updates main universe", mirror, suite),
-		fmt.Sprintf("deb %s %s-security main universe", mirror, suite))
+		fmt.Sprintf("deb %s %s main universe", source, suite),
+		fmt.Sprintf("deb %s %s-updates main universe", source, suite),
+		fmt.Sprintf("deb %s %s-security main universe", source, suite))
 	cmd.Env = append(os.Environ(), fmt.Sprintf("SOURCE_DATE_EPOCH=%d", epoch.Unix()), "TMPDIR=/tmp")
 	cmd.Stdout, cmd.Stderr = &output, &output
 

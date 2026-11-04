@@ -71,6 +71,7 @@ SANDBOX_TEST_DIR ?= $(abspath ../../.tmp)/sandbox-test
 # transient service under sudo, since only a service's cgroup is handed to its --uid. A shell stays there as
 # the tests' parent, as `go run`'s go command does for RocketClaw.
 # SANDBOX_TEST_COVERPROFILE, when set, writes the tests' coverage of COVERPKG there, for CI to merge.
+# SANDBOX_TEST_PACKAGE_MIRROR, when set, is an Ubuntu mirror the image build tries first for its packages.
 SANDBOX_TEST_FLAGS ?=
 SANDBOX_TEST_CGO ?= 0
 # In a container, such as the Linux a Mac runs these targets in, the cgroup make runs in is delegated to it
@@ -86,6 +87,7 @@ sandbox-test:
 	CGO_ENABLED=$(SANDBOX_TEST_CGO) go test -c $(SANDBOX_TEST_FLAGS) $(if $(SANDBOX_TEST_COVERPROFILE),-cover -covermode=atomic -coverpkg=$(COVERPKG)) -o $(SANDBOX_TEST_DIR)/harness.test ./harness
 	cd harness && $(SANDBOX_TEST_SCOPE) /bin/sh -c '"$$@"; exit $$?' sh /usr/bin/env ROCKETCLAW_SANDBOX_REQUIRE=1 \
 		ROCKETCLAW_SANDBOX_DIR=$(SANDBOX_TEST_DIR)/sandbox TMPDIR=$(SANDBOX_TEST_DIR)/tmp \
+		$(if $(SANDBOX_TEST_PACKAGE_MIRROR),ROCKETCLAW_SANDBOX_PACKAGE_MIRROR=$(SANDBOX_TEST_PACKAGE_MIRROR)) \
 		$(if $(SANDBOX_TEST_COVERPROFILE),ROCKETCLAW_SANDBOX_GOCOVERDIR=$(SANDBOX_TEST_DIR)/gocover) \
 		$(SANDBOX_TEST_DIR)/harness.test -test.run 'TestEmulatedShell' -test.v -test.count 1 -test.timeout 30m \
 		$(if $(SANDBOX_TEST_COVERPROFILE),-test.coverprofile=$(abspath $(SANDBOX_TEST_COVERPROFILE)))
