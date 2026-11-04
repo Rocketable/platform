@@ -87,6 +87,11 @@ function pathSession(path: string) {
   return path.startsWith("/s/") ? decodeSessionId(path.slice(3)) : path.startsWith("/oc/") ? decodeSessionId(path.slice(4)) : "";
 }
 
+// The session this browser tab marked unread while showing it, by rowKey. The session list hears its view as held, which
+// keeps the mark, until the page shows another session; a reload keeps the hold.
+const heldUnread = "held-unread";
+addEventListener("popstate", () => { if (sessionStorage.getItem(heldUnread) !== rowKey(pathSession(pagePath()), server())) sessionStorage.removeItem(heldUnread); });
+
 const Delegations = createContext<Pick<HistoryView, "delegations" | "reviewRationales"> | undefined>(undefined);
 
 // The right panel shows one delegation or one skill, so opening either replaces the other.
@@ -660,8 +665,8 @@ function ServerSessions({ children }: { children: ReactNode }) {
       const snapshotGeneration = await loadSnapshotGeneration(currentOwner, currentProtocol).catch(() => undefined);
       if (ac.signal.aborted || captured !== gen.current) return;
       const viewing = document.hasFocus() && server() === name ? pathSession(pagePath()) : "";
-      const held = listing.current;
-      readSessionEnumeration(currentOwner, Promise.resolve(listSessions(ac.signal, `${serverURL(name)}/api/ListSessions?${new URLSearchParams({ viewing, since: held.version })}`)), () => rowsRef.current, (merged) => {
+      const held = listing.current, keepMark = viewing && sessionStorage.getItem(heldUnread) === rowKey(viewing, name) ? [["hold", ""]] : [];
+      readSessionEnumeration(currentOwner, Promise.resolve(listSessions(ac.signal, `${serverURL(name)}/api/ListSessions?${new URLSearchParams([["viewing", viewing], ["since", held.version], ...keepMark])}`)), () => rowsRef.current, (merged) => {
         // Only changed rows arrive since a held version; they show in place once the listing completes.
         if (ac.signal.aborted || captured !== gen.current || held.version) {
           return;
@@ -1333,8 +1338,7 @@ function useTabs() {
     commands: (path: string, rows: Session[], paths = new Set([path])): { key: string; label: string; sub?: { menu: string; label: string }; run: () => void }[] => {
       const tab = state.tabs.find((item) => item.path === path), selected = state.tabs.filter((item) => paths.has(item.path));
       const birth = paths.size === 1 && state.spaces.find((space) => space.id === rows.find((row) => rowPath(row) === path)?.spaceId);
-      // Shared changes act on this one tab, for everyone. A Shared tab that is not this person's offers only its removal,
-      // its notifications, and, for a Search page, Duplicate.
+      // Shared changes act on this one tab, for everyone.
       // Taking a Search page out of Shared keeps the page it held, as the server returns it, as this person's own, with
       // any searches of their own page there, so nobody's searches are lost.
       const keep = ({ unshared: page }: SavedTabs) => page && setState((current) => ({ ...current, tabs: current.tabs.some((item) => item.path === path)
@@ -1355,14 +1359,19 @@ function useTabs() {
           .map(([key, label, sub, until]) => ({ key: `notify-${key}`, label: `Snooze notifications ${label}`, sub: { menu: "Snooze notifications", label: sub }, run: () => mute(path, new Date(until()).toISOString()) })),
         { key: "notify-pick", label: "Snooze notifications until a picked time…", sub: { menu: "Snooze notifications", label: "Pick date & time…" }, run: () => setSnoozing(path) },
       ];
-      if (!shown.some((item) => item.path === path)) return [...share, ...copy, ...shelve, ...notify];
+      const marking = [...paths].filter((item) => pathSession(item) && !rows.find((row) => rowPath(row) === item)?.unreadAt);
+      const unread = marking.length ? [{ key: "unread", label: "Mark as unread", run: () => {
+        if (marking.includes(pathname)) sessionStorage.setItem(heldUnread, rowKey(pathSession(pathname), name));
+        sharing.mutate({ markUnread: marking });
+      } }] : [];
+      if (!shown.some((item) => item.path === path)) return [...share, ...copy, ...shelve, ...unread, ...notify];
       return [
         { key: "close", label: "Close", run: () => close([...paths]) },
         { key: "close-others", label: "Close others", run: () => close(shown.flatMap((tab) => tab.path === path ? [] : [tab.path]), path) },
         { key: "close-right", label: "Close to the right", run: () => close(shown.slice(shown.findIndex((tab) => tab.path === path) + 1).map((tab) => tab.path), path) },
         { key: "close-all", label: "Close all", run: () => close(shown.map((tab) => tab.path)) },
         ...share, ...copy, ...shelve,
-        ...notify,
+        ...unread, ...notify,
         { key: "group-new", label: "Add to new group", sub: { menu: "Add to group", label: "New group" }, run: () => {
           const id = crypto.getRandomValues(new Uint32Array(2)).join("-");
           setState((current) => ({ ...current, groups: [...current.groups, { id, name: "", color: Object.keys(groupColors)[groups.length % Object.keys(groupColors).length] }] }));
@@ -1400,8 +1409,8 @@ function TabSettling() {
 
 // An open session tab whose unread mark moves past the one this window last saw raises a desktop notification that
 // opens it, unless it is the tab in view or this person muted or snoozed it. A Shared tab counts as open. Marks come only
-// from this person's own turns, or anyone's in a session in some space's Shared group.
-// The first complete live list after a page load or owner change only records the marks; restored rows never count.
+// from this person's own turns, or anyone's in a session in some space's Shared group; a mark the person set themselves
+// raises nothing. The first complete live list after a page load or owner change only records the marks; restored rows never count.
 // It is titled by the session's name, else its agent, or a remote OpenCode session by its tab title, and shows
 // the start of the reply: a RocketClaw row's preview is its last message, an OpenCode row's reply its last answer.
 // ponytail: rows refresh on the sidebar poll, so a hidden window's throttled timers can delay the notification;
@@ -1427,7 +1436,7 @@ function TabNotifications() {
     seen.current = { owner, unread: new Map([...last?.unread ?? [], ...rows.map((row) => [rowKey(row.id, row.rocketclaw), row.unreadAt ?? ""] as const)]), servers: new Set([...last?.servers ?? [], ...complete]) };
     if (!last || !("Notification" in window) || Notification.permission !== "granted") return;
     for (const row of rows) {
-      if (!last.servers.has(row.rocketclaw ?? "") || !row.unreadAt || row.unreadAt === last.unread.get(rowKey(row.id, row.rocketclaw))) continue;
+      if (!last.servers.has(row.rocketclaw ?? "") || !row.unreadAt || row.markedUnread || row.unreadAt === last.unread.get(rowKey(row.id, row.rocketclaw))) continue;
       const path = rowPath(row), tabs = tabsOf(row);
       if (!tabs.open.some((tab) => tab.path === path) || muteOf(tabs.mutes, path) || (document.hasFocus() && tabs.active === path)) continue;
       // A notification replacing one with its tag alerts again in Chromium only with renotify, which TypeScript's DOM types omit.
@@ -1512,7 +1521,7 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
 function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { path: string; shared?: boolean }, rows: Session[], targets: Set<string>, rename: () => void, remove: (id: string) => void) {
   const renaming = targets.size === 1 && (isSearch(menu.path) || (pathSession(menu.path) && !menu.shared)) ? [{ key: "rename", label: isSearch(menu.path) ? "Rename search" : "Rename session", run: rename }] : [];
   const remote = targets.size === 1 && !menu.shared ? rows.find((row) => row.id === pathSession(menu.path) && row.server) : undefined;
-  return [...renaming, ...menu.shared ? commands(menu.path, rows).filter(({ key }) => key === "unshare" || key === "duplicate" || key === "shelve" || key.startsWith("notify")) : commands(menu.path, rows, targets), ...remote ? [{ key: "delete", label: "Delete session", run: () => remove(remote.id) }] : []];
+  return [...renaming, ...menu.shared ? commands(menu.path, rows).filter(({ key }) => ["unshare", "duplicate", "shelve", "unread"].includes(key) || key.startsWith("notify")) : commands(menu.path, rows, targets), ...remote ? [{ key: "delete", label: "Delete session", run: () => remove(remote.id) }] : []];
 }
 
 function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat: () => void }) {

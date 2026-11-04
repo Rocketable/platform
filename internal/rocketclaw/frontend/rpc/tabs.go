@@ -161,6 +161,17 @@ func (s *Server) changeTabs(ctx context.Context, username string, limit backend.
 		err = s.muteTab(ctx, username, request.Mute)
 	case request.Unmute != "":
 		err = s.sessions.UnmuteTab(ctx, username, request.Unmute)
+	case len(request.MarkUnread) > 0:
+		// Every session must be one the caller may open before any is marked.
+		for _, path := range request.MarkUnread {
+			if err = s.visibleConversation(ctx, backend.TabConversation(path)); err != nil {
+				break
+			}
+		}
+
+		if err == nil {
+			err = s.sessions.MarkUnread(ctx, username, request.MarkUnread)
+		}
 	case request.TopShelf != nil:
 		// The shelf came from a request's protobuf JSON, so it marshals back without error.
 		shelf, _ := protojson.Marshal(request.TopShelf)

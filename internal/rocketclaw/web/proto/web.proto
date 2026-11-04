@@ -10,6 +10,8 @@ message ListSessionsRequest {
   // The version of the last complete listing the caller holds. When the server still knows it, the
   // listing sends only the rows that changed since; otherwise it sends every row.
   string since = 2;
+  // The caller marked the viewing session unread while it was in view: the view counts without clearing the mark.
+  bool hold = 3;
 }
 
 message Session {
@@ -61,6 +63,8 @@ message Session {
   bool external = 31;
   // When its newest running or waiting turn was created, else its last update, RFC3339Nano.
   string arrived_at = 32;
+  // The caller marked it unread themselves, so the mark raises no notification.
+  bool marked_unread = 33;
 }
 
 // The first of these a session has: asking, running work, queued turns.
@@ -776,8 +780,8 @@ message TabMute {
 }
 
 // TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space,
-// adds one tab to or removes one from a space's Shared group, mutes or unmutes one session tab for the caller, or
-// replaces the caller's Top Shelf.
+// adds one tab to or removes one from a space's Shared group, mutes or unmutes one session tab for the caller, marks
+// session tabs unread for the caller, or replaces the caller's Top Shelf.
 // revision is the saved revision the state was made from.
 message TabsRequest {
   reserved 8;
@@ -795,6 +799,7 @@ message TabsRequest {
   // edit_shared saves a Shared Search page's one page; a page no longer shared stays unshared.
   SharedTab edit_shared = 11;
   TopShelf top_shelf = 12;
+  repeated string mark_unread = 13;
 }
 
 // TabsResponse is every space, oldest first, and the caller's saved tab state and its revision.

@@ -281,6 +281,19 @@ func TestTabs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/Yw " + until}, mutes(response), "a refused mute stores nothing")
 
+	// A session nobody may open, or one that does not exist, cannot be marked, and refuses the tabs marked with it.
+	for path, code := range map[string]codes.Code{"/s/cHJpdmF0ZS1Y": codes.PermissionDenied, "/s/bm9uZQ": codes.NotFound} {
+		_, err = call("127.0.0.1", &TabsRequest{MarkUnread: []string{"/s/YQ", path}})
+		assert.Equal(t, code, status.Code(err), path)
+	}
+
+	assert.Equal(t, []string{"/s/YQ 0 f", "/s/Yw  t"}, aliceTabs())
+
+	// Alice marks her open tab unread.
+	_, err = call("127.0.0.1", &TabsRequest{MarkUnread: []string{"/s/YQ"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/s/YQ 0 t", "/s/Yw  t"}, aliceTabs())
+
 	// A Top Shelf is the caller's own: each save replaces it whole, and every reply carries it.
 	assert.Nil(t, response.TopShelf, "nothing shelved yet")
 

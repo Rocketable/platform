@@ -47,8 +47,8 @@ func TestSessionReads(t *testing.T) {
     INSERT INTO web_tab_states (username, revision, viewing, viewed_at) VALUES ('alice', 0, 'y', now())
     ON CONFLICT (username) DO UPDATE SET viewing = excluded.viewing, viewed_at = excluded.viewed_at
 )
-INSERT INTO web_tabs (username, path, conversation_id, unread_at) VALUES ('alice', '/s/eA', 'x', '2026-10-22T10:00:00.5Z'), ('alice', '/s/eQ', 'y', NULL)
-ON CONFLICT (username, path) DO UPDATE SET unread_at = excluded.unread_at`)
+INSERT INTO web_tabs (username, path, conversation_id, unread_at, marked_unread) VALUES ('alice', '/s/eA', 'x', '2026-10-22T10:00:00.5Z', TRUE), ('alice', '/s/eQ', 'y', NULL, FALSE)
+ON CONFLICT (username, path) DO UPDATE SET unread_at = excluded.unread_at, marked_unread = excluded.marked_unread`)
 		require.NoError(t, err)
 	}
 	marked := []string{"alice viewing=y", "x unread=t", "y unread=f"}
@@ -93,16 +93,20 @@ UNION ALL SELECT format('%s unread=%s', conversation_id, unread_at IS NOT NULL) 
 		out := map[string]string{}
 		for _, session := range listed.Sessions {
 			out[session.Id] = session.UnreadAt
+			if session.MarkedUnread {
+				out[session.Id] += " marked"
+			}
 		}
 
 		return out
 	}
 
+	// Alice set her mark on x herself, and the listing says so.
 	mark()
-	assert.Equal(t, map[string]string{"x": "2026-10-22T10:00:00.5Z", "y": ""}, unread("127.0.0.1", ""), "an empty viewing lists alice's mark")
+	assert.Equal(t, map[string]string{"x": "2026-10-22T10:00:00.5Z marked", "y": ""}, unread("127.0.0.1", ""), "an empty viewing lists alice's mark")
 	assert.Equal(t, marked, reads(), "and leaves her view of y and her mark on x unchanged")
 	assert.Equal(t, map[string]string{"x": "", "y": ""}, unread("192.0.2.2", ""), "bob has no mark")
-	assert.Equal(t, map[string]string{"x": "2026-10-22T10:00:00.5Z", "y": ""}, unread("127.0.0.1", "nope"))
+	assert.Equal(t, map[string]string{"x": "2026-10-22T10:00:00.5Z marked", "y": ""}, unread("127.0.0.1", "nope"))
 	assert.Equal(t, marked, reads(), "a viewing that names no conversation writes nothing")
 
 	assert.Equal(t, map[string]string{"x": "", "y": ""}, unread("127.0.0.1", "x"), "viewing x clears its mark in the same response")
@@ -111,16 +115,17 @@ UNION ALL SELECT format('%s unread=%s', conversation_id, unread_at IS NOT NULL) 
 	httpServer := startHTTPTestServer(t, connection)
 
 	for _, tc := range []struct {
-		header, value string
-		want          []string
+		header, value, query string
+		want                 []string
 	}{
-		{"Sec-Fetch-Site", "cross-site", marked},
-		{"Origin", "https://elsewhere.example", marked},
-		{"Sec-Fetch-Site", "same-origin", []string{"alice viewing=x", "x unread=f", "y unread=f"}},
+		{"Sec-Fetch-Site", "cross-site", "viewing=x", marked},
+		{"Origin", "https://elsewhere.example", "viewing=x", marked},
+		{"Sec-Fetch-Site", "same-origin", "viewing=x", []string{"alice viewing=x", "x unread=f", "y unread=f"}},
+		{"Sec-Fetch-Site", "same-origin", "viewing=x&hold", []string{"alice viewing=x", "x unread=t", "y unread=f"}},
 	} {
 		mark()
 
-		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, httpServer.URL+"/api/ListSessions?viewing=x", http.NoBody)
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, httpServer.URL+"/api/ListSessions?"+tc.query, http.NoBody)
 		require.NoError(t, err)
 		request.Header.Set(tc.header, tc.value)
 
@@ -130,6 +135,6 @@ UNION ALL SELECT format('%s unread=%s', conversation_id, unread_at IS NOT NULL) 
 		require.NoError(t, err)
 		require.NoError(t, response.Body.Close())
 		require.Equal(t, http.StatusOK, response.StatusCode)
-		assert.Equal(t, tc.want, reads(), "%s: %s", tc.header, tc.value)
+		assert.Equal(t, tc.want, reads(), "%s: %s, %s", tc.header, tc.value, tc.query)
 	}
 }

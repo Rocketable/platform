@@ -1059,6 +1059,8 @@ type SidebarSession struct {
 	Model string
 	// UnreadAt is when a turn the listing person sent into ended unseen, zero once read.
 	UnreadAt time.Time
+	// MarkedUnread reports that the listing person marked it unread themselves.
+	MarkedUnread bool
 	// Origin holds the facts that decide its chat origin, as ChatOriginFacts reads them.
 	Origin ChatOriginFacts
 	// Work is the chat's work state, and StateSince when the turn defining it started, or its last
@@ -1309,7 +1311,7 @@ running AS (
 ), external_runs AS (
     SELECT DISTINCT reports_to AS conversation_id FROM conversations WHERE kind = 'external_mcp_run' AND reports_to IS NOT NULL
 ), reads AS (
-    SELECT conversation_id, unread_at FROM web_tabs WHERE username = $6 AND conversation_id IS NOT NULL
+    SELECT conversation_id, unread_at, marked_unread FROM web_tabs WHERE username = $6 AND conversation_id IS NOT NULL
 ), local AS (
 SELECT
     c.conversation_id,
@@ -1335,6 +1337,7 @@ SELECT
     c.kind,
     '' AS remote_session,
     u.unread_at,
+    COALESCE(u.marked_unread, FALSE) AS marked_unread,
     -- Idle chats read NULL and zeros, which cost no allocation per row.
     CASE WHEN k.conversation_id IS NOT NULL THEN 'needs_you' WHEN w.running_since IS NOT NULL THEN 'running' WHEN w.queued_since IS NOT NULL THEN 'queued' END AS work,
     COALESCE(w.running_since, w.queued_since, 0) AS state_since,
@@ -1352,7 +1355,7 @@ LEFT JOIN external_runs x ON x.conversation_id = c.conversation_id
 WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY($5))
 ), remote AS (
 SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.pinned, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
-    o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at,
+    o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at, COALESCE(u.marked_unread, FALSE),
     CASE WHEN o.asking THEN 'needs_you' WHEN o.running OR o.background THEN 'running' END, 0, FALSE AS queued, FALSE AS external_mcp, 0,
     '', '', '', 'null'::jsonb, '', '', '', NULL::bigint, FALSE
 FROM conversations o
@@ -1380,12 +1383,12 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			since, arrived int64
 		)
 
-		dest := make([]any, 0, 37)
+		dest := make([]any, 0, 38)
 
 		for rows.Next() {
 			var row SidebarSession
 
-			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread,
+			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.MarkedUnread,
 				&work, &since, &row.Queued, &row.External, &arrived)
 			if err := scanChatOrigin(rows, &row.Origin, dest...); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
