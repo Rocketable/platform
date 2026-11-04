@@ -636,6 +636,11 @@ func (s *SessionService) TopShelf(ctx context.Context, username string) ([]byte,
 	return shelf, err
 }
 
+// ExistingConversations returns those of ids that name a conversation.
+func (s *SessionService) ExistingConversations(ctx context.Context, ids []string) ([]string, error) {
+	return queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE conversation_id = ANY($1)`, "existing conversations", ids)
+}
+
 // SaveTopShelf replaces username's Top Shelf with shelf, as the Web saves it.
 func (s *SessionService) SaveTopShelf(ctx context.Context, username string, shelf []byte) error {
 	_, err := execState(ctx, s.db, "save top shelf", `INSERT INTO web_top_shelves (username, shelf) VALUES ($1, $2::jsonb)
