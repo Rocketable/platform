@@ -27,11 +27,6 @@ type sandboxedFileSystem struct {
 	hostPaths bool
 }
 
-type readResult struct {
-	raw   []string
-	count int
-}
-
 type patchHunk struct {
 	typ      string
 	path     string
@@ -127,52 +122,38 @@ func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResu
 		return ToolResult{Output: message, Attachments: []Attachment{attachment}}
 	}
 
-	result := readLines(content, offset)
-
-	if result.count < offset && (result.count != 0 || offset != 1) {
-		return TextToolResult(fmt.Sprintf("Offset %d is out of range for this file (%d lines)", offset, result.count))
-	}
-
 	var output strings.Builder
 	output.WriteString("<path>")
 	output.WriteString(filename)
 	output.WriteString("</path>\n<type>file</type>\n<content>\n")
 
-	for i, line := range result.raw {
-		if i > 0 {
-			output.WriteByte('\n')
-		}
-
-		fmt.Fprintf(&output, "%d: %s", offset+i, line)
-	}
-
-	fmt.Fprintf(&output, "\n\n(End of file - total %d lines)", result.count)
-
-	output.WriteString("\n</content>")
-
-	return TextToolResult(output.String())
-}
-
-func readLines(content []byte, offset int) readResult {
 	scanner := bufio.NewScanner(bytes.NewReader(content))
 	scanner.Buffer(make([]byte, 0, 64*1024), max(len(content)+2, 64*1024))
-
-	start := offset - 1
-
-	var raw []string
 
 	count := 0
 
 	for scanner.Scan() {
 		count++
-		if count <= start {
+		if count < offset {
 			continue
 		}
 
-		raw = append(raw, scanner.Text())
+		if count > offset {
+			output.WriteByte('\n')
+		}
+
+		fmt.Fprintf(&output, "%d: %s", count, scanner.Text())
 	}
 
-	return readResult{raw: raw, count: count}
+	if count < offset && (count != 0 || offset != 1) {
+		return TextToolResult(fmt.Sprintf("Offset %d is out of range for this file (%d lines)", offset, count))
+	}
+
+	fmt.Fprintf(&output, "\n\n(End of file - total %d lines)", count)
+
+	output.WriteString("\n</content>")
+
+	return TextToolResult(output.String())
 }
 
 func (sfs *sandboxedFileSystem) ApplyPatch(patchText string) string {
