@@ -747,10 +747,7 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 			Name:        toolName,
 			InputSchema: schema,
 			CallValue: func(ctx context.Context, args map[string]any) (starlark.Value, error) {
-				raw, err := json.Marshal(args)
-				if err != nil {
-					return nil, fmt.Errorf("marshal %s args: %w", toolName, err)
-				}
+				raw, _ := json.Marshal(args) // Code Mode arguments were decoded from JSON.
 
 				result, errCall := recordHostCall(ctx, toolName, args, toolCopy.resumable, toolHostCall{name: toolName, tool: &toolCopy, raw: raw, output: output})
 				if errCall != nil {
@@ -812,10 +809,7 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 		return call.run(ctx)
 	}
 
-	raw, err := json.Marshal(args)
-	if err != nil {
-		return ToolResult{}, fmt.Errorf("marshal %s args: %w", name, err)
-	}
+	raw, _ := json.Marshal(args) // Code Mode arguments were decoded from JSON.
 
 	sum := sha256.Sum256(raw)
 	key := ToolCallKey(ctx)
@@ -887,10 +881,7 @@ func (executeToolDiagnostics) ObserveToolCall(ctx context.Context, path []string
 		return
 	}
 
-	raw, err := json.Marshal(args)
-	if err != nil {
-		raw = json.RawMessage(`{}`)
-	}
+	raw, _ := json.Marshal(args) // Code Mode arguments were decoded from JSON.
 
 	namePath := append(slices.Clone(path), nestedName)
 	nestedName = strings.Join(namePath, " → ")
