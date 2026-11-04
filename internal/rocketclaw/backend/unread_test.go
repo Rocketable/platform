@@ -40,7 +40,7 @@ func unreadBy(t *testing.T, s *SessionService, conversationID string) []string {
 func viewedAgo(t *testing.T, s *SessionService, person, conversationID string, ago time.Duration) {
 	t.Helper()
 
-	require.NoError(t, s.ViewSession(t.Context(), person, conversationID))
+	require.NoError(t, s.ViewSession(t.Context(), person, conversationID, false))
 	_, err := s.db.ExecContext(t.Context(), `UPDATE web_tab_states SET viewed_at = viewed_at - make_interval(secs => $3) WHERE username = $1 AND viewing = $2`, person, conversationID, ago.Seconds())
 	require.NoError(t, err)
 }
@@ -104,7 +104,7 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 			}
 
 			if tc.away {
-				require.NoError(t, service.ViewSession(ctx, alice, "web:elsewhere"))
+				require.NoError(t, service.ViewSession(ctx, alice, "web:elsewhere", false))
 			}
 
 			finish(conversationID, turnID, tc.terminal)
@@ -137,10 +137,78 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 	require.NoError(t, service.ShareTab(ctx, "main", "/s/"+base64.RawURLEncoding.EncodeToString([]byte("web:shared")), nil))
 	require.NoError(t, startTurnDB(ctx, service.db, "turn:shared", "web:shared", slack))
 	require.NoError(t, saveTestTurn(ctx, service, "web:shared", "turn:shared", nil, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "turn:shared"}))
-	require.NoError(t, service.ViewSession(ctx, alice, "web:elsewhere"))
+	require.NoError(t, service.ViewSession(ctx, alice, "web:elsewhere", false))
 	viewedAgo(t, service, bob, "web:shared", 3*time.Second)
 	finish("web:shared", "turn:shared", protocol.TerminalComplete)
 	assert.Equal(t, []string{alice}, unreadBy(t, service, "web:shared"))
+}
+
+// A person's own marks are theirs alone and keep a turn's mark as it was. Viewed as held, a session keeps their own
+// mark and lets a turn ending in view mark nothing; a turn ending unseen makes it a turn's mark, which a held view
+// clears; and marking the session again makes it their own.
+func TestMarkUnread(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	path := func(conversationID string) string {
+		return "/s/" + base64.RawURLEncoding.EncodeToString([]byte(conversationID))
+	}
+	marks := func(conversationID string) []string {
+		t.Helper()
+
+		got, err := queryStrings(ctx, service.db, `SELECT format('%s marked=%s', username, marked_unread) FROM web_tabs WHERE conversation_id = $1 AND unread_at IS NOT NULL ORDER BY username`, "marks", conversationID)
+		require.NoError(t, err)
+
+		return got
+	}
+	turnEnds := func(conversationID, turnID string) {
+		t.Helper()
+		require.NoError(t, startTurnDB(ctx, service.db, turnID, conversationID, webMessage(protocol.InboundKindPrompt, "ask", alice)))
+		require.NoError(t, saveTestTurn(ctx, service, conversationID, turnID, nil, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: turnID}))
+		_, err := service.finishTurn(ctx, turnID, &turnFinish{conversationID: conversationID, outbound: &protocol.OutboundMessage{ConversationID: conversationID, TurnID: turnID, Text: "done"}})
+		require.NoError(t, err)
+	}
+
+	turnMark := func() []string {
+		t.Helper()
+
+		got, err := queryStrings(ctx, service.db, `SELECT unread_at::text FROM web_tabs WHERE conversation_id = 'web:turn'`, "turn mark")
+		require.NoError(t, err)
+
+		return got
+	}
+
+	for _, id := range []string{"web:shared", "web:turn", "web:held"} {
+		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
+	}
+
+	// Bob is a Web person too, so a mark that reached every person would show him.
+	require.NoError(t, service.ViewSession(ctx, bob, "web:turn", false))
+	require.NoError(t, service.ShareTab(ctx, "main", path("web:shared"), nil))
+	turnEnds("web:turn", "turn:turn")
+
+	before := turnMark()
+
+	require.NoError(t, service.MarkUnread(ctx, alice, []string{path("web:shared"), path("web:turn")}))
+	assert.Equal(t, []string{alice + " marked=t"}, marks("web:shared"), "a Shared session's mark is alice's alone")
+	assert.Equal(t, before, turnMark(), "a turn's mark keeps its time")
+	assert.Equal(t, []string{alice + " marked=f"}, marks("web:turn"))
+
+	require.NoError(t, service.MarkUnread(ctx, alice, []string{path("web:held")}))
+	require.NoError(t, service.ViewSession(ctx, alice, "web:held", true))
+	turnEnds("web:held", "turn:held")
+	assert.Equal(t, []string{alice + " marked=t"}, marks("web:held"), "a held view keeps the mark, and a turn ending in view marks nothing")
+
+	_, err := service.db.ExecContext(ctx, `UPDATE web_tab_states SET viewed_at = viewed_at - interval '30 seconds' WHERE username = $1`, alice)
+	require.NoError(t, err)
+	turnEnds("web:held", "turn:held-later")
+	assert.Equal(t, []string{alice + " marked=f"}, marks("web:held"), "a turn ending once the view went stale leaves a turn's mark")
+	require.NoError(t, service.ViewSession(ctx, alice, "web:held", true))
+	assert.Empty(t, marks("web:held"), "a held view clears a turn's mark")
+
+	require.NoError(t, service.MarkUnread(ctx, alice, []string{path("web:held")}))
+	assert.Equal(t, []string{alice + " marked=t"}, marks("web:held"), "marking a read tab that has a row makes the mark alice's own")
 }
 
 // R4: a message Alice queued behind Bob's turn marks her when it runs as its own turn.

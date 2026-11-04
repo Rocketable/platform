@@ -1653,7 +1653,7 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
 
   // A Shared row has no close button, offers no closing, ignores middle-clicks, and takes no drops of this person's tabs.
   expect(await shared(page).getByRole("button", { name: "Close Alpha" }).count()).toBe(0);
-  expect(await sharedMenu(page, "Alpha")).toEqual(["Remove from Shared", "Mute notifications", "Snooze notifications"]);
+  expect(await sharedMenu(page, "Alpha")).toEqual(["Remove from Shared", "Mark as unread", "Mute notifications", "Snooze notifications"]);
   await page.keyboard.press("Escape");
   await page.getByRole("menu").waitFor({ state: "hidden" });
   await row("Alpha").click({ button: "middle" });
@@ -1908,11 +1908,11 @@ test("any session tab, Shared or not, mutes or snoozes its notifications from it
   expect(await sharedMenu(page, "Shortcuts")).toEqual(["Remove from Shared"]);
   await close();
   // A Shared row mutes for this person alone, shows a bell, and then offers Unmute.
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "Mute notifications", "Snooze notifications"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "Mark as unread", "Mute notifications", "Snooze notifications"]);
   await page.getByRole("menuitem", { name: "Mute notifications" }).click();
   await shared(page).getByTitle("Muted", { exact: true }).waitFor();
   expect([saved.mutes, await row("Bravo").getAttribute("aria-description")]).toEqual([[{ path: href("bravo"), until: "" }], "Shared, Space: Main, Muted"]);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "Unmute notifications"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "Mark as unread", "Unmute notifications"]);
   await page.getByRole("menuitem", { name: "Unmute notifications" }).click();
   await shared(page).getByTitle("Muted", { exact: true }).waitFor({ state: "detached" });
   expect(saved.mutes).toEqual([]);

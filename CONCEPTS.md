@@ -306,6 +306,8 @@ A session is in a Space when its Birth Space is that Space, or, with no Birth Sp
 
 A session's per-person mark that a turn the person sent a Web message into has ended and they have not looked at it since. Other people's turns, and turns with no Web sender, mark no one, except in a session in some space's Shared group, where any turn's end marks every Web person. Nobody who is viewing the session when the turn ends is marked. Having the session's tab active in a focused window clears the mark on all of that person's devices.
 
+A person can also mark a read session unread themselves, from its tab menu or the command palette. That mark raises no notification. Marked on the tab in view, it stays until they go to another session and come back.
+
 ## Hosted Pages
 
 ### Hosted Page

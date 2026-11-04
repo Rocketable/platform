@@ -413,7 +413,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
     SELECT c.username, `+tabPathSQL+`, c.conversation_id, now() FROM marks c
     LEFT JOIN web_tab_states p ON p.username = c.username AND p.viewing = c.conversation_id AND p.viewed_at >= now() - interval '10 seconds'
     WHERE p.username IS NULL
-    ON CONFLICT (username, path) DO UPDATE SET unread_at = now(), conversation_id = excluded.conversation_id
+    ON CONFLICT (username, path) DO UPDATE SET unread_at = now(), marked_unread = FALSE, conversation_id = excluded.conversation_id
 ), removed AS (
     DELETE FROM conversations WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $9 AND ($7 OR last_updated >= $8)
 )

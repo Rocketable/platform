@@ -98,7 +98,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, pos
 
 				list := &ListSessionsRequest{Since: r.URL.Query().Get("since")}
 				if protection.Check(&post) == nil {
-					list.Viewing = r.URL.Query().Get("viewing")
+					list.Viewing, list.Hold = r.URL.Query().Get("viewing"), r.URL.Query().Has("hold")
 				}
 
 				request = list

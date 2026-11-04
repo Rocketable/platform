@@ -499,7 +499,8 @@ active tab.
   key press asks for the browser's permission, the earliest a browser allows;
   turn them off in the browser's site settings. A new mark is noticed on the
   session list's poll, so a hidden window may notify late; a page load never
-  notifies for sessions that were already unread.
+  notifies for sessions that were already unread, and a mark you set yourself
+  with **Mark as unread** never notifies.
 - **Mute and snooze.** Any session tab's menu, Shared rows included, offers
   **Mute notifications** and a **Snooze notifications** submenu: 1 hour, 4
   hours, tomorrow 9:00, next Monday 9:00, or **Pick date & time…**, a dialog that
@@ -512,6 +513,14 @@ active tab.
   still shows. The command palette offers the same as **Tabs: Mute
   notifications**, **Tabs: Snooze notifications …**, and **Tabs: Unmute
   notifications** for the tab in view.
+- **Mark as unread.** Any session tab's menu, Shared rows included, offers
+  **Mark as unread** while the session is read for you, and the command palette
+  offers **Tabs: Mark as unread** for the tab in view. With several tabs
+  selected, it marks every selected session that is read. The mark is yours
+  alone, like any Unread mark (see Unread below), and raises no notification.
+  Marking the tab in view keeps you there and keeps the mark while you read it,
+  through reloads too; it clears the next time you go to another tab, a palette
+  preview included, and come back.
 - **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
   A moved tab joins the group of the tab it lands on, or leaves its group when it
   lands on an ungrouped tab. Drag a group's header, or press Shift+Arrow on it, to
@@ -634,7 +643,8 @@ active tab.
   Otherwise other people's
   turns, Slack mentions, crons, an agent waking on its own, and remote OpenCode
   turns with no recorded sender (`/command`, shell runs, prompts typed in
-  OpenCode's own app outside RocketClaw) mark no one. Having the tab active in a
+  OpenCode's own app outside RocketClaw) mark no one. You can also mark a session
+  unread yourself (see Mark as unread above). Having the tab active in a
   focused window clears the mark on all your devices; the server keeps it on your
   tab for the session, even while that tab is closed, so it waits for you after a
   reload or on another device. Screen readers hear

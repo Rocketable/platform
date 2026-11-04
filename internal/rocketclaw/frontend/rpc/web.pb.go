@@ -252,7 +252,9 @@ type ListSessionsRequest struct {
 	Viewing string `protobuf:"bytes,1,opt,name=viewing,proto3" json:"viewing,omitempty"`
 	// The version of the last complete listing the caller holds. When the server still knows it, the
 	// listing sends only the rows that changed since; otherwise it sends every row.
-	Since         string `protobuf:"bytes,2,opt,name=since,proto3" json:"since,omitempty"`
+	Since string `protobuf:"bytes,2,opt,name=since,proto3" json:"since,omitempty"`
+	// The caller marked the viewing session unread while it was in view: the view counts without clearing the mark.
+	Hold          bool `protobuf:"varint,3,opt,name=hold,proto3" json:"hold,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -301,6 +303,13 @@ func (x *ListSessionsRequest) GetSince() string {
 	return ""
 }
 
+func (x *ListSessionsRequest) GetHold() bool {
+	if x != nil {
+		return x.Hold
+	}
+	return false
+}
+
 type Session struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Id         string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -345,7 +354,9 @@ type Session struct {
 	// The session is bound to External MCP, or a run reporting to it is.
 	External bool `protobuf:"varint,31,opt,name=external,proto3" json:"external,omitempty"`
 	// When its newest running or waiting turn was created, else its last update, RFC3339Nano.
-	ArrivedAt     string `protobuf:"bytes,32,opt,name=arrived_at,json=arrivedAt,proto3" json:"arrived_at,omitempty"`
+	ArrivedAt string `protobuf:"bytes,32,opt,name=arrived_at,json=arrivedAt,proto3" json:"arrived_at,omitempty"`
+	// The caller marked it unread themselves, so the mark raises no notification.
+	MarkedUnread  bool `protobuf:"varint,33,opt,name=marked_unread,json=markedUnread,proto3" json:"marked_unread,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -574,6 +585,13 @@ func (x *Session) GetArrivedAt() string {
 		return x.ArrivedAt
 	}
 	return ""
+}
+
+func (x *Session) GetMarkedUnread() bool {
+	if x != nil {
+		return x.MarkedUnread
+	}
+	return false
 }
 
 type HistoryRequest struct {
@@ -6902,8 +6920,8 @@ func (x *TabMute) GetUntil() string {
 }
 
 // TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space,
-// adds one tab to or removes one from a space's Shared group, mutes or unmutes one session tab for the caller, or
-// replaces the caller's Top Shelf.
+// adds one tab to or removes one from a space's Shared group, mutes or unmutes one session tab for the caller, marks
+// session tabs unread for the caller, or replaces the caller's Top Shelf.
 // revision is the saved revision the state was made from.
 type TabsRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
@@ -6919,6 +6937,7 @@ type TabsRequest struct {
 	// edit_shared saves a Shared Search page's one page; a page no longer shared stays unshared.
 	EditShared    *SharedTab `protobuf:"bytes,11,opt,name=edit_shared,json=editShared,proto3" json:"edit_shared,omitempty"`
 	TopShelf      *TopShelf  `protobuf:"bytes,12,opt,name=top_shelf,json=topShelf,proto3" json:"top_shelf,omitempty"`
+	MarkUnread    []string   `protobuf:"bytes,13,rep,name=mark_unread,json=markUnread,proto3" json:"mark_unread,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7026,6 +7045,13 @@ func (x *TabsRequest) GetEditShared() *SharedTab {
 func (x *TabsRequest) GetTopShelf() *TopShelf {
 	if x != nil {
 		return x.TopShelf
+	}
+	return nil
+}
+
+func (x *TabsRequest) GetMarkUnread() []string {
+	if x != nil {
+		return x.MarkUnread
 	}
 	return nil
 }
@@ -7399,10 +7425,11 @@ var File_web_proto protoreflect.FileDescriptor
 
 const file_web_proto_rawDesc = "" +
 	"\n" +
-	"\tweb.proto\x12\x03rpc\"E\n" +
+	"\tweb.proto\x12\x03rpc\"Y\n" +
 	"\x13ListSessionsRequest\x12\x18\n" +
 	"\aviewing\x18\x01 \x01(\tR\aviewing\x12\x14\n" +
-	"\x05since\x18\x02 \x01(\tR\x05since\"\xb6\x06\n" +
+	"\x05since\x18\x02 \x01(\tR\x05since\x12\x12\n" +
+	"\x04hold\x18\x03 \x01(\bR\x04hold\"\xdb\x06\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -7439,7 +7466,8 @@ const file_web_proto_rawDesc = "" +
 	"stateSince\x12\x1a\n" +
 	"\bexternal\x18\x1f \x01(\bR\bexternal\x12\x1d\n" +
 	"\n" +
-	"arrived_at\x18  \x01(\tR\tarrivedAtJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\x0eallowed_agents\"\xba\x01\n" +
+	"arrived_at\x18  \x01(\tR\tarrivedAt\x12#\n" +
+	"\rmarked_unread\x18! \x01(\bR\fmarkedUnreadJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\x0eallowed_agents\"\xba\x01\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
 	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\x12\x1a\n" +
@@ -7923,7 +7951,7 @@ const file_web_proto_rawDesc = "" +
 	"\x06search\x18\x04 \x01(\v2\x0f.rpc.SearchPageR\x06search\"3\n" +
 	"\aTabMute\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
-	"\x05until\x18\x02 \x01(\tR\x05until\"\xbd\x03\n" +
+	"\x05until\x18\x02 \x01(\tR\x05until\"\xde\x03\n" +
 	"\vTabsRequest\x12#\n" +
 	"\x05state\x18\x01 \x01(\v2\r.rpc.TabStateR\x05state\x12!\n" +
 	"\fcreate_space\x18\x02 \x01(\tR\vcreateSpace\x12-\n" +
@@ -7938,7 +7966,9 @@ const file_web_proto_rawDesc = "" +
 	" \x01(\tR\x06unmute\x12/\n" +
 	"\vedit_shared\x18\v \x01(\v2\x0e.rpc.SharedTabR\n" +
 	"editShared\x12*\n" +
-	"\ttop_shelf\x18\f \x01(\v2\r.rpc.TopShelfR\btopShelfJ\x04\b\b\x10\tR\vswap_shared\"\xd0\x02\n" +
+	"\ttop_shelf\x18\f \x01(\v2\r.rpc.TopShelfR\btopShelf\x12\x1f\n" +
+	"\vmark_unread\x18\r \x03(\tR\n" +
+	"markUnreadJ\x04\b\b\x10\tR\vswap_shared\"\xd0\x02\n" +
 	"\fTabsResponse\x12\"\n" +
 	"\x06spaces\x18\x01 \x03(\v2\n" +
 	".rpc.SpaceR\x06spaces\x12#\n" +

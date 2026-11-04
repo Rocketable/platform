@@ -179,7 +179,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	}
 
 	if request.Viewing != "" {
-		if err := s.sessions.ViewSession(ctx, owner, request.Viewing); err != nil {
+		if err := s.sessions.ViewSession(ctx, owner, request.Viewing, request.Hold); err != nil {
 			return fmt.Errorf("web session view: %w", err)
 		}
 	}
@@ -296,7 +296,7 @@ func sidebarSession(chat *backend.SidebarChat) *Session {
 	}
 
 	if !row.UnreadAt.IsZero() {
-		session.UnreadAt = row.UnreadAt.Format(time.RFC3339Nano)
+		session.UnreadAt, session.MarkedUnread = row.UnreadAt.Format(time.RFC3339Nano), row.MarkedUnread
 	}
 
 	return session

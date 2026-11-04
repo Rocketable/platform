@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
-import { encodeSessionId as encode } from "./session-id";
+import { decodeSessionId, encodeSessionId as encode } from "./session-id";
 import type { SearchPage, Session } from "./types";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
@@ -140,6 +140,120 @@ test("an open RocketClaw or OpenCode tab newly marked unread raises a desktop no
     mark(["chat"], "2026-10-22T10:04:00Z");
     await polls();
     expect(await notes()).toEqual([{ title: "main", body: `Chat work ${"x".repeat(189)}…`, tag: "chat", closed: false }]);
+    expect(errors).toEqual([]);
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 60_000);
+
+test("a person marks tabs unread from the tab menu or the palette, silently, and the tab in view keeps its mark until they come back", async () => {
+  const { chromium: engine } = await import(playwright!);
+  let rows: Session[] = ["chat", "first", "second", "seen"].map((id) => ({ id, agent: "main", preview: `${id} work`, ...id === "seen" ? { unreadAt: "2026-10-22T10:00:00Z" } : {} }));
+  const listed: string[] = [], marked: string[][] = [];
+  const set = (id: string, change: Partial<Session>) => { rows = rows.map((row) => row.id === id ? { ...row, ...change } : row); };
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") {
+      const viewing = url.searchParams.get("viewing") ?? "", hold = url.searchParams.has("hold");
+      listed.push(`${viewing}${hold ? " held" : ""}`);
+      if (viewing && !hold) set(viewing, { unreadAt: undefined, markedUnread: undefined });
+      return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    }
+    if (!url.pathname.startsWith("/api/")) {
+      const file = Bun.file(path.join(dist, url.pathname));
+      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    }
+    const input = await request.json() as { id?: string; markUnread?: string[] };
+    switch (url.pathname) {
+      case "/api/Protocol": return Response.json({ protoSha256: "notifications" });
+      case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
+      case "/api/ListQueue": return Response.json({ items: [] });
+      case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: [], messages: [], mentionIds: [] });
+      case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
+      case "/api/Tabs": {
+        const ids = (input.markUnread ?? []).map((item) => decodeSessionId(item.slice(3)));
+        if (ids.length) marked.push(ids);
+        for (const id of ids) if (!rows.find((row) => row.id === id)!.unreadAt) set(id, { unreadAt: new Date().toISOString(), markedUnread: true });
+        return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: rows.map((row) => ({ path: `/s/${encode(row.id)}`, space: "main" })), groups: [], space: "main", last: {} }, revision: "1", shared: [], mutes: [] });
+      }
+      default: return Response.json({});
+    }
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(error.message));
+    await page.addInitScript(() => { if (origin !== "null") sessionStorage.setItem("permission", "granted"); });
+    await page.addInitScript(stubNotifications);
+    const base = `http://127.0.0.1:${server.port}`;
+    const tab = (id: string) => page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: `${id} work`, exact: true });
+    const unread = async (id: string) => (await tab(id).getAttribute("aria-description"))!.includes("Unread");
+    const polls = async () => {
+      const seen = listed.length;
+      while (listed.length < seen + 2) await Bun.sleep(20);
+      await Bun.sleep(100);
+    };
+    await page.goto(`${base}/s/${encode("chat")}`);
+    await tab("seen").waitFor();
+    await polls();
+    expect(listed.at(-1)).toBe("chat");
+
+    // A read session's menu offers the item, and choosing it marks the session without a notification; an unread
+    // one's menu has no item.
+    await tab("seen").click({ button: "right" });
+    await page.getByRole("menuitem").first().waitFor();
+    expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Mark as unread");
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").waitFor({ state: "hidden" });
+    await tab("first").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Mark as unread", exact: true }).click();
+    await polls();
+    expect(marked).toEqual([["first"]]);
+    expect(await unread("first")).toBe(true);
+    expect(await page.evaluate(() => window.notes.length)).toBe(0);
+
+    // A selection's menu offers the item while any selected session is read, here from an unread tab, and marks the
+    // read ones in one call, the tab in view included, which polls then report as held.
+    await tab("second").click({ modifiers: ["ControlOrMeta"] });
+    await tab("seen").click({ modifiers: ["ControlOrMeta"] });
+    await tab("seen").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Mark as unread", exact: true }).click();
+    await polls();
+    expect(marked.length).toBe(2);
+    expect(marked[1].toSorted()).toEqual(["chat", "second"]);
+    expect(listed.at(-1)).toBe("chat held");
+    expect(await unread("chat")).toBe(true);
+    expect(await page.evaluate(() => window.notes.length)).toBe(0);
+
+    // The hold outlives a reload, and leaving the tab and coming back ends it, which clears the mark.
+    await page.reload();
+    await tab("seen").waitFor();
+    await polls();
+    expect(listed.at(-1)).toBe("chat held");
+    await tab("second").click();
+    await tab("chat").click();
+    await polls();
+    expect(listed.at(-1)).toBe("chat");
+    expect(await unread("chat")).toBe(false);
+
+    // The palette marks the tab in view and holds it too.
+    await page.keyboard.press("Control+Shift+p");
+    const commands = page.getByRole("dialog", { name: "Run command", exact: true });
+    await commands.getByRole("button", { name: "Tabs: Mark as unread", exact: true }).click();
+    await commands.waitFor({ state: "hidden" });
+    await polls();
+    expect(marked.at(-1)).toEqual(["chat"]);
+    expect(listed.at(-1)).toBe("chat held");
+    expect(await unread("chat")).toBe(true);
+
+    // A turn of the person's ending later on a session they marked notifies as usual.
+    set("first", { unreadAt: new Date(Date.now() + 60_000).toISOString(), markedUnread: undefined });
+    await polls();
+    expect(await page.evaluate(() => window.notes.map(({ tag }) => tag))).toEqual(["first"]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

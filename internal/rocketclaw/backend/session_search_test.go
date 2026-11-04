@@ -421,7 +421,7 @@ func TestSearchSessionsUnread(t *testing.T) {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO web_tabs (username, path, conversation_id, unread_at) VALUES ('alice', $1, $1, now()), ('alice', $2, $2, now()), ('alice', $3, $3, now()), ('alice', $4, $4, now()), ('bob', $5, $5, now())`,
 		searchChatA, searchChatH, searchChatD, searchChatW, searchChatB)
 	require.NoError(t, err)
-	require.NoError(t, s.ViewSession(ctx, "alice", searchChatW))
+	require.NoError(t, s.ViewSession(ctx, "alice", searchChatW, false))
 
 	for _, tc := range []struct {
 		username, query string

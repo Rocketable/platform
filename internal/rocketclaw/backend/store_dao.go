@@ -789,14 +789,30 @@ ON CONFLICT (username) DO UPDATE SET shelf = excluded.shelf`, username, string(s
 	return err
 }
 
-// ViewSession records that username has conversationID in view now, which clears their mark on it
-// and ends their view of every other session. A conversationID naming no conversation writes nothing.
-func (s *SessionService) ViewSession(ctx context.Context, username, conversationID string) error {
+// ViewSession records that username has conversationID in view now, which clears their mark on it, except a mark
+// they set themselves when hold is set, and ends their view of every other session. A conversationID naming no
+// conversation writes nothing.
+func (s *SessionService) ViewSession(ctx context.Context, username, conversationID string, hold bool) error {
 	_, err := execState(ctx, s.db, "record session view", `WITH viewed AS (
     INSERT INTO web_tab_states (username, revision, viewing, viewed_at) SELECT $1, 0, conversation_id, now() FROM conversations WHERE conversation_id = $2
     ON CONFLICT (username) DO UPDATE SET viewing = excluded.viewing, viewed_at = excluded.viewed_at
 )
-UPDATE web_tabs SET unread_at = NULL WHERE username = $1 AND conversation_id = $2 AND unread_at IS NOT NULL`, username, conversationID)
+UPDATE web_tabs SET unread_at = NULL WHERE username = $1 AND conversation_id = $2 AND unread_at IS NOT NULL AND NOT ($3 AND marked_unread)`, username, conversationID, hold)
+
+	return err
+}
+
+// MarkUnread marks the sessions of paths unread for username, as their own marks. A session already unread keeps
+// its mark.
+func (s *SessionService) MarkUnread(ctx context.Context, username string, paths []string) error {
+	conversations := make([]string, 0, len(paths))
+	for _, path := range paths {
+		conversations = append(conversations, TabConversation(path))
+	}
+
+	_, err := execState(ctx, s.db, "mark sessions unread", `INSERT INTO web_tabs (username, path, conversation_id, unread_at, marked_unread)
+SELECT $1, `+tabPathSQL+`, c.conversation_id, now(), TRUE FROM conversations c WHERE c.conversation_id = ANY($2::text[])
+ON CONFLICT (username, path) DO UPDATE SET unread_at = excluded.unread_at, marked_unread = TRUE WHERE web_tabs.unread_at IS NULL`, username, conversations)
 
 	return err
 }
@@ -1432,7 +1448,7 @@ INSERT INTO web_tabs (username, path, conversation_id, unread_at)
 SELECT s.username, `+tabPathSQL+`, c.conversation_id, now() FROM readers s JOIN conversations c ON c.conversation_id = $1
 LEFT JOIN web_tab_states p ON p.username = s.username AND p.viewing = $1 AND p.viewed_at >= now() - interval '10 seconds'
 WHERE p.username IS NULL
-ON CONFLICT (username, path) DO UPDATE SET unread_at = now(), conversation_id = excluded.conversation_id`, finish.conversationID, turnID, protocol.InboundPrincipalEmailMetadataKey, protocol.SourceWeb); err != nil {
+ON CONFLICT (username, path) DO UPDATE SET unread_at = now(), marked_unread = FALSE, conversation_id = excluded.conversation_id`, finish.conversationID, turnID, protocol.InboundPrincipalEmailMetadataKey, protocol.SourceWeb); err != nil {
 		return nil, fmt.Errorf("mark turn senders unread: %w", err)
 	}
 
