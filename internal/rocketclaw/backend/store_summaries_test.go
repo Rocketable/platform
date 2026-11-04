@@ -602,7 +602,7 @@ func TestSidebarSessionsAllocationBudgets(t *testing.T) {
 		output, err := build.CombinedOutput()
 		require.NoError(t, err, "%s", output)
 
-		cmd := exec.CommandContext(t.Context(), executable, "-test.run=^"+t.Name()+"$", "-test.cpu="+strconv.Itoa(goruntime.GOMAXPROCS(0)))
+		cmd := exec.CommandContext(t.Context(), executable, "-test.run=^"+t.Name()+"$", "-test.cpu="+strconv.Itoa(goruntime.GOMAXPROCS(0)), "-test.benchtime=32x")
 
 		// Keep GC-driven pool eviction independent of the surrounding test runner, too.
 		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_SIDEBAR_ALLOCATIONS=1", "GOGC=100", "GOMEMLIMIT=off")

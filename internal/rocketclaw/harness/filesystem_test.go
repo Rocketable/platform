@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/fs"
 	"os"
@@ -746,6 +747,12 @@ func BenchmarkGrepInventory(b *testing.B) {
 }
 
 func TestGrepInventoryAllocations(t *testing.T) {
+	// This test is nonparallel: restore the throughput setting before other tests run.
+	benchtime := flag.Lookup("test.benchtime").Value.String()
+
+	require.NoError(t, flag.Set("test.benchtime", "4096x"))
+	t.Cleanup(func() { require.NoError(t, flag.Set("test.benchtime", benchtime)) })
+
 	sfs := grepInventoryFixture(t)
 	perFile := testing.Benchmark(func(b *testing.B) {
 		b.Helper()
@@ -757,6 +764,7 @@ func TestGrepInventoryAllocations(t *testing.T) {
 		}
 	})
 	require.Positive(t, perFile.N)
+	require.NoError(t, flag.Set("test.benchtime", "4x"))
 
 	listing := testing.Benchmark(func(b *testing.B) {
 		b.Helper()

@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -94,6 +95,11 @@ Use for docs.
 	})
 
 	t.Run("reports files missing frontmatter", func(t *testing.T) {
+		benchtime := flag.Lookup("test.benchtime").Value.String()
+
+		require.NoError(t, flag.Set("test.benchtime", "4x"))
+		t.Cleanup(func() { require.NoError(t, flag.Set("test.benchtime", benchtime)) })
+
 		content := "# Missing frontmatter\n" + strings.Repeat("x", 64<<10)
 		fsys := fstest.MapFS{"bad-skill/SKILL.md": mapFile(content)}
 

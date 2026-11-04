@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"flag"
 	"io/fs"
 	"os"
 	"path"
@@ -457,6 +458,11 @@ Strictly follow the rules.
 	})
 
 	t.Run("reports missing frontmatter", func(t *testing.T) {
+		benchtime := flag.Lookup("test.benchtime").Value.String()
+
+		require.NoError(t, flag.Set("test.benchtime", "4x"))
+		t.Cleanup(func() { require.NoError(t, flag.Set("test.benchtime", benchtime)) })
+
 		content := "# Missing frontmatter\n" + strings.Repeat("x", 64<<10)
 		fsys := fstest.MapFS{
 			"review.md": testMapFile(content),
