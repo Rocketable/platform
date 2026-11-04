@@ -100,12 +100,17 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 
 	predeclared := make(starlark.StringDict, len(catalog)+len(host)+len(concurrency))
 	for name, tool := range catalog {
-		predeclared[name] = newKwargsBuiltin(name, tool.InputSchema, observe, func(ctx context.Context, callArgs map[string]any) (string, error) {
+		predeclared[name] = newKwargsValueBuiltin(name, tool.InputSchema, observe, func(ctx context.Context, callArgs map[string]any) (starlark.Value, error) {
 			if err := decide(ctx, tool.Server+"."+tool.Name, callArgs); err != nil {
-				return "", err
+				return nil, err
 			}
 
-			return call(ctx, tool.Server, tool.Name, callArgs)
+			result, err := call(ctx, tool.Server, tool.Name, callArgs)
+			if err != nil {
+				return nil, err
+			}
+
+			return starlark.String(result), nil
 		})
 	}
 
@@ -197,17 +202,6 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 	}
 
 	return string(encoded.(starlark.String)), nil
-}
-
-func newKwargsBuiltin(name string, schema map[string]any, observe ToolCallObserver, call func(context.Context, map[string]any) (string, error)) *starlark.Builtin {
-	return newKwargsValueBuiltin(name, schema, observe, func(ctx context.Context, args map[string]any) (starlark.Value, error) {
-		result, err := call(ctx, args)
-		if err != nil {
-			return nil, err
-		}
-
-		return starlark.String(result), nil
-	})
 }
 
 func newKwargsValueBuiltin(name string, schema map[string]any, observe ToolCallObserver, call func(context.Context, map[string]any) (starlark.Value, error)) *starlark.Builtin {
