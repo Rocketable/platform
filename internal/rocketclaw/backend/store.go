@@ -29,6 +29,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -1375,7 +1376,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 
 		var (
 			sessions       []*SidebarSession
-			preview        sql.NullString
+			preview        pgtype.DriverBytes
 			tags           sql.RawBytes
 			updated        sql.NullTime
 			unread         sql.NullTime
@@ -1408,7 +1409,8 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			}
 
 			if updated.Valid {
-				row.Summary = &protocol.SessionSummary{ConversationID: row.Conversation.ID, LastMessage: preview.String, LastUpdated: updated.Time.UTC()}
+				// RawBytes destinations hold off cancellation-driven Close; own the preview before Next.
+				row.Summary = &protocol.SessionSummary{ConversationID: row.Conversation.ID, LastMessage: string(preview), LastUpdated: updated.Time.UTC()}
 			}
 
 			sessions = append(sessions, &row)

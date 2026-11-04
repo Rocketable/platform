@@ -614,8 +614,8 @@ func TestSidebarSessionsAllocationBudgets(t *testing.T) {
 
 	result := testing.Benchmark(BenchmarkSidebarSessions)
 	require.Positive(t, result.N)
-	// Plain builds use about 5.1 MiB and 950 allocations; keep the former race-build margin.
-	require.Less(t, result.AllocedBytesPerOp(), int64(6<<20))
+	// Keep previews independently owned without a second full preview buffer.
+	require.Less(t, result.AllocedBytesPerOp(), int64(4<<20))
 	require.Less(t, result.AllocsPerOp(), int64(990))
 	result = testing.Benchmark(BenchmarkSidebarSessionTags)
 	require.Positive(t, result.N)
