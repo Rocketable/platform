@@ -553,32 +553,6 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 	m.wg.Wait()
 }
 
-func TestPreparePromptInstructionCases(t *testing.T) {
-	m := New(newCronConfig(t, t.TempDir(), "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
-
-	tests := []struct {
-		name string
-		body string
-		want string
-	}{
-		{name: "empty", body: "", want: cronReplyInstruction},
-		{name: "trailing newline", body: "Body\n", want: "Body\n\n" + cronReplyInstruction},
-		{name: "several trailing newlines", body: "Body\n\n\n", want: "Body\n\n\n\n" + cronReplyInstruction},
-		{name: "CRLF", body: "Body\r\n", want: "Body\r\n\n" + cronReplyInstruction},
-		{name: "plain", body: "Body", want: "Body\n\n" + cronReplyInstruction},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := m.preparePrompt(tt.body); got != tt.want {
-				t.Fatalf("preparePrompt(%q) = %q; want %q", tt.body, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestLoadDefinitionRejectsInvalidFrontmatter(t *testing.T) {
 	tests := []struct {
 		name string
@@ -669,28 +643,31 @@ func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
 		t.Fatalf("prompt = %q; want body plus exposed tool instruction", job.Prompt)
 	}
 
+	for _, tt := range []struct {
+		name, body, want string
+	}{
+		{name: "empty", body: "", want: cronReplyInstruction},
+		{name: "trailing newline", body: "Body\n", want: "Body\n\n" + cronReplyInstruction},
+		{name: "several trailing newlines", body: "Body\n\n\n", want: "Body\n\n\n\n" + cronReplyInstruction},
+		{name: "CRLF", body: "Body\r\n", want: "Body\r\n\n" + cronReplyInstruction},
+		{name: "plain", body: "Body", want: "Body\n\n" + cronReplyInstruction},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := m.preparePrompt(tt.body); got != tt.want {
+				t.Fatalf("preparePrompt(%q) = %q; want %q", tt.body, got, tt.want)
+			}
+		})
+	}
+
 	for _, target := range []string{"", "nested/daily", "daily.txt", "daily.example", "daily.example.md", "."} {
 		if _, err := m.LoadOneOffCronjob(target); err == nil {
 			t.Fatalf("LoadOneOffCronjob(%q) succeeded; want error", target)
 		}
 	}
-}
-
-func TestLoadOneOffCronjobReportsReadAndDefinitionErrors(t *testing.T) {
-	workspace := t.TempDir()
-
-	cronDir := filepath.Join(workspace, "cron")
-	if err := os.Mkdir(cronDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	if err := os.WriteFile(filepath.Join(cronDir, "broken.md"), []byte("not frontmatter"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
-	m := New(newCronConfig(t, workspace, "."), ".", newCronScheduleStore(t), &runnerMock{RunFunc: func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		return protocol.CronRunResult{}, nil
-	}}, slog.New(slog.DiscardHandler))
 
 	if _, err := m.LoadOneOffCronjob("missing"); err == nil || !strings.Contains(err.Error(), "read cronjob cron/missing.md") {
 		t.Fatalf("LoadOneOffCronjob(missing) error = %v; want read cronjob error", err)
