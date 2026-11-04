@@ -161,6 +161,10 @@ jobs:
   # §13). ROCKETCLAW_SANDBOX_REQUIRE makes a missing prerequisite fail rather than skip.
   sandbox:
     runs-on: ubuntu-24.04
+    # The runner's own Ubuntu mirror serves the image's packages in seconds; the snapshot archive, often slow,
+    # serves only the indexes and what the mirror lacks.
+    env:
+      SANDBOX_TEST_PACKAGE_MIRROR: http://azure.archive.ubuntu.com/ubuntu/
     steps:
       - uses: actions/checkout@v7
       - *setup-go
