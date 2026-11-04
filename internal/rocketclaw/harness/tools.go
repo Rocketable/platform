@@ -149,33 +149,21 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 
 	for name := range tools {
 		tool := tools[name]
-		if (!tool.codeModeOnly && !CodeModeOnlyHostTool(name)) || !toolVisible(agent, name, &tool) {
-			continue
-		}
+		if !toolVisible(agent, name, &tool) {
+			delete(tools, name)
 
-		codeHosts[name] = tool
-	}
-
-	maps.Copy(tools, scoped.mcpToolsFor(agent, codeHosts))
-
-	for name := range tools {
-		if name == executeToolName || name == loadExecuteResultToolName {
-			// Code-mode tools gate inclusion themselves; nested calls enforce real permissions.
 			continue
 		}
 
 		// Sandbox host tools and embedder custom tools run only inside execute.
-		tool := tools[name]
 		if tool.codeModeOnly || CodeModeOnlyHostTool(name) {
-			delete(tools, name)
-
-			continue
-		}
-
-		if !toolVisible(agent, name, &tool) {
+			codeHosts[name] = tool
 			delete(tools, name)
 		}
 	}
+
+	// Code-mode tools gate inclusion themselves; nested calls enforce real permissions.
+	maps.Copy(tools, scoped.mcpToolsFor(agent, codeHosts))
 
 	if len(scoped.availableSkillSubjects()) == 0 {
 		delete(tools, "find_skills")
