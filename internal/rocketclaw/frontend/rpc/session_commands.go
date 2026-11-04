@@ -17,8 +17,13 @@ import (
 
 func (s *Server) forkSession(ctx context.Context, request *ForkSessionRequest) (*ForkSessionResponse, error) {
 	if remote, ok := strings.CutPrefix(request.Id, "opencode:"); ok {
-		if _, _, err := s.principal(ctx); err != nil {
+		_, limit, err := s.spaceLimit(ctx)
+		if err != nil {
 			return nil, err
+		}
+
+		if limit.Limited() {
+			return nil, fmt.Errorf("fork opencode session: %w", errOpenCodeClosed)
 		}
 
 		name, source, _ := strings.Cut(remote, ":")
@@ -131,7 +136,8 @@ func (s *Server) clearRevert(ctx context.Context, request *ClearRevertRequest) (
 }
 
 func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequest) (*SearchMessagesResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
+	username, limit, err := s.spaceLimit(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -140,7 +146,12 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 		return &SearchMessagesResponse{}, nil
 	}
 
-	found, err := s.sharedSearch(ctx, needle, messageSearch{needle: needle})
+	owner := ""
+	if limit.Limited() {
+		owner = username
+	}
+
+	found, err := s.sharedSearch(ctx, fmt.Sprintf("messages %q %s", owner, needle), messageSearch{owner: owner, needle: needle})
 	if err != nil {
 		return nil, err
 	}
@@ -148,14 +159,34 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 	return found.(*SearchMessagesResponse), nil
 }
 
+// messageSearch finds needle in every visible chat, or, for a non-empty owner, in the chats owner's sidebar lists.
 type messageSearch struct {
-	needle string
+	owner, needle string
 }
 
 func (work messageSearch) search(scanCtx context.Context, s *Server) (any, error) {
 	hits, mentions, err := s.sessions.SearchMessagesMentioning(scanCtx, work.needle, s.channels)
 	if err != nil {
 		return nil, fmt.Errorf("web message search: %w", err)
+	}
+
+	if work.owner != "" {
+		chats := make([]string, 0, len(hits))
+		for _, hit := range hits {
+			chats = append(chats, hit.ConversationID)
+		}
+
+		listed := make(map[string]bool)
+
+		for chat, err := range s.sessions.SidebarChats(scanCtx, work.owner, s.channels, chats) {
+			if err != nil {
+				return nil, fmt.Errorf("web message search: %w", err)
+			}
+
+			listed[chat.Session.Conversation.ID] = true
+		}
+
+		hits = slices.DeleteFunc(hits, func(hit backend.MessageSearchHit) bool { return !listed[hit.ConversationID] })
 	}
 
 	return &SearchMessagesResponse{Matches: messageMatches(hits), TagIds: backend.MentionedIDs(hits, mentions)}, nil
@@ -177,8 +208,7 @@ func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequ
 		scope = backend.SearchMessages
 	}
 
-	// A leading space keeps this key apart from SearchMessages' trimmed needles.
-	found, err := s.sharedSearch(ctx, fmt.Sprintf(" %d %q %s", scope, username, query), sessionSearch{username: username, query: query, scope: scope})
+	found, err := s.sharedSearch(ctx, fmt.Sprintf("sessions %d %q %s", scope, username, query), sessionSearch{username: username, query: query, scope: scope})
 	if err != nil {
 		return nil, err
 	}
@@ -221,8 +251,7 @@ func (s *Server) board(ctx context.Context, request *BoardRequest) (*BoardRespon
 		work.dashboards = append(work.dashboards, dashboard.Lanes)
 	}
 
-	// A leading space and a letter keep this key apart from the session and message searches' keys.
-	found, err := s.sharedSearch(ctx, fmt.Sprintf(" board %q %q %q", username, request.SpaceId, work.dashboards), work)
+	found, err := s.sharedSearch(ctx, fmt.Sprintf("board %q %q %q", username, request.SpaceId, work.dashboards), work)
 	if err != nil {
 		return nil, err
 	}
@@ -275,8 +304,8 @@ type searchWork interface {
 }
 
 // sharedSearch runs search once for the callers waiting on key and stops it only
-// when all of them stop waiting. All authenticated Web callers share the same
-// humanConversation visibility set.
+// when all of them stop waiting. A key names its caller wherever the result
+// differs by person.
 func (s *Server) sharedSearch(ctx context.Context, key string, work searchWork) (any, error) {
 	s.searchMu.Lock()
 	scanCtx := ctx
@@ -356,6 +385,10 @@ func (s *Server) slackNames(ctx context.Context, request *SlackNamesRequest) (*S
 
 func (s *Server) handoff(ctx context.Context, request *HandoffRequest) (*HandoffResponse, error) {
 	if err := s.visibleConversation(ctx, request.Id); err != nil {
+		return nil, err
+	}
+
+	if err := s.turnFeedable(ctx, request.Id, false); err != nil {
 		return nil, err
 	}
 

@@ -113,6 +113,12 @@ An easy agent's `mcp: {<server>: [read]}` or `[read, write]` needs that group in
 tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --argjson r '["get_*","list_*"]' --argjson w '["create_*"]' '.mcp_servers.demo.tools = {read: $r, write: $w}' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
 ```
 
+`permissions` maps a Tailscale login to the list of Web space names it may use, such as `{"contractor@example.com": ["Support", "Ops"]}`. A listed login sees only those spaces, their sessions, and the agents whose `space:` names one of them; logins not listed keep full access. Logins and space names match ignoring case. A blank login, one that starts or ends with spaces, the same login twice ignoring case, an empty space list, or a blank or space-padded space name fail config loading, so reuse an existing key's spelling. It takes effect on restart. Agents act with their own permissions: tell the human when an agent of that space has the session tools, a host shell, this skill, `sudo`, or `task` into other spaces, because it can reach beyond the space for whoever prompts it. For example:
+
+```bash
+tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --arg l "contractor@example.com" --arg s "Support" '.permissions[$l] = ((.permissions[$l] // []) + [$s] | unique)' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
+```
+
 Use `jq` operations for arrays and object updates instead of rewriting large sections by hand.
 
 If multiple related config changes belong together, prefer a single `jq` filter that performs all of them in one pass.

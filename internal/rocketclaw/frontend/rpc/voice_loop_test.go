@@ -12,11 +12,13 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc/metadata"
 )
 
 // pipeListener hands net.Pipe ends to an http.Server, so a gorilla Upgrader can
@@ -90,7 +92,10 @@ func startVoiceLoop(t *testing.T, auth string, engine *mockBackend, stream *mock
 	conn, err := voiceDial(t.Context(), dialect.sideband("call"), nil)
 	require.NoError(t, err)
 
-	call := &voiceCall{server: &Server{backend: engine}, dialect: dialect, id: "call", conn: conn, stream: stream, conversationID: "chat", principal: "alice", username: "alice@example.com"}
+	stream.ContextFunc = func() context.Context {
+		return metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-tailnet-login-bin", "alice@example.com", "rocketclaw-tailnet-name-bin", "alice"))
+	}
+	call := &voiceCall{server: &Server{backend: engine, cfg: new(config.LockedConfig)}, dialect: dialect, id: "call", conn: conn, stream: stream, conversationID: "chat", principal: "alice", username: "alice@example.com"}
 	ctx, cancel := context.WithCancelCause(t.Context())
 
 	calls, groupCtx := errgroup.WithContext(ctx)

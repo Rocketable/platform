@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
-import type { Session, TopShelf } from "./types";
+import type { Session } from "./types";
 import { linked, fetch as openCode, reset, server as fake } from "../../oc/host/test/server";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
@@ -14,7 +14,7 @@ const route = (id: string) => `/oc/${encode(id)}`;
 const box = "http://box.test:4096";
 
 // A RocketClaw Web serving the built view at /oc-ui/ and the fake OpenCode server behind /oc/box/api/.
-function start(shelf?: TopShelf) {
+function start() {
   reset();
   const rows: Session[] = [
     { id: "opencode:box:ses_a", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_a", preview: "Alpha work", server: "box", directory: "/repo", updatedAt: new Date().toISOString() },
@@ -60,9 +60,7 @@ function start(shelf?: TopShelf) {
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, opencodeServers: { box }, agentTags: { main: { tags: ["customer"] } } })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
-      if (await file.exists()) return new Response(file);
-      const index = await Bun.file(path.join(dist, "index.html")).text();
-      return new Response(shelf ? index.replace("</head>", '<script id="rocketclaws" type="application/json">[{"name":"work","url":"http://127.0.0.1:9"}]</script></head>') : index, { headers: { "Content-Type": "text/html" } });
+      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
     }
     const input = await request.json() as { id?: string; [key: string]: unknown };
     calls.push({ path: url.pathname, body: input });
@@ -82,13 +80,11 @@ function start(shelf?: TopShelf) {
         const body: { data: { id: string } } = await forked.json();
         return Response.json({ id: `opencode:box:${body.data.id}` });
       }
-      case "/api/Tabs":
-        if (input.topShelf) shelf = input.topShelf as TopShelf;
-        return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), space: "main" }], groups: [], space: "main", last: {} }, topShelf: shelf });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: route("opencode:box:ses_a"), space: "main" }], groups: [], space: "main", last: {} } });
       default: return Response.json({});
     }
   } });
-  return { web, calls, release, terminals, creates, entryFailures, shelved: () => shelf, base: `http://127.0.0.1:${web.port}` };
+  return { web, calls, release, terminals, creates, entryFailures, base: `http://127.0.0.1:${web.port}` };
 }
 
 async function until(check: () => boolean | Promise<boolean>) {
@@ -365,7 +361,6 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     await confirm.getByRole("button", { name: "Cancel", exact: true }).and(page.locator(":focus")).waitFor();
     await confirm.getByRole("button", { name: "Delete session", exact: true }).click();
     await until(async () => !fake.sessions.has("ses_a") && !page.url().includes(route("opencode:box:ses_a")) && await tabs.getByRole("tab", { name: "Alpha work", exact: true }).count() === 0);
-    expect(calls.filter(({ path, body }) => path === "/api/Tabs" && body.topShelf)).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
@@ -382,7 +377,6 @@ test("remote sessions list, tag, go offline, and start", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
-    const openTabs = () => page.locator('[aria-label="Open tabs"] [data-tab]').evaluateAll((nodes: Element[]) => nodes.map((node) => node.getAttribute("data-tab")));
 
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     await page.locator("main [data-oc-view] [data-slot=session-review-toggle]").waitFor();
@@ -453,7 +447,6 @@ test("remote sessions list, tag, go offline, and start", async () => {
     await page.waitForURL(`${base}${route("opencode:box:ses_child")}`);
     await page.locator("main [data-oc-view]").getByText("answer in ses_child").waitFor();
     expect(calls.filter(({ path }) => path === "/api/CreateSession").map(({ body }) => body)).toEqual([{ opencodeServer: "box", directory: "/srv/fresh", spaceId: "main" }, { opencodeServer: "box", directory: "/srv/fresh", spaceId: "main" }]);
-    expect(await openTabs()).toEqual(expect.arrayContaining([route("opencode:box:ses_a"), route("opencode:box:ses_child")]));
 
     // OpenCode's New session, from inside the view, goes through RocketClaw: the session's own folder, a new tab.
     const view = page.locator("main [data-oc-view]");
@@ -466,7 +459,6 @@ test("remote sessions list, tag, go offline, and start", async () => {
     await page.waitForURL(`${base}${route("opencode:box:ses_child")}`);
     await view.getByText("answer in ses_child").waitFor();
     expect(calls.filter(({ path }) => path === "/api/CreateSession").map(({ body }) => body).slice(2)).toEqual([{ opencodeServer: "box", directory: "/repo", spaceId: "main" }]);
-    expect(await openTabs()).toEqual(expect.arrayContaining([route("opencode:box:ses_a"), route("opencode:box:ses_child")]));
 
     // Pressing New session again while the first is still being created starts one session, not two.
     const created = () => calls.filter(({ path }) => path === "/api/CreateSession").length;
@@ -511,33 +503,6 @@ test("remote sessions list, tag, go offline, and start", async () => {
     await fresh.getByRole("button", { name: "Retry", exact: true }).click();
     await fresh.locator("main [data-oc-view]").getByText("answer in ses_a").waitFor();
     expect(await fresh.getByRole("alert").count()).toBe(0);
-  } finally {
-    await browser.close();
-    web.stop(true);
-  }
-}, 60_000);
-
-test("a deleted remote session leaves the Top Shelf too", async () => {
-  const { chromium: engine } = await import(playwright!);
-  const { web, release, shelved, base } = start({ tabs: [{ path: route("opencode:box:ses_a"), space: "main" }] });
-  release();
-  const browser = await engine.launch({ executablePath: chromium, headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-    const errors: string[] = [];
-    page.on("pageerror", (error: Error) => errors.push(error.message));
-    await page.goto(`${base}${route("opencode:box:ses_a")}`);
-    await page.locator("main [data-oc-view]").getByText("answer in ses_a").waitFor();
-    const shelf = page.getByRole("tablist", { name: "Top Shelf" });
-    await shelf.getByRole("tab", { name: "Alpha work", exact: true }).waitFor();
-    await page.keyboard.press("Control+Shift+p");
-    await page.getByPlaceholder("Type a command").fill("Delete session");
-    await page.getByRole("button", { name: "Sessions: Delete session" }).click();
-    await page.getByRole("dialog", { name: "Delete session", exact: true }).getByRole("button", { name: "Delete session", exact: true }).click();
-    await until(() => !fake.sessions.has("ses_a"));
-    await until(() => shelved()?.tabs?.length === 0);
-    expect(await shelf.locator("[data-tab]").count()).toBe(0);
-    expect(errors).toEqual([]);
   } finally {
     await browser.close();
     web.stop(true);

@@ -68,7 +68,7 @@ func (u *proxyUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func startProxyTestRPC(t *testing.T, upstream string) http.Handler {
 	t.Helper()
 
-	cfg := &config.Config{}
+	cfg := &config.Config{Permissions: map[string][]string{"bob": {"Ops"}}}
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
@@ -137,6 +137,7 @@ func TestOpenCodeProxy(t *testing.T) {
 	before := fake.hits
 
 	assert.Equal(t, http.StatusUnauthorized, serve(http.MethodGet, "/oc/box/api/session", "192.0.2.99:5000", nil).Code, "a caller the Web does not admit")
+	assert.Equal(t, http.StatusForbidden, serve(http.MethodGet, "/oc/box/api/session", "192.0.2.2:5000", nil).Code, "a person limited to spaces")
 	assert.Equal(t, http.StatusNotFound, serve(http.MethodGet, "/oc/nope/api/session", "192.0.2.10:5000", nil).Code, "a server that is not configured")
 	assert.NotEqual(t, "opencode", serve(http.MethodGet, "/oc/box/other", "192.0.2.10:5000", nil).Body.String(), "only the API is proxied")
 

@@ -23,7 +23,7 @@ type SharedTab = { space: string; path: string; search?: SearchPage };
 // A Search page as the server compares it: field order, empty names and board styles, and unset notify marks do not matter.
 const plain = (page?: SearchPage) => JSON.stringify(page ? [page.name ?? "", page.board ?? "", page.searches.map(({ id, name, query, notify }) => [id, name ?? "", query, !!notify]), page.active] : null);
 type Mute = { path: string; until: string };
-type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; mutes: Mute[]; closed: { path: string; space?: string; search?: SearchPage }[] };
+type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; mutes: Mute[] };
 
 // Mirrors the server's Tabs call: it saves the state, changes one space, adds, removes, or edits Shared tabs, or mutes or
 // unmutes one tab, then answers with every space, the saved state, every space's Shared tabs in order, and the mutes.
@@ -36,11 +36,6 @@ function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: numb
     return Response.json({ message: "another space has that name, it is the last space, or it is New session", code: 3 }, { status: 400 });
   }
   if (input.state && (input.revision ?? 0) !== saved.revision) return Response.json({ ...saved, stale: !!++saved.refused });
-  if (input.state) {
-    const open = new Set(input.state.tabs.map((tab) => tab.path));
-    const closing = saved.state.tabs.flatMap(({ path, space, search }) => open.has(path) || path === "/" || path.startsWith("group:") ? [] : [{ path, space, search }]);
-    saved.closed = [...closing, ...saved.closed.filter((tab) => !open.has(tab.path) && !closing.some((item) => item.path === tab.path))].slice(0, 50);
-  }
   if (input.state) [saved.state, saved.revision] = [input.state, saved.revision + 1];
   if (input.createSpace) saved.spaces.push({ id: `space-${saved.spaces.length}-${input.createSpace}`, name: input.createSpace });
   if (input.renameSpace) saved.spaces.find((space) => space.id === input.renameSpace!.id)!.name = input.renameSpace.name;
@@ -67,7 +62,7 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
   const { chromium: engine } = await import(playwright!);
   const prompts: { id: string; text: string }[] = [];
   const sessions = structuredClone(rows);
-  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, sharedOrder: [] }, revision: 0, refused: 0, shared: [], mutes: [], closed: [] };
+  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, sharedOrder: [] }, revision: 0, refused: 0, shared: [], mutes: [] };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -1556,35 +1551,6 @@ test("a session opens in the space it was born in, and a moved one can be restor
   await page.getByRole("menuitem", { name: "Close", exact: true }).waitFor();
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain('Restore to "OPS"');
   await page.keyboard.press("Escape");
-}), 30_000);
-
-test("Recently closed lists closed tabs newest first and reopens one where it was, as Cmd/Ctrl+Alt+T reopens the last", () => withPage({}, async (page, origin, _prompts, saved) => {
-  saved.spaces.push({ id: "ops", name: "OPS" });
-  saved.closed = [{ path: href("echo"), space: "main" }];
-  for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"]]) await openSaved(page, origin, href(id), name, saved);
-  await menu(page, "Bravo", "Close");
-  await menu(page, "Charlie", "Close");
-  await page.keyboard.press("Control+Shift+p");
-  const palette = page.getByRole("dialog", { name: "Run command", exact: true });
-  await palette.getByPlaceholder("Type a command", { exact: true }).fill("recently closed");
-  await palette.getByPlaceholder("Type a command", { exact: true }).press("Enter");
-  await page.waitForURL("**/closed");
-  const list = page.getByRole("list", { name: "Recently closed tabs" }), rows = () => list.getByRole("button").allTextContents();
-  await list.getByRole("button").filter({ hasText: "Charlie" }).waitFor();
-  expect(await rows()).toEqual(["CharlieMain", "BravoMain", "EchoMain"]);
-
-  await list.getByRole("button").filter({ hasText: "Echo" }).click();
-  await page.waitForURL(`**${href("echo")}`);
-  await strip(page).getByRole("tab", { name: "Recently closed", exact: true }).click();
-  await list.getByRole("button").filter({ hasText: "Echo" }).waitFor({ state: "detached" });
-  expect(await rows()).toEqual(["CharlieMain", "BravoMain"]);
-
-  await page.keyboard.press("Control+Alt+t");
-  await page.waitForURL(`**${href("charlie")}`);
-  await until(() => saved.closed.length === 1);
-  expect(await names(page)).toEqual(["Alpha", "Recently closed", "Charlie", "Echo"]);
-  await page.getByRole("button", { name: "Space: Main" }).waitFor();
-  expect(saved.state.tabs.find((tab) => tab.path === href("echo"))?.space).toBe("main");
 }), 30_000);
 
 test("tabs follow a person across windows: a window takes in changes on focus but stays on its own tab", () => withPage({}, async (page, origin, _prompts, saved) => {

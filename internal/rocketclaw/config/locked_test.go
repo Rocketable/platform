@@ -18,6 +18,7 @@ func TestLockedConfig(t *testing.T) {
 		RocketClaws: map[string]RemoteRocketClawConfig{"work": {URL: "https://work.example.ts.net"}},
 		MCPServers:  map[string]MCPServerConfig{"tools": {Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}}},
 		Slack:       SlackConfig{Channels: []SlackChannelConfig{{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}}},
+		Permissions: map[string][]string{"alice": {"Ops"}},
 		Web:         WebConfig{Sentry: SentryConfig{TracesSampleRate: &rate}, Tsnet: &TsnetConfig{Hostname: "rocketclaw", Tags: []string{"tag:rocketclaw"}, Origin: "https://rocketclaw.example.ts.net"}},
 	}
 
@@ -33,6 +34,7 @@ func TestLockedConfig(t *testing.T) {
 		snapshot.Slack.Channels[0].Channel = "changed"
 		snapshot.Slack.Channels[0].Agents[0] = "changed"
 		snapshot.Slack.Channels[0].AllowedUserIDs[0] = "changed"
+		snapshot.Permissions["alice"][0] = "changed"
 		*snapshot.Web.Sentry.TracesSampleRate = 1
 		snapshot.Web.Tsnet.Hostname, snapshot.Web.Tsnet.Tags[0] = "changed", "changed"
 	}
@@ -45,6 +47,7 @@ func TestLockedConfig(t *testing.T) {
 	require.Equal(t, "https://work.example.ts.net", snapshot.RocketClaws["work"].URL)
 	require.Equal(t, MCPServerConfig{Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}}, snapshot.MCPServers["tools"])
 	require.Equal(t, SlackChannelConfig{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}, snapshot.Slack.Channels[0])
+	require.Equal(t, map[string][]string{"alice": {"Ops"}}, snapshot.Permissions)
 	require.InDelta(t, 0.5, *snapshot.Web.Sentry.TracesSampleRate, 0.001)
 	require.Equal(t, &TsnetConfig{Hostname: "rocketclaw", Tags: []string{"tag:rocketclaw"}, Origin: "https://rocketclaw.example.ts.net"}, snapshot.Web.Tsnet)
 

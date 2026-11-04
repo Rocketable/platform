@@ -124,6 +124,10 @@ func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 		return err
 	}
 
+	if err := s.turnFeedable(ctx, id, false); err != nil {
+		return err
+	}
+
 	cfg := s.cfg.Clone()
 
 	thread, recorded, err := s.sessions.Thread(id)
@@ -447,6 +451,12 @@ func (c *voiceCall) handOff(ctx context.Context, event voiceEvent) error {
 	}
 
 	message += "</realtime_delegation>"
+
+	// The session can leave the caller's agents during the call; the lines said wait for a later hand-off.
+	if err := c.server.turnFeedable(c.stream.Context(), c.conversationID, true); err != nil {
+		_ = c.stream.SendMsg(&VoiceEvent{Event: &VoiceEvent_Notice{Notice: status.Convert(err).Message()}})
+		return nil
+	}
 
 	c.said, c.seen[event.id], c.latest = nil, true, event.id
 

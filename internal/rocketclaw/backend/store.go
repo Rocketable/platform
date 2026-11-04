@@ -1278,6 +1278,12 @@ func (s *SessionService) Stop() error {
 // Breaking iteration or cancelling ctx closes the database rows.
 func (s *SessionService) sidebarSessions(ctx context.Context, username string, chats []string) iter.Seq2[SidebarSession, error] {
 	return func(yield func(SidebarSession, error) bool) {
+		limit, err := s.SpaceLimitFor(ctx, s.definitions.Clone().PermittedSpaces(username))
+		if err != nil {
+			yield(SidebarSession{}, err)
+			return
+		}
+
 		rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+chatOriginSQL+shownChatsSQL+`,
 running AS (
     SELECT DISTINCT ON (conversation_id) conversation_id, inbound_json->>'Text' AS prompt, to_timestamp(created_at_unix_ns / 1e9) AS started_at
@@ -1384,6 +1390,10 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			if err := scanChatOrigin(rows, &row.Origin, dest...); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
+			}
+
+			if !limit.AllowsSession(&row) {
+				continue
 			}
 
 			row.Origin.ConversationID, row.Origin.CreatedBy, row.UnreadAt = row.Conversation.ID, ThreadCreator(row.Conversation.CreatedBy), unread.Time.UTC()

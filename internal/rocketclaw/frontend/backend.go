@@ -15,6 +15,7 @@ type Backend interface {
 	CreateConversation(context.Context, protocol.Conversation) error
 	ContinueRun(context.Context, string, string) error
 	SwitchConversationAgent(string, string) (bool, error)
+	RunningAgent(string) string
 	RunTurn(context.Context, *protocol.InboundMessage) error
 	StageRevert(context.Context, string, string) (string, string, error)
 	ClearRevert(context.Context, string) error

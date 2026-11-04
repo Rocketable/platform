@@ -69,6 +69,11 @@ func clone(source *Config) Config {
 		cfg.MCPServers[name] = server
 	}
 
+	cfg.Permissions = maps.Clone(cfg.Permissions)
+	for login, spaces := range cfg.Permissions {
+		cfg.Permissions[login] = slices.Clone(spaces)
+	}
+
 	cfg.Slack.Channels = slices.Clone(cfg.Slack.Channels)
 	for i := range cfg.Slack.Channels {
 		cfg.Slack.Channels[i].Agents = slices.Clone(cfg.Slack.Channels[i].Agents)

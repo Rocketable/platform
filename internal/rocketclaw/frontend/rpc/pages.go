@@ -28,7 +28,8 @@ func (s *Server) pageCall(ctx context.Context, request any) (any, error) {
 }
 
 func (s *Server) getPage(ctx context.Context, request *PageRequest) (*Page, error) {
-	if _, _, err := s.principal(ctx); err != nil {
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -53,7 +54,7 @@ func (s *Server) getPage(ctx context.Context, request *PageRequest) (*Page, erro
 
 	// A page belongs to an agent definition or to the OpenCode session that stored it, placed in its space.
 	agent, ok := agents.Items[request.Agent]
-	if !found || !ok && page.Conversation == "" {
+	if !found || !ok && page.Conversation == "" || !limit.AllowsSpaceName(cmp.Or(agent.Space, page.Space)) {
 		return nil, status.Errorf(codes.NotFound, "page %q not found", name)
 	}
 
@@ -61,7 +62,8 @@ func (s *Server) getPage(ctx context.Context, request *PageRequest) (*Page, erro
 }
 
 func (s *Server) listPages(ctx context.Context) (*ListPagesResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -79,7 +81,7 @@ func (s *Server) listPages(ctx context.Context) (*ListPagesResponse, error) {
 
 	for i := range pages {
 		page := &pages[i]
-		if agent, ok := agents.Items[page.Agent]; (ok || page.Space != "") && page.Kind == backend.PageFile && page.ContentType == "text/html" {
+		if agent, ok := agents.Items[page.Agent]; (ok || page.Space != "") && page.Kind == backend.PageFile && page.ContentType == "text/html" && limit.AllowsSpaceName(cmp.Or(agent.Space, page.Space)) {
 			response.Pages = append(response.Pages, &PageEntry{Agent: page.Agent, Space: cmp.Or(agent.Space, page.Space), Path: page.Name})
 		}
 	}

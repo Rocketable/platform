@@ -436,6 +436,16 @@ func (s *SessionService) SearchSessions(ctx context.Context, username, query str
 		}
 	}
 
+	if s.definitions.Clone().PermittedSpaces(username) != nil {
+		search.Principals = nil
+		for i := range rows {
+			search.Principals = append(search.Principals, principals[rows[i].Conversation.ID]...)
+		}
+
+		slices.Sort(search.Principals)
+		search.Principals = slices.Compact(search.Principals)
+	}
+
 	agents, spaces, err := s.searchDefinitions(ctx, search.Terms)
 	if err != nil {
 		return nil, err

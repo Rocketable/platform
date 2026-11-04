@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -15,13 +16,28 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
+// tabs saves the caller's tab state, changes one space, adds, removes, or edits Shared tabs, or mutes or
+// unmutes one session tab for the caller, then returns every space, the caller's saved state, every Shared
+// tab, and the caller's live mutes. New session and sessions people may not open are never shared or muted.
 func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse, error) {
 	username, _, err := s.principal(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	saved, refused, unshared, err := s.changeTabs(ctx, username, request)
+	names := s.cfg.Clone().PermittedSpaces(username)
+	if names != nil {
+		if err := s.sessions.CreateLimitSpaces(ctx, names); err != nil {
+			return nil, fmt.Errorf("web tabs: %w", err)
+		}
+	}
+
+	limit, err := s.sessions.SpaceLimitFor(ctx, names)
+	if err != nil {
+		return nil, fmt.Errorf("web tabs: %w", err)
+	}
+
+	saved, refused, unshared, err := s.changeTabs(ctx, username, limit, request)
 	if errors.Is(err, backend.ErrSpaceRejected) {
 		err = status.Error(codes.InvalidArgument, backend.ErrSpaceRejected.Error())
 	}
@@ -33,7 +49,6 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		mutes    []backend.TabMute
 		shelf    []byte
 		state    backend.TabState
-		closed   []backend.Tab
 		response = &TabsResponse{Stale: (request.State != nil && !saved) || refused}
 	)
 
@@ -57,17 +72,9 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		shelf, err = s.sessions.TopShelf(ctx, username)
 	}
 
-	if err == nil {
-		closed, err = s.sessions.ClosedTabs(ctx, username)
-	}
-
 	if err == nil && shelf != nil {
 		response.TopShelf = &TopShelf{}
 		err = (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(shelf, response.TopShelf)
-	}
-
-	if err == nil && response.TopShelf != nil {
-		response.TopShelf.Tabs, err = s.liveShelfTabs(ctx, response.TopShelf.Tabs)
 	}
 
 	if err == nil && !saved {
@@ -79,15 +86,11 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	}
 
 	if err == nil {
-		response.Shared, err = sharedTabs(shared)
+		response.Shared, err = sharedTabs(slices.DeleteFunc(shared, func(tab backend.SharedTab) bool { return !limit.AllowsSpaceID(tab.Space) }))
 	}
 
 	if err == nil {
 		response.Unshared, err = searchPage(unshared)
-	}
-
-	if err == nil {
-		response.Closed, err = webTabs(closed)
 	}
 
 	if err != nil {
@@ -95,7 +98,9 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	}
 
 	for _, space := range spaces {
-		response.Spaces = append(response.Spaces, &Space{Id: space.ID, Name: space.Name})
+		if limit.AllowsSpaceID(space.ID) {
+			response.Spaces = append(response.Spaces, &Space{Id: space.ID, Name: space.Name})
+		}
 	}
 
 	response.Mutes = tabMutes(mutes)
@@ -106,10 +111,16 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 // changeTabs makes request's one change for username. It reports whether a save was made from the saved revision,
 // whether an edit of a Shared Search page was refused because the page changed since the edit's base, and the page a
 // Search tab taken out of Shared held.
-func (s *Server) changeTabs(ctx context.Context, username string, request *TabsRequest) (saved, refused bool, unshared []byte, err error) {
+func (s *Server) changeTabs(ctx context.Context, username string, limit backend.SpaceLimit, request *TabsRequest) (saved, refused bool, unshared []byte, err error) {
+	shared := cmp.Or(request.Share, request.EditShared, request.Unshare)
+
 	switch {
 	case request.State != nil:
 		saved, err = s.sessions.SaveTabState(ctx, username, savedTabState(request.State), request.Revision)
+	case limit.Limited() && (request.CreateSpace != "" || request.RenameSpace != nil || request.DeleteSpace != ""):
+		err = status.Error(codes.PermissionDenied, "people limited to spaces cannot create, rename, or delete spaces")
+	case shared != nil && !limit.AllowsSpaceID(shared.Space):
+		err = status.Error(codes.PermissionDenied, "this space is outside your spaces")
 	case request.CreateSpace != "":
 		err = s.sessions.CreateSpace(ctx, request.CreateSpace)
 	case request.RenameSpace != nil:
@@ -178,38 +189,6 @@ func (s *Server) muteTab(ctx context.Context, username string, mute *TabMute) er
 	return nil
 }
 
-func (s *Server) liveShelfTabs(ctx context.Context, tabs []*ShelfTab) ([]*ShelfTab, error) {
-	conversation := func(tab *ShelfTab) string {
-		if tab.Server != "" {
-			return ""
-		}
-
-		return backend.TabConversation(tab.Path)
-	}
-
-	var ids []string
-
-	for _, tab := range tabs {
-		if id := conversation(tab); id != "" {
-			ids = append(ids, id)
-		}
-	}
-
-	if len(ids) == 0 {
-		return tabs, nil
-	}
-
-	live, err := s.sessions.ExistingConversations(ctx, ids)
-	if err != nil {
-		return nil, fmt.Errorf("read top shelf sessions: %w", err)
-	}
-
-	return slices.DeleteFunc(tabs, func(tab *ShelfTab) bool {
-		id := conversation(tab)
-		return id != "" && !slices.Contains(live, id)
-	}), nil
-}
-
 // tabMutes is mutes as the Web reads them, with each snooze's end as an RFC 3339 time in UTC.
 func tabMutes(mutes []backend.TabMute) []*TabMute {
 	out := make([]*TabMute, 0, len(mutes))
@@ -244,21 +223,15 @@ func sharedTabs(shared []backend.SharedTab) ([]*SharedTab, error) {
 // tabState is the backend's saved state as the Web reads it.
 func tabState(state *backend.TabState) (out *TabState, err error) {
 	out = &TabState{Space: state.Space, Last: state.Last, SharedOrder: state.SharedOrder}
-	out.Tabs, err = webTabs(state.Tabs)
-
-	for _, group := range state.Groups {
-		out.Groups = append(out.Groups, &TabGroup{Id: group.ID, Name: group.Name, Color: group.Color, Collapsed: group.Collapsed})
-	}
-
-	return out, err
-}
-
-func webTabs(saved []backend.Tab) (out []*Tab, err error) {
-	for _, tab := range saved {
+	for _, tab := range state.Tabs {
 		page, errPage := searchPage(tab.Search)
 		err = errors.Join(err, errPage)
 
-		out = append(out, &Tab{Path: tab.Path, Group: tab.Group, Space: tab.Space, Search: page})
+		out.Tabs = append(out.Tabs, &Tab{Path: tab.Path, Group: tab.Group, Space: tab.Space, Search: page})
+	}
+
+	for _, group := range state.Groups {
+		out.Groups = append(out.Groups, &TabGroup{Id: group.ID, Name: group.Name, Color: group.Color, Collapsed: group.Collapsed})
 	}
 
 	return out, err

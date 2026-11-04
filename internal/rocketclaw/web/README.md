@@ -416,9 +416,7 @@ server and space. Opening one on its own server works like a Shared tab: it
 shows the page in its space with no tab, and a shelved Search page edits the
 shelf's copy unless the person has a tab of it there. One on another server is
 opened by entering that server's view in the tab's space. With remotes, a first
-load waits for the shelf, so reloading a shelved page adds no tab. Deleting a
-session from the Web takes it off the shelf, and the local server leaves its own
-sessions that no longer exist out of every reply, however they were deleted.
+load waits for the shelf, so reloading a shelved page adds no tab.
 
 The local server's protocol change reloads the page. A remote that never
 answered shows why it is unavailable, one that stopped answering shows it is
@@ -468,14 +466,6 @@ active tab.
   New session alone does not close. Closing with the × button or the menu moves
   keyboard focus to the selected tab. A page that is only in Shared has no close
   button, and Escape leaves it open.
-- **Recently closed.** The server keeps your last 50 closed tabs, newest first,
-  with the space each was in and a Search page's searches; New session is never
-  one. **Tabs: Recently closed** in the command palette opens the `/closed` page,
-  which lists them with their spaces. Choosing one reopens it in its space, or in
-  the current space when that space is gone, and Cmd/Ctrl+Alt+T (or **Tabs:
-  Reopen closed tab**) reopens the newest, in a remote OpenCode session too, whose
-  New terminal command has no default key for that reason. A reopened tab leaves the list, and so
-  does a deleted session's tab. A preview tab is never saved, so it never lists.
 - **Remote OpenCode sessions.** A remote session's tab shows OpenCode's own
   session view, copied into RocketClaw at `internal/rocketclaw/oc/` and mounted in
   the page with no frame. It reaches its server through the Web's
@@ -540,8 +530,9 @@ active tab.
   active tab, and activating any hidden tab, including with Cmd/Ctrl+[ and ],
   expands its group. Arrow keys skip hidden tabs. Headers report
   `aria-expanded`.
-- **Spaces.** Spaces are shared by everyone: the server keeps one list, oldest
-  first, starting with **Main**, and names are unique ignoring case. Every tab
+- **Spaces.** Spaces are shared by everyone except people limited to spaces
+  (below): the server keeps one list, oldest first, starting with **Main**, and
+  names are unique ignoring case. Every tab
   belongs to one space, and the strip shows only the current
   space's tabs. The space button at the top of the strip names the current
   space; its menu lists the spaces to switch to and offers **New space**,
@@ -576,6 +567,17 @@ active tab.
 - **Agent picker.** New session offers every agent. Once a session's agent has a
   space, its picker and `$agent` offer only agents with that space, ignoring case;
   when that leaves none the Slack channel allows, they offer all of those.
+- **People limited to spaces.** A person the config's `permissions` lists (see
+  [Space permissions](../../../README.md#space-permissions)) gets only their
+  spaces from the server: the space menu, **Move to space**, and Shared groups
+  show only those, and so do the session list, search, Dashboards, the agent
+  picker, the Cron page, and the Page Index. The space menu hides **New space**,
+  **Rename space**, and **Delete space** for them, because the server refuses
+  them. When another person switches a session to an agent outside their spaces,
+  the session stays open to them, a pending question shows no answer form, and
+  Send first switches the session to the agent the picker shows, one of theirs.
+  A tab they saved earlier for a session outside their spaces opens into a
+  refusal.
 - **Groups in spaces.** A group lives in one space. The tab menu offers only the
   current space's groups, and moving a tab to another space takes it out of its group.
   The group editor adds **Move group to "<space>"** for each other space: it
@@ -756,7 +758,8 @@ Strip Bay, Dispatch Console, Triage Census, Kanban, or Radar Scope; **List**
 shows its results again. A Dashboard's searches are its lanes. The server sorts the sessions
 of the space its tab sits in into them, each session once, in the first lane it
 matches; a session without a Birth Space counts in its agent's space, or in every
-space when its agent has none. The board follows the session list without a reload.
+space when its agent has none, except for people limited to spaces, who never see
+it. The board follows the session list without a reload.
 **Notify** marks the shown lane for notification: while a Dashboard is open in the
 current space, as your tab or in that space's Shared group, a session entering a
 marked lane raises a desktop notification titled "<Dashboard>: <lane>" with the
@@ -865,14 +868,14 @@ failed search shows an error with Retry, and the next keystroke also retries.
 Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
 **Sessions: New**, **Sessions: Search**, **New dashboard**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
 **List Agents**, **List Skills**, **Settings**, **Tabs: Previous**, **Tabs: Next**,
-**Tabs: Recently closed**, and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
-works (the desktop sidebar, not the narrow-screen drawer), and **Tabs: Reopen closed tab** while a tab is closed. In both palettes a command bound to a
+and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
+works (the desktop sidebar, not the narrow-screen drawer). In both palettes a command bound to a
 key shows it on the right of its row, OpenCode style: **⌘ Option N** on Mac or
 **Ctrl Alt N** elsewhere for **Sessions: New**, **⌘ [** and **⌘ ]** for the tab
-commands, **⌘ Option T** for reopening, and **⌘ B** for the sidebar toggle. Unbound commands have no shortcut
+commands, and **⌘ B** for the sidebar toggle. Unbound commands have no shortcut
 hint. **Help: Keyboard Shortcuts** opens the read-only `/shortcuts` page, which
 lists every shortcut from the same list: the palette keys, new session, tab
-stepping and reopening, the sidebar toggle, Escape on a page tab, and the message box's steer
+stepping, the sidebar toggle, Escape on a page tab, and the message box's steer
 and stash keys.
 Timeline detail levels are also available, from `Timeline: Messages only` through
 `Timeline: Everything`.

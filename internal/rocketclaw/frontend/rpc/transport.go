@@ -230,12 +230,22 @@ func (s *Server) identity(ctx context.Context) (*IdentityResponse, error) {
 		return nil, err
 	}
 
-	return &IdentityResponse{Username: username, Principal: principal, SandboxError: s.backend.SandboxError()}, nil
+	response := &IdentityResponse{Username: username, Principal: principal, SandboxError: s.backend.SandboxError()}
+	if s.cfg.Clone().PermittedSpaces(username) != nil {
+		response.Limited = new(true)
+	}
+
+	return response, nil
 }
 
 func (s *Server) reload(ctx context.Context, request *ReloadRequest) (*ReloadResponse, error) {
-	if _, _, err := s.principal(ctx); err != nil {
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil {
 		return nil, err
+	}
+
+	if limit.Limited() {
+		return nil, fmt.Errorf("web reload: %w", status.Error(codes.PermissionDenied, "people limited to spaces cannot reload"))
 	}
 
 	message, err := s.backend.Reload(request.Reason)

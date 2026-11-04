@@ -41,6 +41,8 @@ type Config struct {
 	AutoApproverModel  string                  `json:"auto_approver_model"`
 	Instrumentation    InstrumentationConfig   `json:"instrumentation"`
 	PostHog            PostHogConfig           `json:"posthog,omitzero"`
+	// Permissions maps a Tailscale login to the names of the spaces it is limited to in the Web.
+	Permissions map[string][]string `json:"permissions,omitempty"`
 }
 
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
@@ -454,7 +456,23 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.validatePermissions(); err != nil {
+		return err
+	}
+
 	return c.validateSlack()
+}
+
+// PermittedSpaces returns the names of the spaces permissions lists for login, matched ignoring
+// case, or nil when it lists no such login: then login is not limited to any space.
+func (c *Config) PermittedSpaces(login string) []string {
+	for listed, spaces := range c.Permissions {
+		if strings.EqualFold(listed, login) {
+			return spaces
+		}
+	}
+
+	return nil
 }
 
 func normalizeOpenAIModel(field, model string) (string, error) {
@@ -634,6 +652,29 @@ func (c *Config) validateRocketClaws() error {
 		if !httpsOrigin(origin) {
 			return fmt.Errorf("trusted_rocketclaws[%d]: must be an https origin with no path", i)
 		}
+	}
+
+	return nil
+}
+
+func (c *Config) validatePermissions() error {
+	var seen []string
+
+	for _, login := range slices.Sorted(maps.Keys(c.Permissions)) {
+		spaces := c.Permissions[login]
+
+		switch {
+		case login == "" || strings.TrimSpace(login) != login:
+			return fmt.Errorf("permissions[%q]: login must not be blank or start or end with spaces", login)
+		case slices.ContainsFunc(seen, func(other string) bool { return strings.EqualFold(other, login) }):
+			return fmt.Errorf("permissions[%q]: another entry has that login, ignoring case", login)
+		case len(spaces) == 0:
+			return fmt.Errorf("permissions[%q]: list at least one space", login)
+		case slices.ContainsFunc(spaces, func(space string) bool { return space == "" || strings.TrimSpace(space) != space }):
+			return fmt.Errorf("permissions[%q]: space names must not be blank or start or end with spaces", login)
+		}
+
+		seen = append(seen, login)
 	}
 
 	return nil
