@@ -162,10 +162,6 @@ func withCodeModeSystemPrompt(base string, modelTools, hosts map[string]looperTo
 }
 
 func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool) map[string]looperTool {
-	if agent == nil {
-		return nil
-	}
-
 	servers := visibleMCPServers(agent.Permission, f.mcpRegistry.Names())
 
 	if len(servers) == 0 && len(codeHosts) == 0 {
