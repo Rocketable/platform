@@ -3,6 +3,7 @@ package slack
 import (
 	"encoding/json"
 	"errors"
+	"unicode/utf8"
 )
 
 // Block Objects are also known as Composition Objects
@@ -93,13 +94,13 @@ func getBlockObjectType(obj map[string]any) string {
 	if t, ok := obj["type"].(string); ok {
 		return t
 	}
-	if _, ok := obj["confirm"].(string); ok {
+	if _, ok := obj["confirm"]; ok {
 		return "confirm"
 	}
-	if _, ok := obj["options"].(string); ok {
+	if _, ok := obj["options"]; ok {
 		return "option_group"
 	}
-	if _, ok := obj["text"].(string); ok {
+	if _, ok := obj["text"]; ok {
 		if _, ok := obj["value"].(string); ok {
 			return "option"
 		}
@@ -151,7 +152,7 @@ func (s TextBlockObject) Validate() error {
 	}
 
 	// https://api.slack.com/reference/block-kit/composition-objects#text__fields
-	if len(s.Text) > 3000 {
+	if utf8.RuneCountInString(s.Text) > 3000 {
 		return errors.New("text cannot be longer than 3000 characters")
 	}
 

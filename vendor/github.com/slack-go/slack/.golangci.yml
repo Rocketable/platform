@@ -5,11 +5,24 @@ run:
 linters:
   default: none
   enable:
+    - asasalint
+    - bidichk
+    - canonicalheader
+    - durationcheck
+    - errcheck
+    - errorlint
+    - gocheckcompilerdirectives
     - gocritic
     - gosec
     - govet
+    - ineffassign
+    - makezero
     - misspell
     - modernize
+    - nilnesserr
+    - predeclared
+    - testifylint
+    - thelper
     - unconvert
     - unused
   settings:
@@ -21,6 +34,10 @@ linters:
   exclusions:
     generated: lax
     rules:
+      # Apply errcheck to production code; legacy fixtures omit error checks.
+      - path: _test\.go$
+        linters:
+          - errcheck
       # Test fixtures contain placeholder credentials and local HTTP handlers.
       - path: _test\.go$
         linters:
@@ -37,6 +54,10 @@ linters:
 formatters:
   enable:
     - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/slack-go/slack
   exclusions:
     generated: lax
     warn-unused: true

@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"strconv"
 	"strings"
@@ -337,13 +338,6 @@ func GetUsersOptionLimit(n int) GetUsersOption {
 	}
 }
 
-// GetUsersOptionPresence include user presence
-func GetUsersOptionPresence(n bool) GetUsersOption {
-	return func(p *UserPagination) {
-		p.presence = n
-	}
-}
-
 // GetUsersOptionIncludeLocale sets whether users.list returns each user's locale.
 // GetUsers sends include_locale=true unless this sets it to false.
 func GetUsersOptionIncludeLocale(includeLocale bool) GetUsersOption {
@@ -385,7 +379,6 @@ type UserPagination struct {
 	Users         []User
 	Cursor        string
 	limit         int
-	presence      bool
 	includeLocale bool
 	teamId        string
 	complete      bool
@@ -394,7 +387,7 @@ type UserPagination struct {
 
 // Done checks if the pagination has completed
 func (UserPagination) Done(err error) bool {
-	return err == errPaginationComplete
+	return errors.Is(err, errPaginationComplete)
 }
 
 // Failure checks if pagination failed.
@@ -417,7 +410,6 @@ func (t UserPagination) Next(ctx context.Context) (_ UserPagination, err error) 
 
 	values := url.Values{
 		"limit":          {strconv.Itoa(t.limit)},
-		"presence":       {strconv.FormatBool(t.presence)},
 		"token":          {t.c.token},
 		"cursor":         {t.Cursor},
 		"team_id":        {t.teamId},
@@ -453,7 +445,7 @@ func (api *Client) GetUsersContext(ctx context.Context, options ...GetUsersOptio
 		p, err = p.Next(ctx)
 		if err == nil {
 			results = append(results, p.Users...)
-		} else if rateLimitedError, ok := err.(*RateLimitedError); ok {
+		} else if rateLimitedError, ok := errors.AsType[*RateLimitedError](err); ok {
 			select {
 			case <-ctx.Done():
 				err = ctx.Err()
@@ -484,23 +476,6 @@ func (api *Client) GetUserByEmailContext(ctx context.Context, email string) (*Us
 		return nil, err
 	}
 	return &response.User, nil
-}
-
-// SetUserAsActive marks the currently authenticated user as active.
-// For more information see the SetUserAsActiveContext documentation.
-func (api *Client) SetUserAsActive() error {
-	return api.SetUserAsActiveContext(context.Background())
-}
-
-// SetUserAsActiveContext marks the currently authenticated user as active with a custom context.
-// Slack API docs: https://api.slack.com/methods/users.setActive
-func (api *Client) SetUserAsActiveContext(ctx context.Context) (err error) {
-	values := url.Values{
-		"token": {api.token},
-	}
-
-	_, err = api.userRequest(ctx, "users.setActive", values)
-	return err
 }
 
 // SetUserPresence changes the currently authenticated user presence.
@@ -562,7 +537,7 @@ func (api *Client) SetUserPhotoContext(ctx context.Context, image string, params
 		values.Add("crop_x", strconv.Itoa(params.CropX))
 	}
 	if params.CropY != DEFAULT_USER_PHOTO_CROP_Y {
-		values.Add("crop_y", strconv.Itoa(params.CropX))
+		values.Add("crop_y", strconv.Itoa(params.CropY))
 	}
 	if params.CropW != DEFAULT_USER_PHOTO_CROP_W {
 		values.Add("crop_w", strconv.Itoa(params.CropW))
@@ -728,7 +703,7 @@ func (api *Client) SetUserCustomFieldsContext(ctx context.Context, userID string
 	}
 
 	response := &userResponseFull{}
-	if _, err := postForm(ctx, api.httpclient, APIURL+"users.profile.set", values, response, api); err != nil {
+	if err := api.postMethod(ctx, "users.profile.set", values, response); err != nil {
 		return err
 	}
 
@@ -847,7 +822,7 @@ func (api *Client) GetUserProfileContext(ctx context.Context, params *GetUserPro
 	}
 	resp := &getUserProfileResponse{}
 
-	err := api.postMethod(ctx, "users.profile.get", values, &resp)
+	err := api.postMethod(ctx, "users.profile.get", values, resp)
 	if err != nil {
 		return nil, err
 	}

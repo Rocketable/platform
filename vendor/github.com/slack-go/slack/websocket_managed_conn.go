@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/slack-go/slack/internal/backoff"
 	"github.com/slack-go/slack/internal/errorsx"
-	"github.com/slack-go/slack/internal/timex"
 )
 
 // UnmappedError represents error occurred when there is no mapping between given event name
@@ -155,19 +155,17 @@ func (rtm *RTM) connect(connectionCount int, useRTMStart bool) (*Info, *websocke
 		default:
 		}
 
-		switch actual := err.(type) {
-		case StatusCodeError:
+		if actual, ok := errors.AsType[StatusCodeError](err); ok {
 			if actual.Code == http.StatusNotFound {
 				rtm.Debugf("invalid auth when connecting with RTM: %s", err)
 				rtm.IncomingEvents <- RTMEvent{"invalid_auth", &InvalidAuthEvent{}}
 				return nil, nil, err
 			}
-		case *RateLimitedError:
+		} else if actual, ok := errors.AsType[*RateLimitedError](err); ok {
 			backoff = actual.RetryAfter
-		default:
 		}
 
-		backoff = timex.Max(backoff, boff.Duration())
+		backoff = max(0, backoff, boff.Duration())
 		// any other errors are treated as recoverable and we try again after
 		// sending the event along the IncomingEvents channel
 		rtm.IncomingEvents <- RTMEvent{"connection_error", &ConnectionErrorEvent{
@@ -186,7 +184,7 @@ func (rtm *RTM) connect(connectionCount int, useRTMStart bool) (*Info, *websocke
 		case <-time.After(backoff): // retry after the backoff.
 		case intentional := <-rtm.killChannel:
 			if intentional {
-				rtm.killConnection(intentional, ErrRTMDisconnected)
+				_ = rtm.killConnection(intentional, ErrRTMDisconnected)
 				return nil, nil, ErrRTMDisconnected
 			}
 		case <-rtm.disconnected:
@@ -225,8 +223,13 @@ func (rtm *RTM) startRTMAndDial(useRTMStart bool) (info *Info, _ *websocket.Conn
 
 	rtm.Debugf("Dialing to websocket on url %s", url)
 	// Only use HTTPS for connections to prevent MITM attacks on the connection.
-	upgradeHeader := http.Header{}
-	upgradeHeader.Add("Origin", "https://api.slack.com")
+	upgradeHeader := rtm.dialHeaders.Clone()
+	if upgradeHeader == nil {
+		upgradeHeader = http.Header{}
+	}
+	if upgradeHeader.Get("Origin") == "" {
+		upgradeHeader.Set("Origin", "https://api.slack.com")
+	}
 	dialer := websocket.DefaultDialer
 	if rtm.dialer != nil {
 		dialer = rtm.dialer
@@ -379,7 +382,16 @@ func (rtm *RTM) ping() error {
 // If the read from the websocket results in a fatal error, this function will return non-nil.
 func (rtm *RTM) receiveIncomingEvent(ctx context.Context, conn *websocket.Conn, events chan json.RawMessage) error {
 	event := json.RawMessage{}
-	err := conn.ReadJSON(&event)
+	// NextReader errors are permanent. Keep them separate from JSON errors,
+	// since an empty message also decodes as io.ErrUnexpectedEOF.
+	_, reader, readErr := conn.NextReader()
+	err := readErr
+	if readErr == nil {
+		err = json.NewDecoder(reader).Decode(&event)
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
+	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -390,10 +402,8 @@ func (rtm *RTM) receiveIncomingEvent(ctx context.Context, conn *websocket.Conn, 
 	}
 
 	switch {
-	case err == io.ErrUnexpectedEOF:
-		// EOF's don't seem to signify a failed connection so instead we ignore
-		// them here and detect a failed connection upon attempting to send a
-		// 'PING' message
+	case readErr == nil && errors.Is(err, io.ErrUnexpectedEOF):
+		// An empty or incomplete JSON frame need not signify a failed connection.
 
 		// trigger a 'PING' to detect potential websocket disconnect
 		select {
@@ -404,8 +414,7 @@ func (rtm *RTM) receiveIncomingEvent(ctx context.Context, conn *websocket.Conn, 
 			return ErrRTMDisconnected
 		}
 	case err != nil:
-		// All other errors from ReadJSON come from NextReader, and should
-		// kill the read loop and force a reconnect.
+		// Failed WebSocket reads and other JSON errors force a reconnect.
 		select {
 		case rtm.IncomingEvents <- RTMEvent{"incoming_error", &IncomingEventError{ErrorObj: err}}:
 		case <-ctx.Done():

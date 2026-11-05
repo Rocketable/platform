@@ -9,15 +9,9 @@ type sumtype struct {
 	TypeVal string `json:"type"`
 }
 
-// MarshalJSON implements the Marshaller interface for Blocks so that any JSON
-// marshalling is delegated and proper type determination can be made before marshal
+// MarshalJSON encodes the underlying block slice.
 func (b Blocks) MarshalJSON() ([]byte, error) {
-	bytes, err := json.Marshal(b.BlockSet)
-	if err != nil {
-		return nil, err
-	}
-
-	return bytes, nil
+	return json.Marshal(b.BlockSet)
 }
 
 // UnmarshalJSON implements the Unmarshaller interface for Blocks, so that any JSON
@@ -87,6 +81,8 @@ func (b *Blocks) UnmarshalJSON(data []byte) error {
 			block = &TaskCardBlock{}
 		case "alert":
 			block = &AlertBlock{}
+		case "auth_provider":
+			block = &AuthProviderBlock{}
 		case "plan":
 			block = &PlanBlock{}
 		case "card":
@@ -133,9 +129,14 @@ func (b *InputBlock) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
+	// Preserve compatibility with partial blocks and null input.
+	if len(a.Element) == 0 {
+		return nil
+	}
+
 	s := sumtype{}
 	if err := json.Unmarshal(a.Element, &s); err != nil {
-		return nil
+		return err
 	}
 
 	var e BlockElement
@@ -186,15 +187,9 @@ func (b *InputBlock) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// MarshalJSON implements the Marshaller interface for BlockElements so that any JSON
-// marshalling is delegated and proper type determination can be made before marshal
+// MarshalJSON encodes the underlying block element slice.
 func (b *BlockElements) MarshalJSON() ([]byte, error) {
-	bytes, err := json.Marshal(b.ElementSet)
-	if err != nil {
-		return nil, err
-	}
-
-	return bytes, nil
+	return json.Marshal(b.ElementSet)
 }
 
 // UnmarshalJSON implements the Unmarshaller interface for BlockElements, so that any JSON
@@ -280,15 +275,9 @@ func (b *BlockElements) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// MarshalJSON implements the Marshaller interface for Accessory so that any JSON
-// marshalling is delegated and proper type determination can be made before marshal
+// MarshalJSON encodes the selected accessory element.
 func (a *Accessory) MarshalJSON() ([]byte, error) {
-	bytes, err := json.Marshal(toBlockElement(a))
-	if err != nil {
-		return nil, err
-	}
-
-	return bytes, nil
+	return json.Marshal(toBlockElement(a))
 }
 
 // UnmarshalJSON implements the Unmarshaller interface for Accessory, so that any JSON
@@ -450,15 +439,9 @@ func toBlockElement(element *Accessory) BlockElement {
 	return nil
 }
 
-// MarshalJSON implements the Marshaller interface for ContextElements so that any JSON
-// marshalling is delegated and proper type determination can be made before marshal
+// MarshalJSON encodes the underlying context element slice.
 func (e *ContextElements) MarshalJSON() ([]byte, error) {
-	bytes, err := json.Marshal(e.Elements)
-	if err != nil {
-		return nil, err
-	}
-
-	return bytes, nil
+	return json.Marshal(e.Elements)
 }
 
 // UnmarshalJSON implements the Unmarshaller interface for ContextElements, so that any JSON

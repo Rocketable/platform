@@ -1,5 +1,57 @@
 # Changelog
 
+## [3.95.0](https://github.com/openai/openai-go/compare/v3.94.0...v3.95.0) (2026-11-05)
+
+
+### Features
+
+* **api:** add Australia, India, and Japan residency options ([#1218](https://github.com/openai/openai-go/issues/1218)) ([6d16502](https://github.com/openai/openai-go/commit/6d16502078401697dc2e830bea0a893071320706))
+* **api:** add GPT-6 Rosalind to the model catalog ([#1216](https://github.com/openai/openai-go/issues/1216)) ([a47bab2](https://github.com/openai/openai-go/commit/a47bab2d14b3f540ec75bf0058fb047cf2619e8d))
+* **api:** add image complexity and GIF and SVG output controls ([#1219](https://github.com/openai/openai-go/issues/1219)) ([6e7ade4](https://github.com/openai/openai-go/commit/6e7ade4c8ef4d07df93504b1bf16d435a4b389ea))
+
+## [3.94.0](https://github.com/openai/openai-go/compare/v3.93.0...v3.94.0) (2026-11-04)
+
+
+### Features
+
+* **api:** add project service tier settings ([#1212](https://github.com/openai/openai-go/issues/1212)) ([90fa868](https://github.com/openai/openai-go/commit/90fa868bcc4e769e0fb242222b3fa088e800b224))
+* **api:** add Responses cache-write usage details ([#1213](https://github.com/openai/openai-go/issues/1213)) ([d3c5a9a](https://github.com/openai/openai-go/commit/d3c5a9a1669c3999fc99ea568d1c33d5abb7dc6c))
+
+
+### Documentation
+
+* clarify generated-file ownership ([#1214](https://github.com/openai/openai-go/issues/1214)) ([709822f](https://github.com/openai/openai-go/commit/709822fc83b994e9cddf7d48cec2d36280feea38))
+
+
+### Build System
+
+* **deps:** bump github.com/Azure/azure-sdk-for-go/sdk/azcore in / ([#1096](https://github.com/openai/openai-go/issues/1096)) ([74ab0b2](https://github.com/openai/openai-go/commit/74ab0b2f65999a5d3b62199b4e39e519543cc328))
+
+## [3.93.0](https://github.com/openai/openai-go/compare/v3.92.0...v3.93.0) (2026-11-03)
+
+
+### Features
+
+* **api:** add workload identity providers and federation rules ([#1209](https://github.com/openai/openai-go/issues/1209)) ([6f36b01](https://github.com/openai/openai-go/commit/6f36b01a1f95584ba01debeaa7868d9b972fa338))
+
+## [3.92.0](https://github.com/openai/openai-go/compare/v3.91.1...v3.92.0) (2026-11-03)
+
+
+### Features
+
+* **api:** expand Live Responses delegation tools ([#1208](https://github.com/openai/openai-go/issues/1208)) ([b587c9d](https://github.com/openai/openai-go/commit/b587c9d74994245db466f20c8d5011bb61b662d7))
+* **realtime:** support typed existing-item references ([#1202](https://github.com/openai/openai-go/issues/1202)) ([355b804](https://github.com/openai/openai-go/commit/355b8040e4886d9a3124e9b1145343d23c3558e7))
+* **responses:** add opt-in WebSocket final response reconstruction ([#1197](https://github.com/openai/openai-go/issues/1197)) ([cdd7106](https://github.com/openai/openai-go/commit/cdd7106aba2c2b773a38ebe20f6478b50c2d219f))
+* **responses:** collect MCP argument progress ([#1198](https://github.com/openai/openai-go/issues/1198)) ([e54229a](https://github.com/openai/openai-go/commit/e54229af78b2cfa71a0f3de3b025c5d9b1503e1e))
+
+
+### Build System
+
+* **deps:** bump github.com/aws/aws-sdk-go-v2 in / ([#1204](https://github.com/openai/openai-go/issues/1204)) ([5a39fe8](https://github.com/openai/openai-go/commit/5a39fe8886edd8c00b1aff99eed7889c93e72358))
+* **deps:** bump github.com/aws/aws-sdk-go-v2/config in / ([#1205](https://github.com/openai/openai-go/issues/1205)) ([80ff174](https://github.com/openai/openai-go/commit/80ff174acd1a50b69042c75befc50e3d5ed3bdee))
+* **deps:** bump github.com/tidwall/gjson in / ([#1053](https://github.com/openai/openai-go/issues/1053)) ([ee3b8fd](https://github.com/openai/openai-go/commit/ee3b8fdd1e4b968a1cc55db7e7b700d06a8ae1bd))
+* **deps:** bump the codeql group with 2 updates ([#1207](https://github.com/openai/openai-go/issues/1207)) ([82b0e09](https://github.com/openai/openai-go/commit/82b0e0925500fdf933b07f0cea6171f0ff79ab63))
+
 ## [3.91.1](https://github.com/openai/openai-go/compare/v3.91.0...v3.91.1) (2026-11-01)
 
 

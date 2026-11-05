@@ -249,8 +249,6 @@ func (r *SocketmodeHandler) socketmodeDispatcher(evt *Event) bool {
 
 // Dispatch interactions to the registered middleware
 func (r *SocketmodeHandler) interactionDispatcher(evt *Event) bool {
-	var ishandled bool = false
-
 	interaction, ok := evt.Data.(slack.InteractionCallback)
 	if !ok {
 		r.Client.log.Printf("Ignored %+v\n", evt)
@@ -258,7 +256,7 @@ func (r *SocketmodeHandler) interactionDispatcher(evt *Event) bool {
 	}
 
 	// Level 1 - socketmode EventType
-	ishandled = r.socketmodeDispatcher(evt)
+	ishandled := r.socketmodeDispatcher(evt)
 
 	// Level 2 - interaction EventType
 	if handlers, ok := r.InteractionEventMap[interaction.Type]; ok {
@@ -305,7 +303,6 @@ func (r *SocketmodeHandler) interactionDispatcher(evt *Event) bool {
 
 // Dispatch eventAPI events to the registered middleware
 func (r *SocketmodeHandler) eventAPIDispatcher(evt *Event) bool {
-	var ishandled bool = false
 	eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
 	if !ok {
 		r.Client.log.Printf("Ignored %+v\n", evt)
@@ -313,9 +310,12 @@ func (r *SocketmodeHandler) eventAPIDispatcher(evt *Event) bool {
 	}
 
 	innerEventType := slackevents.EventsAPIType(eventsAPIEvent.InnerEvent.Type)
+	if innerEventType == "" {
+		innerEventType = slackevents.EventsAPIType(eventsAPIEvent.Type)
+	}
 
 	// Level 1 - socketmode EventType
-	ishandled = r.socketmodeDispatcher(evt)
+	ishandled := r.socketmodeDispatcher(evt)
 
 	// Level 2 - EventAPI EventType
 	if handlers, ok := r.EventApiMap[innerEventType]; ok {
@@ -332,7 +332,6 @@ func (r *SocketmodeHandler) eventAPIDispatcher(evt *Event) bool {
 
 // Dispatch SlashCommands events to the registered middleware
 func (r *SocketmodeHandler) slashCommandDispatcher(evt *Event) bool {
-	var ishandled bool = false
 	slashCommandEvent, ok := evt.Data.(slack.SlashCommand)
 	if !ok {
 		r.Client.log.Printf("Ignored %+v\n", evt)
@@ -340,7 +339,7 @@ func (r *SocketmodeHandler) slashCommandDispatcher(evt *Event) bool {
 	}
 
 	// Level 1 - socketmode EventType
-	ishandled = r.socketmodeDispatcher(evt)
+	ishandled := r.socketmodeDispatcher(evt)
 
 	// Level 2 - SlackCommand by name
 	if handler, ok := r.SlashCommandMap[slashCommandEvent.Command]; ok {
