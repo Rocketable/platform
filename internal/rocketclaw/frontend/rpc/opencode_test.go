@@ -23,6 +23,8 @@ import (
 )
 
 func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
+	t.Parallel()
+
 	var boundary string
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

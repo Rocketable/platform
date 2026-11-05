@@ -30,6 +30,8 @@ import (
 // local chats, is notified of its replies, and greys it while the remote is off; a declared remote that
 // never answers shows why. Both servers sit under one tailnet suffix, which the browser maps to this machine.
 func TestRemoteRocketClawRealBrowser(t *testing.T) {
+	t.Parallel()
+
 	const suffix = "tail1234.ts.net"
 
 	// serve starts a RocketClaw whose model always says reply, with agents beside its built-in ones, and returns its Web RPC
