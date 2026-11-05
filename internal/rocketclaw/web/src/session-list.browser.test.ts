@@ -2592,7 +2592,18 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(ctrl.attachmentPrompts.at(-1)?.delivery).toBe("QUEUE");
     expect(await attachmentPage.getByRole("region", { name: "Messages", exact: true }).getByRole("link", { name: "Download queued.bin", exact: true }).count()).toBe(0);
     expect(Buffer.from(uploadedFiles.at(-1)!.data).toString()).toBe("queue");
-    expect(await attachmentPage.locator("textarea").isEnabled()).toBe(true);
+    const queuedComposerEnabled = await attachmentPage.locator("textarea").isEnabled();
+    if (!queuedComposerEnabled) console.error("Queued attachment composer disabled after dispatch", await attachmentPage.evaluate(() => {
+      const textarea = document.querySelector("textarea");
+      return {
+        url: location.href, connected: textarea?.isConnected, disabled: textarea?.disabled,
+        disabledFieldset: textarea?.closest("fieldset[disabled]")?.tagName,
+        fieldsetClass: textarea?.closest("fieldset")?.className,
+        ariaDisabled: textarea?.closest("[aria-disabled]")?.getAttribute("aria-disabled"),
+        ariaBusy: textarea?.closest("[aria-busy]")?.getAttribute("aria-busy"),
+      };
+    }).catch((error: unknown) => ({ diagnosticError: String(error) })));
+    expect(queuedComposerEnabled).toBe(true);
     expect(await attachmentPage.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
     await attachmentPage.locator('input[type="file"]').setInputFiles({ name: "steer.bin", mimeType: "application/octet-stream", buffer: Buffer.from("steer") });
     ctrl.promptStarted = Promise.withResolvers();
