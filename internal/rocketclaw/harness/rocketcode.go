@@ -585,15 +585,10 @@ func validateAgentModels(agents Agents) error {
 }
 
 func printRuntimeDiagnostics(w io.Writer, activeAgent *Agent, tools map[string]looperTool, skills Skills, systemPrompt string) error {
-	agentName := "(none)"
-	if activeAgent != nil {
-		agentName = activeAgent.Name
-	}
-
 	toolNames := slices.Sorted(maps.Keys(tools))
 	skillNames := slices.Sorted(maps.Keys(skills.Items))
 
-	if _, err := fmt.Fprintf(w, "agent: %s\ntools: %s\nskills: %s\nsystem_prompt:\n---\n%s\n---\n", agentName, strings.Join(toolNames, ", "), strings.Join(skillNames, ", "), systemPrompt); err != nil {
+	if _, err := fmt.Fprintf(w, "agent: %s\ntools: %s\nskills: %s\nsystem_prompt:\n---\n%s\n---\n", activeAgent.Name, strings.Join(toolNames, ", "), strings.Join(skillNames, ", "), systemPrompt); err != nil {
 		return fmt.Errorf("write runtime diagnostics: %w", err)
 	}
 
