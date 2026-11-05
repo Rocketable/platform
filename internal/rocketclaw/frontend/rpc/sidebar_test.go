@@ -138,6 +138,8 @@ func BenchmarkSidebarFingerprints(b *testing.B) {
 }
 
 func TestSidebarSendFailures(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
@@ -190,6 +192,8 @@ func TestSidebarSendFailures(t *testing.T) {
 }
 
 func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
@@ -273,6 +277,8 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 // An External MCP chat's row carries its binding and when its work arrived: its last update while
 // no turn of it or its run waits or runs.
 func TestListSessionsExternalArrival(t *testing.T) {
+	t.Parallel()
+
 	server, ctx := sidebarChoicesFixture(t, 0)
 	require.NoError(t, server.sessions.RegisterExternalMCPConversation("ticket", "choice-00", &backend.ExternalMCPSessionState{Agent: "choice-00", PrivateConversationID: "private", ManagedConversationID: "mcp"}))
 	_, err := server.sessions.AppendEntryID(ctx, "mcp", &harness.SessionEntry{Timestamp: time.Unix(1, 0)})
@@ -294,6 +300,8 @@ func TestListSessionsExternalArrival(t *testing.T) {
 // A poll naming a listing the server still holds gets only the rows changed since and the sessions
 // removed since, so the browser keeps unchanged rows and drops removed ones.
 func TestListSessionsSendsChangesSince(t *testing.T) {
+	t.Parallel()
+
 	server, ctx := sidebarChoicesFixture(t, 3)
 	rows := make(map[string]*Session) // Each chat's last sent row.
 	list := func(ctx context.Context, since string) (sent []string, done *ListSessionsResponse) {
@@ -373,6 +381,8 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 
 // A refresh where nothing changed costs the same few bytes however many sessions there are.
 func TestQuietSessionRefreshSize(t *testing.T) {
+	t.Parallel()
+
 	server, ctx := sidebarChoicesFixture(t, 300)
 	list := func(since string) (size int, version string) {
 		require.NoError(t, server.listSessions(&ListSessionsRequest{Since: since}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {

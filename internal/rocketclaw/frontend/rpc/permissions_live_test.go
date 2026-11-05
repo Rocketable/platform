@@ -29,6 +29,8 @@ import (
 )
 
 func TestSpacePermissionsRealBrowser(t *testing.T) {
+	t.Parallel()
+
 	var (
 		mu       sync.Mutex
 		requests []string

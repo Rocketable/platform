@@ -24,6 +24,8 @@ import (
 
 // The bulk origin facts and History's per-conversation facts must decide the same origins.
 func TestChatOriginFactsMatchHistory(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
