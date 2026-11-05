@@ -302,11 +302,9 @@ type parseDiagnostic struct {
 
 type parseError struct {
 	category       parseCategory
-	message        string
-	line, column   int
 	likelyCause    string
 	recommendedFix string
-	err            error
+	err            syntax.Error
 }
 
 func wrapParseError(err error) error {
@@ -317,9 +315,6 @@ func wrapParseError(err error) error {
 
 	out := parseError{
 		category:       parseCategorySyntax,
-		message:        syn.Msg,
-		line:           int(syn.Pos.Line),
-		column:         int(syn.Pos.Col),
 		likelyCause:    "Starlark rejected the wrapper source",
 		recommendedFix: "Fix the Starlark syntax, then rerun. Failed wrapper output is not evidence.",
 		err:            syn,
@@ -357,9 +352,9 @@ func (e *parseError) Error() string {
 	raw, _ := json.Marshal(parseDiagnostic{
 		Phase:            "codemode_parse",
 		Category:         string(e.category),
-		Message:          e.message,
-		Line:             e.line,
-		Column:           e.column,
+		Message:          e.err.Msg,
+		Line:             int(e.err.Pos.Line),
+		Column:           int(e.err.Pos.Col),
 		ExecutionStarted: false,
 		LikelyCause:      e.likelyCause,
 		RecommendedFix:   e.recommendedFix,
