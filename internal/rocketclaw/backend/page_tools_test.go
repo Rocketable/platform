@@ -20,6 +20,8 @@ import (
 )
 
 func TestPageTools(t *testing.T) {
+	t.Parallel()
+
 	store := newTestSessionService(t)
 	threads := &threadBridgeManager{runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store}
 
