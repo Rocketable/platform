@@ -90,36 +90,29 @@ func (b *broker) close() {
 	b.wg.Wait()
 }
 
-// peerInExec checks the connecting process against the command's cgroup: reaching the socket is not proof.
-func (b *broker) peerInExec(conn *net.UnixConn) error {
+// peerInExec reports whether the connecting process is in the command's cgroup: reaching the socket is not proof.
+func (b *broker) peerInExec(conn *net.UnixConn) bool {
 	raw, err := conn.SyscallConn()
 	if err != nil {
-		return fmt.Errorf("peer: %w", err)
+		return false
 	}
 
 	var cred *unix.Ucred
 
 	errCred := raw.Control(func(fd uintptr) { cred, err = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED) })
-	if err := errors.Join(errCred, err); err != nil {
-		return fmt.Errorf("peer credentials: %w", err)
+	if errCred != nil || err != nil {
+		return false
 	}
 
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", cred.Pid))
-	if err != nil {
-		return fmt.Errorf("peer cgroup: %w", err)
-	}
 
-	if strings.TrimSpace(string(data)) != "0::"+b.cgroup {
-		return fmt.Errorf("peer pid %d is outside the command's cgroup", cred.Pid)
-	}
-
-	return nil
+	return err == nil && strings.TrimSpace(string(data)) == "0::"+b.cgroup
 }
 
 func (b *broker) handle(ctx context.Context, conn *net.UnixConn) {
 	w, r := wire.NewWriter(conn), wire.NewReader(conn)
 
-	if b.peerInExec(conn) != nil {
+	if !b.peerInExec(conn) {
 		return
 	}
 
