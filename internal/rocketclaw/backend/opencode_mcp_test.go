@@ -33,6 +33,8 @@ func (b basicAuthTransport) RoundTrip(request *http.Request) (*http.Response, er
 // An OpenCode session calls the bridge as its coding server, naming itself in _meta: its tools
 // act on its own RocketClaw session, a subagent's on its parent's, and pages need a space.
 func TestOpenCodeMCP(t *testing.T) {
+	t.Parallel()
+
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
 	fake := &fakeOpenCode{
