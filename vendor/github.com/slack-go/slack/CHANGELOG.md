@@ -7,6 +7,211 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-11-03
+
+Huge thank you to Michal Mazurek (@akfaew) for submitting a bunch of patches for this
+release.
+
+### Breaking changes — read before upgrading
+
+> [!WARNING]
+> **v0.34.0 includes breaking API, decoding, serialization, and event-dispatch changes.**
+>
+> **Your code may fail to compile. Code that still compiles may decode, serialize,
+> or route events differently. Malformed payloads can cause an entire Events API
+> event to be rejected.**
+>
+> Review every item below before upgrading, including interfaces, mocks, custom
+> event decoders, and stored payloads.
+
+#### 1. Retired user APIs have been removed
+
+- **`SetUserAsActive` and `SetUserAsActiveContext` are gone.** Remove these calls.
+  `SetUserPresence` still supports `away` and `auto`, but marking user as active is gone.
+- **`GetUsersOptionPresence` is gone.** Remove it from `GetUsers`, `GetUsersContext`,
+  and `GetUsersPaginated` calls. User-list requests no longer send the retired
+  `presence` parameter. Use `GetUserPresence` or `GetUserPresenceContext` for
+  individual presence checks.
+
+#### 2. Team-info method signatures have changed
+
+`GetTeamInfo`, `GetTeamInfoContext`, `GetOtherTeamInfo`, and
+`GetOtherTeamInfoContext` now accept `...GetTeamInfoOption`. **Update interfaces,
+mocks, and assigned function types to include the variadic parameter.** Existing
+direct calls remain valid.
+
+#### 3. Auth-provider blocks have a new concrete type and lose raw JSON
+
+> [!NOTE]
+> This is a brand new block. For now experimental as it doesn't yet appear in the slack
+> docs but is already part of their official node sdk.
+
+- **`auth_provider` blocks now decode as `*AuthProviderBlock`, replacing
+  `*UnknownBlock`.** Update type assertions and type switches.
+
+**An unchanged JSON round trip is no longer guaranteed.** Marshaling drops unknown
+fields, adds zero values for absent required fields, and can omit explicit nulls
+or empty optional values. Keep the original payload if you need to preserve its JSON.
+
+#### 4. Stricter decoding can reject whole events or manifests
+
+Values that were previously ignored or accepted can now return errors:
+
+- **Input blocks:** malformed input elements fail decoding of the input block and
+  its containing `Blocks`. Missing elements and JSON `null` input retain their
+  previous behavior.
+- **Auth-provider blocks:** malformed known fields, such as `"name":42`, fail
+  decoding of the containing `Blocks`.
+- **Messages:** malformed `display_as_bot` values, such as `"false"`, `0`, `[]`, or
+  `{}`, fail message decoding. Missing and `null` values remain accepted.
+  Marshaling now emits explicit `true` and `false` values that were previously
+  discarded.
+
+**A malformed message or block can cause `slackevents.ParseEvent` to reject the
+entire event, preventing its delivery to your handler.** Check error handling and
+any captured payloads you replay.
+
+#### 5. Positional struct literals no longer compile
+
+New fields in `Features`, `TeamInfo`, `Msg`, and `Tab` break positional literals for
+these types. **Use keyed literals with field names.** Existing keyed literals
+remain valid.
+
+#### 6. Built-in user-connection decoders take precedence
+
+The built-in `user_connection` and `user_connection_status_requested` decoders take
+precedence over custom entries in `slack.EventMapping`. **Register custom decoders
+for these events in `slackevents.EventsAPIInnerEventMapping`.**
+
+#### 7. Socket Mode dispatch changes for envelopes without inner events
+
+**Empty-string event handlers no longer receive these envelopes.** Register
+handlers by the outer event type, for example
+`HandleEvents(slackevents.AppRateLimited, handler)` for `app_rate_limited`.
+
+A matching outer-type handler can now suppress the default handler. Check
+applications that relied on the default handler receiving these envelopes.
+
+### Added
+
+- Add `GetCanvasContent` and `GetCanvasContentContext`, with optional Markdown or
+  HTML output. [Slack API reference](https://docs.slack.dev/reference/methods/canvases.getContent/).
+
+- Add `GetTeamInfoOptionIncludeSlackbotAvailability` and
+  `TeamInfo.SlackbotAvailability` for advisory workspace availability.
+  [Slack API reference](https://docs.slack.dev/reference/methods/team.info/).
+
+- Add `RequestUserConnectionAuth`, `BulkUpdateUserConnections`, their context
+  variants, and per-user bulk-update failures. Add `AuthProviderBlock`, the
+  `user_connection` and `user_connection_status_requested` events, and manifest
+  `features.user_connections`. The authentication APIs, status-requested event,
+  and manifest configuration follow the official Node SDK schemas; their standalone
+  reference pages were unavailable when added.
+  `AuthProviderBlock` support is experimental: `auth_provider` is not live in Slack
+  yet. This implementation uses the official Node SDK as a guide. Its schema and
+  behavior may change when Slack releases the block.
+  [Node SDK release](https://github.com/slackapi/node-slack-sdk/releases/tag/%40slack/web-api%408.3.0),
+  [auth provider schema](https://docs.slack.dev/tools/node-slack-sdk/reference/types/interfaces/AuthProviderBlock/),
+  [user connection event](https://docs.slack.dev/reference/events/user_connection/).
+
+- Configure RTM WebSocket handshake headers with `RTMOptionDialHeaders`.
+  Headers are copied and reused on reconnect; existing defaults remain unchanged.
+
+- Decode `data.file_id` on channel tabs as `Tab.Data.FileID`, so the tab that
+  shows a given canvas can be identified from `conversations.info`. Preserve
+  absent `data` and `file_id` fields when marshaling tabs.
+
+### Changed
+
+- Document the undocumented preference endpoints and authentication limits of
+  `GetUserPrefs`, `GetUserPrefsContext`, `MuteChat`, and `UnMuteChat`. The mute
+  helpers use the legacy `muted_channels` preference, which may differ from the
+  current client's notification settings.
+
+### Removed
+
+- **Breaking:** Remove `SetUserAsActive` and `SetUserAsActiveContext`, which called
+  the non-functional `users.setActive` endpoint. Remove these calls from clients;
+  `SetUserPresence` still supports `away` and `auto`, but neither forces a user active.
+  Slack retired this endpoint in 2018; see its
+  [retirement notice](https://docs.slack.dev/changelog/2018-01-presence-present-and-future/).
+
+- **Breaking:** Remove `GetUsersOptionPresence` and stop sending the retired
+  `presence` parameter on `users.list` requests. Remove that option from `GetUsers`,
+  `GetUsersContext`, and `GetUsersPaginated` calls. Use `GetUserPresence` or
+  `GetUserPresenceContext` when individual presence information is needed.
+  Slack retired these features in 2018; see its
+  [retirement notice](https://docs.slack.dev/changelog/2018-01-presence-present-and-future/).
+
+### Fixed
+
+- Remove the requested channel from the legacy muted-channel preference in
+  `UnMuteChat`. Skip updates when the channel is already unmuted, without panicking.
+
+- Honor `ListTeamsParameters.Limit` in `ListTeams` and `ListTeamsContext` requests.
+
+- Encode multiple user IDs as a comma-separated list in `MigrationExchange` requests.
+
+- Omit unset `TimestampTo` and `Limit` parameters in `ListRemoteFiles` and
+  `ListRemoteFilesContext`, so Slack can apply its defaults.
+
+- Preserve optional `display_as_bot` values in messages, including thread
+  broadcasts, as `Msg.DisplayAsBot`. Use a pointer to distinguish false from an
+  absent field. The remaining thread-broadcast fields already decode through
+  `slackevents.MessageEvent.Message`.
+  [Node SDK change](https://github.com/slackapi/node-slack-sdk/commit/e02e7feeb500bfde1f947401a639633e42ce2f91).
+
+- Route Events API envelopes without an inner event, such as `app_rate_limited`,
+  to handlers registered for the outer event type in Socket Mode.
+
+- Reject request timestamps so far in the future that the duration difference
+  overflows, instead of allowing them to pass the five-minute timestamp check.
+
+- Decode confirmation dialogs, options, and option groups in `BlockObjects`
+  using their documented object and array fields instead of silently dropping them.
+  [Slack composition objects](https://docs.slack.dev/reference/block-kit/composition-objects/).
+
+- Decode `internal_team_ids` in EKM original connected channel responses instead
+  of looking for `internal_team_ids_count`.
+  [Slack API reference](https://docs.slack.dev/reference/methods/admin.conversations.ekm.listOriginalConnectedChannelInfo/).
+
+- Honor the `Types` filter in `ListFiles` and `ListFilesContext` requests.
+  [Slack API reference](https://docs.slack.dev/reference/methods/files.list/).
+
+- Send the requested Y crop coordinate in user photo uploads.
+
+- Preserve the initial pagination state after failed conversations and stars
+  requests, so a rate-limited first page is retried instead of reporting an
+  empty successful result.
+
+- Return Slack API errors from starred-item pagination rather than silently
+  treating them as the end of the list.
+
+- Synchronize RTM connection-info reads with reconnect updates.
+
+- Reconnect RTM connections on permanent WebSocket read errors instead of
+  retrying until Gorilla WebSocket panics on a truncated stream. Continue
+  tolerating empty or incomplete JSON messages on healthy connections.
+
+- Deliver warnings from user-profile and event-authorization requests.
+
+- Avoid a nil-pointer panic when decoding a `null` conversation-kick response.
+
+- Honor the configured API endpoint in `SetUserCustomFields` and
+  `SetUserCustomFieldsContext`.
+
+- Preserve error causes in legacy admin helpers and Events API parsing, and
+  recognize wrapped rate-limit, pagination, and RTM errors.
+
+- Accept valid non-ASCII text in `TextBlockObject.Validate` by counting Unicode
+  code points for the 3000-character limit.
+
+- Return custom option errors from `FunctionCompleteSuccess` and
+  `FunctionCompleteSuccessContext` before sending a request.
+- Return decoding errors for malformed input elements from
+  `InputBlock.UnmarshalJSON` and `Blocks.UnmarshalJSON`. Missing elements and
+  JSON `null` input retain their previous decoding behavior.
+
 ## [0.33.0] - 2026-10-30
 
 ### Added
@@ -1005,7 +1210,8 @@ for details.
 [#1196]: https://github.com/slack-go/slack/issues/1196
 [#1547]: https://github.com/slack-go/slack/pull/1547
 
-[Unreleased]: https://github.com/slack-go/slack/compare/v0.33.0...HEAD
+[Unreleased]: https://github.com/slack-go/slack/compare/v0.34.0...HEAD
+[0.34.0]: https://github.com/slack-go/slack/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/slack-go/slack/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/slack-go/slack/compare/v0.31.0...v0.32.0
 [0.31.0]: https://github.com/slack-go/slack/compare/v0.30.1...v0.31.0

@@ -204,7 +204,7 @@ func New(token string, options ...Option) *Client {
 }
 
 // AuthTest tests if the user is able to do authenticated requests or not
-func (api *Client) AuthTest() (response *AuthTestResponse, error error) {
+func (api *Client) AuthTest() (response *AuthTestResponse, err error) {
 	return api.AuthTestContext(context.Background())
 }
 
@@ -224,14 +224,14 @@ func (api *Client) AuthTestContext(ctx context.Context) (response *AuthTestRespo
 // Debugf print a formatted debug line.
 func (api *Client) Debugf(format string, v ...any) {
 	if api.debug {
-		api.log.Output(2, fmt.Sprintf(format, v...))
+		_ = api.log.Output(2, fmt.Sprintf(format, v...))
 	}
 }
 
 // Debugln print a debug line.
 func (api *Client) Debugln(v ...any) {
 	if api.debug {
-		api.log.Output(2, fmt.Sprintln(v...))
+		_ = api.log.Output(2, fmt.Sprintln(v...))
 	}
 }
 

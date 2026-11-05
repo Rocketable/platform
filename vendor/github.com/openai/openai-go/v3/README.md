@@ -30,7 +30,7 @@ Or to pin an SDK version (see the Go compatibility note below):
 <!-- x-release-please-start-version -->
 
 ```sh
-go get -u 'github.com/openai/openai-go/v3@v3.91.1'
+go get -u 'github.com/openai/openai-go/v3@v3.95.0'
 ```
 
 <!-- x-release-please-end -->
@@ -588,7 +588,8 @@ if err != nil {
 defer conn.Abort()
 ```
 
-Use `Send` and `Recv` for typed commands and events. See the
+Use `Send` and `Recv` for typed commands and events, or `SendResponseCreate` to
+combine ordinary input items with references to existing session items. See the
 [Realtime and Translation guide](realtime/README.md) for event handling,
 connection ownership, and finishing a Translation session.
 

@@ -506,7 +506,7 @@ func MsgOptionPost() MsgOption {
 func MsgOptionPostEphemeral(userID string) MsgOption {
 	return func(config *sendConfig) error {
 		config.endpoint = config.apiurl + string(chatPostEphemeral)
-		MsgOptionUser(userID)(config)
+		_ = MsgOptionUser(userID)(config)
 		config.values.Del("ts")
 
 		return nil
@@ -991,7 +991,7 @@ func MsgOptionPostMessageParameters(params PostMessageParameters) MsgOption {
 		}
 
 		// never generates an error.
-		MsgOptionAsUser(params.AsUser)(config)
+		_ = MsgOptionAsUser(params.AsUser)(config)
 
 		if params.Parse != DEFAULT_MESSAGE_PARSE {
 			config.values.Set("parse", params.Parse)
@@ -1098,7 +1098,7 @@ func (api *Client) GetScheduledMessages(params *GetScheduledMessagesParameters) 
 }
 
 // GetScheduledMessagesContext returns the list of scheduled messages based on params with a custom context.
-// Slack API docs: https://api.slack.com/methods/chat.getScheduledMessages.list
+// Slack API docs: https://docs.slack.dev/reference/methods/chat.scheduledMessages.list
 func (api *Client) GetScheduledMessagesContext(ctx context.Context, params *GetScheduledMessagesParameters) (channels []ScheduledMessage, nextCursor string, err error) {
 	values := url.Values{
 		"token": {api.token},
