@@ -1201,7 +1201,22 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 			manager, _ = newTestBridgeManager(t, cfg, store, finals)
 			store.historyWorkers = manager
 			require.NoError(t, manager.StartActiveTurns(t.Context()))
+
 			require.Empty(t, requests, "redo and restart must not repeat stopped work")
+			defer func() {
+				if !t.Failed() {
+					return
+				}
+
+				t.Logf("shadow mutation restart: parent=parent child=%s buffered_requests=%d finals=%d database=%+v", childID, len(requests), len(finals), store.db.Stats())
+				// Bound diagnostic SQL, not the test's waits, so a busy pool cannot stall shutdown.
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				defer cancel()
+
+				rows, err := queryStrings(ctx, store.db, `SELECT format('turn id=%s conversation=%s phase=%s lane=%s outbound=%s', id, conversation_id, phase, takes_lane, outbound_json IS NOT NULL)
+FROM turns WHERE conversation_id IN ($1, $2) ORDER BY id`, "shadow mutation restart state", "parent", childID)
+				t.Logf("shadow mutation restart rows=%v query_error=%v", rows, err)
+			}()
 
 			parent, err = manager.recordedBridge(t.Context(), "parent")
 			require.NoError(t, err)
