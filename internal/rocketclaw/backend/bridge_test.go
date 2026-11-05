@@ -3721,14 +3721,12 @@ Request: $ARGUMENTS
 	require.NoError(t, err)
 	require.Empty(t, saved, "failed preparation must not append a replay turn")
 
-	var delivery errgroup.Group
-	delivery.Go(func() error { return publishTestFinal(t.Context(), bridge, msg, &result) })
+	require.NoError(t, publishTestFinal(t.Context(), bridge, msg, &result))
 	require.Equal(t, "original-input", readRocketCodeOutbound(t, bus).ConsumedID)
 	require.False(t, readRocketCodeOutbound(t, bus).Complete)
 	final := readRocketCodeOutbound(t, bus)
 	require.True(t, final.Complete)
 	require.Equal(t, result.text, final.Text)
-	require.NoError(t, delivery.Wait())
 
 	msg.Text = "next request"
 	_, err = runTestTurn(t.Context(), bridge, msg, "next-turn")
