@@ -52,8 +52,8 @@ func concurrencyBuiltins() starlark.StringDict {
 	return starlark.StringDict{
 		"gather":     starlark.NewBuiltin("gather", makeGather(slots)),
 		"map":        starlark.NewBuiltin("map", makeMap(slots)),
-		"race":       starlark.NewBuiltin("race", makeRace(slots, false)),
-		"race_first": starlark.NewBuiltin("race_first", makeRace(slots, true)),
+		"race":       starlark.NewBuiltin("race", makeRace(slots)),
+		"race_first": starlark.NewBuiltin("race_first", makeRace(slots)),
 	}
 }
 
@@ -101,19 +101,14 @@ func makeMap(slots *semaphore.Weighted) func(*starlark.Thread, *starlark.Builtin
 	}
 }
 
-func makeRace(slots *semaphore.Weighted, firstDone bool) func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error) {
+func makeRace(slots *semaphore.Weighted) func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error) {
 	return func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		callables, concurrency, err := unpackCallables(b.Name(), args, kwargs)
 		if err != nil {
 			return nil, err
 		}
 
-		op := concurrencyOpRace
-		if firstDone {
-			op = concurrencyOpRaceFirst
-		}
-
-		return runRace(thread, slots, op, concurrency, callables, firstDone)
+		return runRace(thread, slots, b.Name(), concurrency, callables)
 	}
 }
 
@@ -198,7 +193,6 @@ func releaseParentSlot(parent *starlark.Thread) func() {
 const (
 	concurrencyOpGather    = "gather"
 	concurrencyOpMap       = "map"
-	concurrencyOpRace      = "race"
 	concurrencyOpRaceFirst = "race_first"
 )
 
@@ -252,7 +246,7 @@ func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, co
 	return starlark.NewList(results), nil
 }
 
-func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, concurrency int, callables []starlark.Value, firstDone bool) (starlark.Value, error) {
+func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, concurrency int, callables []starlark.Value) (starlark.Value, error) {
 	if len(callables) == 0 {
 		return nil, errors.New("race requires at least one callable")
 	}
@@ -280,7 +274,7 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 			return
 		}
 
-		if firstDone || err == nil {
+		if op == concurrencyOpRaceFirst || err == nil {
 			settled = true
 			winner = value
 			errWin = err
