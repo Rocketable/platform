@@ -793,11 +793,14 @@ ON CONFLICT (username) DO UPDATE SET shelf = excluded.shelf`, username, string(s
 // they set themselves when hold is set, and ends their view of every other session. A conversationID naming no
 // conversation writes nothing.
 func (s *SessionService) ViewSession(ctx context.Context, username, conversationID string, hold bool) error {
+	// Consume the state upsert before locking tab rows, as SaveTabState does.
 	_, err := execState(ctx, s.db, "record session view", `WITH viewed AS (
     INSERT INTO web_tab_states (username, revision, viewing, viewed_at) SELECT $1, 0, conversation_id, now() FROM conversations WHERE conversation_id = $2
     ON CONFLICT (username) DO UPDATE SET viewing = excluded.viewing, viewed_at = excluded.viewed_at
+    RETURNING username
 )
-UPDATE web_tabs SET unread_at = NULL WHERE username = $1 AND conversation_id = $2 AND unread_at IS NOT NULL AND NOT ($3 AND marked_unread)`, username, conversationID, hold)
+UPDATE web_tabs t SET unread_at = NULL FROM viewed v
+WHERE t.username = v.username AND t.conversation_id = $2 AND t.unread_at IS NOT NULL AND NOT ($3 AND t.marked_unread)`, username, conversationID, hold)
 
 	return err
 }

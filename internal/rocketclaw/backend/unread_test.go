@@ -11,6 +11,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -209,6 +210,51 @@ func TestMarkUnread(t *testing.T) {
 
 	require.NoError(t, service.MarkUnread(ctx, alice, []string{path("web:held")}))
 	assert.Equal(t, []string{alice + " marked=t"}, marks("web:held"), "marking a read tab that has a row makes the mark alice's own")
+}
+
+func TestViewSessionLocksStateBeforeTabs(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+
+	const conversationID = "web:view-locks"
+
+	path := "/s/" + base64.RawURLEncoding.EncodeToString([]byte(conversationID))
+	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	saved, err := service.SaveTabState(ctx, alice, &TabState{Tabs: []Tab{{Path: path}}}, 0)
+	require.NoError(t, err)
+	require.True(t, saved)
+	require.NoError(t, service.MarkUnread(ctx, alice, []string{path}))
+
+	// A tab save locks the person's state before changing their tab rows.
+	tx, err := service.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	defer func() { _ = tx.Rollback() }()
+
+	var holder int
+	require.NoError(t, tx.QueryRowContext(ctx, `SELECT pg_backend_pid() FROM web_tab_states WHERE username = $1 FOR UPDATE`, alice).Scan(&holder))
+
+	var view errgroup.Group
+	view.Go(func() error { return service.ViewSession(ctx, alice, conversationID, false) })
+
+	defer func() { _ = tx.Rollback(); require.NoError(t, view.Wait()) }()
+
+	require.Eventually(t, func() bool {
+		var blocked bool
+		require.NoError(t, service.db.QueryRowContext(ctx, `SELECT count(*) > 0 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`, holder).Scan(&blocked))
+
+		return blocked
+	}, 5*time.Second, time.Millisecond, "view waits for the tab save's state lock")
+
+	// The waiting view must not hold a tab lock the save still needs.
+	var locked string
+	require.NoError(t, tx.QueryRowContext(ctx, `SELECT path FROM web_tabs WHERE username = $1 AND path = $2 FOR UPDATE NOWAIT`, alice, path).Scan(&locked))
+	require.Equal(t, path, locked)
+	require.NoError(t, tx.Commit())
+	require.NoError(t, view.Wait())
+	require.Empty(t, unreadBy(t, service, conversationID))
 }
 
 // R4: a message Alice queued behind Bob's turn marks her when it runs as its own turn.
