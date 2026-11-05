@@ -5082,6 +5082,25 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		stale.ConversationID, stale.RequireOutputDecision, stale.Cronjob = "cron:daily", msg.RequireOutputDecision, msg.Cronjob
 		require.NoError(t, nt.bridge(t, manager, "cron:daily").enqueue(t.Context(), &bridgeRequest{inbound: stale, backgroundWake: true}, "submit background wake"))
 
+		defer func() {
+			if !t.Failed() {
+				return
+			}
+
+			t.Logf("queued cron wake: buffered_provider_requests=%d finals=%d database=%+v", len(nt.requests), len(nt.finals), nt.service.db.Stats())
+			// Bound diagnostic SQL, not the unchanged outbound wait.
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+
+			rows, err := queryStrings(ctx, nt.service.db, `SELECT format('turn id=%s input=%s conversation=%s phase=%s lane=%s note=%s claimed_by=%s wake=%s destination=%s outbound=%s',
+id, input_id, conversation_id, phase, takes_lane, note, claimed_by, wake, inbound_json->>'SyncDestination', outbound_json IS NOT NULL)
+FROM turns WHERE conversation_id IN ('cron:daily', 'web:cron:daily')
+UNION ALL
+SELECT format('conversation id=%s reports_to=%s producer=%s', conversation_id, reports_to, producer_inbound_json IS NOT NULL)
+FROM conversations WHERE conversation_id IN ('cron:daily', 'web:cron:daily') ORDER BY 1`, "queued cron wake state")
+			t.Logf("queued cron wake rows=%v query_error=%v", rows, err)
+		}()
+
 		assert.Equal(t, "Tests passed.", readFinalFor(t, nt.finals, report).Text)
 		nt.waitIdle(t, manager, report)
 		assert.Equal(t, []string{"turn-cron/call/a consumed true"}, noteStates(t, nt.service))
