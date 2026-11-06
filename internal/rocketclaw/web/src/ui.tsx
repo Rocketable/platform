@@ -48,10 +48,8 @@ import {
   readSessionEnumeration,
   type SavedListing,
   saveCompleteSessions,
-  SESSION_HISTORY_CHANNEL,
   searchIsAuthoritative,
   shouldCommitSnapshot,
-  stripSessionHistory,
 } from "@/session-list";
 
 const queryClient = new QueryClient({
@@ -704,22 +702,6 @@ function ServerSessions({ children }: { children: ReactNode }) {
       invalidatePendingSaves(currentOwner, currentProtocol);
     };
   }, [name, owner, scope, identityRejected, identityGeneration, generation, reset]);
-  const forgetHistory = useCallback((id: string) => {
-    if (owner === undefined || scope === undefined) return;
-    if (ownerRef.current !== owner || protocolRef.current !== scope) return;
-    invalidatePendingSaves(owner, scope);
-    bump();
-    listing.current = { version: "", rows: [] };
-    rowsRef.current = stripSessionHistory(rowsRef.current, id);
-    setView((current) => ({ ...current, rows: rowsRef.current }));
-  }, [owner, scope, bump]);
-  useEffect(() => {
-    const channel = new BroadcastChannel(SESSION_HISTORY_CHANNEL);
-    channel.onmessage = ({ data }: MessageEvent<{ owner: string; protocol: string; id: string }>) => {
-      if (data.owner === owner && data.protocol === scope) forgetHistory(data.id);
-    };
-    return () => channel.close();
-  }, [owner, scope, forgetHistory]);
   const visible = owner !== undefined && ownerRef.current === owner && protocolRef.current === scope;
   const parent = useContext(ServerViews);
   const views = useMemo(() => ({ ...parent, [name]: {

@@ -10,7 +10,6 @@ import {
   saveCompleteSessions,
   searchIsAuthoritative,
   shouldCommitSnapshot,
-  stripSessionHistory,
 } from "./session-list";
 
 const alice = (sessions: Session[], flags: Partial<SessionBatch> = {}): SessionBatch => ({
@@ -124,12 +123,6 @@ describe("session list reconciliation", () => {
     expect(shouldCommitSnapshot({ upstreamSuccess: true, exhausted: false, mismatch: false })).toBe(false);
     expect(shouldCommitSnapshot({ upstreamSuccess: false, exhausted: true, mismatch: false })).toBe(false);
     expect(shouldCommitSnapshot({ upstreamSuccess: true, exhausted: true, mismatch: true })).toBe(false);
-  });
-
-  test("strips preview and timestamp without removing routing metadata", () => {
-    expect(stripSessionHistory([{ id: "keep", title: "room", preview: "secret", updatedAt: "1", agent: "main" }], "keep")).toEqual([
-      { id: "keep", title: "room", preview: "", updatedAt: "", agent: "main" },
-    ]);
   });
 
   test("search is not authoritative while refreshing or before the list is complete", () => {
