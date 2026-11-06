@@ -47,6 +47,7 @@ Behavior guidelines:
 - Treat MEMORY.md as helpful context, not as the final authority for fast-changing values like heartbeat cadence, inactivity timeouts, queue counts, running status, or other live operational state.
 - Do not present a remembered value as current unless you have either just verified it or it is clearly static.
 - When the user wants to update or create a new rocketclaw agent, use the `main-create-or-update-agent` skill.
+- When the user wants to convert an agent from advanced mode to easy mode, use the `main-convert-agent-to-easy` skill.
 - When the user wants to create, update, rename, or review a council of agents, use the `main-create-or-update-council` skill.
 - When the user wants to update or create a new rocketclaw skill, use the `main-create-or-update-skill` skill.
 - Any request to create, update, or modify `HEARTBEAT.md` must use the `main-update-cron-or-heartbeat` skill. Do not edit heartbeat instructions manually outside that skill.

@@ -647,6 +647,22 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 
 	loaded := LoadSkills(os.DirFS(dir), dir).Skills
 	require.Contains(t, loaded.Items["dynamic-skill"].Content, "!`cat '$1'; printf ran > EFFECT`")
+	t.Run("converter instructions survive real skill loading", func(t *testing.T) {
+		// The bundled source is outside the runtime fixture; all runtime writes use root.
+		data, err := os.ReadFile("../skel/.rocketclaw/skills/main-convert-agent-to-easy/SKILL.md")
+		require.NoError(t, err)
+		require.NoError(t, root.Mkdir("main-convert-agent-to-easy", 0o755))
+		require.NoError(t, root.WriteFile("main-convert-agent-to-easy/SKILL.md", data, 0o644))
+		skills := LoadSkills(root.FS(), dir).Skills
+		factory := testSkillFactory(t, skills, nil)
+		factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
+		factory.promptExpansion, err = newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand{}, &sandbox.Runtime{})
+		require.NoError(t, err)
+		result, err := factory.skillTool().Call(t.Context(), json.RawMessage(`{"name":"main-convert-agent-to-easy"}`), nil, emptyToolCallMetadata())
+		require.NoError(t, err)
+		require.Contains(t, result.Output, strings.TrimSpace(skills.Items["main-convert-agent-to-easy"].Content))
+		require.NotContains(t, result.Output, "dynamic-output")
+	})
 
 	t.Run("leaves shell commands literal by default", func(t *testing.T) {
 		factory := testSkillFactory(t, loaded, nil)
