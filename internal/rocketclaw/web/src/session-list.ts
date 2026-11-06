@@ -1,8 +1,6 @@
 import { RPCError } from "./api";
 import type { Remote, Session, SessionBatch } from "./types";
 
-export const SESSION_HISTORY_CHANNEL = "rocketclaw-session-history";
-
 const epochs = new Map<string, number>();
 let globalEpoch = 0;
 const pendingSaves = new Map<IDBTransaction, string>();
@@ -103,7 +101,7 @@ export async function saveCompleteSessions(owner: string, protocol: string, list
       const request = store.get(scopeKey(owner, protocol));
       request.onsuccess = () => {
         // Read/check/write share a transaction: a paused tab cannot overwrite
-        // a deletion even if its BroadcastChannel notification is still queued.
+        // a snapshot from a later generation.
         if ((request.result ?? 0) === generation) store.put(listing, [owner, protocol]);
       };
     });
@@ -129,10 +127,6 @@ export function listedRows(held: SavedListing, result: Pick<EnumerationResult, "
   // RFC 3339 times in UTC compare as text once their fractions have nine digits.
   const updated = new Map(rows.map((row) => [row, row.updatedAt?.replace(/(\.\d+)?Z$/, (_, fraction = ".") => `${fraction.padEnd(10, "0")}Z`) ?? ""]));
   return rows.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || compare(updated.get(b)!, updated.get(a)!) || compare(a.id, b.id));
-}
-
-export function stripSessionHistory(rows: Session[], id: string): Session[] {
-  return rows.map((row) => (row.id === id ? { ...row, preview: "", updatedAt: "" } : row));
 }
 
 export function shouldCommitSnapshot(flags: { upstreamSuccess: boolean; exhausted: boolean; mismatch: boolean }): boolean {
