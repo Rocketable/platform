@@ -315,7 +315,7 @@ Agent instructions.
 !`cat MEMORY.md`
 ```
 
-When the effective file has `mode: easy`, keep it easy: never add advanced keys, and carry over its sections, `space`, `workingDirectory` and `routines` unless the human asked to change them. Switch an agent between modes only when the human asks, and then write only the new mode's keys. Renaming an easy agent leaves its earlier routine runs under the old name.
+When the effective file has `mode: easy`, keep it easy: never add advanced keys, and carry over its sections, `space`, `workingDirectory` and `routines` unless the human asked to change them. Switch an agent between modes only when the human asks, and then write only the new mode's keys. To convert an advanced agent to easy, use `main-convert-agent-to-easy`. Renaming an easy agent leaves its earlier routine runs under the old name.
 
 ## Workflow
 
