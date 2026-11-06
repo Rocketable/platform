@@ -935,15 +935,12 @@ func TestSearchSessionsLongQueryParse(t *testing.T) {
 
 	if os.Getenv("ROCKETCLAW_TEST_LONG_QUERY_PARSE") != "1" {
 		// Measure the parser, not race detector work on atomic coverage counters.
-		binary := filepath.Join(t.TempDir(), "backend.test")
-		build := exec.CommandContext(t.Context(), "go", "test", "-c", "-race=false", "-cover=false", "-o", binary, ".")
-		output, err := build.CombinedOutput()
-		require.NoError(t, err, "%s", output)
+		binary := os.Getenv("ROCKETCLAW_TEST_PLAIN_BINARY")
 
 		cmd := exec.CommandContext(t.Context(), binary, "-test.run=^"+t.Name()+"$", "-test.cpu="+strconv.Itoa(runtime.GOMAXPROCS(0)))
 
 		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_LONG_QUERY_PARSE=1")
-		output, err = cmd.CombinedOutput()
+		output, err := cmd.CombinedOutput()
 		require.NoError(t, err, "%s", output)
 		// Count the isolated parser's CPU work, not time descheduled behind parallel tests.
 		require.Less(t, cmd.ProcessState.UserTime()+cmd.ProcessState.SystemTime(), 2*time.Second)

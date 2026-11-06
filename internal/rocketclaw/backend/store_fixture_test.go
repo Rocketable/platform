@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -24,6 +26,26 @@ func TestMain(m *testing.M) {
 	code := 0
 
 	err := func() (errResult error) {
+		if os.Getenv("ROCKETCLAW_TEST_PLAIN_BINARY") == "" {
+			dir, err := os.MkdirTemp(os.Getenv("TMPDIR"), "backend-plain-")
+			if err != nil {
+				return fmt.Errorf("create plain test binary directory: %w", err)
+			}
+			defer func() { errResult = errors.Join(errResult, os.RemoveAll(dir)) }()
+
+			// Share the build, not the measurement processes. Children inherit its path.
+			executable := filepath.Join(dir, "backend.test")
+
+			build := exec.Command("go", "test", "-c", "-race=false", "-cover=false", "-o", executable, ".")
+			if output, err := build.CombinedOutput(); err != nil {
+				return fmt.Errorf("build plain test binary: %w\n%s", err, output)
+			}
+
+			if err := os.Setenv("ROCKETCLAW_TEST_PLAIN_BINARY", executable); err != nil {
+				return fmt.Errorf("remember plain test binary: %w", err)
+			}
+		}
+
 		base := strings.TrimSpace(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
 		if base == "" || os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL") != "" {
 			// Unit tests need no PostgreSQL; children reuse their parent's template.
