@@ -226,6 +226,41 @@ func TestEasySubagentWorksInParentFolder(t *testing.T) {
 
 	first, shutdown := nt.run(t, ignoreOutbound)
 	registry := nt.bridge(t, first, nt.conversationID).background
+	manager := first
+	stage := "initial subagent start"
+
+	defer func() {
+		if t.Failed() {
+			t.Logf("easy subagent: last_stage=%s buffered_provider_requests=%d finals=%d subagent_bodies=%d database=%+v", stage, len(nt.requests), len(nt.finals), len(subagentBodies), nt.service.db.Stats())
+
+			if manager.mu.TryLock() {
+				parent, ok := manager.bridges[nt.conversationID].(*Bridge)
+				manager.mu.Unlock()
+
+				if ok {
+					t.Logf("parent: buffered_requests=%d", len(parent.requestCh))
+
+					if parent.mu.TryLock() {
+						t.Logf("parent: handling=%t", parent.handling)
+						parent.mu.Unlock()
+					} else {
+						t.Log("parent: mutex busy; handling unavailable")
+					}
+				} else {
+					t.Log("parent: bridge unavailable")
+				}
+			} else {
+				t.Log("parent: manager mutex busy; bridge unavailable")
+			}
+
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+
+			states, err := queryStrings(ctx, nt.service.db, `SELECT format('conversation=%s turn=%s phase=%s takes_lane=%s outbound=%s terminal=%s note=%s wake=%s', conversation_id, id, phase, takes_lane, outbound_json IS NOT NULL, terminal, note, wake) FROM turns ORDER BY conversation_id, id`, "easy subagent failure state")
+			t.Logf("turns=%v query_error=%v", states, err)
+		}
+	}()
+
 	require.NoError(t, nt.bridge(t, first, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
 
 	select {
@@ -234,10 +269,17 @@ func TestEasySubagentWorksInParentFolder(t *testing.T) {
 		t.Fatal("the subagent never ran")
 	}
 
-	assert.Equal(t, "answer", readFinal(t, nt.finals).Text)
+	stage = "initial parent final"
+
+	assert.Equal(t, "answer", readFinal(t, nt.finals).Text, "initial parent final")
 
 	parent := nt.bridge(t, first, nt.conversationID)
+	stage = "initial parent idle"
+
 	require.Eventually(t, func() bool { return !parent.handlingSnapshot() && len(parent.requestCh) == 0 }, 10*time.Second, 10*time.Millisecond)
+
+	stage = "shutdown and folder reset"
+
 	shutdown()
 	registry.shutdown()
 	require.Equal(t, []string{nt.conversationID}, folders())
@@ -246,13 +288,27 @@ func TestEasySubagentWorksInParentFolder(t *testing.T) {
 	require.NoError(t, os.RemoveAll(data))
 
 	var model, tools string
+
+	stage = "recorded subagent configuration"
+
 	require.NoError(t, nt.service.db.QueryRowContext(t.Context(), `SELECT subagent_model, subagent_tools::text FROM conversations WHERE parent_conversation_id = $1`, nt.conversationID).Scan(&model, &tools))
 	require.Equal(t, []string{"gpt-6-luna", `["bash", "task"]`}, []string{model, tools})
 
-	manager, _ := nt.restart(t)
+	stage = "restart"
+	manager, _ = nt.restart(t)
+	stage = "resumed parent final"
+
 	readFinal(t, nt.finals)
+
+	stage = "resumed parent idle"
+
 	nt.waitIdle(t, manager, nt.conversationID)
+
+	stage = "resumed folders"
+
 	require.Equal(t, []string{nt.conversationID}, folders(), "the resumed subagent resolves to its parent's folder")
+
+	stage = "subagent request bodies"
 
 	for range 2 { // The cut run and the resumed one.
 		body := <-subagentBodies
