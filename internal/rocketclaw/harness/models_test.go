@@ -251,7 +251,6 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 			}}, Skills{Items: map[string]Skill{}}, "main", nil)
 
 			require.NoError(t, err)
-			require.Equal(t, "gpt-6.1-sol", loop.Model)
 			require.Equal(t, "work/gpt-6.1-sol", loop.DisplayModel)
 			require.Equal(t, ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, loop.ProviderOrigin)
 
@@ -328,7 +327,7 @@ func TestNewWithProvidersNormalizesOpenAIPrefixedAgentModel(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "openai/gpt-6.1-sol", loop.DisplayModel)
-	require.Equal(t, "gpt-6.1-sol", loop.Model)
+	require.Equal(t, "gpt-6.1-sol", loop.ProviderOrigin.Model)
 }
 
 func TestNewWithProvidersRejectsNonOpenAIProviderQualifiedAgentModel(t *testing.T) {

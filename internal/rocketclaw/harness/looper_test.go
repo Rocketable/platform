@@ -359,7 +359,6 @@ func testLooper(client responsesAPI) *looper {
 
 	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT6Luna}
 	l.Client = client
-	l.Model = openai.ChatModelGPT6Luna
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.Journal = InertJournal{}
 	l.SteerDrain = InertSteerDrain{}

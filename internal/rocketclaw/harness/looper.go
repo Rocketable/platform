@@ -175,7 +175,6 @@ type looper struct {
 	ProviderOrigin     ProviderOrigin
 	Client             responsesAPI
 	SystemPrompt       string
-	Model              shared.ResponsesModel
 	DisplayModel       string
 	ReasoningEffort    shared.ReasoningEffort
 	Verbosity          string
@@ -1829,7 +1828,7 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 	var params responses.ResponseNewParams
 
 	params.Input = input
-	params.Model = l.Model
+	params.Model = l.ProviderOrigin.Model
 	params.Store = openai.Bool(false)
 	params.ContextManagement = []responses.ResponseNewParamsContextManagement{{
 		Type:             "compaction",

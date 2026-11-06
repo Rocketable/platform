@@ -121,7 +121,6 @@ func TestObservabilityUsesResolvedProviderAndModel(t *testing.T) {
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	looper := testLooper(mockResponses(failedResponseWithCode("resp-failed", responses.ResponseErrorCodeInvalidPrompt, "bad prompt")))
 	looper.ProviderOrigin = ProviderOrigin{Provider: "work", Model: "api-model"}
-	looper.Model = "api-model"
 	looper.DisplayModel = "work/api-model"
 	looper.Diagnostics = true
 	looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test")}

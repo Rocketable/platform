@@ -206,7 +206,6 @@ func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, err
 		ProviderOrigin:         origin,
 		Client:                 responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}},
 		SystemPrompt:           withCodeModeSystemPrompt(composeSystemPromptWithSkills(systemPrompt, f.skills, agent), modelTools, codeHosts, mcpServers),
-		Model:                  origin.Model,
 		DisplayModel:           origin.displayModel(),
 		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
 		Verbosity:              agent.Verbosity,
