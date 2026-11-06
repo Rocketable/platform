@@ -132,16 +132,15 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		{Name: "/sched/latencies:seconds"},
 	}
 	baseline := sampleHealth(samples, rocketcodeSessions.db.Stats())
-	healthCtx, cancelHealth := context.WithCancel(runCtx)
 
 	var health errgroup.Group
 	health.Go(func() error {
-		reportHealth(healthCtx, rocketcodeSessions.db, logger, samples, &baseline)
+		reportHealth(runCtx, rocketcodeSessions.db, logger, samples, &baseline)
 		return nil
 	})
 
 	defer func() {
-		cancelHealth()
+		cancel()
 
 		_ = health.Wait()
 	}()
