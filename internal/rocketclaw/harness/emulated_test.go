@@ -73,7 +73,7 @@ func TestEmulatedCurl(t *testing.T) {
 		return code, stdout.String(), stderr.String()
 	}
 
-	for _, args := range [][]string{{server.URL + "/"}, {"-fsSL", server.URL + "/"}, {"-s", "-S", "--fail", "--location", server.URL + "/"}, {"--", server.URL + "/"}} {
+	for _, args := range [][]string{{server.URL + "/"}, {strings.TrimPrefix(server.URL, "http://")}, {"-fsSL", server.URL + "/"}, {"-s", "-S", "--fail", "--location", server.URL + "/"}, {"--", server.URL + "/"}} {
 		code, out, _ := run(args...)
 		require.Equal(t, 0, code, args)
 		require.Equal(t, "ok\x00\xff", out, "bytes come back exactly")
@@ -121,9 +121,6 @@ func TestEmulatedCurl(t *testing.T) {
 
 	_, _, errOut = run("-sS", "-f", server.URL+"/missing")
 	require.Contains(t, errOut, "returned error: 404", "-S shows it again")
-
-	code, out, _ := run("example.invalid")
-	require.Equal(t, 7, code, "a URL without a scheme is http: %s", out)
 }
 
 // An agent's command runs its line in host bash with the guest's arguments, the host environment and the
