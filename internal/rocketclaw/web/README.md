@@ -476,6 +476,13 @@ active tab.
   Reopen closed tab**) reopens the newest, in a remote OpenCode session too, whose
   New terminal command has no default key for that reason. A reopened tab leaves the list, and so
   does a deleted session's tab. A preview tab is never saved, so it never lists.
+- **Next session needing you.** Cmd/Ctrl+Alt+A (or **Sessions: Next needing
+  you**) opens the next session that waits on you: first those asking a
+  question, then unread ones, each longest waiting first. Pressing it again
+  moves on to the next one and wraps around. Only sessions open in a tab,
+  in Shared, or on the Top Shelf count, on any space or server, and muted or
+  snoozed ones do not. The window title counts the asking ones by the same rule.
+  The command shows only while another session needs you.
 - **Remote OpenCode sessions.** A remote session's tab shows OpenCode's own
   session view, copied into RocketClaw at `internal/rocketclaw/oc/` and mounted in
   the page with no frame. It reaches its server through the Web's
