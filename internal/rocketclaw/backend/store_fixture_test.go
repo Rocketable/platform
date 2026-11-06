@@ -50,7 +50,17 @@ func TestMain(m *testing.M) {
 		}
 
 		defer func() {
-			_, err := admin.Exec("DROP DATABASE " + name)
+			// Dropping during parallel tests forces checkpoints of their new schemas.
+			// Children inherit this template's prefix; all services have stopped now.
+			names, err := queryStrings(context.Background(), admin, "SELECT datname FROM pg_database WHERE starts_with(datname, $1) ORDER BY datname", "fixture clones", name+"_")
+
+			errResult = errors.Join(errResult, err)
+			for _, clone := range names {
+				_, err := admin.Exec("DROP DATABASE " + clone)
+				errResult = errors.Join(errResult, err)
+			}
+
+			_, err = admin.Exec("DROP DATABASE " + name)
 			errResult = errors.Join(errResult, err)
 		}()
 
@@ -79,7 +89,7 @@ func TestMain(m *testing.M) {
 			return fmt.Errorf("remember fixture template: %w", err)
 		}
 		// Only shadow and search helpers clone it; cold migration tests still
-		// use their original constructors. Every test cleanup precedes its drop.
+		// use their original constructors. All test cleanups precede clone drops.
 		code = m.Run()
 
 		return nil
@@ -102,17 +112,18 @@ func newMigratedTestSessionServiceAt(t *testing.T, workspace string) *SessionSer
 	require.NoError(t, err)
 
 	admin := stdlib.OpenDB(*cfg)
-	// Each fixture owns its handle, but no idle admin connection outlives a query.
-	admin.SetMaxIdleConns(0)
-	t.Cleanup(func() { require.NoError(t, admin.Close()) })
 
-	name := "t_" + strings.ToLower(rand.Text())
+	name := strings.TrimPrefix(template.Path, "/") + "_" + strings.ToLower(rand.Text())
 	_, err = admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE "+strings.TrimPrefix(template.Path, "/"))
-	require.NoError(t, err)
-	// Register before the existing constructor: its Stop runs before this drop.
+	require.NoError(t, errors.Join(err, admin.Close()))
+	// Stop closes the store first. Remove its relations before a later database
+	// drop checkpoints the cluster, including other tests' newly created schemas.
+	cfg.Database = name
+
 	t.Cleanup(func() {
-		_, err := admin.Exec("DROP DATABASE " + name)
-		require.NoError(t, err)
+		db := stdlib.OpenDB(*cfg)
+		_, err := db.Exec("DROP SCHEMA fixture CASCADE")
+		require.NoError(t, errors.Join(err, db.Close()))
 	})
 
 	location := *template
@@ -137,15 +148,11 @@ func TestMigratedTestDatabaseMatchesColdAndIsolatesClones(t *testing.T) {
 
 	t.Cleanup(func() { require.NoError(t, admin.Close()) })
 
-	name := "t_" + strings.ToLower(rand.Text())
-	_, err = admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE template0")
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, err := admin.Exec("DROP DATABASE " + name)
-		require.NoError(t, err)
-	})
-
 	location, err := url.Parse(os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL"))
+	require.NoError(t, err)
+
+	name := strings.TrimPrefix(location.Path, "/") + "_" + strings.ToLower(rand.Text())
+	_, err = admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE template0")
 	require.NoError(t, err)
 
 	coldLocation := *location
@@ -157,6 +164,11 @@ func TestMigratedTestDatabaseMatchesColdAndIsolatesClones(t *testing.T) {
 	_, err = db.ExecContext(t.Context(), "CREATE SCHEMA fixture")
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
+	t.Cleanup(func() {
+		db := stdlib.OpenDB(*cfg)
+		_, err := db.Exec("DROP SCHEMA fixture CASCADE")
+		require.NoError(t, errors.Join(err, db.Close()))
+	})
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
