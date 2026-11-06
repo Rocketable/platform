@@ -55,19 +55,10 @@ type applyPatchPreview struct {
 
 type openCodePatchError struct {
 	message string
-	cause   error
 }
 
 func (e openCodePatchError) Error() string {
-	if e.cause != nil {
-		return e.message + ": " + e.cause.Error()
-	}
-
 	return e.message
-}
-
-func (e openCodePatchError) Unwrap() error {
-	return e.cause
 }
 
 func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResult {
@@ -234,12 +225,12 @@ func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (previe
 				return applyPatchPreview{}, "apply_patch verification failed: Failed to read file to update: " + filepath.Join(sfs.root.Name(), cleanPath)
 			}
 
-			_, sourceBOM, err := readTextFile(sfs, cleanPath)
+			source, sourceBOM, err := readTextFile(sfs, cleanPath)
 			if err != nil {
 				return applyPatchPreview{}, "apply_patch verification failed: " + err.Error()
 			}
 
-			text, bom, err := deriveNewContentsFromChunks(sfs, cleanPath, hunk.chunks)
+			text, bom, err := deriveNewContentsFromChunks(source, filepath.Join(sfs.root.Name(), cleanPath), hunk.chunks)
 			if err != nil {
 				return applyPatchPreview{}, "apply_patch verification failed: Error: " + err.Error()
 			}
@@ -549,18 +540,13 @@ func rejectSymlink(sfs *sandboxedFileSystem, name string) error {
 	return nil
 }
 
-func deriveNewContentsFromChunks(sfs *sandboxedFileSystem, name string, chunks []updateFileChunk) (text string, bom bool, err error) {
-	originalText, originalBOM, err := readTextFile(sfs, name)
-	if err != nil {
-		return "", false, openCodePatchError{message: "Failed to read file " + filepath.Join(sfs.root.Name(), name), cause: err}
-	}
-
+func deriveNewContentsFromChunks(originalText, filePath string, chunks []updateFileChunk) (text string, bom bool, err error) {
 	originalLines := strings.Split(originalText, "\n")
 	if len(originalLines) > 0 && originalLines[len(originalLines)-1] == "" {
 		originalLines = originalLines[:len(originalLines)-1]
 	}
 
-	replacements, err := computeReplacements(originalLines, filepath.Join(sfs.root.Name(), name), chunks)
+	replacements, err := computeReplacements(originalLines, filePath, chunks)
 	if err != nil {
 		return "", false, err
 	}
@@ -572,7 +558,7 @@ func deriveNewContentsFromChunks(sfs *sandboxedFileSystem, name string, chunks [
 
 	text, bom = strings.CutPrefix(strings.Join(newLines, "\n"), "\ufeff")
 
-	return text, originalBOM || bom, nil
+	return text, bom, nil
 }
 
 type replacement struct {

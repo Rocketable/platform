@@ -800,6 +800,34 @@ func TestGrepInventoryAllocations(t *testing.T) {
 	require.Less(t, cost.AllocedBytesPerOp()-listing.AllocedBytesPerOp()-65536*perFile.AllocedBytesPerOp(), int64(512<<10))
 }
 
+func BenchmarkPatchUpdatePreview(b *testing.B) {
+	root, err := os.OpenRoot(b.TempDir())
+	require.NoError(b, err)
+	b.Cleanup(func() { require.NoError(b, root.Close()) })
+
+	content := "old\n" + strings.Repeat("x", 1<<20) + "\n"
+	require.NoError(b, root.WriteFile("large.txt", []byte("\ufeff"+content), 0o644))
+	sfs := &sandboxedFileSystem{root: root}
+	want := "new" + content[3:]
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		preview, errText := sfs.previewApplyPatch("*** Begin Patch\n*** Update File: large.txt\n@@\n-old\n+new\n*** End Patch")
+		require.Empty(b, errText)
+		require.Len(b, preview.changes, 1)
+		require.True(b, preview.changes[0].bom)
+		require.Equal(b, want, preview.changes[0].newContent)
+		require.Equal(b, "Success. Updated the following files:\nM large.txt", preview.output)
+	}
+}
+
+func TestPatchUpdatePreviewAllocation(t *testing.T) {
+	cost := testing.Benchmark(BenchmarkPatchUpdatePreview)
+	// One source buffer, its text, and the edited text fit below four file copies.
+	require.Less(t, cost.AllocedBytesPerOp(), int64(4<<20))
+}
+
 func TestApplyPatchSymlinkDenied(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
@@ -924,6 +952,7 @@ func TestApplyPatchParity(t *testing.T) {
 	}{
 		{"append", "first\n", "+last", "first\nlast\n"},
 		{"blank context", "first\nlast\nmore\n", "-last\n+changed\n ", "first\nchanged\nmore\n"},
+		{"introduced BOM", "first\n", "-first\n+\ufefflast", "\ufefflast\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, err := os.OpenRoot(t.TempDir())
