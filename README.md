@@ -356,6 +356,8 @@ The [cheatsheet](cmd/rocketclaw/CHEATSHEET.md#easy-mode-agent-frontmatter) lists
 - Each routine runs the agent on a schedule written as in a cron file, with its instruction, or with `Scheduled run (<schedule>).` for a bare schedule. It reports like a cron job, in the agent's `space`. The Cron page lists it as `<agent> · <schedule>`, and `cron:<agent>` finds its runs. Schedules repeat: a one-off RFC 3339 time fails loading, and `rocketclaw_schedule_message` sends a single future run. A cron file cannot name an easy agent. Renaming the agent file leaves earlier routine runs under the old name.
 - A shadow must use its parent's mode; one that does not is dropped with a warning. An easy shadow needs the same required keys, and its `space` may differ. Routine runs get no shadows, and a shadow's own `routines` never run.
 
+To convert an advanced agent, ask `main`. Its `main-convert-agent-to-easy` skill maps what has an easy equivalent, asks about everything else, converts the agent's shadows, and moves the cron files that run it into `routines`. It refuses `main` itself and any agent whose cron files come from a git overlay.
+
 ### Emulated shell
 
 An agent that sets `shell: emulated` runs its shell commands in real Bash inside a Linux sandbox instead of host bash: `bash` tool calls, `` !`…` `` lines and workflow workers. The sandbox has a pinned Ubuntu 26.04 LTS with the usual tools plus `python3`, `node` (also as `js-exec`) and `sqlite3`. As on 26.04 itself, `ls`, `cat`, `head` and the other core utilities are the uutils (Rust) coreutils; GNU's are there as `gnuls`, `gnucat` and so on. Each command runs in a fresh Bash, so files in the folder persist between calls but variables, functions and `cd` do not.
