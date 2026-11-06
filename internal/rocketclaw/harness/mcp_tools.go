@@ -357,27 +357,27 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 		out += "\n\nPartial MCP list failures:\n- " + strings.Join(notes, "\n- ")
 	}
 
-	if tc, ok := toolCallContextFrom(ctx); ok && tc.looper != nil {
-		var errSave error
+	tc, _ := toolCallContextFrom(ctx)
 
-		// Settling keeps a still-attached script's job from leaving its turn (backgroundWork.Detach),
-		// so a result stored for the turn reaches it.
-		if tc.sink != nil {
-			tc.sink.mu.Lock()
-			tc.sink.settled = true
-			tc.sink.mu.Unlock()
-		}
+	var errSave error
 
-		// A script that left its turn outlives the turn's spill, so its output is retained instead.
-		if backgroundDetached(ctx) {
-			out, errSave = retainExecuteResult(tc.looper.promptExpansion.root, retainedRel, out)
-		} else {
-			out, errSave = tc.looper.saveExecuteResult(out)
-		}
+	// Settling keeps a still-attached script's job from leaving its turn (backgroundWork.Detach),
+	// so a result stored for the turn reaches it.
+	if tc.sink != nil {
+		tc.sink.mu.Lock()
+		tc.sink.settled = true
+		tc.sink.mu.Unlock()
+	}
 
-		if errSave != nil {
-			return ToolResult{}, errSave
-		}
+	// A script that left its turn outlives the turn's spill, so its output is retained instead.
+	if backgroundDetached(ctx) {
+		out, errSave = retainExecuteResult(tc.looper.promptExpansion.root, retainedRel, out)
+	} else {
+		out, errSave = tc.looper.saveExecuteResult(out)
+	}
+
+	if errSave != nil {
+		return ToolResult{}, errSave
 	}
 
 	return TextToolResult(out), nil
@@ -723,10 +723,7 @@ func argInt(args map[string]any, key string, fallback int) int {
 
 // codeModeHostToolsFromContext binds host tools from looper.CodeModeHosts.
 func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool, hosts map[string]looperTool) {
-	tc, ok := toolCallContextFrom(ctx)
-	if !ok {
-		return nil, nil
-	}
+	tc, _ := toolCallContextFrom(ctx)
 
 	hosts = tc.looper.CodeModeHosts
 	names := slices.Sorted(maps.Keys(hosts))
@@ -804,10 +801,7 @@ func (c toolHostCall) run(ctx context.Context) (ToolResult, error) {
 // for a different tool or arguments runs live; a started, unfinished non-resumable call is interrupted.
 // A non-resumable call runs through shutdown, so its result is recorded before the turn stops.
 func recordHostCall(ctx context.Context, name string, args map[string]any, resumable bool, call hostCall) (ToolResult, error) {
-	tc, ok := toolCallContextFrom(ctx)
-	if !ok {
-		return call.run(ctx)
-	}
+	tc, _ := toolCallContextFrom(ctx)
 
 	raw, _ := json.Marshal(args) // Code Mode arguments were decoded from JSON.
 
@@ -876,8 +870,8 @@ type executeToolDiagnostics struct{}
 // Uses emitChatResponse (blocking send) so nested steps are not dropped when the output
 // buffer is full — unlike emitDiagnosticChatResponse, which drops under backpressure.
 func (executeToolDiagnostics) ObserveToolCall(ctx context.Context, path []string, nestedName string, args map[string]any) {
-	tc, ok := toolCallContextFrom(ctx)
-	if !ok || tc.looper == nil || !tc.looper.Diagnostics || tc.output == nil {
+	tc, _ := toolCallContextFrom(ctx)
+	if !tc.looper.Diagnostics || tc.output == nil {
 		return
 	}
 
