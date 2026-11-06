@@ -438,7 +438,7 @@ github.com/openai/openai-go/v3/webhooks
 # github.com/pires/go-proxyproto v0.16.0
 ## explicit; go 1.26.9
 github.com/pires/go-proxyproto
-# github.com/posthog/posthog-go v1.40.1
+# github.com/posthog/posthog-go v1.41.1
 ## explicit; go 1.21
 github.com/posthog/posthog-go
 # github.com/robfig/cron/v3 v3.0.1
@@ -518,7 +518,7 @@ github.com/tailscale/wireguard-go/tsasm/arm/chacha20
 github.com/tailscale/wireguard-go/tsasm/arm/chacha20poly1305
 github.com/tailscale/wireguard-go/tsasm/arm/poly1305
 github.com/tailscale/wireguard-go/tun
-# github.com/tidwall/gjson v1.20.0
+# github.com/tidwall/gjson v1.20.1
 ## explicit; go 1.23
 github.com/tidwall/gjson
 # github.com/tidwall/match v1.2.0
@@ -527,7 +527,7 @@ github.com/tidwall/match
 # github.com/tidwall/pretty v1.2.2
 ## explicit; go 1.16
 github.com/tidwall/pretty
-# github.com/tidwall/sjson v1.2.6
+# github.com/tidwall/sjson v1.2.7
 ## explicit; go 1.23
 github.com/tidwall/sjson
 # github.com/x448/float16 v0.8.4
@@ -642,7 +642,7 @@ golang.org/x/crypto/nacl/box
 golang.org/x/crypto/nacl/secretbox
 golang.org/x/crypto/poly1305
 golang.org/x/crypto/salsa20/salsa
-# golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
+# golang.org/x/exp v0.0.0-20261106192419-47ce03d25ef0
 ## explicit; go 1.26.0
 golang.org/x/exp/constraints
 golang.org/x/exp/maps
