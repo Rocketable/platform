@@ -83,10 +83,6 @@ func (r PermissionReview) CodeModeCall(e *SessionEntry) (CodeModeCall, bool) {
 }
 
 func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionReviewRequest, parentOutput chan<- ChatResponse) permissionReviewDecision {
-	if f.inPermissionReview {
-		return permissionReviewFailure("automatic permission review cannot recursively require automatic approval")
-	}
-
 	agent := embeddedGuardianAgent()
 	agent.Model = f.autoApproverModel
 
