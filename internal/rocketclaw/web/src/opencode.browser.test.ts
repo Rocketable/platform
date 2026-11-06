@@ -269,7 +269,10 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
       await page.keyboard.press("Control+Backquote");
       releaseList.resolve();
       await view.locator('[data-pane-content="bottom"] [data-component="terminal"]').waitFor();
-      await until(() => terminals.open === 1);
+      await until(() => terminals.open === 1).catch((error: unknown) => {
+        console.error("Terminal reopen socket wait failed", { close, expectedOpenSockets: 1, observedOpenSockets: terminals.open, requests: fake.requests, errors });
+        throw error;
+      });
     }
 
     // Moving the terminal uses OpenCode's real drag state; the host must keep that choice after remounting.
