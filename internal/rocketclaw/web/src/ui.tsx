@@ -1381,11 +1381,57 @@ function useTabs() {
   };
 }
 
-// Sessions follow their sidebar rows to the spaces they were born in. Only this, TabNotifications, and
-// BoardNotifications read the rows at the top, so their updates do not redraw the whole app.
+// Sessions follow their sidebar rows to the spaces they were born in. Only this, TabNotifications, AttentionShortcut,
+// and BoardNotifications read the rows at the top, so their updates do not redraw the whole app.
 function TabSettling() {
   const { rows } = useContext(Sidebar), { settle } = useContext(TabActions);
   useEffect(() => settle(rows), [rows, settle]);
+  return null;
+}
+
+// Each row is checked against its own server's open tabs, Top Shelf tabs, and mutes: the live ones here, the saved ones
+// elsewhere.
+function useTabsOf() {
+  const { servers } = useContext(Sidebar), { state, shared, mutes } = useContext(TabActions);
+  const name = useServer(), shelf = useTopShelf();
+  return (row: Session) => {
+    const saved = servers[row.rocketclaw ?? ""]?.tabs, live = (row.rocketclaw ?? "") === name, shelved = shelf?.tabs?.filter((tab) => (tab.server ?? "") === (row.rocketclaw ?? "")) ?? [];
+    return { open: [...live ? [...state.tabs, ...shared] : [...saved?.state.tabs ?? [], ...saved?.shared ?? []], ...shelved], mutes: live ? mutes : saved?.mutes ?? [], active: live ? state.active : "" };
+  };
+}
+
+// A session this person follows: open in a tab, Shared, or the Top Shelf, and not muted or snoozed.
+const followed = ({ open, mutes }: ReturnType<ReturnType<typeof useTabsOf>>, row: Session) => {
+  const path = rowPath(row);
+  return open.some((tab) => tab.path === path) && !muteOf(mutes, path);
+};
+
+// Opens the next followed session needing this person after the one at path on this server, wrapping: those asking a
+// question, then unread ones, each longest waiting first. Undefined when no other session needs them.
+function useNextAttention(path: string) {
+  const { all } = useContext(Sidebar), tabs = useContext(TabActions), tabsOf = useTabsOf();
+  const mine = all.filter((row) => (row.asking || row.unreadAt) && followed(tabsOf(row), row));
+  const oldest = (field: "stateSince" | "unreadAt", rows: Session[]) => rows.toSorted((a, b) => Date.parse(a[field]!) - Date.parse(b[field]!));
+  const order = [...oldest("stateSince", mine.filter((row) => row.asking)), ...oldest("unreadAt", mine.filter((row) => !row.asking && row.unreadAt))];
+  const at = order.findIndex((row) => (row.rocketclaw ?? "") === server() && rowPath(row) === path);
+  const next = [...order.slice(at + 1), ...order.slice(0, Math.max(at, 0))][0];
+  return next && (() => openRow(tabs, next));
+}
+
+// Cmd/Ctrl+Alt+A opens the next session needing this person.
+function AttentionShortcut() {
+  const next = useNextAttention(usePathname());
+  const onKey = useEffectEvent((event: KeyboardEvent) => {
+    if (event.defaultPrevented || !(event.metaKey || event.ctrlKey) || !event.altKey || event.shiftKey || event.code !== "KeyA" || !next) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) next();
+  });
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => onKey(event);
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, []);
   return null;
 }
 
@@ -1399,16 +1445,9 @@ function TabSettling() {
 // server push would fix it. Every window that saw the mark notifies under the session's tag, so the system shows
 // one notification, even while another window has the tab in view.
 function TabNotifications() {
-  const { all, servers } = useContext(Sidebar), { state, shared, mutes } = useContext(TabActions);
-  const name = useServer();
-  const owner = useQuery(queries.identity("")).data?.username, shelf = useTopShelf();
+  const { all, servers } = useContext(Sidebar), tabsOf = useTabsOf();
+  const owner = useQuery(queries.identity("")).data?.username;
   const seen = useRef<{ owner?: string; unread: Map<string, string>; servers: Set<string> }>({ unread: new Map(), servers: new Set() });
-  // Each row is checked against its own server's open tabs, Top Shelf tabs, and mutes: the live ones here, the saved ones
-  // elsewhere.
-  const tabsOf = (row: Session) => {
-    const saved = servers[row.rocketclaw ?? ""]?.tabs, live = (row.rocketclaw ?? "") === name, shelved = shelf?.tabs?.filter((tab) => (tab.server ?? "") === (row.rocketclaw ?? "")) ?? [];
-    return { open: [...live ? [...state.tabs, ...shared] : [...saved?.state.tabs ?? [], ...saved?.shared ?? []], ...shelved], mutes: live ? mutes : saved?.mutes ?? [], active: live ? state.active : "" };
-  };
   useEffect(() => {
     // A server's rows count once it listed them all, and its first full listing raises nothing.
     const complete = new Set(Object.keys(servers).filter((server) => servers[server].enumerationComplete));
@@ -1420,7 +1459,7 @@ function TabNotifications() {
     for (const row of rows) {
       if (!last.servers.has(row.rocketclaw ?? "") || !row.unreadAt || row.markedUnread || row.unreadAt === last.unread.get(rowKey(row.id, row.rocketclaw))) continue;
       const path = rowPath(row), tabs = tabsOf(row);
-      if (!tabs.open.some((tab) => tab.path === path) || muteOf(tabs.mutes, path) || (document.hasFocus() && tabs.active === path)) continue;
+      if (!followed(tabs, row) || (document.hasFocus() && tabs.active === path)) continue;
       // A notification replacing one with its tag alerts again in Chromium only with renotify, which TypeScript's DOM types omit.
       const reply = cleanText((row.server ? row.reply : row.preview) ?? "", {}).replace(/\s+/g, " ").trim();
       const options = { body: reply.length > 200 ? `${reply.slice(0, 199)}…` : reply || "Finished answering", tag: rowKey(row.id, row.rocketclaw), renotify: true };
@@ -1433,7 +1472,7 @@ function TabNotifications() {
   });
   // The window title counts the open, unmuted tabs whose session waits on this person, as "(2) lab - RocketClaw",
   // keeping the server's name from index.html. An OpenCode view's own titles come after index.html's, so they never show.
-  const asking = all.filter((row) => row.asking && tabsOf(row).open.some((tab) => tab.path === rowPath(row)) && !muteOf(tabsOf(row).mutes, rowPath(row))).length;
+  const asking = all.filter((row) => row.asking && followed(tabsOf(row), row)).length;
   useEffect(() => { document.title = (asking ? `(${asking}) ` : "") + document.title.replace(/^\(\d+\) /, ""); }, [asking]);
   // Notifications are on by default: the browser asks for its permission on the first click or key press, the
   // earliest a browser lets a page ask.
@@ -1951,7 +1990,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     setConversation({ id: route.id, created: "", key: created ? conversation.key : conversation.key + 1 });
   }
   return (
-          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabSettling /><TabNotifications /><BoardNotifications />
+          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabSettling /><TabNotifications /><AttentionShortcut /><BoardNotifications />
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
             {tabs.snoozing ? <SnoozeDialog path={tabs.snoozing} /> : null}
             <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} keyCommands={keyCommands(tabs, sidebar.toggle, sidebar.medium)} opencode={palette.opencode} />
@@ -2393,6 +2432,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
     else if (path !== at()) tabs.open(path, "", undefined, true);
   };
   const tabCommands = tabs.commands(origin.path, sidebar.rows).map((item) => ({ ...item, key: `tab-${item.key}`, label: `Tabs: ${item.label}` }));
+  const attention = useNextAttention(origin.path);
   const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
   const draft = drafts.get(id);
@@ -2448,7 +2488,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   // The folder picker leaves session search, so typed folders are never sent as a search.
   const remote = useRemoteCreation(query, () => setMode(undefined), () => { setQuery(""); setPick(""); setMode("commands"); }, paletteCopy[mode ?? "sessions"], recent, opencode);
   const cronJobs = cronInSpace(jobs.data, useInSpace());
-  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, cronJobs, newChat, tabs, (cron) => { setQuery(""); setPick(""); setMode(cron); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...timeline, ...outputs], recent, origin.space));
+  const items = mode === undefined ? [] : remote.pick(() => paletteRows(mode, query.trim(), rows, cronJobs, newChat, tabs, (cron) => { setQuery(""); setPick(""); setMode(cron); }, (stem) => runCron.mutate({ stem }), [...actions.items.map((item) => ({ ...item, label: `Sessions: ${item.label}` })), ...remote.commands, ...commands, ...tabCommands, ...keyCommands, ...attention ? [{ key: "attention-next", label: "Sessions: Next needing you", run: attention }] : [], ...timeline, ...outputs], recent, origin.space));
   // Draw more rows only as scrolling or the keyboard needs them; every choice stays reachable.
   const { shown, next, selected, handoffsOnly } = usePalettePage(items, pick, `${mode}:${query}`);
   const choose = (item: (typeof items)[number]) => {
@@ -2525,6 +2565,7 @@ const shortcuts = [
   { id: "tab-previous", label: "Previous tab", keys: ["mod", "["] },
   { id: "tab-next", label: "Next tab", keys: ["mod", "]"] },
   { id: "tab-reopen", label: "Reopen the last closed tab", keys: ["mod", "Alt", "T"] },
+  { id: "attention-next", label: "Next session needing you", where: "Sessions you follow that ask a question, then unread ones", keys: ["mod", "Alt", "A"] },
   { id: "tab-sidebar", label: "Show or hide the tab sidebar", where: "Tabs in the left sidebar, on a wide window", keys: ["mod", "B"] },
   { id: "page-close", label: "Close the tab", where: "Pages other than sessions and Search pages", keys: ["Escape"] },
   { id: "message-steer", label: "Steer the running turn", where: "Message box, while a turn runs", keys: ["mod", "Enter"] },
