@@ -1377,7 +1377,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 		var (
 			sessions       []*SidebarSession
 			preview        pgtype.DriverBytes
-			tags           sql.RawBytes
+			tags           pgtype.DriverBytes // scanChatOrigin keeps a RawBytes destination until Next.
 			updated        sql.NullTime
 			unread         sql.NullTime
 			work           sql.NullString
