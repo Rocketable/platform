@@ -1078,11 +1078,28 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     ctrl.holdPrompt = true;
     await page.getByPlaceholder("Message a new session").fill("hello\n\nwhile held");
     // A send during an identity refresh has no provisional author, so send just after a refresh.
-    await page.waitForResponse("**/api/Identity");
+    const identityResponse = await page.waitForResponse("**/api/Identity");
+    const identityTransfer = { finished: false, error: "" };
+    void identityResponse.finished().then((error: Error | null) => { identityTransfer.finished = true; identityTransfer.error = error?.message ?? ""; }, (error: Error) => { identityTransfer.error = error.message; });
+    const identityBeforeEnter = { ...identityTransfer };
     await page.getByPlaceholder("Message a new session").press("Enter");
     await ctrl.promptStarted.promise;
     expect(ctrl.prompt).toEqual(["web-session:new:hello\n\nwhile held"]);
-    expect(await page.locator('[data-slot="bubble-content"] [data-slot="message-author"]').textContent()).toBe("Alice Smith");
+    try {
+      expect(await page.locator('[data-slot="bubble-content"] [data-slot="message-author"]').textContent()).toBe("Alice Smith");
+    } catch (error) {
+      console.error("New-session message-author assertion failed", JSON.stringify({
+        identity: { status: identityResponse.status(), beforeEnter: identityBeforeEnter, atFailure: identityTransfer },
+        fixture: { username: ctrl.username, principal: ctrl.principal, identityError: ctrl.identityError, prompts: ctrl.prompt, history: ctrl.history, prompting: [...ctrl.prompting] },
+        browser: await page.evaluate(() => ({
+          path: location.pathname,
+          bubbles: [...document.querySelectorAll('[data-slot="bubble-content"]')].map((node) => ({ text: node.textContent, authors: [...node.querySelectorAll('[data-slot="message-author"]')].map((author) => author.textContent) })),
+          composer: document.querySelector("textarea")?.value,
+          alerts: [...document.querySelectorAll('[role="alert"]')].map((node) => node.textContent),
+        })),
+      }));
+      throw error;
+    }
     await page.waitForURL("**/s/d2ViLXNlc3Npb246bmV3");
     await page.getByPlaceholder("Queue a follow-up · ⌘⏎ steers").waitFor();
     await page.locator("textarea:enabled").waitFor();
