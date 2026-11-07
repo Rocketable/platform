@@ -30,43 +30,47 @@ import (
 func TestSidebarSessionTimestamps(t *testing.T) {
 	at := time.Date(2024, time.January, 2, 3, 4, 5, 123456789, time.UTC)
 	for _, tc := range []struct {
-		name           string
-		state, arrived time.Time
-		wantState      string
-		wantArrived    string
+		name                    string
+		state, arrived, updated time.Time
+		wantState               string
+		wantArrived             string
+		wantUpdated             string
 	}{
-		{"identical", at, at, "2024-01-02T03:04:05.123456789Z", "2024-01-02T03:04:05.123456789Z"},
-		{"different instants", at, at.Add(time.Second), "2024-01-02T03:04:05.123456789Z", "2024-01-02T03:04:06.123456789Z"},
-		{"same instant in another zone", at, at.In(time.FixedZone("example", 3600)), "2024-01-02T03:04:05.123456789Z", "2024-01-02T04:04:05.123456789+01:00"},
-		{"zero arrival", at, time.Time{}, "2024-01-02T03:04:05.123456789Z", "0001-01-01T00:00:00Z"},
-		{"zero state", time.Time{}, at, "", ""},
+		{"identical", at, at, at, "2024-01-02T03:04:05.123456789Z", "2024-01-02T03:04:05.123456789Z", "2024-01-02T03:04:05.123456789Z"},
+		{"different instants", at, at.Add(time.Second), at.Add(2 * time.Second), "2024-01-02T03:04:05.123456789Z", "2024-01-02T03:04:06.123456789Z", "2024-01-02T03:04:07.123456789Z"},
+		{"same instant in another zone", at, at.In(time.FixedZone("example", 3600)), at.In(time.FixedZone("example", -3600)), "2024-01-02T03:04:05.123456789Z", "2024-01-02T04:04:05.123456789+01:00", "2024-01-02T02:04:05.123456789-01:00"},
+		{"zero arrival", at, time.Time{}, at, "2024-01-02T03:04:05.123456789Z", "0001-01-01T00:00:00Z", "2024-01-02T03:04:05.123456789Z"},
+		{"zero state", time.Time{}, at, at, "", "", "2024-01-02T03:04:05.123456789Z"},
+		{"zero updated", at, at, time.Time{}, "2024-01-02T03:04:05.123456789Z", "2024-01-02T03:04:05.123456789Z", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := sidebarSession(&backend.SidebarChat{Session: backend.SidebarSession{StateSince: tc.state, ArrivedAt: tc.arrived}})
+			got := sidebarSession(&backend.SidebarChat{Session: backend.SidebarSession{StateSince: tc.state, ArrivedAt: tc.arrived, Summary: &protocol.SessionSummary{LastUpdated: tc.updated}}})
 			require.Equal(t, tc.wantState, got.StateSince)
 			require.Equal(t, tc.wantArrived, got.ArrivedAt)
+			require.Equal(t, tc.wantUpdated, got.UpdatedAt)
 		})
 	}
 
-	chat := backend.SidebarChat{Session: backend.SidebarSession{StateSince: at, ArrivedAt: at}}
+	chat := backend.SidebarChat{Session: backend.SidebarSession{StateSince: at, ArrivedAt: at, Summary: &protocol.SessionSummary{LastUpdated: at}}}
 
 	var got *Session
 
 	allocs := testing.AllocsPerRun(1, func() { got = sidebarSession(&chat) })
 
 	require.Equal(t, "2024-01-02T03:04:05.123456789Z", got.ArrivedAt)
+	require.Equal(t, got.ArrivedAt, got.UpdatedAt)
 	require.LessOrEqual(t, allocs, float64(2), "identical timestamps need only one formatted string and the response")
 }
 
 func BenchmarkSidebarSession(b *testing.B) {
 	at := time.Date(2024, time.January, 2, 3, 4, 5, 123456789, time.UTC)
-	chat := backend.SidebarChat{Session: backend.SidebarSession{StateSince: at, ArrivedAt: at}}
+	chat := backend.SidebarChat{Session: backend.SidebarSession{StateSince: at, ArrivedAt: at, Summary: &protocol.SessionSummary{LastUpdated: at}}}
 
 	b.ReportAllocs()
 
 	for b.Loop() {
 		got := sidebarSession(&chat)
-		if got.StateSince != got.ArrivedAt {
+		if got.StateSince != got.ArrivedAt || got.StateSince != got.UpdatedAt {
 			b.Fatal("identical timestamps differ")
 		}
 	}
