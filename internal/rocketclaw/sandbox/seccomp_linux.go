@@ -4,7 +4,6 @@ package sandbox
 
 import (
 	"encoding/binary"
-	"fmt"
 
 	"golang.org/x/net/bpf"
 	"golang.org/x/sys/unix"
@@ -28,7 +27,7 @@ const (
 // kernel attack surface or host-wide state no guest command needs, which the user namespace mostly makes
 // powerless already. Sockets other than AF_UNIX fail with EAFNOSUPPORT, though the network namespace has no
 // route anyway.
-func seccompProgram() ([]byte, error) {
+func seccompProgram() []byte {
 	denied := append([]uintptr{
 		unix.SYS_ACCT, unix.SYS_ADD_KEY, unix.SYS_BPF, unix.SYS_CHROOT, unix.SYS_CLOCK_ADJTIME,
 		unix.SYS_CLOCK_SETTIME, unix.SYS_DELETE_MODULE, unix.SYS_FINIT_MODULE, unix.SYS_FSCONFIG,
@@ -73,10 +72,8 @@ func seccompProgram() ([]byte, error) {
 
 	prog = append(prog, allow)
 
-	raw, err := bpf.Assemble(prog)
-	if err != nil {
-		return nil, fmt.Errorf("assemble seccomp filter: %w", err)
-	}
+	// The fixed 4-byte loads, valid jump conditions, and constant returns cannot fail assembly.
+	raw, _ := bpf.Assemble(prog)
 
 	out := make([]byte, 0, 8*len(raw))
 	for _, ins := range raw {
@@ -85,5 +82,5 @@ func seccompProgram() ([]byte, error) {
 		out = binary.NativeEndian.AppendUint32(out, ins.K)
 	}
 
-	return out, nil
+	return out
 }

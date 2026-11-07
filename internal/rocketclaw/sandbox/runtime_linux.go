@@ -55,9 +55,7 @@ func prepare(ctx context.Context, dir string, rt *Runtime, log *slog.Logger) err
 		return errors.New("this machine doesn't have bubblewrap, which the sandbox is built on; install the bubblewrap package and restart RocketClaw")
 	}
 
-	if rt.p.seccomp, err = seccompProgram(); err != nil {
-		return err
-	}
+	rt.p.seccomp = seccompProgram()
 
 	if rt.p.cgroup, err = delegateCgroup(); err != nil {
 		return fmt.Errorf("RocketClaw can't cap each command's memory and processes, because it wasn't started with a cgroup of its own (systemd Delegate=yes; see the README's Emulated shell section): %w", err)
