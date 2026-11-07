@@ -169,66 +169,6 @@ func TestStartSessionPromptServerReturnsErrors(t *testing.T) {
 	}
 }
 
-func TestStartSessionPromptServerExposesMetadataSchema(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error) {
-		return SessionResult{}, nil
-	})
-	require.NoError(t, err)
-
-	defer func() { require.NoError(t, server.Close(context.Background())) }()
-
-	implementation := new(mcp.Implementation)
-	implementation.Name = "test-client"
-	implementation.Version = "1.0.0"
-	client := mcp.NewClient(implementation, nil)
-	transport := new(mcp.StreamableClientTransport)
-	transport.Endpoint = server.url
-	transport.DisableStandaloneSSE = true
-	session, err := client.Connect(t.Context(), transport, nil)
-	require.NoError(t, err)
-
-	defer func() { require.NoError(t, session.Close()) }()
-
-	tools, err := session.ListTools(t.Context(), nil)
-	require.NoError(t, err)
-	require.Len(t, tools.Tools, 1)
-
-	var sessionPromptTool *mcp.Tool
-
-	for i := range tools.Tools {
-		if tools.Tools[i].Name == SessionPromptToolName {
-			sessionPromptTool = tools.Tools[i]
-		}
-	}
-
-	require.NotNil(t, sessionPromptTool)
-
-	schema, ok := sessionPromptTool.InputSchema.(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, []any{"external_conversation_id", "input", "agent"}, schema["required"])
-	properties, ok := schema["properties"].(map[string]any)
-	require.True(t, ok)
-	metadata, ok := properties["metadata"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "object", metadata["type"])
-
-	_, ok = properties["external_conversation_id"].(map[string]any)
-	assert.True(t, ok)
-
-	_, ok = properties["input"].(map[string]any)
-	assert.True(t, ok)
-
-	attachments, ok := properties["attachments"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "array", attachments["type"])
-
-	outputSchema, ok := sessionPromptTool.OutputSchema.(map[string]any)
-	require.True(t, ok)
-	required, ok := outputSchema["required"].([]any)
-	require.True(t, ok)
-	assert.ElementsMatch(t, []any{"external_conversation_id", "agent", "answer"}, required)
-}
-
 func TestStartSessionPromptServerUsesStatelessProtocol(t *testing.T) {
 	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, externalConversationID, agent, input string, _ map[string]string, _ []SessionAttachment) (SessionResult, error) {
 		assert.Equal(t, "external-1", externalConversationID)
@@ -254,6 +194,31 @@ func TestStartSessionPromptServerUsesStatelessProtocol(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tools.Tools, 1)
 	assert.Equal(t, SessionPromptToolName, tools.Tools[0].Name)
+
+	schema, ok := tools.Tools[0].InputSchema.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, []any{"external_conversation_id", "input", "agent"}, schema["required"])
+	properties, ok := schema["properties"].(map[string]any)
+	require.True(t, ok)
+	metadata, ok := properties["metadata"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "object", metadata["type"])
+
+	_, ok = properties["external_conversation_id"].(map[string]any)
+	assert.True(t, ok)
+
+	_, ok = properties["input"].(map[string]any)
+	assert.True(t, ok)
+
+	attachments, ok := properties["attachments"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "array", attachments["type"])
+
+	outputSchema, ok := tools.Tools[0].OutputSchema.(map[string]any)
+	require.True(t, ok)
+	required, ok := outputSchema["required"].([]any)
+	require.True(t, ok)
+	assert.ElementsMatch(t, []any{"external_conversation_id", "agent", "answer"}, required)
 
 	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: SessionPromptToolName, Arguments: map[string]any{
 		"external_conversation_id": "external-1",
