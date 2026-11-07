@@ -1,6 +1,6 @@
 import { timelinePresets } from "@opencode/session-ui/timeline/detail"
 import { defaultSettings, type Settings } from "@/settings/model"
-import { placeSessionTabs, sessionTabPane, type SessionPane, type SessionTabs } from "@/shell/state/session-tabs"
+import { paneTargetMatches, placeSessionTabs, sessionTabPane, type SessionPane, type SessionPaneTarget, type SessionTabs } from "@/shell/state/session-tabs"
 
 // RocketClaw's defaults for settings nobody has changed, replacing upstream's in packages/app/src/settings/model.tsx.
 const defaults = {
@@ -26,13 +26,13 @@ if (localStorage.getItem("rocketclaw.settings-defaults") === null) {
 
 // Apply the default before the native open reveals its pane, while an explicit launcher destination is still known.
 // Native moves keep their placement, and the last terminal's pane survives closing every terminal.
-export function placeTerminalTabs(session: string, previous: SessionTabs, next: SessionTabs, target?: SessionPane) {
+export function placeTerminalTabs(session: string, previous: SessionTabs, next: SessionTabs, target?: SessionPaneTarget) {
   const key = `rocketclaw.terminal-pane:${session}`
   const before = previous.all.findLast((tab) => tab.startsWith("terminal:"))
   const after = next.all.findLast((tab) => tab.startsWith("terminal:"))
-  const pane = target ?? (after && !before
-    ? (localStorage.getItem(key) as SessionPane | null) ?? "bottom"
-    : undefined)
+  const pane = (after && target && paneTargetMatches(target, after) ? target : undefined) ?? (after && !before
+    ? { pane: (localStorage.getItem(key) as SessionPane | null) ?? "bottom", plugin: "terminal" }
+    : target)
   const placed = placeSessionTabs(previous, next, pane)
   if (after) localStorage.setItem(key, sessionTabPane(placed, after))
   else if (before) localStorage.setItem(key, sessionTabPane(previous, before))

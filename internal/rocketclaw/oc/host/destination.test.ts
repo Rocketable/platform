@@ -4,7 +4,7 @@ import { expect, mock, test } from "bun:test"
 const http = { url: "", password: "secret" }
 mock.module("@/runtime/server/current", () => ({ useServer: () => ({ isLocal: false, conn: { http } }) }))
 mock.module("@/runtime/server/client", () => ({
-  useServerSDK: () => ({ api: { server: { info: async () => ({ paths: { tmp: "/srv/tmp" } }) } } }),
+  useServerSDK: () => ({ http, api: { server: { info: async () => ({ paths: { tmp: "/srv/tmp" } }) } } }),
 }))
 mock.module("@/workspaces/location", () => ({ useWorkspaceLocation: () => () => ({ directory: "/repo" }) }))
 

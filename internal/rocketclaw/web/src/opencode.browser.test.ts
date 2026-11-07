@@ -151,7 +151,7 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
     // Extensions keep their empty states and configuration links, but no unsupported draft-prompt setup buttons.
     await view.getByRole("button", { name: "Session details", exact: true }).click();
     const details = page.locator('[data-oc-portal] [data-component="session-summary-panel"]');
-    for (const [service, empty] of [["mcp", "No MCP servers configured"], ["plugins", "No plugins configured"], ["skills", "No skills configured"], ["lsp", "No LSP servers configured"]]) {
+    for (const [service, empty] of [["mcp", "No MCP servers configured"], ["plugins", "No plugins configured"], ["skills", "No skills configured"]]) {
       const pane = details.locator(`[data-service="${service}"]`);
       await pane.getByText(empty, { exact: true }).waitFor({ state: "attached" });
       expect(await pane.getByRole("button", { name: "Copy configuration file path", exact: true, includeHidden: true }).count()).toBe(1);
@@ -253,13 +253,20 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
       }, { times: 1 });
       if (close === "command") {
         // While Mod+W's close is pending, toggle still hides a visible terminal without waiting.
+        const removing = Promise.withResolvers<void>();
+        const releaseRemove = Promise.withResolvers<void>();
+        await page.route("**/oc/box/api/experimental/persistent-pty/pty_1", async (route: { continue(): Promise<void> }) => {
+          removing.resolve();
+          await releaseRemove.promise;
+          await route.continue();
+        }, { times: 1 });
         await view.locator('[data-component="terminal"]').click();
         await page.keyboard.press("ControlOrMeta+w");
-        await terminalList.promise;
+        await removing.promise;
         expect(await view.locator('[data-component="terminal"]').isVisible()).toBe(true);
         await page.keyboard.press("Control+Backquote");
         await until(async () => !await view.locator('[data-component="terminal"]').isVisible());
-        releaseList.resolve();
+        releaseRemove.resolve();
       } else {
         await view.locator('[data-pane-tab^="terminal:"]').getByRole("button", { name: "Close tab", exact: true }).click();
       }

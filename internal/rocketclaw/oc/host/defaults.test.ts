@@ -46,9 +46,13 @@ test("the first terminal opens at the bottom and later moves keep the user's cho
   expect(sessionTabPane(state, "terminal:pty-3")).toBe("side")
 
   // An explicit launch into a pane wins over the default, just as dragging a tab there does.
-  const explicit = placeTerminalTabs("explicit-pane-test", { all: [] }, { all: ["terminal:pty-4"] }, "side")
+  const explicit = placeTerminalTabs("explicit-pane-test", { all: [] }, { all: ["terminal:pty-4"] }, { pane: "side", plugin: "terminal" })
   expect(sessionTabPane(explicit, "terminal:pty-4")).toBe("side")
 
   const stored = placeTerminalTabs("undefined-pane-test", { all: [] }, { all: ["terminal:pty-5"], panes: undefined })
   expect(sessionTabPane(stored, "terminal:pty-5")).toBe("bottom")
+
+  // A launcher for a different plugin cannot redirect the terminal's default.
+  const unrelated = placeTerminalTabs("other-plugin-test", { all: [] }, { all: ["terminal:pty-6"] }, { pane: "split", plugin: "file" })
+  expect(sessionTabPane(unrelated, "terminal:pty-6")).toBe("bottom")
 })

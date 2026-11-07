@@ -1,6 +1,7 @@
 import { Show } from "solid-js"
 import type { ServerConnection } from "@/runtime/server/registry"
 import { useGlobal } from "@/runtime/server/runtime"
+import { selectServerVersion } from "@/runtime/server/health-machine"
 import { tag } from "../manifest.json"
 
 const copy = tag.replace(/^v/, "")
@@ -12,7 +13,7 @@ const release = (version: string) => version.split(".").slice(0, 2).join(".")
  */
 export function VersionPill(props: { server: ServerConnection.Key }) {
   const global = useGlobal()
-  const server = () => global.servers.health[props.server]?.version
+  const server = () => selectServerVersion(global.servers.health[props.server])
 
   return (
     <Show when={server() && release(server()!) !== release(copy)}>

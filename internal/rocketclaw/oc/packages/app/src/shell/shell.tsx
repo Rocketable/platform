@@ -34,7 +34,7 @@ export default function Layout(props: ParentProps) {
               "padding-top": "0px",
               "padding-bottom": settings.active()
                 ? "0px"
-                : "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))",
+                : "var(--shell-safe-area-bottom, var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)))",
               "--settings-bottom-inset": "var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))",
             }}
           >
@@ -43,6 +43,7 @@ export default function Layout(props: ParentProps) {
             </PluginServerCover>
           </main>
         </div>
+        <div data-slot="composer-touch-bar-mount" class="order-last shrink-0" />
         <PluginSlot at="window.bottom" input={{}} />
         <ToastRegion />
         <UploadToastHost />

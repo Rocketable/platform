@@ -17,7 +17,8 @@ import { SettingsProviders } from "./providers/providers"
 import { SettingsModels } from "./models/models"
 import { SettingsServerGeneral } from "./servers/servers"
 import { SettingsServerUnavailable } from "./servers/unavailable"
-import { settingsServerReachable, useSettingsServers, useSettingsServersLoaded } from "./servers/inventory"
+import { useSettingsServers, useSettingsServersLoaded } from "./servers/inventory"
+import { serverPagesConnection } from "./servers/machine"
 import { SettingsWorkspaces } from "./workspaces/workspaces"
 import { useWorkspacesPrefetch } from "./workspaces/queries"
 import { SettingsProjects } from "./workspaces/projects"
@@ -30,7 +31,6 @@ import { ProjectSettingsExtensions } from "./workspaces/project-extensions"
 import { useSettingsSurface } from "./surface"
 import { settingsViewRedirect } from "./route"
 import { pageIcons, pageLabels } from "./pages"
-import { revealSettingsSearch } from "./search-reveal"
 import { PluginSettingsPages } from "@/runtime/plugin/settings-page-view"
 import "@/settings/settings.css"
 
@@ -77,40 +77,24 @@ export function SettingsScreen() {
   const loaded = useSettingsServersLoaded()
   const global = useGlobal()
   let root: HTMLDivElement | undefined
-  let viewType = surface.view().type
-  let activation = 0
 
-  onMount(() => root?.focus({ preventScroll: true }))
-  createEffect(() => {
-    const next = surface.view().type
-
-    if (next === viewType) return
-    viewType = next
-    queueMicrotask(() => {
-      const target =
-        surface.search.state.query.trim() && surface.search.state.expanded
-          ? root?.querySelector<HTMLInputElement>(".settings-search input")
-          : root
-
-      target?.focus({ preventScroll: true })
-    })
+  onMount(() => {
+    root?.focus({ preventScroll: true })
+    onCleanup(surface.search.attach(root!))
   })
-
+  createEffect(() => surface.search.sync(surface.view()))
   createEffect(
     on(
-      () => [surface.view(), surface.search.state.selected] as const,
-      ([view, selected]) => {
-        if (
-          !root ||
-          !selected ||
-          !view.searchActivation ||
-          view.searchActivation !== surface.search.state.activation ||
-          view.searchActivation === activation
-        )
-          return
-        activation = view.searchActivation
-        onCleanup(revealSettingsSearch(root, view))
-      },
+      createMemo(() => surface.view().type),
+      () =>
+        queueMicrotask(() => {
+          const target = surface.search.expanded()
+            ? root?.querySelector<HTMLInputElement>(".settings-search input")
+            : root
+
+          target?.focus({ preventScroll: true })
+        }),
+      { defer: true },
     ),
   )
 
@@ -118,16 +102,17 @@ export function SettingsScreen() {
 
   const project = (server: ServerConnection.Any, directory: string) =>
     global
-      .ensureServerCtx(server)
-      .projects.list()
+      .serverCtx(ServerConnection.key(server))
+      ?.projects.list()
       .find((item) => item.worktree === directory)
 
   const targetServer = createMemo(() => {
     const view = surface.view()
 
     if (view.type !== "project") return undefined
+    const server = connection(view.server)
 
-    return connection(view.server)
+    return server && serverPagesConnection(server.availability)
   })
 
   const targetProject = createMemo(() => {
@@ -136,18 +121,14 @@ export function SettingsScreen() {
 
     if (view.type !== "project" || !server) return undefined
 
-    return server.connection && project(server.connection, view.project)
+    return project(server, view.project)
   })
 
   createEffect(() => {
     const next = settingsViewRedirect({
       view: surface.view(),
       loaded: loaded(),
-      servers: servers().map((item) => ({
-        key: item.key,
-        connected: !!item.connection,
-        starting: item.source?.entry.state === "starting",
-      })),
+      servers: servers().map((item) => ({ key: item.key, availability: item.availability.status })),
     })
 
     if (next) surface.replace(next)
@@ -162,34 +143,7 @@ export function SettingsScreen() {
       onKeyDown={(event) => {
         if (event.key !== "Escape" || event.defaultPrevented || dialog.active) return
         event.preventDefault()
-
-        if (surface.view().type !== "root" && surface.search.back()) return
-
-        if (surface.search.state.query.trim()) {
-          surface.search.clear()
-
-          return
-        }
-
-        surface.back()
-      }}
-      onWheel={(event) => {
-        if (!root || event.ctrlKey || !event.deltaY || !(event.target instanceof Element)) return
-
-        // The page scrolls inside its panel, so a wheel over the gutters or sidebar would otherwise do nothing.
-        if (event.target.closest(".settings-content") || insideScroller(event.target, root)) return
-        const panel = root.querySelector<HTMLElement>(".settings-content > .settings-panel")
-
-        if (!panel) return
-
-        const unit =
-          event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-            ? panel.clientHeight
-            : event.deltaMode === WheelEvent.DOM_DELTA_LINE
-              ? 16
-              : 1
-
-        panel.scrollBy({ top: event.deltaY * unit })
+        surface.search.escape()
       }}
     >
       <Switch>
@@ -197,7 +151,7 @@ export function SettingsScreen() {
           <RootSettings />
         </Match>
         <Match when={surface.view().type === "project"}>
-          <Show when={targetServer()?.connection} keyed>
+          <Show when={targetServer()} keyed>
             {(server) => (
               <Show when={targetProject()}>{(project) => <ProjectSettings server={server} project={project()} />}</Show>
             )}
@@ -208,21 +162,9 @@ export function SettingsScreen() {
   )
 }
 
-// An overflowing scroller owns the wheel even at its edges, so reaching the end of the nav list does not scroll the page.
-function insideScroller(target: Element, root: Element) {
-  for (let node: Element | null = target; node && node !== root; node = node.parentElement) {
-    if (!/auto|scroll/.test(getComputedStyle(node).overflowY)) continue
-
-    if (node.scrollHeight - node.clientHeight > 1) return true
-  }
-
-  return false
-}
-
 function RootSettings() {
   const language = useLanguage()
   const surface = useSettingsSurface()
-  const global = useGlobal()
   const inventory = useSettingsServers()
 
   const [state, setState] = createStore<{ worktreeFilterReset: number; modelProvider: string | undefined }>({
@@ -236,7 +178,7 @@ function RootSettings() {
   const reachable = createMemo(() => {
     const entry = surface.server()
 
-    return entry && settingsServerReachable(entry, global.servers.health[entry.key]) ? entry.connection : undefined
+    return entry && serverPagesConnection(entry.availability)
   })
 
   const prefetchWorkspaces = useWorkspacesPrefetch(reachable)
@@ -266,10 +208,9 @@ function RootSettings() {
       })),
     },
     {
-      items: [...rootClientTabs.map((item) => ({ ...item, label: language.t(item.label) })), ...pluginTabs()],
-    },
-    {
       items: [
+        ...rootClientTabs.map((item) => ({ ...item, label: language.t(item.label) })),
+        ...pluginTabs(),
         {
           value: "servers",
           icon: pageIcons.servers,
@@ -277,11 +218,14 @@ function RootSettings() {
         },
       ],
     },
-    ...(experimentalSettingsAvailable
-      ? [{ items: experimentalTab.map((item) => ({ ...item, label: language.t(item.label) })) }]
-      : []),
     {
-      items: [...aboutTab.map((item) => ({ ...item, label: language.t(item.label) })), ...pluginTabs("about")],
+      items: [
+        ...pluginTabs("about"),
+        ...(experimentalSettingsAvailable
+          ? experimentalTab.map((item) => ({ ...item, label: language.t(item.label) }))
+          : []),
+        ...aboutTab.map((item) => ({ ...item, label: language.t(item.label) })),
+      ],
     },
   ])
 
@@ -353,7 +297,7 @@ function RootSettings() {
               <SettingsModels
                 active={surface.view().tab === "models"}
                 provider={state.modelProvider}
-                onReveal={() => setState("modelProvider", undefined)}
+                onConsumeTarget={() => setState("modelProvider", undefined)}
               />
             </Tabs.Content>
             <Tabs.Content value="extensions" class="settings-panel">

@@ -1,0 +1,1 @@
+import{t as e}from"./core-BXqU3ikT.js";import"./gui-G9iOr4-X.js";var t=e.define(`review.details`);export{t};

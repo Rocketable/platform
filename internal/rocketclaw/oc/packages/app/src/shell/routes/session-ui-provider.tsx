@@ -1,22 +1,31 @@
+// rocketclaw: keep the integration in its mounted view (upstream packages/app/src/shell/routes/session-ui-provider.tsx)
+import { NavigationContext } from "@rocketclaw/host/navigation"
 import { DataProvider, type TurnDiffInput } from "@opencode/session-ui/context"
 import { MarkdownProvider, type ReadMarkdownImage } from "@opencode/session-ui/context/markdown"
 import { useNavigate, useParams } from "@solidjs/router"
-import { createMemo, onCleanup, untrack, useContext, type ParentProps } from "solid-js"
-// rocketclaw: navigation that leaves this session goes to RocketClaw (upstream packages/app/src/shell/routes/session-ui-provider.tsx)
-import { NavigationContext } from "@rocketclaw/host/navigation"
 import { useQuery } from "@tanstack/solid-query"
+import { createEffect, createMemo, createSignal, useContext, on, onCleanup, untrack, type ParentProps } from "solid-js"
 import { useProviders } from "@/providers/catalog/providers"
 import { LocalProvider } from "@/providers/models/selection"
 import type { ServerConnection } from "@/runtime/server/registry"
 import { sessionHref } from "@/shell/routes/session"
 import { useData } from "@/runtime/server/current"
 import { useServerSDK } from "@/runtime/server/client"
+import { formatServerError, isSessionNotFoundError } from "@/runtime/server/errors"
 import { findSessionTab, useTabs } from "@/shell/tabs/tabs"
 import { readLocalImage } from "@/runtime/server/image"
 import { useLanguage } from "@/runtime/i18n/language"
 import { showToast } from "@/shell/notifications/toast"
+import { SessionExportProvider } from "@/session/commands/export-session"
 import { createTurnDiffCache } from "@/session/timeline/turn-diffs"
 import { useSettings } from "@/settings/model"
+import {
+  INITIAL_SESSION_UI_NAVIGATE_STATE,
+  transitionSessionUINavigate,
+  type SessionNavigateOrigin,
+  type SessionUINavigateEffect,
+  type SessionUINavigateEvent,
+} from "./session-ui-navigate-machine"
 
 export function SessionUIProvider(
   props: ParentProps<{
@@ -25,12 +34,12 @@ export function SessionUIProvider(
   }>,
 ) {
   const navigate = useNavigate()
+  const hostNavigation = useContext(NavigationContext)
   const params = useParams()
   const data = useData()
   const serverSDK = useServerSDK()
   const tabs = useTabs()
   const language = useLanguage()
-  const navigation = useContext(NavigationContext)
   const settings = useSettings()
   const directory = () => props.directory
 
@@ -42,40 +51,100 @@ export function SessionUIProvider(
 
   const href = (sessionID: string) => sessionHref(props.server, sessionID)
 
-  const navigateToSession = async (sessionID: string) => {
-    const tab = tabs.store.find(
-      (item) =>
-        item.type === "session" &&
-        item.server === props.server &&
-        (item.sessionId === params.id || item.routeSessionId === params.id),
-    )
+  const origin = (): SessionNavigateOrigin => ({ server: props.server, sessionID: params.id })
+  const [navigation, setNavigation] = createSignal(INITIAL_SESSION_UI_NAVIGATE_STATE)
+  const lookups = new Map<number, AbortController>()
 
-    if (tab?.type === "session") tabs.rememberSessionRoute(tab, sessionID, params.id)
-    await data.session.sync(sessionID).catch(() => undefined)
-    navigate(href(sessionID))
+  const dispatchNavigation = (event: SessionUINavigateEvent) => {
+    const previous = untrack(navigation)
+    const next = transitionSessionUINavigate(previous, event)
+
+    if (next.state !== previous) setNavigation(next.state)
+    next.effects.forEach((effect) =>
+      Promise.try(() => runNavigation(effect)).catch((cause: unknown) => console.error("[session.navigate]", cause)),
+    )
   }
 
-  const openReferencedSession = async (sessionID: string) => {
-    // The transcript may mention a session from another server (or one that was deleted).
-    // Resolve it on this server before touching tabs or the current route.
-    const session = await serverSDK.api.session.get({ sessionID }).catch(() => undefined)
-
-    if (!session || session.time.archived) {
-      showToast({ title: language.t("session.error.notFound") })
+  function runNavigation(effect: SessionUINavigateEffect) {
+    if (effect.type === "child.sync") {
+      const settled = () => dispatchNavigation({ type: "child.synced", attempt: effect.attempt })
+      void Promise.try(() => data.session.sync(effect.targetSessionID)).then(settled, settled)
 
       return
     }
 
-    data.session.remember(session)
-    // rocketclaw: a referenced session opens in its own RocketClaw tab
-    // (upstream packages/app/src/shell/routes/session-ui-provider.tsx)
-    navigation.openSession(session.id)
+    if (effect.type === "child.navigate") {
+      // The tab remembers the child only when the screen goes there, so it never disagrees with the route.
+      const tab = effect.origin.sessionID ? tabs.sessionTab(effect.origin.server, effect.origin.sessionID) : undefined
+
+      if (tab?.type === "session") tabs.rememberSessionRoute(tab, effect.targetSessionID, effect.origin.sessionID)
+      navigate(sessionHref(effect.origin.server, effect.targetSessionID))
+
+      return
+    }
+
+    if (effect.type === "referenced.lookup") {
+      // The transcript may mention a session from another server (or one that was deleted).
+      // Resolve it on this server before touching tabs or the current route.
+      const controller = new AbortController()
+      lookups.set(effect.attempt, controller)
+      void Promise.try(() =>
+        serverSDK.api.session.get({ sessionID: effect.targetSessionID }, { signal: controller.signal }),
+      )
+        .finally(() => lookups.delete(effect.attempt))
+        .then(
+          (session) =>
+            dispatchNavigation(
+              session.time.archived
+                ? { type: "referenced.missing", attempt: effect.attempt }
+                : { type: "referenced.resolved", attempt: effect.attempt, session },
+            ),
+          (cause: unknown) =>
+            dispatchNavigation(
+              isSessionNotFoundError(cause, effect.targetSessionID)
+                ? { type: "referenced.missing", attempt: effect.attempt }
+                : { type: "referenced.failed", attempt: effect.attempt, cause },
+            ),
+        )
+
+      return
+    }
+
+    if (effect.type === "referenced.abort") {
+      lookups.get(effect.attempt)?.abort()
+      lookups.delete(effect.attempt)
+
+      return
+    }
+
+    if (effect.type === "referenced.open") {
+      data.session.remember(effect.session)
+      // rocketclaw: referenced sessions open in RocketClaw (upstream packages/app/src/shell/routes/session-ui-provider.tsx)
+      hostNavigation.openSession(effect.session.id)
+
+      return
+    }
+
+    if (effect.type === "toast.not-found") return showToast({ title: language.t("session.error.notFound") })
+
+    showToast({ title: formatServerError(effect.cause, language.t, language.t("common.requestFailed")) })
   }
+
+  createEffect(
+    on(origin, (current) => dispatchNavigation({ type: "origin.changed", origin: current }), { defer: true }),
+  )
+  onCleanup(() => dispatchNavigation({ type: "disposed" }))
+
+  const navigateToSession = (sessionID: string) =>
+    dispatchNavigation({ type: "child.requested", origin: untrack(origin), targetSessionID: sessionID })
+
+  const openReferencedSession = (sessionID: string) =>
+    dispatchNavigation({ type: "referenced.requested", origin: untrack(origin), targetSessionID: sessionID })
 
   const sessionTitle = (id: string) => {
     const session = data.session.get(id)
 
-    // rocketclaw: without the home session index, resolve unknown mentions on click (upstream packages/app/src/shell/routes/session-ui-provider.tsx)
+    // rocketclaw: unknown mentions remain links, resolved on click (upstream packages/app/src/shell/routes/session-ui-provider.tsx)
     return session ? (!session.time.archived ? session.title || language.t("command.session.new") : undefined) : id
   }
 
@@ -116,8 +185,8 @@ export function SessionUIProvider(
     const cache = turnDiffCache()
 
     return {
-      get: cache.get,
-      load: (input: TurnDiffInput) => cache.load(input, () => serverSDK.api.session.diff(input)),
+      state: cache.state,
+      load: (input: TurnDiffInput) => cache.load(input, (signal) => serverSDK.api.session.diff(input, { signal })),
     }
   })
 
@@ -154,7 +223,7 @@ export function SessionUIProvider(
         backgroundCompaction={backgroundCompaction()}
       >
         <MarkdownProvider readImage={readImage()} openSession={openReferencedSession} sessionTitle={sessionTitle}>
-          {props.children}
+          <SessionExportProvider>{props.children}</SessionExportProvider>
         </MarkdownProvider>
       </DataProvider>
     </LocalProvider>
