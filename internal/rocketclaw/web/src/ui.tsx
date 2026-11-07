@@ -1897,7 +1897,25 @@ export function App() {
   const name = useServer();
   const identity = useQuery(queries.identity(), queryClient), config = useQuery(queries.config(), queryClient);
   const scope = identity.isSuccess && config.isSuccess ? JSON.stringify(["authenticated-username", location.origin + serverPath(""), identity.data.username, config.data.workspace ?? ""]) : undefined;
-  return <QueryClientProvider client={queryClient}><TooltipProvider><ProtocolGuard /><div className="flex h-dvh flex-col"><WebAppUpdate /><SidebarOwner>
+  const shell = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const resize = () => {
+      // Keyboards shrink/pan the visual viewport without changing dvh. Pinch zoom keeps its existing layout.
+      if (viewport.scale !== 1) return;
+      shell.current!.style.height = `${viewport.height}px`;
+      shell.current!.style.top = `${viewport.offsetTop}px`;
+    };
+    resize();
+    viewport.addEventListener("resize", resize);
+    viewport.addEventListener("scroll", resize);
+    return () => {
+      viewport.removeEventListener("resize", resize);
+      viewport.removeEventListener("scroll", resize);
+    };
+  }, []);
+  return <QueryClientProvider client={queryClient}><TooltipProvider><ProtocolGuard /><div ref={shell} className="fixed inset-x-0 top-0 flex h-dvh flex-col"><WebAppUpdate /><SidebarOwner>
     <SessionApp key={name} scope={scope} scopeError={identity.error?.message ?? config.error?.message} />
   </SidebarOwner></div></TooltipProvider></QueryClientProvider>;
 }
