@@ -771,6 +771,24 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 		case request := <-requests:
 			first = append(first, request)
 		case <-time.After(3 * time.Second):
+			t.Logf("shadow final drain startup: received=%d buffered_requests=%d finals=%d events=%d database=%+v", len(first), len(requests), len(finals), len(events), store.db.Stats())
+
+			for _, request := range first {
+				t.Logf("shadow final drain startup: received model=%s inputs=%d", request.Model, len(request.Input))
+			}
+
+			// Bound only diagnostic SQL; preserve the startup wait and failure below.
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			rows, err := queryStrings(ctx, store.db, `SELECT format('conversation=%s agent=%s shadow_parent=%s turn=%s phase=%s lane=%s outbound=%s manifest=%s parent_turn=%s child_turn=%s inputs=%s input_closed=%s terminal=%s',
+c.conversation_id, c.agent, c.shadow_parent, t.id, t.phase, t.takes_lane, t.outbound_json IS NOT NULL,
+s.id, s.parent_turn_id, s.child_turn_id, jsonb_array_length(s.inputs), s.input_closed, s.terminal)
+FROM conversations c LEFT JOIN turns t ON t.conversation_id = c.conversation_id
+LEFT JOIN shadow_turns s ON s.child_conversation_id = c.conversation_id
+WHERE c.conversation_id = $1 OR c.shadow_parent = $1
+ORDER BY c.conversation_id, t.id, s.id LIMIT 20`, "shadow final drain startup state", "parent")
+
+			cancel()
+			t.Logf("shadow final drain startup rows=%v query_error=%v", rows, err)
 			t.Fatal("parent and child did not both start from captured input")
 		}
 	}
