@@ -520,6 +520,82 @@ test("remote sessions list, tag, go offline, and start", async () => {
   }
 }, 60_000);
 
+test("mobile keyboards keep the composer, model controls and bottom bar above the keyboard with short and long drafts", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const { web, release, base } = start();
+  release();
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    // A keyboard can shrink only the visual viewport (Safari/Chrome), or both viewports.
+    // Simulate the browser metrics, not a real OS keyboard; device keyboard transitions still need a phone check.
+    for (const width of [393, 820, 1280]) {
+      const page = await browser.newPage({ viewport: { width, height: 844 }, isMobile: width < 1280, hasTouch: width < 1280 });
+      await page.goto(`${base}${route("opencode:box:ses_a")}`);
+      const editor = page.locator("[data-component=composer-editor]");
+      const composer = page.locator("[data-component=composer]");
+      await editor.waitFor();
+      const visible = async (height: number, top: number, scale = 1) => {
+        await page.evaluate(({ height, top, scale }: { height: number; top: number; scale: number }) => {
+          const viewport = window.visualViewport!;
+          for (const [key, value] of Object.entries({ height, offsetTop: top, scale })) Object.defineProperty(viewport, key, { configurable: true, value });
+          viewport.dispatchEvent(new Event("resize"));
+          viewport.dispatchEvent(new Event("scroll"));
+        }, { height, top, scale });
+      };
+      const bounds = () => page.evaluate(() => ({
+        composer: document.querySelector("[data-component=composer]")!.getBoundingClientRect().toJSON(),
+        bar: document.querySelector("footer")!.getBoundingClientRect().toJSON(),
+        view: document.querySelector("main [data-oc-view]")!.getBoundingClientRect().toJSON(),
+      }));
+      for (const text of ["short draft", "A sufficiently long draft should scroll inside its editor.\n".repeat(40)]) {
+        await editor.fill(text);
+        await visible(410, 0);
+        expect((await bounds()).bar.bottom).toBeLessThanOrEqual(410);
+        expect((await bounds()).composer.bottom).toBeLessThanOrEqual(410);
+        expect((await bounds()).composer.top).toBeGreaterThanOrEqual((await bounds()).view.top);
+        expect(await editor.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
+        expect(await composer.locator("[data-slot=composer-controls]").count()).toBe(1);
+        if (text.length > 100) expect(await page.locator("[data-component=composer-scroll]").evaluate((node: HTMLElement) => node.scrollHeight > node.clientHeight)).toBe(true);
+        // Focusing the editor can also pan the visible viewport; a scroll event alone must reposition the shell.
+        await page.evaluate(() => {
+          Object.defineProperty(window.visualViewport!, "offsetTop", { configurable: true, value: 52 });
+          window.visualViewport!.dispatchEvent(new Event("scroll"));
+        });
+        await until(async () => Math.abs((await bounds()).bar.bottom - 462) < 1);
+        expect((await bounds()).composer.top).toBeGreaterThanOrEqual(52);
+        // Dismissing the keyboard restores the full page, with the unsent draft and focus intact.
+        await visible(844, 0);
+        await until(async () => Math.abs((await bounds()).bar.bottom - 844) < 1);
+        expect(await editor.innerText()).toContain(text.trim());
+      }
+      await page.setViewportSize({ width, height: 410 });
+      await visible(410, 0);
+      await until(async () => (await bounds()).bar.bottom <= 410);
+      expect((await bounds()).composer.bottom).toBeLessThanOrEqual(410);
+      await page.setViewportSize({ width, height: 844 });
+      await visible(844, 0);
+      await until(async () => Math.abs((await bounds()).bar.bottom - 844) < 1);
+      // Pinch zoom must keep the layout's full size, rather than reflowing it into the zoomed-in window.
+      await visible(422, 100, 2);
+      expect((await bounds()).bar.bottom).toBe(844);
+      await visible(844, 0);
+      // RocketClaw's own composer shares the same shell, not just the embedded OpenCode view.
+      await page.goto(base);
+      const native = page.locator("textarea:enabled");
+      await native.fill("A long RocketClaw draft\n".repeat(40));
+      await visible(410, 0);
+      const nativeBounds = await native.boundingBox();
+      expect(nativeBounds!.y).toBeGreaterThanOrEqual(0);
+      expect(nativeBounds!.y + nativeBounds!.height).toBeLessThanOrEqual(410);
+      expect((await page.getByRole("button", { name: "Send", exact: true }).boundingBox())!.y).toBeLessThan(410);
+      await page.close();
+    }
+  } finally {
+    await browser.close();
+    web.stop(true);
+  }
+}, 60_000);
+
 test("a deleted remote session leaves the Top Shelf too", async () => {
   const { chromium: engine } = await import(playwright!);
   const { web, release, shelved, base } = start({ tabs: [{ path: route("opencode:box:ses_a"), space: "main" }] });
