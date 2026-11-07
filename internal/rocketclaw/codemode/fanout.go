@@ -326,9 +326,6 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 
 	_ = group.Wait()
 
-	mu.Lock()
-	defer mu.Unlock()
-
 	if errWin != nil {
 		return nil, errWin
 	}
