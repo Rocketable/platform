@@ -292,7 +292,10 @@ func sidebarSession(chat *backend.SidebarChat) *Session {
 	if summary := row.Summary; summary != nil {
 		session.Preview = summary.LastMessage
 		if !summary.LastUpdated.IsZero() {
-			session.UpdatedAt = summary.LastUpdated.Format(time.RFC3339Nano)
+			session.UpdatedAt = session.StateSince
+			if summary.LastUpdated != row.StateSince {
+				session.UpdatedAt = summary.LastUpdated.Format(time.RFC3339Nano)
+			}
 		}
 	}
 
