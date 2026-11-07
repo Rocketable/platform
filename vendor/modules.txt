@@ -244,7 +244,7 @@ github.com/gaissmai/bart/internal/value
 # github.com/go-gorp/gorp/v3 v3.1.0
 ## explicit; go 1.18
 github.com/go-gorp/gorp/v3
-# github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3
+# github.com/go-json-experiment/json v1.27.2
 ## explicit; go 1.26
 github.com/go-json-experiment/json
 github.com/go-json-experiment/json/internal
