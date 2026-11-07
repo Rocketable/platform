@@ -460,10 +460,6 @@ func (e *providerRetryLimitError) Unwrap() error {
 }
 
 func (e *responseFailureError) Error() string {
-	if e == nil {
-		return "response failed"
-	}
-
 	if e.code != "" && e.message != "" {
 		return fmt.Sprintf("response failed: %s: %s", e.code, e.message)
 	}
