@@ -2928,7 +2928,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
           window.dispatchEvent(new PopStateEvent("popstate"));
         }, `/s/${Buffer.from("queue-navigation-other").toString("base64url")}`);
         await queuePage.waitForURL(`**/s/${Buffer.from("queue-navigation-other").toString("base64url")}`);
-        await queuePage.waitForFunction(() => document.querySelector("textarea")?.value === "");
+        await queuePage.waitForFunction(() => {
+          const input = document.querySelector("textarea");
+          return input?.value === "" && !input.matches(":disabled");
+        });
         expect(await target.getByRole("button", { name: "Edit", exact: true }).isEnabled()).toBe(true);
         transcriptStreams.delete(`queue-expansion-${width}-${count}`);
         await queuePage.goBack();
