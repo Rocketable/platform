@@ -835,7 +835,9 @@ test("a tab waiting on this person stops shimmering and needs them, as do its co
   expect(await header.getByText("Needs you", { exact: true }).isVisible()).toBe(true);
 }), 60_000);
 
-test("Cmd/Ctrl+Alt+A and its command open the next followed session asking a question, then unread, longest waiting first", () => withPage({}, async (page, origin, _prompts, saved) => {
+for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["Linux x86_64", "Ctrl", "Alt"]]) test(`Cmd/Ctrl+Alt+A and its command open the next followed session asking a question, then unread, longest waiting first on ${platform}`, () => withPage({}, async (page, origin, _prompts, saved) => {
+  await page.addInitScript((value: string) => Object.defineProperty(navigator, "platform", { value }), platform);
+  const key = modifier === "⌘" ? "Meta" : "Control";
   const at = (minute: number) => `2026-10-22T10:0${minute}:00Z`;
   const sessions = [
     { id: "calm", name: "Calm", agent: "main" },
@@ -854,12 +856,12 @@ test("Cmd/Ctrl+Alt+A and its command open the next followed session asking a que
   await page.goto(origin + href("calm"));
   await strip(page).getByRole("tab", { name: "Asked old", exact: true }).waitFor();
   for (const id of ["asked-old", "asked-new", "unread-old", "unread-new", "asked-old"]) {
-    await page.keyboard.press("Control+Alt+a");
+    await page.keyboard.press(`${key}+Alt+a`);
     await page.waitForURL(origin + href(id));
   }
-  await page.keyboard.press("Control+Shift+p");
+  await page.keyboard.press(`${key}+Shift+p`);
   const command = page.getByRole("dialog", { name: "Run command", exact: true }).getByRole("button", { name: "Sessions: Next needing you", exact: true });
-  expect(await command.locator("kbd").allTextContents()).toEqual(["Ctrl", "Alt", "A"]);
+  expect(await command.locator("kbd").allTextContents()).toEqual([modifier, alternate, "A"]);
   await command.click();
   await page.waitForURL(origin + href("asked-new"));
 }), 60_000);
