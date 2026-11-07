@@ -1139,10 +1139,23 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 				require.NoError(t, parent.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "original", true)))
 			}
 
-			for range 2 {
+			for received := range 2 {
 				select {
 				case <-requests:
 				case <-time.After(3 * time.Second):
+					t.Logf("shadow mutation startup: received=%d buffered_requests=%d finals=%d cancellations=%d database=%+v", received, len(requests), len(finals), len(cancelled), store.db.Stats())
+					// Bound diagnostic SQL only; preserve the startup wait and failure below.
+					ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+					rows, err := queryStrings(ctx, store.db, `SELECT format('conversation=%s agent=%s shadow_parent=%s turn=%s phase=%s lane=%s outbound=%s manifest=%s parent_turn=%s child_turn=%s inputs=%s input_closed=%s terminal=%s',
+c.conversation_id, c.agent, c.shadow_parent, t.id, t.phase, t.takes_lane, t.outbound_json IS NOT NULL,
+s.id, s.parent_turn_id, s.child_turn_id, jsonb_array_length(s.inputs), s.input_closed, s.terminal)
+FROM conversations c LEFT JOIN turns t ON t.conversation_id = c.conversation_id
+LEFT JOIN shadow_turns s ON s.child_conversation_id = c.conversation_id
+WHERE c.conversation_id = $1 OR c.conversation_id = $2 OR c.shadow_parent = $2
+ORDER BY c.conversation_id, t.id, s.id LIMIT 20`, "shadow mutation startup state", parentID, ownerID)
+
+					cancel()
+					t.Logf("shadow mutation startup rows=%v query_error=%v", rows, err)
 					t.Fatal("parent and child did not start")
 				}
 			}
