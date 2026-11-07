@@ -32,7 +32,7 @@
     "@tanstack/solid-virtual": "3.13.37",
     "diff": "8.0.4",
     "dompurify": "3.4.17",
-    "effect": "4.0.6",
+    "effect": "4.1.0",
     "fuzzysort": "3.1.0",
     "ghostty-web": "github:anomalyco/ghostty-web#e91e38a9ceb13c566ddfa15185a9393849f712a9",
     "katex": "0.18.11",
@@ -69,7 +69,7 @@
     "@types/bun": "1.4.3",
     "@types/node": "24.12.2",
     "bun-types": "1.4.4",
-    "effect": "4.0.6",
+    "effect": "4.1.0",
     "solid-js": "1.9.17"
   },
   "patchedDependencies": {

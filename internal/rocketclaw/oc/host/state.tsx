@@ -1,6 +1,7 @@
 import { Match, Switch } from "solid-js"
 import type { ServerConnection } from "@/runtime/server/registry"
 import { useGlobal } from "@/runtime/server/runtime"
+import { isServerUnauthorized, isServerFailed } from "@/runtime/server/health-machine"
 
 /**
  * The server states RocketClaw shows in place of upstream's connect screen (R17). A server that rejects RocketClaw's
@@ -13,12 +14,12 @@ export function ServerState(props: { server: ServerConnection.Key; name: string 
 
   return (
     <Switch>
-      <Match when={health()?.unauthorized}>
+      <Match when={isServerUnauthorized(health())}>
         <div data-component="rocketclaw-server-notice" role="alert">
           RocketClaw cannot sign in to {props.name}
         </div>
       </Match>
-      <Match when={health()?.healthy === false}>
+      <Match when={isServerFailed(health())}>
         <div data-component="rocketclaw-server-banner" role="status">
           Reconnecting to {props.name}…
         </div>

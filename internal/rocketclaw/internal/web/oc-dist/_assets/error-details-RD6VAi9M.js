@@ -1,0 +1,1 @@
+import{F as e,at as t}from"./solid-web-7fRPiAhO.js";var n=t(`<div data-component=error-details><pre data-slot=error-details-text tabindex=0></pre><div data-slot=error-details-actions>`);function r(t){return(()=>{var r=n(),i=r.firstChild,a=i.nextSibling;return e(i,()=>t.error),e(a,()=>t.children),r})()}export{r as t};

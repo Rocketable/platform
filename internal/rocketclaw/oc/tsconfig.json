@@ -480,6 +480,24 @@
       ],
       "@opencode/util/*": [
         "./packages/util/src/*.ts"
+      ],
+      "@opencode/session-ui/copy": [
+        "./packages/session-ui/src/components/copy.ts"
+      ],
+      "@opencode/session-ui/linked-text": [
+        "./packages/session-ui/src/components/linked-text.tsx"
+      ],
+      "@opencode/ui/line-comment/machine": [
+        "./packages/ui/src/data-display/line-comment/machine.ts"
+      ],
+      "@opencode/ui/mcp-sign-in": [
+        "./packages/ui/src/overlays/mcp-sign-in/mcp-sign-in.ts"
+      ],
+      "@opencode/ui/mcp-sign-in/machine": [
+        "./packages/ui/src/overlays/mcp-sign-in/machine.ts"
+      ],
+      "@opencode/ui/icons/file-type-name": [
+        "./packages/ui/src/components/file-icons/choose-icon-name.ts"
       ]
     }
   },

@@ -188,6 +188,31 @@ test("closing an image preview marks only its view's portal and cleans it on dis
   expect(view.portal.hasAttribute("data-image-preview-closing")).toBe(false)
 })
 
+test("touch controls dock inside their own view without changing the page's safe area", async () => {
+  const outside = document.createElement("div")
+  outside.dataset.slot = "composer-touch-bar-mount"
+  document.body.prepend(outside)
+  const matchMedia = window.matchMedia
+  window.matchMedia = (query) => {
+    const media = matchMedia.call(window, query)
+    if (query === "(hover: none) and (pointer: coarse)") Object.defineProperty(media, "matches", { value: true })
+    return media
+  }
+  try {
+    const view = show()
+    await answered(view)
+    await until(() => view.root.querySelector('[data-slot="composer-touch-bar-mount"] [data-slot="composer-touch-bar"]'))
+    expect(outside.childElementCount).toBe(0)
+    expect(view.root.style.getPropertyValue("--shell-safe-area-bottom")).toBe("0px")
+    expect(document.documentElement.style.getPropertyValue("--shell-safe-area-bottom")).toBe("")
+    view.dispose()
+    expect(view.root.style.getPropertyValue("--shell-safe-area-bottom")).toBe("")
+  } finally {
+    window.matchMedia = matchMedia
+    outside.remove()
+  }
+})
+
 test("mounting and disposing five times leaves nothing behind, and one palette opens after a sixth mount", async () => {
   const html = document.documentElement
   const before = [...html.attributes].map((attribute) => `${attribute.name}=${attribute.value}`)

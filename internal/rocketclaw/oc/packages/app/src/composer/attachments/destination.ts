@@ -29,7 +29,7 @@ export function useAttachmentDestination(controls: Accessor<ComposerControls>) {
       // normalizes the separators and returns the resolved path.
       // rocketclaw: resolve under the server URL's path prefix (/oc/<server>), as the client does, and leave
       // credentials to RocketClaw's proxy (upstream packages/app/src/composer/attachments/destination.ts)
-      const base = new URL(server.conn.http.url)
+      const base = new URL(sdk.http.url)
       if (!base.pathname.endsWith("/")) base.pathname += "/"
       const url = new URL("api/experimental/fs/write", base)
       url.searchParams.set("location[directory]", location().directory)
