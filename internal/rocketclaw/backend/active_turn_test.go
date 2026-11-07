@@ -400,6 +400,35 @@ func TestStopBeforeTurnRegistersCancelStopsTurn(t *testing.T) {
 
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	bridge := newBridge()
+
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+
+		t.Logf("stop before cancel: requests=%d finals=%d queued=%d database=%+v", len(requests), len(finals), len(bridge.requestCh), service.db.Stats())
+
+		if bridge.mu.TryLock() {
+			t.Logf("stop before cancel: handling=%t interrupted=%t turn=%q settlement=%t", bridge.handling, bridge.activeTurnInterrupted, bridge.activeTurnID, bridge.settlement != nil)
+			bridge.mu.Unlock()
+		} else {
+			t.Log("stop before cancel: bridge mutex busy")
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		turns, err := queryStrings(ctx, service.db, `SELECT format('turn=%s phase=%s lane=%s outbound=%s', id, phase, takes_lane, outbound_json IS NOT NULL)
+FROM turns WHERE conversation_id = $1 ORDER BY id LIMIT 20`, "stop before cancel turns", bridge.config.ConversationID)
+		t.Logf("stop before cancel: turns=%v query_error=%v", turns, err)
+		activity, err := queryStrings(ctx, service.db, `WITH history_locks AS (
+SELECT DISTINCT pid FROM pg_locks WHERE locktype = 'advisory' AND classid = 87901 AND objid = hashtext($1)::oid
+)
+SELECT format('pid=%s state=%s wait=%s/%s blockers=%s query=%s', pid, state, wait_event_type, wait_event, pg_blocking_pids(pid), left(query, 240))
+FROM pg_stat_activity JOIN history_locks USING (pid) WHERE datname = current_database() ORDER BY pid LIMIT 20`, "stop before cancel history lock activity", bridge.config.ConversationID)
+		t.Logf("stop before cancel: activity=%v query_error=%v", activity, err)
+	}()
+
 	runTestBridge(t, bridge)
 	// A first turn outlasts startup and its own end, which take the history lock too.
 	require.NoError(t, bridge.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "first", true)))
