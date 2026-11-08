@@ -30,9 +30,11 @@ func newCodexVoice() *codexVoice {
 
 func (*codexVoice) route() voiceRoute { return voiceRouteCodex }
 
-// voices are Codex's realtime voices (codex-rs protocol RealtimeVoicesList).
+// voices follows RealtimeVoicesList::builtin().v3 in codex-rs/protocol/src/protocol.rs
+// at c9b4267c370a755da12ec1c8648c2451163212b7, with its default Cove first.
 func (*codexVoice) voices() []string {
-	return []string{"cove", "juniper", "maple", "spruce", "ember", "vale", "breeze", "arbor", "sol"}
+	return []string{"cove", "juniper", "maple", "spruce", "ember", "vale", "breeze", "arbor", "sol",
+		"aube", "bubbie", "haetsal", "hanul", "himari", "leher", "miko", "neer", "porto", "rindo", "rio", "rivage", "selva", "sonna", "tinta", "viola"}
 }
 
 func (*codexVoice) header(credentials voiceCredentials) http.Header {
@@ -43,6 +45,8 @@ func (*codexVoice) header(credentials voiceCredentials) http.Header {
 }
 
 func (v *codexVoice) create(ctx context.Context, header http.Header, sdp, agent, voice string, history []*TranscriptEvent) (answer, id string, err error) {
+	// Codex still selects this alias after the GPT-Live-1.1 rollout:
+	// codex-rs/core/src/realtime_conversation.rs at c9b4267c370a755da12ec1c8648c2451163212b7.
 	body := struct {
 		SDP     string       `json:"sdp"`
 		Session voiceSession `json:"session"`
