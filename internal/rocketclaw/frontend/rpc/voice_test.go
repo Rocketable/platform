@@ -417,8 +417,12 @@ func TestVoice(t *testing.T) {
 		catalog, err := h.server.listAgents(ctx, "")
 		require.NoError(t, err)
 
+		// Codex's RealtimeVoicesList::builtin().v3 in codex-rs/protocol/src/protocol.rs
+		// at c9b4267c370a755da12ec1c8648c2451163212b7, with Cove kept first as the default.
+		voices := []string{"cove", "juniper", "maple", "spruce", "ember", "vale", "breeze", "arbor", "sol",
+			"aube", "bubbie", "haetsal", "hanul", "himari", "leher", "miko", "neer", "porto", "rindo", "rio", "rivage", "selva", "sonna", "tinta", "viola"}
 		for _, agent := range catalog.Agents {
-			assert.Equal(t, newCodexVoice().voices(), agent.Voices, agent.Name)
+			assert.Equal(t, voices, agent.Voices, agent.Name)
 		}
 	}) {
 		return
@@ -808,9 +812,9 @@ func TestVoice(t *testing.T) {
 		code, _ = post(`{"action":"SHOUT"}`)
 		assert.Equal(t, http.StatusBadRequest, code, "an unknown action is refused before the server")
 
-		answer, err = bob(&VoiceSettingsRequest{Action: VoiceSettingsAction_UPDATE, Voice: new("marin")})
+		answer, err = bob(&VoiceSettingsRequest{Action: VoiceSettingsAction_UPDATE, Voice: new("miko")})
 		require.NoError(t, err)
-		assert.Equal(t, "marin", answer.GetVoice())
+		assert.Equal(t, "miko", answer.GetVoice())
 
 		_, settings = post(`{}`)
 		assert.Equal(t, []any{"cedar", true}, []any{settings.GetVoice(), settings.GetTranscript()}, "one person's update never changes another's settings")

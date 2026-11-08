@@ -51,7 +51,7 @@ The Voice page (`/voice`) and the voice button in each session's composer let yo
 Voice has no settings of its own. Every agent uses the default `openai` provider for audio, independently of the provider running its model. Hand-offs still run on the conversation's selected agent and model:
 
 - `auth: api_key`: the public GPT-Live API, model `gpt-live-1`. It costs about $0.05 per minute, silence included. An `api_base_url` must use HTTPS unless its host is `localhost` or a loopback IP; otherwise voice refuses to send the API key.
-- `auth: chatgpt`: Codex's internal voice route, model `gpt-live-1-codex`, with the provider's ChatGPT login. This route is unofficial and may stop working at any time. The ChatGPT account's data settings apply.
+- `auth: chatgpt`: Codex's internal voice route, model `gpt-live-1-codex`, with the provider's ChatGPT login. Codex still uses this model ID after the GPT-Live-1.1 rollout; RocketClaw offers its 25 subscription voices, with Cove as the default. This route is unofficial and may stop working at any time. The ChatGPT account's data settings apply.
 
 On both routes, a redirect to another scheme, host, or port drops the voice credentials.
 

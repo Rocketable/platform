@@ -189,7 +189,7 @@ Attachment originals use the top-level `attachments` setting: `{"driver":"filesy
 
 ## Web Voice
 
-Voice has no config fields. Every agent uses the default `openai` provider for audio, independently of its model: `api_key` uses the public GPT-Live API (`gpt-live-1`, about $0.05 per minute including silence); `chatgpt` uses its `rocketclaw oai login` credential on Codex's unofficial route (`gpt-live-1-codex`). The microphone needs HTTPS. For a phone or another device, RocketClaw runs its own Tailscale node (tsnet):
+Voice has no config fields. Every agent uses the default `openai` provider for audio, independently of its model: `api_key` uses the public GPT-Live API (`gpt-live-1`, about $0.05 per minute including silence); `chatgpt` uses its `rocketclaw oai login` credential on Codex's unofficial route (`gpt-live-1-codex`, still Codex's model ID after the GPT-Live-1.1 rollout), with 25 voices and Cove as the default. The microphone needs HTTPS. For a phone or another device, RocketClaw runs its own Tailscale node (tsnet):
 
 | Step | Setting |
 | --- | --- |

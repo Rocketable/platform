@@ -54,6 +54,7 @@ func TestVoiceWireRoundTrip(t *testing.T) {
 
 	for _, tc := range []struct {
 		auth                       string
+		voice                      string
 		creds                      voiceCredentials
 		header                     http.Header
 		create, body, location     string
@@ -64,6 +65,7 @@ func TestVoiceWireRoundTrip(t *testing.T) {
 	}{
 		{
 			auth:     "api_key",
+			voice:    "marin",
 			creds:    voiceCredentials{bearer: "sk-test"},
 			header:   http.Header{"Authorization": {"Bearer sk-test"}, "Api-Key": {"sk-test"}},
 			create:   "/v1/live/sessions",
@@ -89,11 +91,14 @@ func TestVoiceWireRoundTrip(t *testing.T) {
 			spoke: `{"type":"session.commentary.append","delegation_id":"d1","content":"Done."}`,
 		},
 		{
-			auth:     "chatgpt",
-			creds:    voiceCredentials{bearer: "token", accountID: "acct"},
-			header:   http.Header{"Authorization": {"Bearer token"}, "Chatgpt-Account-Id": {"acct"}, "Openai-Alpha": {"quicksilver=v2"}, "Originator": {"codex_cli_rs"}},
-			create:   "/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-			body:     `{"sdp":"offer","session":{"model":"gpt-live-1-codex",` + session + `,"audio":{"output":{"voice":"cove"}},"initial_items":` + seed + `}}`,
+			auth:   "chatgpt",
+			voice:  "miko",
+			creds:  voiceCredentials{bearer: "token", accountID: "acct"},
+			header: http.Header{"Authorization": {"Bearer token"}, "Chatgpt-Account-Id": {"acct"}, "Openai-Alpha": {"quicksilver=v2"}, "Originator": {"codex_cli_rs"}},
+			create: "/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+			// Codex c9b4267c: core/src/realtime_conversation.rs keeps the model alias;
+			// codex-api/src/endpoint/realtime_call.rs uses this ChatGPT JSON handshake.
+			body:     `{"sdp":"offer","session":{"model":"gpt-live-1-codex",` + session + `,"audio":{"output":{"voice":"miko"}},"initial_items":` + seed + `}}`,
 			location: "/v1/realtime/calls/rtc_abc",
 			reply:    "answer",
 			id:       "rtc_abc",
@@ -162,7 +167,7 @@ func TestVoiceWireRoundTrip(t *testing.T) {
 			d := testVoiceDialects(t, server.URL)[tc.auth]
 			header := d.header(tc.creds)
 
-			answer, id, err := d.create(t.Context(), header, "offer", "main", d.voices()[0], history)
+			answer, id, err := d.create(t.Context(), header, "offer", "main", tc.voice, history)
 			require.NoError(t, err)
 			assert.Equal(t, []string{"answer", tc.id}, []string{answer, id})
 
