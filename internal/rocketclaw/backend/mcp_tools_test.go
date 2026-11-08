@@ -1,18 +1,20 @@
 package backend
 
 import (
-	"io"
+	"encoding/json"
 	"log/slog"
-	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -81,43 +83,48 @@ func TestWorkflowPrepareOmitsMCPTools(t *testing.T) {
 	workspace := t.TempDir()
 	writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  read: {\"*\": allow}\n  mcp: {\"demo.*\": allow}\n---\nPrompt\n")
 
+	requests := make(chan []string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Tools        []struct{ Name string }
+			Instructions string
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); !assert.NoError(t, err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		assert.NotContains(t, body.Instructions, "MCP namespaces:", "workflow workers must not advertise configured MCP servers")
+
+		names := make([]string, len(body.Tools))
+		for i, tool := range body.Tools {
+			names[i] = tool.Name
+		}
+
+		requests <- names
+
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "response", "message", "ok")
+	}))
+	t.Cleanup(server.Close)
+
 	cfg := &config.Config{
 		Workspace: workspace,
+		OpenAI:    config.OpenAIConfig{APIBaseURL: server.URL},
 		MCPServers: map[string]config.MCPServerConfig{
 			"demo": {URL: "http://127.0.0.1:9"},
 		},
 	}
-	root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler), toolModeWorkflow)
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(cfg), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
-	require.NoError(t, root.MkdirAll(filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode")), 0o755))
-	shellRel := filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode", "wf-mcp"))
-	require.NoError(t, root.Mkdir(shellRel, 0o700))
-
-	// Workflow path does not pass MCPServers; host grants still register execute.
-	// RestrictTools keeps execute and strips task / direct host tools.
-	runtime, err := harness.NewWithModelResolver(resolver, &harness.Config{
-		ShellTempDir:      filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
-		RetainedResultDir: "retained",
-		Diagnostics:       true,
-		ChildSessions:     harness.InertChildSessions{},
-		Journal:           harness.InertJournal{},
-		ShellCommand:      harness.DefaultShellCommand{},
-	}, root, agents, skills, "main", io.Discard)
+	result, err := run.Run(t.Context(), &workflow.AgentRequest{Prompt: "probe"})
 	require.NoError(t, err)
+	require.JSONEq(t, `"ok"`, string(result))
 
-	tools := slices.DeleteFunc(slices.Collect(maps.Keys(runtime.Tools)), func(name string) bool {
-		return name == "task" || harness.CodeModeOnlyHostTool(name)
-	})
-	require.NoError(t, runtime.RestrictTools(tools))
-
-	_, hasExecute := runtime.Tools["execute"]
-	assert.True(t, hasExecute)
-
-	_, hasRead := runtime.Tools["read"]
-	assert.False(t, hasRead)
-
-	_, hasTask := runtime.Tools["task"]
-	assert.False(t, hasTask)
+	tools := <-requests
+	assert.Contains(t, tools, "execute")
+	assert.NotContains(t, tools, "read")
+	assert.NotContains(t, tools, "task")
 }
