@@ -61,6 +61,6 @@ func TestSandboxErrorReachesWeb(t *testing.T) {
 	require.Contains(t, rt.SandboxError(), "Emulated shell unavailable: RocketClaw couldn't read its agents to tell whether one needs the sandbox: broken.md: parse YAML frontmatter")
 
 	// While the image builds, the Web says so rather than that the shell is unavailable.
-	rt.sandboxErr = sandbox.ErrPreparing
+	rt.Sessions.shells.errSandbox = sandbox.ErrPreparing
 	require.Equal(t, "Emulated shell getting ready: the first start builds the sandbox's Ubuntu image, which takes a minute or two; commands wait for it", rt.SandboxError())
 }
