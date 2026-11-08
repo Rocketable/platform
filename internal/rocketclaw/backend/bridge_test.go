@@ -114,7 +114,9 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	t.Parallel()
 
 	bus := newTestBus()
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: bus, config: Config{ConversationID: "web-conversation", SessionService: newTestSessionService(t)}, inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"web-conversation": KindWebChat})
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: bus, config: Config{ConversationID: "web-conversation", SessionService: store}, inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
 	content := protocol.InboundContent{Text: "same text"}
 	initial := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &content, true)
 	initial.Metadata["web_message_id"] = "initial"
@@ -268,7 +270,9 @@ func TestBridgeConsumedInputKeepsRawWebText(t *testing.T) {
 	t.Parallel()
 
 	bus := newTestBus()
-	bridge := &Bridge{bus: bus, config: Config{ConversationID: "slack-thread:C123:111.0", SessionService: newTestSessionService(t)}}
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"slack-thread:C123:111.0": KindSlackThread})
+	bridge := &Bridge{bus: bus, config: Config{ConversationID: "slack-thread:C123:111.0", SessionService: store}}
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{
 		Text: "hello", TextAttachments: []string{`attachment:id "file.txt" (workspace path "artifacts/uploads/id/file.txt")`},
 	}, true)
@@ -443,6 +447,7 @@ func TestInterruptActiveTurnDoesNotDeleteThreadQueueOrScheduled(t *testing.T) {
 
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "due later", DueAt: time.Date(2000, 1, 1, 4, 0, 0, 0, time.UTC)}))
 
@@ -472,6 +477,8 @@ func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	stashAt := time.Date(2000, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "A", Principal: "U1", StashAt: stashAt, Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Date(2000, 1, 1, 12, 5, 0, 0, time.UTC)}))
 
@@ -497,6 +504,7 @@ func TestPickLaterWorkWaitsWhenParkedAfterFutureScheduled(t *testing.T) {
 
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "Ship README", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1"}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Now().UTC().Add(time.Hour)}))
 
@@ -513,6 +521,7 @@ func TestScheduledTurnWaitsForRunAt(t *testing.T) {
 
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "later", DueAt: time.Now().UTC().Add(time.Hour)}))
 
 	reasons, err := queryStrings(t.Context(), store.db, `SELECT reason FROM turns WHERE conversation_id = $1 AND input_id = 's1' AND phase = 'waiting'`, "scheduled turn", conversationID)
@@ -534,6 +543,7 @@ func TestPickLaterWorkStartsParkedQueueAfterScheduledCancel(t *testing.T) {
 
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "Ship README", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1", SlackChannel: "C123", SlackTS: "111.222"}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Now().UTC().Add(time.Hour)}))
 	require.NoError(t, store.ResetScheduledMessages(conversationID))
@@ -560,6 +570,7 @@ func TestOneShotScheduleActivatesOnce(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "thread-1", SessionService: store}, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 	now := time.Now().UTC()
 	scheduled := protocol.ScheduledMessageState{ConversationID: "thread-1", Agent: "main", Message: "follow up", DueAt: now}
@@ -589,6 +600,7 @@ func TestStoppedBridgeLeavesDueScheduleUnclaimed(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "thread-1", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 	now := time.Now().UTC()
 	scheduled := protocol.ScheduledMessageState{ConversationID: "thread-1", Agent: "main", Message: "hourly", DueAt: now, Recurring: true, Interval: time.Hour}
@@ -666,6 +678,8 @@ func TestPickLaterWorkClaimsDueRecurringSchedule(t *testing.T) {
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	dueAt := time.Now().UTC().Add(-time.Second)
+
+	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, store.PutScheduledMessage("repeat", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "again", DueAt: dueAt, Recurring: true, Interval: time.Minute}))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
@@ -704,6 +718,7 @@ func TestPickLaterWorkDoesNotClaimScheduledWhenTurnBusy(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+		recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 		due := protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "now", DueAt: time.Now().UTC().Add(-time.Second), Recurring: true, Interval: time.Minute}
 		require.NoError(t, store.PutScheduledMessage("due", &due))
 
@@ -890,10 +905,13 @@ func TestPublishFinalPreservesTurnID(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"slack-thread:C123:111.222": KindSlackThread})
+
 	bridge := new(Bridge)
 	bridge.bus = bus
 	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: newTestSessionService(t)}
+	bridge.config = Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: store}
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "hello", true)
 	inbound.ConversationID = bridge.config.ConversationID
 	result := runResult{turnID: "turn-1", text: "hello back"}
@@ -919,10 +937,13 @@ func TestPublishFinalMarksCurrentGoalCompletion(t *testing.T) {
 		return nil
 	}}
 
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
+
 	bridge := new(Bridge)
 	bridge.bus = bus
 	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: "thread-1", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: newTestSessionService(t)}
+	bridge.config = Config{ConversationID: "thread-1", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: store}
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "done", true)
 	inbound.ConversationID = "thread-1"
 	result := runResult{turnID: "turn-1", text: "done", goalCompleted: true}
@@ -970,6 +991,8 @@ func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			// Database connections opened outside the bubble crash the test binary when used in it.
 			bridge.config.SessionService = newTestSessionService(t)
+			recordTestConversations(t, bridge.config.SessionService, "main", map[string]ConversationKind{bridge.config.ConversationID: KindSlackThread})
+
 			rt := new(Runtime)
 			bridge.bus = rt
 			events := rt.Subscribe(t.Context())
@@ -1030,6 +1053,7 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
 	continuation := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	continuation.GoalAction = protocol.GoalActionContinue
@@ -1118,6 +1142,7 @@ func TestBridgeSubmitAfterStopStoresRequestDurably(t *testing.T) {
 
 	service := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), bus, &Config{ConversationID: conversationID, Agent: "main", SessionService: service}, slog.New(slog.DiscardHandler))
 	require.NoError(t, startTestBridge(context.Background(), bridge))
 	bridge.Stop()
@@ -1342,6 +1367,7 @@ func TestScheduleMessageToolValidatesAndPreservesMessage(t *testing.T) {
 	var logs bytes.Buffer
 
 	service := newTestSessionService(t)
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"slack-thread:C123:111.222": KindSlackThread})
 	bridge := &Bridge{log: slog.New(slog.NewJSONHandler(&logs, nil)), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", SessionService: service}}
 	tool := bridge.scheduleMessageTool(new(protocol.InboundMessage))
 	assert.ElementsMatch(t, []string{"message", "send_this_in", "recurring"}, tool.Parameters["required"])
@@ -1428,6 +1454,7 @@ func TestResetScheduledMessagesToolUsesScheduleSubject(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"slack-thread:C123:111.222": KindSlackThread})
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "slack-thread:C123:111.222", SessionService: service}}
 	require.NoError(t, service.PutScheduledMessage("later", &protocol.ScheduledMessageState{ConversationID: bridge.config.ConversationID, Agent: "main", Message: "later", DueAt: time.Now().Add(time.Hour)}))
 
@@ -1621,7 +1648,9 @@ func TestAttachmentFallbackAndImageAttachments(t *testing.T) {
 
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
-	bridge := &Bridge{bus: bus, config: Config{ConversationID: "web-fallback", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"web-fallback": KindWebChat})
+	bridge := &Bridge{bus: bus, config: Config{ConversationID: "web-fallback", SessionService: store}, log: slog.New(slog.DiscardHandler)}
 	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "", true)
 	inbound.AttachmentPresence = protocol.AttachmentPresenceUnsupported
 	inbound.Metadata = map[string]string{"web_message_id": "attachment-input"}
@@ -2203,6 +2232,7 @@ func TestStoppedSteerJoinsOnlyOpenTurns(t *testing.T) {
 			service := newTestSessionService(t)
 
 			const conversationID = "web:stopped"
+			recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindWebChat})
 			require.NoError(t, startTurnDB(t.Context(), service.db, "turn-1", conversationID, tc.turn))
 
 			bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: service}}
@@ -2287,7 +2317,9 @@ func TestBridgeScheduleMessageSubmitsAfterDelay(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: protocol.SlackThreadConversationID("D123", "111.222"), SessionService: newTestSessionService(t)}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+		store := newTestSessionService(t)
+		recordTestConversations(t, store, "main", map[string]ConversationKind{protocol.SlackThreadConversationID("D123", "111.222"): KindSlackThread})
+		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: protocol.SlackThreadConversationID("D123", "111.222"), SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "later", false))
 		synctest.Wait()
 
@@ -2503,6 +2535,8 @@ func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
 
 		service := newTestSessionServiceAt(t, workspace)
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+		recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
+
 		bus := newTestBus()
 		t.Cleanup(bus.Close)
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
@@ -2562,6 +2596,8 @@ func TestBridgeFailedWorkerErrorIsNotPersisted(t *testing.T) {
 
 	service := newTestSessionServiceAt(t, workspace)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
+
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
@@ -2623,6 +2659,8 @@ func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
 
 	service := newTestSessionServiceAt(t, workspace)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
+
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
@@ -2713,6 +2751,8 @@ func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
 
 	service := newTestSessionServiceAt(t, workspace)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
+
 	bus := newTestBus()
 	t.Cleanup(bus.Close)
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
@@ -2765,11 +2805,14 @@ func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
 func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 	t.Parallel()
 
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{protocol.SlackThreadConversationID("C123", "111.0"): KindSlackThread})
+
 	bridge := &Bridge{
 		log:       slog.New(slog.DiscardHandler),
 		requestCh: make(chan bridgeRequest, 1),
 		stopCh:    make(chan struct{}),
-		config:    Config{ConversationID: protocol.SlackThreadConversationID("C123", "111.0"), SessionService: newTestSessionService(t)},
+		config:    Config{ConversationID: protocol.SlackThreadConversationID("C123", "111.0"), SessionService: store},
 	}
 
 	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &protocol.ThreadQueueItem{ID: "q1", Source: protocol.SourceSlack, Message: "wait 4s and say alpha", Principal: "U1", SlackChannel: "C123", SlackTS: "111.2", SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.0"}}))
@@ -2832,6 +2875,7 @@ func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Now().UTC(), Position: 0}))
 
 	bus := newTestBus()
@@ -2866,6 +2910,7 @@ func TestBridgeDeletesScheduledMessageWhenTurnStarts(t *testing.T) {
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	require.NoError(t, service.PutScheduledMessage("schedule-1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "later", DueAt: time.Now().UTC()}))
 
 	bus := newTestBus()
@@ -2901,6 +2946,7 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 		workspace := t.TempDir()
 		service := newTestSessionServiceAt(t, workspace)
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+		recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 		require.NoError(t, service.PutScheduledMessage("schedule-1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "later", DueAt: time.Now().UTC(), Recurring: true, Interval: time.Minute}))
 
 		bus := newTestBus()
@@ -2947,7 +2993,9 @@ func TestBridgeStopDisarmsScheduledMessage(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var logs lockedBuffer
 
-		bridge := &Bridge{log: slog.New(slog.NewJSONHandler(&logs, nil)), config: Config{ConversationID: "slack-thread:C123:111.222", SessionService: newTestSessionService(t)}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+		store := newTestSessionService(t)
+		recordTestConversations(t, store, "main", map[string]ConversationKind{"slack-thread:C123:111.222": KindSlackThread})
+		bridge := &Bridge{log: slog.New(slog.NewJSONHandler(&logs, nil)), config: Config{ConversationID: "slack-thread:C123:111.222", SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 		require.NoError(t, bridge.ScheduleMessage(new(protocol.InboundMessage), 5*time.Second, "later", false))
 		bridge.Stop()
 
@@ -2977,6 +3025,7 @@ func TestBridgeResetScheduledMessagesDeletesPersistedAndCancelsArmed(t *testing.
 
 		logger := slog.New(slog.NewJSONHandler(&logs, nil))
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+		recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread, "other": KindWebChat})
 		bridge := NewConversation(config.NewLockedConfig(&config.Config{Workspace: workspace}), discardPublisher{}, &Config{ConversationID: conversationID, Agent: "main", SessionService: store}, logger)
 		bridge.requestCh = make(chan bridgeRequest, 1)
 		bridge.stopCh = make(chan struct{})
@@ -3012,6 +3061,7 @@ func TestBridgeRecurringScheduledMessageAdvancesAndRearms(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+		recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: service}, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 		due := protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "again", DueAt: time.Now().UTC().Add(5 * time.Second), Recurring: true, Interval: time.Minute}
 
@@ -3058,6 +3108,7 @@ func TestBridgeScheduledMessageTimerStopsOnStoreError(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+		recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 		due := protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "later", DueAt: time.Now().UTC().Add(5 * time.Second)}
 
@@ -3312,6 +3363,7 @@ func TestRunTurnExposesPrincipalEnv(t *testing.T) {
 	runtime := config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}})
 
 	require.NoError(t, service.RegisterExternalMCPConversation("public-1", "planner", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:private", ManagedConversationID: protocol.SlackThreadConversationID("C123", "111.222"), OriginPairs: map[string]string{"a": "first"}}))
+	recordTestConversations(t, service, "planner", map[string]ConversationKind{"web-1": KindWebChat, "web-2": KindWebChat, "web-3": KindWebChat})
 
 	for _, tc := range []struct {
 		name, conversationID string
@@ -3591,6 +3643,7 @@ Request: $ARGUMENTS
 		for _, kind := range []protocol.InboundKind{protocol.InboundKindPrompt, protocol.InboundKindSteer, protocol.InboundKindEnqueue} {
 			for _, invocation := range []string{"$docs-helper write API docs", "$skill docs-helper write API docs"} {
 				conversationID := fmt.Sprintf("dollar-%s-%s-%s", source, kind, invocation)
+				recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindWebChat})
 				bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 				msg := protocol.NewInboundMessageFromContent(source, kind, &protocol.InboundContent{Text: invocation, TextAttachments: []string{"attachment-only argument"}}, true)
 				msg.ConversationID = conversationID
@@ -3691,6 +3744,7 @@ Request: $ARGUMENTS
 	}
 
 	// A Slack mention's $<skill> reaches the agent as ordinary text.
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"dollar-slack": KindWebChat, "missing-skill": KindWebChat})
 	mention := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "dollar-slack", Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 	mentionMsg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "$docs-helper write API docs"}, true)
 	mentionMsg.ConversationID = mention.config.ConversationID
@@ -3746,6 +3800,7 @@ func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	_, err = service.AppendEntryID(t.Context(), conversationID, &harness.SessionEntry{Version: 1, Type: "turn", Model: "openai/gpt", ResponseID: "provider-private-sentinel", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable","id":"provider-private-sentinel"}`)}, OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`)}})
 	require.NoError(t, err)
 
@@ -3791,6 +3846,7 @@ func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 
 	held := make(chan struct{})
 
@@ -3945,6 +4001,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread, "destination": KindWebChat})
 
 	bus := newTestBus()
 	t.Cleanup(bus.Close)

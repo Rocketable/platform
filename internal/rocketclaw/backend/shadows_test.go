@@ -999,6 +999,7 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 
 func TestShadowFirstReconciliationClear(t *testing.T) {
 	store, _ := newShadowTestStore(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"parent": KindWebChat})
 	tx, err := store.db.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 
@@ -1808,6 +1809,7 @@ func TestShadowWorkflowTurnsHaveNoShadows(t *testing.T) {
 	t.Parallel()
 
 	store, _ := newShadowTestStore(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"parent": KindWebChat})
 	parent := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
 	request := bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "$workflow audit", true)}
 	request.inbound.Workflow = protocol.WorkflowInvocation{Name: "audit"}

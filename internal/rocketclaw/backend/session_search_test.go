@@ -87,7 +87,8 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 		require.NoError(t, err)
 	}
 
-	// A Delegation History has entries but no conversations row; Web never shows it.
+	// A Delegation History is an unlisted subagent session; Web never shows it.
+	require.NoError(t, s.startSubagent(ctx, searchChatD, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "main"}))
 	_, err := s.AppendEntryID(ctx, searchChatD+"/call-1", testSessionEntry("billing delegated", "support child"))
 	require.NoError(t, err)
 
@@ -146,6 +147,7 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 	require.NoError(t, s.UpsertThread("written-web", ThreadState{Agent: "main"}))
 	require.NoError(t, s.UpsertThread(searchChatW, ThreadState{Agent: "other", CreatedBy: ThreadCreator(`Writer "One"`)}))
 	require.NoError(t, s.startSubagent(ctx, "written-web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "main"}), "an unindexed subagent session leaves search complete")
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"cron:daily": KindCronRun})
 
 	var authored int64
 

@@ -26,6 +26,7 @@ func TestStopBackgroundJobTool(t *testing.T) {
 	defer close(release)
 
 	reportTestRun(t, store, "cron:daily", "main")
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"other": KindWebChat})
 
 	// A session write's reply has no run: stopping it ends the row, not the target's turn.
 	reply := testReply("main", "turn-1/call/w", "web:ops")

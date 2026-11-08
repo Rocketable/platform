@@ -39,6 +39,7 @@ func TestWebQuestionIsListedAndTakesTheFirstAnswer(t *testing.T) {
 	service := newTestSessionService(t)
 	rt := newTestWebQuestions(service)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	req := &protocol.AskUserQuestionRequest{ID: "turn-1/call/c1", ConversationID: conversationID, Question: "Which?", Options: []protocol.AskUserQuestionOption{{Label: "A", Value: "a"}, {Label: "B", Value: "b"}}, Multiple: true}
 
 	listening, cancel := context.WithTimeout(t.Context(), 10*time.Second) // A missing notification fails, not hangs.
@@ -97,6 +98,7 @@ func TestWebQuestionWithdrawsUnlessLeftForRestart(t *testing.T) {
 	service := newTestSessionService(t)
 	rt := newTestWebQuestions(service)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	req := &protocol.AskUserQuestionRequest{ID: "turn-1/call/c1", ConversationID: conversationID, Question: "Ship?"}
 
 	ask := func(cause error) {

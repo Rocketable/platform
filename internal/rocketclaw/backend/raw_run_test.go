@@ -639,7 +639,9 @@ func TestWorkflowAgentRunnerReplaysOnlyMatchingRecordedWorker(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	journal := harness.TracelessJournal{Parent: conversationJournal{store: newTestSessionServiceAt(t, workspace), conversationID: "conversation", log: slog.New(slog.DiscardHandler)}}
+	store := newTestSessionServiceAt(t, workspace)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"conversation": KindWebChat})
+	journal := harness.TracelessJournal{Parent: conversationJournal{store: store, conversationID: "conversation", log: slog.New(slog.DiscardHandler)}}
 	run, err := newWorkflowAgentRunner(config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), &sandbox.Runtime{}, "main", journal, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })

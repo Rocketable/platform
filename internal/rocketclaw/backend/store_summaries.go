@@ -14,9 +14,11 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// lockSessionHistory serializes a conversation's history and the facts its row derives from it.
+// lockSessionHistory serializes a conversation's history and the facts its row derives from it by
+// locking that row. A conversation still being created has no row yet; its primary key serializes
+// creators instead. NO KEY UPDATE leaves rows that reference it insertable.
 func lockSessionHistory(ctx context.Context, db stateStoreDB, conversationID string) error {
-	_, err := execState(ctx, db, "lock session history", `SELECT pg_advisory_xact_lock(87901, hashtext($1))`, conversationID)
+	_, err := execState(ctx, db, "lock session history", `SELECT 1 FROM conversations WHERE conversation_id = $1 FOR NO KEY UPDATE`, conversationID)
 	return err
 }
 

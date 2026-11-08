@@ -1336,6 +1336,8 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	second, err := sessions.AppendEntryID(ctx, id, &entry)
 	require.NoError(t, err)
+	_, err = seeded.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention) VALUES ('unrelated', '', '', 'web_chat', FALSE, 'private')`)
+	require.NoError(t, err)
 	unrelated, err := sessions.AppendEntryID(ctx, "unrelated", &entry)
 	require.NoError(t, err)
 
@@ -2429,6 +2431,8 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	runs := []*protocol.CronRun{{Path: "cron/report:daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, {Path: "cron/report_daily.md", At: time.Date(2026, 9, 5, 2, 0, 0, 2, time.UTC), OneOff: true}}
 
 	runEntries := make([]int64, 0, len(sources))
+	_, err = db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention) VALUES ('unrecorded-history-destination', '', '', 'web_chat', FALSE, 'private')`)
+	require.NoError(t, err)
 
 	for i, source := range sources {
 		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: source, Agent: "producer", Run: runs[i]}))
@@ -3354,6 +3358,9 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		for _, call := range [][2]string{{conversation, "own"}, {conversation + "/own", "nested"}, {conversation, "unshown"}, {"private-X", "private-file"}, {"private-X", "unmirrored"}} {
 			testTurns{db: db}.RecordLegacyDelegation(t, call[0], call[1])
 		}
+
+		_, err = db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention) VALUES ('private-Xother/decoy', '', '', 'web_chat', FALSE, 'private')`)
+		require.NoError(t, err)
 
 		for _, delegation := range []string{conversation + "/own", conversation + "/own/nested", conversation + "/unshown", "private-X/private-file", "private-X/unmirrored", "private-Xother/decoy"} {
 			_, err = sessions.AppendEntryID(ctx, delegation, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})

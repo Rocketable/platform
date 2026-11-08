@@ -1465,6 +1465,7 @@ func TestRevertSavedAttachmentRetryIdentity(t *testing.T) {
 		{Type: "input_text", Text: prompt}, {Type: "input_image", ImageURL: attachments[0].URL}, {Type: "input_file", FileData: attachments[1].URL, Filename: attachments[1].Filename},
 	}})
 	require.NoError(t, err)
+	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
 	_, err = s.AppendEntryID(t.Context(), "main", &harness.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{raw}})
 	require.NoError(t, err)
 	accepted, err := reconcileWebDB(t.Context(), s.db, inbound)

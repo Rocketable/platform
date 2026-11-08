@@ -217,6 +217,8 @@ func TestSessionToolsStoredContract(t *testing.T) {
 
 	base := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"cron:first": KindCronRun, "external_mcp:private": KindExternalMCPRun, "exec:last": KindWebChat, "headed": KindWebChat})
+
 	var privateIDs []int64
 
 	for _, fixture := range []struct {
@@ -289,6 +291,7 @@ func TestSessionToolsTimePrecisionAndDurations(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"0": KindWebChat, "1": KindWebChat, "2": KindWebChat, "3": KindWebChat, "past": KindWebChat, "near-future": KindWebChat, "future": KindWebChat})
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i, offset := range []time.Duration{0, 1, 2, time.Second} {
@@ -352,6 +355,8 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 	require.NoError(t, service.UpsertThread("web:empty", ThreadState{Agent: "main"}))
 	require.NoError(t, service.UpsertThread("web:stored", ThreadState{Agent: "main"}))
 	require.NoError(t, service.BeginGoal("web:stored", &GoalState{Objective: "work", MaxTurns: 3}))
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"external_mcp:private": KindExternalMCPRun, "cron:one": KindCronRun, "exec:one": KindWebChat, "slack-thread:C1:1": KindSlackThread})
+	recordPrivateHistories(t, service, map[string]ConversationKind{"unrecorded": KindWebChat})
 
 	entry := &harness.SessionEntry{Version: 1, Type: "replay", Timestamp: time.Now().UTC(), Model: "model", ResponseID: "response",
 		TokenUsage: &harness.TokenUsage{CompletionReasoningTokens: 7},
@@ -445,6 +450,7 @@ func TestSessionToolsErrors(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	_, err = get.Call(ctx, json.RawMessage(`{"conversation_id":"broken","limit":100,"before_entry_id":0}`), nil)
 	require.ErrorIs(t, err, context.Canceled)
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"broken": KindWebChat, "valid": KindWebChat})
 	_, err = service.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id,entry_json,entry_timestamp) VALUES ('broken','{"timestamp":false}','2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
 	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`), nil)
@@ -483,6 +489,9 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 		{Version: 1, Type: "compaction", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"compaction","id":"cmp_1","encrypted_content":"sealed"}`)}},
 		*testSessionEntry("after compaction", "recent answer"),
 	}
+
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"external_mcp:private": KindExternalMCPRun})
+
 	for _, entry := range entries {
 		_, err := service.AppendEntryID(t.Context(), "external_mcp:private", &entry)
 		require.NoError(t, err)
@@ -734,6 +743,7 @@ func TestSessionsWriteStopWithoutPrompt(t *testing.T) {
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store, bridges: map[string]directBridge{}}
 	bridge := runningTestBridge(t, store, manager, "web:target")
 	require.NoError(t, store.BeginGoal("web:target", &GoalState{Objective: "ship it", MaxTurns: 5}))
+	recordPrivateHistories(t, store, map[string]ConversationKind{"web:sender": KindWebChat})
 
 	write := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:sender", SessionService: store}, threads: manager}, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:sender", harness.Agents{})
 	require.False(t, write.Resumable, "a write cut off by a restart is reported interrupted, not run again")
@@ -793,6 +803,7 @@ func TestSessionsWriteStopLineFollowsStoppedTurn(t *testing.T) {
 
 	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
 	nt.request(t)
+	recordPrivateHistories(t, nt.service, map[string]ConversationKind{"web:sender": KindWebChat})
 
 	write := sessionsWriteTool(&Bridge{config: Config{ConversationID: "web:sender", SessionService: nt.service}, threads: manager}, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:sender", harness.Agents{})
 	output, err := write.Call(t.Context(), json.RawMessage(`{"session_id":"`+nt.conversationID+`","mode":"stop","prompt":"","title":"","agent":""}`), nil)
@@ -925,6 +936,7 @@ func TestSessionsWriteRecipients(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 		// Every sender acts for a top-level turn of main, as a helper under Main does.
+		recordTestConversations(t, store, "main", map[string]ConversationKind{"web:caller-" + sender: KindWebChat})
 		caller := &Bridge{runtime: config.NewLockedConfig(&senderCfg), config: Config{ConversationID: "web:caller-" + sender, SessionService: store}, threads: manager, log: slog.New(slog.DiscardHandler)}
 		runtimeConfig := caller.rocketcodeConfig(workspace, nil, sessionsWriteTool(caller, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", caller.config.ConversationID, agents))
 		runtimeConfig.Journal = harness.InertJournal{}
@@ -1612,6 +1624,8 @@ func TestPostStopLinesKeepsUndecodableLine(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat})
+
 	key := stopLineStep + "parent/turn/call/c1"
 	require.NoError(t, s.SaveTurnStep(t.Context(), "main", key, json.RawMessage(`{"timestamp":"2026-10-19T00:00:00Z","replay_input":7}`)))
 	require.ErrorContains(t, s.postStopLines(t.Context(), "main"), "decode parked stop lines")
@@ -1625,6 +1639,8 @@ func TestSessionToolSummaryReadsBackToLastMessages(t *testing.T) {
 	service := newTestSessionService(t)
 	ctx := t.Context()
 	at := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"chat": KindWebChat})
 
 	_, err := service.AppendEntryID(ctx, "chat", testSessionEntryAt(at, "asked"))
 	require.NoError(t, err)

@@ -14,6 +14,7 @@ func TestRuntimeCompletionNotesReadStoredJobs(t *testing.T) {
 	store := newTestSessionService(t)
 	rt := &Runtime{Sessions: store}
 	conversationID := "one-off-cron:cron/report.md:20260905t020000z:run"
+	recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindOneOffCronRun, conversationID + "/t-1": KindSubagent})
 
 	script := testBackgroundJob(conversationID, "turn-1/call/a")
 	subagent := testBackgroundJob(conversationID+"/t-1", "turn-1/call/t-1/task/call/b")

@@ -17,9 +17,13 @@ func TestShadowConsumedUploadOwnership(t *testing.T) {
 	ctx := t.Context()
 	seed := protocol.OutboundAttachment{ID: "seed", Name: "seed.txt", MIMEType: "text/plain", Data: []byte("seed")}
 	require.NoError(t, store.SaveAttachment(ctx, "parent", "", &seed, true))
-	_, err := store.AppendEntryID(ctx, "parent", testSessionEntry("attachment:seed", "seed answer"))
+	// The parent's history predates its shadows, which a later reconciliation seeds from it.
+	_, err := (stateDAO{db: store.db}).createConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat})
 	require.NoError(t, err)
-	require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main"}))
+	_, err = store.AppendEntryID(ctx, "parent", testSessionEntry("attachment:seed", "seed answer"))
+	require.NoError(t, err)
+	_, err = store.reconcileShadows(ctx, store.db, "parent", "main")
+	require.NoError(t, err)
 
 	var child, copiedID string
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE shadow_parent IS NOT NULL ORDER BY shadow_agent LIMIT 1`).Scan(&child))

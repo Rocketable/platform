@@ -96,6 +96,7 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"web-chat": KindWebChat})
 	reference := uploadTestAttachment(t, s, "web-chat", "file-1")
 	// An easy agent's chat names its upload by host path.
 	uploadTestAttachment(t, s, "web-chat", "file-2")
@@ -146,6 +147,7 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 	// A cron handoff's Web chat has a '/' from the job path, like a Delegation History.
 	const handoff = "web:cron:cron/daily.md:1"
 	require.NoError(t, s.UpsertThread(handoff, ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
+	recordTestConversations(t, s, "main", map[string]ConversationKind{handoff + "/call-1": KindSubagent})
 	handoffID, err := s.AppendEntryID(ctx, handoff, testSessionEntry("handoff prompt", "handoff answer"))
 	require.NoError(t, err)
 	_, err = s.AppendEntryID(ctx, handoff+"/call-1", testSessionEntry("handoff prompt", "delegated answer"))
@@ -611,6 +613,7 @@ func TestMessageSearchSkipsUndecodableTurnRecords(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"web-chat": KindWebChat})
 
 	var logs bytes.Buffer
 
@@ -636,6 +639,7 @@ func TestFinishTurnKeepsUnreadableStep(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"web-chat": KindWebChat})
 	seedActiveTurn(t, s, "web-chat", "turn-1", nil)
 	_, err := s.db.ExecContext(t.Context(), `INSERT INTO steps (conversation_id, key, value) VALUES ('web-chat', 'turn-1', '{"record":{"text":"\u0000"}}')`)
 	require.NoError(t, err)
@@ -648,6 +652,7 @@ func TestFinishTurnKeepsUnreadableStep(t *testing.T) {
 func TestFinishTurnLocksHistoryBeforeTurnRow(t *testing.T) {
 	s := newTestSessionService(t)
 	ctx := t.Context()
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"web-chat": KindWebChat})
 	seedActiveTurn(t, s, "web-chat", "turn-1", nil)
 
 	tx, err := s.db.BeginTx(ctx, nil)

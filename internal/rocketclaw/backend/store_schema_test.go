@@ -66,6 +66,8 @@ func TestDelegationLookupStopsAtFirstChildEntry(t *testing.T) {
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"parent-history": KindWebChat})
 	recordLegacyDelegations(t, store, "parent-history", "amber", "cobalt")
 	_, err := store.db.ExecContext(ctx, `
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
+SELECT 'unrelated-history-' || n, 'main', '', 'web_chat', TRUE FROM generate_series(1, 4096) n;
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES
     ('parent-history', '{"replay_input":[{"type":"function_call","call_id":"cobalt"},{"type":"function_call","call_id":"amber"},{"type":"function_call","call_id":"missing"}]}', '2000-01-01T00:00:00Z');
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
@@ -102,6 +104,9 @@ func TestChatOriginFactsSkipsKnownSourceLookup(t *testing.T) {
 
 	ctx := t.Context()
 	_, err := store.db.ExecContext(ctx, `
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ('source', 'sample-agent', '', 'cron_run', FALSE);
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
+SELECT 'unrelated-' || n, 'sample-agent', '', 'cron_run', FALSE FROM generate_series(1, 512) n;
 INSERT INTO entries (id, conversation_id, entry_json, entry_timestamp)
 VALUES (1000, 'source', '{}', '');
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
@@ -110,7 +115,8 @@ INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
 SELECT 'web:origin-' || n, 'sample-agent', 'alice', 'web_chat', TRUE FROM generate_series(1, 128) n;
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT conversation_id, '{"sync_source_conversation_id":"source","sync_source_entry_id":1000}', ''
-FROM conversations;
+FROM conversations WHERE listed;
+ANALYZE conversations;
 ANALYZE entries;
 SET plan_cache_mode = force_generic_plan;
 SELECT pg_stat_force_next_flush();`)
@@ -121,7 +127,7 @@ SELECT pg_stat_force_next_flush();`)
 	var before, after int64
 	require.NoError(t, store.db.QueryRowContext(ctx, sourceReads).Scan(&before))
 
-	chats, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations`, "chats")
+	chats, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations WHERE listed`, "chats")
 	require.NoError(t, err)
 	saveEntryFacts(t, store, chats...)
 
@@ -234,6 +240,10 @@ func TestExternalMCPMetadataLookupUsesIndex(t *testing.T) {
 
 	ctx := t.Context()
 	_, err := store.db.ExecContext(ctx, `
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES
+    ('with-metadata', 'main', '', 'web_chat', TRUE), ('without-metadata', 'main', '', 'web_chat', TRUE), ('other', 'main', '', 'web_chat', TRUE);
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
+SELECT 'thread-' || n, 'main', '', 'web_chat', TRUE FROM generate_series(1, 4096) n;
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES
     ('with-metadata', '{"type":"mcp_external_metadata","version":1}', '2000-01-01T00:00:00Z'),
     ('with-metadata', '{"type":"mcp_external_metadata","version":2}', '2000-01-01T00:00:00Z'),
@@ -243,6 +253,7 @@ SELECT conversation_id, '{"type":"turn"}', '2000-01-01T00:00:00Z'
 FROM (VALUES ('with-metadata'), ('without-metadata')) c(conversation_id), generate_series(1, 4096);
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT 'thread-' || n, '{"type":"mcp_external_metadata","version":4}', '2000-01-01T00:00:00Z' FROM generate_series(1, 4096) n;
+ANALYZE conversations;
 ANALYZE entries;
 SET plan_cache_mode = force_generic_plan;`)
 	require.NoError(t, err)
@@ -267,7 +278,7 @@ FROM pg_prepared_statements WHERE statement LIKE '%mcp_external_metadata%' AND s
 	plan, err := queryStrings(ctx, store.db, queries[0], "metadata lookup plan")
 	require.NoError(t, err)
 	require.Contains(t, strings.Join(plan, "\n"), "session_entries_mcp_metadata")
-	require.NotContains(t, strings.Join(plan, "\n"), "Sort")
+	require.NotRegexp(t, `Sort Key: e(_\d+)?\.`, strings.Join(plan, "\n"), "the index orders the entries; only the few candidate conversation IDs may be sorted")
 
 	for _, line := range plan {
 		if strings.Contains(line, "Filter:") {
@@ -289,7 +300,10 @@ func TestHistoryVisibilityUsesRevertedParentIndex(t *testing.T) {
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
 SELECT 'unrelated-' || n, 'main', '', 'web_chat', TRUE FROM generate_series(1, 4096) n;
 INSERT INTO conversations (conversation_id, agent, created_by, revert_message_id, kind, listed)
-VALUES ('parent', 'main', '', '10:1', 'web_chat', TRUE);
+VALUES ('parent', 'main', '', '10:1', 'web_chat', TRUE), ('ordinary', 'main', '', '', 'web_chat', TRUE);`)
+	require.NoError(t, err)
+	recordLegacyDelegations(t, store, "parent", "kept", "discarded")
+	_, err = store.db.ExecContext(ctx, `
 INSERT INTO entries (id, conversation_id, entry_json, entry_timestamp) VALUES
     (10, 'parent', '{"replay_input":[{"type":"function_call","call_id":"kept"},{"type":"function_call","call_id":"discarded"}]}', ''),
     (20, 'parent/kept', '{}', ''), (30, 'parent/discarded', '{}', ''), (40, 'ordinary', '{}', '');
@@ -297,7 +311,6 @@ ANALYZE conversations;
 ANALYZE entries;
 SET plan_cache_mode = force_generic_plan;`)
 	require.NoError(t, err)
-	recordLegacyDelegations(t, store, "parent", "kept", "discarded")
 
 	for _, tc := range []struct {
 		conversationID string
@@ -329,6 +342,8 @@ func TestTranscriptChangeUsesSyncSourceIndex(t *testing.T) {
 
 	store := newTestSessionService(t)
 	_, err := store.db.ExecContext(t.Context(), `
+INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
+SELECT 'history-' || n, 'main', '', 'web_chat', TRUE FROM generate_series(1, 4096) n;
 INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
 SELECT 'history-' || n, json_build_object('sync_source_entry_id', n), '' FROM generate_series(1, 4096) n;
 ANALYZE entries;`)
@@ -426,7 +441,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			_, err = db.ExecContext(t.Context(), `CREATE SCHEMA `+name)
 			require.NoError(t, err)
 
-			// The ledger exists, so the barrier can hold the first caller at its baseline's ledger write.
+			// The ledger exists, so the barrier holds every caller at its migration lock.
 			_, err = db.ExecContext(t.Context(), `CREATE TABLE pg_migrations (id text PRIMARY KEY, applied_at timestamptz)`)
 			require.NoError(t, err)
 			barrier, err := db.BeginTx(t.Context(), nil)
@@ -453,7 +468,7 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			var pid int
 
 			require.Eventually(t, func() bool {
-				return db.QueryRowContext(t.Context(), `SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON a.pid=l.pid WHERE l.relation='pg_migrations'::regclass AND NOT l.granted AND a.query LIKE 'INSERT INTO pg_migrations%'`).Scan(&pid) == nil
+				return db.QueryRowContext(t.Context(), `SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON a.pid=l.pid WHERE l.relation='pg_migrations'::regclass AND NOT l.granted AND a.query LIKE 'LOCK TABLE pg_migrations%'`).Scan(&pid) == nil
 			}, 5*time.Second, time.Millisecond)
 
 			ctxSecond, cancelSecond := context.WithCancel(t.Context())
@@ -471,9 +486,9 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			require.Eventually(t, func() bool {
 				var waiting int
 
-				err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted AND classid=hashtext('rocketclaw schema migrations')::oid AND objid=hashtext(current_schema())::oid`).Scan(&waiting)
+				err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE relation='pg_migrations'::regclass AND NOT granted`).Scan(&waiting)
 
-				return err == nil && waiting == 1
+				return err == nil && waiting == 2
 			}, 5*time.Second, time.Millisecond)
 
 			switch outcome {
@@ -515,62 +530,12 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			require.Eventually(t, func() bool {
 				var locks int
 
-				err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=hashtext('rocketclaw schema migrations')::oid AND objid=hashtext(current_schema())::oid`).Scan(&locks)
+				err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE relation='pg_migrations'::regclass`).Scan(&locks)
 
 				return err == nil && locks == 0
 			}, 5*time.Second, time.Millisecond)
 		})
 	}
-}
-
-func TestSessionMigrationsSerializeLedgerCreation(t *testing.T) {
-	t.Parallel()
-
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-	cfg, err := pgx.ParseConfig(dsn)
-	require.NoError(t, err)
-
-	db := stdlib.OpenDB(*cfg)
-	defer func() { require.NoError(t, db.Close()) }()
-
-	barrier, err := db.BeginTx(t.Context(), nil)
-	require.NoError(t, err)
-
-	defer func() { _ = barrier.Rollback() }()
-
-	_, err = barrier.ExecContext(t.Context(), `SELECT pg_advisory_xact_lock(hashtext('rocketclaw schema migrations'), hashtext(current_schema()))`)
-	require.NoError(t, err)
-
-	var callers errgroup.Group
-	for range 2 {
-		callers.Go(func() error {
-			store, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
-			if err != nil {
-				return err
-			}
-
-			return store.Stop()
-		})
-	}
-
-	require.Eventually(t, func() bool {
-		var waiting int
-
-		err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted AND classid=hashtext('rocketclaw schema migrations')::oid AND objid=hashtext(current_schema())::oid`).Scan(&waiting)
-
-		return err == nil && waiting == 2
-	}, 5*time.Second, time.Millisecond)
-
-	var exists bool
-	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT to_regclass('pg_migrations') IS NOT NULL`).Scan(&exists))
-	require.False(t, exists, "both callers must wait before creating the ledger")
-	require.NoError(t, barrier.Rollback())
-	require.NoError(t, callers.Wait())
-
-	var count int
-	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-	require.Equal(t, sessionMigrationCount(t), count)
 }
 
 func TestSessionMigrationsCancelPlanning(t *testing.T) {
@@ -674,12 +639,12 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.Equal(t, 1, kept)
 
 	// The later migrations already ran here; running them again would fail on what they created.
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql")
+	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
 	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql"}, ledger)
+	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql"}, ledger)
 
 	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
 	require.NoError(t, err)
@@ -688,6 +653,36 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	chats, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations`, "conversations")
 	require.NoError(t, err)
 	require.Equal(t, []string{"chat"}, chats)
+}
+
+// 084 deletes the history no conversation owns, keeps the rest, and refuses any more of it.
+func TestHistoryRequiresConversationMigration(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 84)
+	require.NoError(t, err)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"kept": KindWebChat})
+
+	for _, id := range []string{"kept", "gone"} {
+		_, err = store.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{}', '')`, id)
+		require.NoError(t, err)
+		_, err = store.db.ExecContext(ctx, `INSERT INTO steps (conversation_id, key, value) VALUES ($1, 'step', '{}')`, id)
+		require.NoError(t, err)
+		require.NoError(t, startTurnDB(ctx, store.db, id+"-turn", id, protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)))
+	}
+
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	for _, table := range []string{"entries", "steps", "turns"} {
+		owners, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM `+table+` ORDER BY 1`, table)
+		require.NoError(t, err)
+		require.Equal(t, []string{"kept"}, owners, table)
+	}
+
+	_, err = store.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('gone', '{}', '')`)
+	require.ErrorContains(t, err, "entries_conversation_fkey")
 }
 
 func TestDropWebTabStateBlobMigration(t *testing.T) {
@@ -946,38 +941,6 @@ SET enable_seqscan = off;`)
 	require.NoError(t, err)
 	require.Contains(t, strings.Join(plan, "\n"), "entries_search_text")
 	require.Contains(t, strings.Join(plan, "\n"), "turns_search_text")
-}
-
-func TestSessionMigrationUnlockFailureDiscardsConnection(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	store.db.SetMaxOpenConns(1)
-
-	ctx := t.Context()
-
-	var pid int
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&pid))
-	// Shadow only this schema's unlock call to fail after successful migrations.
-	_, err := store.db.ExecContext(ctx, `CREATE FUNCTION pg_advisory_unlock(integer, integer) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'unlock failed'; END $$;
-		SELECT set_config('search_path', current_schema() || ',pg_catalog', false)`)
-	require.NoError(t, err)
-	require.ErrorContains(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)), "unlock failed")
-
-	var nextPID int
-	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&nextPID))
-	require.NotEqual(t, pid, nextPID)
-	require.Eventually(t, func() bool {
-		var locks int
-
-		err := store.db.QueryRowContext(ctx, `SELECT count(*) FROM pg_locks WHERE pid=$1`, pid).Scan(&locks)
-
-		return err == nil && locks == 0
-	}, 5*time.Second, time.Millisecond)
-
-	_, err = store.db.ExecContext(ctx, `SELECT set_config('search_path', current_schema() || ',pg_catalog', false); DROP FUNCTION pg_advisory_unlock(integer, integer)`)
-	require.NoError(t, err)
-	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 }
 
 // An External MCP call for an existing external ID finds its binding in one row through the
