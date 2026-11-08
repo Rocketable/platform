@@ -211,15 +211,12 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		return fmt.Errorf("send web session listing start: %w", err)
 	}
 
-	var (
-		since map[string]uint64
-		known bool
-	)
+	var since map[string]uint64
 
 	s.listingsMu.Lock()
 	for _, listing := range s.listings[owner] {
 		if listing.version == request.Since {
-			since, known = listing.rows, true
+			since = listing.rows
 		}
 	}
 	s.listingsMu.Unlock()
@@ -254,7 +251,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	s.listingsMu.Unlock()
 
 	done := &ListSessionsResponse{UpstreamSuccess: true, Version: listing.version}
-	if known {
+	if since != nil {
 		done.Since = request.Since
 
 		for _, id := range slices.Sorted(maps.Keys(since)) {
