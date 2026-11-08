@@ -75,9 +75,9 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
 
     // Wait for complete action responses before Open loads an earlier page.
     await Promise.all([page.waitForResponse("**/api/MoveToBackground").then((response: { finished(): Promise<unknown> }) => response.finished()), page.getByRole("button", { name: "Move to background", exact: true }).click()]);
-    await page.getByRole("button", { name: "Move to background", exact: true }).waitForFunction((button: HTMLButtonElement) => !button.disabled);
+    await page.getByRole("button", { name: "Move to background", exact: true }).and(page.locator(":enabled")).waitFor();
     await Promise.all([page.waitForResponse("**/api/StopBackgroundJob").then((response: { finished(): Promise<unknown> }) => response.finished()), page.getByRole("button", { name: "Stop old script", exact: true }).click()]);
-    await page.getByRole("button", { name: "Stop old script", exact: true }).waitForFunction((button: HTMLButtonElement) => !button.disabled);
+    await page.getByRole("button", { name: "Stop old script", exact: true }).and(page.locator(":enabled")).waitFor();
     expect(calls).toEqual([{ path: "/api/MoveToBackground", body: { conversationId: "chat" } }, { path: "/api/StopBackgroundJob", body: { conversationId: "chat", jobId: "j-old" } }]);
 
     // A script's call lives on an earlier page; Open loads it and scrolls to the call.
