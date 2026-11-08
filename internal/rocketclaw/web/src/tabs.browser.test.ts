@@ -1064,7 +1064,7 @@ test("tab group editor moves New session in, ungroups, and closes; collapsed gro
   await until(() => saved.state.groups.some((group) => group.color === "Grey"));
   saved.state.groups = [];
   await page.reload();
-  await tab("Bravo").waitFor();
+  await tab("Charlie").waitFor();
   expect(await order(page)).toEqual(["Bravo", "Charlie"]);
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
 }), 60_000);
