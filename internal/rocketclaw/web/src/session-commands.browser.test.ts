@@ -272,11 +272,29 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await commandSearch.press("Enter");
     await commands.waitFor({ state: "hidden" });
     const savedComposer = await composer.inputValue();
+    const readStoredDrafts = async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const open = indexedDB.open("rocketclaw-drafts", 1);
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(open.error);
+        open.onblocked = () => reject(new Error("draft database open blocked"));
+      });
+      try {
+        return await new Promise<{ key: IDBValidKey; text: string }[]>((resolve, reject) => {
+          const tx = db.transaction("content"), store = tx.objectStore("content");
+          const keys = store.getAllKeys(), values = store.getAll();
+          tx.oncomplete = () => resolve(values.result.map((row: { text: string }, index: number) => ({ key: keys.result[index], text: row.text })));
+          tx.onerror = () => reject(tx.error);
+          tx.onabort = () => reject(tx.error);
+        });
+      } finally { db.close(); }
+    };
     await page.waitForFunction(async (text: string) => {
       const db = await new Promise<IDBDatabase>((resolve) => { const open = indexedDB.open("rocketclaw-drafts", 1); open.onsuccess = () => resolve(open.result); });
       const rows = await new Promise<{ text: string }[]>((resolve) => { const request = db.transaction("content").objectStore("content").getAll(); request.onsuccess = () => resolve(request.result); });
       db.close(); return rows.some((row) => row.text === text);
     }, savedComposer);
+    const beforeReloadDrafts = await page.evaluate(readStoredDrafts);
     draftScopeRequests.clear();
     await page.reload();
     await composer.waitFor();
@@ -285,7 +303,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     } catch (error) {
       try {
         console.info("Composer draft restore after reload", JSON.stringify({
-          expected: savedComposer, fixtureTabs: tabs, errors,
+          expected: savedComposer, beforeReloadDrafts, fixtureTabs: tabs, errors,
           draftScopeRequests: [...draftScopeRequests].map(([request, status]) => ({ url: request.url(), status })),
           browser: await page.evaluate(() => ({
             url: location.href,
@@ -294,23 +312,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
             alerts: Array.from(document.querySelectorAll('[role="alert"]'), (node) => node.textContent),
           })),
         }, null, 2));
-        console.info("Stored composer drafts after reload", JSON.stringify(await page.evaluate(async () => {
-          const db = await new Promise<IDBDatabase>((resolve, reject) => {
-            const open = indexedDB.open("rocketclaw-drafts", 1);
-            open.onsuccess = () => resolve(open.result);
-            open.onerror = () => reject(open.error);
-            open.onblocked = () => reject(new Error("draft database open blocked"));
-          });
-          try {
-            return await new Promise<{ key: IDBValidKey; text: string }[]>((resolve, reject) => {
-              const tx = db.transaction("content"), store = tx.objectStore("content");
-              const keys = store.getAllKeys(), values = store.getAll();
-              tx.oncomplete = () => resolve(values.result.map((row: { text: string }, index: number) => ({ key: keys.result[index], text: row.text })));
-              tx.onerror = () => reject(tx.error);
-              tx.onabort = () => reject(tx.error);
-            });
-          } finally { db.close(); }
-        }).catch((error: unknown) => ({ error: String(error) })), null, 2));
+        console.info("Stored composer drafts after reload", JSON.stringify(await page.evaluate(readStoredDrafts).catch((error: unknown) => ({ error: String(error) })), null, 2));
       } finally { throw error; }
     }
     await page.keyboard.press("Meta+Shift+p");
