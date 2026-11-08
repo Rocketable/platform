@@ -99,7 +99,7 @@ const setup: Plugin.Setup<typeof Terminal> = (ctx) => {
         // visible terminals still hide immediately, and mobile has no strip to reopen
         // (upstream packages/gui-plugins/src/terminal/renderer.tsx).
         let id = target.terminal.active()
-        let closing = !layout.narrow() && id !== undefined && layout.state(key(id), target.session) !== "visible"
+        let closing = !layout.narrow() && (id === undefined || layout.state(key(id), target.session) !== "visible")
           ? target.terminal.closing()
           : undefined
         while (closing) {
