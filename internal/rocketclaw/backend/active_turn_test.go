@@ -633,7 +633,8 @@ func newCronTestManager(t *testing.T, service *SessionService) (manager *threadB
 func seedCronRun(t *testing.T, service *SessionService, runID string) *protocol.InboundMessage {
 	t.Helper()
 
-	require.NoError(t, service.recordConversation(t.Context(), protocol.Conversation{ID: runID, Agent: "job", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "cron/daily.md"}}, conversationFacts{}))
+	_, err := service.recordConversation(t.Context(), &protocol.Conversation{ID: runID, Agent: "job", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "cron/daily.md"}}, conversationFacts{}, harness.AgentStickyOff)
+	require.NoError(t, err)
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
 	msg.ConversationID, msg.RequireOutputDecision = runID, true
@@ -649,7 +650,8 @@ func TestSilentCronRunOpensNoReportChat(t *testing.T) {
 
 	service := newTestSessionService(t)
 	manager, cfg, finals := newCronTestManager(t, service)
-	require.NoError(t, service.recordConversation(t.Context(), protocol.Conversation{ID: "cron:quiet", Agent: "job", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "cron/quiet.md"}}, conversationFacts{}))
+	_, err := service.recordConversation(t.Context(), &protocol.Conversation{ID: "cron:quiet", Agent: "job", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "cron/quiet.md"}}, conversationFacts{}, harness.AgentStickyOff)
+	require.NoError(t, err)
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job prompt", false)
 	msg.ConversationID, msg.RequireOutputDecision = "cron:quiet", true
@@ -658,7 +660,7 @@ func TestSilentCronRunOpensNoReportChat(t *testing.T) {
 	writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmodel: gpt-6.1-sol\npermission: {}\n---\nRun the job.\n")
 
 	crashed := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:quiet", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
-	_, err := service.finishTurn(t.Context(), "turn-quiet", &turnFinish{conversationID: strings.TrimSpace("cron:quiet"), entries: []harness.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replayInputForMessage("user", "job prompt")}}, outbound: crashed.newOutboundMessage(msg, "turn-quiet", "", true)})
+	_, err = service.finishTurn(t.Context(), "turn-quiet", &turnFinish{conversationID: strings.TrimSpace("cron:quiet"), entries: []harness.SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replayInputForMessage("user", "job prompt")}}, outbound: crashed.newOutboundMessage(msg, "turn-quiet", "", true)})
 	require.NoError(t, err)
 
 	require.NoError(t, manager.StartActiveTurns(t.Context()))
@@ -1255,6 +1257,148 @@ func TestCronReportKeepsBoundDestination(t *testing.T) {
 	var owner string
 	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT reports_to FROM conversations WHERE conversation_id = 'cron:daily'`).Scan(&owner))
 	assert.Equal(t, existing, owner)
+}
+
+// A cron follows its agent: a sticky: global agent's run reports into its sticky session, opening it when
+// there is none, and that is the session a new Web session resumes. An ordinary chat of the agent is not it.
+func TestStickyGlobalCronReportsToStickySession(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		existing bool
+		sticky   harness.AgentSticky
+	}{{"no chat", false, harness.AgentStickyOff}, {"chat born off", true, harness.AgentStickyOff}, {"chat born global", true, harness.AgentStickyGlobal}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			service := newTestSessionService(t)
+			manager, cfg, finals := newCronTestManager(t, service)
+			msg := seedCronRun(t, service, "cron:daily")
+			writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmodel: gpt-6.1-sol\nsticky: global\nspace: Ops\npermission: {}\n---\nRun the job.\n")
+
+			if tc.existing {
+				_, _, err := service.CreateStickyConversation(t.Context(), protocol.Conversation{ID: "room", Agent: "job", CreatedBy: "alice", Space: "Original"}, tc.sticky)
+				require.NoError(t, err)
+			}
+
+			bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
+			bridge.threads = manager
+			require.NoError(t, bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{conversationID: "cron:daily"}, &runResult{turnID: "turn-cron", text: "report"}, ""))
+			assert.Equal(t, "report", readFinal(t, finals).Text)
+
+			var owner string
+			require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT COALESCE(reports_to, '') FROM conversations WHERE conversation_id = 'cron:daily'`).Scan(&owner))
+			require.NotEmpty(t, owner)
+
+			agents, _, err := LoadRuntimeDefinitions(config.NewLockedConfig(cfg), cfg.RuntimeDirName())
+			require.NoError(t, err)
+
+			sticky, err := service.StickySessions(t.Context(), "bob", agents)
+			require.NoError(t, err)
+			assert.Equal(t, sticky["job"], owner, "the run reports into the session a new Web session resumes")
+
+			var space string
+			require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT s.name FROM conversations c JOIN web_spaces s ON s.id = c.space_id WHERE c.conversation_id = $1`, owner).Scan(&space))
+
+			wantSpace := "Ops"
+
+			if tc.sticky == harness.AgentStickyGlobal {
+				assert.Equal(t, "room", owner)
+
+				wantSpace = "Original"
+			} else {
+				assert.NotEqual(t, "room", owner, "a chat born off is never the shared chat")
+			}
+
+			assert.Equal(t, wantSpace, space, "an existing sticky chat keeps its space")
+
+			_, recorded, err := service.Thread("web:cron:daily")
+			require.NoError(t, err)
+			assert.False(t, recorded, "the run opens no report chat of its own")
+		})
+	}
+}
+
+// A silent sticky: global run's due reminder hands the run to the agent's sticky session, not to a chat of
+// its own.
+func TestStickyGlobalCronReminderOpensStickySession(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	manager, cfg, finals := newCronTestManager(t, service)
+	msg := seedCronRun(t, service, "cron:daily")
+	writeAgent(t, cfg.Workspace, "job", "---\ndescription: Job\nmodel: gpt-6.1-sol\nsticky: global\nspace: Ops\npermission: {}\n---\nRun the job.\n")
+
+	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:daily", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge.threads = manager
+	require.NoError(t, bridge.finish(t.Context(), &bridgeRequest{inbound: msg, turnID: "turn-cron"}, &turnFinish{conversationID: "cron:daily"}, &runResult{turnID: "turn-cron"}, ""))
+	readFinal(t, finals)
+	require.NoError(t, service.PutScheduledMessage("later", &protocol.ScheduledMessageState{ConversationID: "cron:daily", Agent: "job", Message: "follow up", DueAt: time.Now().Add(-time.Minute)}))
+
+	// Web creation, a different cron's report, and this run's due reminder compete for the first session.
+	require.NoError(t, (&Runtime{Sessions: service}).CreateConversation(t.Context(), protocol.Conversation{ID: "cron:report", Agent: "job", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/report.md"}}))
+	report := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:report", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
+	report.threads = manager
+	blocker, err := service.db.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = blocker.Rollback() })
+	_, err = blocker.ExecContext(t.Context(), `LOCK TABLE conversations IN SHARE MODE`)
+	require.NoError(t, err)
+
+	var (
+		requests errgroup.Group
+		web      string
+	)
+
+	requests.Go(func() error { return bridge.handoffProducer(t.Context()) })
+	requests.Go(func() error {
+		return report.openCronReport(t.Context(), &protocol.OutboundMessage{Cronjob: &protocol.CronjobMessage{Agent: "job", RelativePath: "cron/report.md"}})
+	})
+	requests.Go(func() error {
+		id, _, err := service.CreateStickyConversation(t.Context(), protocol.Conversation{ID: "web-candidate", Agent: "job", CreatedBy: "alice"}, harness.AgentStickyGlobal)
+		web = id
+
+		return err
+	})
+	require.Eventually(t, func() bool {
+		var waiting int
+
+		err := service.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting)
+		require.NoError(t, err)
+
+		return waiting >= 3
+	}, 10*time.Second, 10*time.Millisecond)
+	require.NoError(t, blocker.Commit())
+	require.NoError(t, requests.Wait())
+
+	var owner string
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT COALESCE(reports_to, '') FROM conversations WHERE conversation_id = 'cron:daily'`).Scan(&owner))
+	require.NotEmpty(t, owner)
+	assert.Equal(t, web, owner, "concurrent Web creation and the reminder must share the session")
+
+	var reported string
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT reports_to FROM conversations WHERE conversation_id = 'cron:report'`).Scan(&reported))
+	assert.Equal(t, owner, reported, "the simultaneous cron report must share it too")
+
+	var chats int
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations WHERE kind = $1 AND agent = 'job'`, KindWebChat).Scan(&chats))
+	assert.Equal(t, 1, chats, "no duplicate or orphan sticky sessions may be persisted")
+
+	agents, _, err := LoadRuntimeDefinitions(config.NewLockedConfig(cfg), cfg.RuntimeDirName())
+	require.NoError(t, err)
+
+	sticky, err := service.StickySessions(t.Context(), "", agents)
+	require.NoError(t, err)
+	assert.Equal(t, sticky["job"], owner, "the reminder lands in the session a new Web session resumes")
+
+	thread, _, err := service.Thread(owner)
+	require.NoError(t, err)
+	assert.Equal(t, "job", thread.Agent, "the sticky session is the agent's, not the first agent's")
+
+	_, recorded, err := service.Thread("web:cron:daily")
+	require.NoError(t, err)
+	assert.False(t, recorded)
 }
 
 // AE3: an interrupted private External MCP turn, and an External MCP request
@@ -2468,7 +2612,7 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 
 // A subagent acts for its top-level session's running turn, as it did when it ran inside that turn:
 // the files it attaches reach that turn's reply, and the sessions it creates keep that turn's creator
-// and limits: a Web or External MCP principal, or a cron run's own agent and cron creator. Its shell
+// and limits: a trusted person login when known, or a cron run's own agent and cron creator. Its shell
 // sees that turn's person and External MCP metadata. It is not offered scheduling, even when its agent
 // allows it.
 func TestSubagentActsForRootTurn(t *testing.T) {
@@ -2484,8 +2628,8 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 		metadata, caller        map[string]string
 		env, origin             string
 	}{
-		{protocol.SourceWeb, "Alice", "main", "Alice", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, nil, "Alice|alice@example.com|unset", `[Web principal="Alice"]`},
-		{protocol.SourceExternalMCP, "Bob", "main", "Bob", nil, map[string]string{"ticket": "T-1"}, "unset|unset|T-1", `[ExternalMCP principal="Bob"]`},
+		{protocol.SourceWeb, "Alice", "main", "alice@example.com", map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}, nil, "Alice|alice@example.com|unset", `[Web principal="Alice"]`},
+		{protocol.SourceExternalMCP, "Bob", "main", "", nil, map[string]string{"ticket": "T-1"}, "unset|unset|T-1", `[ExternalMCP principal="Bob"]`},
 		{protocol.SourceSystem, "", "job", string(ThreadCreatedByCron), nil, nil, "unset|unset|unset", "[Cron]"},
 	} {
 		t.Run(string(tc.source), func(t *testing.T) {
@@ -2550,7 +2694,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 
 			created, err := queryStrings(t.Context(), nt.service.db, `SELECT agent || ' ' || created_by FROM conversations WHERE name = 'Child'`, "created sessions")
 			require.NoError(t, err)
-			assert.Equal(t, []string{tc.agent + " " + tc.maker}, created, "the created session keeps the top-level turn's agent and creator")
+			assert.Equal(t, []string{tc.agent + " " + tc.maker}, created, "the created session keeps the top-level agent and trusted login, never a display name or provenance label")
 
 			env, err := os.ReadFile(filepath.Join(nt.cfg.Workspace, "principal.txt"))
 			require.NoError(t, err)

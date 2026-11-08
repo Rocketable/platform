@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -72,6 +73,15 @@ func (s *Server) forkSession(ctx context.Context, request *ForkSessionRequest) (
 
 	if !slices.Contains(choices, thread.Agent) {
 		return nil, fmt.Errorf("web fork: %w", status.Error(codes.FailedPrecondition, "session agent is no longer available"))
+	}
+
+	definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	if err != nil {
+		return nil, fmt.Errorf("load web agents: %w", err)
+	}
+
+	if definitions.Items[thread.Agent].Sticky != harness.AgentStickyOff {
+		return nil, fmt.Errorf("web fork: %w", status.Error(codes.FailedPrecondition, "a sticky agent keeps one session, which cannot be forked"))
 	}
 
 	principal, _, err := s.principal(ctx)

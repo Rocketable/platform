@@ -22,7 +22,7 @@ Only use this runtime path:
 
 ## Easy agents use routines
 
-Before writing a cron file, read its agent's `.rocketclaw/agents/<agent>.md`. If it has `mode: easy`, do not write a cron file: one whose `agent` is an easy agent fails startup and reload with `agent <agent> is an easy agent; schedule it with its routines`. Schedule it with `routines` in its own agent file instead, edited through `main-create-or-update-agent` (overlay in `agents/`, `rocketclaw lint`, then `rocketclaw_reload`). Advanced agents have no routines; schedule them with cron files.
+Before writing a cron file, read its agent's `.rocketclaw/agents/<agent>.md`. If it has `mode: easy`, do not write a cron file: one whose `agent` is an easy agent fails startup and reload with `agent <agent> is an easy agent; schedule it with its routines`. Schedule it with `routines` in its own agent file instead, edited through `main-create-or-update-agent` (overlay in `agents/`, `rocketclaw lint`, then `rocketclaw_reload`). Advanced agents have no routines; schedule them with cron files. If the agent has `sticky: user`, schedule it neither way: a cron file naming it fails loading with `agent <agent> is sticky: user; a cron cannot run it`, and routines on it fail with `routines: a sticky: user agent cannot have routines`. A `sticky: global` agent's runs report into its one shared session instead of a chat per run. Its cron must inherit the agent's space or explicitly name the same space; a different space fails loading.
 
 ```yaml
 routines:

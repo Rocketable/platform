@@ -88,7 +88,7 @@ func TestSpacePermissions(t *testing.T) {
 	core.QueueItemsFunc = func(string) ([]protocol.ThreadQueueItem, error) { return nil, nil }
 	core.ReloadFunc = func(string) (string, error) { return "reloaded", nil }
 	core.CreateConversationFunc = func(context.Context, protocol.Conversation) error { return nil }
-	core.ContinueRunFunc = func(context.Context, string, string) error { return nil }
+	core.ContinueRunFunc = func(_ context.Context, _, id string, _ bool) (string, error) { return id, nil }
 	server := New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{SlackTagsMatchingFunc: func(context.Context, string) []string {
 		<-release
 		return []string{"U05MD4PEVHN"}
@@ -476,17 +476,6 @@ func TestSpacePermissionTurns(t *testing.T) {
 	_, err = h.server.voiceSettings(alice, &VoiceSettingsRequest{Action: VoiceSettingsAction_UPDATE, Agent: new("main-agent")})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	voice, err := h.server.voiceSettings(alice, &VoiceSettingsRequest{Action: VoiceSettingsAction_START, Agent: new("ops-agent")})
-	require.NoError(t, err)
-
-	spaces, err := h.rt.Sessions.Spaces(t.Context())
-	require.NoError(t, err)
-
-	ops := spaces[slices.IndexFunc(spaces, func(space backend.Space) bool { return space.Name == "Ops" })].ID
-	top, err := h.rt.Sessions.TopLevelSession(t.Context(), voice.ConversationId)
-	require.NoError(t, err)
-	require.Equal(t, ops, top.SpaceID, "a voice conversation is born in its agent's space")
-
 	request, turn := started(alice, "ops-chat")
 	require.Contains(t, request, "You are ops-agent.")
 	finish(turn)
@@ -575,4 +564,52 @@ func TestSpacePermissionTurns(t *testing.T) {
 	peer.expect(t, "Continued.")
 	cancel()
 	h.ended(t)
+}
+
+// Run now follows the cron's agent: a sticky: global agent's run replies in its sticky session, and a
+// sticky: user agent, which a cron cannot run, is refused.
+func TestRunCronJobFollowsStickyAgent(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	root, err := os.OpenRoot(cfg.Workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(cfg.RuntimeDirName()+"/agents", 0o700))
+
+	for name, sticky := range map[string]string{"room": "global", "mine": "user", "plain": "off"} {
+		require.NoError(t, root.WriteFile(cfg.RuntimeDirName()+"/agents/"+name+".md", []byte("---\nmodel: gpt-6.1-sol\nsticky: "+sticky+"\npermission: {}\n---\nHelp."), 0o600))
+	}
+
+	_, _, err = sessions.CreateStickyConversation(t.Context(), protocol.Conversation{ID: "lobby", Agent: "room", CreatedBy: "bob@example.com"}, harness.AgentStickyGlobal)
+	require.NoError(t, err)
+
+	ran := make(chan string, 3)
+	core := withoutBackgroundJobs()
+	core.CreateConversationFunc = func(context.Context, protocol.Conversation) error { return nil }
+	server := New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{LoadOneOffCronjobFunc: func(stem string) (protocol.OneOffCronjob, error) {
+		return protocol.OneOffCronjob{Agent: stem}, nil
+	}, RunOneOffCronjobFunc: func(_ context.Context, job *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
+		ran <- job.ConversationID
+		return protocol.CronRunResult{}, nil
+	}})
+	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-tailnet-login-bin", "alice@example.com", "rocketclaw-tailnet-name-bin", "Alice"))
+
+	started, err := server.runCronJob(alice, &RunCronJobRequest{Stem: "room"})
+	require.NoError(t, err)
+	require.Equal(t, "lobby", started.Id)
+	require.Equal(t, "lobby", <-ran, "the run replies in the agent's sticky session")
+
+	started, err = server.runCronJob(alice, &RunCronJobRequest{Stem: "plain"})
+	require.NoError(t, err)
+	require.NotEqual(t, "lobby", started.Id)
+	require.Equal(t, started.Id, <-ran)
+
+	_, err = server.runCronJob(alice, &RunCronJobRequest{Stem: "mine"})
+	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 }

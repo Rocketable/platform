@@ -517,8 +517,13 @@ func validateAutoPermissionReviewers(enabled bool, agents Agents) error {
 					return fmt.Errorf("agent %q permission %q rule %q references reserved reviewer %q; use bare auto for the embedded guardian", agentName, bucket.Name, rule.Pattern, guardianAgentName)
 				}
 
-				if _, ok := agents.Items[rule.Reviewer]; !ok {
+				reviewer, ok := agents.Items[rule.Reviewer]
+				if !ok {
 					return fmt.Errorf("agent %q permission %q rule %q references missing reviewer agent %q", agentName, bucket.Name, rule.Pattern, rule.Reviewer)
+				}
+
+				if !delegable(&reviewer, &agent) {
+					return fmt.Errorf("agent %q permission %q rule %q references sticky: %s reviewer agent %q, which reviews only its own rules", agentName, bucket.Name, rule.Pattern, reviewer.Sticky, rule.Reviewer)
 				}
 			}
 		}

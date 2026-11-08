@@ -146,35 +146,37 @@ see [Voice](#voice).
 ## Voice
 
 The **Voice** page (`/voice`, also in the bottom navigation and the command
-palette) holds the signed-in person's voice conversation. RocketClaw keeps it, with the
-person's agent, voice and transcript choice, on the server: the same on every device
-and through restarts, and never shared with another person, even in one browser. Pick an agent and tap the orb to talk; tap it again to hang up. While a call is
+palette) calls the signed-in person's own session of a `sticky: user` agent, the only
+agents it offers. RocketClaw keeps the person's agent, voice and transcript choice on the
+server: the same on every device and through restarts, and never shared with another
+person, even in one browser. Pick an agent and tap the orb to talk; tap it again to hang up. While a call is
 active the orb slowly ebbs and flows, its inner light swirls around a glowing heart,
 and two orbit rings spin around it; it swells and brightens with the voice model's
 speech, measured in the browser from the incoming audio. With reduced motion it stays still. The first
-tap creates the conversation and later visits, on any device, reuse it; each tap asks
-the server first, so a conversation another device reset is never called. Picking another agent
-while idle switches the conversation's agent with `$agent`. **Reset** hangs up and
-forgets the conversation on every device, asking first while its turn runs, so the
-next call begins a fresh one; the old one stays in the session list and search until
-ordinary cleanup (an empty one is removed at the next restart), and a running turn
-keeps running there. A call already live on another device keeps its conversation
-until it ends. A voice picker next to the agent picker lists the voices the
+tap creates the agent's sticky session and later taps, on any device, reuse it; each tap
+asks the server for it first. Picking another agent while idle saves it and moves to that
+agent's own sticky session; no conversation switches agent. A voice picker next to the agent picker lists the voices the
 default `openai` provider offers (ChatGPT-login and API-key providers offer different ones).
 Each person has one voice: a call uses it when the default `openai` provider offers it, and
-that provider's default otherwise, and the composer's voice button follows it too. Icon buttons on the right show the transcript, open the
-conversation, and reset. The row stays on one line: on phones the agent picker drops
+that provider's default otherwise, and the composer's voice button follows it too. Icon buttons on the right show the transcript and
+open the conversation, once the agent has one. The row stays on one line: on phones the agent picker drops
 its robot icon, and a long agent name is shortened. The page shows the call state, elapsed time and notices
 under the orb. **Show transcript** swaps the big orb for live captions (not saved)
 shown as a chat, with a small orb at the bottom that still starts and ends the call;
 the choice is kept with the person's voice settings. Leaving the page hangs up, and cancels a start
-still in progress; a conversation it already created stays.
+still in progress; a session it already created stays.
 The screen stays awake while the Voice page is open or a call runs.
 
 Each session's composer has a voice button, on every screen size, that starts and
 ends a call on that session. It is not dictation: nothing is typed into the composer.
 On New session it first creates the session with the shown agent, as the first send
 does, then calls on it. Leaving the session ends its call.
+
+New session opens a sticky agent's existing session instead of starting one (see the
+[root README](../../../README.md#sticky-agents)), with an alert saying so: at once when
+the agent is picked and the catalog knows its session, else when the first message, or
+the voice button's call, goes there. A sticky session's picker offers only its agent,
+and other sessions' pickers offer no sticky agent.
 
 A tab runs one call at a time, and each person has one live call: starting voice
 anywhere else, on any conversation, ends their older call with "Voice moved to another
@@ -1034,6 +1036,10 @@ chats or pages; **New session** resets the Home draft. Reloading restores persis
 composer content after Identity and config are accepted. Sending is locked through upload and dispatch, preventing repeated
 clicks or Enter presses from submitting the same pending files twice. The composer
 then accepts another input while the original Prompt waits for its turn to finish.
+If New-session Send resumes a sticky session, its old draft and files are stashed
+first, without running them. A failed stash leaves both drafts intact; a failed
+new send stays in the resumed session's message box with its files and error.
+Opening an existing session without sending leaves its draft in the box.
 
 History, queued messages, and live replies show attachment names and download
 actions. Raster images have inline previews, including attachment-only replies.
@@ -1067,7 +1073,8 @@ Send `$handoff` from any session to open a search with **Copy handoff** and
 no destination search runs before you type. Handoff generation begins in the
 background when the dialog opens. An early choice waits for the document; closing
 without a choice cancels generation. Copy puts the document on the clipboard
-without starting a turn. Start new session sends it as the first turn.
+without starting a turn. Start new session sends it as the first turn, or resumes
+the sticky session after stashing its old draft and files in the same way as Send.
 Select a search result to load its session beneath the dialog. Inspect the
 destination and document, then choose **Stash handoff here**. The document waits
 in that session's stash for **Pop**; stashing starts no turn. Cancelling the

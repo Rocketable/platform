@@ -265,7 +265,8 @@ func TestMessageSearchFindsContinuedRun(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, run := range []string{"cron:daily", "cron:other"} {
-		require.NoError(t, rt.ContinueRun(ctx, run, "web:"+run))
+		_, err := rt.ContinueRun(ctx, run, "web:"+run, false)
+		require.NoError(t, err)
 	}
 
 	require.Equal(t, map[string][]string{"thread": {"Cron Writer"}, "web:cron:daily": {"Cron Writer"}}, storedPrincipals(t, s))
@@ -400,7 +401,10 @@ func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
 	saved := testReplayEntry(`{"type":"message","role":"user","content":"saved"}`)
 	saved.TurnID = "stopped"
 	hideTurn := func() error { _, err := s.AppendEntryID(ctx, "chat", saved); return err }
-	bind := inTx(func(tx *sql.Tx) error { _, _, err := (stateDAO{db: tx}).bindRun(ctx, "cron:daily", "chat"); return err })
+	bind := inTx(func(tx *sql.Tx) error {
+		_, _, err := (stateDAO{db: tx}).bindRun(ctx, "cron:daily", "chat")
+		return err
+	})
 
 	for _, tc := range []struct {
 		name, table, column string

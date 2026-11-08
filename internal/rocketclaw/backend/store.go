@@ -54,6 +54,14 @@ type ThreadState struct {
 	CreatedBy ThreadCreator `json:"created_by,omitempty"`
 	// parent is the session a subagent session belongs to, empty for any other.
 	parent string
+	// sticky is the kind of chat the session was born as, which never changes.
+	sticky harness.AgentSticky
+}
+
+// Sticky is the kind of chat the session was born as: off, or its agent's sticky chat for one person or for
+// everyone.
+func (t ThreadState) Sticky() harness.AgentSticky {
+	return t.sticky
 }
 
 // ThreadCreator records which subsystem created a managed text conversation.
@@ -347,7 +355,7 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID,
 
 	managed, private := protocol.Conversation{ID: session.ManagedConversationID, Agent: managedAgent}, protocol.Conversation{ID: session.PrivateConversationID, Agent: session.Agent}
 
-	created, err := (stateDAO{db: tx}).createConversation(ctx, managed, conversationFacts{kind: KindWebChat})
+	created, err := (stateDAO{db: tx}).createConversation(ctx, managed, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
 	if err != nil {
 		return err
 	}
@@ -356,7 +364,7 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID,
 		return fmt.Errorf("register external MCP managed conversation %q: already recorded", managed.ID)
 	}
 
-	if _, err := (stateDAO{db: tx}).createConversation(ctx, private, conversationFacts{kind: KindExternalMCPRun}); err != nil {
+	if _, err := (stateDAO{db: tx}).createConversation(ctx, private, conversationFacts{kind: KindExternalMCPRun}, harness.AgentStickyOff); err != nil {
 		return err
 	}
 
@@ -621,6 +629,7 @@ const (
 	pruneExternalMCP
 	pruneOrphan
 	pruneRunContext
+	pruneSticky
 )
 
 // pruneCandidate is one unit of retention: a thread, the goal of a conversation that is
@@ -638,6 +647,8 @@ type pruneCandidate struct {
 // holds until commit, because every write that revives a conversation takes them.
 func (c pruneCandidate) stale(ctx context.Context, db stateStoreDB, cutoff time.Time) (bool, error) {
 	switch c.kind {
+	case pruneSticky:
+		return true, nil
 	case pruneOrphan:
 		orphans, err := stalePrivateConversationIDs(ctx, db, cutoff, c.id)
 		return len(orphans) > 0, err
@@ -675,6 +686,11 @@ func (c pruneCandidate) stale(ctx context.Context, db stateStoreDB, cutoff time.
 // left for a later pass. It waits a tenth of pace after each check and pace after
 // each deletion, so a background pass stays light on the store.
 func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time, pace time.Duration) (PruneStateStats, error) {
+	stickyIDs, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE sticky <> 'off' ORDER BY conversation_id`, "sticky conversations")
+	if err != nil {
+		return PruneStateStats{}, err
+	}
+
 	threadIDs, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE retention = 'record' ORDER BY conversation_id`, "managed conversation IDs")
 	if err != nil {
 		return PruneStateStats{}, err
@@ -709,6 +725,9 @@ SELECT DISTINCT r.conversation_id FROM runs r JOIN entries e USING (conversation
 	}
 
 	var candidates []pruneCandidate
+	for _, id := range stickyIDs {
+		candidates = append(candidates, pruneCandidate{kind: pruneSticky, id: id})
+	}
 
 	for _, key := range slices.Sorted(maps.Keys(externalSessions)) {
 		session := externalSessions[key]
@@ -725,7 +744,7 @@ SELECT DISTINCT r.conversation_id FROM runs r JOIN entries e USING (conversation
 	}
 
 	for _, id := range threadIDs {
-		if !external[id] {
+		if !external[id] && !slices.Contains(stickyIDs, id) {
 			candidates = append(candidates, pruneCandidate{kind: pruneThread, id: id, threads: 1})
 		}
 	}
@@ -1479,6 +1498,16 @@ func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, c
 		roots = append(roots, c.private)
 	}
 
+	// A sticky chat shows the runs that report into it, so their messages expire with its own.
+	if c.kind == pruneSticky {
+		runs, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE reports_to = $1 ORDER BY 1`, "sticky chat reports", c.id)
+		if err != nil {
+			return 0, false, err
+		}
+
+		roots = append(roots, runs...)
+	}
+
 	tx, ids, _, err := s.beginHistoryMutation(ctx, roots, true)
 	if errors.Is(err, errHistoryBusy) {
 		return 0, false, nil
@@ -1506,6 +1535,28 @@ func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, c
 		}
 
 		return rows, true, nil
+	}
+
+	// A sticky chat stays; its expired messages go, and so do its finished turns, which would show them again.
+	if c.kind == pruneSticky {
+		rows, err = execRows(ctx, tx, "prune old sticky messages", `DELETE FROM entries WHERE conversation_id = ANY($1) AND entry_timestamp < $2`, ids, cutoff.UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			return 0, false, err
+		}
+
+		if _, err := execState(ctx, tx, "prune old sticky turns", `DELETE FROM turns WHERE conversation_id = ANY($1) AND phase = 'done' AND note IS DISTINCT FROM $2 AND created_at_unix_ns < $3`, ids, notePending, cutoff.UnixNano()); err != nil {
+			return 0, false, err
+		}
+
+		if err := refreshPrincipals(ctx, tx, ids); err != nil {
+			return 0, false, err
+		}
+
+		if err := tx.Commit(); err != nil {
+			return 0, false, fmt.Errorf("commit sticky message prune: %w", err)
+		}
+
+		return rows, rows > 0, nil
 	}
 
 	rows, err = deleteSessionEntries(ctx, tx, ids)
@@ -1892,11 +1943,8 @@ func visibleEntry(observed *ObservedSessionEntry) error {
 
 func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, conversationID string, cutoff time.Time) (bool, error) {
 	var bound bool
-	if err := queryScalar(ctx, db, "read retention ownership", `WITH owned AS (
-    SELECT 1 FROM conversations WHERE conversation_id = $1 AND shadow_parent IS NOT NULL UNION ALL SELECT 1 FROM voice_settings WHERE conversation_id = $1
-)
-SELECT count(*) > 0 FROM owned`, &bound, conversationID); err != nil || bound {
-		return false, err // Children expire only with their explicitly recorded owner; a current voice conversation, only after Reset.
+	if err := queryScalar(ctx, db, "read retention ownership", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND shadow_parent IS NOT NULL`, &bound, conversationID); err != nil || bound {
+		return false, err // Children expire only with their explicitly recorded owner.
 	}
 
 	pending, err := conversationHasPendingWork(ctx, db, conversationID)

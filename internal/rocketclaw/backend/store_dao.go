@@ -49,8 +49,31 @@ type conversationFacts struct {
 	slackChannel, slackThread, cronRun string
 }
 
-// createConversation preserves selection and runs under the caller's history lock.
-func (d stateDAO) createConversation(ctx context.Context, conversation protocol.Conversation, facts conversationFacts) (bool, error) {
+// stickyConversationID returns the sticky chat born for agent, username's own for sticky: user, or ""
+// when there is none.
+func (d stateDAO) stickyConversationID(ctx context.Context, agent, username string, sticky harness.AgentSticky) (string, error) {
+	if sticky == harness.AgentStickyUser && username == "" {
+		return "", errors.New("sticky: user requires an identifiable person")
+	}
+
+	var id string
+
+	err := d.db.QueryRowContext(ctx, `SELECT conversation_id FROM conversations WHERE sticky = $1 AND agent = $2 AND ($1 = 'global' OR created_by = $3)`,
+		string(sticky), agent, username).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("read sticky session: %w", err)
+	}
+
+	return id, nil
+}
+
+// createConversation preserves selection and runs under the caller's history lock. sticky records whether
+// the conversation is born its agent's sticky chat, which never changes.
+func (d stateDAO) createConversation(ctx context.Context, conversation protocol.Conversation, facts conversationFacts, sticky harness.AgentSticky) (bool, error) {
 	summary, err := loadSessionSummary(ctx, d.db, conversation.ID)
 	if err != nil {
 		return false, err
@@ -65,15 +88,23 @@ func (d stateDAO) createConversation(ctx context.Context, conversation protocol.
 		}
 	}
 
+	// An ordinary conversation keeps sticky's 'off' default. A sticky chat is unique to its agent, and to its
+	// person for sticky: user, so a concurrent first request's chat wins.
+	birth := map[harness.AgentSticky]struct{ column, value, conflict string }{
+		harness.AgentStickyOff:    {"", "", "(conversation_id)"},
+		harness.AgentStickyUser:   {", sticky", ", 'user'", "(agent, created_by) WHERE sticky = 'user'"},
+		harness.AgentStickyGlobal: {", sticky", ", 'global'", "(agent) WHERE sticky = 'global'"},
+	}[sticky]
+
 	// A new conversation's named birth space is created when missing; each aggregate yields one row, NULL without a name.
 	created, err := execRows(ctx, d.db, "create conversation", `WITH existing AS (SELECT count(*) AS n FROM conversations WHERE conversation_id = $1),
 space AS (
     INSERT INTO web_spaces (name) SELECT $4::text FROM existing WHERE n = 0 AND $4 <> ''
     ON CONFLICT ((lower(name))) DO UPDATE SET name = web_spaces.name RETURNING id
 )
-INSERT INTO conversations (conversation_id, agent, created_by, space_id, kind, listed, slack_channel, slack_thread, cron_run, cron_path, cron_run_at_unix_ns)
-SELECT $1, $2, $3, max(id), $5, $11, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), NULLIF($10::bigint, 0) FROM space
-ON CONFLICT (conversation_id) DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy, conversation.Space, facts.kind, facts.slackChannel, facts.slackThread, facts.cronRun, path, at,
+INSERT INTO conversations (conversation_id, agent, created_by, space_id, kind, listed, slack_channel, slack_thread, cron_run, cron_path, cron_run_at_unix_ns`+birth.column+`)
+SELECT $1, $2, $3, max(id), $5, $11, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''), NULLIF($10::bigint, 0)`+birth.value+` FROM space
+ON CONFLICT `+birth.conflict+` DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy, conversation.Space, facts.kind, facts.slackChannel, facts.slackThread, facts.cronRun, path, at,
 		facts.kind == KindWebChat || facts.kind == KindSlackThread)
 	if err != nil {
 		return false, err
@@ -236,7 +267,9 @@ SELECT r.target, t.agent FROM run r JOIN conversations t ON t.conversation_id = 
 func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error) {
 	var thread ThreadState
 
-	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by, COALESCE(parent_conversation_id, '') FROM conversations WHERE conversation_id = $1 AND retention = 'record'`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &thread.CreatedBy, &thread.parent)
+	// The column stores off by name; harness.AgentStickyOff is empty.
+	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by, COALESCE(parent_conversation_id, ''), CASE WHEN sticky = 'off' THEN '' ELSE sticky END
+FROM conversations WHERE conversation_id = $1 AND retention = 'record'`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &thread.CreatedBy, &thread.parent, &thread.sticky)
 	if err == sql.ErrNoRows {
 		return ThreadState{}, false, nil
 	}
@@ -248,20 +281,54 @@ func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error
 	return thread, true, nil
 }
 
-// VoiceSettings is one person's Web voice state: their current voice conversation
-// (empty when none), the agent for their next one, their voice, and the transcript view.
+// StickySessions maps each sticky agent to the sticky chat born for it: username's own for a sticky: user
+// agent, the shared one for a sticky: global agent. Agents without one are left out.
+func (s *SessionService) StickySessions(ctx context.Context, username string, agents harness.Agents) (map[string]string, error) {
+	var user, global []string
+
+	for name := range agents.Items {
+		switch agents.Items[name].Sticky {
+		case harness.AgentStickyUser:
+			user = append(user, name)
+		case harness.AgentStickyGlobal:
+			global = append(global, name)
+		case harness.AgentStickyOff:
+		}
+	}
+
+	sessions := map[string]string{}
+	if user == nil && global == nil {
+		return sessions, nil // Without sticky agents, the agent catalog stays independent of the database.
+	}
+
+	err := readRows(ctx, s.db, `SELECT agent, conversation_id FROM conversations
+WHERE sticky = 'global' AND agent = ANY($1) OR sticky = 'user' AND agent = ANY($2) AND created_by = $3 AND created_by <> ''`, "sticky sessions", func(row rowScanner) error {
+		var agent, id string
+		if err := row.Scan(&agent, &id); err != nil {
+			return fmt.Errorf("scan sticky session: %w", err)
+		}
+
+		sessions[agent] = id
+
+		return nil
+	}, global, user, username)
+
+	return sessions, err
+}
+
+// VoiceSettings is one person's Web voice state: the agent whose sticky session they call,
+// their voice, and the transcript view.
 type VoiceSettings struct {
-	ConversationID string
-	Agent          string
-	Voice          string
-	Transcript     bool
+	Agent      string
+	Voice      string
+	Transcript bool
 }
 
 // VoiceSettings returns username's voice settings, or the defaults when none are stored.
 func (s *SessionService) VoiceSettings(ctx context.Context, username string) (VoiceSettings, error) {
 	var settings VoiceSettings
 
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(conversation_id, ''), agent, voice, transcript FROM voice_settings WHERE username = $1`, username).Scan(&settings.ConversationID, &settings.Agent, &settings.Voice, &settings.Transcript)
+	err := s.db.QueryRowContext(ctx, `SELECT agent, voice, transcript FROM voice_settings WHERE username = $1`, username).Scan(&settings.Agent, &settings.Voice, &settings.Transcript)
 	if errors.Is(err, sql.ErrNoRows) {
 		return VoiceSettings{}, nil
 	}
@@ -271,21 +338,6 @@ func (s *SessionService) VoiceSettings(ctx context.Context, username string) (Vo
 	}
 
 	return settings, nil
-}
-
-// StartVoiceConversation makes conversationID, started with agent, username's current
-// voice conversation unless one is already current; the current one then wins.
-func (s *SessionService) StartVoiceConversation(ctx context.Context, username, conversationID, agent string) error {
-	_, err := execState(ctx, s.db, "start voice conversation", `INSERT INTO voice_settings (username, conversation_id, agent) VALUES ($1, $2, $3)
-ON CONFLICT (username) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent WHERE voice_settings.conversation_id IS NULL`, username, conversationID, agent)
-
-	return err
-}
-
-// ResetVoiceConversation forgets username's current voice conversation while it is still conversationID.
-func (s *SessionService) ResetVoiceConversation(ctx context.Context, username, conversationID string) error {
-	_, err := execState(ctx, s.db, "reset voice conversation", `UPDATE voice_settings SET conversation_id = NULL WHERE username = $1 AND conversation_id = $2`, username, conversationID)
-	return err
 }
 
 // UpdateVoiceSettings stores the given settings for username; a nil one keeps its value.

@@ -17,7 +17,7 @@ import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCErro
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { ArrowUp, BellOff, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellOff, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, ScrollText, Search, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -430,6 +430,10 @@ function composerLabels(asking: boolean, busy: boolean, id: string) {
 // offeredAgent is the first of names the catalog offers, else the catalog's first agent.
 function offeredAgent(catalog: Agent[], ...names: string[]) {
   return names.find((name) => catalog.some((item) => item.name === name)) ?? catalog[0]?.name;
+}
+
+function alertResumed(agent = "This agent") {
+  window.alert(`${agent} keeps a single session, so its existing session opens instead of a new one.`);
 }
 
 
@@ -1317,8 +1321,10 @@ function useTabs() {
       const block = rest.filter((tab) => tab === target || (!!target.group && tab.group === target.group));
       return rest.toSpliced(tabs.indexOf(target) > tabs.indexOf(members[0]) ? rest.indexOf(block.at(-1)!) + 1 : rest.indexOf(block[0]), 0, ...members);
     }),
-    // A new session's tab waits for its row to learn the space it was born in.
-    create: (id: string) => update((tabs) => tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), group: tab.group, space: tab.space, unplaced: true } : tab)),
+    // A new session's tab waits for its row to learn the space it was born in. A sticky agent's resumed session
+    // keeps the tab it already has.
+    create: (id: string) => update((tabs) => tabs.some((tab) => tab.path === sessionPath(id)) ? tabs.filter((tab) => tab.path !== "/")
+      : tabs.map((tab) => tab.path === "/" ? { path: sessionPath(id), group: tab.group, space: tab.space, unplaced: true } : tab)),
     // Close, the group commands, and the moves act on paths, the selected tabs; sub names an item's submenu and its label there.
     commands: (path: string, rows: Session[], paths = new Set([path])): { key: string; label: string; sub?: { menu: string; label: string }; run: () => void }[] => {
       const tab = state.tabs.find((item) => item.path === path), selected = state.tabs.filter((item) => paths.has(item.path));
@@ -2125,14 +2131,16 @@ function ForkDialog({ source, drafts, onDraftChange }: { source: string; drafts:
 }
 
 function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCommand; drafts: Map<string, ComposerDraft>; onDraftChange: () => void }) {
+  const name = useServer();
   const identity = useQuery(queries.identity());
+  const scope = useContext(DraftScope)!;
   const { setCommand } = useContext(SessionCommands);
   const popup = useRef<HTMLDivElement>(null);
   const route = useRoute();
   const sidebar = useContext(Sidebar);
   const [query, setQuery] = useState("");
   const search = useQuery({ ...queries.searchMessages(query.trim()), enabled: query.trim() !== "" });
-  const handoffRequest = { queryKey: ["handoff", command.source], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ document: string }>("Handoff", { id: command.source }, signal), retry: false, staleTime: Infinity, gcTime: 0 };
+  const handoffRequest = { queryKey: [{ server: name }, "handoff", command.source], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<{ document: string }>("Handoff", { id: command.source }, signal, name), retry: false, staleTime: Infinity, gcTime: 0 };
   const handoff = useQuery(handoffRequest);
   const space = useContext(TabActions).state.space;
   const action = useMutation({ mutationFn: async (kind: "copy" | "new" | "stash") => {
@@ -2140,16 +2148,21 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
     const { document } = await queryClient.fetchQuery(handoffRequest);
     if (kind === "copy") await copyText(document, popup.current!);
     if (kind === "new") {
-      const { agents } = await queryClient.ensureQueryData(queries.agents());
-      const id = await mutations.createSession({ agent: offeredAgent(agents, "main"), spaceId: space });
+      const { agents } = await rpc<AgentChoices>("ListAgents", {}, undefined, name);
+      const agent = offeredAgent(agents, "main");
+      const { id, resumed } = await rpc<{ id: string; resumed?: boolean }>("CreateSession", { agent, spaceId: space }, undefined, name);
+      if (resumed) alertResumed(agent);
       const optimistic: Line = { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), role: "user", text: document, principal };
-      const draft: ComposerDraft = { text: "", files: [], agent: "", sessionId: id, sending: false, busy: true, lines: [optimistic], error: "", edit: 0, submission: 0 };
+      const draft: ComposerDraft = resumed ? await prepareResumedDraft(id, scope, drafts, onDraftChange, name) : { text: "", files: [], agent: "", sessionId: id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0, hydrated: true, persistenceKey: JSON.stringify([scope, id]) };
+      draft.busy = true;
+      draft.lines = [...draft.lines, optimistic];
       drafts.set(id, draft);
       onDraftChange();
       sidebar.invalidateQueries();
-      navigate(sessionPath(id));
-      void mutations.prompt({ id, text: document, messageId: optimistic.id }).catch((err: Error) => {
+      navigate(sessionPath(id), false, name);
+      void mutations.prompt({ id, text: document, messageId: optimistic.id }, name).catch((err: Error) => {
         draft.text = [document, draft.text].filter(Boolean).join("\n\n");
+        draft.edit++;
         draft.lines = draft.lines.filter((line) => line.id !== optimistic.id);
         draft.error = err.message;
         if (draft.submission === 0) draft.busy = false;
@@ -2157,7 +2170,7 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
       });
     }
     if (kind === "stash") {
-      await mutations.prompt({ id: command.target!.conversationId, text: document, delivery: "STASH" });
+      await mutations.prompt({ id: command.target!.conversationId, text: document, delivery: "STASH" }, name);
       void queryClient.invalidateQueries({ queryKey: ["queue"] });
     }
     setCommand(undefined);
@@ -2397,7 +2410,7 @@ function useRemoteCreation(query: string, close: () => void, restart: () => void
   const sidebar = useContext(Sidebar);
   const tabs = useContext(TabActions);
   const [server, setServer] = useState(initial);
-  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: (created) => { sidebar.invalidateQueries(); close(); tabs.open(rowPath({ id: created, kind: "REMOTE_OPENCODE" })); } });
+  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: ({ id }) => { sidebar.invalidateQueries(); close(); tabs.open(rowPath({ id, kind: "REMOTE_OPENCODE" })); } });
   const typed = query.trim();
   const rank = (directory: string) => recent.indexOf(`folder-${directory}`) + 1 || Infinity;
   const known = sidebar.rows.flatMap((row) => row.server === server && row.directory ? [row.directory] : []).toSorted((a, b) => rank(a) - rank(b) || 0);
@@ -2711,7 +2724,7 @@ function RemoteSession({ id }: { id: string }) {
   const [failed, setFailed] = useState("");
   // Each retry loads the entry from a fresh URL, as browsers may keep a failed module load.
   const [retries, setRetries] = useState(0);
-  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: (created) => { sidebar.invalidateQueries(); tabs.open(rowPath({ id: created, kind: "REMOTE_OPENCODE" })); } });
+  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: ({ id }) => { sidebar.invalidateQueries(); tabs.open(rowPath({ id, kind: "REMOTE_OPENCODE" })); } });
   const ready = configured && (!offline || reported);
   const openSession = useEffectEvent((other: string) => tabs.open(rowPath({ id: `opencode:${server}:${other}`, kind: "REMOTE_OPENCODE" })));
   const forkSession = useEffectEvent(async (other: string, before: string) => {
@@ -4473,6 +4486,45 @@ function SkillPanel() {
   </SidePanel>;
 }
 
+function uploadComposerFiles(sessionId: string, files: PendingFile[], name = server()): Promise<AttachmentMeta[]> {
+  return Promise.all(files.map(async ({ file }) => {
+    const response = await fetch(`${serverURL(name)}/api/UploadAttachment?${new URLSearchParams({ conversationId: sessionId, name: file.name })}`, { method: "POST", body: file });
+    if (!response.ok) throw new Error(`Upload failed: ${file.name}`);
+    return response.json();
+  }));
+}
+
+async function prepareResumedDraft(id: string, scope: string, drafts: Map<string, ComposerDraft>, changed: () => void, name = server()) {
+  const draft: ComposerDraft = drafts.get(id) ?? { text: "", files: [], agent: "", sessionId: id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 };
+  drafts.set(id, draft);
+  draft.persistenceKey = JSON.stringify([scope, id]);
+  if (!draft.hydrated) {
+    const content = await draftContent(draft.persistenceKey);
+    if (content && !draft.edit && !draft.text && !draft.files.length) Object.assign(draft, content);
+    draft.hydrated = true;
+  }
+  if (draft.sending || draft.reverting) throw new Error("This session is still sending or restoring its draft. Try again when it finishes.");
+  const { text, files, edit } = draft;
+  if (text !== "" || files.length) {
+    draft.sending = true;
+    changed();
+    try {
+      const attachments = await uploadComposerFiles(id, files, name);
+      await mutations.prompt({ id, text, delivery: "STASH", attachmentIds: attachments.map((file) => file.id) }, name);
+      void queryClient.invalidateQueries({ queryKey: ["queue"] });
+      if (draft.edit !== edit) throw new Error("The old draft was stashed, but this session's draft changed. Review it before trying again.");
+      draft.text = "";
+      draft.files = [];
+      draft.agent = "";
+      draft.edit++;
+    } finally {
+      draft.sending = false;
+      changed();
+    }
+  }
+  return draft;
+}
+
 async function sendComposer(input: {
   draft: ComposerDraft;
   onDraftChange: () => void;
@@ -4484,9 +4536,10 @@ async function sendComposer(input: {
   sessionId: string;
   selected: string;
   currentAgent: string;
-  goSession: (id: string) => void;
+  goSession: (id: string, resumed?: boolean) => void;
+  resumeSession: (id: string) => Promise<ComposerDraft>;
   prompt: { mutateAsync: (value: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }) => Promise<string> };
-  create: { mutateAsync: (value: { agent?: string }) => Promise<string> };
+  create: { mutateAsync: (value: { agent?: string }) => Promise<{ id: string; resumed?: boolean }> };
   scrollToEnd: () => boolean;
   setBusy: (value: boolean) => void;
   setAgentOpen: (value: boolean) => void;
@@ -4494,8 +4547,9 @@ async function sendComposer(input: {
   setLines: (update: (current: Line[]) => Line[]) => void;
   refreshHistory: () => Promise<unknown>;
 }) {
-  const { draft } = input;
-  const delivery = input.delivery ?? (input.busy ? "QUEUE" : "STEER");
+  const name = server();
+  let { draft } = input;
+  let delivery = input.delivery ?? (input.busy ? "QUEUE" : "STEER");
   // Match strings.Fields/unicode.IsSpace in frontend/rpc/server.go, not JavaScript's whitespace.
   const command = input.delivery === "STASH" ? null : /^\p{White_Space}*\$(enqueue|stash|steer)(?=\p{White_Space}|$)\p{White_Space}*/u.exec(input.text);
   const followUp: PromptDelivery = command ? command[1] === "enqueue" ? "QUEUE" : command[1] === "stash" ? "STASH" : "STEER" : delivery;
@@ -4505,34 +4559,53 @@ async function sendComposer(input: {
     return;
   }
   draft.sending = true;
-  const submission = ++draft.submission;
+  let submission = ++draft.submission;
   input.onDraftChange();
   const agent = draft.agent;
   let dispatchedEdit: number | undefined;
-  const enqueue = followUp !== "STEER" && !stopping;
-  if (!input.busy && !enqueue) {
-    input.setBusy(true);
-  }
+  let enqueue = followUp !== "STEER" && !stopping;
   input.scrollToEnd();
   input.setSendError("");
   const optimistic: Line = { id: crypto.getRandomValues(new Uint32Array(4)).join("-"), role: "user", text: command ? input.text.slice(command[0].length) : input.text, principal: input.principal };
   try {
     let sessionId = input.sessionId;
     if (sessionId === "") {
-      sessionId = await input.create.mutateAsync({ agent: input.selected });
-      firstMessages.set(sessionId, optimistic.text.trim().split("\n", 1)[0]);
-      input.goSession(sessionId);
+      const created = await input.create.mutateAsync({ agent: input.selected });
+      sessionId = created.id;
+      if (created.resumed) {
+        alertResumed(input.selected);
+        const target = await input.resumeSession(sessionId);
+        draft.sending = false;
+        draft.text = "";
+        draft.files = [];
+        draft.agent = "";
+        draft.edit++;
+        draft = target;
+        input = { ...input, draft, busy: draft.busy,
+          setBusy: (value) => { draft.busy = value; input.onDraftChange(); },
+          setSendError: (value) => { draft.error = value; input.onDraftChange(); },
+          setLines: (update) => { draft.lines = update(draft.lines); input.onDraftChange(); },
+          refreshHistory: () => readHistoryDelta(sessionId, draft, input.onDraftChange),
+        };
+        draft.text = input.text;
+        draft.files = input.files;
+        draft.agent = agent;
+        draft.edit++;
+        draft.sending = true;
+        draft.error = "";
+        submission = ++draft.submission;
+        delivery = input.delivery ?? (input.busy ? "QUEUE" : "STEER");
+        enqueue = command ? followUp !== "STEER" : delivery !== "STEER" && !stopping;
+      } else firstMessages.set(sessionId, optimistic.text.trim().split("\n", 1)[0]);
+      input.goSession(sessionId, created.resumed);
     }
+    if (!input.busy && !enqueue) input.setBusy(true);
     optimistic.attachments = input.files.map(({ id, file }) => ({ id, name: file.name, mimeType: file.type, size: String(file.size), conversationId: sessionId, file }));
     if (!enqueue && input.busy && !stopping) {
       draft.parked = [...(draft.parked ?? []), optimistic];
       input.onDraftChange();
     } else if (!enqueue) input.setLines((current) => [...current, optimistic]);
-    const attachments: AttachmentMeta[] = await Promise.all(input.files.map(async ({ file }) => {
-      const response = await fetch(`${serverURL()}/api/UploadAttachment?${new URLSearchParams({ conversationId: sessionId, name: file.name })}`, { method: "POST", body: file });
-      if (!response.ok) throw new Error(`Upload failed: ${file.name}`);
-      return response.json();
-    }));
+    const attachments = await uploadComposerFiles(sessionId, input.files, name);
     if (!stashing && !stopping && !/^\p{White_Space}*\$agent(?=\p{White_Space}|$)/u.test(optimistic.text) && input.sessionId !== "" && input.currentAgent !== "" && input.selected !== "" && input.selected !== input.currentAgent) {
       await input.prompt.mutateAsync({ id: sessionId, text: `$agent ${input.selected}` });
       await queryClient.invalidateQueries({ queryKey: ["agents"] });
@@ -4743,12 +4816,13 @@ function SessionComposer({
   refreshHistory: () => Promise<unknown>;
   queued: QueueItem[];
 }) {
+  const name = useServer();
   const identity = useQuery(queries.identity());
   const { setCommand } = useContext(SessionCommands);
   const scope = useContext(DraftScope)!;
   const revert = useContext(RevertActions)!;
   const { scrollToEnd, scrollToMessage } = useMessageScroller();
-  const prompt = useMutation({ mutationFn: mutations.prompt, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
+  const prompt = useMutation({ mutationFn: (input: Parameters<typeof mutations.prompt>[0]) => mutations.prompt(input, name), onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
   // No polling: on a slow link a 2 s refresh used a large share of the connection. Agent switches made here
   // refetch it; changes made elsewhere arrive when the window regains focus or the session reopens.
   const agents = useQuery(queries.agents({ conversationId: id }));
@@ -4778,7 +4852,14 @@ function SessionComposer({
     void persistComposerDraft(draft)?.finally(() => { if (draft.persistenceError !== error) onDraftChange(); });
   };
   const setFiles = (value: PendingFile[]) => { draft.files = value; draft.edit++; onDraftChange(); };
-  const setAgent = (value: string) => { draft.agent = value; draft.edit++; onDraftChange(); };
+  const setAgent = (value: string) => {
+    const resumed = id === "" ? agents.data?.agents.find((item) => item.name === value)?.stickySession : undefined;
+    if (resumed) {
+      alertResumed(value);
+      return navigate(sessionPath(resumed));
+    }
+    draft.agent = value; draft.edit++; onDraftChange();
+  };
   const [agentOpen, setAgentOpen] = useState(false);
   const [dollarOff, setDollarOff] = useState(false);
   const [dollarPick, setDollarPick] = useState("");
@@ -4802,12 +4883,14 @@ function SessionComposer({
   };
   const question = useQuestion(id, draft, refreshHistory, setSendError);
   const { placeholder, sendLabel } = composerLabels(question.pending, busy, id);
-  const goSession = (sessionId: string) => {
+  const goSession = (sessionId: string, resumed = false) => {
     void draftContent(JSON.stringify([scope, ""]), { text: "", files: [], agent: "" }).catch(() => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; onDraftChange(); });
     draft.sessionId = sessionId;
-    draft.persistenceKey = JSON.stringify([scope, sessionId]);
-    draft.persistedEdit = undefined;
-    drafts.set(sessionId, draft);
+    if (!resumed) {
+      draft.persistenceKey = JSON.stringify([scope, sessionId]);
+      draft.persistedEdit = undefined;
+      drafts.set(sessionId, draft);
+    }
     onDraftChange();
   };
   // A call from a new session creates it with the shown agent, as Send does.
@@ -4815,8 +4898,10 @@ function SessionComposer({
     let sessionId = draft.sessionId;
     try {
       if (sessionId === "") {
-        sessionId = await create.mutateAsync({ agent: selected });
-        goSession(sessionId);
+        const created = await create.mutateAsync({ agent: selected });
+        sessionId = created.id;
+        if (created.resumed) alertResumed(selected);
+        goSession(sessionId, created.resumed);
       }
     } catch (err) {
       return setSendError(err instanceof Error ? err.message : "create failed");
@@ -4847,6 +4932,7 @@ function SessionComposer({
       selected,
       currentAgent,
       goSession,
+      resumeSession: (sessionId) => prepareResumedDraft(sessionId, scope, drafts, onDraftChange, name),
       prompt,
       create,
       scrollToEnd,
@@ -5253,7 +5339,7 @@ function CronMarker({ label, tooltip, pct, ran, onClick }: { label: string; tool
 
 function CronChatLink({ job, className, children }: { job: CronJob; className: string; children: ReactNode }) {
   const sidebar = useContext(Sidebar);
-  const open = useMutation({ mutationFn: mutations.createSession, onSuccess: (id) => {
+  const open = useMutation({ mutationFn: mutations.createSession, onSuccess: ({ id }) => {
     sidebar.invalidateQueries();
     void queryClient.invalidateQueries({ queryKey: ["cronJobs"] });
     navigate(sessionPath(id));
@@ -5558,18 +5644,18 @@ function VoiceStage({ voice, compact, busy, loading, error, onPress }: { voice: 
   </div>;
 }
 
-// useVoiceSettings is the person's voice conversation and settings, kept by the server and
-// the same on every device; update shows a change at once, keeps the server's answer, and
-// puts the old value back if the server refuses it. The page shows its own call's
-// conversation while that call runs, though another device moves the current one: changing
-// the shown id hangs the call up. A call that ended with an error keeps its message only.
+// useVoiceSettings is the person's voice settings, kept by the server and the same on every
+// device; update shows a change at once, keeps the server's answer, and puts the old value
+// back if the server refuses it. callId is the page's own call's conversation while that
+// call runs. A call that ended with an error keeps its message only.
 function useVoiceSettings(username: string) {
   const settings = useQuery(queries.voiceSettings(username));
-  const saved = settings.data ?? { conversationId: "", agent: "", voice: "", transcript: false };
+  const saved = settings.data ?? { agent: "", voice: "", transcript: false };
   const save = (next: VoiceSettings) => queryClient.setQueryData(queries.voiceSettings(username).queryKey, next);
   const version = useRef({ agent: 0, voice: 0, transcript: 0 });
   const update = useMutation({
-    mutationFn: (change: Partial<Omit<VoiceSettings, "conversationId">>) => mutations.voiceSettings({ action: "UPDATE", ...change }),
+    scope: { id: JSON.stringify(queries.voiceSettings(username).queryKey) },
+    mutationFn: (change: Partial<VoiceSettings>) => mutations.voiceSettings({ action: "UPDATE", ...change }),
     onMutate: (change) => {
       for (const key of ["agent", "voice", "transcript"] as const) if (key in change) version.current[key]++;
       save({ ...saved, ...change });
@@ -5588,19 +5674,24 @@ function useVoiceSettings(username: string) {
   });
   const [callId, setCallId] = useState("");
   const call = useOwnVoice(callId);
-  const id = ["connecting", "reconnecting", "live", "ending"].includes(call.state) ? callId : saved.conversationId;
-  // The page owns its call: Reset and leaving the page hang it up.
-  useEffect(() => () => { if (voiceView().conversationId === id && voiceView().state !== "error") stopVoice(); }, [id]);
-  // Until the person's settings load, Start would create a conversation with defaults that overwrite them.
-  return { saved, save, update, id, setCallId, agent: saved.agent || "main", loading: settings.isPending, problem: call.error || settings.error?.message };
+  const live = ["connecting", "reconnecting", "live", "ending"].includes(call.state);
+  // Until the person's settings load, Start would call another agent than theirs.
+  return { saved, update, callId: live ? callId : "", setCallId, agent: saved.agent, loading: settings.isPending, problem: call.error || settings.error?.message };
 }
 
 function VoiceCall({ username }: { username: string }) {
   const sidebar = useContext(Sidebar);
-  const { saved, save, update, id, setCallId, agent, loading, problem } = useVoiceSettings(username);
+  const { saved, update, callId, setCallId, agent, loading, problem } = useVoiceSettings(username);
+  const agents = useQuery(queries.agents());
+  const catalog = (agents.data?.agents ?? []).filter((item) => item.sticky === "user");
+  // The person's choice, else the shipped voice agent, else main, else the first one offered.
+  const selected = offeredAgent(catalog, agent, "voice", "main") ?? "";
+  const agentInfo = catalog.find((item) => item.name === selected);
+  const id = callId || agentInfo?.stickySession || "";
   const voice = useOwnVoice(id);
+  // The page owns its call: leaving the page hangs it up.
+  useEffect(() => () => { if (voiceView().conversationId === id && voiceView().state !== "error") stopVoice(); }, [id]);
   const [picking, setPicking] = useState(false);
-  const [confirm, setConfirm] = useState(false);
   const { mutate: saveSetting } = update;
   const transcript = saved.transcript;
   // A reply too long to speak turns the transcript on, as the button does, so it is on screen.
@@ -5614,68 +5705,34 @@ function VoiceCall({ username }: { username: string }) {
       if (written) saveSetting({ transcript: true }); // A new call's transcript starts empty.
     });
   }, [id, saveSetting]);
-  const agents = useQuery(queries.agents(id ? { conversationId: id } : undefined));
-  const catalog = agents.data?.agents ?? [];
-  const selected = [id ? agents.data?.currentAgent : agent].find((name) => catalog.some((item) => item.name === name)) ?? catalog[0]?.name ?? "";
   const active = voice.state !== "idle" && voice.state !== "error";
-  const agentInfo = catalog.find((item) => item.name === selected);
   const voices = agentInfo?.voices ?? [];
   const speaker = voiceChoice(agentInfo, saved.voice);
   // Leaving cancels a start still creating its conversation.
   const left = useRef(false);
   useEffect(() => () => { left.current = true; }, []);
-  // Start always asks the server, so a conversation another device reset is never called.
-  const start = useMutation({ mutationKey: ["voiceCall", username], mutationFn: async () => {
-    const next = await mutations.voiceSettings({ action: "START", agent: selected });
-    save(next);
+  const start = useMutation({ mutationFn: async () => {
+    const { id: next } = await mutations.createSession({ agent: selected });
     sidebar.invalidateQueries();
+    void queryClient.invalidateQueries({ queryKey: ["agents"] });
     if (left.current) return;
-    setCallId(next.conversationId);
-    void startVoice(next.conversationId, speaker);
+    setCallId(next);
+    void startVoice(next, speaker);
   } });
-  const pick = useMutation({ mutationFn: async (name: string) => {
-    await update.mutateAsync({ agent: name });
-    if (!id) return;
-    await mutations.prompt({ id, text: `$agent ${name}` });
-    await queryClient.invalidateQueries({ queryKey: ["agents"] });
-  } });
-  // Only this page's call can be live here: the composer ends its call on leaving its session.
-  const reset = useMutation({ mutationKey: ["voiceCall", username], mutationFn: async () => {
-    stopVoice();
-    setCallId("");
-    setConfirm(false);
-    await mutations.voiceSettings({ action: "RESET", conversationId: id });
-    await queryClient.invalidateQueries({ queryKey: ["voiceSettings"] });
-  } });
-  // Start and Reset never overlap, so a Start cannot land on the conversation a Reset is forgetting.
-  const settling = useIsMutating({ mutationKey: ["voiceCall", username] }) > 0;
-  const error = [voice.error, problem, ...[start, pick, update, reset].map((mutation) => mutation.error?.message)].find(Boolean);
+  const error = [voice.error, problem, ...[start, update].map((mutation) => mutation.error?.message)].find(Boolean);
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-3xl flex-col gap-4 p-4">
       <PageTitle>Voice</PageTitle>
       <div className="flex items-center gap-1.5 sm:gap-2 max-sm:[&>:first-child>svg:first-child]:hidden">
-        <AgentPicker catalog={catalog} selected={selected} setAgent={(name) => pick.mutate(name)} open={picking} setOpen={setPicking} disabled={[active, start.isPending, pick.isPending, catalog.length === 0].some(Boolean)} />
+        <AgentPicker catalog={catalog} selected={selected} setAgent={(name) => update.mutate({ agent: name })} open={picking} setOpen={setPicking} disabled={[active, start.isPending, update.isPending, catalog.length === 0].some(Boolean)} />
         {agentInfo && voices.length > 0 ? <VoicePicker voices={voices} value={speaker} disabled={active || start.isPending} onPick={(name) => update.mutate({ voice: name })} /> : null}
         <div className="ml-auto flex items-center gap-1">
           <Button variant={transcript ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-8" aria-label="Show transcript" title="Show transcript" aria-pressed={transcript} onClick={() => update.mutate({ transcript: !transcript })}><Captions /></Button>
-          {id ? <>
-            <Button variant="ghost" size="icon" className="size-11 sm:size-8" role="link" nativeButton={false} render={<Link href={sessionPath(id)} />} aria-label="Open conversation" title="Open conversation"><MessageSquare /></Button>
-            <Button variant="ghost" size="icon" className="size-11 sm:size-8" aria-label="Reset" title="Start a new voice conversation" disabled={settling} onClick={() => sidebar.rows.find((row) => row.id === id)?.running ? setConfirm(true) : reset.mutate()}><RotateCcw /></Button>
-          </> : null}
+          {id ? <Button variant="ghost" size="icon" className="size-11 sm:size-8" role="link" nativeButton={false} render={<Link href={sessionPath(id)} />} aria-label="Open conversation" title="Open conversation"><MessageSquare /></Button> : null}
         </div>
       </div>
       {transcript ? <VoiceTranscript captions={voice.captions} /> : null}
-      <VoiceStage voice={voice} compact={transcript} busy={settling} loading={agents.isPending || loading} error={error} onPress={() => active ? stopVoice() : start.mutate()} />
-      <Dialog open={confirm} onOpenChange={setConfirm}>
-        <DialogContent>
-          <DialogTitle>Reset voice conversation?</DialogTitle>
-          <DialogDescription>The agent is still working. Its turn keeps running in the old conversation.</DialogDescription>
-          <div className="mt-6 flex justify-end gap-2">
-            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
-            <Button disabled={settling} onClick={() => reset.mutate()}>Reset</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <VoiceStage voice={voice} compact={transcript} busy={start.isPending} loading={agents.isPending || loading || selected === ""} error={error} onPress={() => active ? stopVoice() : start.mutate()} />
     </div>
   );
 }

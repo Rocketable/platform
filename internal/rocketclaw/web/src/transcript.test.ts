@@ -10,10 +10,10 @@ const api = new API({ cwd: import.meta.dir });
 const source = (await (await api.updateSnapshot({ openProject: "../tsconfig.json" })).getProjects()[0].program.getSourceFile(`${import.meta.dir}/ui.tsx`))!;
 await api.close();
 const transpiler = new Bun.Transpiler({ loader: "tsx" });
-const names = ["historyPage", "shadowHistory", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "firstMessages", "revertComposer", "unsavedRequest", "restoreFiles", "promoteComposer", "popComposer", "switchQueueAgent", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle", "comparisonRows", "turnKey", "mergeShadowBindings"];
+const names = ["historyPage", "shadowHistory", "applyHistoryDelta", "readHistoryDelta", "readEarlierHistory", "sendComposer", "prepareResumedDraft", "uploadComposerFiles", "alertResumed", "firstMessages", "revertComposer", "unsavedRequest", "restoreFiles", "promoteComposer", "popComposer", "switchQueueAgent", "stopComposer", "historyLines", "pendingInputs", "lineId", "isStopCommand", "transcriptTurns", "toolTitle", "comparisonRows", "turnKey", "mergeShadowBindings"];
 const functions = source.statements.filter((node) => (isFunctionDeclaration(node) ? names.includes(node.name?.text ?? "") : isVariableStatement(node) && node.declarationList.declarations.some((declaration) => names.includes(declaration.name.getText(source))))).map((node) => node.getText(source)).join("\n");
-const javascript = transpiler.transformSync(`import { QueryClient, queryOptions } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { captureException } from ${JSON.stringify(Bun.resolveSync("@sentry/react", import.meta.dir))};\nimport { queries, mutations, RPCError } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nimport { serverURL } from ${JSON.stringify(new URL("./navigation.tsx", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand", "switchQueueAgent"].includes(name)).join(", ")}, queryClient };`);
-const { shadowHistory, applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, firstMessages, revertComposer, promoteComposer, popComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, comparisonRows, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+const javascript = transpiler.transformSync(`import { QueryClient, queryOptions } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nimport { captureException } from ${JSON.stringify(Bun.resolveSync("@sentry/react", import.meta.dir))};\nimport { queries, mutations, RPCError } from ${JSON.stringify(new URL("./api.ts", import.meta.url).href)};\nimport { server, serverURL } from ${JSON.stringify(new URL("./navigation.tsx", import.meta.url).href)};\nconst queryClient = new QueryClient();\n${functions}\nexport { ${names.filter((name) => !["historyPage", "lineId", "isStopCommand", "switchQueueAgent"].includes(name)).join(", ")}, queryClient };`);
+const { shadowHistory, applyHistoryDelta, readHistoryDelta, readEarlierHistory, sendComposer, prepareResumedDraft, firstMessages, revertComposer, promoteComposer, popComposer, stopComposer, historyLines, pendingInputs, transcriptTurns, toolTitle, comparisonRows, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 
 test("comparison rows pair producer-scoped IDs, retain pending and unavailable turns, and omit child seed history", () => {
   const parent = historyLines([
@@ -679,7 +679,7 @@ for (const failure of ["", "create", "upload", "prompt"]) test(`new-session send
   const text = "  first request\nsecond line  ";
   const draft = { text, files, agent: "planner", edit: 0, submission: 0, sending: false, lines: [] as Line[] };
   const id = `created-${failure || "success"}`;
-  const creating = Promise.withResolvers<string>();
+  const creating = Promise.withResolvers<{ id: string }>();
   const calls: string[] = [];
   let busy = false, error = "";
   const original = globalThis.fetch;
@@ -700,7 +700,7 @@ for (const failure of ["", "create", "upload", "prompt"]) test(`new-session send
     await send(); // A second submit while session creation is pending must not create another session.
     expect(calls).toEqual(["create"]);
     if (failure === "create") creating.reject(new Error("create refused"));
-    else creating.resolve(id);
+    else creating.resolve({ id });
     await sending;
     expect(calls).toEqual(failure === "create" ? ["create"] : failure === "upload" ? ["create", "navigate", "upload"] : ["create", "navigate", "upload", "prompt", ...(failure ? [] : ["history"])]);
     expect(draft).toMatchObject({ text: failure ? text : "", files: failure ? files : [], agent: failure ? "planner" : "", sending: false });
@@ -748,6 +748,74 @@ test("composer renders exact input before Prompt completes and history failure d
     expect(draft.lines.at(-1)).toMatchObject({ text: "private report", complete: true });
     expect(draft.lines.map((line) => line.text)).toEqual(["prior answer", "  exact human input\n", "private report"]);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+for (const text of ["  $stop\n", ""]) for (const failure of ["", "upload", "stash"]) test(`resumed drafts are kept until explicit stash accepts text and files: ${JSON.stringify(text)} failure=${failure}`, async () => {
+  const files = [{ id: "local", file: new File([new Uint8Array([0, 255, 1])], "old.bin") }];
+  const draft = { text, files, agent: "main", sessionId: "sticky", edit: 0, submission: 0, sending: false, busy: false, hydrated: true, lines: [], error: "" };
+  const drafts = new Map([["sticky", draft]]);
+  const originalFetch = globalThis.fetch;
+  const stashing = Promise.withResolvers<void>(), accepted = Promise.withResolvers<void>();
+  globalThis.fetch = Object.assign(async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes("UploadAttachment")) {
+      expect(init?.body).toBe(files[0].file);
+      return failure === "upload" ? new Response("unavailable", { status: 503 }) : Response.json({ id: "uploaded" });
+    }
+    expect(JSON.parse(init!.body as string)).toEqual({ id: "sticky", text, delivery: "STASH", attachmentIds: ["uploaded"] });
+    stashing.resolve();
+    await accepted.promise;
+    return failure === "stash" ? Response.json({ code: 14, message: "stash failed" }, { status: 503 }) : Response.json({ privateText: "" });
+  }, { preconnect: originalFetch.preconnect });
+  try {
+    const result = prepareResumedDraft("sticky", "scope", drafts, () => {});
+    if (failure !== "upload") {
+      await stashing.promise;
+      expect(draft).toMatchObject({ text, files, sending: true });
+      accepted.resolve();
+    }
+    if (failure) await expect(result).rejects.toThrow(failure === "upload" ? "Upload failed: old.bin" : "stash failed");
+    else expect(await result).toBe(draft);
+    expect(draft).toMatchObject({ text: failure ? text : "", files: failure ? files : [], sending: false });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+for (const failure of [false, true]) test(`resumed first send uses the visible draft owner: failure=${failure}`, async () => {
+  const home = { text: "new request", files: [], agent: "main", edit: 0, submission: 0, sending: false, busy: false, lines: [] as Line[], error: "" };
+  const target = { ...home, text: "", sessionId: "sticky", lines: [] as Line[] };
+  const calls: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(async () => Response.json({ messages: [], reset: true, revision: "now", entryKeys: [], running: false }), { preconnect: originalFetch.preconnect });
+  const originalWindow = globalThis.window;
+  globalThis.window = { alert: () => {} } as unknown as Window & typeof globalThis;
+  try {
+    await sendComposer({ draft: home, text: home.text, files: [], busy: false, sessionId: "", selected: "main", currentAgent: "", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setBusy: (value: boolean) => { home.busy = value; }, setSendError: (value: string) => { home.error = value; }, setLines: (update: (lines: Line[]) => Line[]) => { home.lines = update(home.lines); }, refreshHistory: async () => {}, create: { mutateAsync: async () => ({ id: "sticky", resumed: true }) }, resumeSession: async () => { calls.push("prepared"); return target; }, goSession: () => { calls.push("navigate"); }, prompt: { mutateAsync: async () => { calls.push("prompt"); if (failure) throw new Error("new send failed"); return ""; } } });
+    expect(calls).toEqual(["prepared", "navigate", "prompt"]);
+    expect(target).toMatchObject({ text: failure ? "new request" : "", error: failure ? "new send failed" : "", sending: false });
+    expect(home.error).toBe("");
+    expect(home.sending).toBe(false);
+  } finally { globalThis.fetch = originalFetch; globalThis.window = originalWindow; }
+});
+
+test("resumed draft upload and stash stay on their owning server after navigation", async () => {
+  const draft = { text: "old draft", files: [{ id: "file", file: new File(["old"], "old.txt") }], agent: "main", sessionId: "sticky", edit: 0, submission: 0, sending: false, busy: false, hydrated: true, lines: [], error: "" };
+  const originalFetch = globalThis.fetch, originalLocation = globalThis.location, originalDocument = globalThis.document;
+  const upload = Promise.withResolvers<Response>(), started = Promise.withResolvers<void>();
+  const urls: string[] = [];
+  globalThis.location = new URL("http://localhost/") as unknown as Location;
+  globalThis.document = { getElementById: () => ({ textContent: JSON.stringify([{ name: "other", url: "https://other.example" }]) }) } as unknown as Document;
+  globalThis.fetch = Object.assign(async (url: string | URL | Request) => {
+    urls.push(String(url));
+    if (String(url).includes("UploadAttachment")) { started.resolve(); return upload.promise; }
+    return Response.json({ privateText: "" });
+  }, { preconnect: originalFetch.preconnect });
+  try {
+    const result = prepareResumedDraft("sticky", "scope", new Map([["sticky", draft]]), () => {});
+    await started.promise;
+    globalThis.location = new URL("http://localhost/r/other/") as unknown as Location;
+    upload.resolve(Response.json({ id: "uploaded" }));
+    await result;
+    expect(urls).toEqual(["/api/UploadAttachment?conversationId=sticky&name=old.txt", "/api/Prompt"]);
+  } finally { upload.resolve(Response.json({ id: "uploaded" })); globalThis.fetch = originalFetch; globalThis.location = originalLocation; globalThis.document = originalDocument; }
 });
 
 for (const busy of [true, false]) test(`private commands retire only their own parked input and stay anchored: busy=${busy}`, async () => {

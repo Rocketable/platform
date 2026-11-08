@@ -240,6 +240,8 @@ message CreateSessionRequest {
 
 message CreateSessionResponse {
   string id = 1;
+  // Set when the agent is sticky and id is its existing session, resumed instead of created.
+  bool resumed = 2;
 }
 
 message ForkSessionRequest {
@@ -442,6 +444,10 @@ message Agent {
   repeated string voices = 10;
   // New sessions in another space do not offer this agent; empty offers it in every space.
   string space = 11;
+  // user or global for an agent with one Web session per person or one in all; empty when off.
+  string sticky = 12;
+  // A sticky agent's existing session, the caller's own for user, that a new session resumes; empty when none.
+  string sticky_session = 13;
 }
 
 message ListAgentsRequest { string conversation_id = 1; }
@@ -665,26 +671,26 @@ message VoiceRequest {
 }
 
 enum VoiceSettingsAction {
+  reserved 1, 2;
+  reserved "START", "RESET";
   READ = 0;
-  // START returns the current voice conversation, creating one with agent when none is current.
-  START = 1;
-  // RESET forgets the current voice conversation while it is still conversation_id.
-  RESET = 2;
-  // UPDATE stores the agent, voice and transcript fields that are set.
+  // UPDATE stores the agent, voice and transcript fields that are set; agent must be sticky: user.
   UPDATE = 3;
 }
 
 message VoiceSettingsRequest {
+  reserved 2;
+  reserved "conversation_id";
   VoiceSettingsAction action = 1;
-  string conversation_id = 2;
   optional string agent = 3;
   optional string voice = 4;
   optional bool transcript = 5;
 }
 
-// VoiceSettingsResponse is the caller's voice settings; conversation_id is empty when none is current.
+// VoiceSettingsResponse is the caller's voice settings; a call goes to agent's sticky session.
 message VoiceSettingsResponse {
-  string conversation_id = 1;
+  reserved 1;
+  reserved "conversation_id";
   string agent = 2;
   string voice = 3;
   bool transcript = 4;

@@ -366,7 +366,7 @@ SELECT count(s.*) > 0, q.position FROM queued q LEFT JOIN seen s ON TRUE GROUP B
 		return false, nil
 	}
 
-	created, err := (stateDAO{db: tx}).createConversation(ctx, protocol.Conversation{ID: conversationID, Agent: agent}, conversationFacts{kind: KindSlackThread, slackChannel: target.ChannelID, slackThread: target.ThreadID})
+	created, err := (stateDAO{db: tx}).createConversation(ctx, protocol.Conversation{ID: conversationID, Agent: agent}, conversationFacts{kind: KindSlackThread, slackChannel: target.ChannelID, slackThread: target.ThreadID}, harness.AgentStickyOff)
 	if err != nil {
 		return false, err
 	}
@@ -497,58 +497,72 @@ func (m *threadBridgeManager) webOrigin(ctx context.Context) (string, error) {
 	return "https://" + net.JoinHostPort(host, port), nil
 }
 
-// createSession creates a Web session named title for start's agent, unless allowed excludes it, and
-// queues inbound with reply, under its job ID as queue item ID, as its first turn, as writeSession queues
-// an enqueue, so that turn survives a restart. It mints start.conversationID and returns its WebURL,
-// looked up before any side effect, which reply keeps.
-func (m *threadBridgeManager) createSession(ctx context.Context, start *threadStart, allowed []string, title string, inbound *protocol.InboundMessage, reply *backgroundJob) (string, error) {
+func (m *threadBridgeManager) createSession(ctx context.Context, start *threadStart, allowed []string, title string, inbound *protocol.InboundMessage, reply *backgroundJob) (url string, resumed bool, err error) {
 	if len(allowed) > 0 && !slices.Contains(allowed, start.agent) {
-		return "", fmt.Errorf("agent %q is not allowed on this source surface", start.agent)
+		return "", false, fmt.Errorf("agent %q is not allowed on this source surface", start.agent)
 	}
 
-	agents, err := ExternalMCPAgentsIn(m.runtime, m.runtime.Clone().RuntimeDirName())
+	agents, _, err := LoadRuntimeDefinitions(m.runtime, m.runtime.Clone().RuntimeDirName())
 	if err != nil {
-		return "", fmt.Errorf("load configured agents: %w", err)
+		return "", false, fmt.Errorf("load configured agents: %w", err)
 	}
 
-	if !slices.Contains(agents, start.agent) {
-		return "", fmt.Errorf("agent %q is not configured", start.agent)
+	if !slices.Contains(agents.PrimaryNames(), start.agent) {
+		return "", false, fmt.Errorf("agent %q is not configured", start.agent)
 	}
 
 	start.conversationID = rand.Text()
 
-	url, err := m.WebURL(ctx, start.conversationID)
+	origin, err := m.webOrigin(ctx)
 	if err != nil {
-		return "", err
+		return "", false, err
+	}
+
+	sticky := agents.Items[start.agent].Sticky
+	if sticky != harness.AgentStickyOff {
+		start.conversationID, resumed, err = m.store.CreateStickyConversation(ctx, protocol.Conversation{ID: start.conversationID, Agent: start.agent, CreatedBy: string(start.createdBy), Space: agents.Items[start.agent].Space}, sticky)
+		if err != nil {
+			return "", false, fmt.Errorf("persist sticky Web session: %w", err)
+		}
+
+		if _, err := m.store.checkSessionTarget(ctx, reply.conversationID, inbound.Metadata[protocol.InboundSenderSessionMetadataKey], start.conversationID); err != nil {
+			return "", false, err
+		}
 	}
 
 	thread := ThreadState{Agent: start.agent, CreatedBy: start.createdBy}
 
 	managed, err := m.ensureThreadBridge(ctx, start.conversationID, thread)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 
-	if err := m.store.UpsertThread(start.conversationID, thread); err != nil {
-		m.mu.Lock()
-		delete(m.bridges, start.conversationID)
-		m.mu.Unlock()
+	if sticky == harness.AgentStickyOff {
+		if err := m.store.UpsertThread(start.conversationID, thread); err != nil {
+			m.mu.Lock()
+			delete(m.bridges, start.conversationID)
+			m.mu.Unlock()
 
-		managed.Stop()
+			managed.Stop()
 
-		return "", fmt.Errorf("persist new Web session: %w", err)
+			return "", false, fmt.Errorf("persist new Web session: %w", err)
+		}
 	}
 
-	if _, err := m.store.UpdateConversationDetails(ctx, start.conversationID, nil, &title); err != nil {
-		return "", fmt.Errorf("name new Web session: %w", err)
+	if !resumed {
+		if _, err := m.store.UpdateConversationDetails(ctx, start.conversationID, nil, &title); err != nil {
+			return "", false, fmt.Errorf("name new Web session: %w", err)
+		}
 	}
+
+	url = origin + "/s/" + base64.RawURLEncoding.EncodeToString([]byte(start.conversationID))
 
 	reply.input, reply.target = url, start.conversationID
 	if _, _, err := m.writeSession(ctx, start.conversationID, reply.jobID, sessionWriteEnqueue, inbound, reply); err != nil {
-		return "", fmt.Errorf("queue new Web session first prompt: %w", err)
+		return "", false, fmt.Errorf("queue Web session prompt: %w", err)
 	}
 
-	return url, nil
+	return url, resumed, nil
 }
 
 // writeSession delivers an agent's write, inbound under queue item ID id, to the session target

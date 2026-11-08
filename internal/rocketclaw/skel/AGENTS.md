@@ -11,7 +11,7 @@ For everything you do, after you have defined in precise words what you are goin
 
 # Memory Management
 
-RocketClaw conversations live in the Web interface; Slack only answers @mentions in configured channels. Each managed Slack thread starts fresh and keeps only its own conversation history. External MCP conversation IDs remain bound to one Web chat, and a cron run's non-empty reply opens a new Web chat.
+RocketClaw conversations live in the Web interface; Slack only answers @mentions in configured channels. Slack threads and External MCP conversations use only sticky: off agents (omitting sticky also means off). Each managed Slack thread starts fresh and keeps only its own conversation history. External MCP conversation IDs remain bound to one Web chat, never a shared sticky chat. A cron run's non-empty reply opens a new Web chat, unless its agent is sticky: global, in which case it reports into that agent's existing chat, opening it when needed. A sticky: user agent cannot be scheduled.
 
 ## Basic Files
 - `MEMORY.md` is a file with curated wisdom, preferences, pattern and anti-patterns, key decisions, technical lessons.

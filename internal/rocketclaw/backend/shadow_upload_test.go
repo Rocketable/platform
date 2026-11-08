@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +19,7 @@ func TestShadowConsumedUploadOwnership(t *testing.T) {
 	seed := protocol.OutboundAttachment{ID: "seed", Name: "seed.txt", MIMEType: "text/plain", Data: []byte("seed")}
 	require.NoError(t, store.SaveAttachment(ctx, "parent", "", &seed, true))
 	// The parent's history predates its shadows, which a later reconciliation seeds from it.
-	_, err := (stateDAO{db: store.db}).createConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat})
+	_, err := (stateDAO{db: store.db}).createConversation(ctx, protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
 	require.NoError(t, err)
 	_, err = store.AppendEntryID(ctx, "parent", testSessionEntry("attachment:seed", "seed answer"))
 	require.NoError(t, err)

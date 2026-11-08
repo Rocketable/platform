@@ -1311,30 +1311,39 @@ WHERE m.conversation_id = $1`, source).Scan(&data, &owner, &active); err != nil 
 			return nil
 		}
 
+		var inbound protocol.InboundMessage
+		if err := json.Unmarshal(data, &inbound); err != nil {
+			return fmt.Errorf("decode producer routing: %w", err)
+		}
+
+		definitions, _, err := LoadRuntimeDefinitions(b.runtime, runtimeCfg.RuntimeDirName())
+		if err != nil {
+			return fmt.Errorf("load web agents: %w", err)
+		}
+
+		// A sticky: global agent's run reports into its shared chat instead.
+		if definitions.Items[inbound.Cronjob.Agent].Sticky == harness.AgentStickyGlobal {
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("commit producer handoff check: %w", err)
+			}
+
+			return b.openCronReport(ctx, &protocol.OutboundMessage{Cronjob: inbound.Cronjob})
+		}
+
 		var recorded bool
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1`, web).Scan(&recorded); err != nil {
 			return fmt.Errorf("read canonical web conversation: %w", err)
 		}
 
 		if !recorded {
-			var inbound protocol.InboundMessage
-			if err := json.Unmarshal(data, &inbound); err != nil {
-				return fmt.Errorf("decode producer routing: %w", err)
-			}
-
-			definitions, _, err := LoadRuntimeDefinitions(b.runtime, runtimeCfg.RuntimeDirName())
-			if err != nil {
-				return fmt.Errorf("load web agents: %w", err)
-			}
-
-			choices := definitions.PrimaryNames()
+			choices := slices.DeleteFunc(definitions.PrimaryNames(), func(name string) bool { return definitions.Items[name].Sticky != harness.AgentStickyOff })
 			if len(choices) == 0 {
 				return errors.New("create canonical web conversation: no loaded agents")
 			}
 
 			// Like a report chat, the chat is born in the cron's space, else its agent's.
 			space := cmp.Or(inbound.Cronjob.Space, definitions.Items[inbound.Cronjob.Agent].Space)
-			if _, err := dao.createConversation(ctx, protocol.Conversation{ID: web, Agent: choices[0], CreatedBy: string(ThreadCreatedByCron), Space: space}, conversationFacts{kind: KindWebChat, cronRun: source}); err != nil {
+			if _, err := dao.createConversation(ctx, protocol.Conversation{ID: web, Agent: choices[0], CreatedBy: string(ThreadCreatedByCron), Space: space}, conversationFacts{kind: KindWebChat, cronRun: source}, harness.AgentStickyOff); err != nil {
 				return err
 			}
 
@@ -1786,13 +1795,22 @@ func (b *Bridge) openCronReport(ctx context.Context, outbound *protocol.Outbound
 		return fmt.Errorf("load cron agents: %w", err)
 	}
 
-	destinationID := "web:" + b.config.ConversationID
 	space := cmp.Or(outbound.Cronjob.Space, agents.Items[outbound.Cronjob.Agent].Space)
+	destination := protocol.Conversation{ID: "web:" + b.config.ConversationID, Agent: outbound.Cronjob.Agent, CreatedBy: string(ThreadCreatedByCron), Space: space}
+	facts := conversationFacts{kind: KindWebChat, cronRun: b.config.ConversationID}
+
+	// A sticky: global agent reports into its shared chat, which continues no single run.
+	sticky := agents.Items[destination.Agent].Sticky
+	if sticky != harness.AgentStickyOff {
+		destination.ID, facts.cronRun = rand.Text(), ""
+	}
 
 	ctx = context.WithoutCancel(ctx)
-	if err := b.config.SessionService.recordConversation(ctx, protocol.Conversation{ID: destinationID, Agent: outbound.Cronjob.Agent, CreatedBy: string(ThreadCreatedByCron), Space: space}, conversationFacts{kind: KindWebChat, cronRun: b.config.ConversationID}); err != nil {
+	if _, err := b.config.SessionService.recordConversation(ctx, &destination, facts, sticky); err != nil {
 		return fmt.Errorf("record cron report chat: %w", err)
 	}
+
+	destinationID := destination.ID
 
 	tx, err := b.config.SessionService.beginStateTx(ctx, "cron destination binding")
 	if err != nil {
@@ -2941,14 +2959,14 @@ func LoadRuntimeDefinitions(cfg *config.LockedConfig, runtimeDir string) (harnes
 	return loadRocketCodeDefinitionsIn(root, cfg, runtimeDir, toolModePersistent)
 }
 
-// ExternalMCPAgentsIn returns agents externally selectable through MCP in runtimeDir.
+// ExternalMCPAgentsIn returns non-sticky agents externally selectable through MCP in runtimeDir.
 func ExternalMCPAgentsIn(cfg *config.LockedConfig, runtimeDir string) ([]string, error) {
 	agents, _, err := LoadRuntimeDefinitions(cfg, runtimeDir)
 	if err != nil {
 		return nil, err
 	}
 
-	return agents.PrimaryNames(), nil
+	return slices.DeleteFunc(agents.PrimaryNames(), func(name string) bool { return agents.Items[name].Sticky != harness.AgentStickyOff }), nil
 }
 
 func parseReasonArg(raw json.RawMessage, op string) (string, error) {

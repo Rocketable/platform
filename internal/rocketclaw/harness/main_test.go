@@ -803,6 +803,23 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 		require.ErrorContains(t, err, `references missing reviewer agent "release-guardian"`)
 	})
 
+	t.Run("enabled rejects another agent's sticky reviewer", func(t *testing.T) {
+		config := testWorkspaceConfig(t, dir)
+		config.AutoApprovePermissions = true
+		agents := Agents{Items: map[string]Agent{
+			"main":     {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(reviewer)}`)},
+			"reviewer": {Name: "reviewer", Model: "gpt-5.4", Sticky: AgentStickyUser, Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(reviewer)}`)},
+		}}
+
+		_, err := NewWithProviders(Providers{OpenAI: &client}, config, root, agents, skills, "main", nil)
+
+		require.ErrorContains(t, err, `agent "main" permission "bash" rule "deploy *" references sticky: user reviewer agent "reviewer", which reviews only its own rules`)
+
+		delete(agents.Items, "main")
+		_, err = NewWithProviders(Providers{OpenAI: &client}, config, root, agents, skills, "reviewer", nil)
+		require.NoError(t, err, "a sticky agent may review its own rules")
+	})
+
 	t.Run("enabled rejects explicit guardian reviewer", func(t *testing.T) {
 		config := testWorkspaceConfig(t, dir)
 		config.AutoApprovePermissions = true

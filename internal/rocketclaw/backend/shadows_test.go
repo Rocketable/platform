@@ -103,7 +103,7 @@ func TestShadowActivationRollback(t *testing.T) {
 	for _, kind := range []string{"queue", "schedule", "note"} {
 		t.Run(kind, func(t *testing.T) {
 			store, _ := newShadowTestStore(t)
-			_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat})
+			_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
 			require.NoError(t, err)
 
 			bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "parent", Agent: "main", SessionService: store}}
@@ -178,7 +178,7 @@ func TestShadowSeedAndFork(t *testing.T) {
 	t.Parallel()
 
 	store, root := newShadowTestStore(t)
-	_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat})
+	_, err := (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
 	require.NoError(t, err)
 
 	attachment := protocol.OutboundAttachment{ID: "original", Name: "seed.txt", MIMEType: "text/plain", Data: []byte("seed bytes")}
@@ -1895,7 +1895,7 @@ func TestHistoryMutationSharesLockOrder(t *testing.T) {
 			web := "web:" + tc.producer
 
 			for _, id := range []string{tc.producer, web, tc.child} {
-				_, err := (stateDAO{db: s.db}).createConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}, conversationFacts{kind: KindWebChat})
+				_, err := (stateDAO{db: s.db}).createConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
 				require.NoError(t, err)
 			}
 

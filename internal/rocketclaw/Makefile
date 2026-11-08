@@ -75,9 +75,11 @@ SANDBOX_TEST_DIR ?= $(abspath ../../.tmp)/sandbox-test
 SANDBOX_TEST_FLAGS ?=
 SANDBOX_TEST_CGO ?= 0
 # In a container, such as the Linux a Mac runs these targets in, the cgroup make runs in is delegated to it
-# (linux.Containerfile): its processes move into a leaf, and the tests into a fresh sibling.
+# (linux.Containerfile): its processes move into a leaf, and the tests into a fresh sibling. A RocketClaw that
+# an earlier test started may already have moved make into its supervisor leaf; the scope then starts from
+# that leaf's parent, as RocketClaw does on a reload.
 ifneq ($(wildcard /.dockerenv),)
-SANDBOX_TEST_SCOPE ?= /bin/sh -c 'cg=/sys/fs/cgroup$$(cut -d: -f3 /proc/self/cgroup); mkdir -p $$cg/init $$cg/test-$$$$; for p in $$(cat $$cg/cgroup.procs); do echo $$p > $$cg/init/cgroup.procs 2>/dev/null || true; done; echo "+cpu +memory +pids" > $$cg/cgroup.subtree_control; echo $$$$ > $$cg/test-$$$$/cgroup.procs; exec "$$@"' sh
+SANDBOX_TEST_SCOPE ?= /bin/sh -c 'cg=/sys/fs/cgroup$$(cut -d: -f3 /proc/self/cgroup); cg=$${cg%/supervisor}; mkdir -p $$cg/init $$cg/test-$$$$; for p in $$(cat $$cg/cgroup.procs); do echo $$p > $$cg/init/cgroup.procs 2>/dev/null || true; done; echo "+cpu +memory +pids" > $$cg/cgroup.subtree_control; echo $$$$ > $$cg/test-$$$$/cgroup.procs; exec "$$@"' sh
 endif
 SANDBOX_TEST_SCOPE ?= systemd-run --user --scope --quiet -p Delegate=yes
 SANDBOX_TEST_COVERPROFILE ?=

@@ -720,7 +720,7 @@ func TestSessionsWriteToolDescription(t *testing.T) {
 	write := sessionsWriteTool(new(Bridge), new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:sender", harness.Agents{})
 
 	assert.Equal(t, "Create a top-level RocketClaw Web session, or write prompt to an existing one, without waiting for its turn. Supply every field. "+
-		"With an empty session_id, create a session named title, run by agent (empty for this turn's agent), whose first turn runs prompt; mode is ignored. The new session cannot see this conversation, so prompt must carry all the context it needs. "+
+		"With an empty session_id, create a session named title, run by agent (empty for this turn's agent), or reuse that agent's sticky session; mode is ignored and prompt is queued. A reused session keeps its name and history. The receiver cannot see the sending conversation, so prompt must carry all the context it needs. A personal sticky agent requires the originating person's login identity. "+
 		"With session_id, deliver prompt to that session; title and agent are ignored. steer joins its running turn while that turn still takes input, otherwise runs as its next turn; enqueue runs after the work already queued; stop stops its current turn and goal, then runs prompt before anything already queued. "+
 		"Only stop takes an empty prompt: it then just stops the turn and goal, queues nothing, and posts that this session stopped it into that session's transcript without starting a turn. "+
 		"The receiver is told this session and agent sent it and that its answer comes back here. Each call that returns a queue_item_id gets exactly one reply: when the target's turn that took prompt ends, or, for an empty-prompt stop, once the stopped turn is over, a <session_reply> note naming that queue_item_id arrives here with the outcome and that turn's final answer. A steer's answer covers the whole turn it joined. "+
@@ -1032,7 +1032,7 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 			manager, _ := nt.run(t, ignoreOutbound)
 
 			prompt := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "go", true)
-			prompt.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}
+			prompt.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}
 			require.NoError(t, nt.bridge(t, manager, caller).Submit(t.Context(), prompt))
 
 			finals := map[string]*protocol.OutboundMessage{}
@@ -1041,7 +1041,7 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 				finals[final.ConversationID] = final
 			}
 
-			created, err := queryStrings(t.Context(), nt.service.db, `SELECT conversation_id FROM conversations WHERE name = 'Child' AND created_by = 'Alice'`, "created sessions")
+			created, err := queryStrings(t.Context(), nt.service.db, `SELECT conversation_id FROM conversations WHERE name = 'Child' AND created_by = 'alice@example.com'`, "created sessions")
 			require.NoError(t, err)
 			require.Len(t, created, 1, "the creator is recorded")
 			require.Contains(t, finals, created[0])

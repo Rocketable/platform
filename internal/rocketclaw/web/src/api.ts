@@ -108,8 +108,8 @@ export const mutations = {
   clearRevert: (input: { id: string }) => rpc("ClearRevert", input),
   forkSession: (input: { id: string; before?: string }) => rpc<{ id: string; prompt: TranscriptEvent }>("ForkSession", input),
   popQueueItem: (input: { id: string; itemId: string }) => rpc("PopQueueItem", input),
-  createSession: async (input: { name?: string; agent?: string; sourceConversationId?: string; opencodeServer?: string; directory?: string; spaceId?: string }) => (await rpc<{ id: string }>("CreateSession", input)).id,
-  prompt: async (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }) => (await rpc<{ privateText: string }>("Prompt", input)).privateText,
+  createSession: async (input: { name?: string; agent?: string; sourceConversationId?: string; opencodeServer?: string; directory?: string; spaceId?: string }) => rpc<{ id: string; resumed?: boolean }>("CreateSession", input),
+  prompt: async (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }, name = server()) => (await rpc<{ privateText: string }>("Prompt", input, undefined, name)).privateText,
   runCron: async (input: { stem: string }) => (await rpc<{ id: string }>("RunCronJob", input)).id,
   updateSession: (input: { id: string; pinned?: boolean; name?: string; tag?: string }) => rpc("UpdateSession", input),
   removeQueueItem: (input: { id: string; itemId: string }) => rpc("RemoveQueueItem", input),
@@ -119,6 +119,6 @@ export const mutations = {
   moveToBackground: (input: { conversationId: string }) => rpc("MoveToBackground", input),
   stopBackgroundJob: (input: { conversationId: string; jobId: string }) => rpc("StopBackgroundJob", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
-  voiceSettings: (input: { action: "START" | "RESET" | "UPDATE"; conversationId?: string; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
+  voiceSettings: (input: { action: "UPDATE"; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
   tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; mute?: SavedTabs["mutes"][number]; unmute?: string; markUnread?: string[]; topShelf?: TopShelf }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),
 };

@@ -42,7 +42,7 @@ func TestShadowLifecycleAdmissionRollback(t *testing.T) {
 		t.Run(table, func(t *testing.T) {
 			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
-			_, err = (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat})
+			_, err = (stateDAO{db: store.db}).createConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
 			require.NoError(t, err)
 			_, err = store.AppendEntryID(t.Context(), "parent", testSessionEntry("seed", "answer"))
 			require.NoError(t, err)

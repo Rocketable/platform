@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/gorilla/websocket"
@@ -73,42 +74,33 @@ func (s *Server) voiceSettings(ctx context.Context, request *VoiceSettingsReques
 		return nil, err
 	}
 
-	var settings backend.VoiceSettings
-
-	switch request.Action {
-	case VoiceSettingsAction_READ:
-	case VoiceSettingsAction_START:
-		// The conversation START finds is its answer, though another device resets it a moment later.
-		if settings, err = s.sessions.VoiceSettings(ctx, username); err != nil || settings.ConversationID != "" {
-			break
+	if request.Action == VoiceSettingsAction_UPDATE {
+		choices, err := s.agentChoices(ctx, "")
+		if err != nil {
+			return nil, err
 		}
 
-		var created *CreateSessionResponse
-		if created, err = s.createSession(ctx, &CreateSessionRequest{Agent: request.GetAgent()}); err == nil {
-			err = s.sessions.StartVoiceConversation(ctx, username, created.Id, request.GetAgent())
+		definitions, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+		if err != nil {
+			return nil, fmt.Errorf("load web agents: %w", err)
 		}
-	case VoiceSettingsAction_RESET:
-		err = s.sessions.ResetVoiceConversation(ctx, username, request.ConversationId)
-	case VoiceSettingsAction_UPDATE:
-		var choices []string
-		if choices, err = s.agentChoices(ctx, ""); err == nil {
-			if request.Agent != nil && !slices.Contains(choices, *request.Agent) || request.Voice != nil && !slices.Contains(append(newCodexVoice().voices(), (&publicVoice{}).voices()...), *request.Voice) {
-				return nil, fmt.Errorf("web voice settings: %w", status.Error(codes.InvalidArgument, "select a loaded agent and an offered voice"))
-			}
 
-			err = s.sessions.UpdateVoiceSettings(ctx, username, request.Agent, request.Voice, request.Transcript)
+		if request.Agent != nil && (!slices.Contains(choices, *request.Agent) || definitions.Items[*request.Agent].Sticky != harness.AgentStickyUser) ||
+			request.Voice != nil && !slices.Contains(append(newCodexVoice().voices(), (&publicVoice{}).voices()...), *request.Voice) {
+			return nil, fmt.Errorf("web voice settings: %w", status.Error(codes.InvalidArgument, "select a loaded sticky: user agent and an offered voice"))
+		}
+
+		if err := s.sessions.UpdateVoiceSettings(ctx, username, request.Agent, request.Voice, request.Transcript); err != nil {
+			return nil, fmt.Errorf("web voice settings: %w", err)
 		}
 	}
 
-	if err == nil && settings.ConversationID == "" {
-		settings, err = s.sessions.VoiceSettings(ctx, username)
-	}
-
+	settings, err := s.sessions.VoiceSettings(ctx, username)
 	if err != nil {
 		return nil, fmt.Errorf("web voice settings: %w", err)
 	}
 
-	return &VoiceSettingsResponse{ConversationId: settings.ConversationID, Agent: settings.Agent, Voice: settings.Voice, Transcript: settings.Transcript}, nil
+	return &VoiceSettingsResponse{Agent: settings.Agent, Voice: settings.Voice, Transcript: settings.Transcript}, nil
 }
 
 // voice runs one call for exactly as long as the request lives.

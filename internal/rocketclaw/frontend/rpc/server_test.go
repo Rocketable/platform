@@ -3819,6 +3819,7 @@ func TestContinueCronRun(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 0o700))
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "aaa.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: global\n---\nHelp."), 0o600))
 
 	db, err := sql.Open("pgx", dsn)
 	require.NoError(t, err)
@@ -3867,6 +3868,10 @@ func TestContinueCronRun(t *testing.T) {
 				created, err := server.createSession(ctx, &CreateSessionRequest{SourceConversationId: run})
 				require.NoError(t, err)
 				require.Equal(t, "web:"+run, created.Id)
+				thread, found, err := sessions.Thread(created.Id)
+				require.NoError(t, err)
+				require.True(t, found)
+				require.Equal(t, "main", thread.Agent, "ordinary continuation must not select an unrelated sticky agent")
 			}
 
 			require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM entries`).Scan(&after))
@@ -3902,6 +3907,41 @@ func TestContinueCronRun(t *testing.T) {
 			require.JSONEq(t, `{"type":"message","role":"user","content":"follow-up"}`, string(agent[1].Entry.ReplayInput[0]))
 		})
 	}
+
+	t.Run("global sticky", func(t *testing.T) {
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "room.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: global\nspace: Original\n---\nHelp."), 0o600))
+
+		shared, err := server.createSession(ctx, &CreateSessionRequest{Agent: "room"})
+		require.NoError(t, err)
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "room.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: global\nspace: Ops\n---\nHelp."), 0o600))
+
+		run := "cron:cron/global.md:20260905T010000.000000001Z:global"
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "room", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/global.md"}}))
+		_, err = sessions.AppendEntryID(ctx, run, &harness.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"global report"}`)}})
+		require.NoError(t, err)
+
+		for range 2 {
+			opened, err := server.createSession(ctx, &CreateSessionRequest{SourceConversationId: run})
+			require.NoError(t, err)
+			require.Equal(t, shared.Id, opened.Id)
+		}
+
+		var destination string
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT reports_to FROM conversations WHERE conversation_id = $1`, run).Scan(&destination))
+		require.Equal(t, shared.Id, destination)
+		_, continuation, err := sessions.CronRun(ctx, shared.Id)
+		require.NoError(t, err)
+		require.False(t, continuation, "the shared session must remain eligible for sticky lookup")
+
+		resumed, err := server.createSession(ctx, &CreateSessionRequest{Agent: "room"})
+		require.NoError(t, err)
+		require.Equal(t, shared.Id, resumed.Id)
+		require.True(t, resumed.Resumed)
+
+		var space string
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT s.name FROM conversations c JOIN web_spaces s ON s.id = c.space_id WHERE c.conversation_id = $1`, shared.Id).Scan(&space))
+		require.Equal(t, "Original", space, "work continues in the sticky chat without moving it")
+	})
 }
 
 // An easy agent's routine is its own Cron job, named "<agent> · <schedule>", with its runs, and Run starts it.

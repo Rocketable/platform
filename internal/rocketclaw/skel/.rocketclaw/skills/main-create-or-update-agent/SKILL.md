@@ -254,6 +254,8 @@ The optional `schema.output` frontmatter field is a YAML JSON Schema for that ag
 
 The optional `space` frontmatter field is one Web space name string. A Web session started with the agent is born in that space, which is created when missing, and a session whose agent has a `space` offers only agents with the same `space`, ignoring case, unless none of the agents its Slack channel allows has it; a cron without its own `space` uses its agent's. Set or change it only when the human asks, and carry it over on updates and renames. A non-string value fails agent loading.
 
+The optional `sticky` frontmatter field, in advanced and easy agents alike, is `off` (the default), `user` or `global`; any other value fails agent loading. `user` keeps one Web session per person and `global` one shared by everyone: a new Web session with the agent opens that existing one instead. Such a session switches only to agents with the same `sticky` value and cannot be forked, and only `user` agents are offered on the Voice page. A sticky agent is never another agent's `task` subagent or permission reviewer, though it may delegate, including to itself. A `global` agent's cron and routine runs report into its one session; a `user` agent cannot be scheduled, so never give it `routines` or name it in a cron file. Set or change it only when the human asks, and carry it over on updates and renames.
+
 Preserve any other valid frontmatter keys unless the human asked to change them.
 
 The body of the file should contain the agent's purpose and operating instructions based on what the human asked for.
@@ -272,6 +274,7 @@ Keys:
 - `mode: easy`
 - `model` (required): a real model name, optionally `provider/model` and `#effort`; its provider must be configured in `rocketclaw.json`
 - `space` (required): Web space name
+- `sticky`: `off` (default), `user` or `global`, as for advanced agents
 - `workingDirectory` (required): the agent's own folder, the only one its shell and file tools can write, for example `sessions/<name>/$ROCKETCLAW_CONVERSATION_ID`; relative to RocketClaw's working directory; it may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills`, `cron`, `scripts` or `workflows`, wherever a link puts them
 - `subagents`: models `task` may run this agent on, each like `model`; `[]` for none; default its own `model`
 - `maxRecursion`: subagent levels, 0 or more; `0` turns `task` off; default `1`

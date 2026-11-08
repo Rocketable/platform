@@ -137,7 +137,17 @@ mutation RPC or event is added.
 Session discovery starts from explicitly recorded conversations with stored entries,
 excluding private Cron locators and recorded MCP X bindings. It does not discover
 orphaned entry rows or backfill records. `CreateSession` records a fresh opaque ID
-with the selected loaded agent.
+with the selected loaded agent. For a sticky agent it first looks for the agent's sticky
+session (`StickySessions`): the chat whose stored `sticky` value, set once at creation,
+matches the agent's mode, created by the caller's login for `sticky: user`. A chat born
+`off` never counts. When one exists it
+returns that ID with `resumed` set and creates nothing. `RunCronJob` likewise runs a
+`sticky: global` agent's cron in that session, and refuses a `sticky: user` agent with
+`FailedPrecondition`.
+A unique index allows one `user` chat per agent and login, and one `global` chat per
+agent. A concurrent first request waits for the other's insert and then finds that chat,
+so cron reports, due reminders and Web requests share one session rather than creating
+duplicates.
 `ListSessions` streams one conversation per response message in list order, each
 with the caller's `unread_at` (empty once read). Its `viewing` field names the
 session the caller's focused window shows; the HTTP adapter passes it on only for
@@ -152,10 +162,14 @@ failure or wire cut can leave a visible prefix, which is not a completed list.
 Cancellation cancels the gRPC call, including pending reads, and releases database
 rows. `Identity` returns the Go-mapped username separately from `Protocol` negotiation.
 `ListAgents` loads the current runtime definitions and supplies the agent picker,
-using the existing Slack channel policy for Slack Y. Session rows do not repeat
-the agent choices. `$agent name` persists selection and updates the live bridge without
-resetting history; private producer X cannot be selected. Removed choices are not
-re-added merely because they remain the current selection.
+using the existing Slack channel policy for Slack Y. Each agent carries its `sticky`
+value and the caller's `sticky_session`, so the New session picker can open it. Session
+rows do not repeat the agent choices. `$agent name` persists selection and updates the
+live bridge without resetting history; private producer X cannot be selected. Removed
+choices are not re-added merely because they remain the current selection. A session
+whose agent is sticky offers only that agent, and any other session offers no sticky
+agent (`sameSticky`), in `ListAgents` and to `$agent`; `ForkSession` refuses a sticky
+agent's session with `FailedPrecondition`.
 
 `ListConfig` exposes only the retained `ConfigView` fields: workspace, overlays,
 model aliases, channel agent choices, MCP server names, logging level,
@@ -300,15 +314,12 @@ handler returns right after `ended`. OpenAI's `session.closed` ends the call as
 `expired`, `safety` (a content stop), or `closed`.
 
 `VoiceSettings(VoiceSettingsRequest) -> VoiceSettingsResponse` (`POST /api/VoiceSettings`)
-reads and changes the caller's voice settings: their current voice conversation, the
-agent for their next one, their voice, and the transcript view. The action is `READ`
-(the default), `START` (returns the current conversation, or creates one with `agent`
-as `CreateSession` would), `RESET` (forgets the current conversation while it is still
-`conversationId`), or `UPDATE` (stores the `agent`, `voice` and `transcript` fields that
-are set; an agent the caller cannot choose or a voice no route offers is
-`InvalidArgument`). Every action answers with the caller's whole settings row, and
-`conversationId` is empty when none is current. Startup cleanup never deletes a
-person's current voice conversation; after `RESET`, ordinary cleanup applies.
+reads and changes the caller's voice settings: the agent the Voice page calls, their
+voice, and the transcript view. The action is `READ` (the default) or `UPDATE` (stores
+the `agent`, `voice` and `transcript` fields that are set; an agent the caller cannot
+choose, one that is not `sticky: user`, or a voice no route offers is
+`InvalidArgument`). Every action answers with the caller's whole settings row. The page
+calls the agent's sticky session, which `CreateSession` returns.
 
 When the sideband drops, a public call ends as `lost`. A Codex call reconnects as
 Codex does: it waits 200 ms, doubling to 5 s (reset after 30 s connected), then

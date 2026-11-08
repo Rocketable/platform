@@ -13,7 +13,7 @@ type Backend interface {
 	Reload(string) (string, error)
 	Subscribe(context.Context) iter.Seq[protocol.Event]
 	CreateConversation(context.Context, protocol.Conversation) error
-	ContinueRun(context.Context, string, string) error
+	ContinueRun(context.Context, string, string, bool) (string, error)
 	SwitchConversationAgent(string, string) (bool, error)
 	RunningAgent(string) string
 	RunTurn(context.Context, *protocol.InboundMessage) error

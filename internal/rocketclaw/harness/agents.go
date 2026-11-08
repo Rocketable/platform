@@ -36,6 +36,7 @@ type Agent struct {
 	FrontmatterNode *yaml.Node
 	FileMode        fs.FileMode
 	Mode            AgentMode
+	Sticky          AgentSticky
 
 	// Easy-only fields, compiled from an easy file's sections; advanced agents leave them zero.
 	// Model entries keep their text as written, provider prefix and #effort included.
@@ -55,6 +56,18 @@ type Agent struct {
 	// and MCP server.tool subjects. Nil means every tool.
 	Tools []string
 }
+
+// AgentSticky is how many Web sessions an agent may have.
+type AgentSticky string
+
+const (
+	// AgentStickyOff lets every new Web session start fresh; frontmatter writes it off or leaves it out.
+	AgentStickyOff AgentSticky = ""
+	// AgentStickyUser keeps one Web session per person: a new one resumes theirs.
+	AgentStickyUser AgentSticky = "user"
+	// AgentStickyGlobal keeps one Web session shared by everyone: a new one resumes it.
+	AgentStickyGlobal AgentSticky = "global"
+)
 
 // Agents contains all discovered agents keyed by name.
 type Agents struct {
@@ -202,14 +215,15 @@ func loadAgent(fsys fs.FS, filePath string, cfg AgentLoadConfig) (Agent, error) 
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
 
-	mode := AgentModeAdvanced
-	if field := frontmatterField(frontmatterNode, "mode"); field != nil {
-		mode = AgentMode(field.Value)
-	}
-
-	// Non-scalar nodes have an empty Value and fail here too.
+	// Non-scalar nodes have an empty Value and fail both checks too.
+	mode := AgentMode(frontmatterValue(frontmatterNode, "mode", string(AgentModeAdvanced)))
 	if !slices.Contains([]AgentMode{AgentModeAdvanced, AgentModeEasy}, mode) {
 		return Agent{}, fmt.Errorf("%s: mode: must be easy or advanced", filePath)
+	}
+
+	sticky, ok := map[string]AgentSticky{"off": AgentStickyOff, "user": AgentStickyUser, "global": AgentStickyGlobal}[frontmatterValue(frontmatterNode, "sticky", "off")]
+	if !ok {
+		return Agent{}, fmt.Errorf("%s: sticky: must be off, user or global", filePath)
 	}
 
 	name := strings.TrimSuffix(filePath, filepath.Ext(filePath))
@@ -242,7 +256,7 @@ func loadAgent(fsys fs.FS, filePath string, cfg AgentLoadConfig) (Agent, error) 
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
 
-	agent := Agent{Name: name, Model: model, ReasoningEffort: modelEffort, Space: space, Prompt: strings.TrimSpace(prompt), Location: filePath, OutputSchema: outputSchema, Frontmatter: frontmatter, FrontmatterNode: frontmatterNode, FileMode: info.Mode(), Mode: mode}
+	agent := Agent{Name: name, Model: model, ReasoningEffort: modelEffort, Space: space, Prompt: strings.TrimSpace(prompt), Location: filePath, OutputSchema: outputSchema, Frontmatter: frontmatter, FrontmatterNode: frontmatterNode, FileMode: info.Mode(), Mode: mode, Sticky: sticky}
 	if mode == AgentModeEasy {
 		if err := compileEasyAgent(&agent, cfg); err != nil {
 			return Agent{}, fmt.Errorf("%s: %w", filePath, err)
@@ -348,6 +362,15 @@ func frontmatterField(frontmatter *yaml.Node, key string) *yaml.Node {
 	}
 
 	return nil
+}
+
+// frontmatterValue is key's scalar value, or fallback when key is absent. A non-scalar's value is empty.
+func frontmatterValue(frontmatter *yaml.Node, key, fallback string) string {
+	if field := frontmatterField(frontmatter, key); field != nil {
+		return field.Value
+	}
+
+	return fallback
 }
 
 func sanitizeAgentFrontmatter(frontmatterText string) string {

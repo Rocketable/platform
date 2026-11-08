@@ -163,6 +163,10 @@ The model-facing tool through which an agent delegates a prompt to another agent
 
 An agent whose file sets `mode: easy`. A section its file leaves out turns on everything in it, a section it writes turns on only what it lists, and everything on is reviewed by the agent's own approver. Its shell commands always run in the Emulated Shell, in its own folder, and it gets only the commands, secrets, MCP tools, skills, models, and Routines its file names.
 
+### Sticky Session
+
+The one Web session a sticky agent keeps: per person for `sticky: user`, matched by login rather than display name, and one for everyone for `sticky: global`. Each chat records at creation whether it is born sticky, and that never changes; a chat born `off` never becomes a Sticky Session. A new Web session or session-tool creation resumes the agent's Sticky Session and starts one only when there is none. A personal sticky request without an identifiable person is refused. A `global` agent's cron and Routine runs report into its Sticky Session, opening it when there is none; a `user` agent cannot be scheduled. The chat stays in its original space, cannot be forked, and keeps its row while messages older than 90 days expire. A session switches only to agents of the kind it was born as, skipping agents that already have that kind of session for its person, or for everyone with `global`. A sticky agent is top-level: it may delegate, including to itself, but no other agent delegates to it or names it as a permission reviewer. Slack threads and External MCP conversations use only sticky: off agents and keep separate histories. The Voice page calls only sticky: user agents, each on the person's own Sticky Session.
+
 ### Routine
 
 A schedule an Easy Agent declares in its own file, in place of a cron file, that runs the agent with the routine's instruction and reports as a cron job does. Its identity is its agent and schedule text, and its runs have no Shadow Sessions.
@@ -228,9 +232,9 @@ Audio flows between the browser and OpenAI; RocketClaw creates the call with the
 
 ### Voice Settings
 
-One person's Web voice state, kept by the server and the same on every device: their current voice conversation for the Voice page, the agent for their next one, their voice, and whether the Voice page shows the transcript.
+One person's Web voice state, kept by the server and the same on every device: the sticky: user agent whose Sticky Session the Voice page calls, their voice, and whether the Voice page shows the transcript.
 
-Two people never share Voice Settings, even in one browser. Retention cleanup never deletes a person's current voice conversation, even with no messages; Reset forgets it, and ordinary cleanup applies after that. A call uses the person's voice when the default Provider offers it, and that Provider's default voice otherwise.
+Two people never share Voice Settings, even in one browser. A call uses the person's voice when the default Provider offers it, and that Provider's default voice otherwise.
 
 ### Voice Hand-off
 

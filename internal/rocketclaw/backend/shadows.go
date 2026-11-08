@@ -741,7 +741,7 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 
 	names := definitions.ShadowNames(agent)
 	if len(names) > 0 {
-		if _, err := (stateDAO{db: db}).createConversation(ctx, protocol.Conversation{ID: parent, Agent: agent}, conversationFacts{kind: KindWebChat}); err != nil {
+		if _, err := (stateDAO{db: db}).createConversation(ctx, protocol.Conversation{ID: parent, Agent: agent}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff); err != nil {
 			return nil, err
 		}
 	}
@@ -757,7 +757,7 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 		}
 
 		id := rand.Text()
-		if _, err := (stateDAO{db: db}).createConversation(ctx, protocol.Conversation{ID: id, Agent: name}, conversationFacts{kind: KindShadow}); err != nil {
+		if _, err := (stateDAO{db: db}).createConversation(ctx, protocol.Conversation{ID: id, Agent: name}, conversationFacts{kind: KindShadow}, harness.AgentStickyOff); err != nil {
 			return nil, err
 		}
 

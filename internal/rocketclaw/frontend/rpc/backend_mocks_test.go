@@ -35,7 +35,7 @@ var _ frontend.Backend = &mockBackend{}
 //			CompletionNotesFunc: func(context1 context.Context, s string, strings []string) ([]protocol.BackgroundJob, error) {
 //				panic("mock out the CompletionNotes method")
 //			},
-//			ContinueRunFunc: func(context1 context.Context, s string, s1 string) error {
+//			ContinueRunFunc: func(context1 context.Context, s string, s1 string, b bool) (string, error) {
 //				panic("mock out the ContinueRun method")
 //			},
 //			CreateConversationFunc: func(context1 context.Context, conversation protocol.Conversation) error {
@@ -118,7 +118,7 @@ type mockBackend struct {
 	CompletionNotesFunc func(context1 context.Context, s string, strings []string) ([]protocol.BackgroundJob, error)
 
 	// ContinueRunFunc mocks the ContinueRun method.
-	ContinueRunFunc func(context1 context.Context, s string, s1 string) error
+	ContinueRunFunc func(context1 context.Context, s string, s1 string, b bool) (string, error)
 
 	// CreateConversationFunc mocks the CreateConversation method.
 	CreateConversationFunc func(context1 context.Context, conversation protocol.Conversation) error
@@ -224,6 +224,8 @@ type mockBackend struct {
 			S string
 			// S1 is the s1 argument value.
 			S1 string
+			// B is the b argument value.
+			B bool
 		}
 		// CreateConversation holds details about calls to the CreateConversation method.
 		CreateConversation []struct {
@@ -552,7 +554,7 @@ func (mock *mockBackend) CompletionNotesCalls() []struct {
 }
 
 // ContinueRun calls ContinueRunFunc.
-func (mock *mockBackend) ContinueRun(context1 context.Context, s string, s1 string) error {
+func (mock *mockBackend) ContinueRun(context1 context.Context, s string, s1 string, b bool) (string, error) {
 	if mock.ContinueRunFunc == nil {
 		panic("mockBackend.ContinueRunFunc: method is nil but Backend.ContinueRun was just called")
 	}
@@ -560,15 +562,17 @@ func (mock *mockBackend) ContinueRun(context1 context.Context, s string, s1 stri
 		Context1 context.Context
 		S        string
 		S1       string
+		B        bool
 	}{
 		Context1: context1,
 		S:        s,
 		S1:       s1,
+		B:        b,
 	}
 	mock.lockContinueRun.Lock()
 	mock.calls.ContinueRun = append(mock.calls.ContinueRun, callInfo)
 	mock.lockContinueRun.Unlock()
-	return mock.ContinueRunFunc(context1, s, s1)
+	return mock.ContinueRunFunc(context1, s, s1, b)
 }
 
 // ContinueRunCalls gets all the calls that were made to ContinueRun.
@@ -579,11 +583,13 @@ func (mock *mockBackend) ContinueRunCalls() []struct {
 	Context1 context.Context
 	S        string
 	S1       string
+	B        bool
 } {
 	var calls []struct {
 		Context1 context.Context
 		S        string
 		S1       string
+		B        bool
 	}
 	mock.lockContinueRun.RLock()
 	calls = mock.calls.ContinueRun
