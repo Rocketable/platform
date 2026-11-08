@@ -862,21 +862,41 @@ func TestLoginDevicePrintsCodeAndStopsOnContextCancel(t *testing.T) {
 }
 
 func TestLoginDeviceFallsBackToDefaultInterval(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	base := http.DefaultClient.Transport
-	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		require.Equal(t, issuer+"/api/accounts/deviceauth/usercode", req.URL.String())
-		cancel()
+	for _, interval := range []string{"not-a-duration", "0", "-1"} {
+		t.Run(interval, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
 
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"device_auth_id":"dev-123","user_code":"CODE-456","interval":"not-a-duration"}`)), Header: make(http.Header)}, nil
-	})
+				started := time.Now()
+				polls := 0
+				base := http.DefaultClient.Transport
+				http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					if req.URL.String() == issuer+"/api/accounts/deviceauth/usercode" {
+						body := fmt.Sprintf(`{"device_auth_id":"dev-123","user_code":"CODE-456","interval":%q}`, interval)
+						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+					}
 
-	t.Cleanup(func() { http.DefaultClient.Transport = base })
+					require.Equal(t, issuer+"/api/accounts/deviceauth/token", req.URL.String())
+					require.Equal(t, 8*time.Second, time.Since(started), "five-second fallback plus three-second polling delay")
 
-	path, err := loginDeviceIn(ctx, t.TempDir(), config.DefaultRuntimeDir, "openai", io.Discard)
-	require.Empty(t, path)
-	require.ErrorIs(t, err, context.Canceled)
-	require.ErrorContains(t, err, "wait for device authorization")
+					polls++
+
+					cancel()
+
+					return &http.Response{StatusCode: http.StatusForbidden, Body: http.NoBody, Header: make(http.Header)}, nil
+				})
+
+				t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+				path, err := loginDeviceIn(ctx, t.TempDir(), config.DefaultRuntimeDir, "openai", io.Discard)
+				require.Empty(t, path)
+				require.ErrorIs(t, err, context.Canceled)
+				require.ErrorContains(t, err, "wait for device authorization")
+				require.Equal(t, 1, polls)
+			})
+		})
+	}
 }
 
 func TestLoginDeviceReportsAuthorizationResponseErrors(t *testing.T) {
