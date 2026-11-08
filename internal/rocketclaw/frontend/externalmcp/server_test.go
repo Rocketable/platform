@@ -8,7 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"syscall"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -327,8 +330,19 @@ func TestServerAccessorsAndClose(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.NotEmpty(t, server.url)
+	callSessionPrompt(t, server.URL(), "", "", "main", "hello", nil)
+
+	endpoint, err := url.Parse(server.URL())
+	require.NoError(t, err)
+
 	require.NoError(t, server.Close(context.Background()))
+
+	conn, err := new(net.Dialer).DialContext(t.Context(), "tcp", endpoint.Host)
+	if err == nil {
+		require.NoError(t, conn.Close())
+	}
+
+	require.ErrorIs(t, err, syscall.ECONNREFUSED)
 	require.NoError(t, server.Close(context.Background()))
 }
 
