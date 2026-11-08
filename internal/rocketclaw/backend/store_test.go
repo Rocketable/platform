@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -440,7 +441,9 @@ func TestObserveEntriesJSONAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkObserveEntries)
 	require.Positive(t, result.N)
 	// 6.5 MiB. A reused buffer costs up to 5.8 MiB under CI's -race; a fresh one cost 6.9 MiB, or 7.9 MiB under -race.
-	require.Less(t, result.AllocedBytesPerOp(), int64(13<<19))
+	require.Less(t, result.AllocedBytesPerOp(), int64(13<<19),
+		"benchmark N=%d T=%s MemAllocs=%d MemBytes=%d B/op=%d allocs/op=%d GOMAXPROCS=%d GOGC=%q GOMEMLIMIT=%q",
+		result.N, result.T, result.MemAllocs, result.MemBytes, result.AllocedBytesPerOp(), result.AllocsPerOp(), goruntime.GOMAXPROCS(0), os.Getenv("GOGC"), os.Getenv("GOMEMLIMIT"))
 }
 
 func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
