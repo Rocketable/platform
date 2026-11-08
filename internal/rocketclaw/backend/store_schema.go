@@ -3,7 +3,6 @@ package backend
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"embed"
 	"errors"
 	"fmt"
@@ -20,7 +19,7 @@ var errApplySchemaMigrations = errors.New("apply rocketclaw state schema migrati
 //go:embed migrations/*.sql
 var sessionDBMigrations embed.FS
 
-func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) (errResult error) {
+func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	startedAt := time.Now()
 
 	logger.Info("initializing rocketclaw state store schema")
@@ -29,19 +28,18 @@ func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) (
 	if err != nil {
 		return fmt.Errorf("%w: %w", errApplySchemaMigrations, err)
 	}
-	defer func() {
-		// Never return a session lock to the pool after cancellation or an
-		// uncertain unlock response. ErrBadConn closes the physical connection.
-		if errResult != nil {
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-		}
+	defer func() { _ = conn.Close() }()
 
-		_ = conn.Close()
-	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("%w: %w", errApplySchemaMigrations, err)
+	}
+	defer func() { _ = tx.Rollback() }()
 
 	for _, query := range []string{
-		`SELECT pg_advisory_lock(hashtext('rocketclaw schema migrations'), hashtext(current_schema()))`,
+		// shortcut: two first starts on an empty schema can race to create the ledger; the loser fails and starts on retry.
 		`CREATE TABLE IF NOT EXISTS pg_migrations (id text PRIMARY KEY, applied_at timestamptz)`,
+		lockMigrationsSQL,
 		// 001_baseline.sql is the schema 001_init.sql through 059_legacy_handoff.sql built, so a store
 		// at 059 or later adopts it in place: the legacy_ tables 059 kept go, and the baseline's ledger
 		// row replaces those migrations' rows, which sort at or before 059's; later rows stay. An older
@@ -63,9 +61,13 @@ BEGIN
     END IF;
 END $$`,
 	} {
-		if _, err := conn.ExecContext(ctx, query); err != nil {
+		if _, err := tx.ExecContext(ctx, query); err != nil {
 			return fmt.Errorf("%w: %w", errApplySchemaMigrations, err)
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: %w", errApplySchemaMigrations, err)
 	}
 
 	migrations, err := (migrate.EmbedFileSystemMigrationSource{
@@ -115,16 +117,16 @@ END $$`,
 		n++
 	}
 
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_unlock(hashtext('rocketclaw schema migrations'), hashtext(current_schema()))`); err != nil {
-		return fmt.Errorf("%w: %w", errApplySchemaMigrations, err)
-	}
-
 	logger.Info("initialized rocketclaw state store schema", "migrations", n, "elapsed", time.Since(startedAt))
 
 	return nil
 }
 
-// applySessionMigration keeps each migration's schema and ledger row atomic.
+// lockMigrationsSQL serializes startups migrating the same schema until the transaction ends.
+const lockMigrationsSQL = `LOCK TABLE pg_migrations IN EXCLUSIVE MODE`
+
+// applySessionMigration keeps each migration's schema and ledger row atomic, and skips one that a
+// concurrent startup applied first.
 func applySessionMigration(ctx context.Context, conn *sql.Conn, migration *migrate.Migration) error {
 	err := conn.Raw(func(raw any) error {
 		tx, err := raw.(*stdlib.Conn).Conn().Begin(ctx)
@@ -132,6 +134,19 @@ func applySessionMigration(ctx context.Context, conn *sql.Conn, migration *migra
 			return fmt.Errorf("begin migration: %w", err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
+
+		if _, err := tx.Exec(ctx, lockMigrationsSQL); err != nil {
+			return fmt.Errorf("lock migrations: %w", err)
+		}
+
+		var applied bool
+		if err := tx.QueryRow(ctx, `SELECT count(*) > 0 FROM pg_migrations WHERE id = $1`, migration.Id).Scan(&applied); err != nil {
+			return fmt.Errorf("read migration ledger: %w", err)
+		}
+
+		if applied {
+			return nil
+		}
 
 		for _, query := range migration.Up {
 			if _, err := tx.Exec(ctx, query); err != nil {

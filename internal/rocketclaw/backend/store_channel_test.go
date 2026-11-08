@@ -85,13 +85,12 @@ func TestExternalMCPConversationCleanupRemovesOnlyBoundSessions(t *testing.T) {
 
 	session := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "chat-1"}
 	require.NoError(t, store.RegisterExternalMCPConversation("public", "managed-agent", &session))
+	require.NoError(t, store.UpsertThread("unrelated", ThreadState{Agent: "other"}))
 
 	for _, conversationID := range []string{session.PrivateConversationID, session.ManagedConversationID, "unrelated"} {
 		_, err := store.AppendEntryID(t.Context(), conversationID, testSessionEntry(conversationID, "assistant"))
 		require.NoError(t, err)
 	}
-
-	require.NoError(t, store.UpsertThread("unrelated", ThreadState{Agent: "other"}))
 
 	require.NoError(t, store.RemoveExternalMCPConversation("public"))
 

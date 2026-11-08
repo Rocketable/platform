@@ -214,7 +214,7 @@ func TestNestedWorkflowSessionTags(t *testing.T) {
 	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
 	require.NoError(t, root.WriteFile(".rocketclaw/workflows/tag.star", []byte("meta = {\"name\": \"tag\", \"description\": \"Tag\"}\ndef main(args): return agent(\"tag\", label=\"worker\")\n"), 0o600))
 	service := newTestSessionServiceAt(t, workspace)
-	recordTestConversations(t, service, "main", map[string]ConversationKind{"visible": KindWebChat})
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"visible": KindWebChat, "external_mcp:owning": KindExternalMCPRun})
 
 	requests := 0
 
@@ -308,6 +308,8 @@ func TestNestedWorkflowStepsSeeTurnEnvironment(t *testing.T) {
 	defer server.Close()
 
 	service := newTestSessionServiceAt(t, workspace)
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"advanced": KindWebChat, "easy": KindWebChat})
+
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
 

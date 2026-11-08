@@ -421,6 +421,8 @@ func BenchmarkObserveEntries(b *testing.B) {
 	require.NoError(b, err)
 	b.Cleanup(func() { require.NoError(b, service.Stop()) })
 
+	recordTestConversations(b, service, "main", map[string]ConversationKind{"benchmark": KindWebChat})
+
 	entry := testSessionEntry(strings.Repeat("synthetic entry ", 4096), "assistant")
 	for range 32 {
 		_, err := service.AppendEntryID(b.Context(), "benchmark", entry)
@@ -450,6 +452,7 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"main": KindWebChat})
 
 	first := testSessionEntry("first\x00\x00\\\x00\\\\\x00\n\t😀", "assistant")
 	second := testSessionEntry("literal \\u0000", "assistant")
@@ -473,7 +476,7 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 	require.Equal(t, "json", columnType)
 
 	for _, raw := range []string{`{`, `{"text":"\u0000"}`, `{"text":"\ud800"}`, `{"text":"\udc00"}`} {
-		_, err := service.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('invalid', $1, '')`, raw)
+		_, err := service.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', $1, '')`, raw)
 		require.Error(t, err)
 	}
 }
@@ -488,6 +491,7 @@ func TestSessionServiceScheduledMessages(t *testing.T) {
 		stored    int
 	}{{false, 0}, {true, 1}} {
 		store := newTestSessionService(t)
+		recordTestConversations(t, store, "helper", map[string]ConversationKind{"slack-thread:D123:111.222": KindSlackThread})
 
 		message := protocol.ScheduledMessageState{ConversationID: "slack-thread:D123:111.222", Agent: "helper", Message: "later", DueAt: dueAt, Recurring: test.recurring}
 		if test.recurring {
@@ -579,6 +583,8 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 		AttachmentWarnings: []string{"original warning"},
 	}
 	reply := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.333", ThreadTS: "111.222"}
+
+	recordTestConversations(t, store, "helper", map[string]ConversationKind{conversationID: KindSlackThread, "other": KindWebChat})
 
 	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ConversationID: conversationID, Message: "write tests", Content: content, Source: protocol.SourceSlack, SlackReply: reply, Principal: "U1", StashAt: firstStash, Position: 0, ParkAfter: "s1", SlackChannel: reply.ChannelID, SlackTS: reply.MessageTS}))
 	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{Kind: "steer", ConversationID: conversationID, Message: "write changelog", Principal: "U2", StashAt: secondStash, Position: 1, ParkAfter: "s1", SlackChannel: "D123", SlackTS: "333.444"}))
@@ -1160,7 +1166,7 @@ func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	recordTestConversations(t, service, "main", map[string]ConversationKind{"thread": KindWebChat})
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"main": KindWebChat, "thread": KindWebChat})
 	_, err := service.AppendEntryID(context.Background(), "main", testSessionEntry("main", "assistant"))
 	require.NoError(t, err)
 	_, err = service.AppendEntryID(context.Background(), "thread", testSessionEntry("thread", "assistant"))
@@ -1353,6 +1359,8 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 
 		decoy := protocol.SlackThreadConversationID("DX1", slackTestTS(cutoff.Add(-time.Hour))) + "/call-1"
 		unrelated := id + "/unrelated"
+
+		require.NoError(t, store.UpsertThread(decoy, ThreadState{Agent: "planner"}))
 		require.NoError(t, store.UpsertThread(unrelated, ThreadState{Agent: "planner"}))
 		_, err = store.AppendEntryID(t.Context(), unrelated, testSessionEntryAt(cutoff.Add(time.Hour), unrelated))
 		require.NoError(t, err)
@@ -1447,7 +1455,7 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
-	recordTestConversations(t, store, "selected", map[string]ConversationKind{"slack-thread:C1:1.1": KindSlackThread, "slack-thread:C1:2.2": KindSlackThread})
+	recordTestConversations(t, store, "selected", map[string]ConversationKind{"slack-thread:C1:1.1": KindSlackThread, "slack-thread:C1:2.2": KindSlackThread, "external_mcp:planner:def": KindExternalMCPRun})
 
 	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: " cron ", PrivateConversationID: " external_mcp:cron:abc ", ManagedConversationID: " slack-thread:C1:1.1 "}))
 
@@ -2160,8 +2168,8 @@ func testSessionEntryAt(ts time.Time, user string) *harness.SessionEntry {
 
 // recordTestConversations records each conversation as the code creating its kind does, with a
 // Slack thread's channel and thread.
-func recordTestConversations(t *testing.T, s *SessionService, agent string, kinds map[string]ConversationKind) {
-	t.Helper()
+func recordTestConversations(tb testing.TB, s *SessionService, agent string, kinds map[string]ConversationKind) {
+	tb.Helper()
 
 	for id, kind := range kinds {
 		facts := conversationFacts{kind: kind}
@@ -2169,7 +2177,7 @@ func recordTestConversations(t *testing.T, s *SessionService, agent string, kind
 			facts.slackChannel, facts.slackThread = testSlackThread(id)
 		}
 
-		require.NoError(t, s.recordConversation(t.Context(), protocol.Conversation{ID: id, Agent: agent}, facts))
+		require.NoError(tb, s.recordConversation(tb.Context(), protocol.Conversation{ID: id, Agent: agent}, facts))
 	}
 }
 
@@ -2228,6 +2236,8 @@ func TestCopiedAttributionSurvivesSourceRetention(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "planner", map[string]ConversationKind{"producer-x": KindCronRun, "interactive-y": KindWebChat})
+
 	entry := harness.SessionEntry{Version: 1, Type: "turn", Agent: "planner", Model: "work/model-a", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"answer"}`)}}
 	producerID, err := store.AppendEntryID(t.Context(), "producer-x", &entry)
 	require.NoError(t, err)

@@ -271,6 +271,8 @@ func TestLateRunnerLeavesStoppedTurn(t *testing.T) {
 	service := newTestSessionService(t)
 	ctx := t.Context()
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ask", true)
+
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"chat": KindWebChat})
 	require.NoError(t, startTurnDB(ctx, service.db, "turn-1", "chat", inbound))
 
 	save := func(items ...string) {
@@ -314,6 +316,7 @@ func TestFinishTurnKeepsLargeAttachment(t *testing.T) {
 	service := newTestSessionService(t)
 	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "make a file", true)
 	inbound.ConversationID = "web:attachment"
+	recordTestConversations(t, service, "main", map[string]ConversationKind{inbound.ConversationID: KindWebChat})
 	require.NoError(t, startTurnDB(t.Context(), service.db, "attachment-turn", inbound.ConversationID, inbound))
 
 	outbound := protocol.NewOutboundMessage(inbound.ConversationID, "file ready")
@@ -421,11 +424,8 @@ func TestStopBeforeTurnRegistersCancelStopsTurn(t *testing.T) {
 		turns, err := queryStrings(ctx, service.db, `SELECT format('turn=%s phase=%s lane=%s outbound=%s', id, phase, takes_lane, outbound_json IS NOT NULL)
 FROM turns WHERE conversation_id = $1 ORDER BY id LIMIT 20`, "stop before cancel turns", bridge.config.ConversationID)
 		t.Logf("stop before cancel: turns=%v query_error=%v", turns, err)
-		activity, err := queryStrings(ctx, service.db, `WITH history_locks AS (
-SELECT DISTINCT pid FROM pg_locks WHERE locktype = 'advisory' AND classid = 87901 AND objid = hashtext($1)::oid
-)
-SELECT format('pid=%s state=%s wait=%s/%s blockers=%s query=%s', pid, state, wait_event_type, wait_event, pg_blocking_pids(pid), left(query, 240))
-FROM pg_stat_activity JOIN history_locks USING (pid) WHERE datname = current_database() ORDER BY pid LIMIT 20`, "stop before cancel history lock activity", bridge.config.ConversationID)
+		activity, err := queryStrings(ctx, service.db, `SELECT format('pid=%s state=%s wait=%s/%s blockers=%s query=%s', pid, state, wait_event_type, wait_event, pg_blocking_pids(pid), left(query, 240))
+FROM pg_stat_activity WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0 ORDER BY pid LIMIT 20`, "stop before cancel blocked activity")
 		t.Logf("stop before cancel: activity=%v query_error=%v", activity, err)
 	}()
 
@@ -548,6 +548,7 @@ func TestStartActiveTurnsStartsRowWorkers(t *testing.T) {
 	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-private", privateID, msg))
 
 	unrecordedID := protocol.SlackThreadConversationID("C999", "999.000")
+	recordPrivateHistories(t, service, map[string]ConversationKind{unrecordedID: KindSlackThread})
 	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-unrecorded", unrecordedID, protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "orphan", true)))
 
 	var (
@@ -2662,6 +2663,8 @@ func TestTurnProgress(t *testing.T) {
 	progress := func(id, state string) json.RawMessage {
 		return json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"` + id + `","parent_id":"turn-1/response","kind":"tool","state":"` + state + `"}}`)
 	}
+
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"chat": KindWebChat})
 	require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: "turn-1", ConversationKey: "chat", ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","content":"check login"}`),
 		json.RawMessage(`{"type":"function_call","call_id":"call-1","name":"execute","arguments":"{\"description\":\" Run login scenario \",\"code\":\"x\"}"}`),

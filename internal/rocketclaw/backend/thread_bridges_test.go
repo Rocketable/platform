@@ -445,6 +445,8 @@ func TestThreadBridgeManagerStashListAndDeleteQueue(t *testing.T) {
 
 	target := protocol.SlackThreadConversationID("C123", "111.222")
 	other := protocol.SlackThreadConversationID("C123", "333.444")
+	// Hidden histories satisfy the conversation key without a managed thread to wake.
+	recordPrivateHistories(t, store, map[string]ConversationKind{target: KindSlackThread, other: KindSlackThread})
 
 	require.NoError(t, manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "q1", Message: "first", Principal: "U1", StashAt: time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC), SlackChannel: "C123", SlackTS: "1"}))
 	require.NoError(t, manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "q2", Message: "second", Principal: "U1", StashAt: time.Date(2026, 8, 24, 14, 0, 0, 0, time.UTC), SlackChannel: "C123", SlackTS: "2"}))
@@ -501,6 +503,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 	}}
 	manager := newThreadBridgeManager(runtime, store, slog.New(slog.DiscardHandler), factory)
 
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"web:caller": KindWebChat, "caller-global": KindWebChat, "caller-user": KindWebChat})
 	caller := &Bridge{config: Config{ConversationID: "web:caller", SessionService: store}, threads: manager}
 	origin := &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}
 	write := sessionsWriteTool(caller, origin, origin, "main", caller.config.ConversationID, harness.Agents{})

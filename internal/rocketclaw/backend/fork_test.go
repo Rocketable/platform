@@ -277,6 +277,7 @@ func TestForkConversationRejectsUnreadableHistory(t *testing.T) {
 	sessions, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+	require.NoError(t, (&Runtime{Sessions: sessions}).CreateConversation(t.Context(), protocol.Conversation{ID: "source", Agent: "main"}))
 
 	for _, raw := range []string{
 		`{"replay_input":[{"type":"compaction","content":42}]}`,

@@ -503,7 +503,9 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 	t.Parallel()
 
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), inputOpen: true, requestCh: make(chan bridgeRequest, 2), config: Config{SessionService: newTestSessionService(t)}}
+	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"web-drain": KindWebChat})
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), inputOpen: true, requestCh: make(chan bridgeRequest, 2), config: Config{ConversationID: "web-drain", SessionService: store}}
 
 	for _, text := range []string{"first", "second"} {
 		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper " + text, TextAttachments: []string{"attachment text"}, Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte(text)}}}, true)
@@ -542,6 +544,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		store := newTestSessionService(t)
 		target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
 		conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
+		recordTestConversations(t, store, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), bus: discardPublisher{}, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: true, requestCh: make(chan bridgeRequest, 2)}
 		manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{conversationID: bridge}}
 		active := &turnCompletion{done: make(chan struct{})}
@@ -1469,6 +1472,7 @@ func TestMoveAsCallFinishes(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
 	finished := &backgroundWorkMock{RunBackgroundFunc: func(context.Context) (string, error) { return "done", nil }, DetachFunc: func() bool { return true }}

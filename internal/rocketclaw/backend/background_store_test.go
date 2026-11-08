@@ -147,6 +147,8 @@ func TestBackgroundJobCreateKeepsFirstRow(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+
 	first := testBackgroundJob("main", "turn-1/call/a")
 	first.origin.SyncDestination = "visible"
 	stored, created, err := createBackgroundJob(t.Context(), store.db, first)
@@ -169,6 +171,8 @@ func TestBackgroundJobTransitionsCompareAndSet(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+
 	job := testBackgroundJob("main", "turn-1/call/a")
 	createTestBackgroundJob(t, store, job)
 
@@ -229,6 +233,8 @@ func TestBackgroundJobFinishStoresNoteAndClearsJournal(t *testing.T) {
 
 	store := newTestSessionService(t)
 	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+
 	job := testBackgroundJob("main", "turn-1/call/a")
 	createTestBackgroundJob(t, store, job)
 	// A job started by a host call of the script keeps running, and owns its steps, after it.
@@ -280,6 +286,8 @@ func TestBackgroundNoteClaimSucceedsOnce(t *testing.T) {
 
 	store := newTestSessionService(t)
 	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+
 	job := testBackgroundJob("main", "turn-1/call/a")
 	createTestBackgroundJob(t, store, job)
 	finishTestBackgroundJob(t, store, job, backgroundCompleted, true)
@@ -325,6 +333,8 @@ func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 		t.Run(string(tt.terminal)+"/saved="+strconv.FormatBool(tt.saved), func(t *testing.T) {
 			store := newTestSessionService(t)
 			ctx := t.Context()
+			recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+
 			job := testBackgroundJob("main", "turn-1/call/a")
 			createTestBackgroundJob(t, store, job)
 			finishTestBackgroundJob(t, store, job, backgroundCompleted, true)
@@ -365,6 +375,8 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		ctx := t.Context()
+		recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindCronRun})
+
 		job := testBackgroundJob("main", "turn-1/call/a")
 		createTestBackgroundJob(t, store, job)
 		finishTestBackgroundJob(t, store, job, backgroundCompleted, true)
@@ -456,6 +468,7 @@ func TestFinishTurnSettlesSessionReplies(t *testing.T) {
 			ctx := t.Context()
 			notes := &backgroundNotesMock{noteReadyFunc: func(string) {}}
 			store.jobs = newBackgroundRegistry(store, notes, testLogger())
+			recordTestConversations(t, store, "main", map[string]ConversationKind{"caller": KindWebChat, "target": KindWebChat, "shadow": KindWebChat})
 
 			reply := testReply("caller", "turn-1/call/w", "target")
 			createTestBackgroundJob(t, store, reply)
@@ -568,6 +581,7 @@ func TestReleaseStaleBackgroundClaims(t *testing.T) {
 
 	store := newTestSessionService(t)
 	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
 	seedActiveTurn(t, store, "main", "live", nil)
 
 	for turnID, jobID := range map[string]string{"live": "turn-1/call/a", "gone": "turn-1/call/b"} {
@@ -590,6 +604,7 @@ func TestTurnCleanupKeepsBackgroundJournal(t *testing.T) {
 
 	store := newTestSessionService(t)
 	ctx := t.Context()
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
 	seedActiveTurn(t, store, "main", "turn-1", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "turn-1"})
 	createTestBackgroundJob(t, store, testBackgroundJob("main", "turn-1/call/a"))
 
@@ -651,6 +666,7 @@ func TestBackgroundJobsListOwnAndDestinationJobs(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat, "other": KindWebChat})
 	createTestBackgroundJob(t, store, testBackgroundJob("main", "turn-1/call/running"))
 
 	pending := testBackgroundJob("main", "turn-1/call/pending")
@@ -780,6 +796,9 @@ func TestConversationRemovalDeletesBackgroundJobs(t *testing.T) {
 		retainTestResult(t, spill, conversationID, conversationID, time.Now())
 	}
 
+	// An agent without shadows records them without comparison children.
+	recordTestConversations(t, store, "solo", map[string]ConversationKind{"main": KindWebChat, "other": KindWebChat})
+
 	for _, conversationID := range []string{"main", "other"} {
 		createTestBackgroundJob(t, store, testBackgroundJob(conversationID, "turn-1/call/a"))
 		require.NoError(t, store.SaveTurnStep(ctx, conversationID, "turn-1/call/a/host/1", json.RawMessage(`{}`)))
@@ -837,6 +856,7 @@ func TestBackgroundJobChangeNotices(t *testing.T) {
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	reportTestRun(t, store, "cron:daily", "visible")
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
 	conn, err := store.db.Conn(ctx)
 	require.NoError(t, err)
 

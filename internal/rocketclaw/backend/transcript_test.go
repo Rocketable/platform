@@ -130,6 +130,8 @@ func TestObserveTranscript(t *testing.T) {
 		ReplayAttribution: []harness.ReplayAttribution{{Start: 0, End: 1, Agent: "previous", Model: "previous-model", ReasoningEffort: new("low")}},
 		OutputTrace:       []json.RawMessage{json.RawMessage(`{"id":"trace"}`)}, TokenUsage: &harness.TokenUsage{TotalTokens: 5}, ResponseID: "response-1",
 	}
+
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat, "producer": KindCronRun})
 	require.NoError(t, upsertTestTurn(ctx, s, checkpoint))
 	entries, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
@@ -190,7 +192,6 @@ func TestObserveTranscript(t *testing.T) {
 	require.False(t, entries[1].Active)
 	require.NotEqual(t, initialRevision, entries[1].Revision)
 	// A producer's identical turn ID must not replace the destination's own turn.
-	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat, "producer": KindCronRun})
 	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'main' WHERE conversation_id = 'producer'`)
 	require.NoError(t, err)
 	producerID, err := s.AppendEntryID(ctx, "producer", saved)
@@ -327,6 +328,8 @@ func TestTranscriptPages(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat})
+
 	ids := make([]int64, 5)
 	appendRow := func(i int) {
 		var err error
@@ -422,6 +425,7 @@ func TestTranscriptChanges(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat, "unrelated": KindWebChat})
 	conn, err := s.db.Conn(ctx)
 
 	require.NoError(t, err)
@@ -438,6 +442,8 @@ func TestTranscriptChanges(t *testing.T) {
 
 	defer func() { _ = tx.Rollback() }()
 
+	_, err = tx.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ('rolled-back', 'main', '', 'web_chat', TRUE)`)
+	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('rolled-back', '{"replay_input":["SECRET"]}', '')`)
 	require.NoError(t, err)
 	_, err = s.db.ExecContext(ctx, `SELECT pg_notify($1, 'barrier')`, channel)
@@ -535,6 +541,7 @@ func TestTranscriptChanges(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, protocol.ConversationChange{ConversationID: "main"}, change)
 	other := newTestSessionService(t)
+	recordTestConversations(t, other, "main", map[string]ConversationKind{"main": KindWebChat})
 	_, err = other.AppendEntryID(ctx, "main", testSessionEntry("other schema", "SECRET"))
 	require.NoError(t, err)
 	_, err = s.AppendEntryID(ctx, "unrelated", testSessionEntry("other conversation", "SECRET"))
@@ -708,6 +715,7 @@ func TestActiveTurnOutputTracePersistence(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat})
 
 	var logs lockedBuffer
 
@@ -784,6 +792,7 @@ func TestCodeModeCallsSavedOnTheirOwn(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat})
 	journal := conversationJournal{store: s, conversationID: "main", log: slog.New(slog.DiscardHandler)}
 	progress := json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"exec","kind":"tool","state":"working","text":"execute"}}`)
 	require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: "turn-1", ConversationKey: "main", ReplayInput: testSessionEntry("hello", "").ReplayInput, OutputTrace: []json.RawMessage{progress}}))
@@ -861,6 +870,7 @@ func TestJournalSavesTurnItemsOnce(t *testing.T) {
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat})
 	journal := conversationJournal{store: s, conversationID: "main", log: slog.New(slog.DiscardHandler)}
 	require.NoError(t, startTurnDB(ctx, s.db, "turn-1", "main", protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "seed", true)))
 
@@ -993,6 +1003,7 @@ func TestTranscriptObservationReportsUnreadableStoredEntries(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat})
 	_, err := s.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","output_trace":1}', '')`)
 	require.NoError(t, err)
 	_, err = s.ObserveTranscript(t.Context(), "main", 0, 0, nil)

@@ -109,6 +109,7 @@ func TestBackgroundJobRunsDetachedOnce(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{Source: protocol.SourceSystem, RequireOutputDecision: true}}
 	started, release := make(chan struct{}, 1), make(chan struct{})
@@ -150,6 +151,7 @@ func TestBackgroundJobFinishRetried(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
 	started, release := make(chan struct{}, 1), make(chan struct{})
@@ -232,6 +234,9 @@ func TestStoppedSubagentStaysStopped(t *testing.T) {
 	}}, testLogger())
 	started := make(chan struct{}, 2)
 
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+	require.NoError(t, store.startSubagent(t.Context(), "main", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a", Turn: "turn-1", Call: "a"}, Agent: "researcher"}))
+
 	_, err := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main/a", origin: &protocol.InboundMessage{}}.Run(t.Context(), &harness.BackgroundJob{ID: "turn-2/call/x", Kind: harness.BackgroundKindExecute, Detached: true}, blockedWork(started, make(chan struct{})))
 	require.NoError(t, err)
 	<-started
@@ -283,7 +288,7 @@ func TestStoppedWaitStopsSubagentTurn(t *testing.T) {
 			store.jobs = registry
 			t.Cleanup(registry.shutdown)
 
-			recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
+			recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat, "web:ops": KindWebChat})
 			require.NoError(t, store.startSubagent(t.Context(), "main", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a", Turn: "turn-0", Call: "busy"}, Agent: "researcher"}))
 			require.NoError(t, store.startSubagent(t.Context(), "main/a", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/b", Turn: "turn-0", Call: "deep"}, Agent: "researcher"}))
 
@@ -337,6 +342,7 @@ func TestBackgroundJobAttachedCall(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
 	task := func(name string) *harness.BackgroundJob {
@@ -474,6 +480,7 @@ func TestBackgroundJobsRunWithoutLimit(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat})
 	registry, notes := newTestBackgroundRegistry(store)
 	turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: "main", origin: &protocol.InboundMessage{}}
 
@@ -505,6 +512,8 @@ func TestBackgroundJobsAbandoned(t *testing.T) {
 	store.jobs = registry
 	started := make(chan struct{}, 2)
 
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat, "other": KindWebChat})
+
 	for _, conversationID := range []string{"main", "other"} {
 		turn := backgroundTurn{registry: registry, root: testTurnRoot(t), conversationID: conversationID, origin: &protocol.InboundMessage{}}
 		_, err := turn.Run(t.Context(), &harness.BackgroundJob{ID: "turn-1/call/a", Kind: harness.BackgroundKindExecute, Detached: true}, blockedWork(started, make(chan struct{})))
@@ -529,6 +538,7 @@ func TestRestartSettlesRunningJobs(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"main": KindWebChat, "cron:daily": KindCronRun, "private": KindExternalMCPRun, "main/b": KindSubagent})
 
 	for conversationID, origin := range map[string]*protocol.InboundMessage{"main": {Source: protocol.SourceSlack}, "cron:daily": {RequireOutputDecision: true}, "private": {SyncDestination: "managed"}} {
 		script := testBackgroundJob(conversationID, "turn-1/call/"+conversationID)
