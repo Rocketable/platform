@@ -81,13 +81,13 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     await page.getByText("draft.txt", { exact: true }).waitFor();
     // A revert shows no notice; Redo is a command and leaves no command text behind.
     expect(await page.getByText("History reverted", { exact: false }).count()).toBe(0);
-    await input.fill("$redo"); await input.press("Enter");
+    await input.fill("$redo"); await page.getByRole("button", { name: "Send", exact: true }).click();
     await page.getByText("Second answer", { exact: true }).waitFor();
     expect(await input.inputValue()).toBe("");
-    await input.fill("$undo"); await input.press("Enter");
+    await input.fill("$undo"); await page.getByRole("button", { name: "Send", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "Second request");
     expect(await page.getByText("draft.txt", { exact: true }).count()).toBe(0);
-    await input.fill("$undo"); await input.press("Enter");
+    await input.fill("$undo"); await page.getByRole("button", { name: "Send", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "First request");
     await page.waitForFunction(() => !document.querySelector("[data-message-id]"));
     expect(await page.locator("[data-message-id]").count()).toBe(0);
@@ -178,7 +178,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       await input.focus();
       await page.keyboard.type(" typed while clearing");
       // Use actual pointer clicks: disabled controls must not dispatch draft edits.
-      const buttons = ["Add files", "Remove scratch.txt", "Stash", "Steer", "Send"];
+      const buttons = ["Add files", "Remove scratch.txt", "Composer actions", "Send"];
       if (outcome === "reset") buttons.unshift("$goal <objective> Start a goal loop");
       for (const name of buttons) {
         const button = page.getByRole("button", { name, exact: true });
@@ -186,6 +186,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
         const bounds = (await button.boundingBox())!;
         await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
       }
+      expect(await page.getByRole("button", { name: "Steer", exact: true }).count()).toBe(0);
       const agent = page.getByRole("button", { name: "Choose agent", exact: true });
       expect(await agent.isDisabled()).toBe(true);
       const bounds = (await agent.boundingBox())!;
@@ -229,7 +230,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
         expect(await input.inputValue()).toBe("Discarded scratch");
         expect(await input.isEditable()).toBe(true);
         await page.getByText("scratch.txt", { exact: true }).waitFor();
-        for (const name of ["Add files", "Remove scratch.txt", "Stash", "Send"]) expect(await page.getByRole("button", { name, exact: true }).isEnabled()).toBe(true);
+        for (const name of ["Add files", "Remove scratch.txt", "Composer actions", "Send"]) expect(await page.getByRole("button", { name, exact: true }).isEnabled()).toBe(true);
         expect(await agent.isEnabled()).toBe(true);
         expect(await page.getByLabel("Attach files").isEnabled()).toBe(true);
         await input.fill("Recovered scratch");

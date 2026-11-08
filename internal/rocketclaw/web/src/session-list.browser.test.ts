@@ -1081,7 +1081,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const identityResponse = await page.waitForResponse("**/api/Identity");
     const identityTransfer = { finished: false, error: "" };
     void identityResponse.finished().then((error: Error | null) => { identityTransfer.finished = true; identityTransfer.error = error?.message ?? ""; }, (error: Error) => { identityTransfer.error = error.message; });
-    await page.getByPlaceholder("Message a new session").press("Enter");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
     await ctrl.promptStarted.promise;
     expect(ctrl.prompt).toEqual(["web-session:new:hello\n\nwhile held"]);
     try {
@@ -1095,7 +1095,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       throw error;
     }
     await page.waitForURL("**/s/d2ViLXNlc3Npb246bmV3");
-    await page.getByPlaceholder("Queue a follow-up · ⌘⏎ steers").waitFor();
+    await page.getByPlaceholder("Queue a follow-up").waitFor();
     await page.locator("textarea:enabled").waitFor();
     expect(await page.locator("textarea").evaluate((input: HTMLTextAreaElement) => document.activeElement === input)).toBe(true);
     expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
@@ -1127,7 +1127,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       const longDraft = "A long draft line\n".repeat(100);
       await page.locator("textarea").fill(longDraft);
       expect(await page.locator("textarea").evaluate((element: HTMLTextAreaElement) => element.scrollHeight > element.clientHeight)).toBe(true);
-      const sendBounds = await page.getByRole("button", { name: "Send", exact: true }).boundingBox();
+      const sendBounds = await page.getByRole("button", { name: "Queue", exact: true }).boundingBox();
       expect(sendBounds!.y).toBeGreaterThanOrEqual(0);
       expect(sendBounds!.y + sendBounds!.height).toBeLessThanOrEqual(844);
       await page.locator("textarea").press("Control+End");
@@ -1170,10 +1170,10 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     for (const delivery of ["QUEUE", "STEER", "STEER"] as const) {
       await page.locator("textarea").fill("identical follow-up");
       const intervention = page.waitForRequest("**/api/Prompt");
-      if (delivery === "QUEUE") await page.locator("textarea").press("Enter");
+      if (delivery === "QUEUE") await page.getByRole("button", { name: "Queue", exact: true }).click();
       else {
         const steerBox = await page.getByRole("button", { name: "Steer", exact: true }).last().boundingBox();
-        const sendBox = await page.getByRole("button", { name: "Send", exact: true }).boundingBox();
+        const sendBox = await page.getByRole("button", { name: "Queue", exact: true }).boundingBox();
         expect(steerBox!.height).toBeGreaterThanOrEqual(44);
         expect(steerBox!.x + steerBox!.width).toBeLessThanOrEqual(sendBox!.x);
         expect(steerBox!.y).toBe(sendBox!.y);
@@ -1341,7 +1341,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     promptHold = Promise.withResolvers();
     ctrl.promptStarted = Promise.withResolvers();
     await page.locator("textarea").fill("newer held steer");
-    await page.locator("textarea").press("Control+Enter");
+    await page.getByRole("button", { name: "Steer", exact: true }).last().click();
     await ctrl.promptStarted.promise;
     await page.locator("textarea").fill("newer unsent draft");
     const olderFailure = page.waitForResponse((response: { request: () => { postDataJSON: () => { text: string } }; url: () => string }) => response.url().endsWith("/api/Prompt") && response.request().postDataJSON().text === "older failing turn");
@@ -1350,7 +1350,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     // Removal of its optimistic row proves the browser processed the rejection.
     await page.getByText("older failing turn", { exact: true }).waitFor({ state: "hidden" });
     expect(await page.locator("textarea").inputValue()).toBe("newer unsent draft");
-    expect(await page.locator("textarea").getAttribute("placeholder")).toBe("Queue a follow-up · ⌘⏎ steers");
+    expect(await page.locator("textarea").getAttribute("placeholder")).toBe("Queue a follow-up");
     await hidden(page, "older turn failed late");
     await page.locator("textarea").fill("");
     expect(await page.getByRole("button", { name: "Stop", exact: true }).isEnabled()).toBe(true);
@@ -2414,11 +2414,11 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       const detailsPage = await browser.newPage({ viewport: { width, height: 844 } });
       await detailsPage.goto(`${origin}/s/${Buffer.from("named").toString("base64url")}`);
       await detailsPage.getByRole("button", { name: "Choose agent", exact: true }).waitFor();
-      expect(await detailsPage.getByRole("button", { name: "Steer", exact: true }).isDisabled()).toBe(true);
+      expect(await detailsPage.getByRole("button", { name: "Steer", exact: true }).count()).toBe(0);
       if (width === 390) {
         await detailsPage.setViewportSize({ width: 320, height: 568 });
         const selector = detailsPage.getByRole("button", { name: "Choose agent", exact: true });
-        expect((await selector.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+        expect((await selector.boundingBox())!.height).toBeGreaterThanOrEqual(28);
         const selectorBox = (await selector.boundingBox())!;
         const sendBox = (await detailsPage.getByRole("button", { name: "Send", exact: true }).boundingBox())!;
         expect(selectorBox.width).toBeLessThanOrEqual(144);
@@ -2739,10 +2739,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await stashPage.locator("textarea").fill("$stop");
     await stashPage.locator('input[type="file"]').setInputFiles({ name: "held.txt", mimeType: "text/plain", buffer: Buffer.from("held contents") });
     ctrl.promptError = true;
-    const stashButton = stashPage.getByRole("button", { name: "Stash", exact: true });
-    // Idle: Stash stays usable but is no louder than the disabled Steer.
+    await stashPage.getByRole("button", { name: "Composer actions", exact: true }).click();
+    const stashButton = stashPage.getByRole("menuitem", { name: "Stash", exact: true });
     expect(await stashButton.isDisabled()).toBe(false);
-    expect((await stashButton.getAttribute("class"))?.split(/\s+/)).toContain("opacity-50");
     await stashButton.click();
     await shown(stashPage, "Stash failed; retry");
     expect(await stashPage.locator("textarea").inputValue()).toBe("$stop");
@@ -2805,8 +2804,9 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     expect(steers).toBe(1);
     expect(await heldRow.getByRole("button", { name: "Edit", exact: true }).count()).toBe(0);
     await stashPage.locator("textarea").fill("busy stash");
-    // Running: Stash lights up together with Steer.
-    expect((await stashButton.getAttribute("class"))?.split(/\s+/)).not.toContain("opacity-50");
+    await stashPage.getByRole("button", { name: "Composer actions", exact: true }).click();
+    expect(await stashButton.isDisabled()).toBe(false);
+    await stashPage.keyboard.press("Escape");
     await stashPage.locator("textarea").press("Control+Alt+Enter");
     await heldRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
     expect(await heldRow.getByText("busy stash", { exact: true }).count()).toBe(1);
@@ -3052,7 +3052,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await retiredPage.goto(`${origin}/s/${Buffer.from("retired-session").toString("base64url")}`);
     await retiredPage.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "other" }).waitFor();
     await retiredPage.locator("textarea").fill("held hello");
-    await retiredPage.getByRole("button", { name: "Stash", exact: true }).click();
+    await retiredPage.getByRole("button", { name: "Composer actions", exact: true }).click();
+    await retiredPage.getByRole("menuitem", { name: "Stash", exact: true }).click();
     const popped = retiredPage.waitForResponse((response: PromptResponse) => response.url().endsWith("/api/PopQueueItem"));
     await retiredPage.locator("[data-queue-id]").getByRole("button", { name: "Pop", exact: true }).click();
     await popped;

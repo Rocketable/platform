@@ -944,8 +944,10 @@ palette offers the same actions.
 Safe-area padding is preserved. On very narrow screens, navigation buttons scroll
 horizontally instead of overlapping.
 
-The composer is a [Prompt Input](https://ui.shadcn.com/docs/ai-elements/base/prompt-input):
-an Input Group with pending files above the text and its controls below. Use its
+The composer follows the embedded OpenCode layout: a rounded
+[Prompt Input](https://ui.shadcn.com/docs/ai-elements/base/prompt-input) card with
+pending files above the text and a scrolling agent, model, and effort row below.
+Model and effort describe the selected native agent; they are not independent selectors. Use its
 agent menu, a [Model Selector](https://ui.shadcn.com/docs/ai-elements/base/model-selector),
 to change agents; each agent shows its model and effort, and typing a name's first
 letters moves to it. New Web threads select
@@ -964,8 +966,14 @@ cursor there for your comment. The browser's right-click menu remains available.
 Use **+** to choose files, drop files onto the composer, or paste them, such as a
 screenshot copied to the clipboard. Pending files stay in
 selection order and can be removed individually. Send accepts files without text;
-Enter and **Send** queue later work while a turn is running. The **Steer** button
-immediately left of Send guides the active response; Cmd/Ctrl+Enter does the same.
+On desktop, Enter and **Send** queue later work while a turn is running.
+The **Steer** action appears beside Send only with a draft during a running turn;
+Cmd/Ctrl+Enter does the same. Empty drafts disable Send, or show **Stop** while working.
+Phones and tablets use a separate bottom action bar with 44px touch targets:
+**Send** when idle, **Queue** and **Steer** with a draft while working, or **Stop**
+with an empty draft. Return adds a newline, even with command suggestions open;
+Cmd/Ctrl+Return on a touch device performs the primary action. A narrow desktop
+window keeps desktop behavior. Voice remains available beside the composer actions.
 After sending, focus returns to the composer so the next message can be typed.
 Steers wait in **Waiting to steer**, separate from both chat and the later-work
 queue. A persisted input in a History delta moves that input into chat at the point
@@ -973,7 +981,7 @@ it was used, with its attachments. Identical texts remain separate inputs, track
 by durable input ID. Queue promotion keeps the server queue ID and follows the
 same consumption rule. Replacing the active turn includes each consumed steer
 without repeating the earlier response.
-Use **Stash** to save the draft and its attachments without sending, whether the
+Use **Composer actions (…) → Stash** to save the draft and its attachments without sending, whether the
 chat is idle or busy. Press **⌘ Option Enter** on macOS or **Ctrl Alt Enter** on
 Windows/Linux to stash, including when command suggestions are open.
 **Stashed** rows stay in the queue panel until you choose

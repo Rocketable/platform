@@ -184,7 +184,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     }))).toMatchObject({ copyFocused: true });
     const composer = page.locator("textarea");
     await composer.fill("$fork");
-    await composer.press("Enter");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByRole("button", { name: "Choose this prompt Continue before this message" }).click();
     await page.waitForURL("**/s/" + btoa("forked").replace(/=+$/, ""));
@@ -400,7 +400,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await aborted;
     await composer.fill("$handoff");
-    await composer.press("Enter");
+    await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true }));
     await dialog.getByRole("button", { name: "Copy handoff", exact: true }).click();
     await dialog.getByRole("button", { name: "Copying handoff…", exact: true }).waitFor({ timeout: 2000 });
@@ -418,7 +418,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
 
     await composer.fill("$handoff");
     handoffSeen = Promise.withResolvers();
-    await composer.press("Enter");
+    await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     await destinationSearch.fill("destination search");
     const destinationMatch = dialog.getByRole("button", { name: /Destination search needle/ });
     await destinationMatch.getByRole("img", { name: "Forked session", exact: true }).waitFor();
@@ -472,7 +472,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     expect(prompts).toHaveLength(1);
 
     await composer.fill("$handoff");
-    await composer.press("Enter");
+    await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     expect(prompts).toHaveLength(1);
     await destinationSearch.fill("First request");
     if (width < 640) {
@@ -494,7 +494,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await dialog.waitFor({ state: "hidden" });
     expect(prompts).toHaveLength(1);
     await composer.fill("$handoff");
-    await composer.press("Enter");
+    await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     await dialog.getByRole("button", { name: "Start new session", exact: true }).click();
     await dialog.getByRole("button", { name: "Starting session…", exact: true }).waitFor({ timeout: 2000 });
     expect(await dialog.locator('p[role="status"]').count()).toBe(0);
@@ -511,7 +511,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await composer.waitFor();
     failFirstTurn = true;
     await composer.fill("$handoff");
-    await composer.press("Enter");
+    await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     await dialog.getByRole("button", { name: "Start new session", exact: true }).click();
     await page.waitForURL("**/s/" + btoa("created").replace(/=+$/, ""));
     await dialog.waitFor({ state: "hidden" });
@@ -521,7 +521,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
     await composer.waitFor();
     await composer.fill("start a turn");
-    await composer.press("Enter");
+    await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
     await composer.fill("draft during turn");
     await page.keyboard.press("Meta+Shift+p");
@@ -533,7 +533,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     expect(await composer.inputValue()).toBe("draft during turn");
     handoffReady = Promise.withResolvers<void>();
     await composer.fill("$handoff");
-    await composer.press("Enter");
+    await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     await destinationSearch.fill("destination search");
     await dialog.getByRole("button", { name: /Destination search needle/ }).click();
     const stashButton = dialog.getByRole("button", { name: "Stash handoff here" });
