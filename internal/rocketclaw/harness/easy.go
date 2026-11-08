@@ -45,7 +45,7 @@ type AgentRoutine struct {
 func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 	node := agent.FrontmatterNode
 	if err := checkEasyKeys(node, "", "mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN",
-		"commands", "mcp", "rocketclaw", "tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema"); err != nil {
+		"commands", "mcp", "rocketclaw", "tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema", "sticky"); err != nil {
 		return err
 	}
 
@@ -129,6 +129,10 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 	}
 
 	if field := frontmatterField(node, "routines"); field != nil {
+		if agent.Sticky == AgentStickyUser {
+			return errors.New("routines: a sticky: user agent cannot have routines")
+		}
+
 		if field.Kind != yaml.SequenceNode {
 			return errors.New("routines: must be a list of schedules and one-entry maps from schedule to instruction")
 		}

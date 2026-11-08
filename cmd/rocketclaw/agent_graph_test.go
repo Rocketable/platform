@@ -50,6 +50,7 @@ main
 	output := captureStdout(t, func() error { return runAgentGraph(nil) })
 	assert.Equal(t, `digraph agent_graph {
   "main" [label="main\nmaxRecursion=unbounded"];
+  "voice" [label="voice\nmaxRecursion=1\nshell=emulated"];
 }
 `, output)
 	_, err := os.Stat(filepath.Join(workspace, ".rocketclaw", "agents", "main.md"))

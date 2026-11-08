@@ -195,11 +195,7 @@ type VoiceSettingsAction int32
 
 const (
 	VoiceSettingsAction_READ VoiceSettingsAction = 0
-	// START returns the current voice conversation, creating one with agent when none is current.
-	VoiceSettingsAction_START VoiceSettingsAction = 1
-	// RESET forgets the current voice conversation while it is still conversation_id.
-	VoiceSettingsAction_RESET VoiceSettingsAction = 2
-	// UPDATE stores the agent, voice and transcript fields that are set.
+	// UPDATE stores the agent, voice and transcript fields that are set; agent must be sticky: user.
 	VoiceSettingsAction_UPDATE VoiceSettingsAction = 3
 )
 
@@ -207,14 +203,10 @@ const (
 var (
 	VoiceSettingsAction_name = map[int32]string{
 		0: "READ",
-		1: "START",
-		2: "RESET",
 		3: "UPDATE",
 	}
 	VoiceSettingsAction_value = map[string]int32{
 		"READ":   0,
-		"START":  1,
-		"RESET":  2,
 		"UPDATE": 3,
 	}
 )
@@ -1810,8 +1802,10 @@ func (x *CreateSessionRequest) GetSpaceId() string {
 }
 
 type CreateSessionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Set when the agent is sticky and id is its existing session, resumed instead of created.
+	Resumed       bool `protobuf:"varint,2,opt,name=resumed,proto3" json:"resumed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1851,6 +1845,13 @@ func (x *CreateSessionResponse) GetId() string {
 		return x.Id
 	}
 	return ""
+}
+
+func (x *CreateSessionResponse) GetResumed() bool {
+	if x != nil {
+		return x.Resumed
+	}
+	return false
 }
 
 type ForkSessionRequest struct {
@@ -3593,7 +3594,11 @@ type Agent struct {
 	// Voices offered by the default openai provider, the default first; empty when unavailable.
 	Voices []string `protobuf:"bytes,10,rep,name=voices,proto3" json:"voices,omitempty"`
 	// New sessions in another space do not offer this agent; empty offers it in every space.
-	Space         string `protobuf:"bytes,11,opt,name=space,proto3" json:"space,omitempty"`
+	Space string `protobuf:"bytes,11,opt,name=space,proto3" json:"space,omitempty"`
+	// user or global for an agent with one Web session per person or one in all; empty when off.
+	Sticky string `protobuf:"bytes,12,opt,name=sticky,proto3" json:"sticky,omitempty"`
+	// A sticky agent's existing session, the caller's own for user, that a new session resumes; empty when none.
+	StickySession string `protobuf:"bytes,13,opt,name=sticky_session,json=stickySession,proto3" json:"sticky_session,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3701,6 +3706,20 @@ func (x *Agent) GetVoices() []string {
 func (x *Agent) GetSpace() string {
 	if x != nil {
 		return x.Space
+	}
+	return ""
+}
+
+func (x *Agent) GetSticky() string {
+	if x != nil {
+		return x.Sticky
+	}
+	return ""
+}
+
+func (x *Agent) GetStickySession() string {
+	if x != nil {
+		return x.StickySession
 	}
 	return ""
 }
@@ -6117,14 +6136,13 @@ func (x *VoiceRequest) GetVoice() string {
 }
 
 type VoiceSettingsRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Action         VoiceSettingsAction    `protobuf:"varint,1,opt,name=action,proto3,enum=rpc.VoiceSettingsAction" json:"action,omitempty"`
-	ConversationId string                 `protobuf:"bytes,2,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
-	Agent          *string                `protobuf:"bytes,3,opt,name=agent,proto3,oneof" json:"agent,omitempty"`
-	Voice          *string                `protobuf:"bytes,4,opt,name=voice,proto3,oneof" json:"voice,omitempty"`
-	Transcript     *bool                  `protobuf:"varint,5,opt,name=transcript,proto3,oneof" json:"transcript,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Action        VoiceSettingsAction    `protobuf:"varint,1,opt,name=action,proto3,enum=rpc.VoiceSettingsAction" json:"action,omitempty"`
+	Agent         *string                `protobuf:"bytes,3,opt,name=agent,proto3,oneof" json:"agent,omitempty"`
+	Voice         *string                `protobuf:"bytes,4,opt,name=voice,proto3,oneof" json:"voice,omitempty"`
+	Transcript    *bool                  `protobuf:"varint,5,opt,name=transcript,proto3,oneof" json:"transcript,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *VoiceSettingsRequest) Reset() {
@@ -6164,13 +6182,6 @@ func (x *VoiceSettingsRequest) GetAction() VoiceSettingsAction {
 	return VoiceSettingsAction_READ
 }
 
-func (x *VoiceSettingsRequest) GetConversationId() string {
-	if x != nil {
-		return x.ConversationId
-	}
-	return ""
-}
-
 func (x *VoiceSettingsRequest) GetAgent() string {
 	if x != nil && x.Agent != nil {
 		return *x.Agent
@@ -6192,15 +6203,14 @@ func (x *VoiceSettingsRequest) GetTranscript() bool {
 	return false
 }
 
-// VoiceSettingsResponse is the caller's voice settings; conversation_id is empty when none is current.
+// VoiceSettingsResponse is the caller's voice settings; a call goes to agent's sticky session.
 type VoiceSettingsResponse struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
-	Agent          string                 `protobuf:"bytes,2,opt,name=agent,proto3" json:"agent,omitempty"`
-	Voice          string                 `protobuf:"bytes,3,opt,name=voice,proto3" json:"voice,omitempty"`
-	Transcript     bool                   `protobuf:"varint,4,opt,name=transcript,proto3" json:"transcript,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Agent         string                 `protobuf:"bytes,2,opt,name=agent,proto3" json:"agent,omitempty"`
+	Voice         string                 `protobuf:"bytes,3,opt,name=voice,proto3" json:"voice,omitempty"`
+	Transcript    bool                   `protobuf:"varint,4,opt,name=transcript,proto3" json:"transcript,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *VoiceSettingsResponse) Reset() {
@@ -6231,13 +6241,6 @@ func (x *VoiceSettingsResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use VoiceSettingsResponse.ProtoReflect.Descriptor instead.
 func (*VoiceSettingsResponse) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{94}
-}
-
-func (x *VoiceSettingsResponse) GetConversationId() string {
-	if x != nil {
-		return x.ConversationId
-	}
-	return ""
 }
 
 func (x *VoiceSettingsResponse) GetAgent() string {
@@ -7580,9 +7583,10 @@ const file_web_proto_rawDesc = "" +
 	"\x16source_conversation_id\x18\x03 \x01(\tR\x14sourceConversationId\x12'\n" +
 	"\x0fopencode_server\x18\x04 \x01(\tR\x0eopencodeServer\x12\x1c\n" +
 	"\tdirectory\x18\x05 \x01(\tR\tdirectory\x12\x19\n" +
-	"\bspace_id\x18\x06 \x01(\tR\aspaceId\"'\n" +
+	"\bspace_id\x18\x06 \x01(\tR\aspaceId\"A\n" +
 	"\x15CreateSessionResponse\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"<\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
+	"\aresumed\x18\x02 \x01(\bR\aresumed\"<\n" +
 	"\x12ForkSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06before\x18\x02 \x01(\tR\x06before\"S\n" +
@@ -7727,7 +7731,7 @@ const file_web_proto_rawDesc = "" +
 	"\bupcoming\x18\t \x03(\tR\bupcoming\x12\x16\n" +
 	"\x06origin\x18\n" +
 	" \x01(\tR\x06origin\x12\x14\n" +
-	"\x05space\x18\v \x01(\tR\x05spaceJ\x04\b\b\x10\t\"\xb2\x02\n" +
+	"\x05space\x18\v \x01(\tR\x05spaceJ\x04\b\b\x10\t\"\xf1\x02\n" +
 	"\x05Agent\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\x1c\n" +
@@ -7740,7 +7744,9 @@ const file_web_proto_rawDesc = "" +
 	"\fcustom_shell\x18\t \x01(\tR\vcustomShell\x12\x16\n" +
 	"\x06voices\x18\n" +
 	" \x03(\tR\x06voices\x12\x14\n" +
-	"\x05space\x18\v \x01(\tR\x05space\"<\n" +
+	"\x05space\x18\v \x01(\tR\x05space\x12\x16\n" +
+	"\x06sticky\x18\f \x01(\tR\x06sticky\x12%\n" +
+	"\x0esticky_session\x18\r \x01(\tR\rstickySession\"<\n" +
 	"\x11ListAgentsRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\"]\n" +
 	"\x12ListAgentsResponse\x12\"\n" +
@@ -7884,10 +7890,9 @@ const file_web_proto_rawDesc = "" +
 	"\fVoiceRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x10\n" +
 	"\x03sdp\x18\x02 \x01(\tR\x03sdp\x12\x14\n" +
-	"\x05voice\x18\x03 \x01(\tR\x05voice\"\xef\x01\n" +
+	"\x05voice\x18\x03 \x01(\tR\x05voice\"\xdd\x01\n" +
 	"\x14VoiceSettingsRequest\x120\n" +
-	"\x06action\x18\x01 \x01(\x0e2\x18.rpc.VoiceSettingsActionR\x06action\x12'\n" +
-	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x19\n" +
+	"\x06action\x18\x01 \x01(\x0e2\x18.rpc.VoiceSettingsActionR\x06action\x12\x19\n" +
 	"\x05agent\x18\x03 \x01(\tH\x00R\x05agent\x88\x01\x01\x12\x19\n" +
 	"\x05voice\x18\x04 \x01(\tH\x01R\x05voice\x88\x01\x01\x12#\n" +
 	"\n" +
@@ -7895,14 +7900,13 @@ const file_web_proto_rawDesc = "" +
 	"transcript\x88\x01\x01B\b\n" +
 	"\x06_agentB\b\n" +
 	"\x06_voiceB\r\n" +
-	"\v_transcript\"\x8c\x01\n" +
-	"\x15VoiceSettingsResponse\x12'\n" +
-	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x14\n" +
+	"\v_transcriptJ\x04\b\x02\x10\x03R\x0fconversation_id\"z\n" +
+	"\x15VoiceSettingsResponse\x12\x14\n" +
 	"\x05agent\x18\x02 \x01(\tR\x05agent\x12\x14\n" +
 	"\x05voice\x18\x03 \x01(\tR\x05voice\x12\x1e\n" +
 	"\n" +
 	"transcript\x18\x04 \x01(\bR\n" +
-	"transcript\"+\n" +
+	"transcriptJ\x04\b\x01\x10\x02R\x0fconversation_id\"+\n" +
 	"\x05Space\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"\x8b\x01\n" +
@@ -8016,13 +8020,11 @@ const file_web_proto_rawDesc = "" +
 	"\x0ePromptDelivery\x12\t\n" +
 	"\x05STEER\x10\x00\x12\t\n" +
 	"\x05QUEUE\x10\x01\x12\t\n" +
-	"\x05STASH\x10\x02*A\n" +
+	"\x05STASH\x10\x02*E\n" +
 	"\x13VoiceSettingsAction\x12\b\n" +
-	"\x04READ\x10\x00\x12\t\n" +
-	"\x05START\x10\x01\x12\t\n" +
-	"\x05RESET\x10\x02\x12\n" +
+	"\x04READ\x10\x00\x12\n" +
 	"\n" +
-	"\x06UPDATE\x10\x032\x90\x15\n" +
+	"\x06UPDATE\x10\x03\"\x04\b\x01\x10\x01\"\x04\b\x02\x10\x02*\x05START*\x05RESET2\x90\x15\n" +
 	"\x03Web\x126\n" +
 	"\x10UploadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment(\x01\x128\n" +
 	"\x12DownloadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment0\x01\x12E\n" +

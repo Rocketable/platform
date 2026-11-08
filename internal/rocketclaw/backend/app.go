@@ -344,8 +344,17 @@ func (f conversationFactory) newBridge(cfg *Config) directBridge {
 }
 
 func validateRuntimeAssets(cfg *config.LockedConfig, runtimeDir string) error {
-	if _, _, err := LoadRuntimeDefinitions(cfg, runtimeDir); err != nil {
+	agents, _, err := LoadRuntimeDefinitions(cfg, runtimeDir)
+	if err != nil {
 		return fmt.Errorf("validate rocketcode definitions: %w", err)
+	}
+
+	for _, channel := range cfg.Clone().Slack.Channels {
+		for _, name := range channel.Agents {
+			if agents.Items[name].Sticky != harness.AgentStickyOff {
+				return fmt.Errorf("slack channel %s agent %s must use sticky: off", channel.Channel, name)
+			}
+		}
 	}
 
 	return validateWorkflowDefinitions(cfg.Clone(), runtimeDir)

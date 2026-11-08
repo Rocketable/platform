@@ -136,7 +136,7 @@ func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
 
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "skills"), 0o755))
-	writeAppTestAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-6.1-sol\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-6.1-sol\n---\nPrompt\n")
 
 	store := newWorkspaceSessionService(t)
 	bridges := make([]*directBridgeMock, 0, 2)
@@ -153,7 +153,7 @@ func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
 
 	_, err := store.db.ExecContext(t.Context(), `ALTER TABLE conversations ADD CONSTRAINT reject_thread CHECK (false) NOT VALID`)
 	require.NoError(t, err)
-	_, err = manager.createSession(t.Context(), start, nil, "", nil, nil)
+	_, _, err = manager.createSession(t.Context(), start, nil, "", nil, nil)
 	require.ErrorContains(t, err, "persist new Web session")
 	require.Len(t, bridges, 1)
 	assert.Len(t, bridges[0].StopCalls(), 1)
@@ -483,7 +483,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "skills"), 0o755))
-	writeAppTestAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-6.1-sol\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-6.1-sol\n---\nPrompt\n")
 
 	store := newWorkspaceSessionService(t)
 
@@ -505,7 +505,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"web:caller": KindWebChat, "caller-global": KindWebChat, "caller-user": KindWebChat})
 	caller := &Bridge{config: Config{ConversationID: "web:caller", SessionService: store}, threads: manager}
-	origin := &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}
+	origin := &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice", protocol.InboundPrincipalEmailMetadataKey: "alice@example.com"}}
 	write := sessionsWriteTool(caller, origin, origin, "main", caller.config.ConversationID, harness.Agents{})
 
 	output, err := write.Call(t.Context(), []byte(`{"session_id":"","mode":"steer","title":" Child ","prompt":" literal $(date) ","agent":""}`), nil)
@@ -552,7 +552,7 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 	thread, ok, err := store.Thread(conversationID)
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, ThreadState{Agent: "main", CreatedBy: "Alice"}, thread, "the creator is recorded")
+	assert.Equal(t, ThreadState{Agent: "main", CreatedBy: "alice@example.com"}, thread, "the login, not the display name, is recorded")
 
 	var name string
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT name FROM conversations WHERE conversation_id = $1`, conversationID).Scan(&name))
@@ -560,6 +560,49 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 
 	_, err = write.Call(t.Context(), []byte(`{"session_id":"","mode":"steer","title":"","prompt":"again","agent":""}`), nil)
 	require.ErrorContains(t, err, "title is required")
+
+	for _, sticky := range []string{"global", "user"} {
+		t.Run(sticky, func(t *testing.T) {
+			writeAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-6.1-sol\nsticky: "+sticky+"\n---\nPrompt\n")
+			id, _, err := store.CreateStickyConversation(t.Context(), protocol.Conversation{ID: "existing-" + sticky, Agent: "main", CreatedBy: "alice@example.com", Space: "Original"}, harness.AgentSticky(sticky))
+			require.NoError(t, err)
+
+			name := "Original title"
+			_, err = store.UpdateConversationDetails(t.Context(), id, nil, &name)
+			require.NoError(t, err)
+
+			origin.Metadata[protocol.InboundPrincipalEmailMetadataKey] = "alice@example.com"
+			origin.Metadata[protocol.InboundPrincipalMetadataKey] = "Bob"
+			caller.config.ConversationID = "caller-" + sticky
+			write := sessionsWriteTool(caller, origin, origin, "main", caller.config.ConversationID, harness.Agents{})
+			output, err := write.Call(t.Context(), []byte(`{"session_id":"","mode":"steer","title":"Do not rename","prompt":"next request","agent":""}`), nil)
+			require.NoError(t, err)
+			assert.JSONEq(t, fmt.Sprintf(`{"outcome":"queued","session_id":%q,"url":%q,"queue_item_id":%q}`, id, "https://100.95.197.99:8080/s/"+base64.RawURLEncoding.EncodeToString([]byte(id)), caller.config.ConversationID+"/"), output.Output)
+			thread, found, err := store.Thread(id)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, ThreadCreator("alice@example.com"), thread.CreatedBy)
+			require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT name FROM conversations WHERE conversation_id = $1`, id).Scan(&name))
+			assert.Equal(t, "Original title", name)
+
+			items, err := manager.queueItems(id)
+			require.NoError(t, err)
+			require.Len(t, items, 1)
+			assert.False(t, items[0].Inbound.Human)
+			assert.Equal(t, protocol.SourceSystem, items[0].Inbound.Source)
+
+			self := sessionsWriteTool(caller, origin, origin, "main", id, harness.Agents{})
+			_, err = self.Call(t.Context(), []byte(`{"session_id":"","mode":"enqueue","title":"Self","prompt":"loop","agent":""}`), nil)
+			require.ErrorContains(t, err, "is this session")
+
+			if sticky == "user" {
+				delete(origin.Metadata, protocol.InboundPrincipalEmailMetadataKey)
+
+				_, err = write.Call(t.Context(), []byte(`{"session_id":"","mode":"enqueue","title":"Missing person","prompt":"request","agent":""}`), nil)
+				require.ErrorContains(t, err, "identifiable person")
+			}
+		})
+	}
 }
 
 func TestThreadBridgeManagerWebURLUsesTsnetOrigin(t *testing.T) {
@@ -580,7 +623,7 @@ func TestThreadBridgeManagerWebURLUsesTsnetOrigin(t *testing.T) {
 func TestSessionsWriteRejectsUnavailableAgents(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "skills"), 0o755))
-	writeAppTestAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-6.1-sol\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-6.1-sol\n---\nPrompt\n")
 
 	store := newWorkspaceSessionService(t)
 	manager := newThreadBridgeManager(config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}}), store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge {
@@ -722,14 +765,6 @@ func newWorkspaceSessionService(t *testing.T) *SessionService {
 func shortTempDir(t *testing.T) string {
 	t.Helper()
 	return t.TempDir()
-}
-
-func writeAppTestAgent(t *testing.T, workspace, name, content string) {
-	t.Helper()
-
-	dir := filepath.Join(workspace, config.DefaultRuntimeDir, "agents")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, name+".md"), []byte(content), 0o600))
 }
 
 // R18: promoting an agent-written queue item keeps it non-human, whether it joins the open

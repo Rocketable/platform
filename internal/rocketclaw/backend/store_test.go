@@ -824,7 +824,8 @@ func TestSessionServiceClaimCronScheduleSerializesSamePathAndCompletionClearsRun
 
 	// The claimed run starts; a run of another file, and a reminder waiting in this one, do not count.
 	run := protocol.Conversation{ID: "cron:daily.md:run", Agent: "main", Run: &protocol.CronRun{Path: "daily.md", At: now}}
-	require.NoError(t, store.recordConversation(t.Context(), run, conversationFacts{}))
+	_, err = store.recordConversation(t.Context(), &run, conversationFacts{}, harness.AgentStickyOff)
+	require.NoError(t, err)
 	require.NoError(t, startTurnDB(t.Context(), store.db, "daily-run", run.ID, protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "job", false)))
 	require.NoError(t, store.PutScheduledMessage("follow-up", &protocol.ScheduledMessageState{ConversationID: run.ID, Agent: "main", Message: "later", DueAt: next}))
 
@@ -1652,6 +1653,84 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 		require.NoError(t, err)
 		assert.Len(t, entries, 1, conversationID)
 	}
+
+	t.Run("sticky message window", func(t *testing.T) {
+		store := newTestSessionService(t)
+		ctx := t.Context()
+		cutoff := time.Unix(1_700_000_000, 0).UTC()
+		old := cutoff.Add(-time.Hour)
+
+		for _, sticky := range []string{"user", "global"} {
+			id, _, err := store.CreateStickyConversation(ctx, protocol.Conversation{ID: sticky, Agent: sticky, CreatedBy: "alice@example.com"}, harness.AgentSticky(sticky))
+			require.NoError(t, err)
+
+			for _, item := range []struct {
+				at   time.Time
+				text string
+			}{{old, "expired"}, {cutoff, "boundary"}, {cutoff.Add(time.Second), "fresh"}} {
+				_, err := store.AppendEntryID(ctx, id, testSessionEntryAt(item.at, item.text))
+				require.NoError(t, err)
+			}
+
+			seedActiveTurn(t, store, id, "ended-"+id, testSessionEntryAt(old, "expired fallback"))
+			_, err = store.db.ExecContext(ctx, `UPDATE turns SET phase = 'done', terminal = 'stopped', created_at_unix_ns = $2 WHERE id = $1`, "ended-"+id, old.UnixNano())
+			require.NoError(t, err)
+			seedActiveTurn(t, store, id, "active-"+id, testSessionEntryAt(cutoff.Add(time.Second), "current work"))
+			require.NoError(t, store.PutThreadQueueItem("queued-"+id, &protocol.ThreadQueueItem{ID: "queued-" + id, ConversationID: id, Message: "pending", Kind: protocol.InboundKindHeld, StashAt: old}))
+		}
+
+		_, _, err := store.CreateStickyConversation(ctx, protocol.Conversation{ID: "empty-user", Agent: "user", CreatedBy: "bob@example.com"}, harness.AgentStickyUser)
+		require.NoError(t, err)
+		_, err = store.AppendEntryID(ctx, "empty-user", testSessionEntryAt(old, "expired only"))
+		require.NoError(t, err)
+		// A chat born off keeps ordinary retention even though its agent is sticky.
+		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: "born-off", Agent: "user", CreatedBy: "carol@example.com"}))
+		_, err = store.AppendEntryID(ctx, "born-off", testSessionEntryAt(old, "expired ordinary"))
+		require.NoError(t, err)
+		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: "cron:old", Agent: "global", Run: &protocol.CronRun{Path: "cron/daily.md"}}))
+		_, err = store.AppendEntryID(ctx, "cron:old", testSessionEntryAt(old, "expired hidden report"))
+		require.NoError(t, err)
+		_, err = (&Runtime{Sessions: store}).ContinueRun(ctx, "cron:old", "global", true)
+		require.NoError(t, err)
+
+		_, err = store.PruneStateBefore(ctx, cutoff, 0)
+		require.NoError(t, err)
+
+		_, recorded, err := store.Thread("born-off")
+		require.NoError(t, err)
+		require.False(t, recorded, "an expired chat born off is deleted, not kept as a sticky chat")
+
+		for id, want := range map[string]int{"user": 2, "global": 2, "empty-user": 0} {
+			_, recorded, err := store.Thread(id)
+			require.NoError(t, err)
+			require.True(t, recorded, "sticky rows survive even when every message expired")
+
+			entries, err := store.ObserveEntries(ctx, id)
+			require.NoError(t, err)
+			require.Len(t, entries, want)
+
+			transcript, err := store.ObserveTranscript(ctx, id, 0, 0, nil)
+			require.NoError(t, err)
+
+			for _, entry := range transcript {
+				raw, err := json.Marshal(entry.Entry)
+				require.NoError(t, err)
+				assert.NotContains(t, string(raw), "expired")
+			}
+
+			if id == "empty-user" {
+				continue
+			}
+
+			queue, err := store.ThreadQueueForConversation(id)
+			require.NoError(t, err)
+			require.Len(t, queue, 1, "queued input survives")
+
+			active, err := store.HasActiveTurn(ctx, id)
+			require.NoError(t, err)
+			assert.True(t, active, "a live turn survives")
+		}
+	})
 }
 
 func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
@@ -2148,6 +2227,7 @@ func newTestSessionService(t *testing.T) *SessionService {
 func newTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
 	t.Helper()
 
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "agents"), 0o755))
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
@@ -2177,7 +2257,8 @@ func recordTestConversations(tb testing.TB, s *SessionService, agent string, kin
 			facts.slackChannel, facts.slackThread = testSlackThread(id)
 		}
 
-		require.NoError(tb, s.recordConversation(tb.Context(), protocol.Conversation{ID: id, Agent: agent}, facts))
+		_, err := s.recordConversation(tb.Context(), &protocol.Conversation{ID: id, Agent: agent}, facts, harness.AgentStickyOff)
+		require.NoError(tb, err)
 	}
 }
 
@@ -2258,13 +2339,6 @@ func TestVoiceSettings(t *testing.T) {
 	store := newTestSessionService(t)
 	ctx := t.Context()
 
-	create := func(id string) {
-		t.Helper()
-		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
-	}
-	create("voice-a")
-	create("voice-b")
-
 	settings := func(username string) VoiceSettings {
 		t.Helper()
 
@@ -2273,53 +2347,65 @@ func TestVoiceSettings(t *testing.T) {
 
 		return current
 	}
-	recorded := func(id string) bool {
-		t.Helper()
-
-		_, ok, err := store.Thread(id)
-		require.NoError(t, err)
-
-		return ok
-	}
-	prune := func() {
-		t.Helper()
-
-		// The cutoff is an hour ahead: conversations carry the database's clock,
-		// which may run ahead of this process's.
-		_, err := store.PruneStateBefore(ctx, time.Now().Add(time.Hour), 0)
-		require.NoError(t, err)
-	}
 
 	assert.Equal(t, VoiceSettings{}, settings("alice"), "a person with no row gets the defaults")
 
-	require.NoError(t, store.StartVoiceConversation(ctx, "alice", "voice-a", "main"))
-	require.NoError(t, store.StartVoiceConversation(ctx, "alice", "voice-b", "other"))
-
-	voice, on := "cedar", true
+	agent, voice, on := "main", "cedar", true
+	require.NoError(t, store.UpdateVoiceSettings(ctx, "alice", &agent, nil, nil))
 	require.NoError(t, store.UpdateVoiceSettings(ctx, "alice", nil, &voice, &on))
 	require.NoError(t, store.UpdateVoiceSettings(ctx, "bob", nil, nil, &on))
-	assert.Equal(t, VoiceSettings{ConversationID: "voice-a", Agent: "main", Voice: "cedar", Transcript: true}, settings("alice"), "the first start wins; an update keeps the fields it was not given")
+	assert.Equal(t, VoiceSettings{Agent: "main", Voice: "cedar", Transcript: true}, settings("alice"), "an update keeps the fields it was not given")
 	assert.Equal(t, VoiceSettings{Transcript: true}, settings("bob"))
+}
 
-	// Startup cleanup deleted an empty current voice conversation on 2026-10-13.
-	prune()
-	assert.True(t, recorded("voice-a"), "an empty current voice conversation survives startup cleanup")
-	assert.False(t, recorded("voice-b"), "an empty conversation that is nobody's is still deleted")
+// A sticky chat is the one born for its agent, and its person for sticky: user. A chat born off never is.
+func TestStickySessions(t *testing.T) {
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	_, _, err := store.CreateStickyConversation(ctx, protocol.Conversation{ID: "anonymous", Agent: "mine"}, harness.AgentStickyUser)
+	require.ErrorContains(t, err, "identifiable person")
 
-	require.NoError(t, store.ResetVoiceConversation(ctx, "alice", "voice-b"))
-	assert.Equal(t, "voice-a", settings("alice").ConversationID, "a stale reset leaves the newer conversation current")
+	for _, conversation := range []protocol.Conversation{{ID: "plain-mine", Agent: "mine", CreatedBy: "alice"}, {ID: "plain-ours", Agent: "ours", CreatedBy: "bob"}} {
+		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, conversation))
+	}
 
-	require.NoError(t, store.ResetVoiceConversation(ctx, "alice", "voice-a"))
-	assert.Equal(t, VoiceSettings{Agent: "main", Voice: "cedar", Transcript: true}, settings("alice"))
-	prune()
-	assert.False(t, recorded("voice-a"), "after Reset, ordinary cleanup applies")
+	agents := harness.Agents{Items: map[string]harness.Agent{"mine": {Sticky: harness.AgentStickyUser}, "ours": {Sticky: harness.AgentStickyGlobal}, "free": {Sticky: harness.AgentStickyOff}}}
+	open := func(id, agent, username string) (string, bool) {
+		t.Helper()
 
-	create("voice-c")
-	require.NoError(t, store.StartVoiceConversation(ctx, "alice", "voice-c", "main"))
-	_, err := store.db.ExecContext(ctx, `DELETE FROM conversations WHERE conversation_id = 'voice-c'`)
+		got, resumed, err := store.CreateStickyConversation(ctx, protocol.Conversation{ID: id, Agent: agent, CreatedBy: username}, agents.Items[agent].Sticky)
+		require.NoError(t, err)
+
+		return got, resumed
+	}
+
+	sessions, err := store.StickySessions(ctx, "alice", agents)
 	require.NoError(t, err)
-	assert.Equal(t, VoiceSettings{Agent: "main", Voice: "cedar", Transcript: true}, settings("alice"), "a deleted conversation clears only the pointer")
-	assert.Equal(t, VoiceSettings{Transcript: true}, settings("bob"))
+	assert.Empty(t, sessions, "chats born off are not sticky chats, even with an agent that is sticky now")
+
+	for _, first := range []struct{ id, agent, username string }{{"alice-mine", "mine", "alice"}, {"bob-mine", "mine", "bob"}, {"shared", "ours", ""}} {
+		id, resumed := open(first.id, first.agent, first.username)
+		assert.Equal(t, []any{first.id, false}, []any{id, resumed}, "the first request creates the chat")
+	}
+
+	for username, want := range map[string]map[string]string{
+		"alice": {"mine": "alice-mine", "ours": "shared"},
+		"bob":   {"mine": "bob-mine", "ours": "shared"},
+		"carol": {"ours": "shared"},
+	} {
+		sessions, err := store.StickySessions(ctx, username, agents)
+		require.NoError(t, err)
+		assert.Equal(t, want, sessions, username)
+
+		for agent, selected := range want {
+			id, resumed := open("candidate", agent, username)
+			assert.Equal(t, []any{selected, true}, []any{id, resumed}, "later requests resume it")
+		}
+	}
+
+	agents.Items["mine"] = harness.Agent{Sticky: harness.AgentStickyGlobal}
+	id, resumed := open("mine-shared", "mine", "alice")
+	assert.Equal(t, []any{"mine-shared", false}, []any{id, resumed}, "a chat born for one person is not the shared chat after the agent turns global")
 }
 
 func TestWebSpaces(t *testing.T) {
@@ -2694,7 +2780,8 @@ func TestConversationKindsAtCreation(t *testing.T) {
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "job", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/daily.md"}}))
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: oneOff, Agent: "job", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/once.md", OneOff: true}}))
 	require.NoError(t, runtime.CreateConversation(ctx, protocol.Conversation{ID: "web:" + run, Agent: "main", CreatedBy: "alice"}))
-	require.NoError(t, runtime.ContinueRun(ctx, run, "web:"+run))
+	_, err := runtime.ContinueRun(ctx, run, "web:"+run, false)
+	require.NoError(t, err)
 	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "job", PrivateConversationID: "private", ManagedConversationID: "mcp-chat"}))
 	require.NoError(t, store.startSubagent(ctx, "web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "helper"}))
 

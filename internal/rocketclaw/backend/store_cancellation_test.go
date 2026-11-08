@@ -60,7 +60,7 @@ func TestSessionOperationsRejectCanceledContext(t *testing.T) {
 			case "page":
 				_, _, err = store.Page(ctx, "main", PageData, "note")
 			case "continue run":
-				err = runtime.ContinueRun(ctx, "run", "chat")
+				_, err = runtime.ContinueRun(ctx, "run", "chat", false)
 			case "external MCP metadata":
 				_, _, err = store.externalMCPMetadataEntry(ctx, "chat")
 			}

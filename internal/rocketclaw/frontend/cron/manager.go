@@ -600,6 +600,14 @@ func loadDefinitionsIn(cfg *config.LockedConfig, runtimeDir string) ([]definitio
 			return nil, fmt.Errorf("%s: agent %s is an easy agent; schedule it with its routines", relativePath, definition.agent)
 		}
 
+		if agents.Items[definition.agent].Sticky == harness.AgentStickyUser {
+			return nil, fmt.Errorf("%s: agent %s is sticky: user; a cron cannot run it", relativePath, definition.agent)
+		}
+
+		if agent := agents.Items[definition.agent]; agent.Sticky == harness.AgentStickyGlobal && definition.space != "" && !strings.EqualFold(definition.space, agent.Space) {
+			return nil, fmt.Errorf("%s: sticky: global agent %s requires the cron to use its space %s", relativePath, definition.agent, agent.Space)
+		}
+
 		definitions = append(definitions, definition)
 	}
 

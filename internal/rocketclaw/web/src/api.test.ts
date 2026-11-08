@@ -112,7 +112,7 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
     expect(await queries.skills({ agent: "main" }).queryFn({ signal })).toEqual([{ name: "review" }]);
     await queries.skills().queryFn({ signal });
     expect(await mutations.prompt({ id: "visible", text: "  exact\n", delivery: "QUEUE", attachmentIds: ["second", "first"] })).toBe("private\nreport");
-    expect(await mutations.createSession({ agent: "main" })).toBe("web-session:new");
+    expect(await mutations.createSession({ agent: "main" })).toEqual({ id: "web-session:new" });
     expect(await mutations.runCron({ stem: "daily" })).toBe("cron:id");
     expect(await queries.protocol().queryFn({ signal })).toBe("hash");
     expect(await queries.identity().queryFn({ signal })).toEqual({ username: "alice", principal: "Alice Smith" });

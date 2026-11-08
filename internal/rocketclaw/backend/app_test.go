@@ -105,7 +105,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "rocketclaw runtime assets reloaded", reloaded)
 
-			_, err = bridge.threads.createSession(rt.RunCtx, &threadStart{agent: "missing"}, nil, "", nil, nil)
+			_, _, err = bridge.threads.createSession(rt.RunCtx, &threadStart{agent: "missing"}, nil, "", nil, nil)
 			require.ErrorContains(t, err, `agent "missing" is not configured`)
 
 			msg := bridge.config.RequestRestart.restart("test restart")

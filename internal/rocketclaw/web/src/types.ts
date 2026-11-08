@@ -25,9 +25,11 @@ export type SearchSessionsResponse = { terms: { key: string; text: string; start
 export type SessionBatch = { sessions?: Session[]; owner?: string; upstreamSuccess?: boolean; opencodeServers?: Remote["servers"]; agentTags?: Record<string, { tags?: string[] }>; version?: string; since?: string; removed?: string[] };
 export type AgentChoices = { agents: Agent[]; currentAgent: string };
 export type CronJob = { stem: string; status: string; lastRun: string; nextRun: string; schedule?: string; body?: string; agent?: string; upcoming?: string[]; origin?: string; space?: string };
-// VoiceSettings is the signed-in person's voice state, kept by the server; conversationId is empty when none is current.
-export type VoiceSettings = { conversationId: string; agent: string; voice: string; transcript: boolean };
-export type Agent = { name: string; model?: string; reasoning?: string; description?: string; verbosity?: string; prompt?: string; permissions?: string; origin?: string; customShell?: string; voices?: string[]; space?: string; rocketclaw?: string };
+// VoiceSettings is the signed-in person's voice state, kept by the server; a call goes to agent's sticky session.
+export type VoiceSettings = { agent: string; voice: string; transcript: boolean };
+// sticky is "user" or "global" for an agent with one session per person or one in all; stickySession is the one a
+// new session resumes.
+export type Agent = { name: string; model?: string; reasoning?: string; description?: string; verbosity?: string; prompt?: string; permissions?: string; origin?: string; customShell?: string; voices?: string[]; space?: string; rocketclaw?: string; sticky?: string; stickySession?: string };
 export type Skill = { name: string; description?: string; license?: string; compatibility?: string; content?: string; origin?: string };
 export type Workflow = { name: string; description?: string };
 export type PageEntry = { agent: string; space?: string; path: string };

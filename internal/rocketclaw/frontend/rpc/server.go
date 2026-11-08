@@ -1090,8 +1090,14 @@ func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*R
 		return nil, fmt.Errorf("run web cron job: %w", status.Error(codes.PermissionDenied, "this cron or its agent is outside your spaces"))
 	}
 
-	id := rand.Text()
-	if err := s.backend.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: job.Agent, CreatedBy: principal, Space: space}); err != nil {
+	if agents.Items[job.Agent].Sticky == harness.AgentStickyUser {
+		return nil, fmt.Errorf("run web cron job: %w", status.Error(codes.FailedPrecondition, "a cron cannot run a sticky: user agent"))
+	}
+
+	conversation := protocol.Conversation{ID: rand.Text(), Agent: job.Agent, CreatedBy: principal, Space: space}
+
+	id, _, err := s.sessions.CreateStickyConversation(ctx, conversation, agents.Items[job.Agent].Sticky)
+	if err != nil {
 		return nil, fmt.Errorf("create web cron conversation: %w", err)
 	}
 
@@ -1237,7 +1243,7 @@ func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*L
 }
 
 func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse, error) {
-	_, limit, err := s.spaceLimit(ctx)
+	username, limit, err := s.spaceLimit(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1273,10 +1279,19 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 				return nil, fmt.Errorf("web channel choices: %w", err)
 			}
 		}
+
+		if allowed, err = s.sameKind(ctx, definitions, thread, allowed); err != nil {
+			return nil, err
+		}
 	}
 
 	allowed = sameSpace(definitions, response.CurrentAgent, slices.DeleteFunc(allowed, func(name string) bool { return !limit.AllowsAgent(name) }))
 	cfg := s.cfg.Clone()
+
+	sticky, err := s.sessions.StickySessions(ctx, username, definitions)
+	if err != nil {
+		return nil, fmt.Errorf("list web agents: %w", err)
+	}
 
 	// Keep the allowed order: Slack channels list their default agent first.
 	for _, name := range allowed {
@@ -1298,13 +1313,13 @@ func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse
 			shell = "emulated"
 		}
 
-		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt, CustomShell: shell, Voices: voices, Space: agent.Space})
+		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt, CustomShell: shell, Voices: voices, Space: agent.Space, Sticky: string(agent.Sticky), StickySession: sticky[name]})
 	}
 
 	return response, nil
 }
 
-// sessionAgentChoices is agentChoices narrowed to the space of the session's agent, as $agent offers them.
+// sessionAgentChoices is agentChoices narrowed to the session's agent's stickiness and space, as $agent offers them.
 func (s *Server) sessionAgentChoices(ctx context.Context, id string) ([]string, error) {
 	choices, err := s.agentChoices(ctx, id)
 	if err != nil {
@@ -1321,7 +1336,29 @@ func (s *Server) sessionAgentChoices(ctx context.Context, id string) ([]string, 
 		return nil, fmt.Errorf("load web agents: %w", err)
 	}
 
+	if choices, err = s.sameKind(ctx, definitions, thread, choices); err != nil {
+		return nil, err
+	}
+
 	return sameSpace(definitions, thread.Agent, choices), nil
+}
+
+// sameKind keeps the session's own agent and the agents it may switch to: those whose sticky setting is
+// the kind the session was born as, so an ordinary session takes only sticky: off agents. A sticky session
+// also skips agents that already have that kind of session for its person, or for everyone with global.
+func (s *Server) sameKind(ctx context.Context, definitions harness.Agents, thread backend.ThreadState, allowed []string) ([]string, error) {
+	var taken map[string]string
+
+	if thread.Sticky() != harness.AgentStickyOff {
+		var err error
+		if taken, err = s.sessions.StickySessions(ctx, string(thread.CreatedBy), definitions); err != nil {
+			return nil, fmt.Errorf("read sticky sessions: %w", err)
+		}
+	}
+
+	return slices.DeleteFunc(allowed, func(name string) bool {
+		return name != thread.Agent && (definitions.Items[name].Sticky != thread.Sticky() || taken[name] != "")
+	}), nil
 }
 
 // sameSpace keeps the allowed agents in current's space, ignoring case, when current has one.
@@ -1424,18 +1461,15 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 		return nil, err
 	}
 
-	if source != "" && len(choices) > 0 {
-		request.Agent = choices[0]
-	}
-
-	if !slices.Contains(choices, request.Agent) {
-		return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.InvalidArgument, "select a loaded agent"))
+	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
+	if err != nil {
+		return nil, fmt.Errorf("load web agents: %w", err)
 	}
 
 	id := rand.Text()
 
 	if source != "" {
-		_, recorded, err := s.sessions.Thread(source)
+		thread, recorded, err := s.sessions.Thread(source)
 		if err != nil {
 			return nil, fmt.Errorf("read cron conversation: %w", err)
 		}
@@ -1443,17 +1477,64 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 		if !recorded {
 			return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.NotFound, "cron run is not recorded"))
 		}
+
+		if agents.Items[thread.Agent].Sticky == harness.AgentStickyGlobal {
+			request.Agent = thread.Agent
+		} else {
+			// The continuation is born an ordinary chat, so it takes only sticky: off agents.
+			choices = slices.DeleteFunc(choices, func(name string) bool { return agents.Items[name].Sticky != harness.AgentStickyOff })
+
+			request.Agent = ""
+			if len(choices) > 0 {
+				request.Agent = choices[0]
+			}
+		}
 		// CreateConversation preserves existing rows, so continuing again returns the same chat.
 		id = "web:" + source
 	}
 
-	// A session is born in its cron's or agent's space, else in the space the person is in.
-	agents, _, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.Clone().RuntimeDirName())
-	if err != nil {
-		return nil, fmt.Errorf("load web agents: %w", err)
+	if !slices.Contains(choices, request.Agent) {
+		return nil, fmt.Errorf("create web conversation: %w", status.Error(codes.InvalidArgument, "select a loaded agent"))
 	}
 
-	space := agents.Items[request.Agent].Space
+	space, err := s.birthSpace(ctx, agents, request.Agent, path, request.SpaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	conversation := protocol.Conversation{ID: id, Agent: request.Agent, CreatedBy: principal, Space: space}
+	sticky := agents.Items[request.Agent].Sticky
+
+	var resumed bool
+	if sticky != harness.AgentStickyOff {
+		id, resumed, err = s.sessions.CreateStickyConversation(ctx, conversation, sticky)
+	} else {
+		err = s.backend.CreateConversation(ctx, conversation)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("create web conversation: %w", err)
+	}
+
+	if source != "" {
+		bound, err := s.backend.ContinueRun(ctx, source, id, sticky != harness.AgentStickyOff)
+		if err != nil {
+			return nil, fmt.Errorf("continue cron run: %w", err)
+		}
+
+		// An ordinary continuation opens its own chat; a sticky one opens where the run is bound.
+		if sticky != harness.AgentStickyOff {
+			id = bound
+		}
+	}
+
+	return &CreateSessionResponse{Id: id, Resumed: resumed}, nil
+}
+
+// birthSpace is the space a new session with agent is born in: its cron's (path) or agent's, else the one the
+// person is in, spaceID.
+func (s *Server) birthSpace(ctx context.Context, agents harness.Agents, agent, path, spaceID string) (string, error) {
+	space := agents.Items[agent].Space
 
 	if path != "" {
 		if job, err := s.cronjobs.LoadOneOffCronjob(cronfrontend.Stem(path)); err == nil {
@@ -1461,28 +1542,20 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 		}
 	}
 
-	if space == "" {
-		spaces, err := s.sessions.Spaces(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("read web spaces: %w", err)
-		}
-
-		if i := slices.IndexFunc(spaces, func(item backend.Space) bool { return item.ID == request.SpaceId }); i >= 0 {
-			space = spaces[i].Name
-		}
+	if space != "" {
+		return space, nil
 	}
 
-	if err := s.backend.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: request.Agent, CreatedBy: principal, Space: space}); err != nil {
-		return nil, fmt.Errorf("create web conversation: %w", err)
+	spaces, err := s.sessions.Spaces(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read web spaces: %w", err)
 	}
 
-	if source != "" {
-		if err := s.backend.ContinueRun(ctx, source, id); err != nil {
-			return nil, fmt.Errorf("continue cron run: %w", err)
-		}
+	if i := slices.IndexFunc(spaces, func(item backend.Space) bool { return item.ID == spaceID }); i >= 0 {
+		return spaces[i].Name, nil
 	}
 
-	return &CreateSessionResponse{Id: id}, nil
+	return "", nil
 }
 
 func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptResponse, error) {

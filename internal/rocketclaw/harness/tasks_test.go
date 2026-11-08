@@ -698,6 +698,29 @@ func TestAdvancedTaskRefusesEasyAgent(t *testing.T) {
 	require.EqualError(t, err, "agent type main is an easy agent, which task cannot run; write to its sessions with rocketclaw_sessions instead")
 }
 
+// A sticky agent is top-level: task runs it only for itself, never for another agent.
+func TestTaskRunsStickyAgentOnlyForItself(t *testing.T) {
+	room := testAgent("room")
+	room.Sticky = AgentStickyGlobal
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"room": room, "child": testAgent("child")}})
+	factory.agent = testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"task": permissionAllow}))
+	factory.agent.Name = "boss"
+
+	require.NotContains(t, factory.taskDescription(), "- room:")
+	require.Contains(t, factory.taskDescription(), "- child:")
+
+	_, err := factory.subagentWrite(t.Context(), &taskParams{SubagentType: "room", Prompt: "look"})
+	require.EqualError(t, err, "agent type room is a sticky: global agent, which only it delegates to; write to its session with rocketclaw_sessions instead")
+
+	factory.agent = &room
+	factory.agent.Permission = permissionSetForActions(map[string]PermissionAction{"task": permissionAllow})
+	require.Contains(t, factory.taskDescription(), "- room:")
+
+	write, err := factory.subagentWrite(t.Context(), &taskParams{SubagentType: "room", Prompt: "look"})
+	require.NoError(t, err)
+	require.Equal(t, "room", write.Agent)
+}
+
 // taskKey is the subagent key of a new root task call keyed turnID + "/call/" + callID.
 func taskKey(turnID, callID string) string {
 	sum := sha256.Sum256([]byte(turnID + "/call/" + callID))

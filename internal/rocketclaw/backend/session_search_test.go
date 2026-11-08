@@ -55,14 +55,16 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 		searchChatW: {kind: KindWebChat},
 		searchChatD: {kind: KindWebChat, cronRun: daily}, searchChatE: {kind: KindWebChat, cronRun: weekly}, "external_mcp:private": {kind: KindExternalMCPRun},
 	} {
-		require.NoError(t, s.recordConversation(ctx, protocol.Conversation{ID: id, Space: map[string]string{searchChatA: "Blue garden", searchChatW: "Blue garden", searchChatB: "Amber"}[id]}, facts))
+		_, err := s.recordConversation(ctx, &protocol.Conversation{ID: id, Space: map[string]string{searchChatA: "Blue garden", searchChatW: "Blue garden", searchChatB: "Amber"}[id]}, facts, harness.AgentStickyOff)
+		require.NoError(t, err)
 	}
 
 	for id, run := range map[string]*protocol.CronRun{
 		daily:  {Path: "cron/daily.md", At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 		weekly: {Path: "cron/Weekly report.md", At: time.Date(2026, 1, 3, 3, 4, 5, 0, time.UTC), OneOff: true},
 	} {
-		require.NoError(t, s.recordConversation(ctx, protocol.Conversation{ID: id, Run: run}, conversationFacts{}))
+		_, err := s.recordConversation(ctx, &protocol.Conversation{ID: id, Run: run}, conversationFacts{}, harness.AgentStickyOff)
+		require.NoError(t, err)
 	}
 
 	for _, chat := range []struct {
@@ -821,8 +823,9 @@ func TestSpaceLimit(t *testing.T) {
 		{"loose-unborn", "loose", ""},
 		{"switched", "main-agent", "Ops"},
 	} {
-		require.NoError(t, s.recordConversation(ctx, protocol.Conversation{ID: chat.id, Agent: chat.agent, Space: chat.space}, conversationFacts{kind: KindWebChat}))
-		_, err := s.AppendEntryID(ctx, chat.id, testReplayEntry(fmt.Sprintf(`{"type":"message","role":"user","prompt_header":%s,"content":"needle"}`, jsonString(fmt.Sprintf("[Web principal=%q]", "Writer "+chat.id)))))
+		_, err := s.recordConversation(ctx, &protocol.Conversation{ID: chat.id, Agent: chat.agent, Space: chat.space}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
+		require.NoError(t, err)
+		_, err = s.AppendEntryID(ctx, chat.id, testReplayEntry(fmt.Sprintf(`{"type":"message","role":"user","prompt_header":%s,"content":"needle"}`, jsonString(fmt.Sprintf("[Web principal=%q]", "Writer "+chat.id)))))
 		require.NoError(t, err)
 	}
 

@@ -19,71 +19,106 @@ import (
 
 // CreateConversation records an explicit ID, a Web chat or a cron run, without changing existing selection.
 func (r *Runtime) CreateConversation(ctx context.Context, conversation protocol.Conversation) error {
-	return r.Sessions.recordConversation(ctx, conversation, conversationFacts{kind: KindWebChat})
+	_, err := r.Sessions.recordConversation(ctx, &conversation, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
+	return err
 }
 
-func (s *SessionService) recordConversation(ctx context.Context, conversation protocol.Conversation, facts conversationFacts) error {
+// CreateStickyConversation finds or creates the agent's sticky Web session and reports whether the
+// request resumed an existing session.
+func (s *SessionService) CreateStickyConversation(ctx context.Context, conversation protocol.Conversation, sticky harness.AgentSticky) (id string, resumed bool, err error) {
+	created, err := s.recordConversation(ctx, &conversation, conversationFacts{kind: KindWebChat}, sticky)
+
+	return conversation.ID, !created, err
+}
+
+// recordConversation creates conversation, or for a sticky agent finds or creates its session, and
+// reports whether it created the row.
+func (s *SessionService) recordConversation(ctx context.Context, conversation *protocol.Conversation, facts conversationFacts, sticky harness.AgentSticky) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin conversation creation: %w", err)
+		return false, fmt.Errorf("begin conversation creation: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := lockSessionHistory(ctx, tx, conversation.ID); err != nil {
-		return err
+	dao := stateDAO{db: tx}
+
+	if sticky != harness.AgentStickyOff {
+		id, err := dao.stickyConversationID(ctx, conversation.Agent, conversation.CreatedBy, sticky)
+		if err != nil {
+			return false, err
+		}
+
+		if id != "" {
+			conversation.ID = id
+			return false, nil
+		}
 	}
 
-	created, err := (stateDAO{db: tx}).createConversation(ctx, conversation, facts)
+	if err := lockSessionHistory(ctx, tx, conversation.ID); err != nil {
+		return false, err
+	}
+
+	created, err := dao.createConversation(ctx, *conversation, facts, sticky)
 	if err != nil {
-		return err
+		return false, err
+	}
+
+	// A concurrent first request created the sticky chat while this one waited for it.
+	if !created && sticky != harness.AgentStickyOff {
+		if conversation.ID, err = dao.stickyConversationID(ctx, conversation.Agent, conversation.CreatedBy, sticky); err != nil {
+			return false, err
+		}
 	}
 
 	if created {
 		if _, err := s.reconcileShadows(ctx, tx, conversation.ID, conversation.Agent); err != nil {
-			return err
+			return false, err
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit conversation creation: %w", err)
+		return false, fmt.Errorf("commit conversation creation: %w", err)
 	}
 
-	return nil
+	return created, nil
 }
 
 // ContinueRun has a conversation show, and search find, a hidden run's history before its own,
 // taking the run's preview when it first does, and adopts the run when it reports to no
-// conversation. Nothing is copied, and continuing again changes nothing.
-func (r *Runtime) ContinueRun(ctx context.Context, run, conversationID string) error {
+// conversation. A shared destination shows the bound run without becoming a per-run continuation.
+// Nothing is copied, and continuing again changes nothing. The returned ID is the bound destination.
+func (r *Runtime) ContinueRun(ctx context.Context, run, conversationID string, shared bool) (string, error) {
 	tx, err := r.Sessions.beginStateTx(ctx, "run continuation")
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if err := lockHistories(ctx, tx, []string{run, conversationID}); err != nil {
-		return err
+		return "", err
 	}
 
-	if _, err := execState(ctx, tx, "link continued run", `UPDATE conversations c SET continues = $2, cron_run = $2,
+	if !shared {
+		if _, err := execState(ctx, tx, "link continued run", `UPDATE conversations c SET continues = $2, cron_run = $2,
     preview = COALESCE(p.preview, c.preview), last_updated = COALESCE(p.last_updated, c.last_updated) FROM conversations p WHERE c.conversation_id = $1 AND c.continues IS NULL AND p.conversation_id = $2`, conversationID, run); err != nil {
-		return err
-	}
+			return "", err
+		}
 
-	if err := refreshPrincipals(ctx, tx, []string{conversationID}); err != nil {
-		return err
+		if err := refreshPrincipals(ctx, tx, []string{conversationID}); err != nil {
+			return "", err
+		}
 	}
 
 	owner, schedules, err := (stateDAO{db: tx}).bindRun(ctx, run, conversationID)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit run continuation: %w", err)
+		return "", fmt.Errorf("commit run continuation: %w", err)
 	}
 
-	return r.threads.armSchedules(ctx, owner, schedules)
+	return owner, r.threads.armSchedules(ctx, owner, schedules)
 }
 
 // SlackThread returns the Slack channel and thread conversationID was stored with: both for a

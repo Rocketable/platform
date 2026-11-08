@@ -150,7 +150,8 @@ func (f *toolFactory) taskDescription() string {
 func (f *toolFactory) availableSubagentsDescription() string {
 	names := make([]string, 0, len(f.agents.Items))
 	for name := range f.agents.Items {
-		if f.agent == nil || f.agents.Items[name].Mode == AgentModeEasy || f.agent.Permission.evaluate("task", name).Action != permissionAllow {
+		agent := f.agents.Items[name]
+		if f.agent == nil || agent.Mode == AgentModeEasy || f.agent.Permission.evaluate("task", name).Action != permissionAllow || !delegable(&agent, f.agent) {
 			continue
 		}
 
@@ -253,6 +254,12 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 	return TaskResult(last), nil
 }
 
+// delegable reports whether delegator may run agent as its subagent: a sticky agent is top-level, so only it
+// delegates to itself, and no child session ever runs a sticky agent of another kind than its parent's.
+func delegable(agent, delegator *Agent) bool {
+	return agent.Sticky == AgentStickyOff || delegator != nil && agent.Name == delegator.Name
+}
+
 // subagentWrite is the write, but its key, that delegates params: to the agent type they name, never an easy
 // agent (A4), or, for an easy agent, to that agent on the model they pick from its subagents, with the tools
 // they name from its own, or all of its own when they name none (R7).
@@ -265,6 +272,10 @@ func (f *toolFactory) subagentWrite(ctx context.Context, params *taskParams) (Su
 
 		if agent.Mode == AgentModeEasy {
 			return SubagentWrite{}, fmt.Errorf("agent type %s is an easy agent, which task cannot run; write to its sessions with rocketclaw_sessions instead", agent.Name)
+		}
+
+		if !delegable(&agent, f.agent) {
+			return SubagentWrite{}, fmt.Errorf("agent type %s is a sticky: %s agent, which only it delegates to; write to its session with rocketclaw_sessions instead", agent.Name, agent.Sticky)
 		}
 
 		delegator := ""

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,8 +31,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -180,7 +183,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	require.NoError(t, root.Mkdir("agents", 0o700))
 
-	for name, model := range map[string]string{"main": "gpt-6.1-sol", "nokey": "nokey/gpt-6.1-sol", "chat": "chat/gpt-6.1-sol", "stale": "stale/gpt-6.1-sol", "worker": "worker/test-model"} {
+	for name, model := range map[string]string{"main": "gpt-6.1-sol\nsticky: user", "nokey": "nokey/gpt-6.1-sol", "chat": "chat/gpt-6.1-sol", "stale": "stale/gpt-6.1-sol", "worker": "worker/test-model"} {
 		require.NoError(t, root.WriteFile(filepath.Join("agents", name+".md"), []byte("---\ndescription: Voice fixture\nmodel: "+model+"\npermission: {}\n---\nReply plainly.\n"), 0o600))
 	}
 
@@ -769,92 +772,182 @@ func TestVoice(t *testing.T) {
 		bob := func(request *VoiceSettingsRequest) (*VoiceSettingsResponse, error) {
 			return h.server.voiceSettings(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.2")), request)
 		}
-		recorded := func(id string) bool {
-			t.Helper()
-
-			thread, ok, err := h.rt.Sessions.Thread(id)
-			require.NoError(t, err)
-			assert.Equal(t, "alice", string(thread.CreatedBy))
-
-			return ok
-		}
 
 		code, settings := post(`{}`)
 		require.Equal(t, http.StatusOK, code)
-		assert.Empty(t, settings.GetConversationId(), "a person with no row has no voice conversation")
+		assert.Empty(t, settings.GetAgent(), "a person with no row gets the defaults")
 
-		code, settings = post(`{"action":"START","agent":"main"}`)
+		code, settings = post(`{"action":"UPDATE","agent":"main","voice":"cedar","transcript":true}`)
 		require.Equal(t, http.StatusOK, code)
+		assert.Equal(t, []any{"main", "cedar", true}, []any{settings.GetAgent(), settings.GetVoice(), settings.GetTranscript()})
 
-		first := settings.GetConversationId()
-		require.NotEmpty(t, first)
-		assert.Equal(t, "main", settings.GetAgent())
-		assert.True(t, recorded(first))
+		for _, body := range []string{`{"action":"UPDATE","agent":"nokey"}`, `{"action":"UPDATE","agent":"ghost"}`, `{"action":"UPDATE","voice":"no-such-voice"}`, `{"action":"START","agent":"main"}`} {
+			code, _ = post(body)
+			assert.Equal(t, http.StatusBadRequest, code, "voice offers only sticky: user agents and offered voices, and starts no conversation: %s", body)
+		}
 
-		_, settings = post(`{"action":"START","agent":"nokey"}`)
-		assert.Equal(t, first, settings.GetConversationId(), "another device of the same person gets the current conversation")
-		assert.Equal(t, "main", settings.GetAgent())
-
-		_, err := bob(&VoiceSettingsRequest{Action: VoiceSettingsAction_START, Agent: new("ghost")})
-		require.ErrorContains(t, err, "select a loaded agent")
-		answer, err := bob(&VoiceSettingsRequest{})
-		require.NoError(t, err)
-		assert.Empty(t, answer.GetConversationId(), "a refused start creates nothing")
-
-		code, settings = post(`{"action":"UPDATE","voice":"cedar","transcript":true}`)
-		require.Equal(t, http.StatusOK, code)
-		assert.Equal(t, []any{first, "main", "cedar", true}, []any{settings.GetConversationId(), settings.GetAgent(), settings.GetVoice(), settings.GetTranscript()})
-
-		code, _ = post(`{"action":"UPDATE","voice":"no-such-voice"}`)
-		assert.Equal(t, http.StatusBadRequest, code)
-		code, _ = post(`{"action":"UPDATE","agent":"ghost"}`)
-		assert.Equal(t, http.StatusBadRequest, code)
-		code, _ = post(`{"action":"SHOUT"}`)
-		assert.Equal(t, http.StatusBadRequest, code, "an unknown action is refused before the server")
-
-		answer, err = bob(&VoiceSettingsRequest{Action: VoiceSettingsAction_UPDATE, Voice: new("miko")})
+		answer, err := bob(&VoiceSettingsRequest{Action: VoiceSettingsAction_UPDATE, Voice: new("miko")})
 		require.NoError(t, err)
 		assert.Equal(t, "miko", answer.GetVoice())
 
 		_, settings = post(`{}`)
-		assert.Equal(t, []any{"cedar", true}, []any{settings.GetVoice(), settings.GetTranscript()}, "one person's update never changes another's settings")
+		assert.Equal(t, []any{"main", "cedar", true}, []any{settings.GetAgent(), settings.GetVoice(), settings.GetTranscript()}, "one person's update never changes another's settings")
+	}) {
+		return
+	}
 
-		// The 2026-10-13 failure: a call that admits no hand-off leaves the voice
-		// conversation empty, and startup cleanup deleted it.
-		_, err = h.rt.Sessions.PruneStateBefore(t.Context(), time.Now(), 0)
+	if !t.Run("sticky sessions", func(t *testing.T) {
+		alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+		bob := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.2"))
+		create := func(ctx context.Context, agent string) *CreateSessionResponse {
+			t.Helper()
+
+			created, err := h.server.createSession(ctx, &CreateSessionRequest{Agent: agent})
+			require.NoError(t, err)
+
+			return created
+		}
+
+		cfg := h.server.cfg.Clone()
+		root, err := os.OpenRoot(cfg.Workspace)
 		require.NoError(t, err)
-		require.True(t, recorded(first))
+		t.Cleanup(func() { require.NoError(t, root.Close()) })
+		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "room.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: global\npermission: {}\n---\nReply plainly.\n"), 0o600))
 
-		response, err := http.Post(h.url+"/api/Voice", "application/json", strings.NewReader(`{"conversationId":"`+first+`","sdp":"offer-reject"}`))
+		// The fixture's main chat is alice's, but it was born off, so it is not her sticky session.
+		mine, bobs := create(alice, "main"), create(bob, "main")
+		assert.Equal(t, []any{false, false}, []any{mine.Id == "main", mine.Resumed}, "a chat born off is never a sticky session")
+		assert.False(t, bobs.Resumed, "another person's session is not theirs")
+		assert.Equal(t, &CreateSessionResponse{Id: mine.Id, Resumed: true}, create(alice, "main"), "a sticky: user agent resumes the person's own session")
+		assert.Equal(t, &CreateSessionResponse{Id: bobs.Id, Resumed: true}, create(bob, "main"))
+
+		room := create(alice, "room")
+		assert.False(t, room.Resumed)
+		assert.Equal(t, &CreateSessionResponse{Id: room.Id, Resumed: true}, create(bob, "room"), "a sticky: global agent resumes anyone's session")
+
+		plain := create(alice, "nokey")
+		assert.NotEqual(t, plain.Id, create(alice, "nokey").Id, "sticky: off creates a session every time")
+
+		catalog, err := h.server.listAgents(bob, "")
 		require.NoError(t, err)
-		data, err := io.ReadAll(response.Body)
+
+		offered := map[string][2]string{}
+		for _, agent := range catalog.Agents {
+			offered[agent.Name] = [2]string{agent.Sticky, agent.StickySession}
+		}
+
+		assert.Equal(t, [2]string{"user", bobs.Id}, offered["main"])
+		assert.Equal(t, [2]string{"global", room.Id}, offered["room"])
+		assert.Equal(t, [2]string{"", ""}, offered["nokey"])
+
+		for id, want := range map[string]string{bobs.Id: "main, voice", plain.Id: "chat, nokey, stale, worker"} {
+			reply, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "$agent"})
+			require.NoError(t, err)
+			assert.Equal(t, want, reply.PrivateText, "a sticky session keeps its agent, and no other session switches to a sticky one")
+		}
+
+		for id, agent := range map[string]string{bobs.Id: "nokey", plain.Id: "main"} {
+			_, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "$agent " + agent})
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+		}
+
+		_, err = h.server.forkSession(bob, &ForkSessionRequest{Id: bobs.Id})
+		assert.Equal(t, codes.FailedPrecondition, status.Code(err), "a sticky agent's session cannot be forked")
+
+		// A session switches only to agents of the kind it was born as, never to one whose sticky session its
+		// person already has, even after its own agent stops being sticky.
+		aide := filepath.Join(cfg.RuntimeDirName(), "agents", "aide.md")
+		require.NoError(t, root.WriteFile(aide, []byte("---\nmodel: gpt-6.1-sol\nsticky: user\npermission: {}\n---\nReply plainly.\n"), 0o600))
+		create(alice, "aide")
+
+		for id, want := range map[string]string{mine.Id: "main, voice", bobs.Id: "aide, main, voice"} {
+			reply, err := h.server.prompt(alice, &PromptRequest{Id: id, Text: "$agent"})
+			require.NoError(t, err)
+			assert.Equal(t, want, reply.PrivateText, "alice already has a sticky session with aide; bob does not")
+		}
+
+		_, err = h.server.prompt(alice, &PromptRequest{Id: bobs.Id, Text: "$agent aide"})
 		require.NoError(t, err)
-		require.NoError(t, response.Body.Close())
-		assert.Contains(t, string(data), "openai voice request failed with HTTP 401", "the call reaches OpenAI instead of failing as not recorded")
+		require.NoError(t, root.WriteFile(aide, []byte("---\nmodel: gpt-6.1-sol\npermission: {}\n---\nReply plainly.\n"), 0o600))
 
-		h.replies <- voiceModelText("rv", "Ready.")
-
-		response, err = http.Post(h.url+"/api/Prompt", "application/json", strings.NewReader(`{"id":"`+first+`","text":"hello"}`))
+		reply, err := h.server.prompt(alice, &PromptRequest{Id: bobs.Id, Text: "$agent"})
 		require.NoError(t, err)
-		require.NoError(t, response.Body.Close())
-		assert.Equal(t, http.StatusOK, response.StatusCode)
-		<-h.requests
+		assert.Equal(t, "aide, main, voice", reply.PrivateText, "a session born sticky: user still takes only sticky: user agents")
 
-		_, settings = post(`{"action":"RESET","conversationId":"stale"}`)
-		assert.Equal(t, first, settings.GetConversationId(), "a stale reset leaves the current conversation")
+		_, err = h.server.prompt(alice, &PromptRequest{Id: bobs.Id, Text: "$agent nokey"})
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	}) {
+		return
+	}
 
-		_, settings = post(`{"action":"RESET","conversationId":"` + first + `"}`)
-		assert.Equal(t, []any{"", "main", "cedar", true}, []any{settings.GetConversationId(), settings.GetAgent(), settings.GetVoice(), settings.GetTranscript()})
+	if !t.Run("concurrent sticky creation", func(t *testing.T) {
+		cfg := h.server.cfg.Clone()
+		db, err := sql.Open("pgx", cfg.DatabaseURL)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-		_, settings = post(`{"action":"START","agent":"main"}`)
-		assert.NotEqual(t, first, settings.GetConversationId(), "after Reset, Start creates a fresh conversation")
-		assert.True(t, recorded(first), "Reset keeps the old conversation")
+		root, err := os.OpenRoot(cfg.Workspace)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+		for _, sticky := range []string{"user", "global"} {
+			t.Run(sticky, func(t *testing.T) {
+				name := "race-" + sticky
+				require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: "+sticky+"\n---\nHelp."), 0o600))
+
+				// Block inserts but not lookups, so every request reaches the same first-creation race.
+				blocker, err := db.BeginTx(t.Context(), nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = blocker.Rollback() })
+				_, err = blocker.ExecContext(t.Context(), `LOCK TABLE conversations IN SHARE MODE`)
+				require.NoError(t, err)
+
+				responses := make([]*CreateSessionResponse, 6)
+
+				var requests errgroup.Group
+				for i := range responses {
+					requests.Go(func() error {
+						ip := "127.0.0.1"
+						if sticky == "global" && i%2 == 0 {
+							ip = "192.0.2.2"
+						}
+
+						ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", ip))
+						response, err := h.server.createSession(ctx, &CreateSessionRequest{Agent: name})
+						responses[i] = response
+
+						return err
+					})
+				}
+
+				require.Eventually(t, func() bool {
+					var waiting int
+
+					err := db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting)
+					require.NoError(t, err)
+
+					return waiting >= len(responses)
+				}, 10*time.Second, 10*time.Millisecond)
+				require.NoError(t, blocker.Commit())
+				require.NoError(t, requests.Wait())
+
+				ids, resumed := map[string]bool{}, 0
+				for _, response := range responses {
+					ids[response.Id] = true
+					if response.Resumed {
+						resumed++
+					}
+				}
+
+				require.Len(t, ids, 1, "concurrent first creations must all return the same sticky session")
+				require.Equal(t, len(responses)-1, resumed, "exactly one request creates; every other request resumes")
+			})
+		}
 	}) {
 		return
 	}
 
 	t.Run("one call per person", func(t *testing.T) {
-		// An earlier subtest's retention pass removed the fixture chats, so this one makes its own.
 		for _, id := range []string{"second", "shared"} {
 			require.NoError(t, h.rt.CreateConversation(t.Context(), protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
 		}

@@ -399,7 +399,7 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "assistant", "---\ndescription: Main\nmodel: gpt-5.4\nreasoningEffort: high\nverbosity: low\npermission:\n  bash:\n    \"gh *\": allow\n  rocketclaw:\n    code_mode_approve: auto(release-reviewer)\n---\nPrompt\n")
 	writeAgent(t, workspace, "restricted", "---\ndescription: Restricted\nmodel: gpt-5.4\npermission:\n  task:\n    \"go-reviewer\": allow\n---\nPrompt\n")
-	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: gpt-6.1-sol\n---\nPrompt\n")
+	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: gpt-6.1-sol\nsticky: off\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	root, err := os.OpenRoot(workspace)
@@ -448,9 +448,26 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 		}
 	}
 
-	externalAgents, err := ExternalMCPAgentsIn(config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir)
-	require.NoError(t, err)
-	require.Equal(t, []string{"assistant", "helper", "restricted"}, externalAgents)
+	writeAgent(t, workspace, "personal", "---\nmodel: gpt-6.1-sol\nsticky: user\n---\nPrompt\n")
+	writeAgent(t, workspace, "shared", "---\nmodel: gpt-6.1-sol\nsticky: global\n---\nPrompt\n")
+	t.Run("MCP offers only non-sticky agents", func(t *testing.T) {
+		externalAgents, err := ExternalMCPAgentsIn(config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir)
+		require.NoError(t, err)
+		require.Equal(t, []string{"assistant", "helper", "restricted"}, externalAgents)
+	})
+
+	for _, name := range []string{"assistant", "helper", "personal", "shared"} {
+		t.Run("Slack "+name, func(t *testing.T) {
+			cfg := &config.Config{Workspace: workspace, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"assistant", name}}}}}
+
+			err := validateRuntimeAssets(config.NewLockedConfig(cfg), config.DefaultRuntimeDir)
+			if name == "assistant" || name == "helper" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "slack channel #ops agent "+name+" must use sticky: off")
+			}
+		})
+	}
 }
 
 func TestLoadRocketCodeDefinitionsReportsInvalidTypedFrontmatter(t *testing.T) {

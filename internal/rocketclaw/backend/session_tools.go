@@ -795,7 +795,7 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 
 	return harness.Tool{Name: sessionsWriteToolName, Permission: "rocketclaw", VisibilitySubjects: []string{sessionsSubject}, Subjects: func(json.RawMessage) ([]string, error) { return []string{sessionsSubject}, nil },
 		Description: "Create a top-level RocketClaw Web session, or write prompt to an existing one, without waiting for its turn. Supply every field. " +
-			"With an empty session_id, create a session named title, run by agent (empty for this turn's agent), whose first turn runs prompt; mode is ignored. The new session cannot see this conversation, so prompt must carry all the context it needs. " +
+			"With an empty session_id, create a session named title, run by agent (empty for this turn's agent), or reuse that agent's sticky session; mode is ignored and prompt is queued. A reused session keeps its name and history. The receiver cannot see the sending conversation, so prompt must carry all the context it needs. A personal sticky agent requires the originating person's login identity. " +
 			"With session_id, deliver prompt to that session; title and agent are ignored. steer joins its running turn while that turn still takes input, otherwise runs as its next turn; enqueue runs after the work already queued; stop stops its current turn and goal, then runs prompt before anything already queued. " +
 			"Only stop takes an empty prompt: it then just stops the turn and goal, queues nothing, and posts that this session stopped it into that session's transcript without starting a turn. " +
 			"The receiver is told this session and agent sent it and that its answer comes back here. Each call that returns a queue_item_id gets exactly one reply: when the target's turn that took prompt ends, or, for an empty-prompt stop, once the stopped turn is over, a <session_reply> note naming that queue_item_id arrives here with the outcome and that turn's final answer. A steer's answer covers the whole turn it joined. " +
@@ -823,7 +823,11 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 			agent, _ := harness.ToolCallAgent(ctx)
 			inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, input.Prompt, false)
 			inbound.PreserveWhitespace = true
+
 			inbound.Metadata = map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text", protocol.InboundSenderSessionMetadataKey: owner, protocol.InboundSenderAgentMetadataKey: agent.Name}
+			if username := origin.Metadata[protocol.InboundPrincipalEmailMetadataKey]; username != "" {
+				inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey] = username
+			}
 
 			var (
 				result struct {
@@ -847,7 +851,7 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 				}
 
 				allowed := strings.FieldsFunc(origin.Metadata[protocol.InboundAllowedAgentsMetadataKey], func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' })
-				start := threadStart{agent: cmp.Or(strings.TrimSpace(input.Agent), agentName), createdBy: ThreadCreator(origin.Metadata[protocol.InboundPrincipalMetadataKey])}
+				start := threadStart{agent: cmp.Or(strings.TrimSpace(input.Agent), agentName), createdBy: ThreadCreator(origin.Metadata[protocol.InboundPrincipalEmailMetadataKey])}
 
 				if origin.Cronjob != nil {
 					allowed, start.createdBy = []string{agentName}, ThreadCreatedByCron
@@ -858,7 +862,14 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 				}
 
 				result.Outcome, reply.agent, reply.label = sessionCreated, start.agent, "create"
-				result.URL, err = b.threads.createSession(ctx, &start, allowed, title, inbound, reply)
+
+				var resumed bool
+
+				result.URL, resumed, err = b.threads.createSession(ctx, &start, allowed, title, inbound, reply)
+				if resumed {
+					result.Outcome = sessionQueued
+				}
+
 				result.SessionID = start.conversationID
 			} else {
 				var targetAgent string
