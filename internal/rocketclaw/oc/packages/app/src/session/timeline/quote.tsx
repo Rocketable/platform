@@ -224,6 +224,8 @@ export function createTimelineQuote(input: {
     const active = document.activeElement
 
     if (isQuotePressing(current) || !root || !input.enabled() || !selection || selection.rangeCount === 0) return
+    // rocketclaw: cached timelines are detached while another session shows (upstream packages/app/src/session/timeline/quote.tsx)
+    if (!root.isConnected) return
 
     if (active !== document.body && !(active instanceof Node && root.contains(active) && !editable(active))) return
     const range = selection.getRangeAt(0)

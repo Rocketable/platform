@@ -257,6 +257,7 @@ test("navigating into a child session stays in the view and reports the child", 
 test("moving the view to another session shows it in place on the same live stream, and closes an open palette", async () => {
   const view = show()
   await answered(view)
+  view.keep(["ses_a"])
   const streams = server.streams
   press(document.body, "k", modK)
   await until(() => palettes())

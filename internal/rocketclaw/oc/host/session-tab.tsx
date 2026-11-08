@@ -1,5 +1,5 @@
 import { useLocation } from "@solidjs/router"
-import { createEffect } from "solid-js"
+import { createEffect, untrack } from "solid-js"
 import type { ServerConnection } from "@/runtime/server/registry"
 import { useTabs } from "@/shell/tabs/tabs"
 import { routeSession } from "./navigation"
@@ -30,7 +30,7 @@ export function SessionTab(props: { server: ServerConnection.Key; sessionID: str
     if (!tabs.ready() || !props.keep) return
     const keep = new Set([props.sessionID, ...props.keep])
     // Removing the tab OpenCode counts as current would navigate the view away, so the shown one counts first.
-    tabs.remember(tabs.addSessionTab({ server: props.server, sessionId: props.sessionID }))
+    untrack(() => tabs.remember(tabs.addSessionTab({ server: props.server, sessionId: props.sessionID })))
 
     // From the last tab back, so each removal leaves the earlier indexes in place.
     for (let index = tabs.store.length - 1; index >= 0; index--) {
