@@ -1080,7 +1080,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     // A send during an identity refresh has no provisional author, so send just after a refresh.
     const identityResponse = await page.waitForResponse("**/api/Identity");
     const identityTransfer = { finished: false, error: "" };
-    void identityResponse.finished().then((error: Error | null) => { identityTransfer.finished = true; identityTransfer.error = error?.message ?? ""; }, (error: Error) => { identityTransfer.error = error.message; });
+    await identityResponse.finished().then((error: Error | null) => { identityTransfer.finished = true; identityTransfer.error = error?.message ?? ""; }, (error: Error) => { identityTransfer.error = error.message; });
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await ctrl.promptStarted.promise;
     expect(ctrl.prompt).toEqual(["web-session:new:hello\n\nwhile held"]);
