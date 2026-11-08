@@ -799,8 +799,11 @@ function TabDrawer({ medium, open, toggle, children }: ReturnType<typeof useTabS
       <Drawer.Backdrop className="fixed inset-0 z-50 bg-black/10 opacity-[calc(1-var(--drawer-swipe-progress))] transition-opacity duration-200 data-swiping:duration-0 data-starting-style:opacity-0 data-ending-style:opacity-0 supports-backdrop-filter:backdrop-blur-xs" />
       <Drawer.Viewport className="fixed inset-0 z-50 flex">
         {/* Picking the tab already shown leaves the address alone, so the pick itself closes the drawer. A mouse
-            click lands on the popup, which holds the pointer for its swipe, so the tab is found under the pointer. */}
-        <Drawer.Popup id="tab-sidebar" onClick={(event) => { if (document.elementFromPoint(event.clientX, event.clientY)?.closest('[role="tab"]')) toggle(); }} className="flex h-full w-3/4 max-w-sm flex-col border-r bg-popover text-sm text-popover-foreground shadow-lg outline-none touch-auto [transform:translateX(var(--drawer-swipe-movement-x))] transition-transform duration-200 ease-in-out data-swiping:select-none data-starting-style:[transform:translateX(-100%)] data-ending-style:[transform:translateX(-100%)]">
+            click lands on the popup, which holds the pointer for its swipe, so it is passed to the tab under the pointer. */}
+        <Drawer.Popup id="tab-sidebar" onClick={(event) => {
+          if ((event.target as Element).closest('[role="tab"]')) toggle();
+          else document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[role="tab"]')?.click();
+        }} className="flex h-full w-3/4 max-w-sm flex-col border-r bg-popover text-sm text-popover-foreground shadow-lg outline-none touch-auto [transform:translateX(var(--drawer-swipe-movement-x))] transition-transform duration-200 ease-in-out data-swiping:select-none data-starting-style:[transform:translateX(-100%)] data-ending-style:[transform:translateX(-100%)]">
           <Drawer.Title className="sr-only">Tabs</Drawer.Title>
           {children}
         </Drawer.Popup>
