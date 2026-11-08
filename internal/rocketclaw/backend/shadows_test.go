@@ -874,10 +874,10 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 					return
 				}
 
-				requests <- request
-
 				select {
 				case <-held:
+					requests <- request
+
 					select {
 					case <-release:
 					case <-r.Context().Done():
@@ -885,6 +885,7 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 
 					return
 				default:
+					requests <- request
 				}
 
 				w.Header().Set("Content-Type", "application/json")
@@ -930,6 +931,7 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 				}
 			}
 
+			require.Empty(t, held, "both initial requests reserved their holds before being reported")
 			require.JSONEq(t, string(initial[0]), string(initial[1]))
 			head, found, err := store.headTurn(t.Context(), childID)
 			require.NoError(t, err)
