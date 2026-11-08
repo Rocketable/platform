@@ -2119,7 +2119,7 @@ func TestNativeForwardRequiresAllMarkersAndAgreeingSource(t *testing.T) {
 
 func TestRenderNativeForwardBoundsSharedMaterial(t *testing.T) {
 	forward := slackNativeForward{previews: []string{strings.Repeat("p", protocol.MaxInboundTextAttachmentBytes)}, channelID: "C1", threadTS: "1.1"}
-	got := renderSlackForward(forward, []slack.Message{{User: "U1", Text: "must not fit"}}, nil)
+	got := renderSlackForward(forward, []slack.Message{{User: "U1", Text: "must not fit"}}, nil, nil)
 	require.LessOrEqual(t, len(got), protocol.MaxInboundTextAttachmentBytes)
 	require.Contains(t, got, "[Slack forwarded preview truncated]")
 	require.NotContains(t, got, "must not fit")
@@ -2132,12 +2132,12 @@ func TestRenderNativeForwardExactAndUTF8Boundaries(t *testing.T) {
 	)
 
 	exact := strings.Repeat("x", protocol.MaxInboundTextAttachmentBytes-len(heading))
-	got := renderSlackForward(slackNativeForward{previews: []string{exact}}, nil, nil)
+	got := renderSlackForward(slackNativeForward{previews: []string{exact}}, nil, nil, nil)
 	require.Len(t, got, protocol.MaxInboundTextAttachmentBytes)
 	require.NotContains(t, got, "truncated")
 
 	preview := strings.Repeat("x", protocol.MaxInboundTextAttachmentBytes-len(heading)-1) + "é"
-	got = renderSlackForward(slackNativeForward{previews: []string{preview}}, nil, nil)
+	got = renderSlackForward(slackNativeForward{previews: []string{preview}}, nil, nil, nil)
 	require.LessOrEqual(t, len(got), protocol.MaxInboundTextAttachmentBytes)
 	require.True(t, utf8.ValidString(got))
 	require.Contains(t, got, notice)
@@ -2149,7 +2149,7 @@ func TestRenderNativeForwardReservesImageReferenceBeforeTranscriptTruncation(t *
 	forward := slackNativeForward{previews: []string{"preview"}}
 	messages := []slack.Message{{User: "U1", Text: strings.Repeat("x", protocol.MaxInboundTextAttachmentBytes)}}
 
-	got := renderSlackForward(forward, messages, []string{imageNote})
+	got := renderSlackForward(forward, messages, []string{imageNote}, nil)
 	require.LessOrEqual(t, len(got), protocol.MaxInboundTextAttachmentBytes)
 	require.Contains(t, got, imageNote)
 	require.Contains(t, got, "[Slack forwarded thread truncated]")
@@ -2160,7 +2160,7 @@ func TestRenderNativeForwardReservesImageReferenceBeforePreviewTruncation(t *tes
 
 	forward := slackNativeForward{previews: []string{strings.Repeat("p", protocol.MaxInboundTextAttachmentBytes)}}
 
-	got := renderSlackForward(forward, nil, []string{imageNote})
+	got := renderSlackForward(forward, nil, []string{imageNote}, nil)
 	require.LessOrEqual(t, len(got), protocol.MaxInboundTextAttachmentBytes)
 	require.Contains(t, got, imageNote)
 	require.Contains(t, got, "[Slack forwarded preview truncated]")
