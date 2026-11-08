@@ -231,88 +231,58 @@ func permissionReviewPrompt(request *permissionReviewRequest, originHeader, plan
 	)
 }
 
-type permissionReviewTranscriptEntry struct {
-	role string
-	text string
-	tool bool
-}
-
 func renderPermissionReviewTranscript(items []responses.ResponseInputItemUnionParam) []string {
-	entries := permissionReviewTranscriptEntries(items)
-	if len(entries) == 0 {
-		return []string{"<no retained transcript entries>\n"}
-	}
+	lines := make([]string, 0, len(items))
 
-	lines := make([]string, 0, len(entries))
-
-	for i := range entries {
-		entry := entries[i]
+	for i := range items {
+		item := &items[i]
 		line := struct {
 			Index int    `json:"index"`
 			Role  string `json:"role"`
 			Text  string `json:"text"`
 			Tool  bool   `json:"tool,omitempty"`
-		}{Index: i + 1, Role: entry.role, Text: entry.text, Tool: entry.tool}
+		}{Index: len(lines) + 1}
 
-		data, _ := json.Marshal(line) // The line contains only int, string and bool fields.
-
-		lines = append(lines, string(data)+"\n")
-	}
-
-	return lines
-}
-
-func permissionReviewTranscriptEntries(items []responses.ResponseInputItemUnionParam) []permissionReviewTranscriptEntry {
-	entries := []permissionReviewTranscriptEntry{}
-
-	for i := range items {
-		item := &items[i]
 		switch {
 		case item.OfMessage != nil:
-			role := string(item.OfMessage.Role)
+			line.Role = string(item.OfMessage.Role)
 
-			var text string
 			if item.OfMessage.Content.OfString.Valid() {
-				text = item.OfMessage.Content.OfString.Value
+				line.Text = item.OfMessage.Content.OfString.Value
 			} else {
-				text = permissionReviewContentText(item.OfMessage.Content.OfInputItemContentList)
+				line.Text = permissionReviewContentText(item.OfMessage.Content.OfInputItemContentList)
 			}
 
-			switch {
-			case strings.TrimSpace(text) != "":
-				entries = append(entries, permissionReviewTranscriptEntry{role: role, text: text})
-			case len(item.OfMessage.Content.OfInputItemContentList) > 0:
-				entries = append(entries, permissionReviewTranscriptEntry{
-					role: role,
-					text: "<message attachments omitted from permission review transcript>",
-				})
+			if strings.TrimSpace(line.Text) == "" {
+				if len(item.OfMessage.Content.OfInputItemContentList) == 0 {
+					continue
+				}
+
+				line.Text = "<message attachments omitted from permission review transcript>"
 			}
 		case item.OfFunctionCall != nil:
 			call := item.OfFunctionCall
-			if strings.TrimSpace(call.Arguments) != "" {
-				entries = append(entries, permissionReviewTranscriptEntry{
-					role: "tool " + call.Name + " call",
-					text: call.Arguments,
-					tool: true,
-				})
-			}
-		case item.OfFunctionCallOutput != nil:
-			var text string
-			if item.OfFunctionCallOutput.Output.OfString.Valid() {
-				text = item.OfFunctionCallOutput.Output.OfString.Value
-			} else {
-				text = permissionReviewContentText(item.OfFunctionCallOutput.Output.OfResponseFunctionCallOutputItemArray)
+			if strings.TrimSpace(call.Arguments) == "" {
+				continue
 			}
 
-			if strings.TrimSpace(text) == "" {
+			line.Role, line.Text, line.Tool = "tool "+call.Name+" call", call.Arguments, true
+		case item.OfFunctionCallOutput != nil:
+			line.Role, line.Tool = "tool result", true
+
+			if item.OfFunctionCallOutput.Output.OfString.Valid() {
+				line.Text = item.OfFunctionCallOutput.Output.OfString.Value
+			} else {
+				line.Text = permissionReviewContentText(item.OfFunctionCallOutput.Output.OfResponseFunctionCallOutputItemArray)
+			}
+
+			if strings.TrimSpace(line.Text) == "" {
 				if len(item.OfFunctionCallOutput.Output.OfResponseFunctionCallOutputItemArray) == 0 {
 					continue
 				}
 
-				text = "<tool result attachments omitted from permission review transcript>"
+				line.Text = "<tool result attachments omitted from permission review transcript>"
 			}
-
-			entries = append(entries, permissionReviewTranscriptEntry{role: "tool result", text: text, tool: true})
 		case item.OfReasoning != nil:
 			parts := make([]string, 0, len(item.OfReasoning.Summary))
 			for j := range item.OfReasoning.Summary {
@@ -321,25 +291,29 @@ func permissionReviewTranscriptEntries(items []responses.ResponseInputItemUnionP
 				}
 			}
 
-			text := strings.Join(parts, "\n")
-			if text == "" {
-				text = "<encrypted reasoning omitted>"
+			line.Role, line.Text = "reasoning summary", strings.Join(parts, "\n")
+			if line.Text == "" {
+				line.Text = "<encrypted reasoning omitted>"
 			}
-
-			entries = append(entries, permissionReviewTranscriptEntry{role: "reasoning summary", text: text})
 		case item.OfCompaction != nil:
-			entries = append(entries, permissionReviewTranscriptEntry{role: "compaction", text: CompactionCheckpointText(item.OfCompaction)})
+			line.Role, line.Text = "compaction", CompactionCheckpointText(item.OfCompaction)
 		default:
-			role := "item"
+			line.Role, line.Text = "item", "<item omitted from permission review transcript>"
 			if typ := item.GetType(); typ != nil {
-				role = *typ
+				line.Role = *typ
 			}
-
-			entries = append(entries, permissionReviewTranscriptEntry{role: role, text: "<item omitted from permission review transcript>"})
 		}
+
+		data, _ := json.Marshal(line) // The line contains only int, string and bool fields.
+
+		lines = append(lines, string(data)+"\n")
 	}
 
-	return entries
+	if len(lines) == 0 {
+		return []string{"<no retained transcript entries>\n"}
+	}
+
+	return lines
 }
 
 func permissionReviewContentText[T interface{ GetText() *string }](content []T) string {
