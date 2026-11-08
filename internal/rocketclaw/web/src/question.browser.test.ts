@@ -71,14 +71,14 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web quest
 
     // Send answers with the composer's text instead of queueing it.
     const composer = page.locator("textarea");
-    expect(await composer.getAttribute("placeholder")).toBe("Answer the question · ⌘⏎ steers");
+    expect(await composer.getAttribute("placeholder")).toBe("Answer the question");
     await composer.fill("my own answer");
-    await composer.press("Enter");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
     await page.getByText("answer unavailable", { exact: true }).waitFor();
     expect(await composer.inputValue()).toBe("my own answer");
     expect(await card.getByText("Question q3?").isVisible()).toBe(true);
     await page.locator("textarea:enabled").waitFor();
-    await composer.press("Enter");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
     await card.getByText("Question q4?").waitFor();
     expect(await composer.inputValue()).toBe("");
     await page.getByText("answer unavailable", { exact: true }).waitFor({ state: "detached" });
@@ -87,7 +87,7 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`pending Web quest
     await card.getByRole("button", { name: "Submit" }).click();
     await page.getByText("This question was already answered or ended").waitFor();
     await card.waitFor({ state: "detached" });
-    expect(await composer.getAttribute("placeholder")).toBe("Queue a follow-up · ⌘⏎ steers");
+    expect(await composer.getAttribute("placeholder")).toBe("Queue a follow-up");
     expect(calls).toEqual([
       { path: "/api/AnswerQuestion", body: { conversationId: "chat", askId: "q1", selected: ["yes"] } },
       { path: "/api/AnswerQuestion", body: { conversationId: "chat", askId: "q2", selected: ["alpha", "gamma"] } },
@@ -134,7 +134,7 @@ test("a limited person cannot answer a question of an agent outside their spaces
     const composer = page.locator("textarea");
     await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
     await page.getByRole("button", { name: "Choose agent", exact: true }).filter({ hasText: "ops-agent" }).waitFor();
-    expect(await composer.getAttribute("placeholder")).toBe("Queue a follow-up · ⌘⏎ steers");
+    expect(await composer.getAttribute("placeholder")).toBe("Queue a follow-up");
     expect(await page.getByRole("form", { name: "Question" }).count()).toBe(0);
     await composer.fill("hello");
     await composer.press("Enter");

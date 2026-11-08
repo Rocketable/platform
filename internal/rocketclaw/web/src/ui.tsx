@@ -17,7 +17,7 @@ import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCErro
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { BellOff, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Send, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellOff, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, RotateCcw, ScrollText, Search, Settings, Share, ShieldCheck, Sparkles, Square, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -260,7 +260,7 @@ function QueuePanel({
     onReorder(next);
   };
   return (
-    <div className="mb-2 rounded-lg bg-muted p-2 shadow-[inset_0_0_0_1px_var(--border)]">
+    <div className="relative -mb-3 rounded-t-xl border border-b-0 bg-background px-1.5 pt-1.5 pb-4">
       {jobs}
       {update.error ? <p role="alert" className="px-2 text-sm text-destructive">{update.error instanceof RPCError && update.error.code === 5 ? "This message is no longer waiting." : update.error.message}</p> : null}
       <ul className={cn("flex flex-col gap-0.5 overflow-y-auto", edit ? "max-h-[50dvh]" : "max-h-32")}>
@@ -422,8 +422,8 @@ function useQuestion(id: string, draft: ComposerDraft, onChange: () => Promise<u
 
 // composerLabels says what Send does: answer the pending question, queue behind the running turn, or send.
 function composerLabels(asking: boolean, busy: boolean, id: string) {
-  if (asking) return { placeholder: "Answer the question · ⌘⏎ steers", sendLabel: "Send answer" };
-  if (busy) return { placeholder: "Queue a follow-up · ⌘⏎ steers", sendLabel: "Send to queue" };
+  if (asking) return { placeholder: "Answer the question", sendLabel: "Send answer" };
+  if (busy) return { placeholder: "Queue a follow-up", sendLabel: "Send to queue" };
   return { placeholder: id ? "Message or $command" : "Message a new session", sendLabel: "Send message" };
 }
 
@@ -5010,6 +5010,9 @@ function Composer({
   jobs: ReactNode;
 }) {
   const mac = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(navigator.platform);
+  // Match OpenCode's embedded packages/app/src/composer/editor/editor.tsx:
+  // touch Return adds a line; the separate touch bar sends, queues, steers, or stops.
+  const touch = useMedia("(hover: none) and (pointer: coarse)");
   const selectedButton = useRef<HTMLButtonElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const { composer } = useContext(SessionCommands);
@@ -5022,15 +5025,21 @@ function Composer({
     messageInput.current?.focus();
   });
   const empty = text.trim() === "" && files.length === 0;
-  const stopping = busy && empty;
-  const steerOff = !busy || sending || empty || isStopCommand(text);
+  const agent = catalog.find((item) => item.name === selected);
+  const actions = <>
+    <VoiceToggle sessionId={sessionId} agent={selected} sending={sending} call={call} />
+    <ComposerMore sending={sending} empty={empty} stash={() => void send("STASH")} />
+    <ComposerSend touch={touch} busy={busy} sending={sending} empty={empty} stoppingCommand={isStopCommand(text)} sendLabel={sendLabel} mac={mac} send={send} stop={stop} />
+  </>;
+  const attach = <Tooltip disabled={touch}><TooltipTrigger render={<InputGroupButton size="icon-sm" className={touch ? "size-11" : "size-7"} disabled={sending} />} aria-label="Add files" onMouseDown={(event) => event.preventDefault()} onClick={() => fileInput.current?.click()}><Plus /></TooltipTrigger><TooltipContent>Add files</TooltipContent></Tooltip>;
   const pickerOpen = matches.length > 0;
   const selectedInvocation = matches[pick]?.invocation;
   useEffect(() => {
     selectedButton.current?.scrollIntoView({ block: "nearest" });
   }, [pickerOpen, selectedInvocation]);
   return (
-    <div className="px-3 pb-4 sm:px-5">
+    <div data-native-composer data-touch={touch} className="shrink-0">
+      <div className="px-3 pb-3">
       <SelectionQuote text={text} setText={setText} messageInput={messageInput} sending={sending} />
       <div className="relative mx-auto w-full max-w-3xl">
         {matches.length > 0 ? (
@@ -5059,6 +5068,8 @@ function Composer({
         <PromptInput files={files} setFiles={setFiles} sending={sending} fileInput={fileInput}>
           <InputGroupTextarea
             ref={messageInput}
+            aria-label="Message"
+            enterKeyHint={touch ? "enter" : undefined}
             disabled={sending}
             value={text}
             onChange={(event) => {
@@ -5067,8 +5078,10 @@ function Composer({
               setText(event.target.value);
             }}
             placeholder={placeholder}
-            className="min-h-16 max-h-[40dvh] overflow-y-auto sm:mt-2 sm:min-h-[52px] sm:w-[calc(100%-0.75rem)]"
+            className="min-h-[60px] max-h-[180px] overflow-y-auto"
             onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || event.repeat) return;
+              if (touch && event.key === "Enter" && !event.metaKey && !event.ctrlKey) return;
               if (event.key === "Enter" && event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
                 event.preventDefault();
                 void send("STASH");
@@ -5103,29 +5116,60 @@ function Composer({
               }
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                void send(busy && (event.metaKey || event.ctrlKey) ? "STEER" : undefined);
+                void send(!touch && busy && (event.metaKey || event.ctrlKey) ? "STEER" : undefined);
               }
             }}
           />
-          <InputGroupAddon align="block-end" className="sm:mt-0.5">
-            <Tooltip><TooltipTrigger render={<InputGroupButton size="icon-sm" className="size-11 sm:-ml-0.5 sm:size-7" disabled={sending} />} aria-label="Add files" onClick={() => fileInput.current?.click()}><Plus /></TooltipTrigger><TooltipContent>Add files</TooltipContent></Tooltip>
-            <AgentPicker catalog={catalog} selected={selected} setAgent={setAgent} open={agentOpen} setOpen={setAgentOpen} disabled={sending || catalog.length === 0} />
-            <InputGroupButton size="sm" variant={steerOff ? "quiet" : "ghost"} className="ml-auto h-11 sm:h-7" disabled={sending || empty} onClick={() => void send("STASH")}>Stash</InputGroupButton>
-            <Tooltip>
-              <TooltipTrigger render={<InputGroupButton size="sm" className="h-11 sm:h-7" disabled={steerOff} />} aria-label="Steer" onClick={() => void send("STEER")}>
-                Steer
-              </TooltipTrigger>
-              <TooltipContent>Guide the current response <ModEnterKeys mac={mac} /></TooltipContent>
-            </Tooltip>
-            <VoiceToggle sessionId={sessionId} agent={selected} sending={sending} call={call} />
-            <Tooltip><TooltipTrigger render={<InputGroupButton size="icon-sm" variant="default" className="size-11 sm:-mr-0.5 sm:size-7" disabled={sending} />} aria-label={stopping ? "Stop" : "Send"} onClick={() => void (stopping ? stop() : send())}>
-              {stopping ? <Square /> : <Send />}
-            </TooltipTrigger><TooltipContent>{stopping ? "Stop response" : sendLabel}</TooltipContent></Tooltip>
+          <InputGroupAddon align="block-end" className="h-11">
+            {!touch ? attach : null}
+            <div data-slot="composer-controls" className="flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-x-contain scrollbar-none">
+              <AgentPicker catalog={catalog} selected={selected} setAgent={setAgent} open={agentOpen} setOpen={setAgentOpen} disabled={sending || catalog.length === 0} />
+              {agent?.model ? <span title={agent.model} className="max-w-[220px] shrink-0 truncate px-2 text-muted-foreground">{agent.model}</span> : null}
+              {agent?.reasoning ? <span className="shrink-0 px-2 text-muted-foreground capitalize">{agent.reasoning}</span> : null}
+            </div>
+            {!touch ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
           </InputGroupAddon>
         </PromptInput>
       </div>
+      </div>
+      {touch ? <div data-slot="composer-touch-bar" className="flex h-14 items-center gap-1 border-t bg-background px-2">{attach}{actions}</div> : null}
     </div>
   );
+}
+
+function ComposerMore({ sending, empty, stash }: { sending: boolean; empty: boolean; stash: () => void }) {
+  return <DropdownMenu>
+    <DropdownMenuTrigger aria-label="Composer actions" render={<InputGroupButton size="icon-sm" disabled={sending} />}><Ellipsis /></DropdownMenuTrigger>
+    <DropdownMenuContent side="top" className="min-w-44">
+      <Menu.Group>
+        <Menu.Item nativeButton render={<Button variant="ghost" className="w-full justify-start" />} disabled={sending || empty} onClick={stash}>Stash</Menu.Item>
+      </Menu.Group>
+    </DropdownMenuContent>
+  </DropdownMenu>;
+}
+
+function ComposerSend({ touch, busy, sending, empty, stoppingCommand, sendLabel, mac, send, stop }: {
+  touch: boolean; busy: boolean; sending: boolean; empty: boolean; stoppingCommand: boolean; sendLabel: string; mac: boolean;
+  send: (delivery?: PromptDelivery) => Promise<void>; stop: () => Promise<void>;
+}) {
+  return <div data-slot="composer-delivery" className="ml-auto flex shrink-0 items-center gap-1">
+    {busy && !empty && !stoppingCommand ? <Tooltip disabled={touch}>
+      <TooltipTrigger render={<InputGroupButton size="sm" disabled={sending} />} aria-label="Steer" onMouseDown={(event) => event.preventDefault()} onClick={() => void send("STEER")}>
+        Steer{!touch ? <span className="hidden sm:inline"><ModEnterKeys mac={mac} /></span> : null}
+      </TooltipTrigger>
+      <TooltipContent>Guide the current response without stopping it</TooltipContent>
+    </Tooltip> : null}
+    <ComposerSubmit touch={touch} busy={busy} sending={sending} empty={empty} sendLabel={sendLabel} send={send} stop={stop} />
+  </div>;
+}
+
+function ComposerSubmit({ touch, busy, sending, empty, sendLabel, send, stop }: Omit<ComponentProps<typeof ComposerSend>, "mac" | "stoppingCommand">) {
+  const stopping = busy && empty;
+  const label = stopping ? "Stop" : touch && busy && sendLabel !== "Send answer" ? "Queue" : "Send";
+  const Icon = sending ? LoaderCircle : stopping ? Square : ArrowUp;
+  return <Tooltip disabled={touch}><TooltipTrigger data-composer-submit render={<InputGroupButton size={touch ? "sm" : "icon-sm"} variant={stopping ? "secondary" : "default"} disabled={sending || (!stopping && empty)} />} aria-label={label} onMouseDown={(event) => event.preventDefault()} onClick={() => void (stopping ? stop() : send())}>
+    {touch ? label : null}<Icon className={cn(sending && "animate-spin")} />
+  </TooltipTrigger><TooltipContent>{stopping ? "Stop response" : sendLabel}</TooltipContent></Tooltip>;
 }
 
 // The agent menu follows Model Selector (https://ui.shadcn.com/docs/ai-elements/base/model-selector):
@@ -5133,8 +5177,8 @@ function Composer({
 function AgentPicker({ catalog, selected, setAgent, open, setOpen, disabled }: { catalog: Agent[]; selected: string; setAgent: (name: string) => void; open: boolean; setOpen: (open: boolean) => void; disabled: boolean }) {
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger disabled={disabled} aria-label="Choose agent" title={selected} render={<InputGroupButton size="sm" className="min-h-11 min-w-0 max-w-[220px] shrink sm:-ml-1 sm:h-7 sm:min-h-0" />}>
-        <Bot /><span className={cn("min-w-0 truncate", !selected && "text-muted-foreground")}>{selected || "Choose agent"}</span><ChevronDown />
+      <DropdownMenuTrigger disabled={disabled} aria-label="Choose agent" title={selected} render={<InputGroupButton size="sm" className="min-h-11 min-w-0 max-w-[220px] shrink sm:h-7 sm:min-h-0" />}>
+        <span className={cn("min-w-0 truncate", !selected && "text-muted-foreground")}>{selected || "Choose agent"}</span><ChevronDown />
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" className="w-[min(28rem,calc(100vw-2rem))]">
         <DropdownMenuRadioGroup value={selected} onValueChange={(name: string) => setAgent(name)}>
@@ -5646,7 +5690,7 @@ function VoiceToggle({ sessionId, agent, sending, call }: { sessionId: string; a
   useEffect(() => () => { if (voiceView().conversationId === sessionId) stopVoice(); }, [route.id, sessionId]);
   return <>
     <span aria-live="polite" title={notice} className="hidden max-w-48 truncate text-xs text-muted-foreground empty:absolute sm:inline">{notice}</span>
-    <Tooltip><TooltipTrigger render={<Button type="button" variant={calling ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-7" disabled={!calling && sending} />} aria-label="Voice call" aria-pressed={calling} onClick={() => void (calling ? stopVoice() : call(speaker))}>
+    <Tooltip><TooltipTrigger render={<Button type="button" variant={calling ? "secondary" : "ghost"} size="icon" className="size-11 sm:size-7" disabled={!calling && sending} />} aria-label="Voice call" aria-pressed={calling} onMouseDown={(event) => event.preventDefault()} onClick={() => void (calling ? stopVoice() : call(speaker))}>
       {state === "connecting" ? <LoaderCircle className="animate-spin" /> : calling ? <MicOff /> : <Mic />}
     </TooltipTrigger><TooltipContent>{calling ? `End voice call (${state})` : "Start voice call"}</TooltipContent></Tooltip>
   </>;

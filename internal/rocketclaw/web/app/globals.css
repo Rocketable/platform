@@ -391,6 +391,58 @@
   }
 }
 
+/* OpenCode packages/app/src/composer/editor/editor.tsx: raised card, 60px editor,
+   scrolling model controls, and a separate 44px-target touch toolbar. */
+[data-native-composer] [data-slot="input-group"] {
+  border: 0;
+  border-radius: 12px;
+  background: var(--background);
+  box-shadow: inset 0 0 0 1px var(--border), 0 2px 4px color-mix(in oklch, var(--foreground) 6%, transparent);
+  overflow: clip;
+}
+[data-native-composer] textarea {
+  padding: 16px 16px 8px;
+}
+[data-native-composer] [data-align="block-end"] {
+  padding: 0 8px;
+  gap: 4px;
+}
+[data-native-composer] :is(textarea, [data-slot="input-group-addon"], [aria-label="Choose agent"]) {
+  font-size: 13px;
+  font-weight: 440;
+  line-height: 20px;
+}
+[data-native-composer] :is([aria-label="Choose agent"], [aria-label="Composer actions"], [aria-label="Voice call"]) {
+  height: 28px;
+  min-height: 28px;
+  color: var(--muted-foreground);
+}
+[data-native-composer] [aria-label="Choose agent"] {
+  flex-shrink: 0;
+}
+[data-native-composer] [data-composer-submit] {
+  border-radius: 6px;
+}
+[data-native-composer][data-touch="true"] :is([aria-label="Composer actions"], [aria-label="Voice call"]) {
+  width: 44px;
+  height: 44px;
+}
+[data-native-composer][data-touch="true"] [data-slot="composer-delivery"] button {
+  height: 44px;
+  border-radius: 12px;
+  padding-inline: 16px;
+  font-size: 15px;
+}
+[data-native-composer][data-touch="false"] [data-slot="composer-delivery"] [aria-label="Steer"] {
+  height: 28px;
+  font-size: 12px;
+}
+@media (max-width: 359px) {
+  [data-native-composer][data-touch="true"] [data-slot="composer-delivery"] button {
+    padding-inline: 10px;
+  }
+}
+
 /* Markdown output for chat messages. Tailwind's reset removes heading sizes, list markers, and
    block spacing; single line breaks in paragraphs stay visible, as in Raw output. */
 @layer components {

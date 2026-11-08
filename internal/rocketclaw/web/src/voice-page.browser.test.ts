@@ -139,6 +139,19 @@ test("Voice page keeps each person's conversation and settings on the server, an
     expect(stored()).toBe("");
     await held(1); // The open Voice page keeps the screen on.
 
+    const narrow = await browser.newPage({ viewport: { width: 320, height: 664 }, hasTouch: true });
+    const longAgent = "An agent with a very long name that must fit on a phone";
+    await narrow.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: [{ name: longAgent, model: "openai/gpt", voices: ["cove"] }], currentAgent: longAgent } }));
+    await narrow.goto(origin + "/voice");
+    const narrowPicker = narrow.getByRole("button", { name: "Choose agent", exact: true });
+    await narrowPicker.filter({ hasText: longAgent }).waitFor();
+    for (const width of [320, 390]) {
+      await narrow.setViewportSize({ width, height: 664 });
+      expect(await narrowPicker.evaluate((element: HTMLElement) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+      expect(await narrow.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    await narrow.close();
+
     const voicePicker = page.getByRole("combobox", { name: "Choose voice" });
     const shownVoice = () => voicePicker.locator('[data-slot="select-value"]').textContent();
     expect(await shownVoice()).toBe("Cove");
