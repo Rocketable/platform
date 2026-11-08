@@ -105,34 +105,25 @@ func InterpolatePermissions(agent *Agent, env []string) {
 
 	buckets := slices.Clone(agent.Permission.Buckets)
 	for i, bucket := range buckets {
-		buckets[i].Rules = slices.Clone(bucket.Rules)
-		for j, rule := range bucket.Rules {
-			matches := permissionEnvPattern.FindAllStringSubmatchIndex(rule.Pattern, -1)
-			if len(matches) == 0 {
-				continue
+		kept := slices.Clone(bucket.Rules)[:0]
+		for _, rule := range bucket.Rules {
+			if matches := permissionEnvPattern.FindAllStringSubmatchIndex(rule.Pattern, -1); len(matches) > 0 {
+				segments := make([]ruleSegment, 0, 2*len(matches)+1)
+				start := 0
+
+				for _, match := range matches {
+					key := rule.Pattern[match[2]:match[3]]
+					segments = append(segments, ruleSegment{Text: rule.Pattern[start:match[0]]}, ruleSegment{Text: key, Literal: true})
+					start = match[1]
+				}
+
+				segments = append(segments, ruleSegment{Text: rule.Pattern[start:]})
+				rule.segments = segments
 			}
 
-			segments := make([]ruleSegment, 0, 2*len(matches)+1)
-			start := 0
-
-			for _, match := range matches {
-				key := rule.Pattern[match[2]:match[3]]
-				segments = append(segments, ruleSegment{Text: rule.Pattern[start:match[0]]}, ruleSegment{Text: key, Literal: true})
-				start = match[1]
-			}
-
-			segments = append(segments, ruleSegment{Text: rule.Pattern[start:]})
-			rule.segments = segments
-			buckets[i].Rules[j] = rule
-		}
-	}
-
-	for i := range buckets {
-		// Rules whose variable is absent or empty are dropped from the set:
-		// a scoped rule without its variable grants nothing that turn. A deny
-		// rule instead matches as if the variable were *, so it still denies.
-		kept := buckets[i].Rules[:0]
-		for _, rule := range buckets[i].Rules {
+			// Rules whose variable is absent or empty are dropped from the set:
+			// a scoped rule without its variable grants nothing that turn. A deny
+			// rule instead matches as if the variable were *, so it still denies.
 			if len(rule.segments) == 0 {
 				kept = append(kept, rule)
 				continue
