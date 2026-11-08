@@ -835,9 +835,11 @@ func TestApplyPatchSymlinkDenied(t *testing.T) {
 	require.NoError(t, root.WriteFile(".env", []byte("SECRET=old\n"), 0o644))
 	require.NoError(t, root.Symlink(".env", "safe.txt"))
 	require.NoError(t, root.Close())
+	before := snapshotTree(t, dir)
 
 	result := runGoApplyPatch(t, dir, "*** Begin Patch\n*** Update File: safe.txt\n@@\n-SECRET=old\n+SECRET=new\n*** End Patch")
 	require.False(t, result.OK)
+	require.Equal(t, before, result.Tree)
 }
 
 func TestApplyPatchEnvFileHardDeny(t *testing.T) {
@@ -875,10 +877,12 @@ func TestApplyPatchEnvFileHardDeny(t *testing.T) {
 			require.NoError(t, err)
 			seedRoot(t, root, tt.seed, nil)
 			require.NoError(t, root.Close())
+			before := snapshotTree(t, dir)
 
 			result := runGoApplyPatch(t, dir, tt.patch)
 			require.False(t, result.OK)
 			require.Contains(t, result.Error, "access denied: .env files are blocked")
+			require.Equal(t, before, result.Tree)
 		})
 	}
 
