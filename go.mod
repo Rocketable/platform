@@ -107,10 +107,10 @@ require (
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc // indirect
 	github.com/tailscale/web-client-prebuilt v0.0.0-20260917222731-e0ed2d0d0fea // indirect
 	github.com/tailscale/wireguard-go v0.0.0-20260928213032-417aef361226 // indirect
-	github.com/tidwall/gjson v1.20.1 // indirect
+	github.com/tidwall/gjson v1.20.2 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
-	github.com/tidwall/pretty v1.2.2 // indirect
-	github.com/tidwall/sjson v1.2.7 // indirect
+	github.com/tidwall/pretty v1.3.0 // indirect
+	github.com/tidwall/sjson v1.2.8 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
