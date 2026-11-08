@@ -1877,6 +1877,15 @@ test("Shared shows in the narrow screen's tab drawer once it has tabs", () => wi
   await strip(page).waitFor({ state: "detached" });
 }), 30_000);
 
+test("A mouse click opens a tab in the narrow screen's tab drawer", () => withPage({ viewport: { width: 375, height: 700 } }, async (page, origin, _prompts, saved) => {
+  saved.state = { ...saved.state, tabs: [{ path: href("alpha"), space: "main" }, { path: href("bravo"), space: "main" }], space: "main" };
+  await page.goto(`${origin}${href("alpha")}`);
+  await page.getByRole("button", { name: "Show sidebar", exact: true }).click();
+  await strip(page).getByRole("tab", { name: "Bravo", exact: true }).click();
+  await page.waitForURL(`**${href("bravo")}`);
+  await strip(page).waitFor({ state: "detached" });
+}), 30_000);
+
 test("Shared rows step, arrow, and reorder like this person's tabs, and Escape leaves a Shared-only page open", () => withPage({}, async (page, origin, _prompts, saved) => {
   const row = (name: string) => shared(page).getByRole("tab", { name, exact: true }), tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const focused = (locator: any) => locator.evaluate((node: HTMLElement) => document.activeElement === node);
