@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net"
@@ -103,7 +104,7 @@ func TestWebFetchReturnsImageAndPDFAttachments(t *testing.T) {
 			require.Equal(t, tt.wantOutput, got.Output)
 			require.Len(t, got.Attachments, 1)
 			require.Equal(t, tt.wantMIME, got.Attachments[0].MIME)
-			require.Contains(t, got.Attachments[0].URL, "data:"+tt.wantMIME+";base64,")
+			require.Equal(t, "data:"+tt.wantMIME+";base64,"+base64.StdEncoding.EncodeToString(tt.content), got.Attachments[0].URL)
 		})
 	}
 }
