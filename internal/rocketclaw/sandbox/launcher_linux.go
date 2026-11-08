@@ -359,14 +359,6 @@ func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *ex
 		}
 	}()
 
-	// "1" when init ran; "1E" when it ran but could not exec Bash; nothing when bwrap failed.
-	ready := make(chan bool, 1)
-
-	go func() {
-		b, _ := io.ReadAll(io.LimitReader(readyR, 2))
-		ready <- string(b) == "1"
-	}()
-
 	exited := make(chan struct{})
 
 	go func() {
@@ -400,7 +392,9 @@ func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *ex
 		return Result{}, errKill
 	}
 
-	if !<-ready {
+	// "1" when init ran; "1E" when it ran but could not exec Bash; nothing when bwrap failed.
+	ready, _ := io.ReadAll(io.LimitReader(readyR, 2))
+	if string(ready) != "1" {
 		return Result{}, fmt.Errorf("the sandbox did not start: %s", strings.TrimSpace(output.String()))
 	}
 
