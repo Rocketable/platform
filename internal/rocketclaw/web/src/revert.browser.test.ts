@@ -182,7 +182,14 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       if (outcome === "reset") buttons.unshift("$goal <objective> Start a goal loop");
       for (const name of buttons) {
         const button = page.getByRole("button", { name, exact: true });
-        expect(await button.isDisabled()).toBe(true);
+        try { expect(await button.isDisabled()).toBe(true); } catch (error) {
+          console.error("Held local-draft reset control", JSON.stringify({ width, outcome, expectedButton: name, username, workspace, marker, errors, state: await page.evaluate(() => {
+            const input = document.querySelector("textarea");
+            const control = window as unknown as { releaseClear?: () => void; clearWrites: number };
+            return { path: location.pathname, text: input?.value, disabled: input?.matches(":disabled"), fieldsetDisabled: input?.closest("fieldset")?.disabled, activeElement: document.activeElement?.tagName, clearHeld: !!control.releaseClear, clearWrites: control.clearWrites, buttons: [...document.querySelectorAll<HTMLButtonElement>("[data-native-composer] button")].map((node) => ({ name: node.getAttribute("aria-label") || node.innerText.replace(/\s+/g, " ").trim(), disabled: node.matches(":disabled"), hidden: !node.checkVisibility() || !!node.closest('[aria-hidden="true"]') })) };
+          }).catch((diagnosticError: unknown) => ({ diagnosticError: String(diagnosticError) })) }));
+          throw error;
+        }
         const bounds = (await button.boundingBox())!;
         await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
       }
