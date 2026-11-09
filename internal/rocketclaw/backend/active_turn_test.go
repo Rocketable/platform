@@ -2622,6 +2622,22 @@ func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 			writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw: {rocketclaw_restart: allow, rocketclaw_attach_files_to_response: allow}\n---\nResearch\n")
 
 			manager, _ := nt.run(t, ignoreOutbound)
+			defer func() {
+				if !t.Failed() {
+					return
+				}
+
+				t.Logf("turn-bound subagent: provider_requests=%d tool_results=%d finals=%d database=%+v", len(nt.requests), len(results), len(nt.finals), nt.service.db.Stats())
+				// Bound diagnostic SQL only; keep the original reply and tool waits.
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				defer cancel()
+
+				rows, err := queryStrings(ctx, nt.service.db, `SELECT format('turn=%s conversation=%s parent=%s phase=%s lane=%s terminal=%s kind=%s note=%s wake=%s claimed_by=%s outbound=%s',
+t.id, t.conversation_id, c.parent_conversation_id, t.phase, t.takes_lane, t.terminal, t.kind, t.note, t.wake, t.claimed_by, t.outbound_json IS NOT NULL)
+FROM turns t LEFT JOIN conversations c USING (conversation_id) ORDER BY t.id`, "turn-bound subagent state")
+				t.Logf("turn-bound subagent rows=%v query_error=%v", rows, err)
+			}()
+
 			require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)))
 
 			final := readFinalFor(t, nt.finals, nt.conversationID)
