@@ -1,6 +1,7 @@
 ---
 title: The Test PostgreSQL Container Needs a Larger /dev/shm
 date: 2026-10-08
+last_updated: 2026-11-09
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/backend
 problem_type: developer_experience
@@ -39,7 +40,7 @@ While building the indexed message search (`docs/plans/2026-10-08-1107-feat-inde
 
 ## Guidance
 
-Give any Docker PostgreSQL used for these tests a larger `/dev/shm`:
+Give any Docker PostgreSQL used for these tests a larger `/dev/shm`. On a Linux host:
 
 ```bash
 docker run -d --name rocketclaw-test-pg --shm-size=1g \
@@ -49,6 +50,8 @@ docker run -d --name rocketclaw-test-pg --shm-size=1g \
   -p 127.0.0.1:55432:5432 postgres:18
 export ROCKETCLAW_TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:55432/rocketclaw_test?sslmode=disable'
 ```
+
+On a Mac, this setup does not reach `make test`. Every `make` target in `internal/rocketclaw` runs again in the `rocketclaw-linux` container, on the `colima-rocketclaw-linux` Docker context, with `--network host` (`internal/rocketclaw/Makefile:14`–`18`). That container receives only variables given on the `make` command line, not your exported environment. Plain `docker` on the Mac uses another context, whose published port is not the test container's `127.0.0.1`. Start the database with the setup in `docs/solutions/best-practices/concurrent-make-test-runs-share-one-test-database-container-name.md`, which uses that context and passes the URL as `make test ROCKETCLAW_TEST_DATABASE_URL=...`, and add `--shm-size=1g` to its `docker run`.
 
 As of this writing, neither of the repo's own container setups sets it:
 
@@ -76,3 +79,5 @@ After: `docker run -d --shm-size=1g ... postgres:18`. The same suite passed.
 ## Related
 
 - `docs/solutions/best-practices/postgres-extension-in-migration-with-shared-test-database.md`: another consequence of every test sharing one database.
+- `docs/solutions/best-practices/concurrent-make-test-runs-share-one-test-database-container-name.md`: how to start a test database that `make test` can reach on a Mac.
+- `docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md`: a second run that hit this limit (SQLSTATE 53100) and a reusable `pg_fresh` setup with `--shm-size=1g`.
