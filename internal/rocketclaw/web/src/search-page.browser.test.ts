@@ -243,8 +243,10 @@ for (const width of [1280, 390]) test(`saved search tabs at ${width}px`, async (
     expect(shown("alice")!.searches.map((item) => item.name)).toEqual(["Alice"]);
     await until(() => shown("bob")?.searches.length === 1);
     // Closing Bob's only search closes his page, not to Alice's last message.
+    const closed = page.waitForResponse((reply: { url(): string; request(): { postDataJSON(): { state?: { tabs: SavedTab[] } } } }) => reply.url().endsWith("/api/Tabs") && reply.request().postDataJSON().state?.tabs.every((tab) => !tab.search));
     await page.getByRole("button", { name: "Close search 1" }).click();
     await page.waitForURL(`http://127.0.0.1:${server.port}/`);
+    await closed; // Navigation does not wait for the tab save.
     expect(api.tabs("bob").filter((tab) => tab.search)).toEqual([]);
     await page.keyboard.press("Control+p");
     const dialog = page.getByRole("dialog", { name: "Go to session" });
