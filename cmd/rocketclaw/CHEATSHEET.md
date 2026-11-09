@@ -187,6 +187,13 @@ Attachment originals use the top-level `attachments` setting: `{"driver":"filesy
 | `rocketclaw oai list` | Show provider, default marker, configured auth mode, and local credential presence. |
 | `rocketclaw oai logout [provider]` | Remove only the selected local credential; it does not revoke a remote token. |
 
+Decision models answer typed questions (yes/no, a choice, a score) with probabilities and a confidence, faster and cheaper than a chat model. Configure them under `decision`, keyed `openai` (the Decisions API, `gpt-6-luna`) or `typesafe` (TypeSafe System One, such as `jev-latest`), each with its own `api_key` and optional `api_base_url`; they never reuse the chat providers' credentials. `api_base_url` includes the API version (defaults `https://api.openai.com/v1` and `https://api.typesafe.ai/v1`), so it can point at a proxy or at another service that speaks the same protocol; the model after `provider/` is sent as written. Every decision call, from a review or a script, is traced as a model call with its token counts. `auto_approver_decision.model` (`provider/model`, such as `openai/gpt-6-luna`) makes the built-in `guardian`'s reviews ask that model first (see Agent Frontmatter And Permissions), and `auto_approver_decision.min_confidence` (0 to 1, default 0.9) is the confidence each of its answers needs:
+
+```json
+"decision": {"openai": {"api_key": "sk-…"}, "typesafe": {"api_key": "ts-…"}},
+"auto_approver_decision": {"model": "typesafe/jev-latest", "min_confidence": 0.9}
+```
+
 ## Web Voice
 
 Voice has no config fields. Every agent uses the default `openai` provider for audio, independently of its model: `api_key` uses the public GPT-Live API (`gpt-live-1`, about $0.05 per minute including silence); `chatgpt` uses its `rocketclaw oai login` credential on Codex's unofficial route (`gpt-live-1-codex`, still Codex's model ID after the GPT-Live-1.1 rollout), with 25 voices and Cove as the default. The microphone needs HTTPS. For a phone or another device, RocketClaw runs its own Tailscale node (tsnet):
@@ -298,6 +305,7 @@ Known frontmatter fields:
 | `model` | Required model name, `model` or `provider/model`, with an optional `#effort` reasoning-effort suffix such as `gpt-6.1-sol#high`. Avoid `#xhigh`; `rocketclaw lint` reports it. |
 | `reasoningEffort` | Deprecated; use the `model` suffix. A `model` suffix wins over this field. |
 | `verbosity` | Optional model verbosity. |
+| `approver` | Optional, used only when this agent is another agent's `auto(agent-name)` reviewer. It takes only `decision`: `model` (`provider/model`, its provider configured under `decision`), the decision model asked before this reviewer runs; `minConfidence`, the confidence its answers need (0 to 1, default `auto_approver_decision.min_confidence`, then 0.9); and `prompt`, rules added for the decision model only. Without `decision.model` this reviewer is never pre-gated. Any other key under `approver` fails loading: an advanced agent's own `auto` calls always go to `guardian` on the config's settings. |
 | `maxRecursion` | Optional task delegation depth for inferences started with this agent. Omitted or `-1` is unlimited, `0` disables `task`, and positive integers allow that many levels. |
 | `shell` | Optional shell for this agent's commands instead of `/bin/bash`: either the absolute path of a program, called as `<shell> <command>`, or `emulated` for real Bash in a Linux sandbox (see [Emulated shell](../../README.md#emulated-shell)). Any other value stops this agent from loading. A path names one program; the value cannot carry extra arguments. Omit it to keep default bash. See the wrapper contract below. |
 | `space` | Optional Web space name, as one string; any other value stops this agent from loading. A Web session started with this agent is born in that space, created when missing, and opens there. A new Web session offers every agent; a session whose agent has a `space` offers only agents with the same `space`, ignoring case, or every agent its Slack channel allows when none of those has that `space`. |
@@ -335,6 +343,20 @@ Permission actions:
 
 `auto` and `auto(agent-name)` review tool execution permission. Finished automatic reviews and Task subagents are saved, and the web chat opens them from the tool row that started them.
 
+A review can be pre-gated by a decision model, which is asked the guardian's questions first: risk, user authorization, prompt injection, the outcome, and whether judging the call needs files or state the review does not show. Its answer settles the review only when every answer reaches the minimum confidence, no investigation is needed, and the outcome follows the guardian's outcome rules: critical risk or prompt injection deny, high risk allows only with at least medium authorization, and low and medium risk allow. Anything else, a refusal, an error, or no answer within 30 seconds, goes to the reviewer as before. The saved review names the decision model. Whole-script reviews (`code_mode_approve`) are pre-gated the same way as single calls.
+
+Who checks what:
+
+| Agent and rule | Reviewer | Decision model asked first | Confidence | Decision model's rules |
+| --- | --- | --- | --- | --- |
+| Advanced, `auto` (or `sudo`) | `guardian` on `auto_approver_model` | `auto_approver_decision.model` | `auto_approver_decision.min_confidence`, then 0.9 | the guardian's policy |
+| Advanced, `auto(agent-name)` | that agent | its `approver.decision.model`, otherwise none | its `approver.decision.minConfidence`, then config, then 0.9 | its body + its `approver.decision.prompt` |
+| Easy, every reviewed call and script | `guardian` on `approver.model`, then `auto_approver_model` | `approver.decision.model`, then config; none when `approver.prompt` is set without `approver.decision.prompt` | `approver.decision.minConfidence`, then config, then 0.9 | the guardian's policy + `approver.decision.prompt` |
+
+The chat reviewer and the decision model each read their own prompt. `guardian` reads its full rulebook plus an easy agent's `approver.prompt`; its decision model reads the same policy without the parts it cannot follow (investigating and writing JSON) plus `approver.decision.prompt`. A custom reviewer reads its body; its decision model reads the body plus `approver.decision.prompt`. Lines written as ``!`…` `` in either added prompt run as they do in the reviewer's prompt. An easy agent with `approver.prompt` but no `approver.decision.prompt` is never pre-gated, so the decision model cannot allow what those rules forbid. Otherwise write a rule that must hold in both prompts: a rule only the decision model reads cannot deny a low- or medium-risk call on its own, since that answer goes to the reviewer, which never saw it.
+
+A custom reviewer may call its own `decision` tool while it reviews, with `allow` rules; an `auto` rule there is refused, because a review cannot start another review. An easy agent can be named in `auto(agent-name)`, but it is never pre-gated there: its `approver.decision` is for reviews of its own calls.
+
 Permission buckets:
 
 | Bucket | Subject |
@@ -350,6 +372,7 @@ Permission buckets:
 | `task` | Subagent names visible and callable through `task` only. `maxRecursion` can still hide `task` when the delegation budget is exhausted; it does not gate the nested workflow tool. |
 | `workflow` | Workflow stems for `rocketclaw_dynamic_workflow`. |
 | `mcp` | Outbound MCP as `server.tool` or wildcards such as `demo.*`. Gates nested MCP builtins inside `execute`. Host grants alone can still surface `execute` without mcp. |
+| `decision` | `provider/model` names for the `decision` tool inside Code Mode `execute`, such as `decision: {"typesafe/*": allow}`. A script calls `decision(model=..., state={...}, questions={name: {type, instructions, criteria}}, images=[...])`, where `images`, optional, lists workspace image files the agent may `read`, and where a `choice` maps labels to when each applies, a `score` lists levels lowest first, and a `bool` gives `{"true": ..., "false": ...}`. It returns a dict `{model, answers, usage, stop_reason, error_message}` with answers by question name: `choice` `{choice, probabilities, confidence}`, `score` `{score, confidence}`, `bool` `{probability}`; `usage` is `{input_tokens, output_tokens}`. TypeSafe takes PNG and JPEG images. A provider error, refusal or 30 seconds without an answer gives `stop_reason` `"error"` instead of failing the script. Its description lists the models the agent may call. `allow` runs calls without review; `auto` or `auto(agent-name)` reviews each call first. A `sudo` agent may call every model of every configured provider, each call reviewed by `guardian`. Without a rule the tool is hidden; it exists only when `decision` providers are configured. |
 | `rocketclaw` | RocketClaw platform tool names, such as `rocketclaw_store` or `rocketclaw_restart`, the `rocketclaw_sessions` key that covers all five session tools, and the settings `code_mode_approve`, `load_agents_md`, `allow_background`, and `rocketclaw_sessions_recipient`. Only exact names count: a wildcard key such as `"*"` or `rocketclaw_sessions_*`, or the scalar form `rocketclaw: allow`, fails agent loading and asks for each tool by name. A `rocketclaw_set_tag` tag-group list also grants `rocketclaw_get_tags`. |
 
 `rocketclaw_sessions` takes one of these values, and it decides whether the agent gets `rocketclaw_sessions_list`, `rocketclaw_sessions_get`, `rocketclaw_sessions_current_id`, `rocketclaw_sessions_get_url`, and `rocketclaw_sessions_write`:
@@ -383,7 +406,7 @@ Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-ex
 
 ## Easy Mode Agent Frontmatter
 
-`mode: easy` selects the easy format (see the [README](../../README.md#easy-mode-agents)). A section left out or set to `auto` turns on everything in it; a written section turns on only what it lists. Everything on is reviewed by the agent's approver, except `skill`, `find_skills`, `task`, hosted `websearch`, and the default-on RocketClaw tools (`rocketclaw_reload`, scheduled messages, `rocketclaw_attach_files_to_response`, `rocketclaw_update_goal`, `ask_user_question`). Each `execute` script is reviewed whole, and its calls one by one.
+`mode: easy` selects the easy format (see the [README](../../README.md#easy-mode-agents)). A section left out or set to `auto` turns on everything in it; a written section turns on only what it lists. Everything on is reviewed by the agent's approver, except `skill`, `find_skills`, `task`, `decision`, hosted `websearch`, and the default-on RocketClaw tools (`rocketclaw_reload`, scheduled messages, `rocketclaw_attach_files_to_response`, `rocketclaw_update_goal`, `ask_user_question`). Each `execute` script is reviewed whole, and its calls one by one.
 
 | Key | Meaning | Left out |
 | --- | --- | --- |
@@ -394,7 +417,8 @@ Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-ex
 | `workingDirectory` | The agent's folder, read-write for its shell and file tools. Relative to RocketClaw's working directory. `$VAR`s come from the turn, each escaped into one path segment, or from RocketClaw's environment; an unset one fails the turn. It may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills`, `cron`, `scripts` or `workflows`, wherever a link puts them. | Required. |
 | `subagents` | Models `task` may run this agent on, each like `model`; `[]` for none. | The agent's own `model`. |
 | `maxRecursion` | Subagent levels, 0 or more; `0` turns `task` off. | `1` |
-| `approver` | `model` replaces the review model and effort. `prompt` is added to the guardian's rules as tenant rules and never replaces them. | `guardian` on `auto_approver_model`. |
+| `approver` | `model` replaces the review model and effort. `prompt` is added to the guardian's rules as tenant rules and never replaces them; the decision model does not read it. `decision` pre-gates the reviews: `model` (`provider/model`, its provider configured under `decision`) and `minConfidence` (0 to 1) replace `auto_approver_decision.model` and `auto_approver_decision.min_confidence`, and `prompt` adds rules for the decision model only. With `prompt` set and no `decision.prompt`, reviews are never pre-gated; write the rules in both to pre-gate them. | `guardian` on `auto_approver_model`, after `auto_approver_decision.model` when set. |
+| `decision` | Decision models the Code Mode `decision` tool may call, each `provider/model` with its provider configured under `decision`; its calls run without review. | No `decision` tool. |
 | `secretsARN` | Secrets Manager ARNs, fetched each turn. Each secret is a JSON object of string values whose keys are environment variable names, each key in one secret only. Only `commands` programs and host-bash ``!`…` `` lines get them. A failure fails the turn and names the ARN and key. | No secrets. |
 | `commands` | Map from command name to host command line, run in host bash, in the folder, with RocketClaw's environment plus the secrets and the guest's arguments appended. Command lines are trusted as written; names are 1-64 of letters, digits, `_`, `.`, `+` and `-`, not `curl`, a Bash reserved word or `rocketclaw…`. | No commands. |
 | `mcp` | `{}` for none, or a map from server to `auto` or tool groups such as `[read]` or `[read, write]`. Groups come from `mcp_servers.<name>.tools.read` and `.tools.write` in `rocketclaw.json`, lists of tool-name patterns; a tool in both is a config error, and one in neither is reachable only through `auto`. An unknown server or group fails loading. | Every tool of every server. |

@@ -14,6 +14,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/codemode"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/openai/openai-go/v3/responses"
+	starjson "go.starlark.net/lib/json"
 	"go.starlark.net/starlark"
 	"golang.org/x/sync/errgroup"
 )
@@ -749,6 +750,11 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 					return nil, errCall
 				}
 
+				// Scripts read the decision tool's answers as a dict; Starlark has no JSON decoding.
+				if toolName == "decision" {
+					return starlark.Call(&starlark.Thread{Name: toolName}, starjson.Module.Members["decode"], starlark.Tuple{starlark.String(result.Output)}, nil)
+				}
+
 				if toolName == "bash" {
 					if bashResult, ok := result.Data.(BashResult); ok {
 						return &bashStarlarkResult{output: bashResult.Output, errorCode: bashResult.ErrorCode}, nil
@@ -922,6 +928,8 @@ func codeModeHostRequiredFields(name string, params map[string]any) []string {
 	case "read":
 		// filePath or filename accepted by Call; neither forced here.
 		return nil
+	case "decision":
+		return []string{"model", "state", "questions"}
 	}
 
 	switch required := params["required"].(type) {

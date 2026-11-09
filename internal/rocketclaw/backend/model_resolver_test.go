@@ -22,6 +22,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// A decision provider's api_base_url, which includes the API version, can point at another service
+// speaking the same protocol.
+func TestDecidersUseConfiguredBaseURL(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		provider config.DecisionProvider
+		path     string
+		response string
+	}{
+		{provider: config.DecisionOpenAI, path: "/proxy/v1/decisions", response: `{"model":"m","usage":{},"answers":[{"type":"predicate","name":"q","probability":0.9}]}`},
+		{provider: config.DecisionTypeSafe, path: "/proxy/v1/systemone", response: `{"model":"m","usage":{"input_tokens":1,"output_tokens":1},"answers":{"q":{"type":"noul","noul":0.9}}}`},
+	} {
+		t.Run(string(tc.provider), func(t *testing.T) {
+			t.Parallel()
+
+			var paths, keys []string
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				paths, keys = append(paths, r.URL.Path), append(keys, r.Header.Get("Authorization"))
+
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.response)
+			}))
+			t.Cleanup(server.Close)
+
+			deciders := newDeciders(&config.Config{Decision: map[config.DecisionProvider]config.DecisionProviderConfig{tc.provider: {APIKey: "key", APIBaseURL: server.URL + "/proxy/v1"}}})
+
+			answers, _, err := deciders[string(tc.provider)].Decide(t.Context(), &harness.DecisionRequest{Model: "m", Input: "x", Questions: []harness.DecisionQuestion{{Name: "q", Type: harness.DecisionPredicate}}})
+			require.NoError(t, err)
+			require.Len(t, answers, 1)
+			require.InDelta(t, 0.9, answers[0].Probability, 0)
+			require.Equal(t, []string{tc.path}, paths)
+			require.Equal(t, []string{"Bearer key"}, keys)
+		})
+	}
+}
+
 func TestModelResolverSelectsUnqualifiedExplicitAndNamedProviders(t *testing.T) {
 	t.Parallel()
 

@@ -30,6 +30,7 @@ For creation, you must know:
 - whether the agent is easy or advanced (see [Easy mode agents](#easy-mode-agents)); for easy agents, gather that section's inputs instead of the two items below
 - target name under `agents/`, description, a real model name (optionally `provider/model` and `#effort`), and purpose
 - agent kind and exact opt-ins: bash command patterns, writable path patterns, skill names, task agent names, or another named permission bucket
+- whether the agent's own scripts need the `decision` tool, and which decision models; for a custom reviewer, whether its reviews should ask a decision model first, and what rules that model gets (see [Reviews and decision models](#reviews-and-decision-models))
 
 For updates, you must know:
 - the current agent name or top-level `agents/<name>.md` path, change type, and requested edits
@@ -62,6 +63,7 @@ Built-in permission buckets:
 - `skill`: skill names for `find_skills` and `skill`
 - `task`: subagent names for the `task` tool only
 - `workflow`: workflow stems for `rocketclaw_dynamic_workflow`
+- `decision`: `provider/model` names the Code Mode `decision` tool may call, such as `"typesafe/*": allow`; scripts call `decision(model=..., state={...}, questions={...}, images=[...])` inside `execute`, where images are workspace files the agent may `read`; the tool exists only when `decision` providers are configured in `rocketclaw.json`
 - `read` / `edit` / `glob` / `grep` / `webfetch` / `bash`: same subjects as before; unlock nested builtins inside Code Mode `execute` (not separate top-level tools)
 - `mcp`: outbound MCP as `server.tool` or wildcards such as `demo.*`; unlocks Code Mode `execute` MCP builtins when a matching configured `mcp_servers` name is granted
 - `rocketclaw`: exact RocketClaw tool and setting names only; a wildcard key such as `"*"` or `rocketclaw_sessions_*`, or the scalar form `rocketclaw: allow`, fails agent loading
@@ -74,7 +76,7 @@ For edit-only agents, an `edit` allow also permits reading the same path unless 
 
 For bash agents, rocketcode checks permissions against each parsed shell call. Multi-command scripts need every parsed call allowed.
 
-Automatic permission review rules use `auto` or `auto(<agent-name>)`. Bare `auto` uses RocketCode's embedded `guardian` reviewer. `auto(<agent-name>)` uses that loaded custom reviewer agent. RocketClaw always enables RocketCode automatic review; failed review, invalid reviewer output, recursive review, timeout, or rejection denies the tool call. Do not create or rename an agent to `guardian`, because that name is reserved for the embedded reviewer. Custom reviewer agents should normally use a `#low` model suffix, such as `model: gpt-6.1-sol#low`, because each automatic permission review has 90 seconds to return a valid decision.
+Automatic permission review rules use `auto` or `auto(<agent-name>)`. Bare `auto` uses RocketCode's embedded `guardian` reviewer. `auto(<agent-name>)` uses that loaded custom reviewer agent. RocketClaw always enables RocketCode automatic review; failed review, invalid reviewer output, recursive review, timeout, or rejection denies the tool call. Do not create or rename an agent to `guardian`, because that name is reserved for the embedded reviewer. Custom reviewer agents should normally use a `#low` model suffix, such as `model: gpt-6.1-sol#low`, because each automatic permission review has 90 seconds to return a valid decision. A custom reviewer may also set `approver.decision`: its reviews then ask that decision model first, with the reviewer's body plus `approver.decision.prompt` as the rules, and the reviewer runs only when the answers are not confident or consistent. See [Reviews and decision models](#reviews-and-decision-models).
 
 If the human wants whole-script review rather than just reviews of nested calls, set `permission.rocketclaw.code_mode_approve: auto` or `auto(<agent-name>)`. Omit it (or set `allow`) when no whole-script review is requested.
 
@@ -161,9 +163,78 @@ permission:
   mcp:
     "demo.*": allow
     "demo.danger": deny
+  decision:
+    "typesafe/*": allow
 ```
 
 If the agent needs no tools, omit the `permission` block. Outbound MCP tools stay omitted until `permission.mcp` grants a configured server.
+
+## Reviews and decision models
+
+Every `auto` check goes to a reviewer, and the reviewer can be pre-gated by a decision model: a fast model that answers the review's questions with probabilities. Its answer settles the check only when every answer is confident and follows the guardian's outcome rules; otherwise the reviewer runs as usual. Whole-script checks (`code_mode_approve`) are pre-gated the same way.
+
+| Agent and rule | Reviewer | Decision model asked first | Its rules |
+| --- | --- | --- | --- |
+| Advanced, `auto` (or `sudo`) | `guardian` on `auto_approver_model` | `auto_approver_decision.model` in `rocketclaw.json`, if set | the guardian's policy |
+| Advanced, `auto(<agent-name>)` | that agent | its `approver.decision.model`, otherwise none | its body + its `approver.decision.prompt` |
+| Easy, everything reviewed | `guardian` on `approver.model`, then `auto_approver_model` | `approver.decision.model`, then `auto_approver_decision.model`; none when `approver.prompt` is set without `approver.decision.prompt` | the guardian's policy + `approver.decision.prompt` |
+
+The chat reviewer and the decision model each read their own prompt. When you write rules that must hold, put each rule in both: `approver.prompt` and `approver.decision.prompt` for an easy agent, or the body and `approver.decision.prompt` for a custom reviewer. A rule only one of them reads can be skipped. An easy agent with `approver.prompt` and no `approver.decision.prompt` is never pre-gated, so its rules always reach the guardian.
+
+`approver.decision` takes `model` (`provider/model`), `minConfidence` (0 to 1; default `auto_approver_decision.min_confidence`, then 0.9) and `prompt`. Its provider, and the provider of every model in an easy agent's `decision` list, must be configured under `decision` in `rocketclaw.json`, or the agent fails to load. An advanced `permission.decision` rule naming an unconfigured provider still loads, but every call to it returns `stop_reason` `"error"`, so check its provider too. Use `main-update-rocketclaw-json` to add a provider.
+
+An advanced agent's `approver:` takes only `decision`, and it applies only when another agent names this one in `auto(<agent-name>)`. It never changes how this agent's own calls are checked: those go to `guardian` on the config's settings, or to the custom reviewer the rule names. A custom reviewer may call its own `decision` tool while it reviews, with `allow` rules only.
+
+Advanced agent:
+
+```yaml
+---
+description: Release helper
+model: gpt-6.1-sol#high
+permission:
+  rocketclaw:
+    code_mode_approve: auto(release-reviewer)
+  bash:
+    "git *": auto
+    "deploy *": auto(release-reviewer)
+  decision:
+    "typesafe/*": allow
+---
+```
+
+Custom reviewer:
+
+```yaml
+---
+description: Reviews deploys
+model: gpt-6.1-sol#low
+approver:
+  decision:
+    model: openai/gpt-6-luna
+    minConfidence: 0.95
+    prompt: Deny production deploys outside business hours.
+---
+Deny production deploys outside business hours. Allow staging deploys.
+```
+
+Easy agent:
+
+```yaml
+---
+mode: easy
+model: gpt-6.1-sol
+space: Marketing
+workingDirectory: sessions/marketing/$ROCKETCLAW_CONVERSATION_ID
+approver:
+  model: gpt-6.1-sol#low
+  prompt: Never email outside the company.
+  decision:
+    model: openai/gpt-6-luna
+    minConfidence: 0.85
+    prompt: Never email outside the company.
+decision: [typesafe/jev-latest]
+---
+```
 
 ## Runtime and tool behavior
 
@@ -278,7 +349,8 @@ Keys:
 - `workingDirectory` (required): the agent's own folder, the only one its shell and file tools can write, for example `sessions/<name>/$ROCKETCLAW_CONVERSATION_ID`; relative to RocketClaw's working directory; it may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills`, `cron`, `scripts` or `workflows`, wherever a link puts them
 - `subagents`: models `task` may run this agent on, each like `model`; `[]` for none; default its own `model`
 - `maxRecursion`: subagent levels, 0 or more; `0` turns `task` off; default `1`
-- `approver`: `model` replaces the review model, `prompt` is added to the guardian's rules; default `guardian` on `auto_approver_model`
+- `approver`: `model` replaces the review model, `prompt` is added to the guardian's rules, and `decision` (`model`, `minConfidence`, `prompt`) replaces the decision model reviews ask first and gives it its own rules; default `guardian` on `auto_approver_model`, after `auto_approver_decision.model` when set; see [Reviews and decision models](#reviews-and-decision-models)
+- `decision`: decision models the Code Mode `decision` tool may call, each `provider/model` with its provider configured under `decision`; calls run without review; default no `decision` tool
 - `secretsARN`: Secrets Manager ARNs, fetched each turn, given only to `commands` programs and ``!`…` `` lines
 - `commands`: map from command name to the host command line it runs
 - `mcp`: `{}` for none, or a map from server to `auto` or tool groups `[read]` or `[read, write]`; groups come from `mcp_servers.<name>.tools` in `rocketclaw.json` (use `main-update-rocketclaw-json`); an unknown server or group fails loading
@@ -290,7 +362,7 @@ Keys:
 - `delegatedFrom`: `true` (default), `false`, or the agent names that may start, message or stop its chats
 - `schema.output`: as for advanced agents
 
-Any other key fails loading with `<key>: not an easy-mode key`, including the advanced keys `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo`, `guardrail` and `additionalInstructions`. `approver` takes only `model` and `prompt`, and `schema` only `output`.
+Any other key fails loading with `<key>: not an easy-mode key`, including the advanced keys `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo`, `guardrail` and `additionalInstructions`. `approver` takes only `model`, `prompt` and `decision`, `approver.decision` only `model`, `minConfidence` and `prompt`, and `schema` only `output`.
 
 The body is the agent's whole instructions: easy agents never load `AGENTS.md`, and their tools see only `workingDirectory`. ``!`…` `` lines in the body run in host bash from the workspace, so end the body with ``!`cat MEMORY.md` `` instead of the `MEMORY.md` instruction, and add ``!`cat AGENTS.md` `` when the human wants it included.
 
@@ -302,6 +374,8 @@ space: Marketing
 workingDirectory: sessions/marketing/$ROCKETCLAW_CONVERSATION_ID
 approver:
   prompt: "Deny write actions the user did not explicitly request."
+  decision:
+    prompt: "Deny write actions the user did not explicitly request."
 mcp:
   alitu_google_marketing: [read]
 rocketclaw: [sessions, pages]
@@ -328,7 +402,8 @@ When the effective file has `mode: easy`, keep it easy: never add advanced keys,
 4. Summarize the agent change you are about to make.
 5. Create or update the overlay file in `agents/`.
 6. If this is a rename and an old overlay file exists at the previous path, remove that old overlay file.
-7. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, run `rocketclaw lint`, resolve or explicitly suppress findings approved by the human, then optionally tell the human you are applying them now and call `rocketclaw_reload` exactly once. Use `rocketclaw_restart` only when runtime configuration or overlay-list entries changed.
+7. If the agent names a decision model, check that its provider is under `decision` in `rocketclaw.json`; if not, add it with `main-update-rocketclaw-json` before reloading.
+8. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, run `rocketclaw lint`, resolve or explicitly suppress findings approved by the human, then optionally tell the human you are applying them now and call `rocketclaw_reload` exactly once. Use `rocketclaw_restart` only when runtime configuration or overlay-list entries changed.
 
 ## Important
 
@@ -339,6 +414,8 @@ When the effective file has `mode: easy`, keep it easy: never add advanced keys,
 - Run `rocketclaw lint` after requested agent or relevant script edits and before `rocketclaw_reload` or `rocketclaw_restart`.
 - Always end the agent instructions with an explicit instruction to use `MEMORY.md`, or, for easy agents, with ``!`cat MEMORY.md` ``.
 - Never add advanced keys to a `mode: easy` file.
+- Never write `approver.model` or `approver.prompt` in an advanced file; it takes only `approver.decision`, and only for its reviews of other agents.
+- Write each review rule that must hold in both the chat reviewer's prompt and `approver.decision.prompt`.
 - Make all requested agent-definition edits before calling `rocketclaw_reload` or `rocketclaw_restart`; do not call either between intermediate edits.
 - Be truthful about overlay limitations when a rename cannot remove an old embedded source path.
 - If no agent-definition file changed, do not call `rocketclaw_restart`.

@@ -54,6 +54,7 @@ func clone(source *Config) Config {
 	cfg.Overlays = slices.Clone(cfg.Overlays)
 	cfg.Environment = slices.Clone(cfg.Environment)
 	cfg.Providers = maps.Clone(cfg.Providers)
+	cfg.Decision = maps.Clone(cfg.Decision)
 	cfg.OpenCode = maps.Clone(cfg.OpenCode)
 	cfg.RocketClaws = maps.Clone(cfg.RocketClaws)
 	cfg.TrustedRocketClaws = slices.Clone(cfg.TrustedRocketClaws)

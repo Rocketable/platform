@@ -39,8 +39,12 @@ type Config struct {
 	OpenAI             OpenAIConfig            `json:"openai"`
 	Providers          map[string]OpenAIConfig `json:"providers,omitempty"`
 	AutoApproverModel  string                  `json:"auto_approver_model"`
-	Instrumentation    InstrumentationConfig   `json:"instrumentation"`
-	PostHog            PostHogConfig           `json:"posthog,omitzero"`
+	// Decision configures decision-model providers by name, openai or typesafe.
+	Decision map[DecisionProvider]DecisionProviderConfig `json:"decision,omitempty"`
+	// AutoApproverDecision is the decision model the built-in guardian's reviews ask first.
+	AutoApproverDecision AutoApproverDecisionConfig `json:"auto_approver_decision,omitzero"`
+	Instrumentation      InstrumentationConfig      `json:"instrumentation"`
+	PostHog              PostHogConfig              `json:"posthog,omitzero"`
 	// Permissions maps a Tailscale login to the names of the spaces it is limited to in the Web.
 	Permissions map[string][]string `json:"permissions,omitempty"`
 }
@@ -252,6 +256,38 @@ type OpenAIConfig struct {
 	PromptCacheMarkersRelativePosition *int `json:"prompt_cache_markers_relative_position,omitempty"`
 }
 
+// DecisionProvider names a decision-model API.
+type DecisionProvider string
+
+// The decision-model APIs RocketClaw can call.
+const (
+	DecisionOpenAI   DecisionProvider = "openai"
+	DecisionTypeSafe DecisionProvider = "typesafe"
+)
+
+// DecisionProviderNames returns every configured decision provider name.
+func (c *Config) DecisionProviderNames() []string {
+	names := make([]string, 0, len(c.Decision))
+	for name := range c.Decision {
+		names = append(names, string(name))
+	}
+
+	return names
+}
+
+// DecisionProviderConfig configures one decision-model API; it never shares the chat providers' credentials.
+type DecisionProviderConfig struct {
+	APIKey     string `json:"api_key"`
+	APIBaseURL string `json:"api_base_url,omitempty"`
+}
+
+// AutoApproverDecisionConfig is the decision model, a provider/model under decision, that the built-in
+// guardian asks first, and the confidence every answer needs to settle a review.
+type AutoApproverDecisionConfig struct {
+	Model         string  `json:"model,omitempty"`
+	MinConfidence float64 `json:"min_confidence,omitempty"`
+}
+
 // Provider returns the default or named provider configuration.
 func (c *Config) Provider(name string) (OpenAIConfig, bool) {
 	if name == "openai" {
@@ -436,6 +472,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.validateDecision(); err != nil {
+		return err
+	}
+
 	if err := c.validateInstrumentation(); err != nil {
 		return err
 	}
@@ -617,6 +657,30 @@ func (c *Config) validateMCPServers() error {
 		}
 
 		c.MCPServers[name] = server
+	}
+
+	return nil
+}
+
+func (c *Config) validateDecision() error {
+	for _, name := range slices.Sorted(maps.Keys(c.Decision)) {
+		switch {
+		case name != DecisionOpenAI && name != DecisionTypeSafe:
+			return fmt.Errorf("decision[%q]: provider must be openai or typesafe", name)
+		case strings.TrimSpace(c.Decision[name].APIKey) == "":
+			return fmt.Errorf("decision[%q].api_key is required", name)
+		}
+	}
+
+	decision := &c.AutoApproverDecision
+
+	decision.Model = strings.TrimSpace(decision.Model)
+	if provider, model, _ := strings.Cut(decision.Model, "/"); decision.Model != "" && (model == "" || c.Decision[DecisionProvider(provider)] == DecisionProviderConfig{}) {
+		return fmt.Errorf("auto_approver_decision.model: %q must be provider/model with its provider configured in decision", decision.Model)
+	}
+
+	if decision.MinConfidence < 0 || decision.MinConfidence > 1 {
+		return errors.New("auto_approver_decision.min_confidence must be between 0 and 1")
 	}
 
 	return nil

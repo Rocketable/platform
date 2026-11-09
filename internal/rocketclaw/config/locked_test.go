@@ -15,6 +15,7 @@ func TestLockedConfig(t *testing.T) {
 		Workspace: "workspace", Overlays: []string{"overlay"},
 		Environment: []string{"KEY=value"},
 		Providers:   map[string]OpenAIConfig{"work": {APIKey: "invented"}},
+		Decision:    map[DecisionProvider]DecisionProviderConfig{DecisionTypeSafe: {APIKey: "invented"}},
 		RocketClaws: map[string]RemoteRocketClawConfig{"work": {URL: "https://work.example.ts.net"}},
 		MCPServers:  map[string]MCPServerConfig{"tools": {Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}}},
 		Slack:       SlackConfig{Channels: []SlackChannelConfig{{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}}},
@@ -28,6 +29,7 @@ func TestLockedConfig(t *testing.T) {
 		snapshot.Overlays[0] = "changed"
 		snapshot.Environment[0] = "changed"
 		snapshot.Providers["work"] = OpenAIConfig{APIKey: "changed"}
+		snapshot.Decision[DecisionTypeSafe] = DecisionProviderConfig{APIKey: "changed"}
 		snapshot.RocketClaws["work"] = RemoteRocketClawConfig{URL: "changed"}
 		server := snapshot.MCPServers["tools"]
 		server.Args[0], server.Env["KEY"], server.Headers["HEADER"] = "changed", "changed", "changed"
@@ -44,6 +46,7 @@ func TestLockedConfig(t *testing.T) {
 	require.Equal(t, []string{"overlay"}, snapshot.Overlays)
 	require.Equal(t, []string{"KEY=value"}, snapshot.Environment)
 	require.Equal(t, "invented", snapshot.Providers["work"].APIKey)
+	require.Equal(t, "invented", snapshot.Decision[DecisionTypeSafe].APIKey)
 	require.Equal(t, "https://work.example.ts.net", snapshot.RocketClaws["work"].URL)
 	require.Equal(t, MCPServerConfig{Args: []string{"arg"}, Env: map[string]string{"KEY": "value"}, Headers: map[string]string{"HEADER": "value"}}, snapshot.MCPServers["tools"])
 	require.Equal(t, SlackChannelConfig{Channel: "ops", Agents: []string{"main"}, AllowedUserIDs: []string{"alice"}}, snapshot.Slack.Channels[0])

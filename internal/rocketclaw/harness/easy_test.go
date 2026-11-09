@@ -15,8 +15,9 @@ func loadEasyTestAgent(t *testing.T, frontmatter string) (Agent, []error) {
 	t.Helper()
 
 	result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\n" + frontmatter + "\n---\nBody\n")}, AgentLoadConfig{
-		MCPToolGroups: map[string]map[string][]string{"s": {"read": {"list_*"}, "write": {"update_*"}}, "t": {"read": {"get_*"}}},
-		Providers:     []string{"openai", "work"},
+		MCPToolGroups:     map[string]map[string][]string{"s": {"read": {"list_*"}, "write": {"update_*"}}, "t": {"read": {"get_*"}}},
+		Providers:         []string{"openai", "work"},
+		DecisionProviders: []string{"openai"},
 		Skills: fstest.MapFS{
 			"marketing/seo/SKILL.md":      testMapFile("---\nname: seo\ndescription: SEO\n---\n"),
 			"marketing/team/ads/SKILL.md": testMapFile("---\nname: ads\ndescription: Ads\n---\n"),
@@ -43,6 +44,11 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 		{"unknown subagent provider", easyRequired + "\nsubagents: [nope/gpt-6]", `main.md: model "nope/gpt-6": provider "nope" is not configured`},
 		{"unknown approver provider", easyRequired + "\napprover: {model: nope/gpt-6}", `main.md: model "nope/gpt-6": provider "nope" is not configured`},
 		{"misspelled approver key", easyRequired + "\napprover: {promt: rules}", "main.md: approver.promt: not an easy-mode key"},
+		{"unknown approver decision provider", easyRequired + "\napprover: {decision: {model: typesafe/jev-latest}}", `main.md: decision model "typesafe/jev-latest": provider "typesafe" is not configured in decision`},
+		{"unqualified approver decision model", easyRequired + "\napprover: {decision: {model: gpt-6-luna}}", `main.md: decision model "gpt-6-luna": provider "gpt-6-luna" is not configured in decision`},
+		{"approver confidence above one", easyRequired + "\napprover: {decision: {model: openai/gpt-6-luna, minConfidence: 2}}", "main.md: approver.decision.minConfidence: must be between 0 and 1"},
+		{"unknown decision tool provider", easyRequired + "\ndecision: [typesafe/jev-latest]", `main.md: decision model "typesafe/jev-latest": provider "typesafe" is not configured in decision`},
+		{"decision auto", easyRequired + "\ndecision: auto", "main.md: decision: must be a list of provider/model names"},
 		{"unknown rocketclaw group", easyRequired + "\nrocketclaw: [chat]", `main.md: rocketclaw: unknown group "chat"`},
 		{"tags group without tags", easyRequired + "\nrocketclaw: [tags]", "main.md: tags: required by the tags group in rocketclaw, and only with it"},
 		{"tags without tags group", easyRequired + "\nrocketclaw: [sessions]\ntags: [[open, closed]]", "main.md: tags: required by the tags group in rocketclaw, and only with it"},
@@ -104,7 +110,8 @@ func TestLoadEasyAgentFields(t *testing.T) {
 		agent, errs := loadEasyTestAgent(t, easyRequired+`
 subagents: [work/gpt-6-luna#max, gpt-6-luna]
 maxRecursion: 0
-approver: {model: work/gpt-6-luna#max, prompt: Deny writes.}
+approver: {model: work/gpt-6-luna#max, prompt: Deny writes., decision: {model: openai/gpt-6-luna, minConfidence: 0.8, prompt: Deny outside writes.}}
+decision: [openai/gpt-6-luna]
 secretsARN: ["arn::marketing-read"]
 commands: {stripe-write: "stripe -c $ROCKETCLAW_METADATA_CUSTOMER_ID"}
 mcp: {s: [read]}
@@ -124,6 +131,7 @@ schema: {output: {type: object, properties: {answer: {type: string}}}}`)
 		require.Equal(t, []string{"work/gpt-6-luna#max", "gpt-6-luna"}, agent.Subagents)
 		require.Equal(t, "work/gpt-6-luna#max", agent.ApproverModel)
 		require.Equal(t, "Deny writes.", agent.ApproverPrompt)
+		require.Equal(t, ApproverDecision{Model: "openai/gpt-6-luna", MinConfidence: 0.8, Prompt: "Deny outside writes."}, agent.ApproverDecision)
 		require.Equal(t, []string{"arn::marketing-read"}, agent.SecretsARN)
 		require.Equal(t, map[string]string{"stripe-write": "stripe -c $ROCKETCLAW_METADATA_CUSTOMER_ID"}, agent.Commands)
 		require.Equal(t, [][]string{{"triage", "resolved"}}, agent.TagGroups)
@@ -242,6 +250,10 @@ func TestEasyAgentSections(t *testing.T) {
 		{name: "no mcp", sections: "mcp: {}", off: [][2]string{{"mcp", "s.list_reports"}, {"mcp", "t.get_x"}}},
 		{name: "no subagents", sections: "subagents: []", off: [][2]string{{"task", "main"}}},
 		{name: "no recursion", sections: "maxRecursion: 0", off: [][2]string{{"task", "main"}}},
+		{name: "no decision models", off: [][2]string{{"decision", "openai/gpt-6-luna"}}},
+		{name: "decision model", sections: "decision: [openai/gpt-6-luna]",
+			on:  [][2]string{{"decision", "openai/gpt-6-luna"}},
+			off: [][2]string{{"decision", "openai/other"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agent, errs := loadEasyTestAgent(t, easyRequired+"\n"+tc.sections)

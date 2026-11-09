@@ -172,6 +172,9 @@ packages:
       responsesAPI:
         config:
           structname: mockResponsesAPI
+      Decider:
+        config:
+          structname: mockDecider
   github.com/Rocketable/platform/internal/rocketclaw/codemode:
     interfaces:
       ToolCallObserver:

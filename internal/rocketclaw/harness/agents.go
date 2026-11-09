@@ -32,11 +32,14 @@ type Agent struct {
 	Location        string
 	Permission      PermissionSet
 	OutputSchema    map[string]any
-	Frontmatter     map[string]any
-	FrontmatterNode *yaml.Node
-	FileMode        fs.FileMode
-	Mode            AgentMode
-	Sticky          AgentSticky
+	// ApproverDecision is the decision model asked before an approver. An easy agent's guards the guardian's
+	// reviews of its own calls; an advanced agent's guards its reviews of others as auto(<agent>).
+	ApproverDecision ApproverDecision
+	Frontmatter      map[string]any
+	FrontmatterNode  *yaml.Node
+	FileMode         fs.FileMode
+	Mode             AgentMode
+	Sticky           AgentSticky
 
 	// Easy-only fields, compiled from an easy file's sections; advanced agents leave them zero.
 	// Model entries keep their text as written, provider prefix and #effort included.
@@ -306,7 +309,7 @@ func loadAgent(fsys fs.FS, filePath string, cfg AgentLoadConfig) (Agent, error) 
 		}
 	}
 
-	if err := parseAgentShell(frontmatterNode, &agent); err != nil {
+	if err := cmp.Or(parseAgentShell(frontmatterNode, &agent), parseAgentApprover(frontmatterNode, &agent, cfg)); err != nil {
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
 
@@ -315,6 +318,74 @@ func loadAgent(fsys fs.FS, filePath string, cfg AgentLoadConfig) (Agent, error) 
 	agent.Verbosity = argString(frontmatter, "verbosity")
 
 	return agent, nil
+}
+
+// ApproverDecision is an approver.decision block: the decision model asked before the approver, the
+// confidence each answer needs, and rules added to the decision model's prompt.
+type ApproverDecision struct {
+	Model         string  `yaml:"model"`
+	MinConfidence float64 `yaml:"minConfidence"`
+	Prompt        string  `yaml:"prompt"`
+}
+
+// parseAgentApprover reads an advanced agent's approver block, which holds only its settings as another
+// agent's auto(<agent>) reviewer.
+func parseAgentApprover(node *yaml.Node, agent *Agent, cfg AgentLoadConfig) error {
+	field := frontmatterField(node, "approver")
+	if field != nil && field.Kind != yaml.MappingNode {
+		return errors.New("approver: must be a mapping with only decision")
+	}
+
+	if err := checkKeys(field, "approver.", "advanced agents take only approver.decision", "decision"); err != nil {
+		return err
+	}
+
+	return parseApproverDecision(field, agent, cfg)
+}
+
+// parseApproverDecision reads the decision block of approver, an agent's approver block or nil, into
+// agent.ApproverDecision; a missing one leaves it zero.
+func parseApproverDecision(approver *yaml.Node, agent *Agent, cfg AgentLoadConfig) error {
+	if approver == nil {
+		return nil
+	}
+
+	node := frontmatterField(approver, "decision")
+	if node == nil {
+		return nil
+	}
+
+	errShape := errors.New("approver.decision: must be a mapping of model and prompt strings and a minConfidence number")
+	if node.Kind != yaml.MappingNode {
+		return errShape
+	}
+
+	if err := checkKeys(node, "approver.decision.", "not an approver.decision key", "model", "minConfidence", "prompt"); err != nil {
+		return err
+	}
+
+	if node.Decode(&agent.ApproverDecision) != nil {
+		return errShape
+	}
+
+	if decision := &agent.ApproverDecision; decision.MinConfidence < 0 || decision.MinConfidence > 1 {
+		return errors.New("approver.decision.minConfidence: must be between 0 and 1")
+	}
+
+	agent.ApproverDecision.Model = strings.TrimSpace(agent.ApproverDecision.Model)
+
+	return checkDecisionModels(cfg, agent.ApproverDecision.Model)
+}
+
+// checkDecisionModels reports the first non-empty provider/model whose provider is not configured.
+func checkDecisionModels(cfg AgentLoadConfig, models ...string) error {
+	for _, model := range models {
+		if provider, _, _ := strings.Cut(model, "/"); model != "" && !slices.Contains(cfg.DecisionProviders, provider) {
+			return fmt.Errorf("decision model %q: provider %q is not configured in decision", model, provider)
+		}
+	}
+
+	return nil
 }
 
 func parseAgentFrontmatter(content []byte) (frontmatter map[string]any, frontmatterNode *yaml.Node, prompt string, err error) {

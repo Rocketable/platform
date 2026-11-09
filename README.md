@@ -287,6 +287,8 @@ Release note for agent session control:
 
 Every permission review starts with a header RocketClaw writes outside the transcript: the turn's source (`Web`, `Slack`, `Cron`, `ExternalMCP` or `System`, or `ScheduledMessage` with its creator's source), the person who asked when known, and the agent that sent the message. Subagents, workflow workers and shadows carry their top-level turn's header. The reviewer trusts it over any origin the transcript claims, so a rule such as "cron turns never use write credentials" can be enforced.
 
+A decision model can settle reviews first. Configure OpenAI's Decisions API or TypeSafe under `decision` in `rocketclaw.json`, and name the model in `auto_approver_decision` (`{"model": "openai/gpt-6-luna", "min_confidence": 0.9}`), or in an easy agent's `approver.decision`. The guardian's reviews then ask that model about risk, user authorization, prompt injection and the outcome, and whether judging the call needs files or state it cannot see. They act on its answer only when every answer is confident enough (`min_confidence`, 0.9 by default), nothing needs a closer look, and the outcome follows the guardian's rules. Anything less, and every error, goes to the guardian as before. A custom reviewer (`auto(name)`) asks a decision model first only when its own frontmatter sets `approver.decision.model`, and then sends its own prompt plus `approver.decision.prompt` as the rules. The decision model and the chat reviewer each read their own prompt, so an easy agent whose `approver.prompt` has no `approver.decision.prompt` is never pre-gated, and a rule that must hold goes in both; the [cheatsheet](cmd/rocketclaw/CHEATSHEET.md#agent-frontmatter-and-permissions) has a table of who checks what. TypeSafe receives the rules with each question rather than next to the conversation it judges. Agents can also ask decision models typed questions themselves: Code Mode scripts call `decision(model=..., state={...}, questions={...})`, optionally with `images=[...]` naming workspace image files the agent may read, and get the answers back as a dict with the tokens used, so one script can sort many items at once. Every decision call is traced with its token counts. An agent gets this tool only when its `permission.decision` rules, or an easy agent's `decision` list, name the models it may call. Each provider's `api_base_url` can point at another service that speaks the same protocol.
+
 ### Sticky agents
 
 `sticky` in an agent's frontmatter, advanced or easy, limits how many Web sessions the agent has:
@@ -306,7 +308,7 @@ Cron files and routines follow their agent. Each run of a `global` agent, from a
 An agent file with `mode: easy` uses a shorter format. Leaving `mode` out, or `mode: advanced`, keeps the format described above; any other value fails to load. The rules of an easy file:
 
 - A section left out, or set to `auto`, turns on everything in it. A section written out turns on only what it lists.
-- Everything turned on is reviewed before it runs by the agent's approver: the guardian, on `approver.model` when set, with `approver.prompt` added to its rules. As under `sudo`, skills, `task`, web search and the default-on RocketClaw tools (reload, scheduled messages, attaching files, goal updates and questions) run without review.
+- Everything turned on is reviewed before it runs by the agent's approver: the guardian, on `approver.model` when set, with `approver.prompt` added to its rules. `approver.decision` (`model`, `minConfidence`, `prompt`) sets the decision model asked first and its own rules. With `approver.prompt` set and no `approver.decision.prompt`, reviews are never pre-gated; write the rules in both to pre-gate them. As under `sudo`, skills, `task`, web search and the default-on RocketClaw tools (reload, scheduled messages, attaching files, goal updates and questions) run without review, and so does the `decision` tool for the models the `decision` list names.
 - `model`, `space` and `workingDirectory` are required. A misspelled or unknown key fails to load, and so do the advanced keys `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo`, `guardrail` and `additionalInstructions`.
 - The body is the agent's whole instructions. Easy agents never load `AGENTS.md` and get no reply-style line; write ``!`cat AGENTS.md` `` in the body to include it.
 
@@ -325,6 +327,9 @@ maxRecursion: 1
 approver:
   model: openai/gpt-6-luna#max
   prompt: "Cron turns never use write credentials. Deny write actions the user did not explicitly request."
+  decision:
+    model: typesafe/jev-latest
+    prompt: "Cron turns never use write credentials. Deny write actions the user did not explicitly request."
 
 secretsARN:
   - "arn:aws:secretsmanager:us-east-1:123456789012:secret:marketing-read"

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -459,6 +460,54 @@ func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `"done"`, string(result))
 	require.Equal(t, []string{"gpt-6.1-sol", "review-model", "review-model", "gpt-6.1-sol"}, models)
+}
+
+// A configured decision model settles confident reviews before any guardian request.
+func TestWorkflowAgentRunnerAsksDecisionModelFirst(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    code_mode_approve: auto\n  bash:\n    \"printf ok\": auto\n---\nMain prompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	var requests []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct{ Model string }
+		if err := json.NewDecoder(r.Body).Decode(&body); !assert.NoError(t, err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		requests = append(requests, path.Base(r.URL.Path)+" "+body.Model)
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case r.URL.Path == "/decisions":
+			_, _ = io.WriteString(w, `{"model":"gpt-6-luna","usage":{},"answers":[
+				{"type":"score","name":"risk_level","score":0,"confidence":0.97,"probabilities":[{"value":0,"label":"low","probability":0.98}]},
+				{"type":"score","name":"user_authorization","score":2,"confidence":0.95,"probabilities":[{"value":2,"label":"medium","probability":0.96}]},
+				{"type":"predicate","name":"prompt_injection","probability":0.01},
+				{"type":"choice","name":"outcome","choice":"allow","confidence":0.98,"probabilities":[{"value":"allow","probability":0.99}]},
+				{"type":"predicate","name":"needs_investigation","probability":0.01}]}`)
+		case len(requests) == 1:
+			writeRawRunFunctionCall(t, w, "resp_1", "execute", executeBashScript("printf ok"))
+		default:
+			writeRawRunMessage(t, w, "resp_done", "msg_done", "done")
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "review-model", Decision: map[config.DecisionProvider]config.DecisionProviderConfig{config.DecisionOpenAI: {APIKey: "decide-key", APIBaseURL: server.URL}}, AutoApproverDecision: config.AutoApproverDecisionConfig{Model: "openai/gpt-6-luna"}}
+	run, err := newWorkflowAgentRunner(config.NewLockedConfig(cfg), &sandbox.Runtime{}, "main", harness.InertJournal{}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, run.Close()) })
+
+	result, err := run.Run(t.Context(), &workflow.AgentRequest{Prompt: "run", Worker: workflow.Worker{Name: "worker", Instructions: "work", Tools: []string{"execute"}}})
+	require.NoError(t, err)
+	require.JSONEq(t, `"done"`, string(result))
+	require.Equal(t, []string{"responses gpt-6.1-sol", "decisions gpt-6-luna", "decisions gpt-6-luna", "responses gpt-6.1-sol"}, requests)
 }
 
 // KTD10: an easy agent's workers run only on its own model or its subagents', see its files only, and are
