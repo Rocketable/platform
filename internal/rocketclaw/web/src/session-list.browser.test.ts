@@ -2418,9 +2418,12 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       if (width === 390) {
         await detailsPage.setViewportSize({ width: 320, height: 568 });
         const selector = detailsPage.getByRole("button", { name: "Choose agent", exact: true });
-        expect((await selector.boundingBox())!.height).toBeGreaterThanOrEqual(28);
-        const selectorBox = (await selector.boundingBox())!;
-        const sendBox = (await detailsPage.getByRole("button", { name: "Send", exact: true }).boundingBox())!;
+        // A viewport update can move both controls between separate boundingBox calls.
+        const [selectorBox, sendBox] = await selector.evaluate((element: HTMLElement) => [element, element.closest("[data-native-composer]")!.querySelector('button[aria-label="Send"]')!].map((node) => {
+          const { width, height, y } = node.getBoundingClientRect();
+          return { width, height, y };
+        }));
+        expect(selectorBox.height).toBeGreaterThanOrEqual(28);
         expect(selectorBox.width).toBeLessThanOrEqual(144);
         expect(Math.abs(selectorBox.y - sendBox.y)).toBeLessThan(2);
         await selector.click();
