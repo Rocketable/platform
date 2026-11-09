@@ -158,7 +158,7 @@ func TestBuildImage(t *testing.T) {
 
 	info, err := os.Lstat(filepath.Join(dst, "usr", "bin", "su"))
 	require.NoError(t, err)
-	require.Equal(t, fs.FileMode(0o755), info.Mode().Perm(), "setuid never survives")
+	require.Equal(t, fs.FileMode(0o755), info.Mode(), "setuid never survives")
 
 	hard, err := os.Lstat(filepath.Join(dst, "usr", "bin", "sudo"))
 	require.NoError(t, err)
