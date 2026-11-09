@@ -1,6 +1,7 @@
 ---
 title: make coverage-profile Kills Its Own Shell When Run Directly on a Mac
 date: 2026-11-03
+last_updated: 2026-11-09
 category: docs/solutions/best-practices/
 module: internal/rocketclaw
 problem_type: developer_experience
@@ -82,4 +83,5 @@ After the fix, the same command runs the chosen tests and writes `.coverage.out`
 ## Related
 
 - `docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md`: older setup for running RocketClaw tests from a workspace. It predates the move of Mac runs into the Linux container.
-- `docs/solutions/best-practices/colima-bind-mounts-fill-vm-disk.md`: another way the Colima VM behind these runs can fail.
+- `docs/solutions/best-practices/colima-bind-mounts-fill-vm-disk.md`: a disk trap on Colima's default VM, which plain `docker` uses. These runs use the `rocketclaw-linux` VM instead.
+- `docs/solutions/best-practices/concurrent-make-test-runs-share-one-test-database-container-name.md`: the same repeating in-container PID names the recipe's PostgreSQL container, so concurrent runs can remove each other's database.
