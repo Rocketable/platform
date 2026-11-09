@@ -17,7 +17,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/openai/openai-go/v3 v3.97.0
+	github.com/openai/openai-go/v3 v3.98.0
 	github.com/posthog/posthog-go v1.42.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rubenv/sql-migrate v1.8.1
@@ -29,11 +29,11 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0
 	go.starlark.net v0.0.0-20261021141710-4f4267fb140d
 	golang.org/x/crypto v0.58.0
-	golang.org/x/image v0.47.0
+	golang.org/x/image v0.48.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.25.0
 	golang.org/x/sys v0.50.0
-	golang.org/x/text v0.43.0
+	golang.org/x/text v0.44.0
 	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
@@ -124,7 +124,7 @@ require (
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb // indirect
 	golang.org/x/exp v0.0.0-20261106192419-47ce03d25ef0 // indirect
 	golang.org/x/oauth2 v0.38.0 // indirect
-	golang.org/x/term v0.47.0 // indirect
+	golang.org/x/term v0.48.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v1.1.1 // indirect
