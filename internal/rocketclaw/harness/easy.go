@@ -28,7 +28,8 @@ type AgentLoadConfig struct {
 	// MCPToolGroups maps every configured MCP server to its tool groups (read, write) of tool-name patterns.
 	MCPToolGroups map[string]map[string][]string
 	// Providers names every configured model provider, openai included.
-	Providers []string
+	Providers         []string
+	DecisionProviders []string
 	// Skills is the skills root; easy skills entries name folders in it.
 	Skills fs.FS
 }
@@ -44,8 +45,8 @@ type AgentRoutine struct {
 // Only skill, task and the embedder's default-on tools skip review.
 func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 	node := agent.FrontmatterNode
-	if err := checkEasyKeys(node, "", "mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN",
-		"commands", "mcp", "rocketclaw", "tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema", "sticky"); err != nil {
+	if err := checkKeys(node, "", "not an easy-mode key", "mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN",
+		"commands", "mcp", "rocketclaw", "tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema", "sticky", "decision"); err != nil {
 		return err
 	}
 
@@ -53,8 +54,8 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 		return errors.New("space: required non-empty string")
 	}
 
-	for _, nested := range [][]string{{"approver", "model", "prompt"}, {"schema", "output"}} {
-		if err := checkEasyKeys(frontmatterField(node, nested[0]), nested[0]+".", nested[1:]...); err != nil {
+	for _, nested := range [][]string{{"approver", "model", "prompt", "decision"}, {"schema", "output"}} {
+		if err := checkKeys(frontmatterField(node, nested[0]), nested[0]+".", "not an easy-mode key", nested[1:]...); err != nil {
 			return err
 		}
 	}
@@ -71,7 +72,7 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 		target     any
 	}{
 		{"maxRecursion", "an integer of 0 or more", &maxRecursion},
-		{"approver", "a mapping of model and prompt strings", &approver},
+		{"approver", "a mapping of model and prompt strings and a decision mapping", &approver},
 		{"secretsARN", "a list of ARNs", &agent.SecretsARN},
 		{"tags", "a list of tag lists", &agent.TagGroups},
 	} {
@@ -80,7 +81,7 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 		}
 	}
 
-	if err := parseEmulatedShell(node, agent); err != nil {
+	if err := errors.Join(parseEmulatedShell(node, agent), parseApproverDecision(frontmatterField(node, "approver"), agent, cfg)); err != nil {
 		return err
 	}
 
@@ -259,7 +260,36 @@ func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) (PermissionSet, e
 		}
 	}
 
+	if err := compileEasyDecision(agent, cfg, &permission); err != nil {
+		return PermissionSet{}, err
+	}
+
 	return permission, nil
+}
+
+// compileEasyDecision checks the decision models agent's decision section lists and lets the decision
+// tool call them.
+func compileEasyDecision(agent *Agent, cfg AgentLoadConfig, permission *PermissionSet) error {
+	// Unlike other sections, decision models are opt-in, so auto would grant nothing.
+	field := frontmatterField(agent.FrontmatterNode, "decision")
+	if field != nil && field.Kind != yaml.SequenceNode {
+		return errors.New("decision: must be a list of provider/model names")
+	}
+
+	models, err := easyList(field, "decision")
+	if err != nil {
+		return err
+	}
+
+	if err := checkDecisionModels(cfg, models...); err != nil {
+		return err
+	}
+
+	for _, model := range models {
+		_ = permission.Allow("decision", model)
+	}
+
+	return nil
 }
 
 // parseEmulatedShell reads the emulated shell's settings, which easy agents and shell: emulated agents share:
@@ -307,12 +337,12 @@ func easyNetworkTargets(node *yaml.Node) ([]string, error) {
 	return targets, err
 }
 
-// checkEasyKeys reports the first key of mapping node, named under prefix, that keys does not list.
-// An absent node, nil, has no keys.
-func checkEasyKeys(node *yaml.Node, prefix string, keys ...string) error {
+// checkKeys reports the first key of mapping node, named under prefix, that keys does not list, as that
+// problem. An absent node, nil, has no keys.
+func checkKeys(node *yaml.Node, prefix, problem string, keys ...string) error {
 	for i := 0; node != nil && i < len(node.Content); i += 2 {
 		if !slices.Contains(keys, node.Content[i].Value) {
-			return fmt.Errorf("%s%s: not an easy-mode key", prefix, node.Content[i].Value)
+			return fmt.Errorf("%s%s: %s", prefix, node.Content[i].Value, problem)
 		}
 	}
 

@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -88,6 +89,26 @@ func (r *modelResolver) Resolve(model string) (*openai.Client, harness.ProviderO
 	client := openai.NewClient(options...)
 
 	return &client, origin, nil
+}
+
+func newDeciders(cfg *config.Config) map[string]harness.Decider {
+	deciders := make(map[string]harness.Decider, len(cfg.Decision))
+	for name, provider := range cfg.Decision {
+		if name == config.DecisionTypeSafe {
+			deciders[string(name)] = harness.TypeSafeDecider{HTTPClient: http.DefaultClient, APIKey: provider.APIKey, BaseURL: cmp.Or(provider.APIBaseURL, "https://api.typesafe.ai/v1")}
+			continue
+		}
+
+		options := []option.RequestOption{option.WithAPIKey(provider.APIKey)}
+		if provider.APIBaseURL != "" {
+			options = append(options, option.WithBaseURL(provider.APIBaseURL), option.WithUnsafeAllowHTTP())
+		}
+
+		client := openai.NewClient(options...)
+		deciders[string(name)] = harness.OpenAIDecider{Client: &client}
+	}
+
+	return deciders
 }
 
 func (r *modelResolver) options(origin harness.ProviderOrigin) []option.RequestOption {

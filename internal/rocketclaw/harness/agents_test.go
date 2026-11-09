@@ -236,6 +236,37 @@ ignored
 		}
 	})
 
+	// An advanced agent's approver block holds only its decision model as another agent's reviewer.
+	t.Run("loads a reviewer's approver decision", func(t *testing.T) {
+		for _, tt := range []struct {
+			frontmatter, wantErr string
+			want                 ApproverDecision
+		}{
+			{frontmatter: "approver:\n  decision: {model: ' openai/gpt-6-luna ', minConfidence: 0.95, prompt: Deny deploys.}", want: ApproverDecision{Model: "openai/gpt-6-luna", MinConfidence: 0.95, Prompt: "Deny deploys."}},
+			{frontmatter: ""},
+			{frontmatter: "approver: {decision: {model: typesafe/jev-latest}}", wantErr: `main.md: decision model "typesafe/jev-latest": provider "typesafe" is not configured in decision`},
+			{frontmatter: "approver: {decision: {minConfidence: 2}}", wantErr: "main.md: approver.decision.minConfidence: must be between 0 and 1"},
+			{frontmatter: "approver: {decision: {rules: Deny deploys.}}", wantErr: "main.md: approver.decision.rules: not an approver.decision key"},
+			{frontmatter: "approver: {decision: [openai/gpt-6-luna]}", wantErr: "main.md: approver.decision: must be a mapping"},
+			{frontmatter: "approver: {prompt: Deny writes.}", wantErr: "main.md: approver.prompt: advanced agents take only approver.decision"},
+			{frontmatter: "approver: openai/gpt-6-luna", wantErr: "main.md: approver: must be a mapping with only decision"},
+		} {
+			t.Run(tt.frontmatter, func(t *testing.T) {
+				result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\nmodel: gpt-5.4\n" + tt.frontmatter + "\n---\nPrompt\n")}, AgentLoadConfig{DecisionProviders: []string{"openai"}})
+
+				if tt.wantErr != "" {
+					require.Len(t, result.Errors, 1)
+					require.ErrorContains(t, result.Errors[0], tt.wantErr)
+
+					return
+				}
+
+				require.Empty(t, result.Errors)
+				require.Equal(t, tt.want, result.Agents.Items["main"].ApproverDecision)
+			})
+		}
+	})
+
 	t.Run("loads reasoning effort from model suffix", func(t *testing.T) {
 		for _, tt := range []struct{ frontmatter, model, effort string }{
 			{"model: work/gpt-6.1-sol#max", "work/gpt-6.1-sol", "max"},

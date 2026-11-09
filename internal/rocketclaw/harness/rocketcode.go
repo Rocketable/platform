@@ -64,8 +64,14 @@ func withCustomShell(shell shellCommander, customShell *CustomShell, command str
 
 // Config contains runtime settings supplied by the embedding application.
 type Config struct {
-	Model                      shared.ResponsesModel
-	AutoApproverModel          shared.ResponsesModel
+	Model             shared.ResponsesModel
+	AutoApproverModel shared.ResponsesModel
+	// AutoApproverDecisionModel, a provider/model in Deciders, settles confident embedded-guardian reviews
+	// first; AutoApproverMinConfidence is the confidence each of its answers needs, 0.9 when zero.
+	AutoApproverDecisionModel string
+	AutoApproverMinConfidence float64
+	// Deciders answers decision questions by provider name; a missing provider is not configured.
+	Deciders                   map[string]Decider
 	ReasoningEffort            shared.ReasoningEffort
 	Diagnostics                bool
 	ExperimentalStrongerSkills bool
@@ -368,7 +374,11 @@ func NewWithModelResolver(
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
 	agentForTools := &activeAgent
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
+
 	baseTools, shellSystem := newSandboxedTools(root, spillRel, shellTemp, shellEnv, config.ShellCommand, &sb)
+	if len(config.Deciders) > 0 {
+		baseTools["decision"] = decisionTool(config.Deciders, config.Observability)
+	}
 
 	customTools, err := customLooperTools(config.CustomTools, baseTools)
 	if err != nil {
@@ -384,6 +394,9 @@ func NewWithModelResolver(
 		rootInstructions:           strings.TrimSpace(rootInstructions),
 		workspaceInstructions:      workspaceInstructions,
 		autoApproverModel:          cmp.Or(config.AutoApproverModel, config.Model),
+		autoApproverDecisionModel:  config.AutoApproverDecisionModel,
+		autoApproverMinConfidence:  config.AutoApproverMinConfidence,
+		deciders:                   config.Deciders,
 		reasoningEffort:            reasoningEffort,
 		compactThreshold:           config.CompactThreshold,
 		compactionSteering:         config.CompactionSteering,

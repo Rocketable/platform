@@ -176,7 +176,7 @@ func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
 func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*agentInfo, []Finding, error) {
 	agentsRoot := filepath.Join(runtimeRoot, "agents")
 
-	agentLoad := harness.LoadAgents(os.DirFS(agentsRoot), harness.AgentLoadConfig{MCPToolGroups: cfg.MCPToolGroups(), Providers: cfg.ProviderNames(), Skills: os.DirFS(filepath.Join(runtimeRoot, "skills"))})
+	agentLoad := harness.LoadAgents(os.DirFS(agentsRoot), harness.AgentLoadConfig{MCPToolGroups: cfg.MCPToolGroups(), Providers: cfg.ProviderNames(), DecisionProviders: cfg.DecisionProviderNames(), Skills: os.DirFS(filepath.Join(runtimeRoot, "skills"))})
 	if len(agentLoad.Errors) > 0 {
 		return nil, nil, fmt.Errorf("load agents: %w", agentLoad.Errors[0])
 	}

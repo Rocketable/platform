@@ -29,6 +29,9 @@ type toolFactory struct {
 	rootInstructions           string
 	workspaceInstructions      string
 	autoApproverModel          string
+	autoApproverDecisionModel  string
+	autoApproverMinConfidence  float64
+	deciders                   map[string]Decider
 	reasoningEffort            shared.ReasoningEffort
 	compactThreshold           int64
 	compactionSteering         string
@@ -160,6 +163,28 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 			codeHosts[name] = tool
 			delete(tools, name)
 		}
+	}
+
+	// The decision tool names the models this agent's rules let it call, so it need not guess.
+	if tool, ok := codeHosts["decision"]; ok {
+		var models []string
+
+		for _, bucket := range agent.Permission.Buckets {
+			for _, rule := range bucket.Rules {
+				if bucket.Name == "decision" && (rule.Action == permissionAllow || rule.Action == permissionAuto) {
+					models = append(models, rule.Pattern)
+				}
+			}
+		}
+
+		if agent.Permission.Sudo {
+			for _, provider := range slices.Sorted(maps.Keys(f.deciders)) {
+				models = append(models, provider+"/*")
+			}
+		}
+
+		tool.Definition.Description = openai.String(decisionToolDescription(models))
+		codeHosts["decision"] = tool
 	}
 
 	// Code-mode tools gate inclusion themselves; nested calls enforce real permissions.

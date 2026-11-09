@@ -155,6 +155,8 @@ Its conversation ID extends the producing conversation's ID with a segment deriv
 An automatic check, by a reviewer agent, of a tool call or a whole Execute script that an agent's permissions mark for review, made before it runs. It allows or denies with a reason; a denial, an unreadable answer, or a failed review blocks the call. Its decision is read from the reviewer's final answer, whichever way the model was reached.
 *Avoid:* approval, approver check
 
+When a decision model is configured, a review asks it first and keeps its answer only when every part is confident, nothing needs a closer look at files or state, and the answers agree with the guardian's outcome rules; otherwise the reviewer reviews as usual. The embedded guardian uses the decision model an easy reviewed agent or the runtime names; a custom reviewer uses one only when its own `approver.decision` names one. The decision model reads its own prompt, not the chat reviewer's added rules. A decision-model answer is saved as the reviewer's would be.
+
 ### Task
 
 The model-facing tool through which an agent delegates a prompt to another agent type, or an Easy Agent to itself on one of its subagent models; the work runs as a Subagent Session, and its answer returns as the tool's result. Another agent cannot Task an Easy Agent.
