@@ -407,7 +407,7 @@ github.com/modelcontextprotocol/go-sdk/internal/xcontext
 github.com/modelcontextprotocol/go-sdk/jsonrpc
 github.com/modelcontextprotocol/go-sdk/mcp
 github.com/modelcontextprotocol/go-sdk/oauthex
-# github.com/openai/openai-go/v3 v3.97.0
+# github.com/openai/openai-go/v3 v3.98.0
 ## explicit; go 1.26.0
 github.com/openai/openai-go/v3
 github.com/openai/openai-go/v3/auth
@@ -420,7 +420,6 @@ github.com/openai/openai-go/v3/internal/apiquery
 github.com/openai/openai-go/v3/internal/encoding/json
 github.com/openai/openai-go/v3/internal/encoding/json/sentinel
 github.com/openai/openai-go/v3/internal/encoding/json/shims
-github.com/openai/openai-go/v3/internal/paramutil
 github.com/openai/openai-go/v3/internal/requestconfig
 github.com/openai/openai-go/v3/internal/websockettransport
 github.com/openai/openai-go/v3/live
@@ -646,7 +645,7 @@ golang.org/x/crypto/salsa20/salsa
 ## explicit; go 1.26.0
 golang.org/x/exp/constraints
 golang.org/x/exp/maps
-# golang.org/x/image v0.47.0
+# golang.org/x/image v0.48.0
 ## explicit; go 1.26.0
 golang.org/x/image/draw
 golang.org/x/image/math/f64
@@ -696,10 +695,10 @@ golang.org/x/sys/windows
 golang.org/x/sys/windows/registry
 golang.org/x/sys/windows/svc
 golang.org/x/sys/windows/svc/mgr
-# golang.org/x/term v0.47.0
+# golang.org/x/term v0.48.0
 ## explicit; go 1.26.0
 golang.org/x/term
-# golang.org/x/text v0.43.0
+# golang.org/x/text v0.44.0
 ## explicit; go 1.26.0
 golang.org/x/text/cases
 golang.org/x/text/internal
