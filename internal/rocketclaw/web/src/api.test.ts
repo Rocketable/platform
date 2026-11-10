@@ -1,7 +1,7 @@
 import { expect, test, spyOn } from "bun:test";
 import { listSessions, mutations, queries, queryKeyHash, rpc } from "./api";
 import { at, pagePath } from "./navigation";
-import { readSessionEnumeration, shouldCommitSnapshot } from "./session-list";
+import { readSessionEnumeration } from "./session-list";
 import type { HistoryView, Session, SessionBatch } from "./types";
 
 const first: SessionBatch = { sessions: [{ id: "one", preview: "first", tags: ["customer", "quote\" 日本語"] }, { id: "older", preview: "no tag field" }], owner: "alice", upstreamSuccess: false };
@@ -52,13 +52,11 @@ for (const outcome of ["success", "cancel", "post-terminal-cancel", "fail", "pos
     if (outcome.endsWith("cancel")) abort.abort();
     tail.resolve();
     const result = await enumeration;
-    expect(shouldCommitSnapshot(result)).toBe(outcome === "success");
-    expect(result.exhausted).toBe(outcome === "success");
+    expect(result.complete).toBe(outcome === "success");
     if (outcome === "success") expect(failure).toBeUndefined();
     else if (outcome.endsWith("cancel")) expect(failure).toMatchObject({ name: "AbortError" });
     else if (outcome.endsWith("failure") || outcome === "fail") expect(failure).toMatchObject({ code: 14, message: "tail failed" });
     else expect(failure).toMatchObject({ message: "Session stream ended without completion" });
-    if (outcome === "post-terminal-cancel") expect(result.upstreamSuccess).toBe(true);
     if (outcome.endsWith("cancel")) await disconnected.promise;
   } finally { abort.abort(); tail.resolve(); server.stop(true); }
 });

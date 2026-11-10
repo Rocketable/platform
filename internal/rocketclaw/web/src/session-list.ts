@@ -129,18 +129,13 @@ export function listedRows(held: SavedListing, result: Pick<EnumerationResult, "
   return rows.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || compare(updated.get(b)!, updated.get(a)!) || compare(a.id, b.id));
 }
 
-export function shouldCommitSnapshot(flags: { upstreamSuccess: boolean; exhausted: boolean; mismatch: boolean }): boolean {
-  return flags.upstreamSuccess && flags.exhausted && !flags.mismatch;
-}
-
 export function searchIsAuthoritative(flags: { refreshing: boolean; enumerationComplete: boolean }): boolean {
   return !flags.refreshing && flags.enumerationComplete;
 }
 
 export type EnumerationResult = {
   received: Session[];
-  upstreamSuccess: boolean;
-  exhausted: boolean;
+  complete: boolean;
   // An owner mismatch or explicit authentication rejection requires live identity revalidation.
   mismatch: boolean;
   remote?: Remote;
@@ -165,7 +160,7 @@ export async function readSessionEnumeration(
   let published = false;
   let dirty = false;
   let upstreamSuccess = false;
-  let exhausted = false;
+  let complete = false;
   let mismatch = false;
   let remote: Remote | undefined;
   let version: string | undefined;
@@ -206,7 +201,7 @@ export async function readSessionEnumeration(
         flush();
       } else if (timer === undefined) timer = setTimeout(flush, 16);
     }
-    exhausted = !mismatch && !signal?.aborted;
+    complete = upstreamSuccess && !mismatch && !signal?.aborted;
   } catch (error) {
     mismatch = error instanceof RPCError && error.code === 16;
     // Retain the received prefix, but failed streams cannot promote a snapshot.
@@ -215,5 +210,5 @@ export async function readSessionEnumeration(
     signal?.removeEventListener("abort", cancel);
   }
   flush();
-  return { received: [...byID.values()], upstreamSuccess, exhausted, mismatch, remote, version, since, removed };
+  return { received: [...byID.values()], complete, mismatch, remote, version, since, removed };
 }
