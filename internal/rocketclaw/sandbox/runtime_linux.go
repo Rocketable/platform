@@ -17,12 +17,15 @@ import (
 	"time"
 )
 
+// Bubblewrap prepares the real sandbox.
+type Bubblewrap struct{}
+
 // Prepare readies the sandbox under dir in the background and returns at once: it checks the host, builds
 // the pinned guest image the first time (a minute or two; later starts find it under the lock's hash), takes over
 // RocketClaw's delegated cgroup, and runs a probe. Run waits for it. On any failure the Runtime stays
 // unavailable with a reason that says what to do, and log records it in full, so emulated shells refuse rather
 // than run unsandboxed (spec §5.3).
-func Prepare(ctx context.Context, dir string, log *slog.Logger) *Runtime {
+func (Bubblewrap) Prepare(ctx context.Context, dir string, log *slog.Logger) *Runtime {
 	rt := &Runtime{p: &prepared{ready: make(chan struct{})}}
 
 	go func() {
@@ -127,7 +130,7 @@ const (
 // has each failure. Any other error returns at once: no retry fixes it.
 func (rt *Runtime) buildImage(ctx context.Context, log *slog.Logger) ([]string, error) {
 	for pause := firstRetry; ; pause = min(2*pause, longestRetry) {
-		installed, _, err := BuildImage(ctx, Snapshot, runtime.GOARCH, rt.p.rootfs)
+		installed, _, err := BuildImage(ctx, Snapshot, runtime.GOARCH, rt.p.rootfs, rt.p.cgroup)
 
 		b, ok := errors.AsType[*BuildError](err)
 		if !ok || errors.Is(err, exec.ErrNotFound) {

@@ -19,7 +19,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // The guest is Ubuntu 26.04 LTS from one archive snapshot (Snapshot, in snapshot.gen.go), so every package
@@ -45,7 +48,8 @@ var keyring []byte
 // writes a tar, and extract writes it out without device nodes, setuid or setgid bits, or file capabilities,
 // plus the guest user and js-exec. It returns the installed packages as name=version lines and the Ubuntu
 // release. Prepare builds Snapshot's at the first start, and the update tool in rootfs/ the newest.
-func BuildImage(ctx context.Context, snapshot, arch, dst string) (installed []string, release string, err error) {
+// mmdebstrap runs in a cgroup, build, under cgroup ("" for the caller's), killed when the build ends.
+func BuildImage(ctx context.Context, snapshot, arch, dst, cgroup string) (installed []string, release string, err error) {
 	work := dst + ".work"
 	if err := os.RemoveAll(work); err != nil {
 		return nil, "", fmt.Errorf("clear %s: %w", work, err)
@@ -57,16 +61,25 @@ func BuildImage(ctx context.Context, snapshot, arch, dst string) (installed []st
 	defer func() { _ = os.RemoveAll(work) }()
 
 	// mmdebstrap builds as root of a user namespace, a subordinate uid that cannot reach into a private home
-	// folder, where work may be; apt reads the keyring as that uid, so it goes in /tmp, open to every uid, with
-	// mmdebstrap's own files.
-	key, err := os.CreateTemp("/tmp", "rocketclaw-keyring-*.gpg")
-	if err != nil {
-		return nil, "", fmt.Errorf("write keyring: %w", err)
-	}
-	defer func() { _ = os.Remove(key.Name()) }()
+	// folder, where work may be, so it builds in /tmp, in one folder per image folder that each build clears.
+	sum := sha256.Sum256([]byte(filepath.Dir(dst)))
+	tmp := "/tmp/rocketclaw-build-" + hex.EncodeToString(sum[:8])
 
-	_, err = key.Write(keyring)
-	if err = errors.Join(err, key.Chmod(0o644), key.Close()); err != nil {
+	if err := clearBuild(tmp); err != nil {
+		return nil, "", err
+	}
+
+	if err := os.Mkdir(tmp, 0o755); err != nil {
+		return nil, "", fmt.Errorf("create build folder: %w", err)
+	}
+	defer func() { _ = clearBuild(tmp) }()
+
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		return nil, "", fmt.Errorf("create build folder: %w", err)
+	}
+
+	key := filepath.Join(tmp, "keyring.gpg")
+	if err := errors.Join(os.WriteFile(key, keyring, 0o644), os.Chmod(key, 0o644)); err != nil {
 		return nil, "", fmt.Errorf("write keyring: %w", err)
 	}
 
@@ -76,31 +89,23 @@ func BuildImage(ctx context.Context, snapshot, arch, dst string) (installed []st
 
 	// ROCKETCLAW_SANDBOX_PACKAGE_MIRROR, when set, is an Ubuntu mirror tried first for the packages, as CI
 	// sets the one beside its runners; the snapshot serves the indexes, and whatever packages the mirror lacks.
-	// apt checks each package against the snapshot's signed indexes, so the versions stay pinned. Like the
-	// keyring, the mirror list goes in /tmp; apt names its indexes after the source, so the list is named by
-	// its contents, and a package cache's indexes match the next build's.
+	// apt checks each package against the snapshot's signed indexes, so the versions stay pinned. The list's path
+	// stays the same from build to build, as apt names a package cache's indexes after it.
 	source := mirror
+
 	if fast := os.Getenv("ROCKETCLAW_SANDBOX_PACKAGE_MIRROR"); fast != "" {
+		list := filepath.Join(tmp, "mirrors.list")
 		content := fmt.Sprintf("%s\tpriority:1 type:deb\n%s/\tpriority:2\n", fast, mirror)
-		sum := sha256.Sum256([]byte(content))
-		name := "/tmp/rocketclaw-mirrors-" + hex.EncodeToString(sum[:8]) + ".list"
 
-		list, err := os.CreateTemp("/tmp", "rocketclaw-mirrors-*.tmp")
-		if err != nil {
+		if err := errors.Join(os.WriteFile(list, []byte(content), 0o644), os.Chmod(list, 0o644)); err != nil {
 			return nil, "", fmt.Errorf("write mirror list: %w", err)
 		}
 
-		_, err = list.WriteString(content)
-		if err = errors.Join(err, list.Chmod(0o644), list.Close(), os.Rename(list.Name(), name)); err != nil {
-			_ = os.Remove(list.Name())
-			return nil, "", fmt.Errorf("write mirror list: %w", err)
-		}
-
-		source = "mirror+file:" + name
+		source = "mirror+file:" + list
 	}
 
 	args := []string{"--mode=unshare", "--variant=essential", "--arch=" + arch, "--format=tar",
-		"--keyring=" + key.Name(), "--aptopt=Acquire::Check-Valid-Until false", "--aptopt=Acquire::Retries 5",
+		"--keyring=" + key, "--aptopt=Acquire::Check-Valid-Until false", "--aptopt=Acquire::Retries 5",
 		// Pipelined requests crawl through some networks' proxies, as on GitHub's runners, whose own apt has
 		// pipelining off.
 		"--aptopt=Acquire::http::Pipeline-Depth 0"}
@@ -126,17 +131,47 @@ func BuildImage(ctx context.Context, snapshot, arch, dst string) (installed []st
 			"--customize-hook=sync-out /var/lib/apt/lists '"+filepath.Join(cache, "lists")+"'")
 	}
 
-	var output bytes.Buffer
+	// On a pipe, Run would wait for mmdebstrap's helpers, which outlive it when the OOM killer takes it alone.
+	output, err := os.Create(filepath.Join(tmp, "output"))
+	if err != nil {
+		return nil, "", fmt.Errorf("create build output: %w", err)
+	}
+	defer func() { _ = output.Close() }()
 
 	cmd := exec.CommandContext(ctx, "mmdebstrap", append(args, "--include="+packages, suite, raw,
 		fmt.Sprintf("deb %s %s main universe", source, suite),
 		fmt.Sprintf("deb %s %s-updates main universe", source, suite),
 		fmt.Sprintf("deb %s %s-security main universe", source, suite))...)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("SOURCE_DATE_EPOCH=%d", epoch.Unix()), "TMPDIR=/tmp")
-	cmd.Stdout, cmd.Stderr = &output, &output
+	cmd.Env = append(os.Environ(), fmt.Sprintf("SOURCE_DATE_EPOCH=%d", epoch.Unix()), "TMPDIR="+tmp)
+	cmd.Stdout, cmd.Stderr = output, output
 
-	if err := cmd.Run(); err != nil {
-		return nil, "", &BuildError{Err: err, Output: output.Bytes()}
+	build := filepath.Join(cgroup, "build")
+	if cgroup != "" {
+		if err := os.Mkdir(build, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+			return nil, "", fmt.Errorf("cgroup: %w", err)
+		}
+
+		fd, err := unix.Open(build, unix.O_DIRECTORY|unix.O_RDONLY|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return nil, "", fmt.Errorf("cgroup: %w", err)
+		}
+		defer func() { _ = unix.Close(fd) }()
+
+		cmd.SysProcAttr = &syscall.SysProcAttr{UseCgroupFD: true, CgroupFD: fd}
+		cmd.Cancel = func() error { return killCgroup(build) }
+	}
+
+	errRun := cmd.Run()
+
+	if cgroup != "" {
+		if err := errors.Join(killCgroup(build), unix.Rmdir(build)); err != nil {
+			return nil, "", err
+		}
+	}
+
+	if errRun != nil {
+		out, _ := os.ReadFile(output.Name())
+		return nil, "", &BuildError{Err: errRun, Output: out}
 	}
 
 	if installed, release, err = extract(raw, dst); err == nil && cache != "" {
@@ -144,6 +179,19 @@ func BuildImage(ctx context.Context, snapshot, arch, dst string) (installed []st
 	}
 
 	return installed, release, err
+}
+
+// clearBuild removes the build folder tmp; only mmdebstrap's helper can remove what its subordinate uid left.
+func clearBuild(tmp string) error {
+	helper := exec.Command("mmdebstrap", "--unshare-helper", "find", tmp, "-mindepth", "2", "-delete")
+	helper.Dir = "/"
+	_ = helper.Run()
+
+	if err := os.RemoveAll(tmp); err != nil {
+		return fmt.Errorf("clear build folder: %w", err)
+	}
+
+	return nil
 }
 
 // pruneCache deletes the cached packages the image no longer installs, so a cache carried over from an

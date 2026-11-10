@@ -46,6 +46,7 @@ type lockedRun struct {
 	configPath string
 	logger     *slog.Logger
 	assemble   FrontendAssembler
+	sandboxes  sandboxPreparer
 	sessions   *SessionService
 }
 
@@ -85,7 +86,7 @@ func (s *runShutdown) start(reason string, restart bool) bool {
 }
 
 // Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs.
-func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble FrontendAssembler) error {
+func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble FrontendAssembler, sandboxes sandboxPreparer) error {
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 
@@ -152,6 +153,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		configPath: configPath,
 		logger:     logger,
 		assemble:   assemble,
+		sandboxes:  sandboxes,
 		sessions:   rocketcodeSessions,
 	})
 }
@@ -241,7 +243,7 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		Cfg: rocketcodeSessions.definitions, Log: logger, RunCtx: runCtx,
 		Sessions:          rocketcodeSessions,
 		ExternalMCPUsers:  externalMCPUsers,
-		ExternalMCPAgents: inertRefresher{}, CronJobs: inertRefresher{}, assemble: s.assemble,
+		ExternalMCPAgents: inertRefresher{}, CronJobs: inertRefresher{}, assemble: s.assemble, sandboxes: s.sandboxes,
 		TextRouter: threadBridges, threads: threadBridges, background: background,
 		questions: questions,
 	}

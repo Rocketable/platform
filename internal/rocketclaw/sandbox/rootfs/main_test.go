@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,6 +21,16 @@ import (
 func TestMain(m *testing.M) {
 	if filepath.Base(os.Args[0]) != "mmdebstrap" {
 		os.Exit(m.Run())
+	}
+
+	// The build clears its folder through mmdebstrap's helper, which runs the rest as the build's uid.
+	if os.Args[1] == "--unshare-helper" {
+		path, err := exec.LookPath(os.Args[2])
+		if err == nil {
+			err = syscall.Exec(path, os.Args[2:], os.Environ())
+		}
+
+		panic(err)
 	}
 
 	if os.Getenv("MMDEBSTRAP_FAIL") == "1" {

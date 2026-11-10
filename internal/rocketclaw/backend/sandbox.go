@@ -42,7 +42,7 @@ func (r *Runtime) prepareSandbox() {
 
 			e.mu.Lock()
 			if e.rt == nil || e.rt.Err() != nil && !errors.Is(e.rt.Err(), sandbox.ErrPreparing) {
-				e.rt = sandbox.Prepare(r.RunCtx, dir, r.Log)
+				e.rt = r.sandboxes.Prepare(r.RunCtx, dir, r.Log)
 			}
 
 			rt = e.rt

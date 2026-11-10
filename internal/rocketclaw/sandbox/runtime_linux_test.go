@@ -5,6 +5,8 @@ package sandbox
 import (
 	"archive/tar"
 	"bytes"
+	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +31,16 @@ import (
 func TestMain(m *testing.M) {
 	if filepath.Base(os.Args[0]) != "mmdebstrap" {
 		os.Exit(m.Run())
+	}
+
+	// The build clears its folder through mmdebstrap's helper, which runs the rest as the build's uid.
+	if os.Args[1] == "--unshare-helper" {
+		path, err := exec.LookPath(os.Args[2])
+		if err == nil {
+			err = unix.Exec(path, os.Args[2:], os.Environ())
+		}
+
+		panic(err)
 	}
 
 	f, err := os.Create(os.Args[slices.Index(os.Args, suite)+1])
@@ -87,6 +99,18 @@ func TestMain(m *testing.M) {
 			fmt.Fprint(os.Stderr, "Err:1 https://snapshot.ubuntu.com resolute InRelease\n  503  Service Unavailable\nE: Failed to fetch InRelease  503  Service Unavailable\n")
 			os.Exit(100)
 		}
+	case "hang":
+		// Like mmdebstrap: a folder in TMPDIR, and a helper on its output that outlives it unless its cgroup goes.
+		dir, err := os.MkdirTemp("", "mmdebstrap.")
+		helper := exec.Command("sleep", "infinity")
+		helper.Stdout = os.Stdout
+
+		ready := fmt.Sprintf("%d %s", os.Getpid(), dir)
+		if err = errors.Join(err, helper.Start(), os.WriteFile(os.Getenv("ROOTFS_TEST_READY"), []byte(ready), 0)); err != nil {
+			panic(err)
+		}
+
+		time.Sleep(time.Hour)
 	case "duplicate":
 		entries = append(entries, entries[slices.IndexFunc(entries, func(e entry) bool { return e.h.Name == "./bin" })])
 	case "dangling":
@@ -147,7 +171,7 @@ func TestBuildImage(t *testing.T) {
 	fakeMmdebstrap(t)
 
 	dst := filepath.Join(t.TempDir(), "rootfs")
-	installed, release, err := BuildImage(t.Context(), Snapshot, "amd64", dst)
+	installed, release, err := BuildImage(t.Context(), Snapshot, "amd64", dst, "")
 	require.NoError(t, err)
 	require.Equal(t, []string{"bash=5.3-2ubuntu1", "zlib1g=1:1.3"}, installed, "installed packages, sorted; removed ones left out")
 	require.Equal(t, "26.04", release)
@@ -191,7 +215,7 @@ func TestBuildImage(t *testing.T) {
 		"drop ./usr/lib/os-release":  "read os-release:",
 	} {
 		t.Setenv("ROOTFS_TEST_MODE", mode)
-		_, _, err = BuildImage(t.Context(), Snapshot, "amd64", dst)
+		_, _, err = BuildImage(t.Context(), Snapshot, "amd64", dst, "")
 		require.ErrorContains(t, err, want, mode)
 	}
 
@@ -203,18 +227,18 @@ func TestBuildImage(t *testing.T) {
 		"fail quietly":   "mmdebstrap failed (exit status 1)",
 	} {
 		t.Setenv("ROOTFS_TEST_MODE", mode)
-		_, _, err = BuildImage(t.Context(), Snapshot, "amd64", dst)
+		_, _, err = BuildImage(t.Context(), Snapshot, "amd64", dst, "")
 		require.EqualError(t, err, want)
 	}
 
 	t.Setenv("ROOTFS_TEST_MODE", "fail")
-	_, _, err = BuildImage(t.Context(), Snapshot, "amd64", dst)
+	_, _, err = BuildImage(t.Context(), Snapshot, "amd64", dst, "")
 	b, ok := errors.AsType[*BuildError](err)
 	require.True(t, ok)
 	require.Contains(t, string(b.Output), strings.Repeat("I: downloading\n", 500))
 
 	t.Setenv("PATH", t.TempDir())
-	_, _, err = BuildImage(t.Context(), Snapshot, "amd64", dst)
+	_, _, err = BuildImage(t.Context(), Snapshot, "amd64", dst, "")
 	require.ErrorIs(t, err, exec.ErrNotFound, "no mmdebstrap")
 }
 
@@ -232,7 +256,7 @@ func TestBuildImagePrunesPackageCache(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(archives, name), nil, 0o644))
 	}
 
-	_, _, err := BuildImage(t.Context(), Snapshot, "amd64", filepath.Join(t.TempDir(), "rootfs"))
+	_, _, err := BuildImage(t.Context(), Snapshot, "amd64", filepath.Join(t.TempDir(), "rootfs"), "")
 	require.NoError(t, err)
 
 	left, err := os.ReadDir(archives)
@@ -245,6 +269,60 @@ func TestBuildImagePrunesPackageCache(t *testing.T) {
 
 	require.Equal(t, []string{"bash_5.3-2ubuntu1_amd64.deb", "lock", "zlib1g_1%3a1.3_amd64.deb"}, names)
 	require.DirExists(t, filepath.Join(cache, "lists"))
+}
+
+// A cancelled build, or one whose mmdebstrap alone is killed as the OOM killer does, leaves no process and no
+// folder behind, and the next build clears what a crash left.
+func TestBuildImageLeavesNothing(t *testing.T) {
+	fakeMmdebstrap(t)
+	t.Setenv("ROOTFS_TEST_MODE", "hang")
+
+	ready := filepath.Join(t.TempDir(), "ready")
+	require.NoError(t, unix.Mkfifo(ready, 0o600))
+	t.Setenv("ROOTFS_TEST_READY", ready)
+
+	own, err := os.ReadFile("/proc/self/cgroup")
+	require.NoError(t, err)
+
+	cgroup := filepath.Join(cgroupRoot, strings.TrimPrefix(strings.TrimSpace(string(own)), "0::"), "test-"+rand.Text())
+	if err := os.Mkdir(cgroup, 0o755); err != nil {
+		t.Skipf("WARNING: skipping: this test may not make a cgroup for the build: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Rmdir(cgroup) })
+
+	dst := filepath.Join(t.TempDir(), "rootfs")
+
+	var dir string
+
+	for _, alone := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+
+		go func() { _, _, err := BuildImage(ctx, Snapshot, "amd64", dst, cgroup); done <- err }()
+
+		started, err := os.ReadFile(ready)
+		require.NoError(t, err)
+
+		pid, folder, _ := strings.Cut(string(started), " ")
+		dir = folder
+
+		if n, _ := strconv.Atoi(pid); alone {
+			require.NoError(t, unix.Kill(n, unix.SIGKILL))
+		} else {
+			cancel()
+		}
+
+		require.Error(t, <-done)
+		cancel()
+		require.NoDirExists(t, filepath.Dir(dir))
+		require.NoDirExists(t, filepath.Join(cgroup, "build"), "no process of the build is left")
+	}
+
+	require.NoError(t, os.MkdirAll(dir, 0o755), "as if RocketClaw died mid-build")
+	t.Setenv("ROOTFS_TEST_MODE", "")
+
+	_, _, err = BuildImage(t.Context(), Snapshot, "amd64", dst, cgroup)
+	require.NoError(t, err, "the next build clears the folder first")
 }
 
 // While mmdebstrap fails, as it does when Ubuntu's archive is flaky, the build tries again after growing pauses
@@ -333,7 +411,7 @@ func TestPrepareFailsClosed(t *testing.T) {
 
 	var logs bytes.Buffer
 
-	rt := Prepare(t.Context(), t.TempDir(), slog.New(slog.NewTextHandler(&logs, nil)))
+	rt := Bubblewrap{}.Prepare(t.Context(), t.TempDir(), slog.New(slog.NewTextHandler(&logs, nil)))
 	_, err := rt.Run(t.Context(), &Command{Script: "true"}, probeHost{})
 	require.EqualError(t, err, "this machine doesn't have bubblewrap, which the sandbox is built on; install the bubblewrap package and restart RocketClaw")
 	require.Equal(t, err, rt.Err())

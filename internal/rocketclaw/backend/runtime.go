@@ -11,6 +11,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 )
 
@@ -26,6 +27,11 @@ type inertRefresher struct{}
 
 func (inertRefresher) Refresh() error { return nil }
 
+// sandboxPreparer is sandbox.Bubblewrap, or sandbox.None in tests that never run an emulated shell.
+type sandboxPreparer interface {
+	Prepare(ctx context.Context, dir string, log *slog.Logger) *sandbox.Runtime
+}
+
 // Runtime is the backend after construction, before frontends.
 type Runtime struct {
 	Cfg               *config.LockedConfig
@@ -36,6 +42,7 @@ type Runtime struct {
 	ExternalMCPAgents runtimeRefresher
 	CronJobs          runtimeRefresher
 	assemble          FrontendAssembler
+	sandboxes         sandboxPreparer
 
 	reloadMu sync.Mutex
 

@@ -42,7 +42,7 @@ func TestSandboxErrorReachesWeb(t *testing.T) {
 	writeAgent(t, workspace, "plain", "---\ndescription: Plain\nmodel: gpt-6.1-sol\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
-	rt := &Runtime{Cfg: config.NewLockedConfig(&config.Config{Workspace: workspace}), Log: slog.New(slog.DiscardHandler), RunCtx: t.Context(), Sessions: &SessionService{}}
+	rt := &Runtime{Cfg: config.NewLockedConfig(&config.Config{Workspace: workspace}), Log: slog.New(slog.DiscardHandler), RunCtx: t.Context(), Sessions: &SessionService{}, sandboxes: sandbox.Bubblewrap{}}
 	rt.prepareSandbox()
 	require.Empty(t, rt.SandboxError(), "no emulated agent, no sandbox")
 
