@@ -951,7 +951,8 @@ func TestSearchSessionsLongQueryParse(t *testing.T) {
 		output, err = cmd.CombinedOutput()
 		require.NoError(t, err, "%s", output)
 		// Count the isolated parser's CPU work, not time descheduled behind parallel tests.
-		require.Less(t, cmd.ProcessState.UserTime()+cmd.ProcessState.SystemTime(), 2*time.Second)
+		require.Less(t, cmd.ProcessState.UserTime()+cmd.ProcessState.SystemTime(), 2*time.Second,
+			"parser child user=%s system=%s GOMAXPROCS=%d resources=%+v output=%s", cmd.ProcessState.UserTime(), cmd.ProcessState.SystemTime(), runtime.GOMAXPROCS(0), cmd.ProcessState.SysUsage(), output)
 
 		return
 	}
