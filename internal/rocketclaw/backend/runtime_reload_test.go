@@ -7,15 +7,12 @@ import (
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRuntimeReload(t *testing.T) {
-	// A reload readies the sandbox for the shipped easy voice agent; without bubblewrap on PATH, that fails fast,
-	// before building any image.
-	t.Setenv("PATH", t.TempDir())
-
 	for _, scenario := range []string{"success", "invalid-agent", "invalid-frontend", "refresh-failure", "cron-refresh-failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			cfg := &config.Config{Workspace: t.TempDir()}
@@ -51,7 +48,7 @@ func TestRuntimeReload(t *testing.T) {
 				return nil
 			}}
 			refresh, cron := &runtimeRefresherMock{}, &runtimeRefresherMock{}
-			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, RunCtx: t.Context(), Sessions: &SessionService{}, assemble: assembler, ExternalMCPAgents: refresh, CronJobs: cron}
+			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, RunCtx: t.Context(), Sessions: &SessionService{}, assemble: assembler, sandboxes: sandbox.None{}, ExternalMCPAgents: refresh, CronJobs: cron}
 			refreshed := func(failure string) error {
 				require.False(t, rt.reloadMu.TryLock(), "reload remains serialized through each refresh")
 				live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/main.md")

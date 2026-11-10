@@ -16,6 +16,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,7 +81,9 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		}, ValidateAssetsFunc: func(*config.Config, string) error { return nil }}
 
 		running, ctxRunning := errgroup.WithContext(ctx)
-		running.Go(func() error { return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly) })
+		running.Go(func() error {
+			return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, sandbox.None{})
+		})
 		t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
 		var rt *backend.Runtime

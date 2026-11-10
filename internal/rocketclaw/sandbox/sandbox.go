@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -71,6 +72,12 @@ func CheckCommandName(name string) error {
 
 // errNotReady is the zero Runtime's error: RocketClaw never prepared a sandbox.
 var errNotReady = errors.New("sandbox not prepared")
+
+// None prepares no sandbox, for tests that never run an emulated shell.
+type None struct{}
+
+// Prepare returns the zero Runtime, which refuses every command.
+func (None) Prepare(context.Context, string, *slog.Logger) *Runtime { return &Runtime{} }
 
 // ErrPreparing is what Err reports while Prepare still works; commands wait for it instead.
 var ErrPreparing = errors.New("the first start builds the sandbox's Ubuntu image, which takes a minute or two; commands wait for it")

@@ -16,6 +16,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 )
 
 func TestValidateAssetsAcceptsWorkspaceWithoutCronjobs(t *testing.T) {
@@ -95,5 +96,5 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 
 			return done, nil, nil
 		},
-	}))
+	}, sandbox.None{}))
 }

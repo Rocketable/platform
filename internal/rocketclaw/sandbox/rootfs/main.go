@@ -86,17 +86,14 @@ func update(dir, snapshot string) (bool, error) {
 	return true, nil
 }
 
-// buildImage builds arch's image from snapshot in a temporary folder and removes it. It is not the
-// repository's .tmp: on a Mac, whose folders this runs in through the Linux container, that is
+// buildImage builds arch's image from snapshot in a temporary folder, the same every run, and removes it. It is
+// not the repository's .tmp: on a Mac, whose folders this runs in through the Linux container, that is
 // case-insensitive, and Ubuntu has pam.7.gz and PAM.7.gz.
 func buildImage(snapshot, arch string) (installed []string, release string, err error) {
-	tmp, err := os.MkdirTemp("", "rocketclaw-sandbox-image-")
-	if err != nil {
-		return nil, "", fmt.Errorf("build %s image: %w", arch, err)
-	}
+	tmp := filepath.Join(os.TempDir(), "rocketclaw-sandbox-image")
 	defer func() { _ = os.RemoveAll(tmp) }()
 
-	installed, release, err = sandbox.BuildImage(context.Background(), snapshot, arch, filepath.Join(tmp, "rootfs"))
+	installed, release, err = sandbox.BuildImage(context.Background(), snapshot, arch, filepath.Join(tmp, "rootfs"), "")
 	if err != nil {
 		// The error names mmdebstrap's first error line; whoever runs this needs its whole output.
 		if b, ok := errors.AsType[*sandbox.BuildError](err); ok {

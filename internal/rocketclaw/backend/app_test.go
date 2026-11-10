@@ -23,6 +23,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -148,7 +149,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	lock, err := client.Acquire(runLockName, pglock.FailIfLocked())
 	require.NoError(t, err)
 	ctxLock, cancelLock := context.WithTimeout(t.Context(), time.Second)
-	err = Run(ctxLock, cfg, configPath, slog.New(slog.DiscardHandler), assembler)
+	err = Run(ctxLock, cfg, configPath, slog.New(slog.DiscardHandler), assembler, sandbox.None{})
 
 	cancelLock()
 	require.ErrorIs(t, err, pglock.ErrNotAcquired)
@@ -156,7 +157,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	require.NoError(t, lock.Close())
 	require.NoError(t, seed.Stop())
 
-	require.ErrorIs(t, Run(ctx, cfg, configPath, slog.New(slog.DiscardHandler), assembler), ErrRestartRequested)
+	require.ErrorIs(t, Run(ctx, cfg, configPath, slog.New(slog.DiscardHandler), assembler, sandbox.None{}), ErrRestartRequested)
 	require.Equal(t, []string{"validated", "validated", "assembled", "slack stopped", "extra stopped"}, order)
 
 	for _, resource := range resources {
@@ -233,7 +234,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 
 		errRun := make(chan error, 1)
 		go func() {
-			errRun <- Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), slog.New(slog.DiscardHandler), assembler)
+			errRun <- Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), slog.New(slog.DiscardHandler), assembler, sandbox.None{})
 		}()
 
 		var texts []string
@@ -446,7 +447,9 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 			var logs bytes.Buffer
 
 			done := make(chan error, 1)
-			go func() { done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(&logs, nil)), assembler) }()
+			go func() {
+				done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(&logs, nil)), assembler, sandbox.None{})
+			}()
 
 			var rt *Runtime
 
@@ -524,7 +527,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 					AssembleFunc: func(*Runtime) (<-chan struct{}, []func(context.Context) error, error) {
 						return nil, nil, nil
 					},
-				})
+				}, sandbox.None{})
 			}()
 
 			require.Eventually(t, func() bool {
@@ -550,7 +553,7 @@ func TestRunStopsOnInvalidFrontendAssets(t *testing.T) {
 
 	errInvalid := errors.New("invalid cron")
 	assembler := &frontendAssemblerMock{ValidateAssetsFunc: func(*config.Config, string) error { return errInvalid }}
-	require.ErrorIs(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), assembler), errInvalid)
+	require.ErrorIs(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), assembler, sandbox.None{}), errInvalid)
 	assert.Empty(t, assembler.AssembleCalls())
 }
 
@@ -598,7 +601,7 @@ func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(t.Output(), nil)), assembler)
+		done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(t.Output(), nil)), assembler, sandbox.None{})
 
 		close(done)
 	}()

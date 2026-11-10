@@ -72,7 +72,7 @@ func emulatedRuntime(t *testing.T) *sandbox.Runtime {
 	stale := filepath.Join(dir, "rootfs-0000000000000000")
 	require.NoError(t, os.MkdirAll(filepath.Join(stale, "usr"), 0o755))
 
-	rt := sandbox.Prepare(t.Context(), dir, slog.New(slog.NewTextHandler(t.Output(), nil)))
+	rt := sandbox.Bubblewrap{}.Prepare(t.Context(), dir, slog.New(slog.NewTextHandler(t.Output(), nil)))
 	require.NoError(t, rt.Wait(t.Context()))
 	require.NoDirExists(t, stale)
 

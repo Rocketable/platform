@@ -19,6 +19,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend/externalmcp"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 )
@@ -121,7 +122,7 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	errRun := make(chan error, 1)
 
 	go func() {
-		errRun <- backend.Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), testLogger(), assembler)
+		errRun <- backend.Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), testLogger(), assembler, sandbox.None{})
 	}()
 
 	t.Cleanup(func() {
