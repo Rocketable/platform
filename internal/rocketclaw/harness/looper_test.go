@@ -27,7 +27,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func testResolverForResponsesAPI(api responsesAPI) testModelResolverFunc {
+func testResolverForResponsesAPI(api responsesAPI) *mockModelResolver {
 	middleware := func(req *http.Request, _ option.MiddlewareNext) (*http.Response, error) {
 		data, err := io.ReadAll(req.Body)
 		if err != nil {
@@ -53,14 +53,7 @@ func testResolverForResponsesAPI(api responsesAPI) testModelResolverFunc {
 	}
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithMiddleware(middleware))
 
-	return testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
-		apiModel, err := resolveAgentModelRef(model)
-		if err != nil {
-			return nil, ProviderOrigin{}, err
-		}
-
-		return &client, ProviderOrigin{Provider: "openai", Model: apiModel}, nil
-	})
+	return testResolverForClient(&client)
 }
 
 type testSDKResponse struct {

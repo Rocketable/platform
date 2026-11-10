@@ -88,7 +88,7 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	config := testWorkspaceConfig(t, dir)
 	config.Diagnostics = true
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
-	looper, err := NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{
+	looper, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "remember !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", &diagnostics)
 
@@ -104,7 +104,7 @@ func TestNewRequiresShellTempDir(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	client := openai.NewClient()
-	_, err = NewWithProviders(Providers{OpenAI: &client}, testConfig(""), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
+	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(""), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
 
 	require.EqualError(t, err, "shell temp dir is required")
 }
@@ -120,15 +120,15 @@ func TestNewRejectsInvalidShellTempDir(t *testing.T) {
 	require.NoError(t, root.WriteFile("file", []byte("not a dir"), 0o644))
 
 	client := openai.NewClient()
-	_, err = NewWithProviders(Providers{OpenAI: &client}, testConfig(filepath.Join(dir, "missing")), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
+	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(filepath.Join(dir, "missing")), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
 	require.ErrorContains(t, err, "resolve shell temp dir")
 	require.ErrorContains(t, err, "missing")
 
-	_, err = NewWithProviders(Providers{OpenAI: &client}, testConfig(filePath), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
+	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(filePath), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
 	require.EqualError(t, err, "resolve shell temp dir \""+filePath+"\": not a directory")
 
 	outsideDir := t.TempDir()
-	_, err = NewWithProviders(Providers{OpenAI: &client}, testConfig(outsideDir), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
+	_, err = NewWithModelResolver(testResolverForClient(&client), testConfig(outsideDir), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
 	require.EqualError(t, err, "resolve shell temp dir \""+outsideDir+"\": must be inside workspace root")
 }
 
@@ -153,7 +153,7 @@ func TestNewRejectsInvalidShellEnv(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			config := testWorkspaceConfig(t, dir)
 			config.ShellEnv = tc.env
-			_, err := NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
+			_, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
 
 			require.EqualError(t, err, tc.wantErr)
 		})
@@ -170,7 +170,7 @@ func TestNewCopiesShellEnv(t *testing.T) {
 	env := map[string]string{"ROCKETCLAW_CONVERSATION_ID": "first"}
 	config := testWorkspaceConfig(t, dir)
 	config.ShellEnv = env
-	loop, err := NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{
+	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
 	require.NoError(t, err)
@@ -200,7 +200,7 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 	config.Diagnostics = true
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	config.ShellEnv = map[string]string{"ROCKETCLAW_CONVERSATION_ID": "prompt", "TMPDIR": "/ignored"}
-	_, err = NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{
+	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "env !`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"` tmp !`printf %s \"$TMPDIR\"`", Location: "", Permission: parsePermissionYAML(t, `edit: {"${ROCKETCLAW_CONVERSATION_ID}/note.txt": allow}`), Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", &diagnostics)
 
@@ -300,7 +300,7 @@ func TestNewExpandsPromptsThroughRootAgentCustomShell(t *testing.T) {
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	config.ExpandPromptShellCommands.InputPrompts = true
 	client := openai.NewClient()
-	loop, err := NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{
+	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Model: "gpt-5.4", Prompt: "remember !`echo hi`", CustomShell: CustomShell{Path: writeCustomShell(t, root)}},
 	}}, Skills{Items: map[string]Skill{}}, "main", &diagnostics)
 	require.NoError(t, err)
@@ -370,7 +370,7 @@ read:
 
 	config := testWorkspaceConfig(t, dir)
 	config.ShellEnv = map[string]string{"ROCKETCLAW_PARENT": "parent", "ROCKETCLAW_CHILD": "child"}
-	loop, err := NewWithProviders(Providers{OpenAI: &client}, config, root, agents, skills, "main", nil)
+	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main", nil)
 	require.NoError(t, err)
 
 	for _, tt := range []struct {
@@ -454,7 +454,7 @@ func TestExecuteSpillStorageIsPrivate(t *testing.T) {
 			config.SpillDir = filepath.Join(root.Name(), spillRel)
 			client := openai.NewClient()
 			agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, "read: {'*': allow}\nedit: {'*': allow}\nbash: {'*': allow}\nglob: {'*': allow}\ngrep: {'*': allow}")}
-			loop, err := NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{"main": agent}}, Skills{Items: map[string]Skill{}}, "main", nil)
+			loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{"main": agent}}, Skills{Items: map[string]Skill{}}, "main", nil)
 			require.NoError(t, err)
 			loop.restoreTurnExecuteResults("turn")
 			t.Cleanup(loop.deleteTurnExecuteResults)
@@ -590,7 +590,7 @@ func TestRuntimeRestrictTools(t *testing.T) {
 	newRuntime := func(t *testing.T) *Runtime {
 		t.Helper()
 
-		runtime, err := NewWithProviders(Providers{OpenAI: &client}, testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+		runtime, err := NewWithModelResolver(testResolverForClient(&client), testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
 		require.NoError(t, err)
 
 		return runtime
@@ -649,7 +649,7 @@ func TestNewDoesNotAllowReadingFilesFromVirtualSkills(t *testing.T) {
 	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {virtual: allow}`)}
 	client := openai.NewClient()
 
-	loop, err := NewWithProviders(Providers{OpenAI: &client}, testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	loop, err := NewWithModelResolver(testResolverForClient(&client), testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
 	require.NoError(t, err)
 	require.NotContains(t, loop.Tools, "read")
 }
@@ -671,7 +671,7 @@ func TestNewDoesNotTrustVirtualSkillsWithWorkspaceDisplayPath(t *testing.T) {
 	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {virtual: allow}`)}
 	client := openai.NewClient()
 
-	loop, err := NewWithProviders(Providers{OpenAI: &client}, testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	loop, err := NewWithModelResolver(testResolverForClient(&client), testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
 	require.NoError(t, err)
 	require.NotContains(t, loop.Tools, "read")
 }
@@ -694,7 +694,7 @@ func TestNewDoesNotTrustExternalSkillDirectoryWithLinkedMarker(t *testing.T) {
 	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {external: allow}`)}
 	client := openai.NewClient()
 
-	loop, err := NewWithProviders(Providers{OpenAI: &client}, testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	loop, err := NewWithModelResolver(testResolverForClient(&client), testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
 	require.NoError(t, err)
 	require.NotContains(t, loop.Tools, "read")
 }
@@ -714,7 +714,7 @@ func TestNewDoesNotAllowReadingFilesFromExternalSkills(t *testing.T) {
 	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {external: allow}`)}
 	client := openai.NewClient()
 
-	loop, err := NewWithProviders(Providers{OpenAI: &client}, testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	loop, err := NewWithModelResolver(testResolverForClient(&client), testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
 	require.NoError(t, err)
 	require.NotContains(t, loop.Tools, "read")
 }
@@ -738,7 +738,7 @@ func TestNewDoesNotAllowReadingFilesThroughSymlinkedSkillRoot(t *testing.T) {
 	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {linked: allow}`)}
 	client := openai.NewClient()
 
-	loop, err := NewWithProviders(Providers{OpenAI: &client}, testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	loop, err := NewWithModelResolver(testResolverForClient(&client), testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
 	require.NoError(t, err)
 	require.NotContains(t, loop.Tools, "read")
 }
@@ -752,16 +752,16 @@ func TestNewRequiresParsedAgentsAndSkills(t *testing.T) {
 	client := openai.NewClient()
 	config := testWorkspaceConfig(t, dir)
 
-	_, err = NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
+	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
 	require.EqualError(t, err, "agents are required")
 
-	_, err = NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
+	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
 	require.EqualError(t, err, "skills are required")
 
-	_, err = NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "", nil)
+	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "", nil)
 	require.EqualError(t, err, "defaultAgent is required")
 
-	_, err = NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
+	_, err = NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
 	require.EqualError(t, err, `missing required default agent "main"`)
 }
 
@@ -778,7 +778,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 		config := testWorkspaceConfig(t, dir)
 		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4"}, "guardian": {Name: "guardian", Model: "gpt-5.4"}}}
 
-		_, err := NewWithProviders(Providers{OpenAI: &client}, config, root, agents, skills, "main", nil)
+		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main", nil)
 
 		require.NoError(t, err)
 	})
@@ -788,7 +788,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4"}, "guardian": {Name: "guardian", Model: "gpt-5.4"}}}
 
-		_, err := NewWithProviders(Providers{OpenAI: &client}, config, root, agents, skills, "main", nil)
+		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main", nil)
 
 		require.EqualError(t, err, `agent name "guardian" is reserved when auto permission approval is enabled`)
 	})
@@ -798,7 +798,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)}}}
 
-		_, err := NewWithProviders(Providers{OpenAI: &client}, config, root, agents, skills, "main", nil)
+		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main", nil)
 
 		require.ErrorContains(t, err, `references missing reviewer agent "release-guardian"`)
 	})
@@ -811,12 +811,12 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 			"reviewer": {Name: "reviewer", Model: "gpt-5.4", Sticky: AgentStickyUser, Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(reviewer)}`)},
 		}}
 
-		_, err := NewWithProviders(Providers{OpenAI: &client}, config, root, agents, skills, "main", nil)
+		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main", nil)
 
 		require.ErrorContains(t, err, `agent "main" permission "bash" rule "deploy *" references sticky: user reviewer agent "reviewer", which reviews only its own rules`)
 
 		delete(agents.Items, "main")
-		_, err = NewWithProviders(Providers{OpenAI: &client}, config, root, agents, skills, "reviewer", nil)
+		_, err = NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "reviewer", nil)
 		require.NoError(t, err, "a sticky agent may review its own rules")
 	})
 
@@ -825,7 +825,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(guardian)}`)}}}
 
-		_, err := NewWithProviders(Providers{OpenAI: &client}, config, root, agents, skills, "main", nil)
+		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main", nil)
 
 		require.ErrorContains(t, err, `references reserved reviewer "guardian"`)
 	})
@@ -838,7 +838,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 			"release-guardian": {Name: "release-guardian", Model: "gpt-5.4"},
 		}}
 
-		_, err := NewWithProviders(Providers{OpenAI: &client}, config, root, agents, skills, "main", nil)
+		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main", nil)
 
 		require.NoError(t, err)
 	})

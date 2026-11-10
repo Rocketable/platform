@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	openai "github.com/openai/openai-go/v3"
@@ -20,6 +21,12 @@ type testModelResolverFunc func(string) (*openai.Client, ProviderOrigin, error)
 
 func (f testModelResolverFunc) Resolve(model string) (*openai.Client, ProviderOrigin, error) {
 	return f(model)
+}
+
+func testResolverForClient(client *openai.Client) *mockModelResolver {
+	return &mockModelResolver{ResolveFunc: func(model string) (*openai.Client, ProviderOrigin, error) {
+		return client, ProviderOrigin{Provider: "openai", Model: strings.TrimPrefix(model, "openai/")}, nil
+	}}
 }
 
 func testResolverClient(t *testing.T, output string) (client *openai.Client, requests <-chan string) {
@@ -297,69 +304,6 @@ func TestSessionAttributionReasoningPresence(t *testing.T) {
 	}
 }
 
-func TestParseModelRef(t *testing.T) {
-	for _, tc := range []struct{ name, model, apiModel string }{
-		{name: "empty", model: "", apiModel: "gpt-6-luna"},
-		{name: "whitespace", model: "   ", apiModel: "gpt-6-luna"},
-		{name: "openai", model: "gpt-6.1-sol", apiModel: "gpt-6.1-sol"},
-		{name: "legacy openai prefix", model: "openai/gpt-6.1-sol", apiModel: "gpt-6.1-sol"},
-		{name: "trimmed prefix", model: " openai/gpt-6.1-sol ", apiModel: "gpt-6.1-sol"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			parsed, err := parseModelRef(tc.model)
-
-			require.NoError(t, err)
-			require.Equal(t, tc.apiModel, parsed)
-		})
-	}
-}
-
-func TestNewWithProvidersNormalizesOpenAIPrefixedAgentModel(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	openAIClient := openai.NewClient()
-	loop, err := NewWithProviders(Providers{OpenAI: &openAIClient}, testConfig(dir), root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Model: "openai/gpt-6.1-sol", Prompt: "prompt"},
-	}}, Skills{Items: map[string]Skill{}}, "main", nil)
-
-	require.NoError(t, err)
-	require.Equal(t, "openai/gpt-6.1-sol", loop.DisplayModel)
-	require.Equal(t, "gpt-6.1-sol", loop.ProviderOrigin.Model)
-}
-
-func TestNewWithProvidersRejectsNonOpenAIProviderQualifiedAgentModel(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	openAIClient := openai.NewClient()
-	_, err = NewWithProviders(Providers{OpenAI: &openAIClient}, testConfig(dir), root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Model: "anthropic/claude", Prompt: "prompt"},
-	}}, Skills{Items: map[string]Skill{}}, "main", nil)
-
-	require.EqualError(t, err, `agent "main" model: invalid model "anthropic/claude": expected unprefixed OpenAI model ID`)
-}
-
-func TestNewWithProvidersRejectsEmptyAgentModel(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	client := openai.NewClient()
-	config := testConfig(dir)
-	config.Model = "gpt-6.1-sol"
-	_, err = NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Prompt: "prompt"},
-	}}, Skills{Items: map[string]Skill{}}, "main", nil)
-
-	require.EqualError(t, err, `agent "main" model: required non-empty string`)
-}
-
 func TestOpenAIResponsesModeUsesResponsesEndpoint(t *testing.T) {
 	route := ""
 	body := ""
@@ -457,7 +401,7 @@ func testOpenAILoop(t *testing.T, client *openai.Client) *Runtime {
 
 	config := testConfig(dir)
 	config.Model = "gpt-6.1-sol"
-	loop, err := NewWithProviders(Providers{OpenAI: client}, config, root, Agents{Items: map[string]Agent{
+	loop, err := NewWithModelResolver(testResolverForClient(client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Model: "gpt-6.1-sol", Prompt: "prompt"},
 	}}, Skills{Items: map[string]Skill{}}, "main", nil)
 	require.NoError(t, err)
