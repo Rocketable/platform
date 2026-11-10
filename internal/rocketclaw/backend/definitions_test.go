@@ -12,7 +12,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
-	openai "github.com/openai/openai-go/v3"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -740,8 +739,8 @@ func TestRocketCodeReadsAllowedSkillFilesFromConfiguredRuntimeDirectory(t *testi
 			agents, skills, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), runtimeDir, toolModePersistent)
 			require.NoError(t, err)
 
-			client := openai.NewClient()
-			runtime, err := harness.NewWithProviders(harness.Providers{OpenAI: &client}, &harness.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, ShellCommand: harness.DefaultShellCommand{}}, root, agents, skills, "main", nil)
+			resolver := newModelResolver(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", Auth: "api_key"}}, slog.New(slog.DiscardHandler))
+			runtime, err := harness.NewWithModelResolver(resolver, &harness.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, ShellCommand: harness.DefaultShellCommand{}}, root, agents, skills, "main", nil)
 			require.NoError(t, err)
 
 			action, _ := runtime.Permissions.Evaluate("read", filepath.ToSlash(filepath.Join(skillDir, "asset.txt")))
@@ -767,8 +766,8 @@ func TestRocketCodeInterpolatesPermissionPatternsFromShellEnv(t *testing.T) {
 	require.Equal(t, ".tmp/*", agents.Items["main"].Permission.Buckets[0].Rules[0].Pattern)
 	require.Equal(t, ".tmp/${ROCKETCLAW_METADATA_FRUIT}/note.txt", agents.Items["main"].Permission.Buckets[0].Rules[1].Pattern)
 
-	client := openai.NewClient()
-	runtime, err := harness.NewWithProviders(harness.Providers{OpenAI: &client}, &harness.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, ShellCommand: harness.DefaultShellCommand{}, ShellEnv: map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}}, root, agents, skills, "main", nil)
+	resolver := newModelResolver(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", Auth: "api_key"}}, slog.New(slog.DiscardHandler))
+	runtime, err := harness.NewWithModelResolver(resolver, &harness.Config{ShellTempDir: workspace, RetainedResultDir: "retained", ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, ShellCommand: harness.DefaultShellCommand{}, ShellEnv: map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}}, root, agents, skills, "main", nil)
 	require.NoError(t, err)
 
 	action, _ := runtime.Permissions.Evaluate("edit", ".tmp/banana/note.txt")

@@ -139,6 +139,9 @@ packages:
           structname: agentRunnerMock
   github.com/Rocketable/platform/internal/rocketclaw/harness:
     interfaces:
+      ModelResolver:
+        config:
+          structname: mockModelResolver
       sessionWriter:
         config:
           structname: mockSessionWriter

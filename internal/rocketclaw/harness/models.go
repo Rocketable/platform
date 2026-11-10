@@ -26,19 +26,6 @@ type ModelResolver interface {
 	Resolve(model string) (*openai.Client, ProviderOrigin, error)
 }
 
-type openAIModelResolver struct {
-	client *openai.Client
-}
-
-func (r openAIModelResolver) Resolve(model string) (*openai.Client, ProviderOrigin, error) {
-	apiModel, err := resolveAgentModelRef(model)
-	if err != nil {
-		return nil, ProviderOrigin{}, err
-	}
-
-	return r.client, ProviderOrigin{Provider: "openai", Model: apiModel}, nil
-}
-
 func resolveModel(resolver ModelResolver, model string) (*openai.Client, ProviderOrigin, error) {
 	if strings.TrimSpace(model) == "" {
 		return nil, ProviderOrigin{}, errors.New("required non-empty string")
@@ -66,34 +53,4 @@ func resolveModel(resolver ModelResolver, model string) (*openai.Client, Provide
 
 func (o ProviderOrigin) displayModel() string {
 	return o.Provider + "/" + o.Model
-}
-
-func parseModelRef(model string) (string, error) {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return defaultOpenAIModel, nil
-	}
-
-	if after, ok := strings.CutPrefix(model, "openai/"); ok {
-		model = after
-		if model == "" || strings.Contains(model, "/") {
-			return "", fmt.Errorf("invalid model %q: expected openai/model", "openai/"+model)
-		}
-
-		return model, nil
-	}
-
-	if strings.Contains(model, "/") {
-		return "", fmt.Errorf("invalid model %q: expected unprefixed OpenAI model ID", model)
-	}
-
-	return model, nil
-}
-
-func resolveAgentModelRef(model string) (string, error) {
-	if strings.TrimSpace(model) == "" {
-		return "", errors.New("required non-empty string")
-	}
-
-	return parseModelRef(model)
 }

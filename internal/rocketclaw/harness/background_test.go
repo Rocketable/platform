@@ -531,7 +531,7 @@ func TestSteerSwitchConvertsTurnForProvider(t *testing.T) {
 	factory.resolver = testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
 		api, work := strings.CutPrefix(model, "work/")
 
-		client, origin, err := resolve(api)
+		client, origin, err := resolve.Resolve(api)
 		if work {
 			origin.Provider = "work"
 		}

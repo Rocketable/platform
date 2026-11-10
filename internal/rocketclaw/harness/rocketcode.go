@@ -16,7 +16,6 @@ import (
 	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
-	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -172,11 +171,6 @@ type ObservabilityConfig struct {
 	TraceConfig instrumentation.TraceConfig
 }
 
-// Providers contains model provider clients supplied by embedding applications.
-type Providers struct {
-	OpenAI *openai.Client
-}
-
 // PromptShellCommandExpansion controls which prompt sources expand !`command` snippets.
 type PromptShellCommandExpansion struct {
 	// PrimaryPrompts covers the agent prompt of every session, a Task subagent's included, since a
@@ -258,42 +252,6 @@ func (c *shellTempConfig) effectivePermissions(permissions PermissionSet) Permis
 	buckets = append(buckets, permissions.Buckets...)
 
 	return PermissionSet{Buckets: buckets, Sudo: permissions.Sudo, Easy: permissions.Easy, skillRead: permissions.skillRead}
-}
-
-// NewWithProviders loads the supplied runtime dependencies and returns a configured looper.
-func NewWithProviders(
-	providers Providers,
-	configInput *Config,
-	root *os.Root,
-	agents Agents,
-	skills Skills,
-	defaultAgent string,
-	diagnosticsWriter io.Writer,
-) (*Runtime, error) {
-	if configInput == nil {
-		return nil, errors.New("config is required")
-	}
-
-	config := normalizeConfig(configInput)
-	if _, err := parseModelRef(config.Model); err != nil {
-		return nil, err
-	}
-
-	if config.AutoApproverModel != "" {
-		if _, err := parseModelRef(config.AutoApproverModel); err != nil {
-			return nil, fmt.Errorf("auto approver model: %w", err)
-		}
-	}
-
-	if err := validateAgentModels(agents); err != nil {
-		return nil, err
-	}
-
-	if providers.OpenAI == nil {
-		return nil, errors.New("openai provider is required")
-	}
-
-	return NewWithModelResolver(openAIModelResolver{client: providers.OpenAI}, configInput, root, agents, skills, defaultAgent, diagnosticsWriter)
 }
 
 // interpolateAllAgentPermissions resolves ${ROCKETCLAW_*} patterns in every agent's permission rules against env
@@ -572,21 +530,6 @@ func normalizeConfig(configInput *Config) Config {
 	}
 
 	return config
-}
-
-func validateAgentModels(agents Agents) error {
-	for name := range agents.Items {
-		agent := agents.Items[name]
-		if strings.TrimSpace(agent.Model) == "" {
-			return fmt.Errorf("agent %q model: required non-empty string", name)
-		}
-
-		if _, err := parseModelRef(agent.Model); err != nil {
-			return fmt.Errorf("agent %q model: %w", name, err)
-		}
-	}
-
-	return nil
 }
 
 func printRuntimeDiagnostics(w io.Writer, activeAgent *Agent, tools map[string]looperTool, skills Skills, systemPrompt string) error {
