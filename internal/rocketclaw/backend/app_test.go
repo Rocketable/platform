@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -443,7 +442,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 				},
 			}
 
-			var logs bytes.Buffer
+			var logs lockedBuffer
 
 			done := make(chan error, 1)
 			go func() { done <- Run(ctx, cfg, "", slog.New(slog.NewTextHandler(&logs, nil)), assembler) }()
