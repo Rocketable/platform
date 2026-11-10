@@ -472,15 +472,10 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	_, err = service.toggleSessionTag(t.Context(), "a", "internal", []string{"customer", "internal"})
 	require.NoError(t, err)
 
-	for row, err := range service.sidebarSessions(t.Context(), "", nil) {
-		require.NoError(t, err)
-
-		if row.Conversation.ID == "a" {
-			require.Equal(t, []string{"internal"}, row.Tags)
-			row.Tags = got[1].Tags
-			require.Equal(t, got[1], row, "tag-only changes do not affect sidebar activity")
-		}
-	}
+	got[1].Tags = []string{"internal"}
+	rows, err := service.sidebarRows(t.Context(), "", nil)
+	require.NoError(t, err)
+	require.Equal(t, got, rows, "tag-only changes do not affect sidebar activity")
 
 	_, found, err := service.Thread("empty")
 	require.NoError(t, err)
