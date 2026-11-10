@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/anomalyco/opencode",
-  "tag": "v2.2.6",
-  "commit": "dc2ffcf8bf26f9e669b6aa22b95f50e12be15e06",
+  "tag": "v2.2.7",
+  "commit": "fedc6f208aa2bd54c1019227214568083f6380ad",
   "copied": [
     "LICENSE",
     "packages/app/happydom.ts",
@@ -546,6 +546,8 @@
     "packages/app/src/session/title.ts",
     "packages/app/src/session/usage-exceeded-dialogs.test.ts",
     "packages/app/src/session/usage-exceeded-dialogs.tsx",
+    "packages/app/src/session/viewed-machine.test.ts",
+    "packages/app/src/session/viewed-machine.ts",
     "packages/app/src/settings/about/about.tsx",
     "packages/app/src/settings/about/animated-wordmark.tsx",
     "packages/app/src/settings/about/anomaly-brush.svg",

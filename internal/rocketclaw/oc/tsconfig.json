@@ -379,6 +379,9 @@
       "@opencode/ui/select": [
         "./packages/ui/src/forms/select/select.tsx"
       ],
+      "@opencode/ui/select.css": [
+        "./packages/ui/src/forms/select/select.css"
+      ],
       "@opencode/ui/split-button": [
         "./packages/ui/src/actions/split-button/split-button.tsx"
       ],
