@@ -744,9 +744,7 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 			Name:        toolName,
 			InputSchema: schema,
 			CallValue: func(ctx context.Context, args map[string]any) (starlark.Value, error) {
-				raw, _ := json.Marshal(args) // Code Mode arguments were decoded from JSON.
-
-				result, errCall := recordHostCall(ctx, toolName, args, toolCopy.resumable, toolHostCall{name: toolName, tool: &toolCopy, raw: raw, output: output})
+				result, errCall := recordHostCall(ctx, toolName, args, toolCopy.resumable, toolHostCall{name: toolName, tool: &toolCopy, output: output})
 				if errCall != nil {
 					return nil, errCall
 				}
@@ -768,7 +766,7 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 var errHostCallInterrupted = errors.New("tool call aborted because the runtime stopped before the call completed; side effects may have partially occurred, so inspect the current environment before deciding whether to retry or continue")
 
 type hostCall interface {
-	run(context.Context) (ToolResult, error)
+	run(context.Context, json.RawMessage) (ToolResult, error)
 }
 
 type mcpHostCall struct {
@@ -777,7 +775,7 @@ type mcpHostCall struct {
 	args         map[string]any
 }
 
-func (c mcpHostCall) run(ctx context.Context) (ToolResult, error) {
+func (c mcpHostCall) run(ctx context.Context, _ json.RawMessage) (ToolResult, error) {
 	out, err := c.session.CallTool(ctx, c.server, c.name, c.args)
 	return TextToolResult(out), err
 }
@@ -785,16 +783,15 @@ func (c mcpHostCall) run(ctx context.Context) (ToolResult, error) {
 type toolHostCall struct {
 	name   string
 	tool   *looperTool
-	raw    json.RawMessage
 	output chan<- ChatResponse
 }
 
-func (c toolHostCall) run(ctx context.Context) (ToolResult, error) {
-	if err := CheckNestedToolCall(ctx, c.name, c.tool, c.raw); err != nil {
+func (c toolHostCall) run(ctx context.Context, raw json.RawMessage) (ToolResult, error) {
+	if err := CheckNestedToolCall(ctx, c.name, c.tool, raw); err != nil {
 		return ToolResult{}, err
 	}
 
-	return c.tool.Call(ctx, c.raw, c.output, toolCallMetadata{})
+	return c.tool.Call(ctx, raw, c.output, toolCallMetadata{})
 }
 
 // recordHostCall returns a Code Mode call's recorded result, or runs and journals it. A recording
@@ -846,7 +843,7 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 	runCtx, stop := callContext(ctx, resumable)
 	defer stop()
 
-	result, errRun := call.run(runCtx)
+	result, errRun := call.run(runCtx, raw)
 	if errRun != nil && runCtx.Err() != nil {
 		// A cancelled call is not journaled, so a resumed turn runs it again and replaces this record.
 		return result, errors.Join(errRun, tc.observations.recordCodeModeCall(ctx, record.finish(result, errRun), false))
