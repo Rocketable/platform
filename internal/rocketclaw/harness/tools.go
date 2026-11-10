@@ -580,7 +580,7 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, raw json.RawMes
 
 	content := strings.TrimSpace(skill.Content)
 
-	easy := f.agent != nil && f.agent.Mode == AgentModeEasy
+	easy := f.agent.Mode == AgentModeEasy
 	if easy && f.expandPromptShellCommands.SkillPrompts {
 		content = f.promptExpansion.expandShellCommands(ctx, content)
 	}
@@ -668,11 +668,7 @@ func renderSkillArguments(output, arguments string, appendUnused bool) string {
 }
 
 func (f *toolFactory) availableSkillNames() []string {
-	if f.agent == nil {
-		return slices.Sorted(maps.Keys(f.skills.Items))
-	}
-
-	names := []string{}
+	names := make([]string, 0, len(f.skills.Items))
 	for _, skill := range f.skills.Available(f.agent) {
 		names = append(names, skill.Name)
 	}

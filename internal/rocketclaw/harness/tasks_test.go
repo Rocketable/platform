@@ -353,7 +353,7 @@ func TestTaskToolDescriptionFiltersDeniedSubagents(t *testing.T) {
 		"main":     testAgentWithDescription("main", "Default agent"),
 	}}
 
-	t.Run("no active agent lists no subagents", func(t *testing.T) {
+	t.Run("agent without task permissions lists no subagents", func(t *testing.T) {
 		factory := testTaskFactory(mockResponses(), agents)
 
 		description := factory.taskDescription()
@@ -746,6 +746,7 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 
 	factory.resolver = testResolverForResponsesAPI(client)
 	factory.autoApproverModel = defaultOpenAIModel
+	factory.agent = &Agent{}
 	factory.agents = agents
 	factory.skills = Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
 	factory.baseTools = map[string]looperTool{
