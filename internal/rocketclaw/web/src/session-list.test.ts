@@ -9,7 +9,6 @@ import {
   readSessionEnumeration,
   saveCompleteSessions,
   searchIsAuthoritative,
-  shouldCommitSnapshot,
 } from "./session-list";
 
 const alice = (sessions: Session[], flags: Partial<SessionBatch> = {}): SessionBatch => ({
@@ -114,15 +113,8 @@ describe("session list reconciliation", () => {
       yield { upstreamSuccess: true, version: "v2", since: "v1", removed: ["a"] };
     }
     const result = await readSessionEnumeration("alice", batches(), () => [], () => {}, undefined, (remote) => remotes.push(remote));
-    expect(result).toEqual({ received: [{ id: "b" }], upstreamSuccess: true, exhausted: true, mismatch: false, remote: remotes[0], version: "v2", since: "v1", removed: ["a"] });
+    expect(result).toEqual({ received: [{ id: "b" }], complete: true, mismatch: false, remote: remotes[0], version: "v2", since: "v1", removed: ["a"] });
     expect(remotes).toHaveLength(1);
-  });
-
-  test("commits only after success and exhaustion", () => {
-    expect(shouldCommitSnapshot({ upstreamSuccess: true, exhausted: true, mismatch: false })).toBe(true);
-    expect(shouldCommitSnapshot({ upstreamSuccess: true, exhausted: false, mismatch: false })).toBe(false);
-    expect(shouldCommitSnapshot({ upstreamSuccess: false, exhausted: true, mismatch: false })).toBe(false);
-    expect(shouldCommitSnapshot({ upstreamSuccess: true, exhausted: true, mismatch: true })).toBe(false);
   });
 
   test("search is not authoritative while refreshing or before the list is complete", () => {
@@ -141,30 +133,28 @@ describe("session list reconciliation", () => {
       (rows) => seen.push(rows),
     );
     expect(seen).toEqual([[{ id: "new", preview: "fresh" }, { id: "old", preview: "keep" }]]);
-    expect(result).toEqual({ received: [{ id: "new", preview: "fresh" }], upstreamSuccess: false, exhausted: false, mismatch: true, remote: { servers: {}, agentTags: {} } });
-    expect(shouldCommitSnapshot(result)).toBe(false);
+    expect(result).toEqual({ received: [{ id: "new", preview: "fresh" }], complete: false, mismatch: true, remote: { servers: {}, agentTags: {} } });
+    expect(result.complete).toBe(false);
 
     async function* lateFailure() {
       yield alice([{ id: "one" }], { upstreamSuccess: true });
       throw new Error("cut");
     }
     const failed = await readSessionEnumeration("alice", lateFailure(), () => [], () => {});
-    expect(failed.exhausted).toBe(false);
-    expect(failed.upstreamSuccess).toBe(true);
-    expect(shouldCommitSnapshot(failed)).toBe(false);
+    expect(failed.complete).toBe(false);
 
     const denied = new RPCError("denied", 16);
     for (const batches of [Promise.reject(denied), (async function* () { yield alice([{ id: "prefix" }]); throw denied; })()]) {
       const rejected = await readSessionEnumeration("alice", batches, () => prior, () => {});
       expect(rejected.mismatch).toBe(true);
-      expect(shouldCommitSnapshot(rejected)).toBe(false);
+      expect(rejected.complete).toBe(false);
     }
   });
 
   test("empty successful exhaustion is committable", async () => {
     const result = await readSessionEnumeration("alice", batchesOf([alice([], { upstreamSuccess: true })]), () => [{ id: "old" }], () => {});
     expect(result.received).toEqual([]);
-    expect(shouldCommitSnapshot(result)).toBe(true);
+    expect(result.complete).toBe(true);
   });
 
   test("publishes an immediate row and coalesced prefix before a held tail", async () => {
@@ -202,8 +192,7 @@ describe("session list reconciliation", () => {
     }
     const result = await reading;
     expect(result.received).toEqual(expected);
-    expect(result.exhausted).toBe(true);
-    expect(shouldCommitSnapshot(result)).toBe(true);
+    expect(result.complete).toBe(true);
   });
 
   test("flushes a failed prefix but cancels pending publication on abort or owner mismatch", async () => {
@@ -220,7 +209,7 @@ describe("session list reconciliation", () => {
       const result = await readSessionEnumeration("alice", stream(), () => [], (rows) => seen.push(rows), ac.signal);
       expect(seen).toEqual(ending === "error" ? [[{ id: "first" }], [{ id: "first" }, { id: "pending" }]] : [[{ id: "first" }]]);
       expect(result.received).toEqual([{ id: "first" }, { id: "pending" }]);
-      expect(shouldCommitSnapshot(result)).toBe(false);
+      expect(result.complete).toBe(false);
       await Bun.sleep(25);
       expect(seen.length).toBe(ending === "error" ? 2 : 1);
     }

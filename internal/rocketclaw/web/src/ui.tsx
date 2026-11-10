@@ -49,7 +49,6 @@ import {
   type SavedListing,
   saveCompleteSessions,
   searchIsAuthoritative,
-  shouldCommitSnapshot,
 } from "@/session-list";
 
 const queryClient = new QueryClient({
@@ -682,7 +681,7 @@ function ServerSessions({ children }: { children: ReactNode }) {
         if (ac.signal.aborted || captured !== gen.current) {
           return;
         }
-        const rows = shouldCommitSnapshot(result) ? listedRows(held, result) : undefined;
+        const rows = result.complete ? listedRows(held, result) : undefined;
         if (result.mismatch) {
           reset();
           ownerRef.current = undefined;
