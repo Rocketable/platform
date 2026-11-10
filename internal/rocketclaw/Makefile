@@ -7,6 +7,12 @@ ifeq ($(shell uname -s),Darwin)
 LINUX_PROFILE ?= rocketclaw-linux
 linux_docker := docker --context colima-$(LINUX_PROFILE)
 
+# The command line's variables, such as GOTESTRUN='^(TestA|TestB)$$', go to the container's make as given: make
+# lists them in MAKEOVERRIDES with spaces escaped and each $ doubled, so each is undone and quoted for the shell.
+# \001 holds an escaped space while the list splits into words.
+space := $(subst ,, )
+linux_overrides = $(foreach o,$(subst \$(space),\001,$(MAKEOVERRIDES)),'$(subst \001,$(space),$(subst $$$$,$$,$(subst ','\'',$(o))))')
+
 .DEFAULT_GOAL := run
 .PHONY: linux-container
 Makefile: ;
@@ -15,7 +21,7 @@ Makefile: ;
 	$(linux_docker) run --rm --privileged --network host -v $(HOME):$(HOME) -w $(CURDIR) \
 		-v /var/run/docker.sock:/var/run/docker.sock -v rocketclaw-linux-home:/home/dev \
 		-v rocketclaw-linux-sandbox:/sandbox -e SANDBOX_TEST_DIR=/sandbox \
-		rocketclaw-linux make $(MAKEOVERRIDES) $@
+		rocketclaw-linux make $(linux_overrides) $@
 
 # The VM is Ubuntu, whose AppArmor lets bubblewrap make user namespaces only with a profile saying so.
 linux-container:
@@ -143,15 +149,16 @@ check-coverage: coverage-profile
 
 # CI shards the tests with GOTESTRUN and merges the profiles.
 # Test browsers whose test run was killed never exit, so they are cleared before and after the
-# run. Only orphans (parent PID 1) match, so other running test runs keep their browsers.
+# run. Only orphans (parent PID 1) match, so other running test runs keep their browsers. [c] keeps the
+# pattern from matching this recipe's own shell, whose parent is PID 1 when make is, as in the Linux container.
 coverage-profile:
 	@set -eu; \
 	name=; \
 	cleanup() { \
 		if [ -n "$$name" ]; then docker rm -f -v "$$name" >/dev/null 2>&1 || true; fi; \
-		pkill -P 1 -f 'ms-playwright/chromium' || true; \
+		pkill -P 1 -f 'ms-playwright/[c]hromium' || true; \
 	}; \
-	pkill -P 1 -f 'ms-playwright/chromium' || true; \
+	pkill -P 1 -f 'ms-playwright/[c]hromium' || true; \
 	trap cleanup EXIT INT TERM; \
 	if [ -z "$${ROCKETCLAW_TEST_DATABASE_URL:-}" ]; then \
 		latest=$$(curl -fsSL https://www.postgresql.org/versions.json | jq -r '[.[] | select(.supported) | .major] | max_by(tonumber)'); \
