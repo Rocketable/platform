@@ -376,7 +376,7 @@ func TestFindSkillsToolVisibilityFollowsSkillPermission(t *testing.T) {
 	}, Dirs: nil, fsys: nil}
 
 	t.Run("hidden when all skills are denied", func(t *testing.T) {
-		factory := testSkillFactory(t, skills, nil)
+		factory := testSkillFactory(t, skills, agentWithSkillPermission())
 		agent := agentWithSkillRules(PermissionRule{Pattern: "*", Action: permissionDeny})
 
 		tools, _ := factory.assembleTools(agent)
@@ -385,7 +385,7 @@ func TestFindSkillsToolVisibilityFollowsSkillPermission(t *testing.T) {
 	})
 
 	t.Run("visible when any skill is allowed", func(t *testing.T) {
-		factory := testSkillFactory(t, skills, nil)
+		factory := testSkillFactory(t, skills, agentWithSkillPermission())
 		agent := agentWithSkillRules(
 			PermissionRule{Pattern: "*", Action: permissionDeny},
 			PermissionRule{Pattern: "docs-helper", Action: permissionAllow},
@@ -493,7 +493,7 @@ metadata:
 	loaded := LoadSkills(os.DirFS(root), root).Skills
 
 	t.Run("renders skill content with sampled file list", func(t *testing.T) {
-		factory := testSkillFactory(t, loaded, nil)
+		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
 		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil, emptyToolCallMetadata())
 		require.NoError(t, err)
 
@@ -513,7 +513,7 @@ metadata:
 	})
 
 	t.Run("experimental stronger skills returns a short tool result and developer replay input", func(t *testing.T) {
-		factory := testSkillFactory(t, loaded, nil)
+		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
 		factory.experimentalStrongerSkills = true
 		result, replayInput, err := factory.skillTool().CallReplay(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil, emptyToolCallMetadata())
 		require.NoError(t, err)
@@ -530,7 +530,7 @@ metadata:
 	})
 
 	t.Run("returns an error for unknown skills", func(t *testing.T) {
-		factory := testSkillFactory(t, loaded, nil)
+		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
 		_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"missing-skill"}`), nil, emptyToolCallMetadata())
 		require.EqualError(t, err, `skill "missing-skill" not found. Available skills: git-release`)
 	})
@@ -549,7 +549,7 @@ Use for docs.
 		"docs-helper/reference/link.md":  {Data: []byte("guide.md"), Mode: fs.ModeSymlink, ModTime: time.Time{}, Sys: nil},
 	}, "/virtual/skills").Skills
 
-	factory := testSkillFactory(t, loaded, nil)
+	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
 	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
 
@@ -560,7 +560,7 @@ Use for docs.
 
 func TestSkillsRenderRequiresLoadedFS(t *testing.T) {
 	skills := Skills{Root: "/virtual/skills", Items: map[string]Skill{"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Metadata: nil, Location: "docs-helper/SKILL.md", Content: "Use for docs."}}, Dirs: []string{"docs-helper"}, fsys: nil}
-	factory := testSkillFactory(t, skills, nil)
+	factory := testSkillFactory(t, skills, agentWithSkillPermission())
 
 	_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil, emptyToolCallMetadata())
 
@@ -588,7 +588,7 @@ Args: $ARGUMENTS
 	env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand{}, &sandbox.Runtime{})
 	require.NoError(t, err)
 
-	factory := testSkillFactory(t, loaded, nil)
+	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
 	factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
 	factory.promptExpansion = env
 
@@ -616,7 +616,7 @@ description: $ARGUMENTS and $1 are metadata
 
 No placeholder here.
 `), "arg-skill/$ARGUMENTS.txt": mapFile("resource")}, "/virtual/skills").Skills
-	factory := testSkillFactory(t, loaded, nil)
+	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
 
 	_, output, err := factory.renderSkillToolOutput(t.Context(), json.RawMessage(`{"name":"arg-skill","arguments":"literal request","direct":true}`), true)
 	require.NoError(t, err)
@@ -654,7 +654,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 		require.NoError(t, root.Mkdir("main-convert-agent-to-easy", 0o755))
 		require.NoError(t, root.WriteFile("main-convert-agent-to-easy/SKILL.md", data, 0o644))
 		skills := LoadSkills(root.FS(), dir).Skills
-		factory := testSkillFactory(t, skills, nil)
+		factory := testSkillFactory(t, skills, agentWithSkillPermission())
 		factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
 		factory.promptExpansion, err = newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand{}, &sandbox.Runtime{})
 		require.NoError(t, err)
@@ -665,7 +665,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 	})
 
 	t.Run("leaves shell commands literal by default", func(t *testing.T) {
-		factory := testSkillFactory(t, loaded, nil)
+		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
 		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill","arguments":"MEMORY.md"}`), nil, emptyToolCallMetadata())
 
 		require.NoError(t, err)
@@ -681,7 +681,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 		env, err := newPromptExpansionEnvironment(root, testPromptShellTempConfig(t, root, dir), nil, DefaultShellCommand{}, &sandbox.Runtime{})
 		require.NoError(t, err)
 
-		factory := testSkillFactory(t, loaded, nil)
+		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
 		factory.expandPromptShellCommands = PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: true, InputPrompts: false}
 		factory.promptExpansion = env
 		tool := factory.skillTool()
@@ -714,7 +714,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 			{name: "default", agent: agentWithSkillPermission(), want: "Generated: dynamic-output\n"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				factory := testSkillFactory(t, loaded, nil)
+				factory := testSkillFactory(t, loaded, tc.agent)
 				factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
 				factory.promptExpansion = env
 				// A factory scoped to a sandboxed parent carries the parent's shell.
