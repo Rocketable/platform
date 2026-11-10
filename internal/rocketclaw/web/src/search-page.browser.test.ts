@@ -924,7 +924,21 @@ test("typing reuses message results and new replies preserve selected text", asy
     await search.pressSequentially(" xyz", { delay: 140 });
     expect(await search.inputValue()).toBe("needle xyz");
     expect(await page.evaluate(() => Reflect.get(window, "messageSplits"))).toBe(0);
-    expect(requests).toEqual([{ query: "needle", messages: true }]);
+    try {
+      expect(requests).toEqual([{ query: "needle", messages: true }]);
+    } catch (error) {
+      console.info("Typing search request failure before Enter", JSON.stringify({
+        requests,
+        browser: await search.evaluate((input: HTMLInputElement) => ({
+          query: input.value, selection: [input.selectionStart, input.selectionEnd], focused: document.activeElement === input,
+          messageSplits: Reflect.get(window, "messageSplits"), resultGroups: document.querySelectorAll('[aria-label="Search results"] [role="group"]').length,
+          now: performance.now(), timeOrigin: performance.timeOrigin,
+          searches: performance.getEntriesByType("resource").filter((entry) => new URL(entry.name).pathname === "/api/SearchSessions")
+            .map(({ startTime, duration }) => ({ startTime, duration })),
+        })).catch((failure: unknown) => ({ unavailable: String(failure) })),
+      }));
+      throw error;
+    }
     await search.press("Enter");
     await started.promise;
     expect(await results.getByRole("group").count()).toBe(64);
