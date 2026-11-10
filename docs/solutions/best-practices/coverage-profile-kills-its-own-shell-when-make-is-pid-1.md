@@ -7,7 +7,7 @@ problem_type: developer_experience
 component: development_workflow
 severity: medium
 root_cause: logic_error
-resolution_type: workflow_improvement
+resolution_type: code_fix
 applies_when:
   - Running one RocketClaw test, or a few, on a Mac with make -C internal/rocketclaw coverage-profile GOTESTRUN=...
   - Running make -C internal/rocketclaw check-coverage on a Mac
@@ -53,35 +53,11 @@ This trap is easy to step into. `AGENTS.md` says RocketClaw tests run on a Mac o
 
 ## Guidance
 
-Until the Makefile is fixed, run a focused test subset in the container with something other than `make` as PID 1. This is the runner the space-permissions run used (it lived at `.tmp/run-tests.sh` in that workspace):
+Fixed on 2026-11-10: the `pkill` patterns in `internal/rocketclaw/Makefile` (`coverage-profile`) and `internal/rocketclaw/web/Makefile` (`test`) are now `'ms-playwright/[c]hromium'`. The regex still matches a Chromium command line such as `/opt/ms-playwright/chromium-1200/chrome-linux/chrome`, but not the recipe's own text, which now reads `[c]hromium`. Checked in the container: with the old pattern, a shell whose parent is PID 1 and whose command line holds the pattern was killed (exit 143), and with the new one it survives; both kill an orphaned Chromium. `make -C internal/rocketclaw coverage-profile GOTESTRUN=TestBuildImage` on a Mac then ran to the end.
 
-```sh
-#!/bin/sh
-# Runs `make coverage-profile GOTESTRUN=$1` in the RocketClaw Linux container with make not as PID 1.
-set -eu
-ws=$(cd "$(dirname "$0")/.." && pwd)
-make -C "$ws/internal/rocketclaw" linux-container
-docker --context colima-rocketclaw-linux run --rm --privileged --network host -v "$HOME:$HOME" -w "$ws/internal/rocketclaw" \
-	-v /var/run/docker.sock:/var/run/docker.sock -v rocketclaw-linux-home:/home/dev \
-	-v rocketclaw-linux-sandbox:/sandbox -e SANDBOX_TEST_DIR=/sandbox -e "RUN=$1" \
-	rocketclaw-linux sh -c 'make GOTESTRUN="$(printf %s "$RUN" | sed "s/\\$/\$\$/g")" coverage-profile; exit $?'
-```
+Keep the rule when adding a `pkill -f` or `pgrep -f` to a recipe: write its pattern so the pattern's own text does not match it.
 
-Some details matter:
-
-- `sh -c '...; exit $?'` is a compound command, so `sh` stays PID 1 and does not `exec` into `make`. A bare `sh -c 'make ...'` may be exec'd and bring the problem back.
-- The `docker run` flags and volumes copy the Darwin rule (`Makefile:15`–`17`). If that rule changes, copy the new flags.
-- `make linux-container` first makes sure the Colima VM and the image exist, as the Darwin rule does.
-- `make` expands `$` in `GOTESTRUN`, so an anchored pattern needs `$$`. CI writes `\$\$` for the same reason (`test.yml:147`). The `sed` does this, so `.tmp/run-tests.sh '^(TestFoo|TestBar)$'` works.
-
-A full `make test` needs no workaround.
-
-**The real fix belongs in `internal/rocketclaw/Makefile`. This doc does not make it.** Either change would stop the recipe from matching its own shell. Neither has been tested:
-
-- Write the pattern so its own text does not match it: `pkill -P 1 -f 'ms-playwright/[c]hromium'`. The regex still matches a Chromium command line. The recipe text now contains `[c]hromium`, which the regex does not match.
-- Or add `--init` to the Darwin `docker run`, so Docker's init is PID 1 and `make` is not. Check that the `ENTRYPOINT`'s cgroup moves still work with an extra process in the container.
-
-Once the Makefile is fixed, confirm that `make -C internal/rocketclaw coverage-profile GOTESTRUN=<one test>` passes on a Mac. Then remove the workaround from this doc.
+The Darwin `%` rule used to pass `$(MAKEOVERRIDES)` to the container's `make` unquoted, so a `GOTESTRUN` such as `'^(TestFoo|TestBar)$$'` failed on a Mac with `syntax error near unexpected token '('`, and each `$` reached the shell doubled, where `$$` became its process ID. The rule now quotes each variable for the shell and undoes make's escaping (`linux_overrides`), so the container's `make` gets the variables as typed on the Mac. A dry run shows it: `make -n -C internal/rocketclaw coverage-profile 'GOTESTRUN=^(TestA|TestB)$$'` prints `make 'GOTESTRUN=^(TestA|TestB)$$' coverage-profile`.
 
 ## Why This Matters
 
@@ -89,7 +65,6 @@ Once the Makefile is fixed, confirm that `make -C internal/rocketclaw coverage-p
 
 ## When to Apply
 
-- Before running `coverage-profile` or `check-coverage` directly on a Mac.
 - When a RocketClaw target in the container ends with `Terminated` and shows no test output.
 - When editing the `pkill` lines, adding another `pkill -f` or `pgrep -f` to a recipe, or changing how the Darwin rule starts the container. Any `-f` pattern that appears literally in its own recipe matches that recipe's shell whenever the shell's parent fits the other filters.
 
@@ -102,7 +77,7 @@ $ make -C internal/rocketclaw coverage-profile GOTESTRUN=<pattern>
 make: *** [Makefile:146: coverage-profile] Terminated
 ```
 
-After, through the runner above, `go test` runs the chosen tests and writes `.coverage.out` as usual.
+After the fix, the same command runs the chosen tests and writes `.coverage.out` as usual.
 
 ## Related
 
