@@ -263,7 +263,6 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 		winner  starlark.Value
 		errWin  error
 		settled bool
-		failed  int
 	)
 
 	finish := func(value starlark.Value, err error) {
@@ -284,16 +283,8 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, conc
 			return
 		}
 
-		failed++
-
 		if errWin == nil {
 			errWin = err
-		}
-
-		if failed == len(callables) {
-			settled = true
-
-			cancel()
 		}
 	}
 
