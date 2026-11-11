@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -73,7 +74,14 @@ func emulatedRuntime(t *testing.T) *sandbox.Runtime {
 	require.NoError(t, os.MkdirAll(filepath.Join(stale, "usr"), 0o755))
 
 	rt := sandbox.Bubblewrap{}.Prepare(t.Context(), dir, slog.New(slog.NewTextHandler(t.Output(), nil)))
-	require.NoError(t, rt.Wait(t.Context()))
+
+	// A host tries a failed image build again and again until Ubuntu's archive answers, which here would wait out
+	// the test's timeout without a word: the first failed try fails the test, with apt's output logged above.
+	for rt.Err() == sandbox.ErrPreparing {
+		time.Sleep(time.Second)
+	}
+
+	require.NoError(t, rt.Err())
 	require.NoDirExists(t, stale)
 
 	return rt

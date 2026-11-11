@@ -78,6 +78,7 @@ SANDBOX_TEST_DIR ?= $(abspath ../../.tmp)/sandbox-test
 # the tests' parent, as `go run`'s go command does for RocketClaw.
 # SANDBOX_TEST_COVERPROFILE, when set, writes the tests' coverage of COVERPKG there, for CI to merge.
 # SANDBOX_TEST_PACKAGE_MIRROR, when set, is an Ubuntu mirror the image build tries first for its packages.
+# The tests share one image, so the first failure, such as a build Ubuntu's archive refused, ends the run.
 SANDBOX_TEST_FLAGS ?=
 SANDBOX_TEST_CGO ?= 0
 # In a container, such as the Linux a Mac runs these targets in, the cgroup make runs in is delegated to it
@@ -98,7 +99,7 @@ sandbox-test:
 		$(if $(SANDBOX_TEST_PACKAGE_MIRROR),ROCKETCLAW_SANDBOX_PACKAGE_MIRROR=$(SANDBOX_TEST_PACKAGE_MIRROR)) \
 		ROCKETCLAW_SANDBOX_PACKAGE_CACHE=$(SANDBOX_TEST_DIR)/packages \
 		$(if $(SANDBOX_TEST_COVERPROFILE),ROCKETCLAW_SANDBOX_GOCOVERDIR=$(SANDBOX_TEST_DIR)/gocover) \
-		$(SANDBOX_TEST_DIR)/harness.test -test.run 'TestEmulatedShell' -test.v -test.count 1 -test.timeout 30m \
+		$(SANDBOX_TEST_DIR)/harness.test -test.run 'TestEmulatedShell' -test.v -test.count 1 -test.failfast -test.timeout 30m \
 		$(if $(SANDBOX_TEST_COVERPROFILE),-test.coverprofile=$(abspath $(SANDBOX_TEST_COVERPROFILE)))
 # The guest relay's own coverage, which the tests copy out of each agent's folder, joins the profile.
 	$(if $(SANDBOX_TEST_COVERPROFILE),go tool covdata textfmt -i=$$(ls -d $(SANDBOX_TEST_DIR)/gocover/*/ | paste -sd, -) -o $(SANDBOX_TEST_DIR)/guest.out && tail -n +2 $(SANDBOX_TEST_DIR)/guest.out >> $(abspath $(SANDBOX_TEST_COVERPROFILE)))
