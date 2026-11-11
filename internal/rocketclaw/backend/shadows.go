@@ -168,18 +168,6 @@ WHERE child_conversation_id = ANY($1) AND terminal = ''`, ids, protocol.Terminal
 	}
 }
 
-// deleteOwnedConversations shares full removal between retention and failed MCP creation. A
-// family goes in one statement, since a conversation cannot go before its children.
-func deleteOwnedConversations(ctx context.Context, db stateStoreDB, ids []string) error {
-	for _, table := range []string{"turns", "steps", "schedules", "conversations"} {
-		if _, err := db.ExecContext(ctx, `DELETE FROM `+table+` WHERE conversation_id = ANY($1)`, ids); err != nil {
-			return fmt.Errorf("delete owned %s: %w", table, err)
-		}
-	}
-
-	return nil
-}
-
 // releaseHistory returns settled workers to admission after owned state is erased.
 func releaseHistory(workers []*Bridge) {
 	for _, b := range workers {

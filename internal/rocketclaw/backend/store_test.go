@@ -1534,10 +1534,10 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 	require.EqualError(t, err, "conversation ID is required")
 }
 
-func TestDeleteSessionEntriesReportsDeleteFailures(t *testing.T) {
+func TestDeleteOwnedHistoryReportsDeleteFailures(t *testing.T) {
 	t.Parallel()
 
-	_, err := deleteSessionEntries(context.Background(), errStore{errExec: errors.New("no delete")}, []string{"main"})
+	_, err := deleteOwnedHistory(context.Background(), errStore{errExec: errors.New("no delete")}, []string{"main"})
 	require.ErrorContains(t, err, "lock session history")
 }
 

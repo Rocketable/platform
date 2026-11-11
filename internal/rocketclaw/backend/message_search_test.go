@@ -426,7 +426,7 @@ func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
 			return err
 		})},
 		{"delete", "conversations", "principals", func() error { _, err := s.DeleteSession(ctx, "chat"); return err }},
-		{"prune", "conversations", "principals", inTx(func(tx *sql.Tx) error { _, err := deleteSessionEntries(ctx, tx, []string{"chat"}); return err })},
+		{"prune", "conversations", "principals", inTx(func(tx *sql.Tx) error { _, err := deleteOwnedHistory(ctx, tx, []string{"chat"}); return err })},
 	} {
 		reject(tc.table, tc.column)
 		require.ErrorContains(t, tc.write(), "write unavailable", tc.name)
