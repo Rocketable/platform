@@ -146,9 +146,6 @@ ORDER BY d.username, d.space, d.path, s.position`, "open dashboards", func(row r
 		errs                    []error
 	)
 
-	// ponytail: a changed session list costs one sort per person and space with a Dashboard open, and a Shared
-	// Dashboard one per person who can see its space. Sorting a Shared Dashboard once for everyone without a Space
-	// Limit, when no lane reads is:unread, is the upgrade.
 	for key, group := range open {
 		var (
 			sorting []dashboard

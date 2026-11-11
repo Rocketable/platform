@@ -49,9 +49,6 @@ const (
 // tab parked until it is done, still makes its park due. Whatever depends on the stored row is decided on the locked
 // row, in the conflict clause, which tells a question by its mark's time: one microsecond after now(), or none while
 // in view.
-// ponytail: a tab in view joins for its park until done as it was before the row's lock, so a park the person turns
-// timed in that instant can end then, silently, as the tab is in view; telling the row's two in-view reasons apart in
-// the conflict clause would close it.
 const markTabsSQL = `, strongest AS (
     SELECT DISTINCT ON (username, path) username, path, conversation_id, waking, note FROM readers
     ORDER BY username, path, waking DESC
