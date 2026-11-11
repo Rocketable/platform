@@ -167,7 +167,6 @@ export async function readSessionEnumeration(
 ): Promise<EnumerationResult> {
   const byID = new Map<string, Session>();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let published = false;
   let dirty = false;
   let upstreamSuccess = false;
   let complete = false;
@@ -183,7 +182,6 @@ export async function readSessionEnumeration(
     timer = undefined;
     if (!dirty || signal?.aborted || mismatch) return;
     dirty = false;
-    published ||= byID.size > 0;
     onProgress(mergeSessionRows(baseline(), [...byID.values()]));
   };
   signal?.addEventListener("abort", cancel, { once: true });
@@ -203,13 +201,14 @@ export async function readSessionEnumeration(
       upstreamSuccess = batch.upstreamSuccess ?? false;
       if (upstreamSuccess) ({ version, since, removed, tabs } = batch);
       if (!batch.sessions) continue;
+      const first = byID.size === 0;
       for (const row of batch.sessions) byID.set(row.id, row);
       dirty = true;
       // First useful row is immediate; subsequent display work coalesces over
       // 16 ms without awaiting the timer or slowing transport consumption.
       // Full-list work remains per publication; incremental rendering is the
       // next step if even frame-sized publications become too expensive.
-      if (!published && byID.size > 0) {
+      if (first && byID.size > 0) {
         cancel();
         flush();
       } else if (timer === undefined) timer = setTimeout(flush, 16);
