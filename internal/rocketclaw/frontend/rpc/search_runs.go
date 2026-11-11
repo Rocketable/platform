@@ -11,8 +11,6 @@ import (
 )
 
 // searchRunsKept bounds the searches kept per person, running or finished.
-// ponytail: the bound counts answers, not bytes; a finished answer, message text included, stays in memory until its
-// page comes back for it. A server-wide byte budget that drops the oldest kept answer is the upgrade.
 const searchRunsKept = 8
 
 // searchRun is the search of one Search page's tab and search id, running on the server for one person: what it
