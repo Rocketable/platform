@@ -77,6 +77,8 @@ message Session {
   string note = 36;
   // The caller parked its tab until its next turn ends, which has no time.
   bool until_done = 37;
+  // A prompt the caller sends parks its tab until it is done: by their choice for the session, else for every session.
+  bool auto_park = 38;
 }
 
 // TabAttention is the caller's attention on a tab location that is not a session, as a Session row carries a
@@ -830,6 +832,12 @@ enum AttentionAction {
   UNPARK = 3;
   // Park until done sets a session's tab aside until its next turn ends; other locations are skipped.
   PARK_UNTIL_DONE = 4;
+  // Auto-park makes each prompt the caller sends a session park its tab until it is done, and stop auto-park makes
+  // none, over their choice for every session; other locations are skipped.
+  AUTO_PARK = 5;
+  STOP_AUTO_PARK = 6;
+  // Sent says the caller sent each session a prompt: those they auto-park park until they are done.
+  SENT = 7;
 }
 
 // AttentionChange does action to the caller's attention on the tab locations paths. until is an RFC 3339 time.
@@ -840,8 +848,8 @@ message AttentionChange {
 }
 
 // TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space,
-// adds one tab to or removes one from a space's Shared group, changes the caller's attention on tabs, or replaces the
-// caller's Top Shelf.
+// adds one tab to or removes one from a space's Shared group, changes the caller's attention on tabs, replaces the
+// caller's Top Shelf, or sets whether they auto-park every session.
 // revision is the saved revision the state was made from.
 message TabsRequest {
   reserved 8, 9, 10, 13;
@@ -858,6 +866,8 @@ message TabsRequest {
   SharedTab edit_shared = 11;
   TopShelf top_shelf = 12;
   AttentionChange attention = 14;
+  // auto_park sets whether the caller auto-parks every session they chose nothing for.
+  optional bool auto_park = 15;
 }
 
 // TabsResponse is every space, oldest first, and the caller's saved tab state and its revision.
@@ -878,6 +888,8 @@ message TabsResponse {
   TopShelf top_shelf = 8;
   // closed is the caller's last 50 closed tabs, newest first, each with the space it was in and a Search tab's page.
   repeated Tab closed = 9;
+  // auto_park is whether the caller auto-parks every session they chose nothing for.
+  bool auto_park = 10;
 }
 
 // The first event answers the browser's SDP offer; the last ends the call.

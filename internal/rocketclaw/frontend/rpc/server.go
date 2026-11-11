@@ -333,7 +333,7 @@ func sidebarSession(chat *backend.SidebarChat) *Session {
 	}
 
 	session.UnreadAt, session.MarkedUnread, session.Parked, session.Until, session.Note = webAttention(&row.Attention)
-	session.UntilDone = row.Attention.UntilDone
+	session.UntilDone, session.AutoPark = row.Attention.UntilDone, row.AutoPark
 
 	return session
 }
@@ -1683,6 +1683,13 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	content, err := s.uploadContent(ctx, request.Id, text, request.AttachmentIds)
 	if err != nil {
 		return nil, err
+	}
+
+	// Input the agent acts on parks the sender's tab until it is done when they auto-park the session; a stash does not.
+	if kind != protocol.InboundKindHeld {
+		if err := s.sessions.ChangeAttention(ctx, username, []string{"/s/" + base64.RawURLEncoding.EncodeToString([]byte(request.Id))}, backend.AttentionSent, nil); err != nil {
+			return nil, fmt.Errorf("web prompt: %w", err)
+		}
 	}
 
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, kind, &content, true)

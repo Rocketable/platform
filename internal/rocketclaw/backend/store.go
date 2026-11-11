@@ -1071,6 +1071,9 @@ type SidebarSession struct {
 	Model string
 	// Attention is the listing person's attention on its tab; its Path is empty.
 	Attention Attention
+	// AutoPark reports that a prompt the listing person sends it parks its tab until it is done: by their choice for
+	// it, else their choice for every session.
+	AutoPark bool
 	// Origin holds the facts that decide its chat origin, as ChatOriginFacts reads them.
 	Origin ChatOriginFacts
 	// Work is the chat's work state, and StateSince when the turn defining it started, or its last
@@ -1320,8 +1323,10 @@ running AS (
     WHERE a.key IS NULL
 ), external_runs AS (
     SELECT DISTINCT reports_to AS conversation_id FROM conversations WHERE kind = 'external_mcp_run' AND reports_to IS NOT NULL
+), everyone AS (
+    SELECT auto_park FROM web_tab_states WHERE username = $6
 ), reads AS (
-    SELECT conversation_id, unread_at, quiet, parked, NULLIF(until, 'infinity') AS until, until = 'infinity' AS until_done, note
+    SELECT conversation_id, unread_at, quiet, parked, NULLIF(until, 'infinity') AS until, until = 'infinity' AS until_done, note, auto_park
     FROM web_tab_attention WHERE username = $6 AND conversation_id IS NOT NULL
 ), local AS (
 SELECT
@@ -1353,6 +1358,7 @@ SELECT
     u.until,
     COALESCE(u.until_done, FALSE) AS until_done,
     COALESCE(u.note, '') AS note,
+    COALESCE(u.auto_park, e.auto_park, FALSE) AS auto_park,
     -- Idle chats read NULL and zeros, which cost no allocation per row.
     CASE WHEN k.conversation_id IS NOT NULL THEN 'needs_you' WHEN w.running_since IS NOT NULL THEN 'running' WHEN w.queued_since IS NOT NULL THEN 'queued' END AS work,
     COALESCE(w.running_since, w.queued_since, 0) AS state_since,
@@ -1362,6 +1368,7 @@ SELECT
     `+originColumns+`
 FROM shown c
 LEFT JOIN reads u ON u.conversation_id = c.conversation_id
+LEFT JOIN everyone e ON TRUE
 LEFT JOIN conversations run ON run.conversation_id = c.cron_run
 LEFT JOIN running r ON r.conversation_id = c.conversation_id
 LEFT JOIN work w ON w.conversation_id = c.conversation_id
@@ -1371,11 +1378,12 @@ WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY(
 ), remote AS (
 SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.pinned, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
     o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at, COALESCE(u.quiet, FALSE),
-    COALESCE(u.parked, FALSE), u.until, COALESCE(u.until_done, FALSE), COALESCE(u.note, ''),
+    COALESCE(u.parked, FALSE), u.until, COALESCE(u.until_done, FALSE), COALESCE(u.note, ''), COALESCE(u.auto_park, e.auto_park, FALSE),
     CASE WHEN o.asking THEN 'needs_you' WHEN o.running OR o.background THEN 'running' END, 0, FALSE AS queued, FALSE AS external_mcp, 0,
     '', '', '', 'null'::jsonb, '', '', '', NULL::bigint, FALSE
 FROM conversations o
 LEFT JOIN reads u ON u.conversation_id = o.conversation_id
+LEFT JOIN everyone e ON TRUE
 -- Rows of servers no longer configured stay stored, hidden, and return with their server.
 WHERE o.kind = 'remote' AND o.server = ANY($4) AND ($5::text[] IS NULL OR o.conversation_id = ANY($5))
 ), chats AS (
@@ -1405,7 +1413,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			var row SidebarSession
 
 			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
-				&row.Attention.Parked, &until, &row.Attention.UntilDone, &row.Attention.Note, &work, &since, &row.Queued, &row.External, &arrived)
+				&row.Attention.Parked, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &work, &since, &row.Queued, &row.External, &arrived)
 			if err := scanChatOrigin(rows, &row.Origin, dest...); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return

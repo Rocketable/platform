@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -14,6 +16,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,16 +68,25 @@ func (u *proxyUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// startProxyTestRPC serves a Web that admits 192.0.2.10 and 127.0.0.1 and relays box to upstream.
-func startProxyTestRPC(t *testing.T, upstream string) http.Handler {
+// startProxyTestRPC serves a Web that admits 192.0.2.10 and 127.0.0.1 and relays box to upstream, with its sessions
+// and their database.
+func startProxyTestRPC(t *testing.T, upstream string) (http.Handler, *backend.SessionService, *sql.DB) {
 	t.Helper()
 
-	cfg := &config.Config{Permissions: map[string][]string{"bob": {"Ops"}}}
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	servers := map[string]config.OpenCodeConfig{"box": {URL: upstream, Password: "pw"}}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenCode: servers, Permissions: map[string][]string{"bob": {"Ops"}}}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{SandboxErrorFunc: noSandboxError}, nil, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error {
@@ -92,7 +105,7 @@ func startProxyTestRPC(t *testing.T, upstream string) http.Handler {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	return NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, map[string]config.OpenCodeConfig{"box": {URL: upstream, Password: "pw"}}, "", nil)
+	return NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, servers, "", nil), sessions, openTestTurns(t, dsn).db
 }
 
 func TestOpenCodeProxy(t *testing.T) {
@@ -100,7 +113,7 @@ func TestOpenCodeProxy(t *testing.T) {
 	upstream := httptest.NewServer(fake)
 	t.Cleanup(upstream.Close)
 
-	handler := startProxyTestRPC(t, upstream.URL)
+	handler, sessions, db := startProxyTestRPC(t, upstream.URL)
 
 	serve := func(method, target, remote string, header http.Header) *httptest.ResponseRecorder {
 		request := httptest.NewRequestWithContext(t.Context(), method, "http://rocketclaw.example"+target, nil)
@@ -178,6 +191,25 @@ func TestOpenCodeProxy(t *testing.T) {
 			assert.JSONEq(t, test.want, fake.body, test.body)
 		}
 	}
+
+	// A prompt to a session its sender auto-parks parks their tab until it is done before OpenCode gets it. The
+	// prompts above went through though no sync had recorded s1, so none could park.
+	_, err := db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, title, name, directory, last_updated, synced_at)
+VALUES ('opencode:box:s2', '', '', 'remote', FALSE, 'remote', 'box', 's2', '', '', '/srv', now(), now())`)
+	require.NoError(t, err)
+	require.NoError(t, sessions.SetAutoParkAll(t.Context(), "alice", true))
+	require.Equal(t, http.StatusOK, serve(http.MethodPost, "/oc/box/api/session/s2/prompt", "192.0.2.10:5000", nil).Code)
+
+	listed := 0
+
+	for chat, err := range sessions.SidebarChats(t.Context(), "alice", &mockChannels{}, []string{"opencode:box:s2"}) {
+		require.NoError(t, err)
+		assert.True(t, chat.Session.Attention.Parked && chat.Session.Attention.UntilDone, "%+v", chat.Session.Attention)
+
+		listed++
+	}
+
+	assert.Equal(t, 1, listed)
 }
 
 func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
@@ -185,7 +217,8 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 	upstream := httptest.NewServer(fake)
 	t.Cleanup(upstream.Close)
 
-	web := httptest.NewServer(startProxyTestRPC(t, upstream.URL))
+	proxy, _, _ := startProxyTestRPC(t, upstream.URL)
+	web := httptest.NewServer(proxy)
 	t.Cleanup(web.Close)
 
 	// The tailnet listener admits like the Web there: a Tailscale user, whatever the IP.
@@ -198,7 +231,8 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 
 		return &apitype.WhoIsResponse{Node: node, UserProfile: &tailcfg.UserProfile{LoginName: "zoe@example.com"}}, nil
 	}}
-	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, []string{"https://local.tail1234.ts.net"}, startProxyTestRPC(t, upstream.URL)))
+	proxy, _, _ = startProxyTestRPC(t, upstream.URL)
+	tailnet := httptest.NewTLSServer(NewTailnetHandler(whois, []string{"https://local.tail1234.ts.net"}, proxy))
 	t.Cleanup(tailnet.Close)
 
 	for _, listener := range []*httptest.Server{web, tailnet} {

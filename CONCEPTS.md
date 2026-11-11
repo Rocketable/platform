@@ -256,7 +256,7 @@ The server keeps one list, oldest first, with names unique ignoring case, and th
 
 A named, colored run of one person's adjacent tabs in one Space, which can be collapsed to its header.
 
-A group sits where its first tab is and lives in that tab's Space; moving it to another Space moves all its tabs. It goes away when its last tab closes or leaves it, unless the person keeps it: a kept group stays where it was, across reloads and devices, offers a new session inside it while empty and expanded, and goes once it is both empty and no longer kept. The Shared Group and the Top Shelf are groups with rules of their own.
+A group sits where its first tab is and lives in that tab's Space; moving it to another Space moves all its tabs. It stays when its last tab closes or leaves it: an empty group stays where it was, across reloads and devices, offers a new session inside it while expanded, and goes only when the person deletes it, which closes its tabs too. The Shared Group and the Top Shelf are groups with rules of their own.
 
 ### Preview Tab
 
@@ -318,7 +318,7 @@ A session is in a Space when its Birth Space is that Space, or, with no Birth Sp
 
 ### Unread
 
-One person's attention state on one tab, which the server keeps for every kind of tab, by the tab's location: read, waiting, or Parked. New session, the Preview Tab and a kept group's placeholder have none. A waiting tab shows a bold title on every device, and the window title's count and Cmd/Ctrl+Alt+A count it.
+One person's attention state on one tab, which the server keeps for every kind of tab, by the tab's location: read, waiting, or Parked. New session, the Preview Tab and a group's placeholder have none. A waiting tab shows a bold title on every device, and the window title's count and Cmd/Ctrl+Alt+A count it.
 
 The server writes every mark; the browser only reads them and reports which tab is in view. Something new makes a tab waiting: a session's turn ends or its agent starts asking; a search the person entered on a Search Page finishes; a session enters a Dashboard's flagged lane; a cron's run ends, once its last turn ends with nothing left to wake it, for that cron's tab and the Cron overview of its space; an HTML file of a Hosted Page is stored, for that page's tab and the Page Index of its space. Agents, Skills, Settings, Shortcuts, Voice and Recently closed get only what the person sets. A session's turn end or question reaches the people who sent or steered that turn from the Web, those with the session in their own tabs, those with it on a Top Shelf this server keeps, and everyone who sees it in a space's Shared Group; Cron and Pages tabs reach the people who have them as their own tab, on that shelf, or Shared. The browser notifies only for a tab the person has, there or on another server's Top Shelf: news on a tab they closed waits, quiet, until they open it again, and the end of a park brings a closed tab back. A person with a Space Limit is never marked for a space outside it. Nobody is marked for the tab they viewed in the last 10 seconds, or the last 4 for a question or a park's end.
 
@@ -332,6 +332,8 @@ A tab a person set aside, until they unpark it, until a time they chose, or, for
 A parked tab is never bold and raises no notification: anything new on it leaves a quiet Unread mark. Unparking returns it to its place, bold if something happened that the person has not seen, without a notification either way. It comes back by itself, bold with a notification, when its time is up, when the turn a park until it is done waited for ends, with the reply's own notification, or when its agent asks a question, which makes the park due at once, also on a Shared tab or one parked and closed. Closing a tab parked until unparked ends the park; one parked until a time, or until it is done, stays parked and comes back when the park ends. Close others, Close to the right, Close all and Close group close this space's parked tabs too.
 
 The server checks a person's park times each time one of their windows asks for the session list, which an open window does every few seconds, so a park ends on the first such poll after its time; one that comes due while no window is open shows bold without a notification when a window opens. A park time that comes due on a closed tab brings the tab back where it was: in its Space, in its group when that still exists, and at its old position when possible.
+
+A person can auto-park sessions: then each message they send a session that the agent acts on, from the Web or from a remote OpenCode session's view, first parks its tab until it is done. Their choice for one session wins over their choice for every session; both are theirs alone and kept by the server.
 
 ## Hosted Pages
 

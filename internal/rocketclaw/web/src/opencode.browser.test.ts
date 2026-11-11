@@ -625,7 +625,7 @@ test("a shelf row offers its server's attention items, one of an offline server 
       return items;
     };
     await shelf.getByRole("tab", { name: "Alpha work", exact: true }).waitFor();
-    expect(await menu(shelf.getByRole("tab", { name: "Alpha work", exact: true }))).toEqual(["Mark as unread", "Park", "Remove from Top Shelf"]);
+    expect(await menu(shelf.getByRole("tab", { name: "Alpha work", exact: true }))).toEqual(["Mark as unread", "Park", "Auto-park when I send", "Remove from Top Shelf"]);
     await shelf.locator('[role="tab"][aria-label="Cron"][aria-description="Top Shelf, work, Server offline"]').waitFor();
     expect(await shelf.locator('[data-tab="/cron"]').evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("0.6");
     await offline.hover();

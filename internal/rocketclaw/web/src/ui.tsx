@@ -21,6 +21,7 @@ import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRig
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, InlineText, MarkdownText, OUTPUT_KEY, TranscriptText, cleanText, copyText, mentionIds, setPreference, useCleanText, usePreference, useSlackNames } from "./transcript-text";
@@ -972,8 +973,8 @@ function pageSpace(state: Pick<TabState, "spaces" | "space">, path: string): [st
 // Group colors light enough for black text in both themes.
 const groupColors: Record<string, string> = { Grey: "bg-gray-400", Blue: "bg-blue-400", Red: "bg-red-400", Yellow: "bg-yellow-400", Green: "bg-green-400", Pink: "bg-pink-400", Purple: "bg-purple-400", Cyan: "bg-cyan-400", Orange: "bg-orange-400" };
 const groupName = (group: TabGroup) => group.name || `${group.color} group`;
-// A group kept when empty holds a placeholder among its tabs, so it stays where it was after its last tab goes. Only the
-// strip draws it, as New session in the emptied group; tab commands, closing, and stepping never see it.
+// Every group holds a placeholder among its tabs, so it stays where it was after its last tab goes, until deleted. Only
+// the strip draws it, as New session in the emptied group; tab commands, closing, and stepping never see it.
 const keeper = (group: string) => `group:${group}`, isKeeper = (tab: Tab) => tab.path.startsWith("group:");
 
 // Each group sits where its first member is, so its tabs stay adjacent.
@@ -1020,12 +1021,16 @@ function leave(state: TabState, doomed: string, spaces: Space[]): TabState {
 const relocate = ({ preview: _preview, unplaced: _unplaced, ...tab }: Tab, space: string): Tab => ({ ...tab, space });
 
 // The server's saved tabs; tabs left in a lost space or group belong to the first space and no group, and a lost group's
-// placeholder goes.
+// placeholder goes. A group saved before every group held one gets its placeholder after its last tab.
 function savedTabs(owner?: string, saved?: Pick<SavedTabs, "spaces" | "state">): TabState {
   const spaces = saved?.spaces ?? [{ id: "main", name: "Main" }], known = (id?: string) => spaces.some((space) => space.id === id);
   const groups = saved?.state.groups ?? [];
   const tabs = (saved?.state.tabs ?? []).map(({ group, space, ...tab }) => ({ ...tab, group: groups.some((item) => item.id === group) ? group : undefined, space: known(space) ? space : spaces[0].id })).filter((tab) => tab.group || !isKeeper(tab));
-  return { owner, tabs: arrange(tabs), active: "", groups, spaces, space: known(saved?.state.space) ? saved!.state.space : spaces[0].id, last: saved?.state.last ?? {}, sharedOrder: saved?.state.sharedOrder ?? [] };
+  const kept = groups.reduce<Tab[]>((list, { id }) => {
+    const member = list.find((tab) => tab.group === id);
+    return member && !list.some((tab) => tab.path === keeper(id)) ? join(list, keeper(id), id, member.space!) : list;
+  }, tabs);
+  return { owner, tabs: arrange(kept), active: "", groups, spaces, space: known(saved?.state.space) ? saved!.state.space : spaces[0].id, last: saved?.state.last ?? {}, sharedOrder: saved?.state.sharedOrder ?? [] };
 }
 
 // A space chosen on another server's branch of the space tree, or a Top Shelf tab's, which its first load enters.
@@ -1242,7 +1247,7 @@ function useTabs() {
   const regroup = (match: (tab: Tab) => boolean, group?: string) => update((tabs) => tabs.map((tab) => match(tab) ? { ...tab, group } : tab));
   const edit = (id: string, change: Partial<TabGroup>) => setState((current) => ({ ...current, groups: current.groups.map((group) => group.id === id ? { ...group, ...change } : group) }));
   // The strip and menus show only the current space's tabs and groups, leaving out parked tabs, which show in Parked; shown
-  // leaves out kept groups' placeholders too.
+  // leaves out groups' placeholders too.
   const strip = state.tabs.filter((tab) => tab.space === state.space && !parked.has(tab.path)), shown = strip.filter((tab) => !isKeeper(tab));
   // Bulk closes take this space's tabs, parked ones too.
   const spaceTabs = state.tabs.filter((tab) => tab.space === state.space && !isKeeper(tab));
@@ -1383,7 +1388,7 @@ function useTabs() {
         { key: "group-new", label: "Add to new group", sub: { menu: "Add to group", label: "New group" }, run: () => {
           const id = crypto.getRandomValues(new Uint32Array(2)).join("-");
           setState((current) => ({ ...current, groups: [...current.groups, { id, name: "", color: Object.keys(groupColors)[groups.length % Object.keys(groupColors).length] }] }));
-          regroup((item) => paths.has(item.path), id);
+          update((tabs) => join(tabs.map((item) => paths.has(item.path) ? { ...item, group: id } : item), keeper(id), id, state.space));
           setEditor({ id, open: true });
         } },
         ...groups.filter((group) => selected.some((item) => item.group !== group.id)).map((group) => ({ key: `group-${group.id}`, label: `Add to group "${groupName(group)}"`, sub: { menu: "Add to group", label: groupName(group) }, run: () => update((tabs) => selected.reduce((joined, item) => join(joined, item.path, group.id, state.space), tabs)) })),
@@ -1394,14 +1399,15 @@ function useTabs() {
       ];
     },
     newInGroup,
-    // Ungrouping or closing a kept group's tabs leaves it empty; no longer kept, an empty group goes.
+    // Ungrouping or closing a group's tabs leaves it empty; only Delete group, which closes them too, removes it.
     groupCommands: (id: string) => [
       { key: "new", label: "New tab in group", run: () => newInGroup(id) },
-      state.tabs.some((tab) => tab.path === keeper(id))
-        ? { key: "unkeep", label: "Don't keep group when empty", run: () => update((tabs) => tabs.filter((tab) => tab.path !== keeper(id))) }
-        : { key: "keep", label: "Keep group when empty", run: () => update((tabs) => join(tabs, keeper(id), id, state.space)) },
       { key: "ungroup", label: "Ungroup", run: () => regroup((tab) => tab.group === id && !isKeeper(tab)) },
       { key: "close", label: "Close group", run: () => close(spaceTabs.flatMap((tab) => tab.group === id ? [tab.path] : [])) },
+      { key: "delete", label: "Delete group", run: () => {
+        close(spaceTabs.flatMap((tab) => tab.group === id ? [tab.path] : []));
+        update((tabs) => tabs.filter((tab) => tab.path !== keeper(id)));
+      } },
       ...state.spaces.filter((space) => space.id !== state.space).map((space) => ({ key: `space-${space.id}`, label: `Move group to "${space.name}"`, run: () => setState(openTab({ ...state, tabs: state.tabs.map((tab) => tab.group === id ? relocate(tab, space.id) : tab) }, state.active, reach)) })),
     ],
   };
@@ -1434,7 +1440,7 @@ function useTabsOf() {
 type Mark = TabAttention & { server: string; row?: Session };
 const marksOf = (server: string, view: SidebarView): Mark[] => [...view.rows.flatMap((row) => row.unreadAt ? [{ ...rowAttention(row), path: rowPath(row), server, row }] : []), ...(view.marks ?? []).flatMap((mark) => mark.unreadAt ? [{ ...mark, server }] : [])];
 // A session row's attention, which carries its quiet flag as markedUnread.
-const rowAttention = (row: Session): Omit<TabAttention, "path"> => ({ unreadAt: row.unreadAt, quiet: row.markedUnread, parked: row.parked, until: row.until, untilDone: row.untilDone, note: row.note });
+const rowAttention = (row: Session): Omit<TabAttention, "path"> => ({ unreadAt: row.unreadAt, quiet: row.markedUnread, parked: row.parked, until: row.until, untilDone: row.untilDone, note: row.note, autoPark: row.autoPark });
 // A tab location's attention on its server: its session row's, else its own row's.
 function attentionOf(view: Pick<SidebarView, "rows" | "marks"> | undefined, path: string): Omit<TabAttention, "path"> | undefined {
   const id = pathSession(path), row = id ? view?.rows.find((item) => item.id === id) : undefined;
@@ -1461,22 +1467,25 @@ const laters = [["1h", "1 hour", "for 1 hour", () => Date.now() + 3_600_000], ["
 
 // The attention items for the tab locations paths, from the menu of path, read from their server's view: send makes the
 // change on that server, and pick asks for a time. New session has none, and nor does a server offline or on another
-// protocol. Mark as read and Mark as unread each act on the tabs it fits, Park offers Until it is done only when every
-// tab is a session's, and a parked tab offers Unpark in its place.
+// protocol. Mark as read and Mark as unread each act on the tabs it fits, Park offers Until it is done and Auto-park
+// only when every tab is a session's, and a parked tab offers Unpark in its place.
 function attentionItems(view: SidebarView | undefined, path: string, targets: Iterable<string>, send: Attend, pick: (picking: Picking) => void): TabCommand[] {
   const paths = [...targets].filter((item) => item !== "/"), of = (item: string) => attentionOf(view, item) ?? {};
   if (!view || view.offline || view.foreign || !paths.length) return [];
   const bold = paths.filter((item) => of(item).unreadAt && !of(item).parked), read = paths.filter((item) => !of(item).unreadAt && !of(item).parked);
+  const sessions = paths.every((item) => pathSession(item));
   return [
     ...bold.length ? [{ key: "read", label: "Mark as read", run: () => send(bold, "MARK_READ") }] : [],
     ...read.length ? [{ key: "unread", label: "Mark as unread", run: () => send(read, "MARK_UNREAD") }] : [],
     ...of(path).parked ? [{ key: "unpark", label: "Unpark", run: () => send(paths, "UNPARK") }] : [
       // A session's tab can wait for its next turn to end.
-      ...paths.every((item) => pathSession(item)) ? [{ key: "park-done", label: "Park until it is done", sub: { menu: "Park", label: "Until it is done" }, run: () => send(paths, "PARK_UNTIL_DONE") }] : [],
+      ...sessions ? [{ key: "park-done", label: "Park until it is done", sub: { menu: "Park", label: "Until it is done" }, run: () => send(paths, "PARK_UNTIL_DONE") }] : [],
       ...laters.map(([key, label, park, at]) => ({ key: `park-${key}`, label: `Park ${park}`, sub: { menu: "Park", label },
         run: () => at ? send(paths, "PARK", new Date(at()).toISOString()) : pick({ send: (until) => send(paths, "PARK", until) }) })),
       { key: "park", label: "Park until I unpark", sub: { menu: "Park", label: "Until I unpark" }, run: () => send(paths, "PARK") },
     ],
+    // A session's tab can park until it is done whenever this person sends it a prompt.
+    ...sessions ? [of(path).autoPark ? { key: "park-auto", label: "Stop auto-parking", run: () => send(paths, "STOP_AUTO_PARK") } : { key: "park-auto", label: "Auto-park when I send", run: () => send(paths, "AUTO_PARK") }] : [],
   ];
 }
 
@@ -1685,7 +1694,7 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
           event.dataTransfer.setData(group ? "application/x-rocketclaw-group" : "application/x-rocketclaw-tab", group ?? pathOf(event)!);
         }}
         onDragOver={(event) => { if (!event.dataTransfer.types.some((type) => type === sharedDrag || type === shelfDrag)) event.preventDefault(); }}
-        // A group header stands for its first tab, the only drop target a collapsed group shows, or an empty kept group's
+        // A group header stands for its first tab, the only drop target a collapsed group shows, or an empty group's
         // placeholder, so a tab dropped there joins it.
         onDrop={(event) => {
           const header = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group, group = event.dataTransfer.getData("application/x-rocketclaw-group");
@@ -1725,7 +1734,7 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
               {asking ? needsYou : null}
               <button type="button" aria-label={`Edit ${groupName(group)}`} className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={openEditor}><Ellipsis className="size-3.5" /></button>
             </div> : null,
-            // An expanded empty kept group offers New session, which starts one in the group.
+            // An expanded empty group offers New session, which starts one in the group.
             isKeeper(tab) ? group!.collapsed || shown.some((item) => item.group === group!.id) ? null
               : <button key={tab.path} type="button" data-tab={tab.path} aria-label={`New session in ${groupName(group!)}`} className="flex shrink-0 items-center rounded-md text-sm text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring" onClick={() => newInGroup(group!.id)}>
                 <span className={cn("pointer-events-none my-1.5 ml-1 w-0.5 shrink-0 self-stretch", groupColors[group!.color])} />
@@ -6044,6 +6053,24 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
   );
 }
 
+// Auto-park is this person's choice for every session they chose nothing for on this server, which keeps it, so it
+// follows them and reaches OpenCode sessions too. Each session row says whether it applies there.
+function AutoParkRow() {
+  const name = useServer(), owner = useQuery(queries.identity()).data?.username, { queryKey } = queries.tabs(owner ?? "", name);
+  const saved = useQuery({ ...queries.tabs(owner ?? "", name), enabled: false }), invalidate = useContext(SidebarInvalidation), id = useId();
+  const change = useMutation({ mutationFn: (autoPark: boolean) => tabsCall(name, { autoPark }), onSuccess: (reply) => {
+    queryClient.setQueryData<SavedTabs>(queryKey, (old) => old && { ...old, autoPark: reply.autoPark });
+    invalidate();
+  } });
+  return <div className="flex items-center justify-between gap-4 border-b py-2">
+    <div>
+      <h3 id={id} className="text-sm">Auto-park sessions</h3>
+      <p className="text-sm text-muted-foreground">A message you send parks its session's tab until it is done. A session's tab menu can turn this on or off for that session alone.</p>
+    </div>
+    <Switch aria-labelledby={id} checked={!!saved.data?.autoPark} disabled={!saved.data || change.isPending} onCheckedChange={(checked) => change.mutate(checked)} />
+  </div>;
+}
+
 function ConfigPage() {
   const config = useQuery({ ...queries.config(), staleTime: 60_000 });
   return (
@@ -6057,6 +6084,9 @@ function ConfigPage() {
       </ConfigSection>
       <ConfigSection title="Timeline">
         <TimelineDetailCard />
+      </ConfigSection>
+      <ConfigSection title="Tabs">
+        <AutoParkRow />
       </ConfigSection>
       {config.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
       {config.error ? <p className="text-sm text-destructive">{config.error.message}</p> : null}

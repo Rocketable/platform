@@ -250,6 +250,12 @@ const (
 	AttentionAction_UNPARK AttentionAction = 3
 	// Park until done sets a session's tab aside until its next turn ends; other locations are skipped.
 	AttentionAction_PARK_UNTIL_DONE AttentionAction = 4
+	// Auto-park makes each prompt the caller sends a session park its tab until it is done, and stop auto-park makes
+	// none, over their choice for every session; other locations are skipped.
+	AttentionAction_AUTO_PARK      AttentionAction = 5
+	AttentionAction_STOP_AUTO_PARK AttentionAction = 6
+	// Sent says the caller sent each session a prompt: those they auto-park park until they are done.
+	AttentionAction_SENT AttentionAction = 7
 )
 
 // Enum value maps for AttentionAction.
@@ -260,6 +266,9 @@ var (
 		2: "PARK",
 		3: "UNPARK",
 		4: "PARK_UNTIL_DONE",
+		5: "AUTO_PARK",
+		6: "STOP_AUTO_PARK",
+		7: "SENT",
 	}
 	AttentionAction_value = map[string]int32{
 		"MARK_READ":       0,
@@ -267,6 +276,9 @@ var (
 		"PARK":            2,
 		"UNPARK":          3,
 		"PARK_UNTIL_DONE": 4,
+		"AUTO_PARK":       5,
+		"STOP_AUTO_PARK":  6,
+		"SENT":            7,
 	}
 )
 
@@ -426,7 +438,9 @@ type Session struct {
 	// With a mark, the notification text a timer wrote: "Park ended"; else empty.
 	Note string `protobuf:"bytes,36,opt,name=note,proto3" json:"note,omitempty"`
 	// The caller parked its tab until its next turn ends, which has no time.
-	UntilDone     bool `protobuf:"varint,37,opt,name=until_done,json=untilDone,proto3" json:"until_done,omitempty"`
+	UntilDone bool `protobuf:"varint,37,opt,name=until_done,json=untilDone,proto3" json:"until_done,omitempty"`
+	// A prompt the caller sends parks its tab until it is done: by their choice for the session, else for every session.
+	AutoPark      bool `protobuf:"varint,38,opt,name=auto_park,json=autoPark,proto3" json:"auto_park,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -688,6 +702,13 @@ func (x *Session) GetNote() string {
 func (x *Session) GetUntilDone() bool {
 	if x != nil {
 		return x.UntilDone
+	}
+	return false
+}
+
+func (x *Session) GetAutoPark() bool {
+	if x != nil {
+		return x.AutoPark
 	}
 	return false
 }
@@ -7179,8 +7200,8 @@ func (x *AttentionChange) GetUntil() string {
 }
 
 // TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space,
-// adds one tab to or removes one from a space's Shared group, changes the caller's attention on tabs, or replaces the
-// caller's Top Shelf.
+// adds one tab to or removes one from a space's Shared group, changes the caller's attention on tabs, replaces the
+// caller's Top Shelf, or sets whether they auto-park every session.
 // revision is the saved revision the state was made from.
 type TabsRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
@@ -7192,9 +7213,11 @@ type TabsRequest struct {
 	Share       *SharedTab             `protobuf:"bytes,6,opt,name=share,proto3" json:"share,omitempty"`
 	Unshare     *SharedTab             `protobuf:"bytes,7,opt,name=unshare,proto3" json:"unshare,omitempty"`
 	// edit_shared saves a Shared Search page's one page; a page no longer shared stays unshared.
-	EditShared    *SharedTab       `protobuf:"bytes,11,opt,name=edit_shared,json=editShared,proto3" json:"edit_shared,omitempty"`
-	TopShelf      *TopShelf        `protobuf:"bytes,12,opt,name=top_shelf,json=topShelf,proto3" json:"top_shelf,omitempty"`
-	Attention     *AttentionChange `protobuf:"bytes,14,opt,name=attention,proto3" json:"attention,omitempty"`
+	EditShared *SharedTab       `protobuf:"bytes,11,opt,name=edit_shared,json=editShared,proto3" json:"edit_shared,omitempty"`
+	TopShelf   *TopShelf        `protobuf:"bytes,12,opt,name=top_shelf,json=topShelf,proto3" json:"top_shelf,omitempty"`
+	Attention  *AttentionChange `protobuf:"bytes,14,opt,name=attention,proto3" json:"attention,omitempty"`
+	// auto_park sets whether the caller auto-parks every session they chose nothing for.
+	AutoPark      *bool `protobuf:"varint,15,opt,name=auto_park,json=autoPark,proto3,oneof" json:"auto_park,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7299,6 +7322,13 @@ func (x *TabsRequest) GetAttention() *AttentionChange {
 	return nil
 }
 
+func (x *TabsRequest) GetAutoPark() bool {
+	if x != nil && x.AutoPark != nil {
+		return *x.AutoPark
+	}
+	return false
+}
+
 // TabsResponse is every space, oldest first, and the caller's saved tab state and its revision.
 // stale reports a refused save: the state was made from an older revision than the one saved, or a Shared Search
 // page edit made from a page that has since changed.
@@ -7314,7 +7344,9 @@ type TabsResponse struct {
 	Unshared *SearchPage `protobuf:"bytes,7,opt,name=unshared,proto3" json:"unshared,omitempty"`
 	TopShelf *TopShelf   `protobuf:"bytes,8,opt,name=top_shelf,json=topShelf,proto3" json:"top_shelf,omitempty"`
 	// closed is the caller's last 50 closed tabs, newest first, each with the space it was in and a Search tab's page.
-	Closed        []*Tab `protobuf:"bytes,9,rep,name=closed,proto3" json:"closed,omitempty"`
+	Closed []*Tab `protobuf:"bytes,9,rep,name=closed,proto3" json:"closed,omitempty"`
+	// auto_park is whether the caller auto-parks every session they chose nothing for.
+	AutoPark      bool `protobuf:"varint,10,opt,name=auto_park,json=autoPark,proto3" json:"auto_park,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7403,6 +7435,13 @@ func (x *TabsResponse) GetClosed() []*Tab {
 		return x.Closed
 	}
 	return nil
+}
+
+func (x *TabsResponse) GetAutoPark() bool {
+	if x != nil {
+		return x.AutoPark
+	}
+	return false
 }
 
 // The first event answers the browser's SDP offer; the last ends the call.
@@ -7665,7 +7704,7 @@ const file_web_proto_rawDesc = "" +
 	"\x05since\x18\x02 \x01(\tR\x05since\x12\x12\n" +
 	"\x04hold\x18\x03 \x01(\bR\x04hold\x12\x1f\n" +
 	"\vsame_origin\x18\x04 \x01(\bR\n" +
-	"sameOrigin\"\xbc\a\n" +
+	"sameOrigin\"\xd9\a\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -7708,7 +7747,8 @@ const file_web_proto_rawDesc = "" +
 	"\x05until\x18# \x01(\tR\x05until\x12\x12\n" +
 	"\x04note\x18$ \x01(\tR\x04note\x12\x1d\n" +
 	"\n" +
-	"until_done\x18% \x01(\bR\tuntilDoneJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\x0eallowed_agents\"\x97\x01\n" +
+	"until_done\x18% \x01(\bR\tuntilDone\x12\x1b\n" +
+	"\tauto_park\x18& \x01(\bR\bautoParkJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\x0eallowed_agents\"\x97\x01\n" +
 	"\fTabAttention\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1b\n" +
 	"\tunread_at\x18\x02 \x01(\tR\bunreadAt\x12\x14\n" +
@@ -8207,7 +8247,7 @@ const file_web_proto_rawDesc = "" +
 	"\x0fAttentionChange\x12\x14\n" +
 	"\x05paths\x18\x01 \x03(\tR\x05paths\x12,\n" +
 	"\x06action\x18\x02 \x01(\x0e2\x14.rpc.AttentionActionR\x06action\x12\x14\n" +
-	"\x05until\x18\x03 \x01(\tR\x05until\"\xe4\x03\n" +
+	"\x05until\x18\x03 \x01(\tR\x05until\"\x94\x04\n" +
 	"\vTabsRequest\x12#\n" +
 	"\x05state\x18\x01 \x01(\v2\r.rpc.TabStateR\x05state\x12!\n" +
 	"\fcreate_space\x18\x02 \x01(\tR\vcreateSpace\x12-\n" +
@@ -8220,9 +8260,12 @@ const file_web_proto_rawDesc = "" +
 	"\vedit_shared\x18\v \x01(\v2\x0e.rpc.SharedTabR\n" +
 	"editShared\x12*\n" +
 	"\ttop_shelf\x18\f \x01(\v2\r.rpc.TopShelfR\btopShelf\x122\n" +
-	"\tattention\x18\x0e \x01(\v2\x14.rpc.AttentionChangeR\tattentionJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"\tattention\x18\x0e \x01(\v2\x14.rpc.AttentionChangeR\tattention\x12 \n" +
+	"\tauto_park\x18\x0f \x01(\bH\x00R\bautoPark\x88\x01\x01B\f\n" +
+	"\n" +
+	"_auto_parkJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
 	"J\x04\b\n" +
-	"\x10\vJ\x04\b\r\x10\x0eR\vswap_sharedR\x04muteR\x06unmuteR\vmark_unread\"\xb9\x02\n" +
+	"\x10\vJ\x04\b\r\x10\x0eR\vswap_sharedR\x04muteR\x06unmuteR\vmark_unread\"\xd6\x02\n" +
 	"\fTabsResponse\x12\"\n" +
 	"\x06spaces\x18\x01 \x03(\v2\n" +
 	".rpc.SpaceR\x06spaces\x12#\n" +
@@ -8232,7 +8275,9 @@ const file_web_proto_rawDesc = "" +
 	"\x06shared\x18\x05 \x03(\v2\x0e.rpc.SharedTabR\x06shared\x12+\n" +
 	"\bunshared\x18\a \x01(\v2\x0f.rpc.SearchPageR\bunshared\x12*\n" +
 	"\ttop_shelf\x18\b \x01(\v2\r.rpc.TopShelfR\btopShelf\x12 \n" +
-	"\x06closed\x18\t \x03(\v2\b.rpc.TabR\x06closedJ\x04\b\x06\x10\aR\x05mutes\"\xda\x01\n" +
+	"\x06closed\x18\t \x03(\v2\b.rpc.TabR\x06closed\x12\x1b\n" +
+	"\tauto_park\x18\n" +
+	" \x01(\bR\bautoParkJ\x04\b\x06\x10\aR\x05mutes\"\xda\x01\n" +
 	"\n" +
 	"VoiceEvent\x12*\n" +
 	"\x06answer\x18\x01 \x01(\v2\x10.rpc.VoiceAnswerH\x00R\x06answer\x12'\n" +
@@ -8273,14 +8318,17 @@ const file_web_proto_rawDesc = "" +
 	"\x13VoiceSettingsAction\x12\b\n" +
 	"\x04READ\x10\x00\x12\n" +
 	"\n" +
-	"\x06UPDATE\x10\x03\"\x04\b\x01\x10\x01\"\x04\b\x02\x10\x02*\x05START*\x05RESET*\\\n" +
+	"\x06UPDATE\x10\x03\"\x04\b\x01\x10\x01\"\x04\b\x02\x10\x02*\x05START*\x05RESET*\x89\x01\n" +
 	"\x0fAttentionAction\x12\r\n" +
 	"\tMARK_READ\x10\x00\x12\x0f\n" +
 	"\vMARK_UNREAD\x10\x01\x12\b\n" +
 	"\x04PARK\x10\x02\x12\n" +
 	"\n" +
 	"\x06UNPARK\x10\x03\x12\x13\n" +
-	"\x0fPARK_UNTIL_DONE\x10\x042\x90\x15\n" +
+	"\x0fPARK_UNTIL_DONE\x10\x04\x12\r\n" +
+	"\tAUTO_PARK\x10\x05\x12\x12\n" +
+	"\x0eSTOP_AUTO_PARK\x10\x06\x12\b\n" +
+	"\x04SENT\x10\a2\x90\x15\n" +
 	"\x03Web\x126\n" +
 	"\x10UploadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment(\x01\x128\n" +
 	"\x12DownloadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment0\x01\x12E\n" +
@@ -8639,6 +8687,7 @@ func file_web_proto_init() {
 	file_web_proto_msgTypes[73].OneofWrappers = []any{}
 	file_web_proto_msgTypes[90].OneofWrappers = []any{}
 	file_web_proto_msgTypes[94].OneofWrappers = []any{}
+	file_web_proto_msgTypes[106].OneofWrappers = []any{}
 	file_web_proto_msgTypes[108].OneofWrappers = []any{
 		(*VoiceEvent_Answer)(nil),
 		(*VoiceEvent_Ended)(nil),
