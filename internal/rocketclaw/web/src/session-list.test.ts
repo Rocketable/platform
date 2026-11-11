@@ -5,6 +5,7 @@ import { RPCError } from "./api";
 import type { Remote, Session, SessionBatch } from "./types";
 import {
   listedRows,
+  listedTabs,
   mergeSessionRows,
   readSessionEnumeration,
   saveCompleteSessions,
@@ -89,6 +90,11 @@ describe("session list reconciliation", () => {
     expect(listedRows(held, { received: changed, since: "v1", removed: ["gone"] })).toEqual([changed[0], held.rows[0], changed[1]]);
     expect(listedRows(held, { received: [{ id: "only" }] }), "a listing since nothing held sent every row").toEqual([{ id: "only" }]);
     expect(listedRows(held, { received: [{ id: "only" }], since: "v0" })).toEqual([{ id: "only" }]);
+    // Tab rows sent since replace the held ones by location, and one with only its path leaves.
+    const tabs = { ...held, tabs: [{ path: "/cron/a", unreadAt: "1" }, { path: "/pages/b", parked: true }, { path: "/search/c", until: "2" }] };
+    expect(listedTabs(tabs, { tabs: [{ path: "/pages/b" }, { path: "/search/c", unreadAt: "3", note: "Search finished" }, { path: "/cron/d", unreadAt: "4" }], since: "v1" }))
+      .toEqual([{ path: "/cron/a", unreadAt: "1" }, { path: "/search/c", unreadAt: "3", note: "Search finished" }, { path: "/cron/d", unreadAt: "4" }]);
+    expect(listedTabs(tabs, { tabs: [{ path: "/cron/d", unreadAt: "4" }] }), "a listing since nothing held sent every row").toEqual([{ path: "/cron/d", unreadAt: "4" }]);
   });
 
   test("orders rows by the server's rule", () => {
@@ -107,13 +113,13 @@ describe("session list reconciliation", () => {
   test("reports the first message's metadata and the completion's changes", async () => {
     const remotes: Remote[] = [];
     async function* batches() {
-      yield { owner: "alice", opencodeServers: { box: "https://box" }, agentTags: { main: { tags: ["bug"] }, bare: {} } };
+      yield { owner: "alice", opencodeServers: { box: "https://box" }, agentTags: { main: { tags: ["bug"] }, bare: {} }, tabRevision: "7" };
       expect(remotes).toEqual([{ servers: { box: "https://box" }, agentTags: { main: ["bug"], bare: [] } }]);
       yield { sessions: [{ id: "b" }] };
-      yield { upstreamSuccess: true, version: "v2", since: "v1", removed: ["a"] };
+      yield { upstreamSuccess: true, version: "v2", since: "v1", removed: ["a"], tabs: [{ path: "/cron/a", unreadAt: "1" }] };
     }
     const result = await readSessionEnumeration("alice", batches(), () => [], () => {}, undefined, (remote) => remotes.push(remote));
-    expect(result).toEqual({ received: [{ id: "b" }], complete: true, mismatch: false, remote: remotes[0], version: "v2", since: "v1", removed: ["a"] });
+    expect(result).toEqual({ received: [{ id: "b" }], complete: true, mismatch: false, remote: remotes[0], version: "v2", since: "v1", removed: ["a"], tabs: [{ path: "/cron/a", unreadAt: "1" }], tabRevision: "7" });
     expect(remotes).toHaveLength(1);
   });
 

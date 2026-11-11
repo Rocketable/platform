@@ -27,7 +27,7 @@ function serve(tabs: Record<string, State["tabs"]>, shared: Shared) {
         if (input.share) shared.push(input.share);
         const edited = input.editShared && shared.find((tab) => tab.space === input.editShared!.space && tab.path === input.editShared!.path);
         if (edited) edited.search = input.editShared!.search;
-        return Response.json({ spaces: [{ id: "main", name: "Main" }], state: mine.state, revision: String(mine.revision), shared, mutes: [] });
+        return Response.json({ spaces: [{ id: "main", name: "Main" }], state: mine.state, revision: String(mine.revision), shared });
       }
       case "/api/Identity": return Response.json({ username: who });
       case "/api/Protocol": return Response.json({ protoSha256: "dashboards" });

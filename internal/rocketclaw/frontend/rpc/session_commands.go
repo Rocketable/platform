@@ -218,7 +218,12 @@ func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequ
 		scope = backend.SearchMessages
 	}
 
-	found, err := s.sharedSearch(ctx, fmt.Sprintf("sessions %d %q %s", scope, username, query), sessionSearch{username: username, query: query, scope: scope})
+	work := sessionSearch{username: username, query: query, scope: scope}
+	if request.Tab != "" {
+		return s.runSearch(ctx, request, work)
+	}
+
+	found, err := s.sharedSearch(ctx, fmt.Sprintf("sessions %d %q %s", scope, username, query), work)
 	if err != nil {
 		return nil, err
 	}

@@ -487,15 +487,19 @@ func spaceNameError(_ sql.Result, err error) error {
 
 // DeleteSpace deletes space id unless it is the last space. Sessions born there lose their birth space,
 // and the pages of OpenCode sessions there are deleted with it. Its Shared tabs move to the first space
-// left, keeping when they were added; one shared there already stays once. Locking every space, in id
-// order, makes concurrent deletes take turns, so two cannot remove the last two.
+// left, keeping when they were added and their Search pages; one shared there already stays once, with its
+// own page. Locking every space, in id order, makes concurrent deletes take turns, so two cannot remove the
+// last two.
 func (s *SessionService) DeleteSpace(ctx context.Context, id string) error {
 	deleted, err := execRows(ctx, s.db, "delete space", `WITH locked AS (SELECT id, created_at FROM web_spaces ORDER BY id FOR UPDATE),
 others AS (SELECT id FROM locked WHERE id <> $1 ORDER BY created_at, id LIMIT 1),
+moving AS (
+    SELECT t.path, o.id AS space FROM web_shared_tabs t CROSS JOIN others o
+    LEFT JOIN web_shared_tabs kept ON kept.space = o.id AND kept.path = t.path
+    WHERE t.space = $1 AND kept.path IS NULL
+),
 moved AS (
-    INSERT INTO web_shared_tabs (space, path, conversation_id, added_at, search)
-    SELECT o.id, t.path, t.conversation_id, t.added_at, t.search FROM web_shared_tabs t CROSS JOIN others o WHERE t.space = $1
-    ON CONFLICT DO NOTHING
+    UPDATE web_shared_tabs t SET space = m.space FROM moving m WHERE t.space = $1 AND t.path = m.path
 ),
 pages AS (
     DELETE FROM hosted_pages p USING conversations c, others WHERE p.conversation_id = c.conversation_id AND c.space_id = $1
@@ -508,13 +512,64 @@ DELETE FROM web_spaces USING others WHERE web_spaces.id = $1`, id)
 	return err
 }
 
-// Tab is one open Web tab; Group and Space are the ids of its group and space. Search is a Search tab's page as
-// JSON, which only the Web reads, and nil for other tabs.
+// Tab is one open Web tab; Group and Space are the ids of its group and space. Search is a Search tab's page, nil for
+// other tabs.
 type Tab struct {
 	Path         string
 	Group, Space string
-	Search       []byte
+	Search       *SearchPage
 }
+
+// SearchPage is a Search tab's name, the style id of the Dashboard it is, empty for an ordinary page, the id of the
+// search it shows, and its searches in order. It travels to and from the database as JSON in the shape protobuf JSON
+// gives the Web's SearchPage, which leaves out empty fields.
+type SearchPage struct {
+	Name     string        `json:"name,omitempty"`
+	Board    string        `json:"board,omitempty"`
+	Active   string        `json:"active,omitempty"`
+	Searches []SavedSearch `json:"searches,omitempty"`
+}
+
+// SavedSearch is one search on a SearchPage. Notify marks a Dashboard lane whose newly entering sessions raise a
+// desktop notification.
+type SavedSearch struct {
+	ID     string `json:"id,omitempty"`
+	Name   string `json:"name,omitempty"`
+	Query  string `json:"query,omitempty"`
+	Notify bool   `json:"notify,omitempty"`
+}
+
+// Scan reads a page as searchPageSQL selects it.
+func (p *SearchPage) Scan(src any) error {
+	if err := json.Unmarshal(src.([]byte), p); err != nil {
+		return fmt.Errorf("read search page: %w", err)
+	}
+
+	return nil
+}
+
+// searchPageJoinSQL joins row t's Search page as p and the page's searches as s, as searchPageSQL reads them.
+const searchPageJoinSQL = `LEFT JOIN web_search_pages p ON p.id = t.search_page LEFT JOIN web_searches s ON s.page = p.id`
+
+// searchPageSQL selects the Search page of row t as SearchPage scans it, NULL for a row with none. Its query joins t's
+// page as p and the page's searches as s, by searchPageJoinSQL or an inner join, and groups by t's key and p.id.
+const searchPageSQL = `CASE WHEN p.id IS NOT NULL THEN jsonb_strip_nulls(jsonb_build_object('name', NULLIF(p.name, ''), 'board', NULLIF(p.board, ''), 'active', NULLIF(p.active, ''),
+    'searches', jsonb_agg(jsonb_build_object('id', NULLIF(s.id, ''), 'name', NULLIF(s.name, ''), 'query', NULLIF(s.query, ''), 'notify', NULLIF(s.notify, FALSE)) ORDER BY s.position) FILTER (WHERE s.page IS NOT NULL))) END`
+
+// searchPagesSQL stores each page of its query's written CTE, search as JSON in protobuf JSON's shape, under its
+// search_page id: as a new page, or over the page already there.
+const searchPagesSQL = `pages AS (
+    INSERT INTO web_search_pages (id, name, board, active)
+    SELECT search_page, COALESCE(search->>'name', ''), COALESCE(search->>'board', ''), COALESCE(search->>'active', '') FROM written
+    ON CONFLICT (id) DO UPDATE SET name = excluded.name, board = excluded.board, active = excluded.active
+), dropped AS (
+    DELETE FROM web_searches s USING written w WHERE s.page = w.search_page AND s.position > jsonb_array_length(COALESCE(w.search->'searches', '[]'))
+), searches AS (
+    INSERT INTO web_searches (page, position, id, name, query, notify)
+    SELECT w.search_page, s.n, COALESCE(s.search->>'id', ''), COALESCE(s.search->>'name', ''), COALESCE(s.search->>'query', ''), COALESCE((s.search->>'notify')::boolean, FALSE)
+    FROM written w CROSS JOIN jsonb_array_elements(w.search->'searches') WITH ORDINALITY AS s(search, n)
+    ON CONFLICT (page, position) DO UPDATE SET id = excluded.id, name = excluded.name, query = excluded.query, notify = excluded.notify
+)`
 
 // TabGroup is one Web tab group.
 type TabGroup struct {
@@ -590,7 +645,9 @@ func (s *SessionService) TabState(ctx context.Context, username string) (TabStat
 		return TabState{}, 0, fmt.Errorf("decode shared order: %w", err)
 	}
 
-	state.Tabs, err = queryRows(ctx, tx, `SELECT path, group_id, space, search FROM web_tabs WHERE username = $1 AND position IS NOT NULL ORDER BY position`, "tabs", func(row rowScanner) (Tab, error) {
+	state.Tabs, err = queryRows(ctx, tx, `SELECT t.path, t.group_id, t.space, `+searchPageSQL+` FROM web_tabs t
+`+searchPageJoinSQL+`
+WHERE t.username = $1 GROUP BY t.username, t.path, p.id ORDER BY t.position`, "tabs", func(row rowScanner) (Tab, error) {
 		var tab Tab
 		return tab, row.Scan(&tab.Path, &tab.Group, &tab.Space, &tab.Search)
 	}, username)
@@ -607,10 +664,9 @@ func (s *SessionService) TabState(ctx context.Context, username string) (TabStat
 }
 
 // SaveTabState replaces username's saved Web tab state when it was made from the saved revision,
-// and reports whether it did. Tabs it closes join the ones ClosedTabs lists.
-// Saves never write unread_at: a closed tab stays while unread. A session
-// tab names its conversation under the path marks use, and one of a session that does not exist is
-// dropped.
+// and reports whether it did. Tabs it closes join the ones ClosedTabs lists, and one parked until
+// unparked is unparked. A session tab names its conversation under the path marks use, and one of a
+// session that does not exist is dropped.
 func (s *SessionService) SaveTabState(ctx context.Context, username string, state *TabState, revision int64) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -637,13 +693,16 @@ WHERE web_tab_states.revision = $3`, username, state.Space, revision, lastSpaces
 	}
 
 	var (
-		paths, conversations, groups, spaces, searches []string
-		groupIDs, names, colors                        []string
-		collapsed                                      []bool
+		paths, conversations, groups, spaces []string
+		searches                             []*SearchPage
+		groupIDs, names, colors              []string
+		collapsed                            []bool
 	)
 
 	// A Web from before Search pages saves their tabs without their pages, so a tab saved without one keeps its own.
-	pages, err := queryRows(ctx, tx, `SELECT path, search FROM web_tabs WHERE username = $1 AND search IS NOT NULL`, "tab search pages", func(row rowScanner) (Tab, error) {
+	pages, err := queryRows(ctx, tx, `SELECT t.path, `+searchPageSQL+` FROM web_tabs t
+JOIN web_search_pages p ON p.id = t.search_page LEFT JOIN web_searches s ON s.page = p.id
+WHERE t.username = $1 GROUP BY t.username, t.path, p.id`, "tab search pages", func(row rowScanner) (Tab, error) {
 		var tab Tab
 		return tab, row.Scan(&tab.Path, &tab.Search)
 	}, username)
@@ -656,35 +715,64 @@ WHERE web_tab_states.revision = $3`, username, state.Space, revision, lastSpaces
 			tab.Search = pages[i].Search
 		}
 
-		paths, conversations, groups, spaces, searches = append(paths, tab.Path), append(conversations, TabConversation(tab.Path)), append(groups, tab.Group), append(spaces, tab.Space), append(searches, string(tab.Search))
+		paths, conversations, groups, spaces, searches = append(paths, tab.Path), append(conversations, TabConversation(tab.Path)), append(groups, tab.Group), append(spaces, tab.Space), append(searches, tab.Search)
 	}
 
 	for _, group := range state.Groups {
 		groupIDs, names, colors, collapsed = append(groupIDs, group.ID), append(names, group.Name), append(colors, group.Color), append(collapsed, group.Collapsed)
 	}
 
-	recorded, err := execRows(ctx, tx, "record closed tabs", `WITH incoming AS (
+	// A closed tab gets its own copy of its Search page, as the tab's goes with it, and keeps its group and position
+	// for a timer that brings it back. Closing ends a park that has no time, which nothing else would end. A tab opened,
+	// or opened again, shows the mark its location kept quietly: what came while the person had no tab never notifies.
+	var recorded int
+	if err := tx.QueryRowContext(ctx, `WITH incoming AS (
     SELECT COALESCE(`+tabPathSQL+`, t.path) AS path
     FROM unnest($2::text[], $3::text[]) AS t(path, conversation_id)
     LEFT JOIN conversations c ON c.conversation_id = t.conversation_id
 ), reopened AS (
     DELETE FROM web_closed_tabs w USING incoming i WHERE w.username = $1 AND w.path = i.path
+), opening AS (
+    SELECT i.path FROM incoming i LEFT JOIN web_tabs o ON o.username = $1 AND o.path = i.path WHERE o.path IS NULL
 ), closing AS (
-    SELECT o.path, o.conversation_id, o.space, o.search FROM web_tabs o
+    SELECT o.path, o.conversation_id, o.space, o.group_id, o.position, o.search_page AS source, CASE WHEN o.search_page IS NOT NULL THEN gen_random_uuid() END AS search_page
+    FROM web_tabs o
     LEFT JOIN incoming i ON i.path = o.path
-    WHERE o.username = $1 AND o.position IS NOT NULL AND i.path IS NULL AND o.path <> '/' AND NOT starts_with(o.path, 'group:')
+    WHERE o.username = $1 AND i.path IS NULL AND o.path <> '/' AND NOT starts_with(o.path, 'group:')
+), closed AS (
+    INSERT INTO web_closed_tabs (username, path, conversation_id, space, group_id, position, search_page, closed_at)
+    SELECT $1, path, conversation_id, space, group_id, position, search_page, now() FROM closing
+    ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversation_id, space = excluded.space,
+        group_id = excluded.group_id, position = excluded.position, search_page = excluded.search_page, closed_at = excluded.closed_at
+    RETURNING search_page
+), copied AS (
+    SELECT c.source, c.search_page FROM closed JOIN closing c USING (search_page)
+), pages AS (
+    INSERT INTO web_search_pages (id, name, board, active) SELECT c.search_page, p.name, p.board, p.active FROM copied c JOIN web_search_pages p ON p.id = c.source
+), searches AS (
+    INSERT INTO web_searches (page, position, id, name, query, notify)
+    SELECT c.search_page, s.position, s.id, s.name, s.query, s.notify FROM copied c JOIN web_searches s ON s.page = c.source
+), touched AS (
+    SELECT a.path, c.path IS NOT NULL AS closing FROM web_tab_attention a
+    LEFT JOIN closing c USING (path) LEFT JOIN opening n USING (path)
+    WHERE a.username = $1 AND (c.path IS NOT NULL AND a.parked AND a.until IS NULL OR n.path IS NOT NULL AND a.unread_at IS NOT NULL AND NOT a.quiet)
+    ORDER BY a.path FOR UPDATE OF a
+), unparked AS (
+    UPDATE web_tab_attention a SET parked = FALSE FROM touched u WHERE a.username = $1 AND a.path = u.path AND u.closing AND a.parked AND a.until IS NULL
+), quieted AS (
+    UPDATE web_tab_attention a SET quiet = TRUE FROM touched u WHERE a.username = $1 AND a.path = u.path AND NOT u.closing AND a.unread_at IS NOT NULL
 )
-INSERT INTO web_closed_tabs (username, path, conversation_id, space, search, closed_at)
-SELECT $1, path, conversation_id, space, search, now() FROM closing
-ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversation_id, space = excluded.space,
-    search = excluded.search, closed_at = excluded.closed_at`, username, paths, conversations)
-	if err != nil {
-		return false, err
+SELECT count(*) FROM closed`, username, paths, conversations).Scan(&recorded); err != nil {
+		return false, fmt.Errorf("record closed tabs: %w", err)
 	}
 
+	// A closed tab with a timer stays, so the timer can bring it back.
 	if recorded > 0 {
-		if _, err := execState(ctx, tx, "trim closed tabs", `WITH ranked AS (
-    SELECT path, row_number() OVER (ORDER BY closed_at DESC, path) AS n FROM web_closed_tabs WHERE username = $1
+		if _, err := execState(ctx, tx, "trim closed tabs", `WITH timed AS (
+    SELECT path FROM web_tab_attention WHERE username = $1 AND until IS NOT NULL
+), ranked AS (
+    SELECT w.path, row_number() OVER (ORDER BY w.closed_at DESC, w.path) AS n FROM web_closed_tabs w
+    LEFT JOIN timed t USING (path) WHERE w.username = $1 AND t.path IS NULL
 )
 DELETE FROM web_closed_tabs w USING ranked r WHERE w.username = $1 AND w.path = r.path AND r.n > 50`, username); err != nil {
 			return false, err
@@ -693,28 +781,30 @@ DELETE FROM web_closed_tabs w USING ranked r WHERE w.username = $1 AND w.path = 
 
 	if _, err := execState(ctx, tx, "clear tab state", `WITH groups AS (
     DELETE FROM web_tab_groups WHERE username = $1
-), closed AS (
-    DELETE FROM web_tabs WHERE username = $1 AND unread_at IS NULL
 )
-UPDATE web_tabs SET position = NULL, group_id = '', space = '', search = NULL
-WHERE username = $1 AND unread_at IS NOT NULL`, username); err != nil {
+DELETE FROM web_tabs WHERE username = $1`, username); err != nil {
 		return false, err
 	}
 
-	// Two paths naming one tab, as a legacy spelling and the canonical one do, keep the open one.
-	if _, err := execState(ctx, tx, "write tab state", `WITH groups AS (
-    INSERT INTO web_tab_groups (username, id, position, name, color, collapsed)
-    SELECT $1, id, n - 1, name, color, collapsed FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[]) WITH ORDINALITY AS g(id, name, color, collapsed, n)
-), incoming AS (
-    SELECT COALESCE(`+tabPathSQL+`, t.path) AS path, c.conversation_id, t.n - 1 AS position, t.group_id, t.space, NULLIF(t.search, '')::jsonb AS search
-    FROM unnest($6::text[], $7::text[], $8::text[], $9::text[], $10::text[]) WITH ORDINALITY AS t(path, conversation_id, group_id, space, search, n)
+	// Two paths naming one tab, as a legacy spelling and the canonical one do, keep the open one, and only a tab
+	// written gets a page.
+	if _, err := execState(ctx, tx, "write tab state", `WITH incoming AS (
+    SELECT COALESCE(`+tabPathSQL+`, t.path) AS path, c.conversation_id, t.n - 1 AS position, t.group_id, t.space, t.search
+    FROM unnest($6::text[], $7::text[], $8::text[], $9::text[], $10::jsonb[]) WITH ORDINALITY AS t(path, conversation_id, group_id, space, search, n)
     LEFT JOIN conversations c ON c.conversation_id = t.conversation_id
     WHERE t.conversation_id = '' OR c.conversation_id IS NOT NULL
-)
-INSERT INTO web_tabs (username, path, conversation_id, position, group_id, space, search)
-SELECT DISTINCT ON (path) $1, path, conversation_id, position, group_id, space, search FROM incoming ORDER BY path, position
-ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversation_id, position = excluded.position,
-    group_id = excluded.group_id, space = excluded.space, search = excluded.search`,
+), kept AS (
+    SELECT DISTINCT ON (path) path, conversation_id, position, group_id, space, search, CASE WHEN search IS NOT NULL THEN gen_random_uuid() END AS search_page
+    FROM incoming ORDER BY path, position
+), tabs AS (
+    INSERT INTO web_tabs (username, path, conversation_id, position, group_id, space, search_page)
+    SELECT $1, path, conversation_id, position, group_id, space, search_page FROM kept
+    RETURNING search_page
+), written AS (
+    SELECT k.search_page, k.search FROM tabs JOIN kept k USING (search_page)
+), `+searchPagesSQL+`
+INSERT INTO web_tab_groups (username, id, position, name, color, collapsed)
+SELECT $1, id, n - 1, name, color, collapsed FROM unnest($2::text[], $3::text[], $4::text[], $5::boolean[]) WITH ORDINALITY AS g(id, name, color, collapsed, n)`,
 		username, groupIDs, names, colors, collapsed, paths, conversations, groups, spaces, searches); err != nil {
 		return false, err
 	}
@@ -728,148 +818,215 @@ ON CONFLICT (username, path) DO UPDATE SET conversation_id = excluded.conversati
 
 // ClosedTabs lists username's closed tabs, newest closed first, as SaveTabState keeps them; they have no group.
 func (s *SessionService) ClosedTabs(ctx context.Context, username string) ([]Tab, error) {
-	return queryRows(ctx, s.db, `SELECT path, space, search FROM web_closed_tabs WHERE username = $1 ORDER BY closed_at DESC, path`, "closed tabs", func(row rowScanner) (Tab, error) {
+	return queryRows(ctx, s.db, `SELECT t.path, t.space, `+searchPageSQL+` FROM web_closed_tabs t
+`+searchPageJoinSQL+`
+WHERE t.username = $1 GROUP BY t.username, t.path, p.id ORDER BY t.closed_at DESC, t.path`, "closed tabs", func(row rowScanner) (Tab, error) {
 		var tab Tab
 		return tab, row.Scan(&tab.Path, &tab.Space, &tab.Search)
 	}, username)
 }
 
 // SharedTab is one tab in a space's Shared group, which every Web user sees. Search is a Search tab's one
-// page as JSON, which everyone in the space sees and edits, and nil for other tabs.
+// page, which everyone in the space sees and edits, and nil for other tabs.
 type SharedTab struct {
 	Space, Path string
-	Search      []byte
+	Search      *SearchPage
 }
 
 // SharedTabs lists every space's Shared tabs, oldest added first.
 func (s *SessionService) SharedTabs(ctx context.Context) ([]SharedTab, error) {
-	return queryRows(ctx, s.db, `SELECT space, path, search FROM web_shared_tabs ORDER BY added_at, path`, "shared tabs", func(row rowScanner) (SharedTab, error) {
+	return queryRows(ctx, s.db, `SELECT t.space, t.path, `+searchPageSQL+` FROM web_shared_tabs t
+`+searchPageJoinSQL+`
+GROUP BY t.space, t.path, p.id ORDER BY t.added_at, t.path`, "shared tabs", func(row rowScanner) (SharedTab, error) {
 		var tab SharedTab
 		return tab, row.Scan(&tab.Space, &tab.Path, &tab.Search)
 	})
 }
 
 // ShareTab adds path to space's Shared tabs under the path SaveTabState saves it as, with search, a Search
-// page's JSON. A tab already shared there keeps its place and page; a missing space or session stores nothing.
-func (s *SessionService) ShareTab(ctx context.Context, space, path string, search []byte) error {
-	_, err := execState(ctx, s.db, "share tab", `INSERT INTO web_shared_tabs (space, path, conversation_id, search)
-SELECT w.id, COALESCE(`+tabPathSQL+`, $2), c.conversation_id, NULLIF($4, '')::jsonb FROM web_spaces w
-LEFT JOIN conversations c ON c.conversation_id = $3
-WHERE w.id = $1 AND ($3 = '' OR c.conversation_id IS NOT NULL)
-ON CONFLICT DO NOTHING`, space, path, TabConversation(path), string(search))
+// page. A tab already shared there keeps its place and page; a missing space or session stores nothing.
+func (s *SessionService) ShareTab(ctx context.Context, space, path string, search *SearchPage) error {
+	_, err := execState(ctx, s.db, "share tab", `WITH shared AS (
+    INSERT INTO web_shared_tabs (space, path, conversation_id, search_page)
+    SELECT w.id, COALESCE(`+tabPathSQL+`, $2), c.conversation_id, CASE WHEN $4::jsonb IS NOT NULL THEN gen_random_uuid() END FROM web_spaces w
+    LEFT JOIN conversations c ON c.conversation_id = $3
+    WHERE w.id = $1 AND ($3 = '' OR c.conversation_id IS NOT NULL)
+    ON CONFLICT DO NOTHING
+    RETURNING search_page
+), written AS (
+    SELECT search_page, $4::jsonb AS search FROM shared WHERE search_page IS NOT NULL
+), `+searchPagesSQL+`
+SELECT count(*) FROM written`, space, path, TabConversation(path), search)
 
 	return err
 }
 
 // EditSharedSearch replaces the page of the Search tab path in space's Shared tabs with search when the saved page is
 // still base, the page the edit was made from, and reports whether it did. One no longer shared stays unshared.
-func (s *SessionService) EditSharedSearch(ctx context.Context, space, path string, base, search []byte) (bool, error) {
-	edited, err := execRows(ctx, s.db, "edit shared search", `UPDATE web_shared_tabs SET search = NULLIF($3, '')::jsonb
-WHERE space = $1 AND path = $2 AND search IS NOT DISTINCT FROM NULLIF($4, '')::jsonb`, space, path, string(search), string(base))
+func (s *SessionService) EditSharedSearch(ctx context.Context, space, path string, base, search *SearchPage) (bool, error) {
+	tx, err := s.beginStateTx(ctx, "shared search edit")
+	if err != nil {
+		return false, err
+	}
 
-	return edited > 0, err
+	defer func() { _ = tx.Rollback() }()
+
+	// Locking the tab first makes an edit made at the same time wait, then compare with the page it saved.
+	if locked, err := execRows(ctx, tx, "lock shared search", `SELECT FROM web_shared_tabs WHERE space = $1 AND path = $2 FOR UPDATE`, space, path); err != nil || locked == 0 {
+		return false, err
+	}
+
+	var edited int
+	if err := tx.QueryRowContext(ctx, `WITH stored AS (
+    SELECT t.space, t.path, `+searchPageSQL+` AS search FROM web_shared_tabs t
+    `+searchPageJoinSQL+`
+    WHERE t.space = $1 AND t.path = $2 GROUP BY t.space, t.path, p.id
+), edited AS (
+    UPDATE web_shared_tabs t SET search_page = CASE WHEN $3::jsonb IS NOT NULL THEN COALESCE(t.search_page, gen_random_uuid()) END
+    FROM stored WHERE t.space = stored.space AND t.path = stored.path AND stored.search IS NOT DISTINCT FROM $4::jsonb
+    RETURNING t.search_page
+), written AS (
+    SELECT search_page, $3::jsonb AS search FROM edited WHERE search_page IS NOT NULL
+), `+searchPagesSQL+`
+SELECT count(*) FROM edited`, space, path, search, base).Scan(&edited); err != nil {
+		return false, fmt.Errorf("edit shared search: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit shared search edit: %w", err)
+	}
+
+	return edited > 0, nil
 }
 
 // UnshareTab takes path out of space's Shared tabs and returns the Search page it held, nil for other tabs.
-func (s *SessionService) UnshareTab(ctx context.Context, space, path string) ([]byte, error) {
-	tabs, err := queryRows(ctx, s.db, `DELETE FROM web_shared_tabs WHERE space = $1 AND path = $2 RETURNING search`, "unshare tab", func(row rowScanner) (SharedTab, error) {
-		var tab SharedTab
-		return tab, row.Scan(&tab.Search)
-	}, space, path)
-	if err != nil || len(tabs) == 0 {
+func (s *SessionService) UnshareTab(ctx context.Context, space, path string) (*SearchPage, error) {
+	tx, err := s.beginStateTx(ctx, "unshare tab")
+	if err != nil {
 		return nil, err
 	}
 
-	return tabs[0].Search, nil
-}
+	defer func() { _ = tx.Rollback() }()
 
-// TabMute is a session tab whose desktop notifications a person muted until Until, or until unmuted
-// when Until is nil.
-type TabMute struct {
-	Path  string
-	Until *time.Time
-}
-
-// MuteTab mutes path's session for username until until, or until unmuted when until is nil. A path
-// that names no session stores nothing.
-func (s *SessionService) MuteTab(ctx context.Context, username, path string, until *time.Time) error {
-	_, err := execState(ctx, s.db, "mute tab", `INSERT INTO web_tab_mutes (username, conversation_id, until)
-SELECT $1, conversation_id, $3 FROM conversations WHERE conversation_id = $2
-ON CONFLICT (username, conversation_id) DO UPDATE SET until = excluded.until`, username, TabConversation(path), until)
-
-	return err
-}
-
-// UnmuteTab unmutes path's session for username.
-func (s *SessionService) UnmuteTab(ctx context.Context, username, path string) error {
-	_, err := execState(ctx, s.db, "unmute tab", `DELETE FROM web_tab_mutes WHERE username = $1 AND conversation_id = $2`, username, TabConversation(path))
-
-	return err
-}
-
-// TabMutes lists username's mutes that have not ended, by the path SaveTabState saves each tab as.
-func (s *SessionService) TabMutes(ctx context.Context, username string) ([]TabMute, error) {
-	return queryRows(ctx, s.db, `SELECT `+tabPathSQL+`, m.until FROM web_tab_mutes m JOIN conversations c USING (conversation_id)
-WHERE m.username = $1 AND (m.until IS NULL OR m.until > now()) ORDER BY m.conversation_id`, "tab mutes", func(row rowScanner) (TabMute, error) {
-		var mute TabMute
-		return mute, row.Scan(&mute.Path, &mute.Until)
-	}, username)
-}
-
-// TopShelf returns username's Top Shelf as the Web saved it, nil when none is saved.
-func (s *SessionService) TopShelf(ctx context.Context, username string) ([]byte, error) {
-	var shelf []byte
-
-	err := queryScalar(ctx, s.db, "read top shelf", `SELECT shelf FROM web_top_shelves WHERE username = $1`, &shelf, username)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
+	// Locking the tab first lets an edit made at the same time finish, so the page returned is the one saved last.
+	if locked, err := execRows(ctx, tx, "lock shared tab", `SELECT FROM web_shared_tabs WHERE space = $1 AND path = $2 FOR UPDATE`, space, path); err != nil || locked == 0 {
+		return nil, err
 	}
+
+	var page *SearchPage
+	if err := tx.QueryRowContext(ctx, `WITH unshared AS (
+    DELETE FROM web_shared_tabs WHERE space = $1 AND path = $2
+)
+SELECT `+searchPageSQL+` FROM web_shared_tabs t
+`+searchPageJoinSQL+`
+WHERE t.space = $1 AND t.path = $2 GROUP BY t.space, t.path, p.id`, space, path).Scan(&page); err != nil {
+		return nil, fmt.Errorf("unshare tab: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit unshare tab: %w", err)
+	}
+
+	return page, nil
+}
+
+// TopShelf is one person's Top Shelf: tabs of any RocketClaw kept above the space picker, in their order, and whether
+// it is collapsed.
+type TopShelf struct {
+	Tabs      []ShelfTab
+	Collapsed bool
+}
+
+// ShelfTab is a tab on the Top Shelf: the RocketClaw it is on, "" for this one, its space id and path there, and a
+// Search tab's page, nil for other tabs.
+type ShelfTab struct {
+	Server, Space, Path string
+	Search              *SearchPage
+}
+
+// TopShelf returns username's Top Shelf; the zero shelf when none is saved.
+func (s *SessionService) TopShelf(ctx context.Context, username string) (TopShelf, error) {
+	// One snapshot, so a concurrent save is read whole or not at all.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return TopShelf{}, fmt.Errorf("begin top shelf read: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	var shelf TopShelf
+	if err := queryScalar(ctx, tx, "read top shelf", `SELECT shelf_collapsed FROM web_tab_states WHERE username = $1`, &shelf.Collapsed, username); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return TopShelf{}, err
+	}
+
+	shelf.Tabs, err = queryRows(ctx, tx, `SELECT t.server, t.space, t.path, `+searchPageSQL+` FROM web_top_shelves t
+`+searchPageJoinSQL+`
+WHERE t.username = $1 GROUP BY t.username, t.server, t.path, p.id ORDER BY t.position`, "top shelf tabs", func(row rowScanner) (ShelfTab, error) {
+		var tab ShelfTab
+		return tab, row.Scan(&tab.Server, &tab.Space, &tab.Path, &tab.Search)
+	}, username)
 
 	return shelf, err
 }
 
-// ExistingConversations returns those of ids that name a conversation.
-func (s *SessionService) ExistingConversations(ctx context.Context, ids []string) ([]string, error) {
-	return queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE conversation_id = ANY($1)`, "existing conversations", ids)
-}
-
-// SaveTopShelf replaces username's Top Shelf with shelf, as the Web saves it.
-func (s *SessionService) SaveTopShelf(ctx context.Context, username string, shelf []byte) error {
-	_, err := execState(ctx, s.db, "save top shelf", `INSERT INTO web_top_shelves (username, shelf) VALUES ($1, $2::jsonb)
-ON CONFLICT (username) DO UPDATE SET shelf = excluded.shelf`, username, string(shelf))
-
-	return err
-}
-
-// ViewSession records that username has conversationID in view now, which clears their mark on it, except a mark
-// they set themselves when hold is set, and ends their view of every other session. A conversationID naming no
-// conversation writes nothing.
-func (s *SessionService) ViewSession(ctx context.Context, username, conversationID string, hold bool) error {
-	// Consume the state upsert before locking tab rows, as SaveTabState does.
-	_, err := execState(ctx, s.db, "record session view", `WITH viewed AS (
-    INSERT INTO web_tab_states (username, revision, viewing, viewed_at) SELECT $1, 0, conversation_id, now() FROM conversations WHERE conversation_id = $2
-    ON CONFLICT (username) DO UPDATE SET viewing = excluded.viewing, viewed_at = excluded.viewed_at
-    RETURNING username
-)
-UPDATE web_tabs t SET unread_at = NULL FROM viewed v
-WHERE t.username = v.username AND t.conversation_id = $2 AND t.unread_at IS NOT NULL AND NOT ($3 AND t.marked_unread)`, username, conversationID, hold)
-
-	return err
-}
-
-// MarkUnread marks the sessions of paths unread for username, as their own marks. A session already unread keeps
-// its mark.
-func (s *SessionService) MarkUnread(ctx context.Context, username string, paths []string) error {
-	conversations := make([]string, 0, len(paths))
-	for _, path := range paths {
-		conversations = append(conversations, TabConversation(path))
+// SaveTopShelf replaces username's Top Shelf with shelf. A local session's tab is kept under the path SaveTabState saves
+// it as, one of a session that does not exist is dropped, and of tabs that repeat a server and path the first is kept.
+func (s *SessionService) SaveTopShelf(ctx context.Context, username string, shelf *TopShelf) error {
+	tx, err := s.beginStateTx(ctx, "top shelf save")
+	if err != nil {
+		return err
 	}
 
-	_, err := execState(ctx, s.db, "mark sessions unread", `INSERT INTO web_tabs (username, path, conversation_id, unread_at, marked_unread)
-SELECT $1, `+tabPathSQL+`, c.conversation_id, now(), TRUE FROM conversations c WHERE c.conversation_id = ANY($2::text[])
-ON CONFLICT (username, path) DO UPDATE SET unread_at = excluded.unread_at, marked_unread = TRUE WHERE web_tabs.unread_at IS NULL`, username, conversations)
+	defer func() { _ = tx.Rollback() }()
 
-	return err
+	// Locking the person's tab state first makes saves made at once take turns, so each replaces the shelf whole.
+	if _, err := execState(ctx, tx, "save top shelf state", `INSERT INTO web_tab_states (username, revision, shelf_collapsed) VALUES ($1, 0, $2)
+ON CONFLICT (username) DO UPDATE SET shelf_collapsed = excluded.shelf_collapsed`, username, shelf.Collapsed); err != nil {
+		return err
+	}
+
+	if _, err := execState(ctx, tx, "clear top shelf", `DELETE FROM web_top_shelves WHERE username = $1`, username); err != nil {
+		return err
+	}
+
+	var (
+		servers, spaces, paths, conversations []string
+		searches                              []*SearchPage
+	)
+
+	for _, tab := range shelf.Tabs {
+		conversation := ""
+		if tab.Server == "" {
+			conversation = TabConversation(tab.Path)
+		}
+
+		servers, spaces, paths, conversations, searches = append(servers, tab.Server), append(spaces, tab.Space), append(paths, tab.Path), append(conversations, conversation), append(searches, tab.Search)
+	}
+
+	if _, err := execState(ctx, tx, "write top shelf", `WITH incoming AS (
+    SELECT t.server, t.space, COALESCE(`+tabPathSQL+`, t.path) AS path, c.conversation_id, t.n - 1 AS position, t.search
+    FROM unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::jsonb[]) WITH ORDINALITY AS t(server, space, path, conversation_id, search, n)
+    LEFT JOIN conversations c ON c.conversation_id = t.conversation_id
+    WHERE t.conversation_id = '' OR c.conversation_id IS NOT NULL
+), kept AS (
+    SELECT DISTINCT ON (server, path) server, space, path, conversation_id, position, search, CASE WHEN search IS NOT NULL THEN gen_random_uuid() END AS search_page
+    FROM incoming ORDER BY server, path, position
+), shelf AS (
+    INSERT INTO web_top_shelves (username, position, server, space, path, conversation_id, search_page)
+    SELECT $1, position, server, space, path, conversation_id, search_page FROM kept
+    RETURNING search_page
+), written AS (
+    SELECT k.search_page, k.search FROM shelf JOIN kept k USING (search_page)
+), `+searchPagesSQL+`
+SELECT count(*) FROM written`, username, servers, spaces, paths, conversations, searches); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit top shelf: %w", err)
+	}
+
+	return nil
 }
 
 // SetThreadAgentIfExists updates a managed conversation agent without creating a thread.
@@ -1557,28 +1714,8 @@ FROM steps s, replay r WHERE a.id = $2 AND s.conversation_id = $1 AND s.key = $2
 		return nil, fmt.Errorf("move turn record: %w", err)
 	}
 
-	// Each Web person who sent a listed session's turn its input or an applied steer finds the
-	// session unread on its tab, and every Web person does when the session is in some space's
-	// Shared group, unless they viewed it in the last 10 seconds by the database clock.
-	if _, err := tx.ExecContext(ctx, `WITH turn AS (
-    SELECT a.inbound_json, a.applied_input_ids FROM turns a JOIN conversations c ON c.conversation_id = $1 AND c.listed WHERE a.id = $2
-), inbounds AS (
-    SELECT inbound_json AS inbound FROM turn
-    UNION ALL SELECT steer->'inbound' FROM turn t JOIN steps s ON s.conversation_id = $1 AND s.key = $2 || '/steers'
-    CROSS JOIN LATERAL json_array_elements(s.value) steer WHERE t.applied_input_ids ? (steer->>'id')
-), senders AS (
-    SELECT DISTINCT inbound->'Metadata'->>$3::text AS username FROM inbounds
-    WHERE inbound->>'Source' = $4 AND inbound->>'Human' = 'true' AND inbound->'Metadata'->>$3::text <> ''
-), readers AS (
-    SELECT username FROM senders
-    UNION SELECT p.username FROM web_shared_tabs t CROSS JOIN turn CROSS JOIN web_tab_states p WHERE t.conversation_id = $1
-)
-INSERT INTO web_tabs (username, path, conversation_id, unread_at)
-SELECT s.username, `+tabPathSQL+`, c.conversation_id, now() FROM readers s JOIN conversations c ON c.conversation_id = $1
-LEFT JOIN web_tab_states p ON p.username = s.username AND p.viewing = $1 AND p.viewed_at >= now() - interval '10 seconds'
-WHERE p.username IS NULL
-ON CONFLICT (username, path) DO UPDATE SET unread_at = now(), marked_unread = FALSE, conversation_id = excluded.conversation_id`, finish.conversationID, turnID, protocol.InboundPrincipalEmailMetadataKey, protocol.SourceWeb); err != nil {
-		return nil, fmt.Errorf("mark turn senders unread: %w", err)
+	if err := s.markTurnEnd(ctx, tx, turnID, finish); err != nil {
+		return nil, err
 	}
 
 	// A shadow stopped at its step limit says so in Web. The note is display-only
@@ -1658,6 +1795,58 @@ SELECT COALESCE(MIN(wake_attempts), 0) FROM released`, finish.conversationID, tu
 	s.jobs.turnFinished(owners)
 
 	return finish.outbound, nil
+}
+
+// markTurnEnd, in finishTurn's transaction tx, marks the readers of turn turnID's end: a listed session's, unless they
+// viewed it in the last 10 seconds by the database clock, and for each turn of a cron's run, the people with that
+// cron's tab or the Cron overview showing it.
+func (s *SessionService) markTurnEnd(ctx context.Context, tx *sql.Tx, turnID string, finish *turnFinish) error {
+	// A cron run ends with the last turn that leaves it nothing to do: no other turn of it, or of a run reporting to it,
+	// running or queued, and no Background Job result waiting to wake it. A turn delivering its reply has done its work.
+	// The run is in its cron's space, else its agent's, as the turn's inbound names them.
+	var cronPath, space, agent string
+	if err := tx.QueryRowContext(ctx, `WITH run AS (
+    SELECT c.cron_path, t.inbound_json->'Cronjob'->>'Space' AS space, t.inbound_json->'Cronjob'->>'Agent' AS agent
+    FROM conversations c JOIN turns t ON t.id = $4 WHERE c.conversation_id = $1 AND c.kind IN ($2, $3)
+), runs AS (
+    SELECT $1::text AS conversation_id
+    UNION ALL SELECT conversation_id FROM conversations WHERE reports_to = $1
+), pending AS (
+    SELECT count(*) AS n FROM turns t JOIN runs USING (conversation_id)
+    WHERE t.id <> $4 AND (t.phase = 'running' OR t.phase = 'waiting' AND t.reason = 'queued' OR NOT t.takes_lane AND t.note = 'pending')
+)
+SELECT COALESCE(max(r.cron_path), ''), COALESCE(max(r.space), ''), COALESCE(max(r.agent), '') FROM run r CROSS JOIN pending p WHERE p.n = 0`,
+		finish.conversationID, KindCronRun, KindOneOffCronRun, turnID).Scan(&cronPath, &space, &agent); err != nil {
+		return fmt.Errorf("read cron run: %w", err)
+	}
+
+	// Cron tabs are marked first: their paths sort before a session's, so each person's rows are taken in key order, as
+	// every other writer takes them.
+	if cronPath != "" {
+		stem := CronStem(cronPath)
+
+		if space == "" {
+			agents, _, err := LoadRuntimeDefinitions(s.definitions, s.definitions.Clone().RuntimeDirName())
+			if err != nil {
+				return fmt.Errorf("load cron agents: %w", err)
+			}
+
+			space = agents.Items[agent].Space
+		}
+
+		if err := s.markLocation(ctx, tx, "/cron", space, "Run finished", func(rest string) bool { return decodeSessionID(rest) == stem }); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `WITH turn AS (
+    SELECT a.id, c.conversation_id, c.kind, a.inbound_json, FALSE AS waking FROM turns a JOIN conversations c ON c.conversation_id = $1 AND c.listed WHERE a.id = $2
+)`+turnEventsSQL+sessionReadersSQL+markTabsSQL+`
+SELECT count(*) FROM marked`, finish.conversationID, turnID); err != nil {
+		return fmt.Errorf("mark turn readers unread: %w", err)
+	}
+
+	return nil
 }
 
 // settleInputs, in finishTurn's transaction tx, releases the queued inputs turn turnID consumed, settles

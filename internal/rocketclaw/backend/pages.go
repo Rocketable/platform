@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -18,8 +20,8 @@ const (
 )
 
 // Page is one Hosted Page file or Page Data entry. Pages leaves Body empty. Conversation is the
-// OpenCode session that owns the page, empty for an agent's page; Space is that session's space name,
-// read only.
+// OpenCode session that owns the page, empty for an agent's page; Space is the page's space name, whose
+// tabs PutPage marks, and which Page and Pages read as that session's.
 type Page struct {
 	Agent        string
 	Kind         PageKind
@@ -36,12 +38,53 @@ const pageOwnerSQL = ` FROM hosted_pages p
 LEFT JOIN conversations c ON c.conversation_id = p.conversation_id
 LEFT JOIN web_spaces s ON s.id = c.space_id`
 
-// PutPage stores page, replacing any page with the same agent, kind, and name.
+// PutPage stores page, replacing any page with the same agent, kind, and name. Storing an HTML file reaches, in the
+// same transaction, the people with its tab, or with the Pages list of its space, of any space when it has none.
 func (s *SessionService) PutPage(ctx context.Context, page *Page) error {
-	_, err := execState(ctx, s.db, "store page", `INSERT INTO hosted_pages (agent, kind, name, content_type, body, conversation_id) VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''))
-ON CONFLICT (agent, kind, name) DO UPDATE SET content_type = excluded.content_type, body = excluded.body, updated_at = now()`, page.Agent, page.Kind, page.Name, page.ContentType, page.Body, page.Conversation)
+	tx, err := s.beginStateTx(ctx, "page store")
+	if err != nil {
+		return err
+	}
 
-	return err
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := execState(ctx, tx, "store page", `INSERT INTO hosted_pages (agent, kind, name, content_type, body, conversation_id) VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''))
+ON CONFLICT (agent, kind, name) DO UPDATE SET content_type = excluded.content_type, body = excluded.body, updated_at = now()`, page.Agent, page.Kind, page.Name, page.ContentType, page.Body, page.Conversation); err != nil {
+		return err
+	}
+
+	// A page's tab is /pages/<space>/<agent>/<file>, each segment escaped and the space spelled any way; an empty or
+	// trailing-slash file is index.html.
+	if page.Kind == PageFile && page.ContentType == "text/html" {
+		if err := s.markLocation(ctx, tx, "/pages", page.Space, page.Agent+" · "+page.Name+" updated", func(rest string) bool {
+			_, location, _ := strings.Cut(rest, "/")
+			segments := strings.Split(location, "/")
+
+			for i := range segments {
+				segment, err := url.PathUnescape(segments[i])
+				if err != nil {
+					return false
+				}
+
+				segments[i] = segment
+			}
+
+			file := strings.Join(segments[1:], "/")
+			if file == "" || strings.HasSuffix(file, "/") {
+				file += "index.html"
+			}
+
+			return segments[0] == page.Agent && file == page.Name
+		}); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit page store: %w", err)
+	}
+
+	return nil
 }
 
 // Page returns the stored page and whether it exists.

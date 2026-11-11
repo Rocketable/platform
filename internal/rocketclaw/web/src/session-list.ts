@@ -1,5 +1,5 @@
 import { RPCError } from "./api";
-import type { Remote, Session, SessionBatch } from "./types";
+import type { Remote, Session, SessionBatch, TabAttention } from "./types";
 
 const epochs = new Map<string, number>();
 let globalEpoch = 0;
@@ -58,8 +58,9 @@ export async function loadSnapshotGeneration(owner: string, protocol: string): P
   }
 }
 
-// A complete listing as saved: its rows as listed, the version the server named it by, and the server's metadata.
-export type SavedListing = { rows: Session[]; version: string; remote?: Remote };
+// A complete listing as saved: its rows as listed, the version the server named it by, the server's metadata, and the
+// attention rows of tabs that are not sessions.
+export type SavedListing = { rows: Session[]; version: string; remote?: Remote; tabs?: TabAttention[] };
 
 // The caller must confirm owner with the backend before reading saved rows.
 // IndexedDB supplies origin isolation; the key adds user and protocol isolation.
@@ -129,6 +130,12 @@ export function listedRows(held: SavedListing, result: Pick<EnumerationResult, "
   return rows.toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || compare(updated.get(b)!, updated.get(a)!) || compare(a.id, b.id));
 }
 
+// Tab rows sent since the held version replace the held ones by location; a row with nothing set leaves.
+export function listedTabs(held: SavedListing, result: Pick<EnumerationResult, "tabs" | "since">): TabAttention[] {
+  const tabs = new Map([...result.since === held.version ? held.tabs ?? [] : [], ...result.tabs ?? []].map((tab) => [tab.path, tab]));
+  return [...tabs.values()].filter((tab) => tab.unreadAt || tab.parked || tab.until);
+}
+
 export function searchIsAuthoritative(flags: { refreshing: boolean; enumerationComplete: boolean }): boolean {
   return !flags.refreshing && flags.enumerationComplete;
 }
@@ -139,11 +146,14 @@ export type EnumerationResult = {
   // An owner mismatch or explicit authentication rejection requires live identity revalidation.
   mismatch: boolean;
   remote?: Remote;
-  // From the completion message: the listing's version and, when sent since a held version, that version and the
-  // IDs removed since.
+  // From the completion message: the listing's version, its tab rows and, when sent since a held version, that version
+  // and the IDs removed since.
   version?: string;
   since?: string;
   removed?: string[];
+  tabs?: TabAttention[];
+  // From the first message: the person's tab-state revision.
+  tabRevision?: string;
 };
 
 // onRemote receives the server's metadata from the listing's first message, before any row.
@@ -166,6 +176,8 @@ export async function readSessionEnumeration(
   let version: string | undefined;
   let since: string | undefined;
   let removed: string[] | undefined;
+  let tabs: TabAttention[] | undefined;
+  let tabRevision: string | undefined;
   const cancel = () => clearTimeout(timer);
   const flush = () => {
     timer = undefined;
@@ -185,10 +197,11 @@ export async function readSessionEnumeration(
           break;
         }
         remote = { servers: batch.opencodeServers ?? {}, agentTags: Object.fromEntries(Object.entries(batch.agentTags ?? {}).map(([agent, choices]) => [agent, choices.tags ?? []])) };
+        tabRevision = batch.tabRevision;
         onRemote(remote);
       }
       upstreamSuccess = batch.upstreamSuccess ?? false;
-      if (upstreamSuccess) ({ version, since, removed } = batch);
+      if (upstreamSuccess) ({ version, since, removed, tabs } = batch);
       if (!batch.sessions) continue;
       for (const row of batch.sessions) byID.set(row.id, row);
       dirty = true;
@@ -210,5 +223,5 @@ export async function readSessionEnumeration(
     signal?.removeEventListener("abort", cancel);
   }
   flush();
-  return { received: [...byID.values()], complete, mismatch, remote, version, since, removed };
+  return { received: [...byID.values()], complete, mismatch, remote, version, since, removed, tabs, tabRevision };
 }

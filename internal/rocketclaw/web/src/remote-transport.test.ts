@@ -61,7 +61,7 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
 
   // A new reply on the remote, while a local page shows, notifies: the chat is in one of the remote's tabs.
   // The remote counts a chat viewed in the last 10 seconds as read (internal/rocketclaw/backend/store_dao.go).
-  expect(await page.evaluate(async (conversation: string) => (await fetch(`/test/view-expired?id=${encodeURIComponent(conversation)}`, { method: "POST" })).ok, id)).toBe(true);
+  expect(await page.evaluate(async () => (await fetch("/test/view-expired", { method: "POST" })).ok)).toBe(true);
   await page.evaluate(async ([url, conversation]: string[]) => { await fetch(`${url}/api/Prompt`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: conversation, text: "Again" }) }); }, [remote, id]);
   await page.clock.fastForward(2_000);
   await page.waitForFunction(() => (window as unknown as { shown: string[] }).shown.length > 0);
@@ -92,8 +92,22 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   for (let saved = true; saved; await Bun.sleep(100)) {
     saved = await page.evaluate(async (url: string) => (await (await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).state.tabs.some((tab: { path: string }) => tab.path.startsWith("/s/")), remote);
   }
-  // From a local space it opens on the remote, in its space, without a tab.
+  // From a local page, its attention items change the person's attention on the remote, which lists it parked, dimmed in
+  // place, until Unpark.
   await page.goto(`${local}/`);
+  const change = (action: string) => page.waitForRequest((request: { url(): string; postData(): string | null }) => request.url() === `${remote}/api/Tabs` && JSON.parse(request.postData()!).attention?.action === action);
+  const parking = change("PARK");
+  await shelf.getByRole("tab").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Park", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Until I unpark", exact: true }).click();
+  expect(JSON.parse((await parking).postData()).attention.paths).toEqual([chat.slice("/r/work".length)]);
+  await shelf.locator('[role="tab"][aria-description$=", Parked"]').waitFor();
+  const unparking = change("UNPARK");
+  await shelf.getByRole("tab").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Unpark", exact: true }).click();
+  await unparking;
+  await shelf.locator('[role="tab"]:not([aria-description*="Parked"])').waitFor();
+  // From a local space it opens on the remote, in its space, without a tab.
   await shelf.getByRole("tab").click();
   await page.waitForURL((url: URL) => url.pathname === chat);
   await page.locator("#transcript-scroll").getByText("Remote reply", { exact: true }).first().waitFor();

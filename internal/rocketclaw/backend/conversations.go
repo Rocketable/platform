@@ -143,6 +143,16 @@ FROM conversations c LEFT JOIN conversations r ON r.conversation_id = c.cron_run
 	return path, run, nil
 }
 
+// CronStem is the name the cron job at path is listed and loaded by: a cron file's stem, or
+// "<agent> · <schedule>" for the routine at agents/<agent>.md#<schedule>.
+func CronStem(path string) string {
+	if agent, schedule, ok := strings.Cut(strings.TrimPrefix(path, "agents/"), ".md#"); ok {
+		return agent + " · " + schedule
+	}
+
+	return strings.TrimSuffix(strings.TrimPrefix(path, "cron/"), ".md")
+}
+
 // RunTurn waits for the submitted work's processing and terminal handling.
 func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage) error {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, inbound.ConversationID); err != nil {

@@ -32,6 +32,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/openai/openai-go/v3/responses"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -55,6 +56,13 @@ type Server struct {
 	searches    map[string]*searchFlight
 	searchGroup singleflight.Group
 
+	// runs holds each person's Search page searches running on the server or finished, by username, oldest first,
+	// until runsStopped. Every run is in runGroup.
+	runsMu      sync.Mutex
+	runs        map[string][]*searchRun
+	runsStopped bool
+	runGroup    errgroup.Group
+
 	// voiceCalls holds each person's live voice call by username; their newer call replaces it.
 	voiceMu    sync.Mutex
 	voiceCalls map[string]*context.CancelCauseFunc
@@ -65,10 +73,11 @@ type Server struct {
 	listings   map[string][]sessionListing
 }
 
-// sessionListing is one complete session listing: its version and each row's fingerprint by ID.
+// sessionListing is one complete session listing: its version, each row's fingerprint by ID, and each tab
+// attention row's by path.
 type sessionListing struct {
-	version string
-	rows    map[string]uint64
+	version    string
+	rows, tabs map[string]uint64
 }
 
 // sessionListingsKept bounds the listings kept per person, one for each tab or device polling at once.
@@ -108,7 +117,7 @@ type CronJobs interface {
 // New builds the Web handlers. The host must restrict RPC access to the trusted Web proxy:
 // the metadata carries the browser IP, not an independently authenticated network peer.
 func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, voiceCalls: map[string]*context.CancelCauseFunc{}, listings: map[string][]sessionListing{}}
+	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, runs: map[string][]*searchRun{}, voiceCalls: map[string]*context.CancelCauseFunc{}, listings: map[string][]sessionListing{}}
 }
 
 // ListSessionEntries returns ordered entry identifiers and metadata.
@@ -179,9 +188,11 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		return err
 	}
 
-	if request.Viewing != "" {
-		if err := s.sessions.ViewSession(ctx, owner, request.Viewing, request.Hold); err != nil {
-			return fmt.Errorf("web session view: %w", err)
+	var revision int64
+
+	if request.SameOrigin {
+		if revision, err = s.sessions.PollAttention(ctx, owner, request.Viewing, request.Hold); err != nil {
+			return fmt.Errorf("web tab view: %w", err)
 		}
 	}
 
@@ -191,7 +202,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 	}
 
 	// The page needs these before any row: an OpenCode tab mounts once it knows its server.
-	first := &ListSessionsResponse{Owner: owner, OpencodeServers: make(map[string]string), AgentTags: make(map[string]*TagChoices)}
+	first := &ListSessionsResponse{Owner: owner, OpencodeServers: make(map[string]string), AgentTags: make(map[string]*TagChoices), TabRevision: revision}
 
 	if !limit.Limited() {
 		for name, server := range s.cfg.Clone().OpenCode {
@@ -211,19 +222,30 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		return fmt.Errorf("send web session listing start: %w", err)
 	}
 
-	var since map[string]uint64
+	var since sessionListing
 
 	s.listingsMu.Lock()
 	for _, listing := range s.listings[owner] {
 		if listing.version == request.Since {
-			since = listing.rows
+			since = listing
 		}
 	}
 	s.listingsMu.Unlock()
 
-	listing := sessionListing{version: rand.Text(), rows: map[string]uint64{}}
+	listing := sessionListing{version: rand.Text(), rows: map[string]uint64{}, tabs: map[string]uint64{}}
 
 	var encoded []byte
+
+	// changed records row's fingerprint under key in fingerprints and reports whether it differs from seen's.
+	changed := func(seen, fingerprints map[string]uint64, key string, row proto.Message) bool {
+		encoded, _ = proto.MarshalOptions{Deterministic: true}.MarshalAppend(encoded[:0], row) // A built row always encodes.
+		fingerprint := fnv.New64a()
+		_, _ = fingerprint.Write(encoded)
+		fingerprints[key] = fingerprint.Sum64()
+		last, ok := seen[key]
+
+		return !ok || last != fingerprints[key]
+	}
 
 	for chat, err := range s.sessions.SidebarChats(ctx, owner, s.channels, nil) {
 		if err != nil {
@@ -231,12 +253,7 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		}
 
 		session := sidebarSession(&chat)
-		encoded, _ = proto.MarshalOptions{Deterministic: true}.MarshalAppend(encoded[:0], session) // A built Session always encodes.
-		fingerprint := fnv.New64a()
-		_, _ = fingerprint.Write(encoded)
-		listing.rows[session.Id] = fingerprint.Sum64()
-
-		if seen, ok := since[session.Id]; ok && seen == listing.rows[session.Id] {
+		if !changed(since.rows, listing.rows, session.Id, session) {
 			continue
 		}
 
@@ -245,18 +262,37 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 		}
 	}
 
+	tabs, err := s.sessions.TabAttention(ctx, owner)
+	if err != nil {
+		return fmt.Errorf("read web tab attention: %w", err)
+	}
+
+	done := &ListSessionsResponse{UpstreamSuccess: true, Version: listing.version}
+
+	for i := range tabs {
+		tab := &TabAttention{Path: tabs[i].Path}
+		if tab.UnreadAt, tab.Quiet, tab.Parked, tab.Until, tab.Note = webAttention(&tabs[i]); changed(since.tabs, listing.tabs, tab.Path, tab) {
+			done.Tabs = append(done.Tabs, tab)
+		}
+	}
+
 	s.listingsMu.Lock()
 	s.listings[owner] = append(s.listings[owner], listing)
 	s.listings[owner] = s.listings[owner][max(0, len(s.listings[owner])-sessionListingsKept):]
 	s.listingsMu.Unlock()
 
-	done := &ListSessionsResponse{UpstreamSuccess: true, Version: listing.version}
-	if since != nil {
+	if since.version != "" {
 		done.Since = request.Since
 
-		for _, id := range slices.Sorted(maps.Keys(since)) {
+		for _, id := range slices.Sorted(maps.Keys(since.rows)) {
 			if _, ok := listing.rows[id]; !ok {
 				done.Removed = append(done.Removed, id)
+			}
+		}
+
+		for _, path := range slices.Sorted(maps.Keys(since.tabs)) {
+			if _, ok := listing.tabs[path]; !ok {
+				done.Tabs = append(done.Tabs, &TabAttention{Path: path})
 			}
 		}
 	}
@@ -296,11 +332,24 @@ func sidebarSession(chat *backend.SidebarChat) *Session {
 		}
 	}
 
-	if !row.UnreadAt.IsZero() {
-		session.UnreadAt, session.MarkedUnread = row.UnreadAt.Format(time.RFC3339Nano), row.MarkedUnread
-	}
+	session.UnreadAt, session.MarkedUnread, session.Parked, session.Until, session.Note = webAttention(&row.Attention)
+	session.UntilDone = row.Attention.UntilDone
 
 	return session
+}
+
+// webAttention is attention's fields as the Web reads them, with times in RFC3339Nano and a quiet flag and note only
+// with a mark.
+func webAttention(attention *backend.Attention) (unreadAt string, quiet, parked bool, until, note string) {
+	if !attention.UnreadAt.IsZero() {
+		unreadAt, quiet, note = attention.UnreadAt.Format(time.RFC3339Nano), attention.Quiet, attention.Note
+	}
+
+	if !attention.Until.IsZero() {
+		until = attention.Until.Format(time.RFC3339Nano)
+	}
+
+	return unreadAt, quiet, attention.Parked, until, note
 }
 
 // historyRevision is a stateless inventory, not an event-log cursor. The database
@@ -324,7 +373,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 	if !cronTrace {
 		err = s.readableConversation(ctx, request.Id)
 	} else {
-		err = s.cronInLimit(limit, cronfrontend.Stem(path))
+		err = s.cronInLimit(limit, backend.CronStem(path))
 	}
 
 	if err != nil {
@@ -1020,7 +1069,7 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 	for i := range jobs {
 		job := &jobs[i]
 
-		row := &CronJob{Stem: cronfrontend.Stem(job.RelativePath), Schedule: strings.Join(job.Schedules, ", "), Body: job.Body, Agent: job.Agent, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
+		row := &CronJob{Stem: backend.CronStem(job.RelativePath), Schedule: strings.Join(job.Schedules, ", "), Body: job.Body, Agent: job.Agent, Origin: job.RelativePath, Space: cmp.Or(job.Space, agents.Items[job.Agent].Space)}
 
 		spaces[row.Stem] = row.Space
 		if !limit.AllowsSpaceName(row.Space) {
@@ -1047,13 +1096,13 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 	runs := map[string]*CronJob{}
 
 	for _, source := range sources {
-		if !limit.AllowsSpaceName(spaces[cronfrontend.Stem(source.Run.Path)]) {
+		if !limit.AllowsSpaceName(spaces[backend.CronStem(source.Run.Path)]) {
 			continue
 		}
 
 		row, ok := runs[source.SourceConversationID]
 		if !ok {
-			row = &CronJob{Stem: cronfrontend.Stem(source.Run.Path), Status: "ran", LastRun: source.Run.At.Format("2006-01-02T15:04:05.000000000Z"), Origin: source.SourceConversationID}
+			row = &CronJob{Stem: backend.CronStem(source.Run.Path), Status: "ran", LastRun: source.Run.At.Format("2006-01-02T15:04:05.000000000Z"), Origin: source.SourceConversationID}
 			runs[row.Origin] = row
 		}
 
@@ -1451,7 +1500,7 @@ func (s *Server) createSession(ctx context.Context, request *CreateSessionReques
 	}
 
 	if run {
-		if err := s.cronInLimit(limit, cronfrontend.Stem(path)); err != nil {
+		if err := s.cronInLimit(limit, backend.CronStem(path)); err != nil {
 			return nil, err
 		}
 	}
@@ -1537,7 +1586,7 @@ func (s *Server) birthSpace(ctx context.Context, agents harness.Agents, agent, p
 	space := agents.Items[agent].Space
 
 	if path != "" {
-		if job, err := s.cronjobs.LoadOneOffCronjob(cronfrontend.Stem(path)); err == nil {
+		if job, err := s.cronjobs.LoadOneOffCronjob(backend.CronStem(path)); err == nil {
 			space = cmp.Or(job.Space, agents.Items[job.Agent].Space)
 		}
 	}

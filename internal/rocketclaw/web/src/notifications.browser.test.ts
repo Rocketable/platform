@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
 import { decodeSessionId, encodeSessionId as encode } from "./session-id";
-import type { SearchPage, Session } from "./types";
+import type { SearchPage, Session, TabAttention } from "./types";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
@@ -32,18 +32,18 @@ function stubNotifications() {
   } as unknown as typeof Notification;
 }
 
-test("an open RocketClaw or OpenCode tab newly marked unread raises a desktop notification, and the poll reports the session in view", async () => {
+test("a loud mark the server sets raises one desktop notification per window, a quiet or parked one none, and the poll reports the tab in view", async () => {
   const { chromium: engine } = await import(playwright!);
   let rows: Session[] = [
     { id: "chat", agent: "main", preview: "Chat work", running: true },
     { id: "opencode:box:ses_a", kind: "REMOTE_OPENCODE", remoteSessionId: "ses_a", preview: "Alpha work", server: "box", directory: "/srv/app", running: true, reply: "All **green**:\n\n- 12 tests pass" },
     { id: "idle", agent: "main", preview: "Idle work", unreadAt: "2026-10-22T10:00:00Z" },
+    // Closed has no tab any more, Team is open only in Shared; this person's marks on Quiet are quiet and Parked is parked.
     { id: "closed", agent: "main", preview: "Closed work", running: true },
-    // Team is open only in Shared; Quiet is muted, Later snoozed for years, and Over's snooze has ended.
-    ...["team", "quiet", "later", "over"].map((id) => ({ id, agent: "main", preview: `${id} work`, running: true })),
+    ...["team", "quiet", "parked"].map((id) => ({ id, agent: "main", preview: `${id} work`, running: true, markedUnread: id === "quiet", parked: id === "parked" })),
   ];
-  const mark = (ids: string[], unreadAt: string) => { rows = rows.map((row) => ids.includes(row.id) ? { ...row, unreadAt } : row); };
-  const viewing: string[] = [];
+  const mark = (ids: string[], unreadAt: string, note?: string) => { rows = rows.map((row) => ids.includes(row.id) ? { ...row, unreadAt, note } : row); };
+  const viewing: string[] = [], tabs: { path: string; space: string }[] = [["/s/", "chat"], ["/oc/", "opencode:box:ses_a"], ["/s/", "idle"], ["/s/", "quiet"], ["/s/", "parked"]].map(([route, id]) => ({ path: `${route}${encode(id)}`, space: "main" }));
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -55,15 +55,16 @@ test("an open RocketClaw or OpenCode tab newly marked unread raises a desktop no
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await request.json() as { id?: string };
+    const input = await request.json() as { id?: string; state?: { tabs: typeof tabs } };
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "notifications" });
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [["/s/", "chat"], ["/oc/", "opencode:box:ses_a"], ["/s/", "idle"], ["/s/", "quiet"], ["/s/", "later"], ["/s/", "over"]].map(([route, id]) => ({ path: `${route}${encode(id)}`, space: "main" })), groups: [], space: "main", last: {} }, revision: "1",
-        shared: [{ space: "main", path: `/s/${encode("team")}` }], mutes: [["quiet", ""], ["later", "2999-01-01T00:00:00Z"], ["over", "2001-01-01T00:00:00Z"]].map(([id, until]) => ({ path: `/s/${encode(id)}`, until })) });
+      case "/api/Tabs":
+        if (input.state) tabs.splice(0, tabs.length, ...input.state.tabs);
+        return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs, groups: [], space: "main", last: {} }, revision: "1", shared: [{ space: "main", path: `/s/${encode("team")}` }] });
       default: return Response.json({});
     }
   } });
@@ -73,8 +74,8 @@ test("an open RocketClaw or OpenCode tab newly marked unread raises a desktop no
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.addInitScript(stubNotifications);
-    const base = `http://127.0.0.1:${server.port}`;
-    await page.goto(`${base}/s/${encode("chat")}`);
+    const base = `http://127.0.0.1:${server.port}`, at = (id: string) => `/s/${encode(id)}`, opencode = `/oc/${encode("opencode:box:ses_a")}`;
+    await page.goto(`${base}${at("chat")}`);
     const notes = (): Promise<Note[]> => page.evaluate(() => window.notes.map(({ title, body, tag, closed }) => ({ title, body, tag, closed })));
     // A poll answered after the change can still be in flight, so the next one proves the change was read.
     const polls = async () => {
@@ -84,31 +85,32 @@ test("an open RocketClaw or OpenCode tab newly marked unread raises a desktop no
     };
     await page.getByRole("tab", { name: "Alpha work" }).waitFor();
     await polls();
-    // A focused window reports the session tab in view.
-    expect(viewing.at(-1)).toBe("chat");
+    // A focused window reports the tab in view by its location.
+    expect(viewing.at(-1)).toBe(at("chat"));
 
     // Notifications are on by default: the first click asks for the browser's permission, and nothing earlier does.
     expect(await page.evaluate(() => window.asked)).toBeUndefined();
     await page.getByRole("tab", { name: "Chat work" }).click();
     await page.waitForFunction(() => window.asked);
 
-    // A turn ending without marking this person, such as another person's, stays quiet, and so does a row
-    // already unread when the page loaded.
+    // A turn ending without marking this person stays quiet, and so does a row already marked when the page loaded.
     rows = rows.map((row) => ({ ...row, running: false }));
     await polls();
     expect(await notes()).toEqual([]);
 
-    // A new mark, or one moving past the last seen, notifies, a tab only in Shared too; the tab in view in a focused
-    // window, a row without a tab, and a muted or snoozed tab stay quiet. An OpenCode notification keeps the tab
-    // title and shows the start of its reply as plain text.
-    mark(["chat", "opencode:box:ses_a", "idle", "closed", "team", "quiet", "later", "over"], "2026-10-22T10:01:00Z");
+    // A new mark, or one moving past the last seen, notifies once, whether the tab is this person's or Shared; the tab in
+    // view in a focused window, a quiet mark, a parked tab and a session they have no tab for stay quiet. An OpenCode
+    // notification keeps the tab title and shows the start of its reply as plain text.
+    mark(["chat", "opencode:box:ses_a", "idle", "closed", "team", "quiet", "parked"], "2026-10-22T10:01:00Z");
+    await polls();
     await polls();
     expect(await notes()).toEqual([
-      { title: "Alpha work", body: "All green: - 12 tests pass", tag: "opencode:box:ses_a", closed: false },
-      { title: "main", body: "Idle work", tag: "idle", closed: false },
-      { title: "main", body: "team work", tag: "team", closed: false },
-      { title: "main", body: "over work", tag: "over", closed: false },
+      { title: "Alpha work", body: "All green: - 12 tests pass", tag: opencode, closed: false },
+      { title: "main", body: "Idle work", tag: at("idle"), closed: false },
+      { title: "main", body: "team work", tag: at("team"), closed: false },
     ]);
+    // The window title counts every mark on a tab this person has, quiet ones too, but not a parked tab's or a closed one's.
+    expect(await page.title()).toStartWith("(5) ");
 
     // With the window in the background, the poll reports no view, so a turn ending on the active tab marks it and
     // notifies. An unnamed RocketClaw session is titled by its agent and shows its last message, cut to 200 characters.
@@ -116,30 +118,35 @@ test("an open RocketClaw or OpenCode tab newly marked unread raises a desktop no
     rows = rows.map((row) => row.id === "chat" ? { ...row, unreadAt: "2026-10-22T10:02:00Z", preview: `Chat work\n${"x".repeat(300)}` } : row);
     await polls();
     expect(viewing.at(-1)).toBe("");
-    expect((await notes()).slice(4)).toEqual([{ title: "main", body: `Chat work ${"x".repeat(189)}…`, tag: "chat", closed: false }]);
+    expect((await notes()).slice(3)).toEqual([{ title: "main", body: `Chat work ${"x".repeat(189)}…`, tag: at("chat"), closed: false }]);
     expect(await page.getByRole("tab", { name: "Chat work" }).getAttribute("aria-description")).toBe("Space: Main, Unread");
+
+    // A park that ended on a session shows its note, not the reply.
+    mark(["idle"], "2026-10-22T10:03:00Z", "Park ended");
+    await polls();
+    expect((await notes()).slice(4)).toEqual([{ title: "main", body: "Park ended", tag: at("idle"), closed: false }]);
 
     // Clicking a notification opens its tab and closes it; the focused window then reports the OpenCode session.
     await page.evaluate(() => (window.notes[0] as unknown as Notification).onclick!(new Event("click")));
-    await page.waitForURL(`${base}/oc/${encode("opencode:box:ses_a")}`);
+    await page.waitForURL(`${base}${opencode}`);
     expect((await notes())[0].closed).toBe(true);
     await page.evaluate(() => { window.focused = true; });
     await polls();
-    expect(viewing.at(-1)).toBe("opencode:box:ses_a");
+    expect(viewing.at(-1)).toBe(opencode);
     expect(errors).toEqual([]);
 
     // Marks restored from the saved session list are older than the first live poll's, which raises nothing;
     // later marks notify again.
     await page.goto("about:blank");
-    mark(["chat", "opencode:box:ses_a", "idle"], "2026-10-22T10:03:00Z");
-    await page.goto(`${base}/s/${encode("idle")}`);
+    mark(["chat", "opencode:box:ses_a", "idle"], "2026-10-22T10:04:00Z");
+    await page.goto(`${base}${at("idle")}`);
     await page.getByRole("tab", { name: "Alpha work" }).waitFor();
     await polls();
     expect(await page.evaluate(() => Notification.permission)).toBe("granted");
     expect(await notes()).toEqual([]);
-    mark(["chat"], "2026-10-22T10:04:00Z");
+    mark(["chat"], "2026-10-22T10:05:00Z");
     await polls();
-    expect(await notes()).toEqual([{ title: "main", body: `Chat work ${"x".repeat(189)}…`, tag: "chat", closed: false }]);
+    expect(await notes()).toEqual([{ title: "main", body: `Chat work ${"x".repeat(189)}…`, tag: at("chat"), closed: false }]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
@@ -147,16 +154,16 @@ test("an open RocketClaw or OpenCode tab newly marked unread raises a desktop no
   }
 }, 60_000);
 
-test("a person marks tabs unread from the tab menu or the palette, silently, and the tab in view keeps its mark until they come back", async () => {
+test("a person marks tabs read or unread from the tab menu or the palette, each item acting on the selected tabs it fits, silently, and the tab in view keeps its mark until they come back", async () => {
   const { chromium: engine } = await import(playwright!);
   let rows: Session[] = ["chat", "first", "second", "seen"].map((id) => ({ id, agent: "main", preview: `${id} work`, ...id === "seen" ? { unreadAt: "2026-10-22T10:00:00Z" } : {} }));
-  const listed: string[] = [], marked: string[][] = [];
+  const listed: string[] = [], marked: string[][] = [], read: string[][] = [];
   const set = (id: string, change: Partial<Session>) => { rows = rows.map((row) => row.id === id ? { ...row, ...change } : row); };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") {
-      const viewing = url.searchParams.get("viewing") ?? "", hold = url.searchParams.has("hold");
+      const viewing = decodeSessionId((url.searchParams.get("viewing") ?? "").slice(3)), hold = url.searchParams.has("hold");
       listed.push(`${viewing}${hold ? " held" : ""}`);
       if (viewing && !hold) set(viewing, { unreadAt: undefined, markedUnread: undefined });
       return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
@@ -165,7 +172,7 @@ test("a person marks tabs unread from the tab menu or the palette, silently, and
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await request.json() as { id?: string; markUnread?: string[] };
+    const input = await request.json() as { id?: string; attention?: { paths: string[]; action: string } };
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "notifications" });
       case "/api/Identity": return Response.json({ username: "tester" });
@@ -174,10 +181,13 @@ test("a person marks tabs unread from the tab menu or the palette, silently, and
       case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: [], messages: [], mentionIds: [] });
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
       case "/api/Tabs": {
-        const ids = (input.markUnread ?? []).map((item) => decodeSessionId(item.slice(3)));
+        const ids = input.attention?.action === "MARK_UNREAD" ? input.attention.paths.map((item) => decodeSessionId(item.slice(3))) : [];
         if (ids.length) marked.push(ids);
         for (const id of ids) if (!rows.find((row) => row.id === id)!.unreadAt) set(id, { unreadAt: new Date().toISOString(), markedUnread: true });
-        return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: rows.map((row) => ({ path: `/s/${encode(row.id)}`, space: "main" })), groups: [], space: "main", last: {} }, revision: "1", shared: [], mutes: [] });
+        const cleared = input.attention?.action === "MARK_READ" ? input.attention.paths.map((item) => decodeSessionId(item.slice(3))) : [];
+        if (cleared.length) read.push(cleared);
+        for (const id of cleared) set(id, { unreadAt: undefined, markedUnread: undefined });
+        return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: rows.map((row) => ({ path: `/s/${encode(row.id)}`, space: "main" })), groups: [], space: "main", last: {} }, revision: "1", shared: [] });
       }
       default: return Response.json({});
     }
@@ -202,11 +212,11 @@ test("a person marks tabs unread from the tab menu or the palette, silently, and
     await polls();
     expect(listed.at(-1)).toBe("chat");
 
-    // A read session's menu offers the item, and choosing it marks the session without a notification; an unread
-    // one's menu has no item.
+    // A read session's menu offers Mark as unread, and choosing it marks the session without a notification; an unread
+    // one's menu offers Mark as read instead.
     await tab("seen").click({ button: "right" });
     await page.getByRole("menuitem").first().waitFor();
-    expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Mark as unread");
+    expect((await page.getByRole("menuitem").allInnerTexts()).filter((item: string) => item.startsWith("Mark as"))).toEqual(["Mark as read"]);
     await page.keyboard.press("Escape");
     await page.getByRole("menu").waitFor({ state: "hidden" });
     await tab("first").click({ button: "right" });
@@ -216,15 +226,23 @@ test("a person marks tabs unread from the tab menu or the palette, silently, and
     expect(await unread("first")).toBe(true);
     expect(await page.evaluate(() => window.notes.length)).toBe(0);
 
-    // A selection's menu offers the item while any selected session is read, here from an unread tab, and marks the
-    // read ones in one call, the tab in view included, which polls then report as held.
+    // Three selected tabs, two read and one bold, offer both items, and each acts in one call on the tabs it fits: Mark as
+    // read on the bold one; Mark as unread, offered while any selected tab is read, on the read ones, here leaving out
+    // the bold first, and taking the tab in view, which polls then report as held.
     await tab("second").click({ modifiers: ["ControlOrMeta"] });
     await tab("seen").click({ modifiers: ["ControlOrMeta"] });
+    await tab("seen").click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Mark as unread", exact: true }).waitFor();
+    await page.getByRole("menuitem", { name: "Mark as read", exact: true }).click();
+    await polls();
+    expect(read).toEqual([["seen"]]);
+    expect(await unread("seen")).toBe(false);
+    await tab("first").click({ modifiers: ["ControlOrMeta"] });
     await tab("seen").click({ button: "right" });
     await page.getByRole("menuitem", { name: "Mark as unread", exact: true }).click();
     await polls();
     expect(marked.length).toBe(2);
-    expect(marked[1].toSorted()).toEqual(["chat", "second"]);
+    expect(marked[1].toSorted()).toEqual(["chat", "second", "seen"]);
     expect(listed.at(-1)).toBe("chat held");
     expect(await unread("chat")).toBe(true);
     expect(await page.evaluate(() => window.notes.length)).toBe(0);
@@ -253,7 +271,7 @@ test("a person marks tabs unread from the tab menu or the palette, silently, and
     // A turn of the person's ending later on a session they marked notifies as usual.
     set("first", { unreadAt: new Date(Date.now() + 60_000).toISOString(), markedUnread: undefined });
     await polls();
-    expect(await page.evaluate(() => window.notes.map(({ tag }) => tag))).toEqual(["first"]);
+    expect(await page.evaluate(() => window.notes.map(({ tag }) => tag))).toEqual([`/s/${encode("first")}`]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
@@ -261,54 +279,40 @@ test("a person marks tabs unread from the tab menu or the palette, silently, and
   }
 }, 60_000);
 
-test("an open Dashboard in this space notifies when a session enters a lane marked for notification", async () => {
+test("a Cron tab's loud mark turns it bold and notifies with its note, a park that ends brings it back after it closed, a tab closed elsewhere never notifies, and a Shared-only row's notification opens it in its space", async () => {
   const { chromium: engine } = await import(playwright!);
-  const rows = new Map(([["w1", "NEEDS_YOU"], ["r1", "RUNNING"], ["q1", "QUEUED", "Deploy **api**"], ["q2", "QUEUED"], ["q3", "QUEUED"], ["o1", "RUNNING", "", "other"]] as const)
-    .map(([id, workState, name = "", spaceId = "main"]): [string, Session] => [id, { id, agent: "main", name: name || id, spaceId, workState }]));
-  const has: Record<string, NonNullable<Session["workState"]>> = { "is:waiting": "NEEDS_YOU", "is:running": "RUNNING", "is:queued": "QUEUED" };
-  const changed = new Set<string>(), requests: { spaceId: string; dashboards: { lanes: string[] }[] }[] = [];
-  const update = (id: string, workState: NonNullable<Session["workState"]>) => { rows.set(id, { ...rows.get(id)!, workState }); changed.add(id); };
-  let polls = 0;
-  // Ops is this person's Dashboard in Main; Elsewhere is Shared in another space, with a notify lane matching o1.
-  const lanes = [["Needs you", "is:waiting", true], ["Running", "is:running", false], ["Queued", "is:queued", false]] as const;
-  const ops: SearchPage = { name: "Ops", board: "kanban", searches: lanes.map(([name, query, notify], i) => ({ id: String(i), name, query, notify })), active: "0" };
-  const elsewhere: SearchPage = { name: "Elsewhere", board: "strips", searches: [{ id: "0", name: "Busy", query: "is:running", notify: true }], active: "0" };
-  let state = { tabs: [{ path: "/search/d", space: "main", search: ops }], groups: [], space: "main", last: { main: "/search/d" } };
+  const cron = `/cron/${encode("daily")}`, chat = `/s/${encode("chat")}`;
+  const ops: SearchPage = { name: "Ops", board: "kanban", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" };
+  let state = { tabs: [{ path: chat, space: "main" }, { path: cron, space: "main" }], groups: [], space: "main", last: {} }, revision = 1, marks: TabAttention[] = [];
+  const viewing: string[] = [];
+  let reloads = 0;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") {
-      const sessions = url.searchParams.get("since") ? [...changed].map((id) => rows.get(id)!) : [...rows.values()];
-      changed.clear();
-      polls++;
-      const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${polls}`, since: url.searchParams.get("since") || undefined };
-      return new Response(`data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: false })}\n\ndata: ${JSON.stringify(done)}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+      // As the server does, the tab in view in a focused window is read.
+      viewing.push(url.searchParams.get("viewing") ?? "");
+      marks = marks.filter((mark) => mark.path !== viewing.at(-1));
+      const first = { sessions: [{ id: "chat", agent: "main", preview: "Chat work" }], owner: "tester", tabRevision: String(revision) };
+      return new Response(`data: ${JSON.stringify(first)}\n\ndata: ${JSON.stringify({ upstreamSuccess: true, tabs: marks })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     }
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await request.json() as { id?: string; state?: typeof state } & typeof requests[number];
+    const input = await request.json() as { id?: string; state?: typeof state; dashboards?: { lanes: string[] }[] };
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "notifications" });
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/ListQueue": return Response.json({ items: [] });
+      case "/api/ListCronJobs": return Response.json({ jobs: [] });
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
-      case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: [], messages: [], mentionIds: [] });
+      case "/api/Board": return Response.json({ dashboards: input.dashboards!.map(({ lanes }) => ({ lanes: lanes.map(() => ({ sessions: [], total: 0 })) })) });
       case "/api/Tabs":
-        if (input.state) state = input.state;
-        return Response.json({ spaces: [{ id: "main", name: "Main" }, { id: "other", name: "Other" }], state, revision: String(polls), shared: [{ space: "other", path: "/search/e", search: elsewhere }], mutes: [] });
-      case "/api/Board": {
-        // Lanes take the space's sessions in order, the first matching lane winning, as the server does.
-        requests.push(input);
-        const taken = new Set<string>();
-        return Response.json({ dashboards: input.dashboards.map(({ lanes: queries }) => ({ lanes: queries.map((query) => {
-          const sessions = [...rows.values()].filter((row) => row.spaceId === input.spaceId && !taken.has(row.id) && row.workState === has[query]);
-          sessions.forEach((row) => taken.add(row.id));
-          return { sessions, total: sessions.length };
-        }) })) });
-      }
+        if (input.state) [state, revision] = [input.state, revision + 1];
+        else reloads++;
+        return Response.json({ spaces: [{ id: "main", name: "Main" }, { id: "team", name: "Team" }], state, revision: String(revision), shared: [{ space: "team", path: "/search/d", search: ops }] });
       default: return Response.json({});
     }
   } });
@@ -319,72 +323,67 @@ test("an open Dashboard in this space notifies when a session enters a lane mark
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.addInitScript(() => { if (origin !== "null") sessionStorage.setItem("permission", "granted"); });
     await page.addInitScript(stubNotifications);
-    const base = `http://127.0.0.1:${server.port}`;
-    const notes = (): Promise<Note[]> => page.evaluate(() => window.notes.map(({ title, body, tag, renotify, closed }) => ({ title, body, tag, renotify, closed })));
-    const lane = (name: string): Promise<string[]> => page.locator(`[data-board] section[aria-label="${name}"] li a`).allTextContents();
-    // Two more polls, and the Board requests they cause, settle every change made before.
-    const settle = async () => {
-      for (const at = polls; polls < at + 2;) await Bun.sleep(20);
-      await Bun.sleep(300);
+    const base = `http://127.0.0.1:${server.port}`, strip = page.getByRole("tablist", { name: "Open tabs" }), daily = strip.getByRole("tab", { name: "daily", exact: true });
+    const notes = (): Promise<Note[]> => page.evaluate(() => window.notes.map(({ title, body, tag, closed }) => ({ title, body, tag, closed })));
+    const polls = async () => {
+      const seen = viewing.length;
+      while (viewing.length < seen + 2) await Bun.sleep(20);
+      await Bun.sleep(100);
     };
-    const note = (id: string, body = id) => ({ title: "Ops: Needs you", body, tag: `/search/d:${id}`, renotify: true, closed: false });
-    await page.goto(`${base}/search/d`);
-    await page.locator('[data-board] section[aria-label="Needs you"] li').waitFor();
-    await settle();
-    // The first result after opening a Dashboard notifies nothing.
-    expect(await notes()).toEqual([]);
+    await page.goto(`${base}${chat}`);
+    await daily.waitFor();
+    await polls();
 
-    // A session entering a notify lane notifies, even in a focused window showing the Dashboard; one entering a lane
-    // without the mark does not. The page and the watcher ask Board once for the change.
-    const before = requests.length;
-    update("q1", "NEEDS_YOU");
-    update("q2", "RUNNING");
-    await settle();
-    expect(await notes()).toEqual([note("q1", "Deploy api")]);
-    expect(requests.length).toBe(before + 1);
+    // A run that finished marks the Cron tab: it goes bold, and the notification takes the tab's title and the note.
+    marks = [{ path: cron, unreadAt: "2026-10-22T10:01:00Z", note: "Run finished" }];
+    await polls();
+    expect(await notes()).toEqual([{ title: "daily", body: "Run finished", tag: cron, closed: false }]);
+    expect(await daily.getAttribute("aria-description")).toBe("Space: Main, Unread");
+    expect(await daily.getByText("daily", { exact: true }).evaluate((title: HTMLElement) => getComputedStyle(title).fontWeight)).toBe("700");
 
-    // A session leaving and re-entering the lane notifies again under the same tag, alerting while the first still shows.
-    update("q1", "QUEUED");
-    await settle();
-    update("q1", "NEEDS_YOU");
-    await settle();
-    expect(await notes()).toEqual([note("q1", "Deploy api"), note("q1", "Deploy api")]);
+    // A focused window names the Cron tab in view, which reads it; without focus it names none.
+    await daily.click();
+    await polls();
+    expect(viewing.at(-1)).toBe(cron);
+    expect(await daily.getAttribute("aria-description")).toBe("Space: Main");
+    await page.evaluate(() => { window.focused = false; });
+    await polls();
+    expect(viewing.at(-1)).toBe("");
 
-    // Turning a lane's mark off and on, or editing its query, notifies nothing for sessions already in it.
-    for (const pressed of ["false", "true"]) {
-      await page.getByRole("button", { name: "Notify", exact: true }).click();
-      await page.waitForFunction((value: string) => document.querySelector('button[aria-label="Notify"]')?.getAttribute("aria-pressed") === value, pressed);
-      await settle();
-    }
-    await page.getByRole("textbox", { name: "Search sessions" }).fill("is:queued");
-    await settle();
-    expect(await lane("Needs you")).toEqual([expect.stringContaining("q3")]);
-    expect(await notes()).toHaveLength(2);
-    // Later arrivals in the edited lane notify.
-    update("r1", "QUEUED");
-    await settle();
-    expect((await notes())[2]).toEqual(note("r1"));
+    // A park of the Cron tab that ends after it closed brings it back, bold, with a notification, in this window, which stayed open.
+    await page.evaluate(() => { window.focused = true; });
+    await strip.getByRole("tab", { name: "Chat work", exact: true }).click();
+    await strip.getByRole("button", { name: "Close daily", exact: true }).click();
+    await daily.waitFor({ state: "detached" });
+    for (const started = Date.now(); state.tabs.some((tab) => tab.path === cron); await Bun.sleep(20)) if (Date.now() - started > 5_000) throw new Error("the closed tab was never saved");
+    const before = reloads;
+    await polls();
+    expect(reloads).toBe(before); // This window's own save raised the revision; it reloads nothing for it.
+    [state, revision, marks] = [{ ...state, tabs: [...state.tabs, { path: cron, space: "main" }] }, revision + 1, [{ path: cron, unreadAt: "2026-10-22T10:02:00Z", note: "Park ended" }]];
+    await daily.waitFor();
+    await polls();
+    expect(await daily.getAttribute("aria-description")).toBe("Space: Main, Unread");
+    expect((await notes()).slice(1)).toEqual([{ title: "daily", body: "Park ended", tag: cron, closed: false }]);
 
-    // Clicking a notification opens its session; the Dashboard keeps notifying while out of view.
-    await page.evaluate(() => (window.notes[0] as unknown as Notification).onclick!(new Event("click")));
-    await page.waitForURL(`${base}/s/${encode("q1")}`);
-    expect((await notes())[0].closed).toBe(true);
-    update("w1", "QUEUED");
-    await settle();
-    expect((await notes())[3]).toEqual(note("w1"));
+    // Another window closes the Cron tab just as a run finishes on it: this window, holding older tabs than the listing
+    // names, notifies nothing for it, and drops the tab once it reloads.
+    [state, revision, marks] = [{ ...state, tabs: state.tabs.filter((tab) => tab.path !== cron) }, revision + 1, [{ path: cron, unreadAt: "2026-10-22T10:02:30Z", note: "Run finished" }]];
+    await daily.waitFor({ state: "detached" });
+    await polls();
+    expect((await notes()).slice(2)).toEqual([]);
 
-    // A Dashboard Shared in another space is never asked for, so it notifies nothing.
-    update("o1", "QUEUED");
-    await settle();
-    update("o1", "RUNNING");
-    await settle();
-    expect(requests.every((sent) => sent.spaceId === "main" && sent.dashboards.length === 1)).toBe(true);
-    expect(await notes()).toHaveLength(4);
-
-    // The first result after a reload notifies nothing either.
-    await page.reload();
-    await settle();
-    expect(await notes()).toEqual([]);
+    // A Dashboard only in another space's Shared group notifies under its name, and its click enters that space, where
+    // it shows as the Shared row it is, without a tab of this person's.
+    marks = [...marks, { path: "/search/d", unreadAt: "2026-10-22T10:03:00Z", note: "Needs you: q1" }];
+    await polls();
+    expect((await notes()).slice(2)).toEqual([{ title: "Ops", body: "Needs you: q1", tag: "/search/d", closed: false }]);
+    await page.evaluate(() => (window.notes[2] as unknown as Notification).onclick!(new Event("click")));
+    await page.waitForURL((url: URL) => url.pathname === "/search/d");
+    await page.getByRole("button", { name: "Space: Team" }).waitFor();
+    expect(await page.getByRole("tablist", { name: "Shared tabs" }).getByRole("tab", { name: "Ops", exact: true }).getAttribute("aria-selected")).toBe("true");
+    await polls();
+    expect(state.tabs.map((tab) => tab.path)).not.toContain("/search/d");
+    expect(await strip.locator('[data-tab="/search/d"]').count()).toBe(0);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
@@ -424,7 +423,7 @@ test("sessions moving between a Dashboard's lanes because its lanes changed are 
       case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: [], messages: [], mentionIds: [] });
       case "/api/Tabs":
         if (input.state) state = input.state;
-        return Response.json({ spaces: [{ id: "main", name: "Main" }], state, revision: String(polls), shared: [], mutes: [] });
+        return Response.json({ spaces: [{ id: "main", name: "Main" }], state, revision: String(polls), shared: [] });
       case "/api/Board": {
         // Each session sits only in the first lane it matches, as the server does.
         await Bun.sleep(slow);
@@ -445,7 +444,6 @@ test("sessions moving between a Dashboard's lanes because its lanes changed are 
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.addInitScript(() => { if (origin !== "null") sessionStorage.setItem("permission", "granted"); });
     await page.addInitScript(stubNotifications);
-    const notes = (): Promise<Note[]> => page.evaluate(() => window.notes.map(({ title, body, tag, renotify, closed }) => ({ title, body, tag, renotify, closed })));
     const lane = (name: string): Promise<string[]> => page.locator(`[data-board] section[aria-label="${name}"] li b`).allTextContents();
     const marked = (): Promise<string[]> => page.locator('[data-board] li[data-new="true"] b').allTextContents();
     const settle = async () => {
@@ -455,32 +453,28 @@ test("sessions moving between a Dashboard's lanes because its lanes changed are 
     await page.goto(`http://127.0.0.1:${server.port}/search/d`);
     await page.locator('[data-board] section[aria-label="Running"] li').waitFor();
     await settle();
-    expect(await notes()).toEqual([]);
 
-    // Closing the Running lane moves e1 into External, a notify lane: it did not arrive, so nothing notifies.
+    // Closing the Running lane moves e1 into External: it did not arrive, so it is not new.
     await page.getByRole("button", { name: "Close search 2" }).click();
     await page.locator('[data-board] section[aria-label="Running"]').waitFor({ state: "detached" });
     await settle();
     expect(await lane("External")).toEqual(["e1"]);
-    expect(await notes()).toEqual([]);
     expect(await marked()).toEqual([]);
 
-    // A session newly entering External notifies once and shows new.
+    // A session newly entering External shows new.
     set({ id: "e2", agent: "main", name: "e2", spaceId: "main", workState: "IDLE", external: true });
     await settle();
-    expect(await notes()).toEqual([{ title: "Ops: External", body: "e2", tag: "/search/d:e2", renotify: true, closed: false }]);
     expect(await marked()).toEqual(["e2"]);
 
-    // Editing Needs you's query moves w1 into External: nothing notifies or shows new.
+    // Editing Needs you's query moves w1 into External: nothing shows new.
     await page.getByRole("textbox", { name: "Search sessions" }).fill("is:running");
     await settle();
     expect(await lane("Needs you")).toEqual(["e1"]);
     expect(await lane("External")).toEqual(["w1", "e2"]);
-    expect(await notes()).toHaveLength(1);
     expect(await marked()).toEqual([]);
 
-    // Turning Needs you's mark on keeps its cards in view, even with Board slow to answer, and e1, already in it,
-    // never notifies. The next result is a silent baseline; a session entering after it notifies once.
+    // Turning Needs you's mark on keeps its cards in view, even with Board slow to answer, and e1, already in it, is not
+    // new. A session entering after the next result shows new; the browser notifies nothing, as the server watches lanes.
     slow = 1000;
     await page.getByRole("button", { name: "Notify", exact: true }).click();
     await page.waitForFunction(() => document.querySelector('button[aria-label="Notify"]')?.getAttribute("aria-pressed") === "true");
@@ -492,7 +486,8 @@ test("sessions moving between a Dashboard's lanes because its lanes changed are 
     set({ ...rows.get("q1")!, workState: "RUNNING" });
     await settle();
     expect(await lane("Needs you")).toEqual(["e1", "q1"]);
-    expect((await notes()).slice(1)).toEqual([{ title: "Ops: Needs you", body: "q1", tag: "/search/d:q1", renotify: true, closed: false }]);
+    expect(await marked()).toEqual(["q1"]);
+    expect(await page.evaluate(() => window.notes)).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
@@ -500,7 +495,7 @@ test("sessions moving between a Dashboard's lanes because its lanes changed are 
   }
 }, 60_000);
 
-test("a lane listing only its newest 200 sessions notifies those arriving newer, not ones sliding in from beyond", async () => {
+test("a lane listing only its newest 200 sessions shows new those arriving newer, not ones sliding in from beyond", async () => {
   const { chromium: engine } = await import(playwright!);
   // c000 arrived last; 202 sessions wait, so the lane lists 200 of them, as the server does.
   const at = (minutes: number) => new Date(Date.UTC(2026, 9, 22, 10) - minutes * 60_000).toISOString();
@@ -530,7 +525,7 @@ test("a lane listing only its newest 200 sessions notifies those arriving newer,
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: [], messages: [], mentionIds: [] });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: "/search/d", space: "main", search: ops }], groups: [], space: "main", last: { main: "/search/d" } }, revision: "1", shared: [], mutes: [] });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: "/search/d", space: "main", search: ops }], groups: [], space: "main", last: { main: "/search/d" } }, revision: "1", shared: [] });
       case "/api/Board": {
         const sessions = [...rows.values()].filter((row) => row.workState === "NEEDS_YOU").toSorted((a, b) => b.arrivedAt!.localeCompare(a.arrivedAt!));
         return Response.json({ dashboards: [{ lanes: [{ sessions: sessions.slice(0, 200), total: sessions.length }] }] });
@@ -545,7 +540,6 @@ test("a lane listing only its newest 200 sessions notifies those arriving newer,
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.addInitScript(() => { if (origin !== "null") sessionStorage.setItem("permission", "granted"); });
     await page.addInitScript(stubNotifications);
-    const notes = (): Promise<string[]> => page.evaluate(() => window.notes.map(({ body }) => body!));
     const marked = (): Promise<string[]> => page.locator('[data-board] li[data-new="true"] b').allTextContents();
     const settle = async () => {
       for (const seen = polls; polls < seen + 2;) await Bun.sleep(20);
@@ -554,20 +548,18 @@ test("a lane listing only its newest 200 sessions notifies those arriving newer,
     await page.goto(`http://127.0.0.1:${server.port}/search/d`);
     await page.locator('[data-board] section[aria-label="Needs you"] li').first().waitFor();
     await settle();
-    expect(await notes()).toEqual([]);
 
     // The newest session leaving lets the 201st into the list: it was in the lane already, so it is not new.
     set({ ...rows.get("c000")!, workState: "IDLE" });
     await settle();
     expect(await page.locator('[data-board] section[aria-label="Needs you"] h3').textContent()).toBe("Needs you 201");
-    expect(await notes()).toEqual([]);
     expect(await marked()).toEqual([]);
 
-    // A session arriving newer than the listed ones still notifies and is marked new.
+    // A session arriving newer than the listed ones is marked new.
     set({ id: "new", agent: "main", name: "new", spaceId: "main", workState: "NEEDS_YOU", arrivedAt: at(-1) });
     await settle();
-    expect(await notes()).toEqual(["new"]);
     expect(await marked()).toEqual(["new"]);
+    expect(await page.evaluate(() => window.notes)).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
@@ -575,7 +567,7 @@ test("a lane listing only its newest 200 sessions notifies those arriving newer,
   }
 }, 60_000);
 
-test("a session the Board lists before the session list has it notifies once, from the Board's own card", async () => {
+test("a session the Board lists before the session list has it shows new once, from the Board's own card", async () => {
   const { chromium: engine } = await import(playwright!);
   // Board answers from every session; the session list has only those listed, sending the changed ones since a version.
   const sessions = new Map<string, Session>([["w1", { id: "w1", agent: "main", name: "w1", spaceId: "main", workState: "NEEDS_YOU", arrivedAt: "2026-10-22T10:00:00Z" }]]);
@@ -601,7 +593,7 @@ test("a session the Board lists before the session list has it notifies once, fr
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
       case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: [], messages: [], mentionIds: [] });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: "/search/d", space: "main", search: ops }], groups: [], space: "main", last: { main: "/search/d" } }, revision: "1", shared: [], mutes: [] });
+      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: "/search/d", space: "main", search: ops }], groups: [], space: "main", last: { main: "/search/d" } }, revision: "1", shared: [] });
       case "/api/Board": {
         const lane = [...sessions.values()].filter((row) => row.workState === "NEEDS_YOU").toSorted((a, b) => b.arrivedAt!.localeCompare(a.arrivedAt!));
         return Response.json({ dashboards: [{ lanes: [{ sessions: lane, total: lane.length }] }] });
@@ -616,7 +608,6 @@ test("a session the Board lists before the session list has it notifies once, fr
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.addInitScript(() => { if (origin !== "null") sessionStorage.setItem("permission", "granted"); });
     await page.addInitScript(stubNotifications);
-    const notes = (): Promise<Note[]> => page.evaluate(() => window.notes.map(({ title, body, tag, renotify, closed }) => ({ title, body, tag, renotify, closed })));
     const marked = (): Promise<string[]> => page.locator('[data-board] li[data-new="true"] b').allTextContents();
     const settle = async () => {
       for (const seen = polls; polls < seen + 2;) await Bun.sleep(20);
@@ -625,20 +616,18 @@ test("a session the Board lists before the session list has it notifies once, fr
     await page.goto(`http://127.0.0.1:${server.port}/search/d`);
     await page.locator('[data-board] section[aria-label="Needs you"] li').waitFor();
     await settle();
-    expect(await notes()).toEqual([]);
 
-    // The Board lists late before the session list has it: another row's change asks Board, whose card notifies and shows new.
+    // The Board lists late before the session list has it: another row's change asks Board, whose card shows new.
     sessions.set("late", { id: "late", agent: "main", name: "Late **arrival**", spaceId: "main", workState: "NEEDS_YOU", arrivedAt: "2026-10-22T10:05:00Z" });
     list({ ...sessions.get("w1")!, preview: "nudge" });
     await settle();
-    const late = { title: "Ops: Needs you", body: "Late arrival", tag: "/search/d:late", renotify: true, closed: false };
-    expect(await notes()).toEqual([late]);
     expect(await marked()).toEqual(["Late arrival"]);
 
-    // The session list catching up notifies nothing more.
+    // The session list catching up marks nothing more, and the browser notifies nothing.
     list(sessions.get("late")!);
     await settle();
-    expect(await notes()).toEqual([late]);
+    expect(await marked()).toEqual([]);
+    expect(await page.evaluate(() => window.notes)).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

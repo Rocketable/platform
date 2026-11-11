@@ -17,18 +17,18 @@ const javascript = new Bun.Transpiler({ loader: "tsx" }).transformSync(`
 `);
 const { tabsCall, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 
-test("personal save replies retain intervening Shared edits and mutes, including refused saves", async () => {
+test("personal save replies retain intervening Shared edits, including refused saves", async () => {
   const key = [{ server: "" }, "tabs", "tester"];
-  const initial: SavedTabs = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "1", shared: [], mutes: [] };
-  for (const state of [true, false]) for (const stale of [false, true]) for (const changed of ["neither", "shared", "mutes"] as const) {
+  const initial: SavedTabs = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "1", shared: [] };
+  for (const state of [true, false]) for (const stale of [false, true]) for (const changed of ["neither", "shared"] as const) {
     queryClient.clear();
     queryClient.setQueryData(key, initial);
     const response = Promise.withResolvers<Response>();
     const fetchMock = spyOn(globalThis, "fetch").mockImplementation(Object.assign(() => response.promise, { preconnect: fetch.preconnect }));
-    const reply: SavedTabs = { ...initial, revision: "2", stale, state: { ...initial.state, last: { main: "/voice" } }, shared: [{ space: "main", path: "/voice" }], mutes: [{ path: "/s/old", until: "" }] };
-    const current: SavedTabs = { ...initial, shared: changed === "shared" ? [{ space: "main", path: "/search/new" }] : initial.shared, mutes: changed === "mutes" ? [{ path: "/s/new", until: "" }] : initial.mutes };
+    const reply: SavedTabs = { ...initial, revision: "2", stale, state: { ...initial.state, last: { main: "/voice" } }, shared: [{ space: "main", path: "/voice" }] };
+    const current: SavedTabs = { ...initial, shared: changed === "shared" ? [{ space: "main", path: "/search/new" }] : initial.shared };
     try {
-      const pending = tabsCall("", state ? { state: initial.state, revision: 1 } : { mute: { path: "/s/old", until: "" } });
+      const pending = tabsCall("", state ? { state: initial.state, revision: 1 } : { attention: { paths: ["/s/old"], action: "MARK_UNREAD" } });
       queryClient.setQueryData(key, current);
       response.resolve(Response.json(reply));
       expect(await pending).toEqual(reply);
@@ -36,7 +36,6 @@ test("personal save replies retain intervening Shared edits and mutes, including
       expect(applied.state).toEqual(state && stale ? reply.state : initial.state);
       expect(applied.revision).toBe(state && stale ? "2" : "1");
       expect(applied.shared).toEqual(!state && stale || state && changed === "shared" ? current.shared : reply.shared);
-      expect(applied.mutes).toEqual(!state && stale || state && changed === "mutes" ? current.mutes : reply.mutes);
     } finally { fetchMock.mockRestore(); queryClient.clear(); }
   }
 });

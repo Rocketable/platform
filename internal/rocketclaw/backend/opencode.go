@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
@@ -245,19 +246,19 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 
 	// through is a session's newest handled idle marker, in OpenCode milliseconds, 0 before its first.
 	type storedSession struct {
-		ran     bool
-		updated time.Time
-		through int64
+		ran, asking bool
+		updated     time.Time
+		through     int64
 	}
 
 	stored := map[string]storedSession{}
 
-	if err := readRows(ctx, s.db, `SELECT conversation_id, running, last_updated, COALESCE(read_through, 0) FROM conversations WHERE server = $1`, "stored opencode sessions", func(row rowScanner) error {
+	if err := readRows(ctx, s.db, `SELECT conversation_id, running, asking, last_updated, COALESCE(read_through, 0) FROM conversations WHERE server = $1`, "stored opencode sessions", func(row rowScanner) error {
 		var (
 			id      string
 			session storedSession
 		)
-		if err := row.Scan(&id, &session.ran, &session.updated, &session.through); err != nil {
+		if err := row.Scan(&id, &session.ran, &session.asking, &session.updated, &session.through); err != nil {
 			return fmt.Errorf("scan stored opencode session: %w", err)
 		}
 
@@ -306,6 +307,7 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		oldest                                            time.Time
 		cursors                                           []*int64
 		markedIDs, markedUsers                            []string
+		markedWaking                                      []bool
 	)
 
 	for _, session := range sessions.Data {
@@ -322,27 +324,30 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		var cursor *int64
 
 		if !busy && (last.ran || session.Time.Updated > last.updated.UnixMilli()) {
-			var idle, users struct {
+			var idle struct {
 				Data []struct {
-					Metadata struct {
-						Username string `json:"rocketclaw_username"`
-					} `json:"metadata"`
 					Time struct {
 						Created int64 `json:"created"`
 					} `json:"time"`
 				} `json:"data"`
 			}
 
-			path := "/api/session/" + url.PathEscape(session.ID) + "/message?type="
-			if openCodeCall(ctx, name, server, http.MethodGet, path+"idle&order=desc&limit=1", nil, &idle) == nil && len(idle.Data) > 0 &&
-				openCodeCall(ctx, name, server, http.MethodGet, path+"user&order=desc&limit=50", nil, &users) == nil {
-				cursor = &idle.Data[0].Time.Created
+			if openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(session.ID)+"/message?type=idle&order=desc&limit=1", nil, &idle) == nil && len(idle.Data) > 0 {
+				if senders, err := openCodeSenders(ctx, name, server, session.ID, last.through, idle.Data[0].Time.Created); err == nil {
+					cursor = &idle.Data[0].Time.Created
 
-				for _, message := range users.Data {
-					if message.Time.Created > last.through && message.Time.Created <= *cursor {
-						markedIDs, markedUsers = append(markedIDs, id), append(markedUsers, message.Metadata.Username)
+					for _, sender := range senders {
+						markedIDs, markedUsers, markedWaking = append(markedIDs, id), append(markedUsers, sender), append(markedWaking, false)
 					}
 				}
+			}
+		}
+
+		// A session that starts asking waits on the people whose stamped prompts since its cursor it runs.
+		if asking[session.ID] && !last.asking {
+			senders, _ := openCodeSenders(ctx, name, server, session.ID, last.through, math.MaxInt64)
+			for _, sender := range senders {
+				markedIDs, markedUsers, markedWaking = append(markedIDs, id), append(markedUsers, sender), append(markedWaking, true)
 			}
 		}
 
@@ -388,8 +393,8 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	// fetch proves deletions only inside its window. Rows stamped after the poll started were
 	// created or renamed meanwhile and stay. Earlier polls must not undo a rename's title/name.
 	// Kept rows are stamped too: offline means unreachable only.
-	// A turn's end marks its senders unread, and every Web person when the session is in some
-	// space's Shared group.
+	// A turn's end reaches the session's readers, and so does its start of asking, read against the
+	// asking stored before this statement, which also brings back the parked tabs of those it notifies.
 	// Session.Info.title is also the shared name, including when cleared (OpenCode v2
 	// https://opencode.ai/v2/openapi.json#/paths/~1api~1session/get).
 	_, err := execState(ctx, s.db, "sync opencode sessions", `WITH incoming AS (
@@ -403,25 +408,49 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
         last_updated = excluded.last_updated, running = excluded.running, background = excluded.background, asking = excluded.asking, synced_at = excluded.synced_at,
         reply = COALESCE(excluded.reply, conversations.reply), agent = excluded.agent, model = excluded.model,
         read_through = GREATEST(excluded.read_through, conversations.read_through)
-), ended AS (
-    SELECT DISTINCT conversation_id, username FROM unnest($17::text[], $18::text[]) AS m(conversation_id, username)
-), marks AS (
-    SELECT conversation_id, username, $14 AS kind FROM ended WHERE username <> ''
-    UNION SELECT e.conversation_id, p.username, $14 FROM ended e JOIN web_shared_tabs t USING (conversation_id) CROSS JOIN web_tab_states p
-), marked AS (
-    INSERT INTO web_tabs (username, path, conversation_id, unread_at)
-    SELECT c.username, `+tabPathSQL+`, c.conversation_id, now() FROM marks c
-    LEFT JOIN web_tab_states p ON p.username = c.username AND p.viewing = c.conversation_id AND p.viewed_at >= now() - interval '10 seconds'
-    WHERE p.username IS NULL
-    ON CONFLICT (username, path) DO UPDATE SET unread_at = now(), marked_unread = FALSE, conversation_id = excluded.conversation_id
-), removed AS (
+), asked AS (
+    SELECT i.conversation_id FROM incoming i LEFT JOIN conversations o USING (conversation_id) WHERE i.asking AND o.asking IS NOT TRUE
+), events AS (
+    SELECT m.conversation_id, $14 AS kind, m.waking, m.username FROM unnest($17::text[], $18::text[], $20::boolean[]) AS m(conversation_id, username, waking)
+    LEFT JOIN asked a USING (conversation_id) WHERE NOT m.waking OR a.conversation_id IS NOT NULL
+    UNION SELECT conversation_id, $14, TRUE, '' FROM asked
+)`+sessionReadersSQL+markTabsSQL+`, removed AS (
     DELETE FROM conversations WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $9 AND ($7 OR last_updated >= $8)
 )
 UPDATE conversations SET synced_at = now(), running = FALSE, background = FALSE, asking = FALSE
 WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7 OR last_updated >= $8))`,
-		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds, agents, models, KindRemote, remotes, cursors, markedIDs, markedUsers, askings)
+		name, ids, titles, directories, updated, running, len(ids) < openCodeSyncLimit, oldest, started, replies, backgrounds, agents, models, KindRemote, remotes, cursors, markedIDs, markedUsers, askings, markedWaking)
 
 	return err
+}
+
+// openCodeSenders lists the RocketClaw people stamped on the prompts of session's newest 50 created after since and no
+// later than until, "" for one sent from elsewhere.
+func openCodeSenders(ctx context.Context, name string, server config.OpenCodeConfig, session string, since, until int64) ([]string, error) {
+	var prompts struct {
+		Data []struct {
+			Metadata struct {
+				Username string `json:"rocketclaw_username"`
+			} `json:"metadata"`
+			Time struct {
+				Created int64 `json:"created"`
+			} `json:"time"`
+		} `json:"data"`
+	}
+
+	if err := openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(session)+"/message?type=user&order=desc&limit=50", nil, &prompts); err != nil {
+		return nil, err
+	}
+
+	var senders []string
+
+	for _, prompt := range prompts.Data {
+		if prompt.Time.Created > since && prompt.Time.Created <= until {
+			senders = append(senders, prompt.Metadata.Username)
+		}
+	}
+
+	return senders, nil
 }
 
 // openCodeRoot walks id's parents up to one of roots, stopping early at a parent it cannot read.

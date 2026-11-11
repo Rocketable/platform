@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
 func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse, error) {
@@ -43,8 +43,7 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	var (
 		spaces   []backend.Space
 		shared   []backend.SharedTab
-		mutes    []backend.TabMute
-		shelf    []byte
+		shelf    backend.TopShelf
 		state    backend.TabState
 		closed   []backend.Tab
 		response = &TabsResponse{Stale: (request.State != nil && !saved) || refused}
@@ -63,10 +62,6 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	}
 
 	if err == nil {
-		mutes, err = s.sessions.TabMutes(ctx, username)
-	}
-
-	if err == nil {
 		shelf, err = s.sessions.TopShelf(ctx, username)
 	}
 
@@ -74,38 +69,19 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		closed, err = s.sessions.ClosedTabs(ctx, username)
 	}
 
-	if err == nil && shelf != nil {
-		response.TopShelf = &TopShelf{}
-		err = (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(shelf, response.TopShelf)
-	}
-
-	if err == nil && response.TopShelf != nil {
-		response.TopShelf.Tabs, err = s.liveShelfTabs(ctx, response.TopShelf.Tabs)
-	}
-
 	if err == nil && !saved {
-		var errState error
-
 		state, response.Revision, err = s.sessions.TabState(ctx, username)
-		response.State, errState = tabState(&state)
-		err = errors.Join(err, errState)
-	}
-
-	if err == nil {
-		response.Shared, err = sharedTabs(slices.DeleteFunc(shared, func(tab backend.SharedTab) bool { return !limit.AllowsSpaceID(tab.Space) }))
-	}
-
-	if err == nil {
-		response.Unshared, err = searchPage(unshared)
-	}
-
-	if err == nil {
-		response.Closed, err = webTabs(closed)
+		response.State = tabState(&state)
 	}
 
 	if err != nil {
 		return nil, fmt.Errorf("web tabs: %w", err)
 	}
+
+	response.Shared = sharedTabs(slices.DeleteFunc(shared, func(tab backend.SharedTab) bool { return !limit.AllowsSpaceID(tab.Space) }))
+	response.Unshared = webSearchPage(unshared)
+	response.Closed = webTabs(closed)
+	response.TopShelf = webTopShelf(&shelf)
 
 	for _, space := range spaces {
 		if limit.AllowsSpaceID(space.ID) {
@@ -113,15 +89,13 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		}
 	}
 
-	response.Mutes = tabMutes(mutes)
-
 	return response, nil
 }
 
 // changeTabs makes request's one change for username. It reports whether a save was made from the saved revision,
 // whether an edit of a Shared Search page was refused because the page changed since the edit's base, and the page a
 // Search tab taken out of Shared held.
-func (s *Server) changeTabs(ctx context.Context, username string, limit backend.SpaceLimit, request *TabsRequest) (saved, refused bool, unshared []byte, err error) {
+func (s *Server) changeTabs(ctx context.Context, username string, limit backend.SpaceLimit, request *TabsRequest) (saved, refused bool, unshared *backend.SearchPage, err error) {
 	shared := cmp.Or(request.Share, request.EditShared, request.Unshare)
 
 	switch {
@@ -148,34 +122,19 @@ func (s *Server) changeTabs(ctx context.Context, username string, limit backend.
 		}
 
 		if err == nil {
-			err = s.sessions.ShareTab(ctx, request.Share.Space, request.Share.Path, searchJSON(request.Share.Search))
+			err = s.sessions.ShareTab(ctx, request.Share.Space, request.Share.Path, savedSearchPage(request.Share.Search))
 		}
 	case request.EditShared != nil:
 		var edited bool
 
-		edited, err = s.sessions.EditSharedSearch(ctx, request.EditShared.Space, request.EditShared.Path, searchJSON(request.EditShared.Base), searchJSON(request.EditShared.Search))
+		edited, err = s.sessions.EditSharedSearch(ctx, request.EditShared.Space, request.EditShared.Path, savedSearchPage(request.EditShared.Base), savedSearchPage(request.EditShared.Search))
 		refused = !edited
 	case request.Unshare != nil:
 		unshared, err = s.sessions.UnshareTab(ctx, request.Unshare.Space, request.Unshare.Path)
-	case request.Mute != nil:
-		err = s.muteTab(ctx, username, request.Mute)
-	case request.Unmute != "":
-		err = s.sessions.UnmuteTab(ctx, username, request.Unmute)
-	case len(request.MarkUnread) > 0:
-		// Every session must be one the caller may open before any is marked.
-		for _, path := range request.MarkUnread {
-			if err = s.visibleConversation(ctx, backend.TabConversation(path)); err != nil {
-				break
-			}
-		}
-
-		if err == nil {
-			err = s.sessions.MarkUnread(ctx, username, request.MarkUnread)
-		}
+	case request.Attention != nil:
+		err = s.changeAttention(ctx, username, request.Attention)
 	case request.TopShelf != nil:
-		// The shelf came from a request's protobuf JSON, so it marshals back without error.
-		shelf, _ := protojson.Marshal(request.TopShelf)
-		err = s.sessions.SaveTopShelf(ctx, username, shelf)
+		err = s.sessions.SaveTopShelf(ctx, username, savedTopShelf(request.TopShelf))
 	}
 
 	if err != nil {
@@ -185,122 +144,81 @@ func (s *Server) changeTabs(ctx context.Context, username string, limit backend.
 	return saved, refused, unshared, nil
 }
 
-// muteTab mutes mute's session for username until its until, or until unmuted when until is empty.
-// Only a session people may open can be muted. It is apart from tabs, whose branches would pass gocyclo's limit.
-func (s *Server) muteTab(ctx context.Context, username string, mute *TabMute) error {
+// changeAttention makes change to username's attention on its tab locations. New session and a kept group's
+// placeholder have none, and every session must be one the caller may open, before any location changes. It is apart
+// from changeTabs, whose branches would pass gocyclo's limit.
+func (s *Server) changeAttention(ctx context.Context, username string, change *AttentionChange) error {
+	action, ok := map[AttentionAction]backend.AttentionAction{
+		AttentionAction_MARK_READ: backend.AttentionRead, AttentionAction_MARK_UNREAD: backend.AttentionUnread, AttentionAction_PARK: backend.AttentionPark,
+		AttentionAction_UNPARK: backend.AttentionUnpark, AttentionAction_PARK_UNTIL_DONE: backend.AttentionParkUntilDone,
+	}[change.Action]
+	if !ok {
+		return fmt.Errorf("web tab attention: %w", status.Error(codes.InvalidArgument, "unknown attention action"))
+	}
+
 	var until *time.Time
 
-	if mute.Until != "" {
-		parsed, err := time.Parse(time.RFC3339, mute.Until)
+	if change.Until != "" {
+		parsed, err := time.Parse(time.RFC3339, change.Until)
 		if err != nil {
-			return fmt.Errorf("web tab mute: %w", status.Error(codes.InvalidArgument, "mute until is not an RFC 3339 time"))
+			return fmt.Errorf("web tab attention: %w", status.Error(codes.InvalidArgument, "until is not an RFC 3339 time"))
 		}
 
 		until = &parsed
 	}
 
-	if err := s.visibleConversation(ctx, backend.TabConversation(mute.Path)); err != nil {
-		return err
+	for _, path := range change.Paths {
+		if path == "/" || strings.HasPrefix(path, "group:") {
+			return fmt.Errorf("web tab attention: %w", status.Error(codes.InvalidArgument, "New session and tab groups have no attention"))
+		}
+
+		if id := backend.TabConversation(path); id != "" {
+			if err := s.visibleConversation(ctx, id); err != nil {
+				return err
+			}
+		}
 	}
 
-	if err := s.sessions.MuteTab(ctx, username, mute.Path, until); err != nil {
-		return fmt.Errorf("web tab mute: %w", err)
+	if err := s.sessions.ChangeAttention(ctx, username, change.Paths, action, until); err != nil {
+		return fmt.Errorf("web tab attention: %w", err)
 	}
 
 	return nil
 }
 
-func (s *Server) liveShelfTabs(ctx context.Context, tabs []*ShelfTab) ([]*ShelfTab, error) {
-	conversation := func(tab *ShelfTab) string {
-		if tab.Server != "" {
-			return ""
-		}
-
-		return backend.TabConversation(tab.Path)
-	}
-
-	var ids []string
-
-	for _, tab := range tabs {
-		if id := conversation(tab); id != "" {
-			ids = append(ids, id)
-		}
-	}
-
-	if len(ids) == 0 {
-		return tabs, nil
-	}
-
-	live, err := s.sessions.ExistingConversations(ctx, ids)
-	if err != nil {
-		return nil, fmt.Errorf("read top shelf sessions: %w", err)
-	}
-
-	return slices.DeleteFunc(tabs, func(tab *ShelfTab) bool {
-		id := conversation(tab)
-		return id != "" && !slices.Contains(live, id)
-	}), nil
-}
-
-// tabMutes is mutes as the Web reads them, with each snooze's end as an RFC 3339 time in UTC.
-func tabMutes(mutes []backend.TabMute) []*TabMute {
-	out := make([]*TabMute, 0, len(mutes))
-
-	for _, mute := range mutes {
-		until := ""
-		if mute.Until != nil {
-			until = mute.Until.UTC().Format(time.RFC3339)
-		}
-
-		out = append(out, &TabMute{Path: mute.Path, Until: until})
+// sharedTabs is every space's Shared tabs as the Web reads them.
+func sharedTabs(shared []backend.SharedTab) []*SharedTab {
+	out := make([]*SharedTab, 0, len(shared))
+	for _, tab := range shared {
+		out = append(out, &SharedTab{Space: tab.Space, Path: tab.Path, Search: webSearchPage(tab.Search)})
 	}
 
 	return out
 }
 
-// sharedTabs is every space's Shared tabs as the Web reads them.
-func sharedTabs(shared []backend.SharedTab) ([]*SharedTab, error) {
-	var err error
-
-	out := make([]*SharedTab, 0, len(shared))
-	for _, tab := range shared {
-		page, errPage := searchPage(tab.Search)
-		err = errors.Join(err, errPage)
-
-		out = append(out, &SharedTab{Space: tab.Space, Path: tab.Path, Search: page})
-	}
-
-	return out, err
-}
-
 // tabState is the backend's saved state as the Web reads it.
-func tabState(state *backend.TabState) (out *TabState, err error) {
-	out = &TabState{Space: state.Space, Last: state.Last, SharedOrder: state.SharedOrder}
-	out.Tabs, err = webTabs(state.Tabs)
-
+func tabState(state *backend.TabState) *TabState {
+	out := &TabState{Space: state.Space, Last: state.Last, SharedOrder: state.SharedOrder, Tabs: webTabs(state.Tabs)}
 	for _, group := range state.Groups {
 		out.Groups = append(out.Groups, &TabGroup{Id: group.ID, Name: group.Name, Color: group.Color, Collapsed: group.Collapsed})
 	}
 
-	return out, err
+	return out
 }
 
-func webTabs(saved []backend.Tab) (out []*Tab, err error) {
+func webTabs(saved []backend.Tab) (out []*Tab) {
 	for _, tab := range saved {
-		page, errPage := searchPage(tab.Search)
-		err = errors.Join(err, errPage)
-
-		out = append(out, &Tab{Path: tab.Path, Group: tab.Group, Space: tab.Space, Search: page})
+		out = append(out, &Tab{Path: tab.Path, Group: tab.Group, Space: tab.Space, Search: webSearchPage(tab.Search)})
 	}
 
-	return out, err
+	return out
 }
 
 // savedTabState is state as the backend saves it.
 func savedTabState(state *TabState) *backend.TabState {
 	saved := &backend.TabState{Space: state.Space, Last: state.Last, SharedOrder: state.SharedOrder}
 	for _, tab := range state.Tabs {
-		saved.Tabs = append(saved.Tabs, backend.Tab{Path: tab.Path, Group: tab.Group, Space: tab.Space, Search: searchJSON(tab.Search)})
+		saved.Tabs = append(saved.Tabs, backend.Tab{Path: tab.Path, Group: tab.Group, Space: tab.Space, Search: savedSearchPage(tab.Search)})
 	}
 
 	for _, group := range state.Groups {
@@ -310,28 +228,50 @@ func savedTabState(state *TabState) *backend.TabState {
 	return saved
 }
 
-// searchPage reads a Search page the backend saved as JSON, nil for other tabs.
-func searchPage(saved []byte) (*SearchPage, error) {
-	if saved == nil {
-		return nil, nil
+// webTopShelf is the backend's saved Top Shelf as the Web reads it.
+func webTopShelf(shelf *backend.TopShelf) *TopShelf {
+	out := &TopShelf{Collapsed: shelf.Collapsed}
+	for _, tab := range shelf.Tabs {
+		out.Tabs = append(out.Tabs, &ShelfTab{Server: tab.Server, Space: tab.Space, Path: tab.Path, Search: webSearchPage(tab.Search)})
 	}
 
-	page := &SearchPage{}
-	if err := (protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(saved, page); err != nil {
-		return nil, fmt.Errorf("read search page: %w", err)
-	}
-
-	return page, nil
+	return out
 }
 
-// searchJSON is page as the backend saves it, nil for other tabs. The page came from a request's protobuf JSON,
-// so it marshals back without error.
-func searchJSON(page *SearchPage) []byte {
+// savedTopShelf is shelf as the backend saves it.
+func savedTopShelf(shelf *TopShelf) *backend.TopShelf {
+	saved := &backend.TopShelf{Collapsed: shelf.Collapsed}
+	for _, tab := range shelf.Tabs {
+		saved.Tabs = append(saved.Tabs, backend.ShelfTab{Server: tab.Server, Space: tab.Space, Path: tab.Path, Search: savedSearchPage(tab.Search)})
+	}
+
+	return saved
+}
+
+// webSearchPage is a Search page the backend saved as the Web reads it, nil for other tabs.
+func webSearchPage(saved *backend.SearchPage) *SearchPage {
+	if saved == nil {
+		return nil
+	}
+
+	page := &SearchPage{Name: saved.Name, Board: saved.Board, Active: saved.Active}
+	for _, search := range saved.Searches {
+		page.Searches = append(page.Searches, &SavedSearch{Id: search.ID, Name: search.Name, Query: search.Query, Notify: search.Notify})
+	}
+
+	return page
+}
+
+// savedSearchPage is page as the backend saves it, nil for other tabs.
+func savedSearchPage(page *SearchPage) *backend.SearchPage {
 	if page == nil {
 		return nil
 	}
 
-	saved, _ := protojson.Marshal(page)
+	saved := &backend.SearchPage{Name: page.Name, Board: page.Board, Active: page.Active}
+	for _, search := range page.Searches {
+		saved.Searches = append(saved.Searches, backend.SavedSearch{ID: search.Id, Name: search.Name, Query: search.Query, Notify: search.Notify})
+	}
 
 	return saved
 }

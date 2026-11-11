@@ -407,20 +407,27 @@ The session list polls each server on its own schedule and merges their rows by
 recency; a row is its chat on its server. `viewing` goes only to the page's
 server. A remote that stops answering keeps its rows, greyed and offline; only a
 refusal clears them. Search fans out to every server, and a failing remote drops
-out. Notifications check each row against its own server's tabs and mutes: the
-live ones for the page's server, the saved ones for others. The space picker
+out. Each server marks its own tabs (see Unread below), and the page notifies
+from every server's listing; a server that is offline or on another protocol
+offers no attention items in its rows' menus. The space picker
 lists each server with its spaces, and choosing another server's space opens
 that server's view in that space.
 
 The Top Shelf is the person's own and lives on the local server, in the Tabs
-reply's `topShelf`; each change saves the whole shelf. A shelved tab names its
+reply's `topShelf`; each change saves the whole shelf, which the server stores
+as one row per shelved tab. A tab can be on the shelf and in the strip at once.
+A shelved tab names its
 server and space. Opening one on its own server works like a Shared tab: it
 shows the page in its space with no tab, and a shelved Search page edits the
 shelf's copy unless the person has a tab of it there. One on another server is
 opened by entering that server's view in the tab's space. With remotes, a first
 load waits for the shelf, so reloading a shelved page adds no tab. Deleting a
-session from the Web takes it off the shelf, and the local server leaves its own
-sessions that no longer exist out of every reply, however they were deleted.
+session from the Web takes it off the shelf, and a local session leaves the
+shelf however it is deleted. A shelved tab reads its
+bold and park from its own server and sends its attention items there.
+One whose server stopped answering is greyed, says "Server offline" in its
+tooltip and to screen readers, and its menu offers only **Remove from Top
+Shelf**.
 
 The local server's protocol change reloads the page. A remote that never
 answered shows why it is unavailable, one that stopped answering shows it is
@@ -448,8 +455,10 @@ active tab.
   Close others, Close to the right, and Close all. Session tabs also offer **Rename session**, which edits the name in
   the tab itself: Enter or clicking away saves and Escape cancels. A blank name
   shows the last message again for RocketClaw sessions; for remote sessions, it
-  clears the OpenCode title too. The command palette offers the same commands as
-  **Tabs: …** for the active tab.
+  clears the OpenCode title too. As in a macOS menu, a line separates its
+  sections: renaming, closing, sharing, attention, grouping and moving, then
+  deleting. The command palette offers the same commands as **Tabs: …** for the
+  active tab.
 - **Selecting tabs.** Cmd/Ctrl+click adds a tab to the selection or removes it,
   and Shift+click selects the shown tabs from the active tab to the clicked one;
   the active tab stays active and always belongs to the selection. The menu of a
@@ -478,13 +487,15 @@ active tab.
   Reopen closed tab**) reopens the newest, in a remote OpenCode session too, whose
   New terminal command has no default key for that reason. A reopened tab leaves the list, and so
   does a deleted session's tab. A preview tab is never saved, so it never lists.
-- **Next session needing you.** Cmd/Ctrl+Alt+A (or **Sessions: Next needing
-  you**) opens the next session that waits on you: first those asking a
-  question, then unread ones, each longest waiting first. Pressing it again
-  moves on to the next one and wraps around. Only sessions open in a tab,
-  in Shared, or on the Top Shelf count, on any space or server, and muted or
-  snoozed ones do not. The window title counts the asking ones by the same rule.
-  The command shows only while another session needs you.
+- **Next tab needing you.** Cmd/Ctrl+Alt+A (or **Sessions: Next needing
+  you**) opens the next bold tab, of any kind (see Unread below): first
+  sessions asking a question, then the rest, each longest waiting first.
+  Pressing it again moves on to the next one and wraps around. Only tabs you
+  see as a tab count: your own tabs in any space, Shared rows, and Top Shelf
+  rows, on any server. Parked tabs, a session of a server that stopped
+  answering, and a marked tab you no longer have do not. A Shared or Top Shelf
+  row opens in its space without a tab of its own. The window title counts the
+  same tabs, as "(2) …". The command shows only while another tab waits.
 - **Remote OpenCode sessions.** A remote session's tab shows OpenCode's own
   session view, copied into RocketClaw at `internal/rocketclaw/oc/` and mounted in
   the page with no frame. It reaches its server through the Web's
@@ -497,39 +508,66 @@ active tab.
   throughout the view, including while OpenCode's terminal has focus, without
   also sending the shortcut to the terminal. ⌘P and ⌘⇧P open RocketClaw's palette.
   Other keys stay with the view; ⌘K opens OpenCode's palette from its composer.
-- **Notifications.** When an open session tab, RocketClaw or remote OpenCode,
-  one of yours or one in any space's Shared group, becomes unread for you (see
-  Unread below), the browser shows a desktop notification with the start of its
-  reply. Other people's turns notify you only in a Shared session. A RocketClaw
-  session's notification is titled by its name, or its agent when it has none;
-  an OpenCode session's by its tab title. Clicking the notification opens the
-  tab. The tab in view (the active tab while the window
-  has focus) does not notify. Notifications are on by default: the first click or
+- **Notifications.** The server decides when a tab becomes bold for you and
+  whether that raises a notification (see Unread below); the browser only
+  shows it. Each open window shows a desktop notification for a new mark that
+  is not quiet, unless the tab is parked or is the tab in view (the active tab
+  while the window has focus). It is titled with the tab's title: a RocketClaw
+  session's name, or its agent when it has none, an OpenCode session's tab
+  title, or any other tab's title. Its body says what happened: “Park ended”
+  for a park's time, the start of the reply for any other session mark,
+  “Search finished”, the Dashboard lane and the session that entered it,
+  “Run finished” for a cron, or “<agent> · <page> updated”. Only a tab you have
+  notifies: in your own tabs, Shared, or on the Top Shelf. News on a tab you
+  closed shows quietly in bold when you open it again, and a window still
+  holding tabs older than the server's waits for its reload before it notifies.
+  Clicking the notification opens the tab where you have it: a Shared or Top
+  Shelf row opens in its space without a tab of your own. Notifications are on by default: the first click or
   key press asks for the browser's permission, the earliest a browser allows;
   turn them off in the browser's site settings. A new mark is noticed on the
   session list's poll, so a hidden window may notify late; a page load never
-  notifies for sessions that were already unread, and a mark you set yourself
-  with **Mark as unread** never notifies.
-- **Mute and snooze.** Any session tab's menu, Shared rows included, offers
-  **Mute notifications** and a **Snooze notifications** submenu: 1 hour, 4
-  hours, tomorrow 9:00, next Monday 9:00, or **Pick date & time…**, a dialog that
-  starts at tomorrow 9:00 and refuses a time already past. A muted or snoozed tab
-  shows a bell with a slash, whose tooltip and screen-reader description say
-  “Muted” or “Snoozed until …”, and its menu offers **Unmute notifications**. A
-  snooze ends by itself. Muting is yours alone, follows you to every device, and
-  belongs to the session, so it covers its Shared row and your own tab and
-  survives closing it. It stops only desktop notifications: the unread title
-  still shows. The command palette offers the same as **Tabs: Mute
-  notifications**, **Tabs: Snooze notifications …**, and **Tabs: Unmute
-  notifications** for the tab in view.
-- **Mark as unread.** Any session tab's menu, Shared rows included, offers
-  **Mark as unread** while the session is read for you, and the command palette
-  offers **Tabs: Mark as unread** for the tab in view. With several tabs
-  selected, it marks every selected session that is read. The mark is yours
-  alone, like any Unread mark (see Unread below), and raises no notification.
-  Marking the tab in view keeps you there and keeps the mark while you read it,
-  through reloads too; it clears the next time you go to another tab, a palette
-  preview included, and come back.
+  notifies for marks that were already there. Notifications show only while a
+  RocketClaw window is open; there is no push.
+- **Mark as read and Mark as unread.** Every tab's menu, Shared and Top Shelf
+  rows included, offers **Mark as read** while a selected tab is bold and
+  **Mark as unread** while one is read; with several tabs selected, each acts
+  on the tabs it fits. The command palette offers the same as **Tabs: Mark as
+  read** and **Tabs: Mark as unread** for the tab in view. Mark as read clears
+  bold even while the agent waits on your answer; its **Needs you** badge
+  stays. Mark as unread turns the tab bold without a notification. Marking the
+  tab in view keeps you there and keeps the mark while you read it, through
+  reloads too; it clears the next time you go to another tab, a palette preview
+  included, and come back.
+- **Park.** The menu's **Park** submenu offers **Until I unpark**, **Until it
+  is done** on session tabs, 1 hour, 4 hours, Tomorrow 9:00, Next Monday 9:00,
+  and **Pick a time…**, a dialog that starts at the next whole hour, today
+  unless that is past midnight, and refuses a time already past; times are the
+  browser's local time. Until it is done lasts until the session's next turn
+  ends, finished, failed, or stopped, also when nothing runs yet. A parked tab
+  leaves the strip for the **Parked** section
+  at the bottom, which lists your parked tabs from every space, each with when
+  its park ends. It folds like Shared, starts folded, and folded still shows
+  the tab in view. A parked tab keeps its space, group, and place, and
+  **Unpark**, in its menu in place of Park, puts it back there.
+  It is never bold and never notifies, but what happens on it is remembered:
+  unparked, it is bold if something happened that you have not seen, without a
+  notification. It comes back by itself, bold with a notification, when its
+  time is up (“Park ended”), when the turn it waited for ends (the reply's own
+  notification), or when its agent asks you a question, within a poll, also
+  when you had closed it. A parked Shared or Top Shelf row stays
+  where it is, dimmed for you alone. Screen readers hear “Parked”, “Parked
+  until …”, or “Parked until it is done”. Close others, Close to the right,
+  Close all, and Close group close this space's parked tabs too; Cmd/Ctrl+[
+  and ] skip them.
+- **Attention follows you.** Bold and parks are yours alone, kept by the
+  server for every kind of tab, so they show on every device. Closing a tab
+  keeps its mark, a park with a time, and a park until it is done; closing a
+  tab parked until you unpark it ends the park. When a park time comes due on
+  a closed tab, or the turn its park waited for ends, the tab comes back where
+  it was: in its space, in its group when that still exists, and at its old
+  place, bold with a notification. The palette offers every item above as
+  **Tabs: …** for the tab in view, such as **Tabs: Park for 1 hour** and
+  **Tabs: Park until I unpark**. New session has none of these items.
 - **Reordering.** Drag a tab onto another. With a tab focused, Shift+Arrow moves it.
   A moved tab joins the group of the tab it lands on, or leaves its group when it
   lands on an ungrouped tab. Drag a group's header, or press Shift+Arrow on it, to
@@ -623,7 +661,8 @@ active tab.
   at once, and both rows light up while it is open. Opening a Shared tab adds no
   tab of your own and keeps you in the current space. Shared tabs show a people
   icon instead of a close button, and their menu offers only **Remove from
-  Shared**, the notification items, and, for a Search page, **Rename search** and
+  Shared**, the attention items (Mark as read or unread, Park), and,
+  for a Search page, **Rename search** and
   **Duplicate**; middle-click and selection never act on them. Drag a Shared row
   onto another to reorder Shared; your own tabs and Shared rows never drop on
   each other. Otherwise the keyboard treats them as tabs: Cmd/Ctrl+[ and ] step through the Shared rows and then your own tabs,
@@ -643,20 +682,29 @@ active tab.
   hourglass: a running Background Job, its own or that of a hidden run reporting to it, or a
   remote OpenCode session's running child session (a background subagent) or shell command.
   A running turn keeps the chat icon. Screen readers hear “Background work running”.
-- **Unread** sessions show a bold title.
-  A session becomes unread for you when a
-  turn ends, finished, failed, or stopped, that holds a message you sent from the
-  Web, unless you had its tab in view in the last 10 seconds. A session in any
-  space's Shared group becomes unread for everyone when one of its turns ends,
-  whoever started it; for a remote OpenCode session, a turn with a prompt in it.
-  Otherwise other people's
-  turns, Slack mentions, crons, an agent waking on its own, and remote OpenCode
-  turns with no recorded sender (`/command`, shell runs, prompts typed in
-  OpenCode's own app outside RocketClaw) mark no one. You can also mark a session
-  unread yourself (see Mark as unread above). Having the tab active in a
-  focused window clears the mark on all your devices; the server keeps it on your
-  tab for the session, even while that tab is closed, so it waits for you after a
-  reload or on another device. Screen readers hear
+- **Unread** tabs show a bold title, and any kind of tab can be unread. The
+  server marks a tab when something new happens on it: for a session, a turn
+  ends, finished, failed, or stopped, or the agent starts asking a question;
+  for a Search page, a search you entered finishes; for a Dashboard, a session
+  enters a lane flagged to notify (see Dashboards below); for a cron's page, its
+  run ends, once nothing is left to wake it, and the Cron page of the cron's
+  space is marked too; for
+  a published page, an HTML file of it is stored, and the space's Pages list is
+  marked too. Agents, Skills, Settings, Shortcuts, Voice, and Recently closed
+  are marked only by you. A session's turn or question reaches you, with a
+  notification, when you sent or steered that turn from the Web, when the
+  session is in your own tabs in any space, or when it is on your Top Shelf and
+  this server keeps that shelf, or when it is Shared in a space you can see, as
+  a Shared tab is a tab of everyone's; whoever started the turn, Slack mentions
+  and crons included. A Cron or Pages tab reaches you the same way when it is
+  your own tab, on that shelf, or Shared. A
+  remote OpenCode session's turn counts when it holds a prompt. Nobody is
+  marked for the tab they had in view in the last 10 seconds, or the last 4
+  for a question or a timer, and nobody is marked for a space outside their
+  limit. You can also mark a tab yourself (see Mark as read and Mark as unread
+  above). Having the tab active in a focused window clears the mark on all
+  your devices; the server keeps it for you, even while the tab is closed, so
+  it waits for you after a reload or on another device. Screen readers hear
   “Unread” in the tab's description.
 - **Keyboard.** The strip is a vertical `tablist` with one Tab stop. Arrow keys (Up/Down
   or Left/Right), Home, and End move focus; Enter or Space activates. Anywhere in
@@ -678,8 +726,8 @@ active tab.
   closed, or changed itself, and saves again, so neither window's changes are
   lost. The server keeps one row per tab and per group. A session's tab is saved
   only while the session exists, and deleting a session removes its tab for
-  everyone. Groups with no tabs are dropped, except the entry that keeps whether
-  you collapsed Shared. A kept group holds its place with a hidden tab row whose
+  everyone. Groups with no tabs are dropped, except the entries that keep whether
+  you collapsed Shared and Parked. A kept group holds its place with a hidden tab row whose
   path is `group:<id>`, which no tab command sees. Tabs whose space is gone join the
   first space keeping their group, and tabs whose group is gone leave it. A
   window reloads them when it becomes visible or regains focus: it takes in
@@ -789,17 +837,24 @@ of the space its tab sits in into them, each session once, in the first lane it
 matches; a session without a Birth Space counts in its agent's space, or in every
 space when its agent has none, except for people limited to spaces, who never see
 it. The board follows the session list without a reload.
-**Notify** marks the shown lane for notification: while a Dashboard is open in the
-current space, as your tab or in that space's Shared group, a session entering a
-marked lane raises a desktop notification titled "<Dashboard>: <lane>" with the
-session's title, even with the Dashboard in view, and clicking it opens the session.
-Opening or reloading a Dashboard, editing a lane's query, or turning on its mark
-notifies nothing for sessions already in the lane; a session that leaves a lane and
-enters it again notifies again. **New dashboard** in the command
-palette opens a new Strip Bay Dashboard, added to the current space's Shared group,
-with the lanes Needs you (`is:waiting`), Running (`is:running`), Queued
+**Notify** flags the shown lane. The server watches every open Dashboard with a
+flagged lane every 5 seconds, also while no window is open. When a session enters
+a flagged lane, it marks the Dashboard's tab for everyone who has that Dashboard
+open: as their own tab, on their Top Shelf, or in the Shared group of a space they
+can see. The tab turns bold and raises a desktop notification titled with the
+Dashboard's name, whose body names the lane and the newest session, with "and 2
+more" when several arrived; clicking it opens the Dashboard. Nobody is marked for
+the Dashboard they are viewing, and a parked Dashboard stays quiet. A session that a
+lane of unread sessions (`is:unread`) shows only for a quiet mark, such as your own
+Mark as unread, has not arrived. The first check
+after the server starts, opening a Dashboard, and editing, reordering, or flagging
+a lane record what
+the lanes hold and mark nothing; a session that leaves a lane and enters it again
+marks again. The board still draws newly arrived cards as new. **New dashboard** in
+the command palette opens a new Strip Bay Dashboard, added to the current space's
+Shared group, with the lanes Needs you (`is:waiting`), Running (`is:running`), Queued
 (`is:queued`), and External (`is:external`), in that order; all but Running are
-marked for notification. **Duplicate**, in a Search page's or Dashboard's tab menu
+flagged to notify. **Duplicate**, in a Search page's or Dashboard's tab menu
 or Shared row menu and in the palette as **Tabs: Duplicate**, opens a copy at a new
 address with the same style, lanes, and marks, named "<name> copy" (an unnamed page
 after its shown query, as "<query> copy"). A copy of a page in the current space's
@@ -812,7 +867,16 @@ titles of the conversations that pass, the same way as plain text. A failed
 filtered search lists no conversations.
 The Search page sends every query to the server. Queries are sent once typing
 pauses for 250 ms (the Search page also at least once a second while typing),
-Enter sends one at once, and a newer query cancels the older request.
+Enter sends one at once, and a newer query cancels the older request. A Search
+page's search runs on the page's server past the request: leaving the page only
+stops waiting, the search keeps running even with the window closed, and the
+page receives the result when you come back. A search you entered by typing,
+Enter, Retry, a link, or the palette marks the tab bold with a "Search
+finished" notification when it ends while you are elsewhere; reopening the page
+runs it again without marking, and new sessions in the list start it over, still
+marking once if you entered it. Other servers'
+results are fetched while the page is open, and a Dashboard's lanes do not run
+this way.
 Results refresh when conversations appear in the session list. An empty
 Cmd/Ctrl+P lists the session list without a request; it opens with the first 50
 rows and renders the rest in the background. Until new results arrive, the
@@ -867,7 +931,7 @@ once, pinned first, retaining recent-first order within each group.
 `sort:newest` or `sort:oldest` instead orders results by last activity on every
 search surface, overriding pinned-first and message-hit grouping; rows without
 activity come last, equal times order by conversation ID, and the last `sort:` wins.
-Typing `is:` suggests `pinned`, `forked`, `cron`, and `unread` (your unread sessions, closed tabs included),
+Typing `is:` suggests `pinned`, `forked`, `cron`, and `unread` (sessions bold for you, closed tabs included, parked ones not),
 then the work terms: `running` (a running turn or background work), `queued` (waiting turns other
 than scheduled reminders), `waiting` (a session marked Needs you: a running turn's unanswered
 question, or a remote OpenCode session's pending form or permission request), and `external` (a

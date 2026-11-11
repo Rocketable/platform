@@ -91,14 +91,14 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, pos
 
 			switch method {
 			case "ListSessions":
-				// Ending views and clearing marks takes a same-origin poll, by the rule protection holds
-				// unsafe methods to; it lets every GET through.
+				// Recording views, which clears marks, and waking timers take a same-origin poll, by the rule
+				// protection holds unsafe methods to; it lets every GET through.
 				post := *r
 				post.Method = http.MethodPost
 
 				list := &ListSessionsRequest{Since: r.URL.Query().Get("since")}
 				if protection.Check(&post) == nil {
-					list.Viewing, list.Hold = r.URL.Query().Get("viewing"), r.URL.Query().Has("hold")
+					list.Viewing, list.Hold, list.SameOrigin = r.URL.Query().Get("viewing"), r.URL.Query().Has("hold"), true
 				}
 
 				request = list

@@ -78,7 +78,7 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
     }
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
     if (url.pathname === "/api/ListSessions") {
-      if (url.searchParams.get("viewing") === "private-stream") return Response.json({ message: "stream failure", code: 13 }, { status: 500 });
+      if (url.searchParams.get("viewing") === "/s/" + btoa("private-stream")) return Response.json({ message: "stream failure", code: 13 }, { status: 500 });
       return new Response(`data: ${JSON.stringify({ sessions: [], owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     }
     if (url.pathname === "/api/Identity") return Response.json({ username: "tester" });

@@ -30,6 +30,17 @@ entry when that entry is not returned. SearchSessions applies the same origin ru
 when it matches the query against every chat the caller may see; cron runs and
 private External MCP conversations never match.
 
+A Search page's `SearchSessions` names its `tab` and `search_id`, and its search
+runs on the server past the request. The same query joins the run or takes its
+finished answer, which only one request receives; another query cancels and
+replaces it, and so does the same query asked `fresh` because new sessions reached
+the caller's list, which keeps the person's entry of a run still going. Each person
+keeps 8 such searches, running or finished. A search the
+person `entered` marks the tab "Search finished" when it ends, unless it was
+replaced, evicted or stopped meanwhile, the person no longer has the tab, or
+they are looking at it.
+Other callers share one search per query while someone waits for it.
+
 `StageRevert` accepts a visible session ID and an optional recorded user
 `message_id`; omission selects Undo's predecessor from complete effective
 history, not the loaded page. It settles the runtime bridge, stages an exclusive
@@ -149,10 +160,23 @@ agent. A concurrent first request waits for the other's insert and then finds th
 so cron reports, due reminders and Web requests share one session rather than creating
 duplicates.
 `ListSessions` streams one conversation per response message in list order, each
-with the caller's `unread_at` (empty once read). Its `viewing` field names the
-session the caller's focused window shows; the HTTP adapter passes it on only for
-same-origin requests, and the server clears that session's mark and records the
-view before it lists. The
+with the caller's attention on it: `unread_at` (empty once read), `marked_unread`
+(the mark raises no notification), `parked`, `until` (when its park ends),
+`until_done` (the park lasts until the session's next turn ends, with no time)
+and `note` (the notification text a timer wrote).
+Its `viewing` field names the location of the caller's focused tab, of any kind,
+such as `/s/<id>` or `/cron`. The HTTP adapter sets `same_origin` only for
+same-origin requests, and only such a request, before the listing, records the
+view, clears that location's mark unless `hold` is set and the mark is quiet,
+and wakes the caller's timers that came due: a park ends, also one an agent's
+question or a turn end made due at once, and a closed tab whose timer came due
+goes back where it was. The first
+message carries `tab_revision`, the caller's tab-state revision, which that
+last step raises so the page reloads its tabs. The final message carries `tabs`,
+the caller's attention rows of locations that are not sessions, only those
+changed since `since`, or all of them; a row with only its path says the
+location has none any more.
+The
 Go HTTP adapter forwards these progressively through a finite SSE response, preserving
 full previews and gRPC's default 4 MiB per-message receive limit. Each envelope
 carries the authenticated owner and summary completeness; the final empty envelope
@@ -160,7 +184,14 @@ marks upstream success and aggregate summary completeness, including for an empt
 list. An SSE `complete` event is sent only after successful gRPC EOF. HTTP iterator exhaustion is separate from that application terminal: a
 failure or wire cut can leave a visible prefix, which is not a completed list.
 Cancellation cancels the gRPC call, including pending reads, and releases database
-rows. `Identity` returns the Go-mapped username separately from `Protocol` negotiation.
+rows.
+`Tabs` changes attention through `attention`: locations, an action (mark read,
+mark unread, park, park until done, unpark), and an RFC 3339 time for a park.
+Park until done parks a session's tab until its next turn ends, and skips any
+other location. It refuses New session (`/`) and `group:` placeholders, and a
+session the caller may not open. The mute, unmute and mark unread fields and the
+reply's mutes are gone, and their field numbers are reserved.
+`Identity` returns the Go-mapped username separately from `Protocol` negotiation.
 `ListAgents` loads the current runtime definitions and supplies the agent picker,
 using the existing Slack channel policy for Slack Y. Each agent carries its `sticky`
 value and the caller's `sticky_session`, so the New session picker can open it. Session
@@ -466,8 +497,11 @@ OpenCode's shell, and anyone with the server's password can call OpenCode direct
 so either can forge it. Remote sessions are listed from a copy RocketClaw
 syncs every 5 seconds; once a day the server's full list removes copies of sessions
 it no longer has. When a sync sees a session's turn end, it also copies the text of
-its newest assistant message, which the Web's notification shows, and marks unread
-for each person whose stamped prompt that turn held. A turn shorter than one sync is
+its newest assistant message, which the Web's notification shows, and marks the
+session for each person whose stamped prompt that turn held and for the people
+who keep it, as a RocketClaw turn's end does. A session that starts asking marks
+the same people, with the senders of the prompts its running turn holds. A turn
+shorter than one sync is
 still found, because OpenCode moves the session's updated time when it accepts a
 prompt. Each copy keeps
 the session's selected agent and model, which `ListSessions` sends as `agent` and
@@ -508,8 +542,9 @@ page acts as them. For that page the handler answers the `OPTIONS` preflight
 with `204`, echoing the requested method and headers, and sets
 `Access-Control-Allow-Origin` and `Vary: Origin` on every answer. It then rewrites
 `Origin` to its own origin and `Sec-Fetch-Site` to `same-origin`, so
-`CrossOriginProtection`, the `ListSessions` `viewing` rule and the OpenCode relay's
-origin check treat the call as same-origin. The caller is still the person on the
+`CrossOriginProtection`, the `ListSessions` same-origin rule and the OpenCode relay's
+origin check treat the call as same-origin. So a trusted page's session list polls
+also wake that server's timers. The caller is still the person on the
 connection. The `listen_address` listener trusts no other origin. The OpenCode relay
 drops OpenCode's own `Access-Control-Allow-Origin`, which would otherwise duplicate
 this one.

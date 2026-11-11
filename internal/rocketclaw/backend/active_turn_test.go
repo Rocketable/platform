@@ -676,6 +676,31 @@ func TestSilentCronRunOpensNoReportChat(t *testing.T) {
 	assert.False(t, reportsTo.Valid, "the run reports to no chat until it is continued in Web")
 }
 
+// A cron run resumed after a restart marks the Cron tabs when its turn ends, the overview in its agent's space.
+func TestResumedCronRunMarksCronTabs(t *testing.T) {
+	t.Parallel()
+
+	nt := newNoteTest(t, answerNoteTest)
+	ctx := t.Context()
+	writeAgent(t, nt.cfg.Workspace, "job", "---\ndescription: Job\nmodel: gpt-6.1-sol\nspace: Ops\npermission: {}\n---\nRun the job.\n")
+	require.NoError(t, nt.service.CreateLimitSpaces(ctx, []string{"Ops"}))
+
+	spaces, err := nt.service.Spaces(ctx)
+	require.NoError(t, err)
+
+	for person, tabs := range map[string][]Tab{alice: {{Path: "/cron", Space: spaces[1].ID}, {Path: "/cron/daily", Space: spaces[1].ID}}, bob: {{Path: "/cron", Space: spaces[0].ID}}} {
+		saved, err := nt.service.SaveTabState(ctx, person, &TabState{Tabs: tabs}, 0)
+		require.NoError(t, err)
+		require.True(t, saved)
+	}
+
+	seedCronRun(t, nt.service, "cron:daily")
+	manager, _ := nt.run(t, ignoreOutbound)
+	require.NoError(t, manager.StartActiveTurns(ctx))
+	readFinalFor(t, nt.finals, "cron:daily")
+	assert.ElementsMatch(t, []string{alice + " /cron loud", alice + " /cron/daily loud"}, locationMarks(t, nt.service, "Run finished"), "not Bob's overview of another space")
+}
+
 // AE2: a scheduled cron row resumed after restart opens its Web report chat, which shows
 // the run's history.
 func TestResumedCronRowOpensReportChat(t *testing.T) {

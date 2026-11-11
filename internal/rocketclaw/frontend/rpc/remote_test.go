@@ -161,11 +161,12 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 	localRPC, _ := serve("Local reply")
 	web := versioned("local", NewHTTPHandler(localRPC, config.SentryConfig{}, config.PostHogConfig{}, nil, "", remotes))
 	local := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The remote recorded the remote location the page last viewed: the chat, or New session if it polled there.
 		if r.URL.Path == "/test/view-expired" {
 			var stale bool
 
 			err := remoteDB.QueryRowContext(r.Context(), `UPDATE web_tab_states SET viewed_at = now() - interval '11 seconds'
-WHERE username = 'alice' AND viewing = $1 RETURNING viewed_at < now() - interval '10 seconds'`, r.URL.Query().Get("id")).Scan(&stale)
+WHERE username = 'alice' RETURNING viewed_at < now() - interval '10 seconds'`).Scan(&stale)
 			assert.NoError(t, err)
 			assert.True(t, stale, "the remote chat's last view must have expired")
 

@@ -136,8 +136,19 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 	require.NoError(t, err)
 	assert.False(t, found)
 
-	// Pages live in the session's space; a session without one cannot store them.
+	// Pages live in the session's space; a session without one cannot store them. Its HTML file marks the Pages list
+	// of that space, not of another.
+	spaces, err := s.Spaces(ctx)
+	require.NoError(t, err)
+
+	for person, space := range map[string]string{alice: spaces[1].ID, bob: spaces[0].ID} {
+		saved, err := s.SaveTabState(ctx, person, &TabState{Tabs: []Tab{{Path: "/pages", Space: space}}}, 0)
+		require.NoError(t, err)
+		require.True(t, saved)
+	}
+
 	assert.Equal(t, "https://rc.example/pages/Billing/opencode%3Abox%3Ases_a/index.html", must("ses_child", "store", map[string]string{"path": "index.html", "content": "<p>a</p>"}))
+	assert.Equal(t, []string{alice + " /pages loud"}, locationMarks(t, s, "opencode:box:ses_a · index.html updated"))
 	assert.JSONEq(t, `{"content_type":"text/html","content":"<p>a</p>"}`, must("ses_a", "read", map[string]string{"path": "index.html"}))
 
 	for tool, arguments := range map[string]any{"store": map[string]string{"path": "index.html", "content": "<p>b</p>"}, "kv_store": map[string]any{"key": "rows", "value": 1}} {

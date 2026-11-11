@@ -594,7 +594,7 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 		for row, err := range s.sidebarSessions(ctx, username, nil) {
 			require.NoError(t, err)
 
-			if !row.UnreadAt.IsZero() {
+			if !row.Attention.UnreadAt.IsZero() {
 				ids = append(ids, row.Conversation.ID)
 			}
 		}
@@ -604,7 +604,7 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	turn := func(updated int64, busy bool, messages ...openCodeTestMessage) {
 		t.Helper()
 
-		_, err := s.db.ExecContext(ctx, `DELETE FROM web_tabs; DELETE FROM web_tab_states`)
+		_, err := s.db.ExecContext(ctx, `DELETE FROM web_tab_attention; DELETE FROM web_tab_states`)
 		require.NoError(t, err)
 
 		fake.sessions = []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", updated)}
@@ -630,9 +630,10 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	assert.Equal(t, []string{id}, unread("alice"))
 	assert.Empty(t, unread("bob"))
 
-	paths, err := queryStrings(ctx, s.db, `SELECT path FROM web_tabs`, "marked tabs")
+	path := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte(id))
+	paths, err := queryStrings(ctx, s.db, `SELECT path FROM web_tab_attention`, "marked tabs")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"/oc/" + base64.RawURLEncoding.EncodeToString([]byte(id))}, paths, "the mark is on the tab path the Web spells")
+	assert.Equal(t, []string{path}, paths, "the mark is on the tab path the Web spells")
 
 	// A turn never seen busy is found by its moved time.updated; Alice's prompt before the cursor
 	// and an unstamped TUI prompt mark no one.
@@ -659,9 +660,9 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	assert.Equal(t, []string{id}, unread("bob"))
 
 	// Alice viewed the session 3 seconds ago, so only Bob, who viewed it long ago, is marked.
-	_, err = s.db.ExecContext(ctx, `DELETE FROM web_tabs; DELETE FROM web_tab_states`)
+	_, err = s.db.ExecContext(ctx, `DELETE FROM web_tab_attention; DELETE FROM web_tab_states`)
 	require.NoError(t, err)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, viewing, viewed_at) VALUES ('alice', 0, $1, now() - interval '3 seconds'), ('bob', 0, $1, now() - interval '30 seconds')`, id)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, viewing, viewed_at) VALUES ('alice', 0, $1, now() - interval '3 seconds'), ('bob', 0, $1, now() - interval '30 seconds')`, path)
 	require.NoError(t, err)
 
 	fake.sessions = []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", 7600)}
@@ -686,20 +687,75 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	assert.Equal(t, []string{id}, unread("bob"))
 	assert.Empty(t, unread("carol"))
 
-	// In a space's Shared group, Carol's turn marks every Web person but Carol, who is viewing it.
-	require.NoError(t, s.ShareTab(ctx, "main", "/oc/"+base64.RawURLEncoding.EncodeToString([]byte(id)), nil))
-	_, err = s.db.ExecContext(ctx, `DELETE FROM web_tabs; DELETE FROM web_tab_states`)
+	// In a space's Shared group, Carol's turn marks Dave, who keeps its tab, and every other Web person but Carol, who
+	// is viewing it, all with a notification.
+	require.NoError(t, s.ShareTab(ctx, "main", path, nil))
+	_, err = s.db.ExecContext(ctx, `DELETE FROM web_tab_attention; DELETE FROM web_tab_states`)
 	require.NoError(t, err)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, viewing, viewed_at) VALUES ('alice', 0, '', now()), ('bob', 0, '', now()), ('carol', 0, $1, now())`, id)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, viewing, viewed_at) VALUES ('alice', 0, '', now()), ('bob', 0, '', now()), ('carol', 0, $1, now())`, path)
 	require.NoError(t, err)
+
+	saved, err := s.SaveTabState(ctx, "dave", &TabState{Tabs: []Tab{{Path: path, Space: "main"}}}, 0)
+	require.NoError(t, err)
+	require.True(t, saved)
 
 	fake.sessions = []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", 8500)}
 	fake.messages["ses_new"] = append(fake.messages["ses_new"], idle(8500))
 
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
-	assert.Equal(t, []string{id}, unread("alice"))
-	assert.Equal(t, []string{id}, unread("bob"))
-	assert.Empty(t, unread("carol"))
+	assert.Equal(t, []string{"alice loud", "bob loud", "dave loud"}, attentionOn(t, s, id))
+}
+
+// A remote session that starts asking marks its keepers, ending a park at their next poll, and the people whose
+// stamped prompts since its cursor it runs, tab or not; it marks no one again until it has stopped asking.
+func TestSyncOpenCodeMarksAskingStarts(t *testing.T) {
+	t.Parallel()
+
+	s := newOpenCodeTestService(t, "box")
+	ctx := t.Context()
+	fake := &fakeOpenCode{
+		sessions:  []openCodeSession{openCodeTestSession("ses_q", "", "/srv/app", 5000)},
+		active:    []string{"ses_q"},
+		locations: []string{"/srv/app"},
+		messages:  map[string][]openCodeTestMessage{"ses_q": {{Type: "user", Username: "bob", Created: 5100}}},
+	}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
+	id := "opencode:box:ses_q"
+	path := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte(id))
+	sync := func(asking bool) []string {
+		t.Helper()
+
+		fake.pending = map[string]map[string][]string{"/api/form": {"/srv/app": {}}, "/api/permission/request": {"/srv/app": {}}}
+		if asking {
+			fake.pending["/api/form"]["/srv/app"] = []string{"ses_q"}
+		}
+
+		require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+
+		return attentionOn(t, s, id)
+	}
+
+	require.Empty(t, sync(false))
+
+	saved, err := s.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: path, Space: "main"}}}, 0)
+	require.NoError(t, err)
+	require.True(t, saved)
+	require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionPark, nil))
+
+	assert.Equal(t, []string{"alice quiet parked", "bob loud"}, sync(true), "the question makes Alice's park due")
+
+	_, err = s.PollAttention(ctx, "alice", "", false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alice loud", "bob loud"}, attentionOn(t, s, id), "her next poll ends it")
+
+	_, err = s.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
+	require.NoError(t, err)
+	assert.Empty(t, sync(true), "a session that goes on asking marks no one again")
+	assert.Empty(t, sync(false))
+	assert.Equal(t, []string{"alice loud", "bob loud"}, sync(true), "asking again marks again")
 }
 
 func TestOpenCodeShellsFollowEvents(t *testing.T) {

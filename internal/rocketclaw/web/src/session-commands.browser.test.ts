@@ -13,7 +13,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     source: [message("1:0", "user", "First request"), message("1:1", "assistant", "First answer"), message("2:0", "user", "Choose this prompt")],
     destination: [message("3:0", "user", "Destination search needle"), message("3:1", "assistant", "You are looking at the destination")],
   };
-  const tabs: SavedTabs = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [], mutes: [] };
+  const tabs: SavedTabs = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "main", last: {}, sharedOrder: [] }, revision: "0", shared: [] };
   const header = "[ exact <header>\n" + "long-unbroken-header-value".repeat(40) + " ]";
   histories.source[0].header = header;
   const prompts: { id: string; text: string; delivery?: PromptDelivery }[] = [];

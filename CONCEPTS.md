@@ -266,17 +266,21 @@ It belongs to that window alone: it is never saved, it never becomes the tab its
 
 ### Closed Tab
 
-One of the last 50 tabs a person closed, which the server keeps, newest first, with the Space it was in and a Search Page's searches, so the Web's Recently closed page or Cmd/Ctrl+Alt+T reopens it there, or in the current space when that Space is gone. New session and Preview Tabs never become one; reopening it or deleting its session takes it off the list.
+One of the last 50 tabs a person closed, which the server keeps, newest first, with the Space it was in, its group and position, and a Search Page's searches, so the Web's Recently closed page or Cmd/Ctrl+Alt+T reopens it there, or in the current space when that Space is gone. New session and Preview Tabs never become one; reopening it or deleting its session takes it off the list. A Closed Tab whose park time is still to come, or whose park waits for its session's turn to end, is never dropped from the 50; when that time comes, the server puts the tab back by itself.
 
 ### Shared Group
 
 The one grey tab group named Shared that every space has, shown first in the Web sidebar. Its tabs are the same for every Web user who can see its space, and any of them can add a tab to it or remove one, which removes it for everyone. A tab can be in a space's Shared Group and in a person's own tabs at once. Its order and collapsing it are each person's own; tabs a person has not placed follow, oldest added first. Deleting a space moves its Shared Group's tabs into the first remaining space's.
+
+A Shared Group is a tab group several people share, and its tabs behave for each of them like their own: something new on a Shared session, Cron, Pages or Dashboard tab makes it waiting with a notification for everyone who can see its space, and an agent's question ends a park on it. A Shared Search Page's finished search marks only the person who entered it, whose search ran. Each person's Unread and Parked on a Shared tab are their own: a tab one person parked stays in the group, dimmed for them only. A Shared tab has no Close: Remove from Shared takes it out for everyone.
 
 ### Search Page
 
 A Web tab for searching sessions, one of as many as a person opens, each with its own address.
 
 It holds its own searches, shown as tabs inside the page, and can be named; unnamed, it is titled by the query it shows. Its name and searches are the person's own and are saved with their tabs, so they follow the page into groups and other spaces and across devices. Added to a space's Shared Group, it becomes one page everyone in that space sees and edits, its searches and which one is shown included, while the person's own copy stays as it was; whoever takes it out of Shared keeps that one page as their own, together with any searches of their own copy. Escape does not close a Search page, and closing its tab discards it unless it is reopened as a Closed Tab. The Web's session search palette finds every space's Search pages by name or query once something is typed.
+
+The server stores each copy of a page as its own row, with one row per search. A Search page's search runs on the page's server, not in the browser, and keeps running when the person switches tabs, closes the window or loses the connection; a new query for the same search replaces the run before it, and the page receives the result when the person comes back. When a search the person entered finishes and they are not looking at the tab, that person alone gets one Unread mark with a notification, also on a Shared page. Reopening the page or new sessions in the list run a search again without marking. Results from Remote RocketClaws are still fetched by the browser while the page is open, and a Dashboard's lanes are not run this way.
 
 ### Remote OpenCode Session
 
@@ -286,7 +290,9 @@ A session on a configured OpenCode coding server that RocketClaw keeps a synced 
 
 A Search Page shown as a board in one of several styles, whose searches are its lanes, tracking the work of the space its tab sits in.
 
-Each session in that space appears once, in the first lane it matches. A session without a Birth Space counts in its agent's space, or in every space when its agent has none; a person with a Space Limit never sees such a session. A new Dashboard starts in the space's Shared Group, and any Dashboard or Search Page can be duplicated. While a Dashboard is open in a person's current space, a session entering a lane marked for notification raises a desktop notification for that person.
+Each session in that space appears once, in the first lane it matches. A session without a Birth Space counts in its agent's space, or in every space when its agent has none; a person with a Space Limit never sees such a session. A new Dashboard starts in the space's Shared Group, and any Dashboard or Search Page can be duplicated.
+
+The server watches every open Dashboard that has a lane flagged to notify, every 5 seconds, whether or not any window is open. When a session enters a flagged lane, it gives the Dashboard tab an Unread mark with a notification for everyone who has that Dashboard open: in their own tabs, on a Top Shelf this server keeps, or in the Shared Group of a space they can see. The notification names the lane and the newest session, and how many more arrived. A session that a lane of unread sessions (`is:unread`) lists only for a quiet mark, such as the person's own Mark as unread, has not arrived. The first check after the server starts, and the first after a lane's query, order or flag changes, only records what each lane holds.
 
 ### Remote RocketClaw
 
@@ -295,6 +301,8 @@ Another RocketClaw server declared in the local server's configuration, whose ch
 ### Top Shelf
 
 One person's own tab group above the space picker, shown only when the local RocketClaw has Remote RocketClaws, holding tabs from any server. It is the same in every space and on every server, and opening one of its tabs shows that page on its own server and in its own space without creating a tab, as a Shared Group tab opens; a Search Page opened from it is edited in place. Tabs join, leave and reorder as in any group, and each names the server and space it comes from. A deleted session leaves it.
+
+The local server stores it, one row per shelf tab. A tab can be on the shelf and in the strip at once. A shelf tab whose server is offline shows greyed and offers only Remove from Top Shelf. Its Unread and Parked live on the tab's own server, and no other server learns what the shelf holds: a shelf tab of the local server reaches its holder as their own tab does, while another server's session that is only on the shelf reaches them only for turns they sent.
 
 ### Birth Space
 
@@ -310,9 +318,20 @@ A session is in a Space when its Birth Space is that Space, or, with no Birth Sp
 
 ### Unread
 
-A session's per-person mark that a turn the person sent a Web message into has ended and they have not looked at it since. Other people's turns, and turns with no Web sender, mark no one, except in a session in some space's Shared group, where any turn's end marks every Web person. Nobody who is viewing the session when the turn ends is marked. Having the session's tab active in a focused window clears the mark on all of that person's devices.
+One person's attention state on one tab, which the server keeps for every kind of tab, by the tab's location: read, waiting, or Parked. New session, the Preview Tab and a kept group's placeholder have none. A waiting tab shows a bold title on every device, and the window title's count and Cmd/Ctrl+Alt+A count it.
 
-A person can also mark a read session unread themselves, from its tab menu or the command palette. That mark raises no notification. Marked on the tab in view, it stays until they go to another session and come back.
+The server writes every mark; the browser only reads them and reports which tab is in view. Something new makes a tab waiting: a session's turn ends or its agent starts asking; a search the person entered on a Search Page finishes; a session enters a Dashboard's flagged lane; a cron's run ends, once its last turn ends with nothing left to wake it, for that cron's tab and the Cron overview of its space; an HTML file of a Hosted Page is stored, for that page's tab and the Page Index of its space. Agents, Skills, Settings, Shortcuts, Voice and Recently closed get only what the person sets. A session's turn end or question reaches the people who sent or steered that turn from the Web, those with the session in their own tabs, those with it on a Top Shelf this server keeps, and everyone who sees it in a space's Shared Group; Cron and Pages tabs reach the people who have them as their own tab, on that shelf, or Shared. The browser notifies only for a tab the person has, there or on another server's Top Shelf: news on a tab they closed waits, quiet, until they open it again, and the end of a park brings a closed tab back. A person with a Space Limit is never marked for a space outside it. Nobody is marked for the tab they viewed in the last 10 seconds, or the last 4 for a question or a park's end.
+
+A mark raises a desktop notification in the person's open windows unless it is quiet. A mark is quiet when the person set it with Mark as unread, when it was written while the tab was Parked or was there when they parked it, and once they open the tab again after closing it. A window whose tabs are older than its session list names holds its notifications until it reloads them, so a tab closed in another window never notifies. Viewing the tab in a focused window, or Mark as read, clears the mark on all of the person's devices, even while the agent still waits on their answer, whose Needs you badge stays. Marked unread on the tab in view, a mark stays until they go to another tab and come back. Closing a tab keeps its mark.
+*Avoid:* muted, snoozed
+
+### Parked
+
+A tab a person set aside, until they unpark it, until a time they chose, or, for a session, until its next turn ends. It keeps its Space, group and position, but the Web shows it in a Parked section at the bottom of the tab strip, collapsed by default, which lists the person's parked tabs from every space with when each park ends. A parked Shared or Top Shelf row stays where it is, dimmed for that person.
+
+A parked tab is never bold and raises no notification: anything new on it leaves a quiet Unread mark. Unparking returns it to its place, bold if something happened that the person has not seen, without a notification either way. It comes back by itself, bold with a notification, when its time is up, when the turn a park until it is done waited for ends, with the reply's own notification, or when its agent asks a question, which makes the park due at once, also on a Shared tab or one parked and closed. Closing a tab parked until unparked ends the park; one parked until a time, or until it is done, stays parked and comes back when the park ends. Close others, Close to the right, Close all and Close group close this space's parked tabs too.
+
+The server checks a person's park times each time one of their windows asks for the session list, which an open window does every few seconds, so a park ends on the first such poll after its time; one that comes due while no window is open shows bold without a notification when a window opens. A park time that comes due on a closed tab brings the tab back where it was: in its Space, in its group when that still exists, and at its old position when possible.
 
 ## Hosted Pages
 
@@ -352,7 +371,7 @@ The shared language frontends and backend import. A frontend drops protocol mess
 
 RocketClaw's durable database for sessions, Managed Slack Thread routing, goals, cron, Scheduled Messages, the Thread Queue, External MCP bindings, and the Step Journal.
 
-Each fact lives in one place. There is one record for every conversation of every kind, with what it is, whether Web lists it, where it reports to, and its facts: Slack thread, summary, tags, goal, External MCP binding, and shadow parent. Every turn is one record, whether waiting (Thread Queue items and one-time Scheduled Messages), running, delivering, or done, Background Jobs included. Saved history, the Step Journal, and cron lines with recurring Scheduled Messages each live in their own place, as do attachments, Slack channel facts, Voice Settings, Hosted Pages, Spaces and tabs, the run lock, and shadow comparison turns. Data a release retires is kept aside until a later release drops it.
+Each fact lives in one place. There is one record for every conversation of every kind, with what it is, whether Web lists it, where it reports to, and its facts: Slack thread, summary, tags, goal, External MCP binding, and shadow parent. Every turn is one record, whether waiting (Thread Queue items and one-time Scheduled Messages), running, delivering, or done, Background Jobs included. Saved history, the Step Journal, and cron lines with recurring Scheduled Messages each live in their own place, as do attachments, Slack channel facts, Voice Settings, Hosted Pages, Spaces and tabs, the run lock, and shadow comparison turns. Data a release retires is kept aside until a later release drops it, with one exception: the release that brought one attention state per tab deleted the old attention data outright on upgrade (mutes, snoozes, unread marks, and the tab rows kept only to hold a mark) and dropped the Top Shelf and Search Page JSON once it had unpacked them into rows.
 
 ### Step Journal
 
@@ -384,3 +403,4 @@ A running turn saves each item of its record once, as a step of its own, instead
 - **Enqueued Slack Message**: a later-turn prompt stashed from Slack with `$enqueue`. Removed with Slack's commands; waiting Slack work is now an accepted mention in the Thread Queue.
 - **Buffered Follow-Up**: a mid-turn Slack message held until the active turn completed. Replaced by Slack Steer, itself later removed; a mid-turn mention now waits in the Thread Queue.
 - **Quickbench, BAR, ELO Scorer**: an internal benchmarking tool that ran agent variations and ranked them with an ELO judge, with its benchmark units and scorers. Removed when Slack, External MCP, and cron moved onto one Backend.
+- **Mute, Snooze**: a person's switch that stopped a session tab's desktop notifications, for good or until a time, while its Unread title still showed. Replaced by Parked.

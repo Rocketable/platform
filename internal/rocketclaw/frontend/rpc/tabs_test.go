@@ -62,7 +62,11 @@ func TestTabs(t *testing.T) {
 
 		var out []string
 
-		result, err := db.QueryContext(t.Context(), `SELECT format('%s %s %s', path, position, unread_at IS NOT NULL) FROM web_tabs WHERE username = 'alice' ORDER BY path COLLATE "C"`)
+		result, err := db.QueryContext(t.Context(), `WITH rows AS (
+    SELECT format('%s %s', path, position) AS row FROM web_tabs WHERE username = 'alice'
+    UNION ALL SELECT format('%s %s %s', path, parked, until IS NOT NULL) FROM web_tab_attention WHERE username = 'alice'
+)
+SELECT row FROM rows ORDER BY row COLLATE "C"`)
 		require.NoError(t, err)
 
 		defer func() { require.NoError(t, result.Close()) }()
@@ -109,10 +113,10 @@ func TestTabs(t *testing.T) {
 	assert.True(t, proto.Equal(saved, response.State))
 	assert.Equal(t, int64(1), response.Revision)
 
-	// Alice has b's open tab and c's closed one unread. A save keeps both marks, writes a's tab saved in the
-	// old URI spelling under its canonical path, drops tabs of sessions that do not exist, even ones whose
-	// path decodes to bytes that are not UTF-8, and deletes closed tabs that are not unread.
-	_, err = db.ExecContext(t.Context(), `UPDATE web_tabs SET unread_at = now() WHERE conversation_id = 'b'; INSERT INTO web_tabs (username, path, conversation_id, unread_at) VALUES ('alice', '/s/Yw', 'c', now())`)
+	// Alice has b's open tab and c, which has no tab, unread. A save closes b's tab and keeps both marks, writes a's
+	// tab saved in the old URI spelling under its canonical path, and drops tabs of sessions that do not exist, even
+	// ones whose path decodes to bytes that are not UTF-8.
+	_, err = db.ExecContext(t.Context(), `INSERT INTO web_tab_attention (username, path, conversation_id, unread_at) VALUES ('alice', '/s/Yg', 'b', now()), ('alice', '/s/Yw', 'c', now())`)
 	require.NoError(t, err)
 
 	next := &TabState{Tabs: []*Tab{{Path: "/s/a", Space: "main"}, {Path: "/s/bm9uZQ", Space: "main"}, {Path: "/s/_w", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/s/a"}}
@@ -121,7 +125,7 @@ func TestTabs(t *testing.T) {
 	assert.False(t, response.Stale)
 	assert.True(t, proto.Equal(next, response.State), "the save answers with the saved state")
 	assert.Equal(t, int64(2), response.Revision)
-	assert.Equal(t, []string{"/s/YQ 0 f", "/s/Yg  t", "/s/Yw  t"}, aliceTabs())
+	assert.Equal(t, []string{"/s/YQ 0", "/s/Yg f f", "/s/Yw f f"}, aliceTabs())
 
 	closed := map[string]*Tab{}
 	for _, tab := range response.Closed {
@@ -136,10 +140,10 @@ func TestTabs(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&TabState{Tabs: []*Tab{{Path: "/s/YQ", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/s/YQ"}}, response.State))
 
-	// Deleting a session deletes its tabs.
+	// Deleting a session deletes its tabs and attention.
 	_, err = db.ExecContext(t.Context(), `DELETE FROM conversations WHERE conversation_id = 'b'`)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"/s/YQ 0 f", "/s/Yw  t"}, aliceTabs())
+	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs())
 
 	response, err = call("192.0.2.2", &TabsRequest{State: &TabState{Space: "main"}, Revision: 0})
 	require.NoError(t, err)
@@ -237,77 +241,64 @@ func TestTabs(t *testing.T) {
 	assert.True(t, response.Stale)
 	assert.Equal(t, []string{space + " /search", space + " /cron"}, shared(response), "an edit after unsharing does not share again")
 
-	// A saved page with a field a later Web dropped still reads, and one saved before board styles is an ordinary page.
-	_, err = searchPage([]byte(`{"name":"x","gone":1}`))
+	// Alice parks a, under its legacy spelling, and the Cron tab until a time, and Bob parks c: each
+	// person's attention is their own, and a session's is kept under its canonical path.
+	later := time.Now().Add(time.Hour).UTC().Format("2006-01-02T15:04:05.000Z07:00")
+	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/a", "/cron"}, Action: AttentionAction_PARK, Until: later}})
 	require.NoError(t, err)
-	legacy, err := searchPage([]byte(`{"name":"x","searches":[{"id":"1","query":"q"}],"active":"1"}`))
+	_, err = call("192.0.2.2", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/Yw"}, Action: AttentionAction_PARK, Until: later}})
 	require.NoError(t, err)
-	assert.True(t, proto.Equal(&SearchPage{Name: "x", Searches: []*SavedSearch{{Id: "1", Query: "q"}}, Active: "1"}, legacy))
+	assert.Equal(t, []string{"/cron t t", "/s/YQ 0", "/s/YQ t t", "/s/Yw f f"}, aliceTabs())
 
-	// Alice mutes a and snoozes c, and Bob mutes c: every reply carries only the caller's live mutes.
-	mutes := func(response *TabsResponse) []string {
-		out := make([]string, 0, len(response.Mutes))
-		for _, mute := range response.Mutes {
-			out = append(out, mute.Path+" "+mute.Until)
-		}
-
-		return out
-	}
-	// The browser writes times with milliseconds; replies carry RFC 3339 times in UTC.
-	later := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
-	until := later.Format(time.RFC3339)
-	_, err = call("127.0.0.1", &TabsRequest{Mute: &TabMute{Path: "/s/YQ"}})
-	require.NoError(t, err)
-	response, err = call("127.0.0.1", &TabsRequest{Mute: &TabMute{Path: "/s/Yw", Until: later.Format("2006-01-02T15:04:05.000Z07:00")}})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"/s/YQ ", "/s/Yw " + until}, mutes(response))
-	response, err = call("192.0.2.2", &TabsRequest{Mute: &TabMute{Path: "/s/Yw"}})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"/s/Yw "}, mutes(response))
-	response, err = call("127.0.0.1", &TabsRequest{Unmute: "/s/YQ"})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"/s/Yw " + until}, mutes(response))
-	response, err = call("127.0.0.1", &TabsRequest{Mute: &TabMute{Path: "/s/YQ", Until: time.Now().Add(-time.Hour).Format(time.RFC3339)}})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"/s/Yw " + until}, mutes(response), "a past snooze is not carried")
-
-	// A malformed time, a session nobody may open, one that does not exist, and a page cannot be muted.
-	for mute, code := range map[*TabMute]codes.Code{{Path: "/s/YQ", Until: "tomorrow"}: codes.InvalidArgument, {Path: "/s/cHJpdmF0ZS1Y"}: codes.PermissionDenied, {Path: "/s/bm9uZQ"}: codes.NotFound, {Path: "/search"}: codes.InvalidArgument} {
-		_, err = call("127.0.0.1", &TabsRequest{Mute: mute})
-		assert.Equal(t, code, status.Code(err), mute.Path)
-	}
-
-	response, err = call("127.0.0.1", &TabsRequest{})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"/s/Yw " + until}, mutes(response), "a refused mute stores nothing")
-
-	// A session nobody may open, or one that does not exist, cannot be marked, and refuses the tabs marked with it.
-	for path, code := range map[string]codes.Code{"/s/cHJpdmF0ZS1Y": codes.PermissionDenied, "/s/bm9uZQ": codes.NotFound} {
-		_, err = call("127.0.0.1", &TabsRequest{MarkUnread: []string{"/s/YQ", path}})
+	// New session, a kept group's placeholder, a session nobody may open, one that does not exist, and a malformed
+	// time are refused, and refuse the locations changed with them.
+	for path, code := range map[string]codes.Code{"/": codes.InvalidArgument, "group:g": codes.InvalidArgument, "/s/cHJpdmF0ZS1Y": codes.PermissionDenied, "/s/bm9uZQ": codes.NotFound} {
+		_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/Yw", path}, Action: AttentionAction_MARK_UNREAD}})
 		assert.Equal(t, code, status.Code(err), path)
 	}
 
-	assert.Equal(t, []string{"/s/YQ 0 f", "/s/Yw  t"}, aliceTabs())
+	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/Yw"}, Action: AttentionAction_PARK, Until: "tomorrow"}})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Equal(t, []string{"/cron t t", "/s/YQ 0", "/s/YQ t t", "/s/Yw f f"}, aliceTabs())
 
-	// Alice marks her open tab unread.
-	_, err = call("127.0.0.1", &TabsRequest{MarkUnread: []string{"/s/YQ"}})
+	// Unparking both leaves a read row with no timer, which goes.
+	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_UNPARK}})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"/s/YQ 0 t", "/s/Yw  t"}, aliceTabs())
+	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs())
+
+	// Parking until it is done takes the session and skips the Cron tab; unparking it lets the row go again.
+	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_PARK_UNTIL_DONE}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/s/YQ 0", "/s/YQ t t", "/s/Yw f f"}, aliceTabs())
+
+	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ"}, Action: AttentionAction_UNPARK}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs())
+
+	response, err = call("127.0.0.1", &TabsRequest{})
+	require.NoError(t, err)
 
 	// A Top Shelf is the caller's own: each save replaces it whole, and every reply carries it.
-	assert.Nil(t, response.TopShelf, "nothing shelved yet")
+	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "nothing shelved yet: %v", response.TopShelf)
 
-	shelf := &TopShelf{Tabs: []*ShelfTab{{Server: "work", Space: "main", Path: "/s/eA"}, {Path: "/s/YQ", Space: "main"}, {Path: "/s/Yg", Space: "main"}, {Path: "/search/1", Space: "main", Search: &SearchPage{Name: "x"}}}, Collapsed: true}
+	shelf := &TopShelf{Tabs: []*ShelfTab{{Server: "work", Space: "main", Path: "/s/eA"}, {Path: "/s/YQ", Space: "main"}, {Path: "/s/Yw", Space: "main"},
+		{Path: "/search/1", Space: "main", Search: &SearchPage{Name: "x", Searches: []*SavedSearch{{Id: "1", Query: "q", Notify: true}}, Active: "1"}}, {Server: "work", Path: "/search/1", Space: "main"}}, Collapsed: true}
 	_, err = call("127.0.0.1", &TabsRequest{TopShelf: shelf})
+	require.NoError(t, err)
+	response, err = call("127.0.0.1", &TabsRequest{})
+	require.NoError(t, err)
+	assert.True(t, proto.Equal(shelf, response.TopShelf), "a read returns the saved shelf, one path on two servers twice: %v", response.TopShelf)
+
+	_, err = db.ExecContext(t.Context(), `DELETE FROM conversations WHERE conversation_id = 'c'`)
 	require.NoError(t, err)
 	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
 
 	shelf.Tabs = slices.Delete(shelf.Tabs, 2, 3)
-	assert.True(t, proto.Equal(shelf, response.TopShelf), "b's deleted session leaves the shelf: %v", response.TopShelf)
+	assert.True(t, proto.Equal(shelf, response.TopShelf), "c's deleted session leaves the shelf: %v", response.TopShelf)
 	response, err = call("192.0.2.2", &TabsRequest{})
 	require.NoError(t, err)
-	assert.Nil(t, response.TopShelf, "another person's shelf is not theirs")
+	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "another person's shelf is not theirs: %v", response.TopShelf)
 	_, err = call("127.0.0.1", &TabsRequest{TopShelf: &TopShelf{}})
 	require.NoError(t, err)
 	response, err = call("127.0.0.1", &TabsRequest{})
