@@ -1,4 +1,4 @@
-import { createMemoryHistory, useLocation } from "@solidjs/router"
+import { createMemoryHistory, useLocation, type LocationChange } from "@solidjs/router"
 import { createContext, createEffect, createMemo, useContext } from "solid-js"
 import { useLanguage } from "@/runtime/i18n/language"
 import { COMMAND_SEARCH_ID, useCommand } from "@/shell/commands/command"
@@ -27,6 +27,11 @@ export function createViewHistory(start: string) {
   let index = 0
   let length = 1
   let floor = 0
+  // The state the router gets with a move to another session. @solidjs/router 1.0.0 ignores a change back to the
+  // location it shows while it is still moving to another, so the view would land on the session it was leaving; a new
+  // state each move makes the router take the change. ponytail: 1.0.1 compares against the pending move instead; drop
+  // this once upstream's bun.lock moves past 1.0.0.
+  let moved: object | undefined
 
   const go = (n: number) => {
     const next = Math.max(floor, Math.min(index + n, length - 1))
@@ -45,10 +50,15 @@ export function createViewHistory(start: string) {
     go,
     back: () => go(-1),
     forward: () => go(1),
+    // The router's listener takes a whole location change as well as a path (@solidjs/router createRouter's init).
+    listen: (listener: (value: string) => void) =>
+      history.listen((value) => (listener as (change: string | LocationChange) => void)({ value, state: moved })),
     show(value: string) {
       length = ++index + 1
       floor = index
+      moved = {}
       history.set({ value, replace: false, scroll: false })
+      moved = undefined
     },
   }
 }

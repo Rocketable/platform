@@ -270,6 +270,55 @@ test("moving the view to another session shows it in place on the same live stre
   await until(() => palettes() === 0)
 })
 
+test("going forward again into a child session keeps its panels working", async () => {
+  const view = show()
+  await answered(view)
+  ;(await until(() => view.root.querySelector<HTMLElement>("[data-component=task-tool-card]"))).click()
+  await answered(view, "ses_child")
+
+  for (const command of ["Navigate back", "Navigate forward"]) {
+    view.openPalette()
+    const search = await until(() => view.portal.querySelector<HTMLInputElement>(".command-palette input"))
+    search.value = command
+    search.dispatchEvent(new InputEvent("input", { bubbles: true }))
+    ;(await until(() => byText(view.portal, ".command-palette-row", command))).click()
+    await until(() => calls.reported.at(-1) === (command === "Navigate back" ? "ses_a" : "ses_child"))
+  }
+
+  const toggle = await until(() => view.root.querySelector<HTMLElement>("[data-slot=session-review-toggle] button"))
+  toggle.click()
+  await until(() => toggle.getAttribute("aria-expanded") === "true")
+})
+
+test("moving the view on before a session shows makes no session look like its child", async () => {
+  const view = show()
+  await answered(view)
+  view.show(linked)
+  await answered(view, linked)
+  view.show("ses_a")
+  await answered(view)
+
+  // The view moves on to ses_child before it shows the linked session again.
+  view.show(linked)
+  view.show("ses_child")
+  await answered(view, "ses_child")
+  view.show("ses_a")
+  await answered(view)
+  await until(() => view.root.querySelector("[data-component=composer] [contenteditable=true]"))
+})
+
+test("moving the view back before the session it left for shows stays on the session moved back to", async () => {
+  const view = show()
+  await answered(view)
+
+  view.show(linked)
+  view.show("ses_a")
+  // Without the fix the router lands on the linked session as soon as it loads, well within this wait.
+  await new Promise((resolve) => setTimeout(resolve, 1000))
+  expect(calls.reported.at(-1)).toBe("ses_a")
+  expect(view.root.textContent).toContain("answer in ses_a")
+})
+
 test("Back stops at the session the view was moved to", async () => {
   const { createViewHistory } = await import("./navigation")
   const history = createViewHistory("/a")
