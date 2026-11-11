@@ -371,7 +371,8 @@ So shape 7 doesn't pass by doing nothing.
 
 Limits of the check: everything is bounded. Each server step is assumed to be one transaction. "Viewing" is a single
 flag, so the 10-second and 4-second windows aren't modeled. Who an event reaches (senders, keepers, Shared) is outside the model,
-which covers only what happens once an event reaches the person. Table layout is outside it too.
+which covers only what happens once an event reaches the person, except whether a turn that background work started
+reaches anyone at all (`WakeReaches`, below). Table layout is outside it too.
 
 To rerun the checks, which need curl, and Java 11 or newer on `PATH`:
 
@@ -400,6 +401,15 @@ the reply, and brings back a closed tab, which keeps the park. `DoneEndsAtTurnEn
 parked until done once a turn end reached the person; with the turn end's rule taken out, TLC finds that broken at
 once. Both checks pass: one-window with 261,720 states, two-windows with 322,470. On the server the park's time is
 `'infinity'`, which no clock reaches and closing keeps; a turn end sets it to now.
+
+**Fixed (2026-11-11): a turn no prompt started also ends it.** A background job's result starts a turn of its own,
+and its end is a turn end like any other: the agent can say it works on in the background, the person parks until
+it is done again, and the result's turn ends the park. The OpenCode sync found a remote session's readers only
+through the stamped prompts before an idle marker, so such a turn, which OpenCode starts with a `synthetic` message,
+reached no one and left the park in place for good. The model now ends a turn either way, and `DoneEndsAtTurnEnd`
+tracks the turn end itself rather than a mark; `WakeReaches = FALSE`, the sync as it was, breaks it in a three-state
+trace. With the sync adding the session's own readers to every new idle marker, both checks pass: one-window with
+351,172 states, two-windows with 412,014.
 
 ## Limits and open points
 

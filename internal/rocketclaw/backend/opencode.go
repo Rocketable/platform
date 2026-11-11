@@ -319,8 +319,9 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		// An idle session the last sync saw running, or whose time.updated moved because a prompt
 		// was accepted, may have ended turns since its cursor. Each idle marker ends a turn covering
 		// every prompt since the previous one, so the stamped prompts after the cursor and no later
-		// than the newest marker name the turns' senders. A failed read leaves the cursor in place,
-		// and the cursor never moves back.
+		// than the newest marker name the turns' senders. A marker after the cursor reaches the
+		// session's readers also with no prompt, as when a background job's result started the turn.
+		// A failed read leaves the cursor in place, and the cursor never moves back.
 		var cursor *int64
 
 		if !busy && (last.ran || session.Time.Updated > last.updated.UnixMilli()) {
@@ -332,11 +333,11 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 				} `json:"data"`
 			}
 
-			if openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(session.ID)+"/message?type=idle&order=desc&limit=1", nil, &idle) == nil && len(idle.Data) > 0 {
+			if openCodeCall(ctx, name, server, http.MethodGet, "/api/session/"+url.PathEscape(session.ID)+"/message?type=idle&order=desc&limit=1", nil, &idle) == nil && len(idle.Data) > 0 && idle.Data[0].Time.Created > last.through {
 				if senders, err := openCodeSenders(ctx, name, server, session.ID, last.through, idle.Data[0].Time.Created); err == nil {
 					cursor = &idle.Data[0].Time.Created
 
-					for _, sender := range senders {
+					for _, sender := range append(senders, "") {
 						markedIDs, markedUsers, markedWaking = append(markedIDs, id), append(markedUsers, sender), append(markedWaking, false)
 					}
 				}

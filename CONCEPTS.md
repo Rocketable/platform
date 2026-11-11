@@ -327,7 +327,7 @@ A mark raises a desktop notification in the person's open windows unless it is q
 
 ### Parked
 
-A tab a person set aside, until they unpark it, until a time they chose, or, for a session, until its next turn ends. It keeps its Space, group and position, but the Web shows it in a Parked section at the bottom of the tab strip, collapsed by default, which lists the person's parked tabs from every space with when each park ends. A parked Shared or Top Shelf row stays where it is, dimmed for that person.
+A tab a person set aside, until they unpark it, until a time they chose, or, for a session, until its next turn ends, whatever started that turn: a person, or background work finishing. It keeps its Space, group and position, but the Web shows it in a Parked section at the bottom of the tab strip, collapsed by default, which lists the person's parked tabs from every space with when each park ends. A parked Shared or Top Shelf row stays where it is, dimmed for that person.
 
 A parked tab is never bold and raises no notification: anything new on it leaves a quiet Unread mark. Unparking returns it to its place, bold if something happened that the person has not seen, without a notification either way. It comes back by itself, bold with a notification, when its time is up, when the turn a park until it is done waited for ends, with the reply's own notification, or when its agent asks a question, which makes the park due at once, also on a Shared tab or one parked and closed. Closing a tab parked until unparked ends the park; one parked until a time, or until it is done, stays parked and comes back when the park ends. Close others, Close to the right, Close all and Close group close this space's parked tabs too.
 
