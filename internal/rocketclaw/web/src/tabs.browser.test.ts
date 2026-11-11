@@ -906,6 +906,20 @@ test("collapsed Shared with a tab unread for this person shows a bold name", () 
   expect(await weight()).toBe("700");
 }), 60_000);
 
+test("a full sidebar scrolls Shared and the person's tabs as one while Parked stays put", () => withPage({ viewport: { width: 1280, height: 400 } }, async (page, origin, _prompts, saved) => {
+  saved.shared = ["alpha", "bravo"].map((id) => ({ space: "main", path: href(id) }));
+  saved.state = { ...saved.state, space: "main", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [href("charlie"), href("delta"), "/cron", href("foxtrot"), href("golf"), "/shortcuts", href("hotel")].map((path, i) => ({ path, space: "main", group: i > 2 ? "work" : undefined })) };
+  saved.attention = [{ path: href("hotel"), parked: true }];
+  await page.goto(`${origin}${href("charlie")}`);
+  const top = (locator: any) => locator.evaluate((node: HTMLElement) => node.getBoundingClientRect().top), parked = page.getByRole("button", { name: "Parked", exact: true });
+  await parked.waitFor();
+  const [shared, parkedAt] = [await top(page.getByRole("tablist", { name: "Shared tabs" })), await top(parked)];
+  await strip(page).getByRole("tab", { name: "Golf", exact: true }).hover();
+  await page.mouse.wheel(0, 1000);
+  await page.waitForFunction((at: number) => document.querySelector('[aria-label="Shared tabs"]')!.getBoundingClientRect().top < at, shared);
+  expect(await top(parked)).toBe(parkedAt);
+}), 30_000);
+
 test("tab groups take a name and color, collapse, adopt opened tabs, follow drags, and survive reload", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const header = strip(page).getByRole("button", { name: "Work", exact: true });
