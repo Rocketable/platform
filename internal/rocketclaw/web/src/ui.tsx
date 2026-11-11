@@ -1652,85 +1652,88 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
   const stop = shown.some((tab) => tab.path === pathname) ? pathname : shown.find((tab) => !groups.find((item) => item.id === tab.group)?.collapsed)?.path;
   // Only this person's tabs and Parked rows leave their list; Shared and Top Shelf rows stay where they are.
   const option = ({ key, label, run }: (typeof items)[number]) => <Menu.Item key={key} onClick={() => { refocus.current = { key, from: menu?.parked ? parkedList : menu?.shared || menu?.shelf ? undefined : list }; run(); }} className={itemClass}>{label}</Menu.Item>;
+  // Everything above Parked scrolls as one; Parked stays at the bottom with its own scroll.
   return <div data-tab-lists className="flex h-full shrink-0 flex-col">
-    {rocketclaws().length ? <TopShelfTabs tabs={tabs} waiting={waiting} openMenu={(tab, anchor) => setMenu({ path: tab.path, anchor, shelf: tab })} /> : null}
-    <SpaceMenu tabs={tabs} name={space} />
-    <SharedTabs tabs={tabs} waiting={waiting} space={space} editing={editing} endEdit={() => setEditing(undefined)} openMenu={(path, anchor) => setMenu({ path, anchor, shared: true })} />
-    <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation="vertical" className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-1 [scrollbar-width:thin]"
-      // A selecting click keeps the active tab; Shift+click selects the rendered tabs from the active one to it.
-      onClickCapture={(event) => {
-        const path = pathOf(event);
-        if (!path || !(event.target as Element).closest('[role="tab"]')) return;
-        const rendered = [...event.currentTarget.querySelectorAll<HTMLElement>("[data-tab]")].map((node) => node.dataset.tab!);
-        const [from, to] = [rendered.indexOf(pathname), rendered.indexOf(path)].toSorted((a, b) => a - b);
-        if (event.shiftKey) setPicked({ at: pathname, paths: new Set(rendered.slice(from, to + 1)) });
-        else if (event.metaKey || event.ctrlKey) setPicked({ at: pathname, paths: selection.symmetricDifference(new Set([path])) });
-        else return setPicked({ at: pathname, paths: new Set() });
-        event.stopPropagation();
-      }}
-      onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
-      onDoubleClick={(event) => { if (event.target === event.currentTarget) newChat(); }}
-      onAuxClick={(event) => {
-        const path = pathOf(event);
-        if (event.button !== 1 || !path) return;
-        event.preventDefault();
-        close([path]);
-      }}
-      onDragStart={(event) => {
-        const group = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group;
-        event.dataTransfer.setData(group ? "application/x-rocketclaw-group" : "application/x-rocketclaw-tab", group ?? pathOf(event)!);
-      }}
-      onDragOver={(event) => { if (!event.dataTransfer.types.some((type) => type === sharedDrag || type === shelfDrag)) event.preventDefault(); }}
-      // A group header stands for its first tab, the only drop target a collapsed group shows, or an empty kept group's
-      // placeholder, so a tab dropped there joins it.
-      onDrop={(event) => {
-        const header = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group, group = event.dataTransfer.getData("application/x-rocketclaw-group");
-        const path = pathOf(event) ?? strip.find((tab) => !!header && tab.group === header)?.path;
-        if (path && group) moveGroup(group, path);
-        else if (path) move(event.dataTransfer.getData("application/x-rocketclaw-tab"), path);
-      }}
-      onKeyDown={(event) => {
-        if ((event.target as HTMLElement).role === "tab" && event.key === "Escape" && selection.size > 1 && !menu) {
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto [scrollbar-width:thin]">
+      {rocketclaws().length ? <TopShelfTabs tabs={tabs} waiting={waiting} openMenu={(tab, anchor) => setMenu({ path: tab.path, anchor, shelf: tab })} /> : null}
+      <SpaceMenu tabs={tabs} name={space} />
+      <SharedTabs tabs={tabs} waiting={waiting} space={space} editing={editing} endEdit={() => setEditing(undefined)} openMenu={(path, anchor) => setMenu({ path, anchor, shared: true })} />
+      <div ref={list} role="tablist" aria-label="Open tabs" aria-orientation="vertical" className="flex flex-1 flex-col gap-0.5 p-1"
+        // A selecting click keeps the active tab; Shift+click selects the rendered tabs from the active one to it.
+        onClickCapture={(event) => {
+          const path = pathOf(event);
+          if (!path || !(event.target as Element).closest('[role="tab"]')) return;
+          const rendered = [...event.currentTarget.querySelectorAll<HTMLElement>("[data-tab]")].map((node) => node.dataset.tab!);
+          const [from, to] = [rendered.indexOf(pathname), rendered.indexOf(path)].toSorted((a, b) => a - b);
+          if (event.shiftKey) setPicked({ at: pathname, paths: new Set(rendered.slice(from, to + 1)) });
+          else if (event.metaKey || event.ctrlKey) setPicked({ at: pathname, paths: selection.symmetricDifference(new Set([path])) });
+          else return setPicked({ at: pathname, paths: new Set() });
+          event.stopPropagation();
+        }}
+        onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
+        onDoubleClick={(event) => { if (event.target === event.currentTarget) newChat(); }}
+        onAuxClick={(event) => {
+          const path = pathOf(event);
+          if (event.button !== 1 || !path) return;
           event.preventDefault();
-          return setPicked({ at: pathname, paths: new Set() });
-        }
-        tabKeys(event, pathname, (path, anchor) => setMenu({ path, anchor }), move);
-      }}>
-      {strip.flatMap((tab, index) => {
-        const group = groups.find((item) => item.id === tab.group);
-        const openEditor = () => setEditor({ id: group!.id, open: true }), chosen = tab.path !== pathname && selection.has(tab.path);
-        // A collapsed group's name goes bold, like an unread tab's title, while any of its tabs waits for this person,
-        // and it says it needs you while any of their sessions waits on this person's answer. Only its header uses these badges.
-        const hidden = new Set(group?.collapsed && strip[index - 1]?.group !== group.id ? shown.flatMap((item) => item.group === group.id ? [item.path] : []) : []);
-        const unread = [...hidden].some((path) => waiting.has(rowKey(path, server()))), asking = hidden.size > 0 && rows.some((row) => row.asking && hidden.has(rowPath(row)));
-        return [
-          group && strip[index - 1]?.group !== group.id ? <div key={group.id} data-group={group.id} draggable className="flex shrink-0 items-center pt-1" onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
-            <button type="button" aria-expanded={!group.collapsed} aria-label={groupName(group)} className="flex h-7 min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => edit(group.id, { collapsed: !group.collapsed })}
-              onKeyDown={(event) => {
-                if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") { event.preventDefault(); openEditor(); }
-                // Shift+Arrow moves the group past the tab or group next to it.
-                const button = event.currentTarget, step = event.shiftKey ? arrows[event.key] : 0;
-                const neighbor = step && strip[step < 0 ? strip.findIndex((item) => item.group === group.id) - 1 : strip.findLastIndex((item) => item.group === group.id) + 1];
-                if (!neighbor) return;
-                event.preventDefault();
-                flushSync(() => moveGroup(group.id, neighbor.path));
-                button.focus();
-              }}>
-              <span className={cn("rounded-full", group.name ? cn("max-w-48 truncate px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium") : "size-3", groupColors[group.color])}>{group.name}</span>
-            </button>
-            {asking ? needsYou : null}
-            <button type="button" aria-label={`Edit ${groupName(group)}`} className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={openEditor}><Ellipsis className="size-3.5" /></button>
-          </div> : null,
-          // An expanded empty kept group offers New session, which starts one in the group.
-          isKeeper(tab) ? group!.collapsed || shown.some((item) => item.group === group!.id) ? null
-            : <button key={tab.path} type="button" data-tab={tab.path} aria-label={`New session in ${groupName(group!)}`} className="flex shrink-0 items-center rounded-md text-sm text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring" onClick={() => newInGroup(group!.id)}>
-              <span className={cn("pointer-events-none my-1.5 ml-1 w-0.5 shrink-0 self-stretch", groupColors[group!.color])} />
-              <span className="flex items-center gap-1.5 py-2 pr-3 pl-3"><SquarePen aria-hidden="true" className="size-4 shrink-0" />New session</span>
-            </button>
-          // A collapsed group still shows its active tab.
-          : group?.collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} description={[chosen && "In selection", `${group ? `Group ${groupName(group)}, ` : ""}Space: ${space}`].filter(Boolean).join(", ")} chosen={chosen} rule={group?.color} active={tab.path === pathname} stop={tab.path === stop} editing={tab.path === editing} endEdit={() => setEditing(undefined)} close={() => { flushSync(() => close([tab.path])); selected()!.focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />,
-        ];
-      })}
+          close([path]);
+        }}
+        onDragStart={(event) => {
+          const group = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group;
+          event.dataTransfer.setData(group ? "application/x-rocketclaw-group" : "application/x-rocketclaw-tab", group ?? pathOf(event)!);
+        }}
+        onDragOver={(event) => { if (!event.dataTransfer.types.some((type) => type === sharedDrag || type === shelfDrag)) event.preventDefault(); }}
+        // A group header stands for its first tab, the only drop target a collapsed group shows, or an empty kept group's
+        // placeholder, so a tab dropped there joins it.
+        onDrop={(event) => {
+          const header = (event.target as Element).closest<HTMLElement>("[data-group]")?.dataset.group, group = event.dataTransfer.getData("application/x-rocketclaw-group");
+          const path = pathOf(event) ?? strip.find((tab) => !!header && tab.group === header)?.path;
+          if (path && group) moveGroup(group, path);
+          else if (path) move(event.dataTransfer.getData("application/x-rocketclaw-tab"), path);
+        }}
+        onKeyDown={(event) => {
+          if ((event.target as HTMLElement).role === "tab" && event.key === "Escape" && selection.size > 1 && !menu) {
+            event.preventDefault();
+            return setPicked({ at: pathname, paths: new Set() });
+          }
+          tabKeys(event, pathname, (path, anchor) => setMenu({ path, anchor }), move);
+        }}>
+        {strip.flatMap((tab, index) => {
+          const group = groups.find((item) => item.id === tab.group);
+          const openEditor = () => setEditor({ id: group!.id, open: true }), chosen = tab.path !== pathname && selection.has(tab.path);
+          // A collapsed group's name goes bold, like an unread tab's title, while any of its tabs waits for this person,
+          // and it says it needs you while any of their sessions waits on this person's answer. Only its header uses these badges.
+          const hidden = new Set(group?.collapsed && strip[index - 1]?.group !== group.id ? shown.flatMap((item) => item.group === group.id ? [item.path] : []) : []);
+          const unread = [...hidden].some((path) => waiting.has(rowKey(path, server()))), asking = hidden.size > 0 && rows.some((row) => row.asking && hidden.has(rowPath(row)));
+          return [
+            group && strip[index - 1]?.group !== group.id ? <div key={group.id} data-group={group.id} draggable className="flex shrink-0 items-center pt-1" onContextMenu={(event) => { event.preventDefault(); openEditor(); }}>
+              <button type="button" aria-expanded={!group.collapsed} aria-label={groupName(group)} className="flex h-7 min-w-0 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => edit(group.id, { collapsed: !group.collapsed })}
+                onKeyDown={(event) => {
+                  if ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu") { event.preventDefault(); openEditor(); }
+                  // Shift+Arrow moves the group past the tab or group next to it.
+                  const button = event.currentTarget, step = event.shiftKey ? arrows[event.key] : 0;
+                  const neighbor = step && strip[step < 0 ? strip.findIndex((item) => item.group === group.id) - 1 : strip.findLastIndex((item) => item.group === group.id) + 1];
+                  if (!neighbor) return;
+                  event.preventDefault();
+                  flushSync(() => moveGroup(group.id, neighbor.path));
+                  button.focus();
+                }}>
+                <span className={cn("rounded-full", group.name ? cn("max-w-48 truncate px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium") : "size-3", groupColors[group.color])}>{group.name}</span>
+              </button>
+              {asking ? needsYou : null}
+              <button type="button" aria-label={`Edit ${groupName(group)}`} className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground" onClick={openEditor}><Ellipsis className="size-3.5" /></button>
+            </div> : null,
+            // An expanded empty kept group offers New session, which starts one in the group.
+            isKeeper(tab) ? group!.collapsed || shown.some((item) => item.group === group!.id) ? null
+              : <button key={tab.path} type="button" data-tab={tab.path} aria-label={`New session in ${groupName(group!)}`} className="flex shrink-0 items-center rounded-md text-sm text-muted-foreground hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring" onClick={() => newInGroup(group!.id)}>
+                <span className={cn("pointer-events-none my-1.5 ml-1 w-0.5 shrink-0 self-stretch", groupColors[group!.color])} />
+                <span className="flex items-center gap-1.5 py-2 pr-3 pl-3"><SquarePen aria-hidden="true" className="size-4 shrink-0" />New session</span>
+              </button>
+            // A collapsed group still shows its active tab.
+            : group?.collapsed && tab.path !== pathname ? null : <TabItem key={tab.path} tab={tab} description={[chosen && "In selection", `${group ? `Group ${groupName(group)}, ` : ""}Space: ${space}`].filter(Boolean).join(", ")} chosen={chosen} rule={group?.color} active={tab.path === pathname} stop={tab.path === stop} editing={tab.path === editing} endEdit={() => setEditing(undefined)} close={() => { flushSync(() => close([tab.path])); selected()!.focus(); }} openMenu={(anchor) => setMenu({ path: tab.path, anchor })} />,
+          ];
+        })}
+      </div>
     </div>
     <ParkedTabs tabs={tabs} list={parkedList} editing={editing} endEdit={() => setEditing(undefined)} openMenu={(path, anchor) => setMenu({ path, anchor, parked: true })} close={(path) => { flushSync(() => close([path])); selected(parkedList)?.focus(); }} />
     {/* The name field lives in a popover because menus take typed letters for type-ahead. */}
@@ -1776,7 +1779,7 @@ function SharedTabs({ tabs: { state, here, shared, pathname, fold, moveShared },
   const inert = () => undefined, pathOf = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>("[data-tab]")?.dataset.tab;
   if (!here.length) return null;
   return <>
-    <div className="flex max-h-1/2 shrink-0 flex-col gap-0.5 overflow-y-auto px-1 pt-1 [scrollbar-width:thin]">
+    <div className="flex shrink-0 flex-col gap-0.5 px-1 pt-1">
       <div className="flex shrink-0 items-center pt-1">
         <button type="button" aria-expanded={!collapsed} className="flex h-7 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => fold("shared", !collapsed)}>
           <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium", groupColors.Grey)}><Users aria-hidden="true" className="size-3" />Shared</span>
@@ -1834,7 +1837,7 @@ function TopShelfTabs({ tabs, waiting, openMenu }: { tabs: ReturnType<typeof use
   const move = (from: number, to: number) => saveShelf((current) => ({ ...current, tabs: moveQueueId(Object.keys(current.tabs ?? []), String(from), String(to)).map((at) => current.tabs![Number(at)]) }));
   const at = (node: EventTarget) => Number((node as Element).closest<HTMLElement>("[data-shelf]")?.dataset.shelf ?? -1);
   return <>
-    <div className="flex max-h-1/3 shrink-0 flex-col gap-0.5 overflow-y-auto px-1 pt-1 [scrollbar-width:thin]">
+    <div className="flex shrink-0 flex-col gap-0.5 px-1 pt-1">
       <div className="flex shrink-0 items-center">
         <button type="button" aria-expanded={!shelf.collapsed} className="flex h-7 items-center rounded-md px-1.5 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => saveShelf((current) => ({ ...current, collapsed: !current.collapsed }))}>
           <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5 text-xs text-black", unread ? "font-bold" : "font-medium", groupColors.Yellow)}><Pin aria-hidden="true" className="size-3" />Top Shelf</span>
