@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	cirello.io/pglock v1.18.0
 	github.com/Arize-ai/openinference/go/openinference-instrumentation v0.1.2
-	github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.12
+	github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.13
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.18
@@ -18,7 +18,7 @@ require (
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/openai/openai-go/v3 v3.98.0
-	github.com/posthog/posthog-go v1.42.2
+	github.com/posthog/posthog-go v1.42.4
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rubenv/sql-migrate v1.8.1
 	github.com/slack-go/slack v0.35.0
@@ -28,7 +28,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
 	go.starlark.net v0.0.0-20261021141710-4f4267fb140d
-	golang.org/x/crypto v0.58.0
+	golang.org/x/crypto v0.59.0
 	golang.org/x/image v0.48.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.25.0
