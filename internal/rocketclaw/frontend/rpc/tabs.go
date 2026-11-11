@@ -74,6 +74,10 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		response.State = tabState(&state)
 	}
 
+	if err == nil {
+		response.AutoPark, err = s.sessions.AutoParkAll(ctx, username)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("web tabs: %w", err)
 	}
@@ -135,6 +139,8 @@ func (s *Server) changeTabs(ctx context.Context, username string, limit backend.
 		err = s.changeAttention(ctx, username, request.Attention)
 	case request.TopShelf != nil:
 		err = s.sessions.SaveTopShelf(ctx, username, savedTopShelf(request.TopShelf))
+	case request.AutoPark != nil:
+		err = s.sessions.SetAutoParkAll(ctx, username, *request.AutoPark)
 	}
 
 	if err != nil {
@@ -144,13 +150,14 @@ func (s *Server) changeTabs(ctx context.Context, username string, limit backend.
 	return saved, refused, unshared, nil
 }
 
-// changeAttention makes change to username's attention on its tab locations. New session and a kept group's
-// placeholder have none, and every session must be one the caller may open, before any location changes. It is apart
-// from changeTabs, whose branches would pass gocyclo's limit.
+// changeAttention makes change to username's attention on its tab locations. New session and a group's placeholder
+// have none, and every session must be one the caller may open, before any location changes. It is apart from
+// changeTabs, whose branches would pass gocyclo's limit.
 func (s *Server) changeAttention(ctx context.Context, username string, change *AttentionChange) error {
 	action, ok := map[AttentionAction]backend.AttentionAction{
 		AttentionAction_MARK_READ: backend.AttentionRead, AttentionAction_MARK_UNREAD: backend.AttentionUnread, AttentionAction_PARK: backend.AttentionPark,
 		AttentionAction_UNPARK: backend.AttentionUnpark, AttentionAction_PARK_UNTIL_DONE: backend.AttentionParkUntilDone,
+		AttentionAction_AUTO_PARK: backend.AttentionAutoPark, AttentionAction_STOP_AUTO_PARK: backend.AttentionNoAutoPark, AttentionAction_SENT: backend.AttentionSent,
 	}[change.Action]
 	if !ok {
 		return fmt.Errorf("web tab attention: %w", status.Error(codes.InvalidArgument, "unknown attention action"))

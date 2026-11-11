@@ -463,4 +463,11 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 	require.False(t, sessions["chat-01"].Parked)
 	require.Equal(t, "Park ended", sessions["chat-01"].Note)
 	require.Empty(t, tabs(done))
+
+	// Auto-park travels on the row too: the person's choice for every session, then their choice for one over it.
+	require.NoError(t, server.sessions.SetAutoParkAll(ctx, "alice", true))
+	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-00")}, backend.AttentionNoAutoPark, nil))
+
+	_, _, sessions = list(&ListSessionsRequest{})
+	require.Equal(t, []bool{false, true}, []bool{sessions["chat-00"].AutoPark, sessions["chat-01"].AutoPark})
 }

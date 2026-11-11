@@ -38,6 +38,12 @@ const (
 	AttentionPark          AttentionAction = "park"
 	AttentionParkUntilDone AttentionAction = "park_done"
 	AttentionUnpark        AttentionAction = "unpark"
+	// AttentionAutoPark and AttentionNoAutoPark set whether a prompt the person sends a session parks its tab until it
+	// is done, over their choice for every session.
+	AttentionAutoPark   AttentionAction = "auto_park"
+	AttentionNoAutoPark AttentionAction = "no_auto_park"
+	// AttentionSent parks until it is done the tab of each session the person sent a prompt and auto-parks.
+	AttentionSent AttentionAction = "sent"
 )
 
 // markTabsSQL continues a WITH holding readers (username, path, conversation_id, waking, note), the people something
@@ -219,8 +225,15 @@ func decodeSessionID(value string) string {
 // path; one naming a session that does not exist is skipped. Mark as unread marks a read, unparked tab quietly; Park
 // sets a park until until, nil for until unparked, which makes a mark quiet; Park until done parks a session's tab
 // until its next turn ends, its until 'infinity', which no clock reaches, and skips any other location; Unpark leaves
-// the mark. A row left read and unparked is deleted.
+// the mark. Auto-park and its opposite set the person's choice for a session, and Sent parks until done the sessions
+// they auto-park, by that choice, else by their choice for every session; each skips any other location. A row left
+// read, unparked and with no choice is deleted.
 func (s *SessionService) ChangeAttention(ctx context.Context, username string, paths []string, action AttentionAction, until *time.Time) error {
+	sent := action == AttentionSent
+	if sent {
+		action = AttentionParkUntilDone
+	}
+
 	tx, err := s.beginStateTx(ctx, "attention change")
 	if err != nil {
 		return err
@@ -240,14 +253,18 @@ ON CONFLICT (username) DO UPDATE SET revision = web_tab_states.revision`, userna
 		conversations = append(conversations, TabConversation(path))
 	}
 
-	changed, err := queryStrings(ctx, tx, `WITH locations AS (
+	changed, err := queryStrings(ctx, tx, `WITH everyone AS (
+    SELECT auto_park FROM web_tab_states WHERE username = $1
+), locations AS (
     SELECT DISTINCT COALESCE(`+tabPathSQL+`, l.path) AS path, c.conversation_id
     FROM unnest($2::text[], $3::text[]) AS l(path, conversation_id) LEFT JOIN conversations c ON c.conversation_id = l.conversation_id
-    WHERE l.conversation_id = '' AND $4::text <> 'park_done' OR c.conversation_id IS NOT NULL
+    LEFT JOIN web_tab_attention o ON o.username = $1 AND o.path = `+tabPathSQL+` CROSS JOIN everyone e
+    WHERE (l.conversation_id = '' AND $4::text NOT IN ('park_done', 'auto_park', 'no_auto_park') OR c.conversation_id IS NOT NULL)
+        AND (NOT $6 OR COALESCE(o.auto_park, e.auto_park))
 )
-INSERT INTO web_tab_attention AS a (username, path, conversation_id, unread_at, quiet, parked, until)
+INSERT INTO web_tab_attention AS a (username, path, conversation_id, unread_at, quiet, parked, until, auto_park)
 SELECT $1, path, conversation_id, CASE WHEN $4::text = 'unread' THEN now() END, $4::text = 'unread', $4::text IN ('park', 'park_done'),
-    CASE $4::text WHEN 'park' THEN $5::timestamptz WHEN 'park_done' THEN 'infinity' END
+    CASE $4::text WHEN 'park' THEN $5::timestamptz WHEN 'park_done' THEN 'infinity' END, CASE $4::text WHEN 'auto_park' THEN TRUE WHEN 'no_auto_park' THEN FALSE END
 FROM locations ORDER BY path
 ON CONFLICT (username, path) DO UPDATE SET
     unread_at = CASE $4::text WHEN 'read' THEN NULL WHEN 'unread' THEN now() ELSE a.unread_at END,
@@ -255,15 +272,16 @@ ON CONFLICT (username, path) DO UPDATE SET
         WHEN 'park_done' THEN a.quiet OR a.unread_at IS NOT NULL ELSE a.quiet END,
     note = CASE $4::text WHEN 'unread' THEN '' ELSE a.note END,
     parked = CASE $4::text WHEN 'park' THEN TRUE WHEN 'park_done' THEN TRUE WHEN 'unpark' THEN FALSE ELSE a.parked END,
-    until = CASE $4::text WHEN 'read' THEN a.until WHEN 'unread' THEN a.until ELSE excluded.until END
+    until = CASE WHEN $4::text IN ('read', 'unread', 'auto_park', 'no_auto_park') THEN a.until ELSE excluded.until END,
+    auto_park = COALESCE(excluded.auto_park, a.auto_park)
 WHERE CASE $4::text WHEN 'unread' THEN a.unread_at IS NULL AND NOT a.parked WHEN 'unpark' THEN a.parked ELSE TRUE END
-RETURNING a.path`, "change attention", username, paths, conversations, string(action), until)
+RETURNING a.path`, "change attention", username, paths, conversations, string(action), until, sent)
 	if err != nil {
 		return err
 	}
 
 	if _, err := execState(ctx, tx, "delete idle attention", `DELETE FROM web_tab_attention
-WHERE username = $1 AND path = ANY($2) AND unread_at IS NULL AND NOT parked AND until IS NULL`, username, changed); err != nil {
+WHERE username = $1 AND path = ANY($2) AND unread_at IS NULL AND NOT parked AND until IS NULL AND auto_park IS NULL`, username, changed); err != nil {
 		return err
 	}
 
@@ -405,6 +423,26 @@ RETURNING s.revision`, username, woken).Scan(&revision)
 	}
 
 	return revision, nil
+}
+
+// AutoParkAll reports whether username auto-parks every session they chose nothing for.
+func (s *SessionService) AutoParkAll(ctx context.Context, username string) (bool, error) {
+	var on bool
+
+	err := s.db.QueryRowContext(ctx, `SELECT auto_park FROM web_tab_states WHERE username = $1`, username).Scan(&on)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("read auto-park: %w", err)
+	}
+
+	return on, nil
+}
+
+// SetAutoParkAll sets whether username auto-parks every session they chose nothing for.
+func (s *SessionService) SetAutoParkAll(ctx context.Context, username string, on bool) error {
+	_, err := execState(ctx, s.db, "save auto-park", `INSERT INTO web_tab_states (username, revision, auto_park) VALUES ($1, 0, $2)
+ON CONFLICT (username) DO UPDATE SET auto_park = excluded.auto_park`, username, on)
+
+	return err
 }
 
 // TabAttention lists username's attention on tab locations that are not sessions, by path. A session's travels with

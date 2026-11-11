@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log"
@@ -41,6 +42,13 @@ func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, servers map
 			if identity.GetLimited() {
 				http.Error(w, status.Convert(errOpenCodeClosed).Message(), http.StatusForbidden)
 				return
+			}
+
+			// A prompt parks the sender's tab until it is done when they auto-park the session, before it can start. A park
+			// that fails, as one for a session no sync has recorded yet does, leaves the prompt to go through.
+			if parts := strings.Split(r.PathValue("path"), "/"); r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "session" && parts[2] == "prompt" {
+				tab := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte("opencode:"+r.PathValue("server")+":"+parts[1]))
+				_ = connection.Invoke(r.Context(), "/rpc.Web/Tabs", &TabsRequest{Attention: &AttentionChange{Paths: []string{tab}, Action: AttentionAction_SENT}}, &TabsResponse{})
 			}
 
 			// The proxy stamps prompts with the person Identity admitted.

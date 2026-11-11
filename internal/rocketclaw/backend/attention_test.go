@@ -498,6 +498,31 @@ VALUES ($1, 0, CASE WHEN $3 THEN $2 ELSE '' END, now())`, username, session.Path
 	}
 }
 
+// Auto-park is a choice kept on the session's attention row: it leaves the row's park and timer alone, keeps the row
+// through an unpark, and skips a location that is no session. The choice for every session starts off.
+func TestAttentionAutoPark(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	soon := time.Now().Add(time.Hour)
+	path := sessionPath("web:auto")
+
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"web:auto": KindWebChat})
+
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{path}, AttentionPark, &soon))
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{path, "/cron"}, AttentionAutoPark, nil))
+	assert.Equal(t, "read parked until=soon", attentionOf(t, service, alice, path))
+	assert.Equal(t, "none", attentionOf(t, service, alice, "/cron"))
+
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{path}, AttentionUnpark, nil))
+	assert.Equal(t, "read", attentionOf(t, service, alice, path), "the choice keeps the row")
+
+	on, err := service.AutoParkAll(ctx, alice)
+	require.NoError(t, err)
+	assert.False(t, on)
+}
+
 // A timer that comes due on a closed tab brings it back where it was, once, with its Search page.
 func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 	t.Parallel()

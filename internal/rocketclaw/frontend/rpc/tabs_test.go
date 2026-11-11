@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"log/slog"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -275,6 +277,42 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs())
 
+	// A prompt Alice sent parks until it is done only a session she auto-parks: by her choice for it, which keeps its
+	// row through an unpark, else by her choice for every session, which every reply of hers carries.
+	sent := func(paths ...string) {
+		t.Helper()
+
+		_, err := call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: paths, Action: AttentionAction_SENT}})
+		require.NoError(t, err)
+	}
+	sent("/s/YQ")
+	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs(), "nothing is auto-parked yet")
+
+	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_AUTO_PARK}})
+	require.NoError(t, err)
+	sent("/s/YQ", "/s/Yw")
+	assert.Equal(t, []string{"/s/YQ 0", "/s/YQ t t", "/s/Yw f f"}, aliceTabs())
+
+	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ"}, Action: AttentionAction_UNPARK}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/s/YQ 0", "/s/YQ f f", "/s/Yw f f"}, aliceTabs())
+
+	response, err = call("127.0.0.1", &TabsRequest{AutoPark: new(true)})
+	require.NoError(t, err)
+	assert.True(t, response.AutoPark)
+
+	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ"}, Action: AttentionAction_STOP_AUTO_PARK}})
+	require.NoError(t, err)
+	sent("/s/YQ", "/s/Yw")
+	assert.Equal(t, []string{"/s/YQ 0", "/s/YQ f f", "/s/Yw t t"}, aliceTabs(), "her choice for a session wins over her choice for every session")
+
+	response, err = call("192.0.2.2", &TabsRequest{})
+	require.NoError(t, err)
+	assert.False(t, response.AutoPark, "auto-park is each person's own")
+
+	_, err = db.ExecContext(t.Context(), `DELETE FROM web_tab_attention WHERE username = 'alice' AND path <> '/s/Yw'; UPDATE web_tab_attention SET parked = FALSE, until = NULL WHERE username = 'alice'`)
+	require.NoError(t, err)
+
 	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
 
@@ -304,6 +342,47 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "an emptied shelf stays empty: %v", response.TopShelf)
+}
+
+// A prompt the agent acts on parks the sender's tab until it is done when they auto-park the session, before its turn
+// starts, and the turn's end makes the park due; a stash parks nothing.
+func TestPromptAutoParks(t *testing.T) {
+	h := startVoiceHarness(t)
+	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	attention := func() backend.Attention {
+		t.Helper()
+
+		for chat, err := range h.rt.Sessions.SidebarChats(t.Context(), "alice", h.server.channels, []string{"worker"}) {
+			require.NoError(t, err)
+			return chat.Session.Attention
+		}
+
+		return backend.Attention{}
+	}
+
+	require.NoError(t, h.rt.Sessions.SetAutoParkAll(t.Context(), "alice", true))
+	_, err := h.server.prompt(alice, &PromptRequest{Id: "worker", Text: "held", Delivery: PromptDelivery_STASH})
+	require.NoError(t, err)
+	require.False(t, attention().Parked, "a stash parks nothing")
+
+	var turn errgroup.Group
+
+	turn.Go(func() error {
+		_, err := h.server.prompt(alice, &PromptRequest{Id: "worker", Text: "work", Delivery: PromptDelivery_STEER})
+		return err
+	})
+
+	<-h.requests
+
+	parked := attention()
+	require.True(t, parked.Parked && parked.UntilDone, "parked until it is done while the turn runs: %+v", parked)
+
+	h.replies <- voiceModelText(rand.Text(), "Done.")
+
+	require.NoError(t, turn.Wait())
+
+	parked = attention()
+	require.True(t, parked.Parked && !parked.UntilDone && !parked.Until.IsZero(), "the turn's end makes the park due: %+v", parked)
 }
 
 func TestTabsSpaceLimit(t *testing.T) {

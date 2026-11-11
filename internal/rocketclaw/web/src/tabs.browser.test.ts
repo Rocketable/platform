@@ -24,21 +24,23 @@ type SharedTab = { space: string; path: string; search?: SearchPage };
 const plain = (page?: SearchPage) => JSON.stringify(page ? [page.name ?? "", page.board ?? "", page.searches.map(({ id, name, query, notify }) => [id, name ?? "", query, !!notify]), page.active] : null);
 type Change = { paths: string[]; action: string; until?: string };
 // attention is this person's attention on each tab location, sent is every attention change, and polls counts session lists.
-type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; topShelf?: { tabs: { space: string; path: string }[] }; attention: TabAttention[]; sent: Change[]; polls: number };
+type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; topShelf?: { tabs: { space: string; path: string }[] }; attention: TabAttention[]; sent: Change[]; polls: number; autoPark?: boolean };
 
 // Mirrors the server's Tabs call: it saves the state, changes one space, adds, removes, or edits Shared tabs, or changes
 // attention, then answers with every space, the saved state, every space's Shared tabs in order, and the Top Shelf.
 // A taken name, ignoring case, deleting the last space, and sharing New session are refused, and a save made from an
 // older revision is stale. A deleted space's Shared tabs join the first remaining space's, once each, keeping their order.
 // Attention changes act as the server's do, and a save closing a tab parked without a time unparks it.
-function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SharedTab; unshare?: SharedTab; editShared?: SharedTab & { base?: SearchPage }; attention?: Change }) {
+function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SharedTab; unshare?: SharedTab; editShared?: SharedTab & { base?: SearchPage }; attention?: Change; autoPark?: boolean }) {
   if (input.attention) saved.sent.push(input.attention);
+  if (input.autoPark !== undefined) saved.autoPark = input.autoPark;
   for (const path of input.attention?.paths ?? []) {
     const { action, until } = input.attention!, row = saved.attention.find((item) => item.path === path) ?? saved.attention[saved.attention.push({ path }) - 1];
     if (action === "MARK_READ") row.unreadAt = undefined;
     if (action === "MARK_UNREAD" && !row.unreadAt && !row.parked) row.unreadAt = new Date().toISOString();
     if (action === "PARK" || (action === "UNPARK" && row.parked)) Object.assign(row, { parked: action === "PARK", until, untilDone: false });
     if (action === "PARK_UNTIL_DONE" && path.startsWith("/s/")) Object.assign(row, { parked: true, until: undefined, untilDone: true });
+    if ((action === "AUTO_PARK" || action === "STOP_AUTO_PARK") && path.startsWith("/s/")) row.autoPark = action === "AUTO_PARK";
   }
   const taken = (name: string, id?: string) => saved.spaces.some((space) => space.id !== id && space.name.toLowerCase() === name.toLowerCase());
   const has = (space: string, path: string) => saved.shared.some((tab) => tab.space === space && tab.path === path);
@@ -938,7 +940,8 @@ test("tab groups take a name and color, collapse, adopt opened tabs, follow drag
   expect(await tab("Bravo").getAttribute("aria-description")).toBe("Group Work, Space: Main");
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
 
-  await until(() => saved.state.groups.some((group) => group.name === "Work") && saved.state.tabs.filter((tab) => tab.group).length === 2);
+  // The new group holds its place with a placeholder among its tabs.
+  await until(() => saved.state.groups.some((group) => group.name === "Work") && saved.state.tabs.filter((tab) => tab.group).map((tab) => tab.path).toSorted().join() === [href("alpha"), href("bravo"), `group:${saved.state.groups[0].id}`].toSorted().join());
   await page.reload();
   await tab("Charlie").waitFor();
   expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Charlie"]);
@@ -1005,10 +1008,11 @@ test("Cmd/Ctrl+click and Shift+click select tabs that the tab menu groups and un
   expect(await page.evaluate(() => getSelection()!.toString())).toBe("");
   expect(await tab("Bravo").getAttribute("aria-description")).toBe("In selection, Space: Main");
   expect(await tab("Delta").getAttribute("aria-description")).toBe("Group Blue group, Space: Main, Turn running");
+  // Work, emptied, stays where it was.
   await menu(page, "Bravo", "Add to group", "Blue group");
-  expect(await order(page)).toEqual(["Blue group", "Delta", "Alpha", "Charlie", "Bravo"]);
+  expect(await order(page)).toEqual(["Work", "Blue group", "Delta", "Alpha", "Charlie", "Bravo"]);
   await menu(page, "Alpha", "Remove from group");
-  expect(await order(page)).toEqual(["Blue group", "Delta", "Alpha", "Charlie", "Bravo"]);
+  expect(await order(page)).toEqual(["Work", "Blue group", "Delta", "Alpha", "Charlie", "Bravo"]);
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("In selection, Space: Main");
 
   // Escape on a tab drops the selection; a plain click on the active tab does too.
@@ -1047,10 +1051,10 @@ test("a group moves whole by dragging its header onto a tab or a collapsed group
   expect(await header("Work").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
   await page.keyboard.press("Shift+ArrowLeft");
   expect(await order(page)).toEqual(["Work", "Alpha", "Bravo", "Ops", "Delta"]);
-  await until(() => saved.state.tabs.map((tab) => tab.path).join() === ["alpha", "bravo", "charlie", "delta"].map(href).join());
+  await until(() => saved.state.tabs.flatMap((tab) => tab.path.startsWith("group:") ? [] : [tab.path]).join() === ["alpha", "bravo", "charlie", "delta"].map(href).join());
 }), 60_000);
 
-test("tab group editor moves New session in, ungroups, and closes; collapsed groups skip arrow keys; a lost group is dropped", () => withPage({}, async (page, origin, _prompts, saved) => {
+test("tab group editor moves New session in, ungroups, closes, and deletes; collapsed groups skip arrow keys; a lost group is dropped", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const field = page.getByRole("textbox", { name: "Group name" });
   for (const [link, name] of [["/", "New session"], [href("alpha"), "Alpha"], [href("bravo"), "Bravo"], [href("charlie"), "Charlie"]]) await openSaved(page, origin, link, name, saved);
@@ -1085,9 +1089,12 @@ test("tab group editor moves New session in, ungroups, and closes; collapsed gro
   await strip(page).getByRole("button", { name: "Work", exact: true }).focus();
   await page.keyboard.press("Shift+F10");
   await page.getByRole("button", { name: "Ungroup", exact: true }).click();
+  expect(await order(page)).toEqual(["Alpha", "Work", "Bravo", "New session", "Charlie"]);
+  // The editor hands focus back to the emptied group's header as it finishes closing; Delete group removes the group.
+  await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [aria-label="Work"]'));
+  await strip(page).getByRole("button", { name: "Edit Work", exact: true }).click();
+  await page.getByRole("button", { name: "Delete group", exact: true }).click();
   expect(await order(page)).toEqual(["Alpha", "Bravo", "New session", "Charlie"]);
-  // The editor hands focus back as it finishes closing.
-  await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Charlie"]'));
 
   await tab("Alpha").click();
   await page.waitForURL(`**${href("alpha")}`);
@@ -1099,7 +1106,7 @@ test("tab group editor moves New session in, ungroups, and closes; collapsed gro
   await strip(page).getByRole("button", { name: "Edit Grey group", exact: true }).click();
   await page.getByRole("button", { name: "Close group", exact: true }).click();
   await page.waitForURL(`**${href("bravo")}`);
-  expect(await order(page)).toEqual(["Bravo", "Charlie"]);
+  expect(await order(page)).toEqual(["Grey group", "Bravo", "Charlie"]);
 
   await menu(page, "Charlie", "Add to group", "New group");
   await page.keyboard.press("Escape");
@@ -1112,7 +1119,7 @@ test("tab group editor moves New session in, ungroups, and closes; collapsed gro
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("Space: Main");
 }), 60_000);
 
-test("a group kept when empty stays in place through reload, offers New session, and takes dropped tabs", () => withPage({}, async (page, origin, _prompts, saved) => {
+test("an emptied group stays in place through reload, offers New session, takes dropped tabs, and goes only when deleted, with its tabs", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   const fresh = strip(page).getByRole("button", { name: "New session in Work", exact: true });
   const command = (name: string) => strip(page).getByRole("button", { name: "Edit Work", exact: true }).click().then(() => page.getByRole("button", { name, exact: true }).click());
@@ -1121,7 +1128,6 @@ test("a group kept when empty stays in place through reload, offers New session,
   await page.keyboard.type("Work");
   await page.keyboard.press("Escape");
   await menu(page, "Charlie", "Add to group", "Work");
-  await command("Keep group when empty");
   expect(await order(page)).toEqual(["Alpha", "Work", "Bravo", "Charlie", "Delta"]);
   expect(await fresh.count()).toBe(0);
 
@@ -1146,11 +1152,10 @@ test("a group kept when empty stays in place through reload, offers New session,
   expect(await order(page)).toEqual(["Charlie", "Alpha", "Work", "New session"]);
   expect(await tab("New session").getAttribute("aria-description")).toBe("Group Work, Space: Main");
 
-  // No longer kept, it goes once empty, like any group.
-  await command("Don't keep group when empty");
-  expect(await order(page)).toEqual(["Charlie", "Alpha", "Work", "New session"]);
-  await menu(page, "New session", "Remove from group");
-  expect(await order(page)).toEqual(["Charlie", "Alpha", "New session"]);
+  // Delete group closes its tabs and removes it.
+  await command("Delete group");
+  await page.waitForURL(`**${href("alpha")}`);
+  expect(await order(page)).toEqual(["Charlie", "Alpha"]);
   await until(() => !saved.state.groups.some((group) => group.name === "Work") && !saved.state.tabs.some((item) => item.path.startsWith("group:")));
 }), 60_000);
 
@@ -1732,7 +1737,7 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
 
   // A Shared row has no close button, offers no closing, ignores middle-clicks, and takes no drops of this person's tabs.
   expect(await shared(page).getByRole("button", { name: "Close Alpha" }).count()).toBe(0);
-  expect(await sharedMenu(page, "Alpha")).toEqual(["Remove from Shared", "—", "Mark as unread", "Park"]);
+  expect(await sharedMenu(page, "Alpha")).toEqual(["Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
   await page.keyboard.press("Escape");
   await page.getByRole("menu").waitFor({ state: "hidden" });
   await row("Alpha").click({ button: "middle" });
@@ -2005,14 +2010,15 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
   const nine = await page.evaluate(() => { const at = new Date(); at.setDate(at.getDate() + 1); at.setHours(9, 0, 0, 0); return at.toISOString(); });
   expect([saved.sent[1], nine.slice(10)]).toEqual([{ paths: ["/cron"], action: "PARK", until: nine }, "T03:30:00.000Z"]);
   await parked.locator('[role="tab"][aria-label="Cron"][aria-description^="Space: Ops, Parked until "]').waitFor();
-  // Parked from its keyboard menu, Charlie leaves Work empty, whose header goes, and focus moves to the strip's selected tab.
+  // Parked from its keyboard menu, Charlie leaves Work empty, whose header stays, though Work was saved before every
+  // group held its place, and focus moves to the strip's selected tab.
   await tab("Charlie").focus();
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Park", exact: true }).press("ArrowRight");
   await page.getByRole("menuitem", { name: "Until I unpark", exact: true }).press("Enter");
   await row("Charlie").waitFor();
   await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Alpha"]'));
-  expect(await order(page)).toEqual(["Alpha", "Delta"]);
+  expect(await order(page)).toEqual(["Alpha", "Work", "Delta"]);
 
   // Cmd/Ctrl+] skips parked tabs.
   for (const id of ["delta", "alpha"]) {
@@ -2050,7 +2056,7 @@ test("Park moves tabs of any kind to Parked, which lists every space's, stepping
 
   // Bulk closes take this space's parked tabs too: Close others closes the parked Cron with the rest of Ops.
   await menu(page, "Alpha", "Close others");
-  await until(() => saved.state.tabs.map((item) => item.path).join() === [href("alpha"), href("hotel")].join());
+  await until(() => saved.state.tabs.map((item) => item.path).join() === [href("alpha"), href("hotel"), "group:work"].join());
   await header.waitFor({ state: "detached" });
 }), 60_000);
 
@@ -2077,6 +2083,36 @@ test("Park until it is done is offered for a session, not a page, and parks the 
   await until(() => saved.sent.length === 1);
   expect(saved.sent[0]).toEqual({ paths: [href("alpha")], action: "PARK_UNTIL_DONE" });
   await parked.locator('[role="tab"][aria-label="Alpha"][aria-description$="Parked until it is done"]').waitFor();
+}), 30_000);
+
+test("Auto-park is offered for a session's tab, not a page's, and turns on and off for that session; Config turns it on for every session", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const items = async (name: string) => {
+    await strip(page).getByRole("tab", { name, exact: true }).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Close", exact: true }).waitFor();
+    const listed = await page.getByRole("menuitem").allInnerTexts();
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").waitFor({ state: "hidden" });
+    return listed;
+  };
+  await openSaved(page, origin, "/cron", "Cron", saved);
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  expect(await items("Cron")).not.toContain("Auto-park when I send");
+
+  await menu(page, "Alpha", "Auto-park when I send");
+  await until(() => saved.sent.length === 1);
+  expect(saved.sent[0]).toEqual({ paths: [href("alpha")], action: "AUTO_PARK" });
+  // The session list, asked again, says the session auto-parks, and its menu offers to stop.
+  while (!(await items("Alpha")).includes("Stop auto-parking")) await Bun.sleep(50);
+  await menu(page, "Alpha", "Stop auto-parking");
+  await until(() => saved.sent.length === 2);
+  expect(saved.sent[1]).toEqual({ paths: [href("alpha")], action: "STOP_AUTO_PARK" });
+
+  await page.goto(`${origin}/config`);
+  const toggle = page.getByRole("switch", { name: "Auto-park sessions" });
+  await toggle.and(page.locator('[aria-checked="false"]:not([data-disabled])')).waitFor();
+  await toggle.click();
+  await until(() => saved.autoPark === true);
+  await toggle.and(page.locator('[aria-checked="true"]')).waitFor();
 }), 30_000);
 
 test("the palette offers the tab in view the same attention items, without Mute or Snooze, and Park until a picked time starts at the next whole hour, which the parked tab states", () => withPage({}, async (page, origin, _prompts, saved) => {
@@ -2119,7 +2155,7 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   saved.state = { ...saved.state, tabs: [{ path: href("alpha"), space: "main" }], space: "main" };
   saved.shared = [{ space: "main", path: href("bravo") }, { space: "main", path: "/search/d", search: { name: "Ops", board: "kanban", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" } }];
   await page.goto(`${origin}${href("alpha")}`);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "—", "Mark as unread", "Park"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
   await close();
   expect(await sharedMenu(page, "Ops")).toEqual(["Rename search", "—", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park"]);
   await close();
@@ -2128,7 +2164,7 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   for (const item of ["Park", "Until I unpark"]) await page.getByRole("menuitem", { name: item, exact: true }).click();
   await row("Bravo").and(page.locator('[aria-description="Shared, Space: Main, Parked"]')).waitFor();
   expect([await sharedNames(page), await opacity(href("bravo")), await names(page)]).toEqual([["Bravo", "Ops"], "0.6", ["Alpha"]]);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "—", "Unpark"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "—", "Unpark", "Auto-park when I send"]);
   await close();
   // Another person's session list carries none of this person's parks, so for them the row is as it was.
   saved.attention = [];
