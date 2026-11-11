@@ -2061,7 +2061,7 @@ test("Park until it is done is offered for a session, not a page, and parks the 
     await page.getByRole("menuitem", { name: "Park", exact: true }).hover();
     const submenu = page.getByRole("menu").nth(1);
     await submenu.getByRole("menuitem", { name: "Until I unpark", exact: true }).waitFor();
-    const items = await submenu.getByRole("menuitem").allInnerTexts();
+    const items = await submenu.locator('[role="menuitem"], [role="separator"]').evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("role") === "separator" ? "—" : node.innerText));
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
     await page.getByRole("menu").first().waitFor({ state: "hidden" });
@@ -2069,8 +2069,9 @@ test("Park until it is done is offered for a session, not a page, and parks the 
   };
   await openSaved(page, origin, "/cron", "Cron", saved);
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
-  expect(await parkMenu("Cron")).not.toContain("Until it is done");
-  expect(await parkMenu("Alpha")).toContain("Until it is done");
+  const times = ["1 hour", "4 hours", "Tomorrow 9:00", "Next Monday 9:00", "Pick a time…"];
+  expect(await parkMenu("Cron")).toEqual([...times, "—", "Until I unpark"]);
+  expect(await parkMenu("Alpha")).toEqual(["Until it is done", "—", ...times, "—", "Until I unpark"]);
 
   await menu(page, "Alpha", "Park", "Until it is done");
   await until(() => saved.sent.length === 1);
