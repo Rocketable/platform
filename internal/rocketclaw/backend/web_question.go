@@ -13,7 +13,21 @@ import (
 // webQuestionStep suffixes the turn step a Web question is saved under.
 const webQuestionStep = "/web-question"
 
-const saveWebQuestionStep = `INSERT INTO steps (conversation_id, key, value) VALUES ($1, $2, $3) ON CONFLICT (conversation_id, key) DO UPDATE SET value = excluded.value`
+// saveWebQuestionStep saves step $2 of conversation $1 as $3, and holds whether the step is new.
+const saveWebQuestionStep = `saved AS (
+    INSERT INTO steps (conversation_id, key, value) VALUES ($1, $2, $3) ON CONFLICT (conversation_id, key) DO UPDATE SET value = excluded.value
+    RETURNING old.key IS NULL AS added
+)`
+
+// askWebQuestionSQL saves question step $2 of conversation $1 as $3. A new step of the running turn of a listed
+// session, which makes it ask, reaches the session's readers, and brings back the parked tabs of those it notifies.
+const askWebQuestionSQL = saveWebQuestionStep + `, running AS (
+    SELECT id, conversation_id, inbound_json FROM turns WHERE conversation_id = $1 AND phase NOT IN ('waiting', 'done') AND takes_lane
+    ORDER BY created_at_unix_ns LIMIT 1
+), turn AS (
+    SELECT r.id, c.conversation_id, c.kind, r.inbound_json, TRUE AS waking FROM running r CROSS JOIN saved s
+    JOIN conversations c ON c.conversation_id = r.conversation_id AND c.listed WHERE s.added AND starts_with($2, r.id || '/')
+)` + turnEventsSQL + sessionReadersSQL + markTabsSQL
 
 // QuestionNotPendingError reports an answer to a question no Web turn waits on, or one already answered.
 type QuestionNotPendingError struct{ ConversationID, QuestionID string }
@@ -51,7 +65,7 @@ func (q *webQuestions) AskUserQuestion(ctx context.Context, req *protocol.AskUse
 	}
 
 	data, _ := json.Marshal(req) // Encoding strings, bools, and slices of them cannot fail.
-	if err := q.change(ctx, saveWebQuestionStep, req.ConversationID, req.ID+webQuestionStep, string(removeSessionEntryNUL(data))); err != nil {
+	if err := q.change(ctx, askWebQuestionSQL, req.ConversationID, req.ID+webQuestionStep, string(removeSessionEntryNUL(data))); err != nil {
 		return protocol.AskUserQuestionAnswer{}, err
 	}
 
@@ -79,14 +93,14 @@ func (q *webQuestions) AskUserQuestion(ctx context.Context, req *protocol.AskUse
 			return protocol.AskUserQuestionAnswer{}, errWait
 		}
 
-		return protocol.AskUserQuestionAnswer{}, errors.Join(errWait, q.change(context.WithoutCancel(ctx), `DELETE FROM steps WHERE conversation_id = $1 AND key = $2`, req.ConversationID, req.ID+webQuestionStep))
+		return protocol.AskUserQuestionAnswer{}, errors.Join(errWait, q.change(context.WithoutCancel(ctx), `withdrawn AS (DELETE FROM steps WHERE conversation_id = $1 AND key = $2)`, req.ConversationID, req.ID+webQuestionStep))
 	}
 }
 
-// change runs statement, a write of step $2 of conversation $1, and wakes the conversation's Web
+// change runs ctes, the queries of a WITH that write step $2 of conversation $1, and wakes the conversation's Web
 // views in the same transaction, since no trigger reports steps whose key holds a slash.
-func (q *webQuestions) change(ctx context.Context, statement, conversationID, key string, value ...any) error {
-	_, err := execState(ctx, q.store.db, fmt.Sprintf("write turn step %q", key), `WITH changed AS (`+statement+`) SELECT pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_object('conversationId', $1::text, 'revision', pg_current_xact_id()::text)::text)`, append([]any{conversationID, key}, value...)...)
+func (q *webQuestions) change(ctx context.Context, ctes, conversationID, key string, value ...any) error {
+	_, err := execState(ctx, q.store.db, fmt.Sprintf("write turn step %q", key), `WITH `+ctes+` SELECT pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_object('conversationId', $1::text, 'revision', pg_current_xact_id()::text)::text)`, append([]any{conversationID, key}, value...)...)
 
 	return err
 }

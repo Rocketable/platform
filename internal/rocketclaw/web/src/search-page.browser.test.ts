@@ -41,8 +41,10 @@ async function until(check: () => boolean) {
   }
 }
 
+// A SearchSessions request: a Search page names its tab and search, and whether the person entered the query.
+type SearchInput = { query: string; filters?: boolean; messages?: boolean; tab?: string; searchId?: string; entered?: boolean; fresh?: boolean };
 // serve answers the App's requests with rows and a SearchSessions fixture, and records every API path.
-function serve(rows: object[], search: (input: { query: string; filters?: boolean; messages?: boolean }) => Promise<object> | object, agents: object[] = [{ name: "main" }]) {
+function serve(rows: object[], search: (input: SearchInput) => Promise<object> | object, agents: object[] = [{ name: "main" }]) {
   const paths = new Set<string>(), tabs = tabsApi(() => "tester");
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
@@ -392,7 +394,7 @@ test("search URL follows the active tab, folds legacy filters, and reopens a mat
 
 test("Cmd+P matches titles at once, asks the server only for filters, and Enter opens the first row", async () => {
   const { chromium: engine } = await import(playwright!);
-  const requests: { query: string; filters?: boolean; messages?: boolean }[] = [];
+  const requests: SearchInput[] = [];
   const held = Promise.withResolvers<void>();
   const started = Promise.withResolvers<void>();
   const filterHeld = Promise.withResolvers<void>();
@@ -444,7 +446,7 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
     await input.fill("tag:bu");
     await titles([]);
     while (requests.at(-1)?.query !== "tag:bu") await page.waitForTimeout(50);
-    expect(requests.at(-1)).toEqual({ query: "tag:bu", filters: true });
+    expect(requests.at(-1)).toEqual({ query: "tag:bu", filters: true }); // No tab: the palette's search ends with its request.
     expect(await pills.count()).toBe(0); // A term still being typed stays in the input.
     await input.pressSequentially("g x");
     await started.promise;
@@ -513,7 +515,7 @@ test("Cmd+P matches titles at once, asks the server only for filters, and Enter 
 
 test("/search renders the server's groups, notices and pills", async () => {
   const { chromium: engine } = await import(playwright!);
-  const requests: { query: string; filters?: boolean; messages?: boolean }[] = [];
+  const requests: SearchInput[] = [];
   const hold = Promise.withResolvers<void>();
   const rows = [
     { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true },
@@ -557,7 +559,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     const field = results.getByRole("group", { name: "Origin chat" });
     expect(await field.getByText("Origin", { exact: true }).count()).toBe(1);
     expect(await field.locator("mark").textContent()).toBe("needle");
-    expect(requests).toEqual([{ query: "needle", messages: true }]);
+    expect(requests).toEqual([{ query: "needle", messages: true, tab: "/search", searchId: expect.any(String), entered: true }]);
 
     await search.fill("chat is:pinned"); // A saved query ending in a filter reopens with that filter.
     await results.getByRole("group", { name: "Pinned conversation" }).waitFor();
@@ -565,7 +567,7 @@ test("/search renders the server's groups, notices and pills", async () => {
     requests.length = 0;
     await page.reload();
     await results.getByRole("group", { name: "Pinned conversation" }).waitFor();
-    expect(requests[0]).toEqual({ query: "chat is:pinned", messages: true });
+    expect(requests[0]).toEqual({ query: "chat is:pinned", messages: true, tab: "/search", searchId: expect.any(String), entered: false });
     expect(await search.inputValue()).toBe("chat is:pinned");
 
     await search.fill("outage tag:"); // Typing leaves the bare operator out; Enter and reopening send it.
@@ -645,7 +647,7 @@ test("/search renders the server's groups, notices and pills", async () => {
 
 test("Cmd+P shows one row per session and hands its text to /search, which finds message hits", async () => {
   const { chromium: engine } = await import(playwright!);
-  const requests: { query: string; filters?: boolean; messages?: boolean }[] = [];
+  const requests: SearchInput[] = [];
   const rows = [
     { id: "third", name: "Pinned conversation", preview: "Other text", agent: "main", pinned: true },
     { id: "second", name: "", title: "", preview: "Needle notes\nOther text", agent: "main" },
@@ -698,7 +700,7 @@ test("Cmd+P shows one row per session and hands its text to /search, which finds
     const first = new URL(page.url()).pathname;
     const results = page.getByLabel("Search results");
     await results.getByRole("link", { name: /Context before NEEDLE/ }).waitFor();
-    expect(requests).toEqual([{ query: "needle", messages: true }]);
+    expect(requests).toEqual([{ query: "needle", messages: true, tab: first, searchId: expect.any(String), entered: true }]);
 
     // New text opens a Search page of its own, even from a Search page.
     await page.keyboard.press("Control+p");
@@ -925,7 +927,7 @@ test("typing reuses message results and new replies preserve selected text", asy
     expect(await search.inputValue()).toBe("needle xyz");
     expect(await page.evaluate(() => Reflect.get(window, "messageSplits"))).toBe(0);
     try {
-      expect(requests).toEqual([{ query: "needle", messages: true }]);
+      expect(requests.map(({ query }) => query)).toEqual(["needle"]);
     } catch (error) {
       console.info("Typing search request failure before Enter", JSON.stringify({
         requests,
@@ -947,7 +949,7 @@ test("typing reuses message results and new replies preserve selected text", asy
     await results.getByRole("link", { name: "Assistant needle xyz replacement", exact: true }).waitFor();
     expect(await results.getByRole("group").count()).toBe(1);
     expect(await results.locator("mark").allTextContents()).toEqual(["needle xyz"]);
-    expect(requests).toEqual([{ query: "needle", messages: true }, { query: "needle xyz", messages: true }]);
+    expect(requests.map(({ query }) => query)).toEqual(["needle", "needle xyz"]);
     await page.keyboard.type("new");
     expect(await search.inputValue()).toBe("new");
   } finally {
@@ -976,6 +978,61 @@ test("a broad search draws a page of rows and scrolling draws the rest", async (
     await page.waitForFunction(() => document.querySelectorAll('[aria-label="Search results"] a[href*="?message="]').length === 3000);
     expect(await results.getByRole("group").count()).toBe(1000);
     expect(await results.getByRole("group", { name: "Wide 999", exact: true }).getByRole("heading").textContent()).toBe("Wide 999(3)");
+  } finally {
+    await browser.close();
+    server.stop(true);
+  }
+}, 30_000);
+
+test("a Search page's search runs on its server, entered when typed, not on return or new chats", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const rows = Array.from({ length: 1000 }, (_, i) => ({ id: `wide-${i}`, name: `Wide ${i}`, agent: "main" }));
+  const requests: SearchInput[] = [];
+  const { server, tabs: api, origin } = serve(rows, (input) => {
+    requests.push(input);
+    return response(input.query, rows.map(({ id }) => ({ conversationId: id, field: "" })), [], {
+      messages: rows.flatMap(({ id }) => [0, 1, 2].map((turn) => ({ conversationId: id, message: { messageId: `${turn}:0`, role: "assistant", text: `wide match ${turn}`, complete: true } }))),
+    });
+  });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage();
+    // The page also searches a remote RocketClaw, unreachable here; the page records what it sends there.
+    await page.route(`${origin}/search`, async (route: { fetch(): Promise<{ text(): Promise<string> }>; fulfill(options: object): Promise<void> }) => {
+      const reply = await route.fetch();
+      await route.fulfill({ response: reply, body: (await reply.text()).replace("</head>", '<script id="rocketclaws" type="application/json">[{"name":"work","url":"http://127.0.0.1:9"}]</script></head>') });
+    });
+    await page.addInitScript(() => {
+      const original = window.fetch, remote: unknown[] = [];
+      Object.assign(window, { remote });
+      Object.defineProperty(window, "fetch", { value: (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "http://127.0.0.1:9/api/SearchSessions") remote.push(JSON.parse(init!.body as string));
+        return original(input, init);
+      } });
+    });
+    await page.goto(`${origin}/search`);
+    const search = page.getByRole("textbox", { name: "Search sessions" });
+    const results = page.getByLabel("Search results");
+    const hits = results.locator('a[href*="?message="]');
+    await search.fill("wide");
+    await results.getByRole("group", { name: "Wide 0", exact: true }).waitFor();
+    await until(() => api.tabs().find((tab) => tab.path === "/search")?.search?.searches[0]?.query === "wide");
+    const searchId = api.tabs().find((tab) => tab.path === "/search")!.search!.searches[0].id;
+    const ran = (entered: boolean) => ({ query: "wide", messages: true, tab: "/search", searchId, entered });
+    expect(requests).toEqual([ran(true)]);
+    await results.getByRole("heading").getByRole("link", { name: "Wide 0", exact: true }).click(); // Leaving only stops waiting.
+    await page.waitForURL(`**/s/${btoa("wide-0").replaceAll("=", "")}`);
+    // Returning takes the server's answer, not entered, and draws it 200 rows at a time.
+    await page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: "wide", exact: true }).click();
+    await results.getByRole("group", { name: "Wide 0", exact: true }).waitFor();
+    expect(requests).toEqual([ran(true), ran(false)]);
+    expect(await hits.count()).toBe(200);
+    await results.evaluate((node: HTMLElement) => { node.scrollTop = node.scrollHeight; });
+    await page.waitForFunction(() => document.querySelectorAll('[aria-label="Search results"] a[href*="?message="]').length === 400);
+    rows.push({ id: "wide-new", name: "Wide new", agent: "main" });
+    await until(() => requests.length === 3);
+    expect(requests[2]).toEqual({ ...ran(false), fresh: true });
+    expect(await page.evaluate(() => Reflect.get(window, "remote"))).toEqual(Array(3).fill({ query: "wide", messages: true }));
   } finally {
     await browser.close();
     server.stop(true);

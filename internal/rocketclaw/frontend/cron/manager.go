@@ -178,16 +178,6 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 }
 
-// Stem is the name the cron job at path is listed and loaded by: a cron file's stem, or
-// "<agent> · <schedule>" for the routine at agents/<agent>.md#<schedule>.
-func Stem(path string) string {
-	if agent, schedule, ok := strings.Cut(strings.TrimPrefix(path, "agents/"), ".md#"); ok {
-		return agent + " · " + schedule
-	}
-
-	return strings.TrimSuffix(strings.TrimPrefix(path, "cron/"), ".md")
-}
-
 // LoadOneOffCronjob resolves and loads one live cronjob, a cron file or a routine, for a run from Web.
 func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, error) {
 	if strings.Contains(target, " · ") {
@@ -196,7 +186,7 @@ func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, erro
 			return protocol.OneOffCronjob{}, fmt.Errorf("load one-off cronjob: %w", err)
 		}
 
-		i := slices.IndexFunc(definitions, func(d definition) bool { return Stem(d.relativePath) == target })
+		i := slices.IndexFunc(definitions, func(d definition) bool { return backend.CronStem(d.relativePath) == target })
 		if i < 0 {
 			return protocol.OneOffCronjob{}, fmt.Errorf("load one-off cronjob: no routine %q", target)
 		}
@@ -259,7 +249,7 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCron
 	raw.Run = &protocol.CronRun{Path: job.RelativePath, At: m.now(), OneOff: true}
 	raw.ConversationID = cronTraceConversationID(oneOffCronTracePrefix, job.RelativePath, raw.Run.At)
 	raw.SyncDestination = job.ConversationID
-	raw.Cronjob = &protocol.CronjobMessage{RelativePath: job.RelativePath, Agent: job.Agent, RanAt: m.now().Format(time.RFC3339)}
+	raw.Cronjob = &protocol.CronjobMessage{RelativePath: job.RelativePath, Agent: job.Agent, RanAt: m.now().Format(time.RFC3339), Space: job.Space}
 
 	m.mu.Lock()
 	if m.closed {

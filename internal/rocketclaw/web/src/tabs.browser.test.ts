@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import path from "node:path";
-import type { SearchPage } from "./types";
+import type { SearchPage, TabAttention } from "./types";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
@@ -22,14 +22,24 @@ const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
 type SharedTab = { space: string; path: string; search?: SearchPage };
 // A Search page as the server compares it: field order, empty names and board styles, and unset notify marks do not matter.
 const plain = (page?: SearchPage) => JSON.stringify(page ? [page.name ?? "", page.board ?? "", page.searches.map(({ id, name, query, notify }) => [id, name ?? "", query, !!notify]), page.active] : null);
-type Mute = { path: string; until: string };
-type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; mutes: Mute[]; closed: { path: string; space?: string; search?: SearchPage }[] };
+type Change = { paths: string[]; action: string; until?: string };
+// attention is this person's attention on each tab location, sent is every attention change, and polls counts session lists.
+type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; topShelf?: { tabs: { space: string; path: string }[] }; attention: TabAttention[]; sent: Change[]; polls: number };
 
-// Mirrors the server's Tabs call: it saves the state, changes one space, adds, removes, or edits Shared tabs, or mutes or
-// unmutes one tab, then answers with every space, the saved state, every space's Shared tabs in order, and the mutes.
+// Mirrors the server's Tabs call: it saves the state, changes one space, adds, removes, or edits Shared tabs, or changes
+// attention, then answers with every space, the saved state, every space's Shared tabs in order, and the Top Shelf.
 // A taken name, ignoring case, deleting the last space, and sharing New session are refused, and a save made from an
 // older revision is stale. A deleted space's Shared tabs join the first remaining space's, once each, keeping their order.
-function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SharedTab; unshare?: SharedTab; editShared?: SharedTab & { base?: SearchPage }; mute?: Mute; unmute?: string }) {
+// Attention changes act as the server's do, and a save closing a tab parked without a time unparks it.
+function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SharedTab; unshare?: SharedTab; editShared?: SharedTab & { base?: SearchPage }; attention?: Change }) {
+  if (input.attention) saved.sent.push(input.attention);
+  for (const path of input.attention?.paths ?? []) {
+    const { action, until } = input.attention!, row = saved.attention.find((item) => item.path === path) ?? saved.attention[saved.attention.push({ path }) - 1];
+    if (action === "MARK_READ") row.unreadAt = undefined;
+    if (action === "MARK_UNREAD" && !row.unreadAt && !row.parked) row.unreadAt = new Date().toISOString();
+    if (action === "PARK" || (action === "UNPARK" && row.parked)) Object.assign(row, { parked: action === "PARK", until, untilDone: false });
+    if (action === "PARK_UNTIL_DONE" && path.startsWith("/s/")) Object.assign(row, { parked: true, until: undefined, untilDone: true });
+  }
   const taken = (name: string, id?: string) => saved.spaces.some((space) => space.id !== id && space.name.toLowerCase() === name.toLowerCase());
   const has = (space: string, path: string) => saved.shared.some((tab) => tab.space === space && tab.path === path);
   if ([input.createSpace && taken(input.createSpace), input.renameSpace && taken(input.renameSpace.name, input.renameSpace.id), input.deleteSpace && saved.spaces.length === 1, input.share?.path === "/"].some(Boolean)) {
@@ -40,6 +50,7 @@ function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: numb
     const open = new Set(input.state.tabs.map((tab) => tab.path));
     const closing = saved.state.tabs.flatMap(({ path, space, search }) => open.has(path) || path === "/" || path.startsWith("group:") ? [] : [{ path, space, search }]);
     saved.closed = [...closing, ...saved.closed.filter((tab) => !open.has(tab.path) && !closing.some((item) => item.path === tab.path))].slice(0, 50);
+    for (const row of saved.attention) if (row.parked && !row.until && closing.some((tab) => tab.path === row.path)) row.parked = false;
   }
   if (input.state) [saved.state, saved.revision] = [input.state, saved.revision + 1];
   if (input.createSpace) saved.spaces.push({ id: `space-${saved.spaces.length}-${input.createSpace}`, name: input.createSpace });
@@ -58,8 +69,6 @@ function tabsCall(saved: Saved, input: { state?: Saved["state"]; revision?: numb
   const unshared = input.unshare && saved.shared.find((tab) => tab.space === input.unshare!.space && tab.path === input.unshare!.path)?.search;
   if (input.unshare) saved.shared = saved.shared.filter((tab) => tab.space !== input.unshare!.space || tab.path !== input.unshare!.path);
   if (unshared) return Response.json({ ...saved, unshared });
-  if (input.mute) saved.mutes = [...saved.mutes.filter((mute) => mute.path !== input.mute!.path), input.mute];
-  if (input.unmute) saved.mutes = saved.mutes.filter((mute) => mute.path !== input.unmute);
   return Response.json(saved);
 }
 
@@ -67,11 +76,16 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
   const { chromium: engine } = await import(playwright!);
   const prompts: { id: string; text: string }[] = [];
   const sessions = structuredClone(rows);
-  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, sharedOrder: [] }, revision: 0, refused: 0, shared: [], mutes: [], closed: [] };
+  const saved: Saved = { spaces: [{ id: "main", name: "Main" }], state: { tabs: [], groups: [], space: "", last: {}, sharedOrder: [] }, revision: 0, refused: 0, shared: [], closed: [], attention: [], sent: [], polls: 0 };
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    // A session's attention rides its row; the other tabs' come as tab rows.
+    if (url.pathname === "/api/ListSessions") {
+      saved.polls++;
+      const listed = sessions.map((row) => ({ ...row, ...saved.attention.find((item) => item.path === href(row.id)) })), tabs = saved.attention.filter((item) => !item.path.startsWith("/s/"));
+      return new Response(`data: ${JSON.stringify({ sessions: listed, owner: "tester", upstreamSuccess: true, tabs })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    }
     if (!url.pathname.startsWith("/api/")) {
       const file = Bun.file(path.join(dist, url.pathname));
       if (await file.exists()) return new Response(file);
@@ -79,7 +93,7 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
       const index = (await Bun.file(path.join(dist, "index.html")).text()).replace("<title>RocketClaw</title>", "<title>lab - RocketClaw</title>");
       return new Response(index, { headers: { "Content-Type": "text/html" } });
     }
-    const input = await request.json().catch(() => ({})) as { id: string; text: string; name: string; query: string; agent?: string } & Parameters<typeof tabsCall>[1];
+    const input = await request.json().catch(() => ({})) as { id: string; text: string; name: string; query: string; agent?: string; dashboards: { lanes: string[] }[] } & Parameters<typeof tabsCall>[1];
     if (url.pathname === "/api/UpdateSession") sessions.find((row) => row.id === input.id)!.name = input.name;
     switch (url.pathname) {
       case "/api/Identity": return Response.json({ username: "tester" });
@@ -98,6 +112,7 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
         return Response.json({ id: "fresh" });
       case "/api/Prompt": prompts.push(input); return Response.json({ privateText: "" });
       case "/api/Tabs": return tabsCall(saved, input);
+      case "/api/Board": return Response.json({ dashboards: input.dashboards.map(({ lanes }) => ({ lanes: lanes.map(() => ({ sessions: [], total: 0 })) })) });
       // Fixed fixture: searching a row's exact name returns that row.
       case "/api/SearchSessions": return Response.json({ terms: [], text: input.query, needle: input.query.toLowerCase(), matches: rows.filter((row) => row.name === input.query).map((row) => ({ conversationId: row.id, field: "Name", text: row.name })), messages: [], mentionIds: [] });
       default: return Response.json({});
@@ -164,11 +179,14 @@ async function chooseSpace(page: any, item: string, role = "menuitem") {
 const shared = (page: any) => page.getByRole("tablist", { name: "Shared tabs" });
 const sharedNames = (page: any) => shared(page).getByRole("tab").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")));
 const focus = (page: any) => page.evaluate(() => { dispatchEvent(new Event("focus")); });
-// Opens a Shared row's menu and lists its items, leaving it open.
+// The open menu's items in order, with "—" for the line between two sections.
+const menuLines = (page: any): Promise<string[]> => page.getByRole("menu").first().locator('[role="menuitem"], [role="separator"]')
+  .evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("role") === "separator" ? "—" : node.innerText));
+// Opens a Shared row's menu and lists its items and section lines, leaving it open.
 async function sharedMenu(page: any, name: string) {
   await shared(page).getByRole("tab", { name, exact: true }).click({ button: "right" });
   await page.getByRole("menuitem").first().waitFor();
-  return page.getByRole("menuitem").allInnerTexts();
+  return menuLines(page);
 }
 
 test("each opened location keeps a tab; close commands, middle-click, and drag survive reload", () => withPage({}, async (page, origin, prompts, saved) => {
@@ -810,7 +828,7 @@ test("an unread tab shows a bold title", () => withPage({}, async (page, origin,
   expect(await groupWeight()).toBe("700");
 }), 60_000);
 
-test("a tab waiting on this person stops shimmering and needs them, as do its collapsed group and the window title", () => withPage({}, async (page, origin, _prompts, saved) => {
+test("a tab waiting on this person's answer stops shimmering and needs them, as does its collapsed group, which stays regular while the tab is read", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   await openSaved(page, origin, href("alpha"), "Alpha", saved);
   expect(await page.title()).toBe("lab - RocketClaw");
@@ -819,7 +837,8 @@ test("a tab waiting on this person stops shimmering and needs them, as do its co
   expect(await animation(tab("Golf").getByText("Golf", { exact: true }))).toBe("none");
   expect(await tab("Golf").getByText("Needs you", { exact: true }).isVisible()).toBe(true);
   expect(await tab("Alpha").getByText("Needs you").count()).toBe(0);
-  expect(await page.title()).toBe("(1) lab - RocketClaw");
+  // Read, it does not count in the window title.
+  expect(await page.title()).toBe("lab - RocketClaw");
 
   const field = page.getByRole("textbox", { name: "Group name" });
   await menu(page, "Golf", "Add to group", "New group");
@@ -833,32 +852,42 @@ test("a tab waiting on this person stops shimmering and needs them, as do its co
   await header.getByRole("button", { name: "Work", exact: true }).click();
   await tab("Golf").waitFor({ state: "detached" });
   expect(await header.getByText("Needs you", { exact: true }).isVisible()).toBe(true);
+  expect(await header.getByRole("button", { name: "Work", exact: true }).locator("span").evaluate((name: HTMLElement) => getComputedStyle(name).fontWeight)).toBe("500");
 }), 60_000);
 
-for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["Linux x86_64", "Ctrl", "Alt"]]) test(`Cmd/Ctrl+Alt+A and its command open the next followed session asking a question, then unread, longest waiting first on ${platform}`, () => withPage({}, async (page, origin, _prompts, saved) => {
+for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["Linux x86_64", "Ctrl", "Alt"]]) test(`Cmd/Ctrl+Alt+A and its command open the next waiting tab, sessions asking a question first, longest waiting first, and the title counts them on ${platform}`, () => withPage({}, async (page, origin, _prompts, saved) => {
   await page.addInitScript((value: string) => Object.defineProperty(navigator, "platform", { value }), platform);
   const key = modifier === "⌘" ? "Meta" : "Control";
   const at = (minute: number) => `2026-10-22T10:0${minute}:00Z`;
   const sessions = [
     { id: "calm", name: "Calm", agent: "main" },
-    { id: "unread-new", name: "Unread new", agent: "main", unreadAt: at(4) },
-    { id: "asked-new", name: "Asked new", agent: "main", running: true, asking: true, stateSince: at(3) },
+    { id: "unread-new", name: "Unread new", agent: "main", unreadAt: at(6) },
+    { id: "asked-new", name: "Asked new", agent: "main", running: true, asking: true, stateSince: at(3), unreadAt: at(5) },
     { id: "unread-old", name: "Unread old", agent: "main", unreadAt: at(2) },
     { id: "asked-old", name: "Asked old", agent: "main", running: true, asking: true, stateSince: at(1), unreadAt: at(0) },
-    // Muted, or without a tab, a session does not need this person.
-    { id: "muted", name: "Muted", agent: "main", running: true, asking: true, stateSince: at(0) },
+    { id: "shelved", name: "Shelved", agent: "main", unreadAt: at(4) },
+    // Read, parked, or without a tab, a session does not wait for this person, even while it asks.
+    { id: "asked-read", name: "Asked read", agent: "main", running: true, asking: true, stateSince: at(0) },
+    { id: "parked", name: "Parked", agent: "main", unreadAt: at(0), parked: true },
     { id: "untabbed", name: "Untabbed", agent: "main", running: true, asking: true, stateSince: at(0), unreadAt: at(0) },
   ];
-  saved.state = { ...saved.state, space: "main", tabs: sessions.flatMap(({ id }) => id === "untabbed" || id === "unread-old" ? [] : [{ path: href(id), space: "main" }]) };
+  const ops = { name: "Ops", board: "kanban", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" };
+  // Unread old is only in Shared, Shelved only on the Top Shelf, and the Ops Dashboard waits through its tab row.
+  saved.state = { ...saved.state, space: "main", tabs: [...sessions.flatMap(({ id }) => ["untabbed", "unread-old", "shelved"].includes(id) ? [] : [{ path: href(id), space: "main" }]), { path: "/search/dash", space: "main", search: ops }] };
   saved.shared = [{ space: "main", path: href("unread-old") }];
-  saved.mutes = [{ path: href("muted"), until: "" }];
-  await page.route("**/api/ListSessions*", (route: any) => route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: true })}\n\nevent: complete\ndata: {}\n\n` }));
+  saved.topShelf = { tabs: [{ space: "main", path: href("shelved") }] };
+  const done = { upstreamSuccess: true, tabs: [{ path: "/search/dash", unreadAt: at(3) }] };
+  await page.route("**/api/ListSessions*", (route: any) => route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ sessions, owner: "tester" })}\n\ndata: ${JSON.stringify(done)}\n\nevent: complete\ndata: {}\n\n` }));
   await page.goto(origin + href("calm"));
   await strip(page).getByRole("tab", { name: "Asked old", exact: true }).waitFor();
-  for (const id of ["asked-old", "asked-new", "unread-old", "unread-new", "asked-old"]) {
+  await page.waitForFunction(() => document.title === "(6) lab - RocketClaw");
+  for (const path of [href("asked-old"), href("asked-new"), href("unread-old"), "/search/dash", href("shelved"), href("unread-new"), href("asked-old")]) {
     await page.keyboard.press(`${key}+Alt+a`);
-    await page.waitForURL(origin + href(id));
+    await page.waitForURL((url: URL) => url.pathname === path);
   }
+  // A Shared or Top Shelf row it visits gains no tab of this person's.
+  expect(await names(page)).not.toContain("Unread old");
+  expect(await names(page)).not.toContain("Shelved");
   await page.keyboard.press(`${key}+Shift+p`);
   const command = page.getByRole("dialog", { name: "Run command", exact: true }).getByRole("button", { name: "Sessions: Next needing you", exact: true });
   expect(await command.locator("kbd").allTextContents()).toEqual([modifier, alternate, "A"]);
@@ -1304,7 +1333,7 @@ test("Search pages are tabs of their own: renamed in place, shared as one page, 
   await until(() => JSON.stringify(saved.shared[0].search?.searches.map((item) => item.query)) === JSON.stringify(["rollback", "other person", "mine"]));
   // Taken out of Shared, the page as saved stays as this person's own, with their own searches there, so nothing anyone
   // added is lost.
-  expect(await sharedMenu(page, "Prod deploys")).toEqual(["Rename search", "Remove from Shared", "Duplicate"]);
+  expect(await sharedMenu(page, "Prod deploys")).toEqual(["Rename search", "—", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park"]);
   await page.getByRole("menuitem", { name: "Remove from Shared", exact: true }).click();
   await row("Prod deploys").waitFor({ state: "detached" });
   await tab("Prod deploys").waitFor();
@@ -1494,7 +1523,8 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "Space: Ops" }).waitFor();
   await tab("New session").click({ button: "right" });
-  expect(await page.getByRole("menuitem").allInnerTexts()).toEqual(["Close", "Close others", "Close to the right", "Close all", "Add to group", "Move to space"]);
+  await page.getByRole("menuitem").first().waitFor();
+  expect(await menuLines(page)).toEqual(["Close", "Close others", "Close to the right", "Close all", "—", "Add to group", "Move to space"]);
   await page.getByRole("menuitem", { name: "Move to space", exact: true }).click();
   const spaces = page.getByRole("menu").nth(1);
   await spaces.waitFor();
@@ -1688,7 +1718,7 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
 
   // A Shared row has no close button, offers no closing, ignores middle-clicks, and takes no drops of this person's tabs.
   expect(await shared(page).getByRole("button", { name: "Close Alpha" }).count()).toBe(0);
-  expect(await sharedMenu(page, "Alpha")).toEqual(["Remove from Shared", "Mark as unread", "Mute notifications", "Snooze notifications"]);
+  expect(await sharedMenu(page, "Alpha")).toEqual(["Remove from Shared", "—", "Mark as unread", "Park"]);
   await page.keyboard.press("Escape");
   await page.getByRole("menu").waitFor({ state: "hidden" });
   await row("Alpha").click({ button: "middle" });
@@ -1935,69 +1965,160 @@ test("Shared rows step, arrow, and reorder like this person's tabs, and Escape l
   expect(await sharedNames(page)).toEqual(["Charlie", "Bravo", "Shortcuts"]);
 }), 30_000);
 
-test("any session tab, Shared or not, mutes or snoozes its notifications from its menu or the palette", () => withPage({}, async (page, origin, _prompts, saved) => {
-  const row = (name: string) => shared(page).getByRole("tab", { name, exact: true }), tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
-  const commands = page.getByRole("dialog", { name: "Run command" }), dialog = page.getByRole("dialog", { name: "Snooze notifications" });
-  const close = async () => { await page.keyboard.press("Escape"); await page.getByRole("menu").first().waitFor({ state: "hidden" }); };
-  const command = async (name: string) => {
-    await page.keyboard.press("Control+Shift+p");
-    await commands.getByRole("button", { name: `Tabs: ${name}`, exact: true }).click();
-    await commands.waitFor({ state: "hidden" });
-  };
-  saved.state = { ...saved.state, tabs: [{ path: href("alpha"), space: "main" }], space: "main" };
-  saved.shared = [{ space: "main", path: "/shortcuts" }, { space: "main", path: href("bravo") }];
+// Asia/Kolkata has no daylight saving, so its 9:00 is always 03:30 UTC.
+test("Park moves tabs of any kind to Parked, which lists every space's, stepping skips it and bulk closes take it, Unpark returns tabs to their group and place, and a closed tab comes back parked only while its park has a time", () => withPage({ timezoneId: "Asia/Kolkata" }, async (page, origin, _prompts, saved) => {
+  const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true }), parked = page.getByRole("tablist", { name: "Parked tabs" }), row = (name: string) => parked.getByRole("tab", { name, exact: true });
+  const header = page.getByRole("button", { name: "Parked", exact: true }), sent = (count: number) => until(() => saved.sent.length === count);
+  // The person's tabs are in Ops, Bravo and Charlie in its Work group; Hotel, in Main, is parked until they unpark it.
+  saved.spaces.push({ id: "ops", name: "Ops" });
+  saved.state = { ...saved.state, space: "ops", groups: [{ id: "work", name: "Work", color: "Blue" }], tabs: [...[href("alpha"), href("bravo"), href("charlie"), href("delta"), "/cron"].map((path, i) => ({ path, space: "ops", group: i === 1 || i === 2 ? "work" : undefined })), { path: href("hotel"), space: "main" }] };
+  saved.attention = [{ path: href("hotel"), parked: true }];
   await page.goto(`${origin}${href("alpha")}`);
+  await header.waitFor();
+  expect([await header.getAttribute("aria-expanded"), await parked.getByRole("tab").count()]).toEqual(["false", 0]);
+  await header.click();
+  expect(await row("Hotel").getAttribute("aria-description")).toBe("Space: Main, Forked session, Parked");
+
+  // Park sends one change naming the tab's location and moves the tab to Parked at once.
+  await menu(page, "Bravo", "Park", "Until I unpark");
   await row("Bravo").waitFor();
-  // Only sessions notify, so a page tab offers no muting.
-  expect(await sharedMenu(page, "Shortcuts")).toEqual(["Remove from Shared"]);
-  await close();
-  // A Shared row mutes for this person alone, shows a bell, and then offers Unmute.
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "Mark as unread", "Mute notifications", "Snooze notifications"]);
-  await page.getByRole("menuitem", { name: "Mute notifications" }).click();
-  await shared(page).getByTitle("Muted", { exact: true }).waitFor();
-  expect([saved.mutes, await row("Bravo").getAttribute("aria-description")]).toEqual([[{ path: href("bravo"), until: "" }], "Shared, Space: Main, Muted"]);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "Mark as unread", "Unmute notifications"]);
-  await page.getByRole("menuitem", { name: "Unmute notifications" }).click();
-  await shared(page).getByTitle("Muted", { exact: true }).waitFor({ state: "detached" });
-  expect(saved.mutes).toEqual([]);
+  await sent(1);
+  expect(saved.sent).toEqual([{ paths: [href("bravo")], action: "PARK" }]);
+  expect(await order(page)).toEqual(["Alpha", "Work", "Charlie", "Delta", "Cron"]);
+  // A timed park is reckoned in the browser's local time, and its row says when it ends.
+  await menu(page, "Cron", "Park", "Tomorrow 9:00");
+  await sent(2);
+  const nine = await page.evaluate(() => { const at = new Date(); at.setDate(at.getDate() + 1); at.setHours(9, 0, 0, 0); return at.toISOString(); });
+  expect([saved.sent[1], nine.slice(10)]).toEqual([{ paths: ["/cron"], action: "PARK", until: nine }, "T03:30:00.000Z"]);
+  await parked.locator('[role="tab"][aria-label="Cron"][aria-description^="Space: Ops, Parked until "]').waitFor();
+  // Parked from its keyboard menu, Charlie leaves Work empty, whose header goes, and focus moves to the strip's selected tab.
+  await tab("Charlie").focus();
+  await page.keyboard.press("Shift+F10");
+  await page.getByRole("menuitem", { name: "Park", exact: true }).press("ArrowRight");
+  await page.getByRole("menuitem", { name: "Until I unpark", exact: true }).press("Enter");
+  await row("Charlie").waitFor();
+  await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Alpha"]'));
+  expect(await order(page)).toEqual(["Alpha", "Delta"]);
 
-  // The Snooze submenu offers four ends and a picked one; next Monday is a Monday at 9:00 within the coming week.
-  await tab("Alpha").click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Snooze notifications" }).click();
-  await page.getByRole("menuitem", { name: "1 hour" }).waitFor();
-  const choices = page.getByRole("menu").filter({ has: page.getByRole("menuitem", { name: "1 hour" }) }).getByRole("menuitem");
-  expect(await choices.allInnerTexts()).toEqual(["1 hour", "4 hours", "Tomorrow, 9:00", "Next Monday, 9:00", "Pick date & time…"]);
-  await page.getByRole("menuitem", { name: "Next Monday, 9:00" }).click();
-  await until(() => saved.mutes.length === 1);
-  // Seven calendar days at 9:00 can be more than 168 hours away on Monday morning.
-  expect(await page.evaluate((until: string) => {
-    const monday = new Date(until);
-    return [monday.getDay(), monday.getHours(), monday.getMinutes(), monday > new Date(), monday.getTime() <= new Date().setHours(7 * 24 + 9, 0, 0, 0)];
-  }, saved.mutes[0].until)).toEqual([1, 9, 0, true, true]);
-  const description = await strip(page).getByTitle(/^Snoozed until /).getAttribute("title");
-  expect(await tab("Alpha").getAttribute("aria-description")).toBe(`Space: Main, ${description}`);
+  // Cmd/Ctrl+] skips parked tabs.
+  for (const id of ["delta", "alpha"]) {
+    await page.keyboard.press("Control+BracketRight");
+    await page.waitForURL(`**${href(id)}`);
+  }
+  // Unpark returns each tab to its group and place.
+  for (const name of ["Charlie", "Bravo"]) {
+    await row(name).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Unpark", exact: true }).click();
+    await tab(name).waitFor();
+  }
+  await sent(5);
+  expect(saved.sent.slice(3)).toEqual([{ paths: [href("charlie")], action: "UNPARK" }, { paths: [href("bravo")], action: "UNPARK" }]);
+  expect(await order(page)).toEqual(["Alpha", "Work", "Bravo", "Charlie", "Delta"]);
 
-  // The palette unmutes and snoozes the tab in view; a picked time starts at tomorrow 9:00 and must lie ahead.
-  await command("Unmute notifications");
-  await until(() => saved.mutes.length === 0);
-  await command("Snooze notifications for 1 hour");
-  await until(() => saved.mutes.length === 1);
-  expect(Math.abs(Date.parse(saved.mutes[0].until) - Date.now() - 3_600_000)).toBeLessThan(60_000);
-  await command("Unmute notifications");
-  await until(() => saved.mutes.length === 0);
-  await command("Snooze notifications until a picked time…");
-  const [date, time] = [dialog.getByLabel("Date"), dialog.getByLabel("Time")];
-  const tomorrow = await page.evaluate(() => { const day = new Date(); day.setDate(day.getDate() + 1); return [day.getFullYear(), day.getMonth() + 1, day.getDate()].map((part) => String(part).padStart(2, "0")).join("-"); });
-  expect([await date.inputValue(), await time.inputValue()]).toEqual([tomorrow, "09:00"]);
-  await date.fill("2001-02-03");
-  expect(await dialog.getByRole("button", { name: "Snooze", exact: true }).isDisabled()).toBe(true);
-  await dialog.getByText("Pick a time in the future.").waitFor();
-  await date.fill("2099-01-02");
-  await time.fill("10:30");
-  await dialog.getByRole("button", { name: "Snooze", exact: true }).click();
+  // Close on a Parked row closes the tab. Reopened, one whose park has a time is still parked; one parked until unparked
+  // is an ordinary tab, as closing it ended its park.
+  for (const [name, path] of [["Cron", "/cron"], ["Hotel", href("hotel")]]) {
+    await parked.getByRole("button", { name: `Close ${name}` }).click();
+    await row(name).waitFor({ state: "detached" });
+    await until(() => saved.closed[0]?.path === path);
+  }
+  await header.waitFor({ state: "detached" });
+  expect(saved.attention.find((item) => item.path === href("hotel"))?.parked).toBe(false);
+  for (const polled = saved.polls + 2; saved.polls < polled;) await Bun.sleep(20);
+  await page.keyboard.press("Control+Alt+t");
+  await page.waitForURL(`**${href("hotel")}`);
+  await page.getByRole("button", { name: "Space: Main" }).waitFor();
+  await tab("Hotel").waitFor();
+  await page.keyboard.press("Control+Alt+t");
+  await page.waitForURL("**/cron");
+  await row("Cron").waitFor();
+  expect(await tab("Cron").count()).toBe(0);
+
+  // Bulk closes take this space's parked tabs too: Close others closes the parked Cron with the rest of Ops.
+  await menu(page, "Alpha", "Close others");
+  await until(() => saved.state.tabs.map((item) => item.path).join() === [href("alpha"), href("hotel")].join());
+  await header.waitFor({ state: "detached" });
+}), 60_000);
+
+test("Park until it is done is offered for a session, not a page, and parks the tab, which Parked says waits for its turn", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const parked = page.getByRole("tablist", { name: "Parked tabs" });
+  const parkMenu = async (name: string) => {
+    await strip(page).getByRole("tab", { name, exact: true }).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Park", exact: true }).hover();
+    const submenu = page.getByRole("menu").nth(1);
+    await submenu.getByRole("menuitem", { name: "Until I unpark", exact: true }).waitFor();
+    const items = await submenu.getByRole("menuitem").allInnerTexts();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+    await page.getByRole("menu").first().waitFor({ state: "hidden" });
+    return items;
+  };
+  await openSaved(page, origin, "/cron", "Cron", saved);
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  expect(await parkMenu("Cron")).not.toContain("Until it is done");
+  expect(await parkMenu("Alpha")).toContain("Until it is done");
+
+  await menu(page, "Alpha", "Park", "Until it is done");
+  await until(() => saved.sent.length === 1);
+  expect(saved.sent[0]).toEqual({ paths: [href("alpha")], action: "PARK_UNTIL_DONE" });
+  await parked.locator('[role="tab"][aria-label="Alpha"][aria-description$="Parked until it is done"]').waitFor();
+}), 30_000);
+
+test("the palette offers the tab in view the same attention items, without Mute or Snooze, and Park until a picked time starts at the next whole hour, which the parked tab states", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const parked = page.getByRole("tablist", { name: "Parked tabs" }), commands = page.getByRole("dialog", { name: "Run command" }), dialog = page.getByRole("dialog", { name: "Park until" });
+  await openSaved(page, origin, href("alpha"), "Alpha", saved);
+  await page.keyboard.press("Control+Shift+p");
+  // The tab commands whose label holds the query, sorted; looser matches the palette lists after them are left out.
+  const filter = async (query: string) => {
+    await page.getByPlaceholder("Type a command").fill(query);
+    return (await commands.getByRole("button").allInnerTexts()).filter((label: string) => label.startsWith("Tabs: ") && label.toLowerCase().includes(query.toLowerCase())).toSorted();
+  };
+  expect(await filter("Tabs: Park")).toEqual(["Tabs: Park for 1 hour", "Tabs: Park for 4 hours", "Tabs: Park until I unpark", "Tabs: Park until a picked time…", "Tabs: Park until it is done", "Tabs: Park until next Monday at 9:00", "Tabs: Park until tomorrow at 9:00"]);
+  expect([await filter("Mute"), await filter("Snooze"), await filter("Tabs: Mark as")]).toEqual([[], [], ["Tabs: Mark as unread"]]);
+  await page.keyboard.press("Escape");
+  await commands.waitFor({ state: "hidden" });
+
+  // Pick a time starts at the next whole hour: today, or tomorrow when that is past midnight.
+  const opensAt = async (now: string) => {
+    await page.clock.setFixedTime(new Date(await page.evaluate((at: string) => new Date(at).toISOString(), now)));
+    await menu(page, "Alpha", "Park", "Pick a time…");
+    return [await dialog.getByLabel("Date").inputValue(), await dialog.getByLabel("Time").inputValue()];
+  };
+  expect(await opensAt("2030-01-01T23:30")).toEqual(["2030-01-02", "00:00"]);
+  await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "hidden" });
-  await until(() => saved.mutes.length === 1);
-  expect(Date.parse(saved.mutes[0].until)).toBe(await page.evaluate(() => new Date("2099-01-02T10:30").getTime()));
+  expect(await opensAt("2030-01-02T08:23")).toEqual(["2030-01-02", "09:00"]);
+  await dialog.getByLabel("Date").fill("2030-01-02");
+  await dialog.getByLabel("Time").fill("10:30");
+  await dialog.getByRole("button", { name: "Park", exact: true }).click();
+  await dialog.waitFor({ state: "hidden" });
+  await until(() => saved.sent.length === 1);
+  expect(saved.sent[0]).toEqual({ paths: [href("alpha")], action: "PARK", until: await page.evaluate(() => new Date("2030-01-02T10:30").toISOString()) });
+  const stated = await page.evaluate(() => `Parked until ${new Date("2030-01-02T10:30").toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`);
+  await parked.locator(`[role="tab"][aria-label="Alpha"][aria-description$="${stated}"]`).waitFor();
+}), 30_000);
+
+test("a Shared row offers the attention items as a tab of the person's own does, and stays in place when parked, dimmed only for the person who parked it", () => withPage({}, async (page, origin, _prompts, saved) => {
+  const row = (name: string) => shared(page).getByRole("tab", { name, exact: true }), opacity = (path: string) => shared(page).locator(`[data-tab="${path}"]`).evaluate((node: HTMLElement) => getComputedStyle(node).opacity);
+  const close = async () => { await page.keyboard.press("Escape"); await page.getByRole("menu").waitFor({ state: "hidden" }); };
+  saved.state = { ...saved.state, tabs: [{ path: href("alpha"), space: "main" }], space: "main" };
+  saved.shared = [{ space: "main", path: href("bravo") }, { space: "main", path: "/search/d", search: { name: "Ops", board: "kanban", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" } }];
+  await page.goto(`${origin}${href("alpha")}`);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "—", "Mark as unread", "Park"]);
+  await close();
+  expect(await sharedMenu(page, "Ops")).toEqual(["Rename search", "—", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park"]);
+  await close();
+
+  await shared(page).getByRole("tab", { name: "Bravo", exact: true }).click({ button: "right" });
+  for (const item of ["Park", "Until I unpark"]) await page.getByRole("menuitem", { name: item, exact: true }).click();
+  await row("Bravo").and(page.locator('[aria-description="Shared, Space: Main, Parked"]')).waitFor();
+  expect([await sharedNames(page), await opacity(href("bravo")), await names(page)]).toEqual([["Bravo", "Ops"], "0.6", ["Alpha"]]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "—", "Unpark"]);
+  await close();
+  // Another person's session list carries none of this person's parks, so for them the row is as it was.
+  saved.attention = [];
+  await row("Bravo").and(page.locator('[aria-description="Shared, Space: Main"]')).waitFor();
+  expect(await opacity(href("bravo"))).toBe("1");
 }), 30_000);
 
 // The new-chat Transcript stays mounted, hidden, on other pages; its creation must not pull the person off the page they chose.

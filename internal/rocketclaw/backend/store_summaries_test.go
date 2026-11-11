@@ -356,7 +356,8 @@ func TestSidebarSessionsListFirstTurnBeforeHistory(t *testing.T) {
 	require.Equal(t, "answer", row.Summary.LastMessage)
 }
 
-// A session asks while its running turn has an unanswered Web question; an answer or the turn's end stops it.
+// A session asks while its running turn has an unanswered Web question; an answer or the turn's end stops it. A
+// question marks its keeper only when it makes the session ask.
 func TestSidebarSessionsMarkUnansweredQuestions(t *testing.T) {
 	t.Parallel()
 
@@ -364,6 +365,10 @@ func TestSidebarSessionsMarkUnansweredQuestions(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, service.UpsertThread("asking", ThreadState{Agent: "main"}))
 	seedActiveTurn(t, service, "asking", "turn-1", nil)
+
+	saved, err := service.SaveTabState(ctx, alice, &TabState{Tabs: []Tab{{Path: sessionPath("asking"), Space: "main"}}}, 0)
+	require.NoError(t, err)
+	require.True(t, saved)
 
 	asking := func() bool {
 		var rows []bool
@@ -382,17 +387,22 @@ func TestSidebarSessionsMarkUnansweredQuestions(t *testing.T) {
 	require.False(t, asking())
 
 	questions := &webQuestions{store: service}
-	require.NoError(t, questions.change(ctx, saveWebQuestionStep, "asking", "turn-1/call/c1"+webQuestionStep, "{}"))
+	require.NoError(t, questions.change(ctx, askWebQuestionSQL, "asking", "turn-1/call/c1"+webQuestionStep, "{}"))
 	require.True(t, asking())
+	require.Equal(t, []string{alice + " loud"}, attentionOn(t, service, "asking"))
 
 	require.NoError(t, questions.change(ctx, saveWebQuestionStep, "asking", "turn-1/call/c1/answer", "{}"))
 	require.False(t, asking())
 
-	_, err := service.finishTurn(ctx, "turn-1", &turnFinish{conversationID: strings.TrimSpace("asking"), outbound: protocol.NewOutboundMessage("asking", ""), entries: []harness.SessionEntry{*testSessionEntry("question", "answer")}})
+	_, err = service.finishTurn(ctx, "turn-1", &turnFinish{conversationID: strings.TrimSpace("asking"), outbound: protocol.NewOutboundMessage("asking", ""), entries: []harness.SessionEntry{*testSessionEntry("question", "answer")}})
 	require.NoError(t, err)
 	require.NoError(t, service.closeTurn(ctx, "turn-1"))
-	require.NoError(t, questions.change(ctx, saveWebQuestionStep, "asking", "turn-0/call/c2"+webQuestionStep, "{}"))
+
+	_, err = service.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
+	require.NoError(t, err)
+	require.NoError(t, questions.change(ctx, askWebQuestionSQL, "asking", "turn-0/call/c2"+webQuestionStep, "{}"))
 	require.False(t, asking(), "a question no running turn waits on asks nothing")
+	require.Empty(t, attentionOn(t, service, "asking"), "and marks no one")
 }
 
 func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {

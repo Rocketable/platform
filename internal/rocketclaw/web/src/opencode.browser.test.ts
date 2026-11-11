@@ -603,9 +603,10 @@ test("mobile keyboards keep the composer, model controls and bottom bar above th
   }
 }, 60_000);
 
-test("a deleted remote session leaves the Top Shelf too", async () => {
+test("a shelf row offers its server's attention items, one of an offline server is greyed and offers only Remove, and a deleted remote session leaves the Top Shelf too", async () => {
   const { chromium: engine } = await import(playwright!);
-  const { web, release, shelved, base } = start({ tabs: [{ path: route("opencode:box:ses_a"), space: "main" }] });
+  // work never answers, so its Cron tab's shelf row is offline.
+  const { web, release, shelved, base } = start({ tabs: [{ path: route("opencode:box:ses_a"), space: "main" }, { server: "work", path: "/cron", space: "main" }] });
   release();
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
@@ -614,15 +615,29 @@ test("a deleted remote session leaves the Top Shelf too", async () => {
     page.on("pageerror", (error: Error) => errors.push(error.message));
     await page.goto(`${base}${route("opencode:box:ses_a")}`);
     await page.locator("main [data-oc-view]").getByText("answer in ses_a").waitFor();
-    const shelf = page.getByRole("tablist", { name: "Top Shelf" });
+    const shelf = page.getByRole("tablist", { name: "Top Shelf" }), offline = shelf.getByRole("tab", { name: "Cron", exact: true });
+    const menu = async (row: any) => {
+      await row.click({ button: "right" });
+      await page.getByRole("menuitem").first().waitFor();
+      const items = await page.getByRole("menuitem").allInnerTexts();
+      await page.keyboard.press("Escape");
+      await page.getByRole("menu").waitFor({ state: "hidden" });
+      return items;
+    };
     await shelf.getByRole("tab", { name: "Alpha work", exact: true }).waitFor();
+    expect(await menu(shelf.getByRole("tab", { name: "Alpha work", exact: true }))).toEqual(["Mark as unread", "Park", "Remove from Top Shelf"]);
+    await shelf.locator('[role="tab"][aria-label="Cron"][aria-description="Top Shelf, work, Server offline"]').waitFor();
+    expect(await shelf.locator('[data-tab="/cron"]').evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("0.6");
+    await offline.hover();
+    await page.locator('[data-slot="tooltip-content"]').filter({ hasText: "Cron · Server offline" }).waitFor();
+    expect(await menu(offline)).toEqual(["Remove from Top Shelf"]);
     await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("Delete session");
     await page.getByRole("button", { name: "Sessions: Delete session" }).click();
     await page.getByRole("dialog", { name: "Delete session", exact: true }).getByRole("button", { name: "Delete session", exact: true }).click();
     await until(() => !fake.sessions.has("ses_a"));
-    await until(() => shelved()?.tabs?.length === 0);
-    expect(await shelf.locator("[data-tab]").count()).toBe(0);
+    await until(() => shelved()?.tabs?.map((tab) => tab.path).join() === "/cron");
+    expect(await shelf.locator("[data-tab]").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.dataset.tab))).toEqual(["/cron"]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

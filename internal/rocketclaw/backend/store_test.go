@@ -661,7 +661,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{
 		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
-		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_mutes", "web_top_shelves", "web_closed_tabs", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
+		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_attention", "web_top_shelves", "web_closed_tabs", "web_search_pages", "web_searches", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
 	}, tables)
 }
 
@@ -2519,18 +2519,16 @@ VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	assert.Equal(t, TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}}, Space: "main", Last: last, SharedOrder: order}, state, "every space keeps its own last tab")
 
 	// A Search tab keeps its page through saves that move it; other tabs have none.
-	page := `{"name":"Triage","searches":[{"id":"1","query":"is:unread"}],"active":"1"}`
-	for i, tab := range []Tab{{Path: "/search/a", Space: "main", Search: []byte(page)}, {Path: "/search/a", Group: "g", Space: "ops", Search: []byte(page)}} {
+	page := &SearchPage{Name: "Triage", Board: "kanban", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}, {ID: "1", Name: "Mine", Query: "principal:alice", Notify: true}}, Active: "1"}
+	for i, tab := range []Tab{{Path: "/search/a", Space: "main", Search: page}, {Path: "/search/a", Group: "g", Space: "ops", Search: page}} {
 		saved, err = store.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}, tab}, Space: "main"}, int64(3+i))
 		require.NoError(t, err)
 		require.True(t, saved)
 
 		state, _, err = store.TabState(ctx, "alice")
 		require.NoError(t, err)
-		require.Len(t, state.Tabs, 2)
-		assert.Nil(t, state.Tabs[0].Search)
-		assert.JSONEq(t, page, string(state.Tabs[1].Search))
-		assert.Equal(t, tab.Space, state.Tabs[1].Space)
+		assert.Equal(t, []Tab{{Path: "/cron", Space: "ops"}, tab}, state.Tabs)
+		assertNoOrphanSearchPages(t, store)
 	}
 
 	// A Web from before Search pages saves the tab without its page, which stays.
@@ -2540,7 +2538,8 @@ VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 
 	state, _, err = store.TabState(ctx, "alice")
 	require.NoError(t, err)
-	assert.JSONEq(t, page, string(state.Tabs[0].Search))
+	assert.Equal(t, []Tab{{Path: "/search/a", Space: "main", Search: page}}, state.Tabs)
+	assertNoOrphanSearchPages(t, store)
 
 	state, revision, err = store.TabState(ctx, "bob")
 	require.NoError(t, err)
@@ -2586,7 +2585,7 @@ func TestWebSharedTabs(t *testing.T) {
 	share(ops, "/s/YQ")
 	share(dev, "/agents")
 
-	unshare := func(space, path string) []byte {
+	unshare := func(space, path string) *SearchPage {
 		t.Helper()
 
 		page, err := store.UnshareTab(ctx, space, path)
@@ -2622,79 +2621,147 @@ func TestWebSharedTabs(t *testing.T) {
 	require.NoError(t, err)
 
 	docs := spaces[1].ID
-	first, second := `{"name":"Triage","searches":[{"id":"1","query":"is:unread"}],"active":"1"}`, `{"name":"Deploys","searches":[],"active":""}`
-	page := func(space string) string {
+	first := &SearchPage{Name: "Triage", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}, {ID: "1", Query: "tag:bug", Notify: true}}, Active: "1"}
+	second, mine := &SearchPage{Name: "Deploys", Board: "kanban", Searches: []SavedSearch{{ID: "2", Name: "Mine", Query: "principal:alice"}}}, &SearchPage{Name: "Mine"}
+	page := func(space, path string) *SearchPage {
 		t.Helper()
 
-		index := slices.IndexFunc(shared(), func(tab SharedTab) bool { return tab.Space == space && tab.Path == "/search/x" })
+		tabs := shared()
+		index := slices.IndexFunc(tabs, func(tab SharedTab) bool { return tab.Space == space && tab.Path == path })
 		require.GreaterOrEqual(t, index, 0)
 
-		return string(shared()[index].Search)
+		return tabs[index].Search
 	}
 
-	require.NoError(t, store.ShareTab(ctx, docs, "/search/x", []byte(first)))
-	assert.JSONEq(t, first, page(docs))
-	require.NoError(t, store.ShareTab(ctx, docs, "/search/x", []byte(second)))
-	assert.JSONEq(t, first, page(docs))
+	require.NoError(t, store.ShareTab(ctx, docs, "/search/x", first))
+	assert.Equal(t, first, page(docs, "/search/x"))
+	require.NoError(t, store.ShareTab(ctx, docs, "/search/x", second))
+	require.NoError(t, store.ShareTab(ctx, "gone", "/search/x", second))
+	require.NoError(t, store.ShareTab(ctx, docs, "/s/bm9uZQ", second))
+	assert.Equal(t, first, page(docs, "/search/x"), "sharing again, into a missing space, or a missing session stores no page")
+	assertNoOrphanSearchPages(t, store)
 
-	edit := func(path, base, search string) bool {
+	edit := func(space, path string, base, search *SearchPage) bool {
 		t.Helper()
 
-		edited, err := store.EditSharedSearch(ctx, docs, path, []byte(base), []byte(search))
+		edited, err := store.EditSharedSearch(ctx, space, path, base, search)
 		require.NoError(t, err)
 
 		return edited
 	}
-	assert.False(t, edit("/search/x", second, second), "an edit made from a page that has since changed is refused")
-	assert.JSONEq(t, first, page(docs))
-	assert.True(t, edit("/search/x", first, second))
-	assert.JSONEq(t, second, page(docs))
-	assert.False(t, edit("/search/y", "", second))
+	assert.False(t, edit(docs, "/search/x", second, second), "an edit made from a page that has since changed is refused")
+	assert.Equal(t, first, page(docs, "/search/x"))
+	assert.True(t, edit(docs, "/search/x", first, second))
+	assert.Equal(t, second, page(docs, "/search/x"))
+	assert.False(t, edit(docs, "/search/y", nil, second))
 	assert.False(t, slices.ContainsFunc(shared(), func(tab SharedTab) bool { return tab.Path == "/search/y" }))
+	assertNoOrphanSearchPages(t, store)
+
+	require.NoError(t, store.ShareTab(ctx, "main", "/search/z", mine))
+	require.NoError(t, store.ShareTab(ctx, docs, "/search/z", first))
 	require.NoError(t, store.DeleteSpace(ctx, docs))
-	assert.JSONEq(t, second, page("main"))
+	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/cron"}, {Space: "main", Path: "/agents"}, {Space: "main", Path: "/search/x", Search: second}, {Space: "main", Path: "/search/z", Search: mine}}, shared(),
+		"a deleted space's Search pages move with their tabs, keeping when they were added; one shared there already keeps its own page")
+	assertNoOrphanSearchPages(t, store)
+
+	// Two edits made from the same page at once: whichever locks the tab first is saved, and the other is refused as
+	// stale once it sees that page.
+	tx, err := store.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	var holder int
+	require.NoError(t, tx.QueryRowContext(ctx, `SELECT pg_backend_pid() FROM web_shared_tabs WHERE space = 'main' AND path = '/search/x' FOR UPDATE`).Scan(&holder))
+
+	results := make(chan bool, 2)
+
+	for _, search := range []*SearchPage{{Name: "A"}, {Name: "B"}} {
+		go func() {
+			edited, err := store.EditSharedSearch(ctx, "main", "/search/x", second, search)
+			assert.NoError(t, err)
+
+			results <- edited
+		}()
+	}
+
+	assert.Eventually(t, func() bool {
+		var waiting int
+
+		// The second edit waits behind the first, which waits behind the lock.
+		_ = store.db.QueryRowContext(ctx, `WITH RECURSIVE waiting AS (
+    SELECT $1::integer AS pid
+    UNION SELECT a.pid FROM pg_stat_activity a JOIN waiting w ON w.pid = ANY(pg_blocking_pids(a.pid))
+)
+SELECT count(*) - 1 FROM waiting`, holder).Scan(&waiting)
+
+		return waiting == 2
+	}, 5*time.Second, time.Millisecond)
+	require.NoError(t, tx.Commit())
+	assert.ElementsMatch(t, []bool{true, false}, []bool{<-results, <-results})
+
+	saved := page("main", "/search/x")
+	assert.Contains(t, []string{"A", "B"}, saved.Name)
+	assert.Equal(t, saved, unshare("main", "/search/x"), "taking it out of Shared returns the page it held")
 	assert.Nil(t, shared()[0].Search, "other tabs have no page")
-	assert.JSONEq(t, second, string(unshare("main", "/search/x")), "taking it out of Shared returns the page it held")
+	assertNoOrphanSearchPages(t, store)
 }
 
-func TestWebTabMutes(t *testing.T) {
+// assertNoOrphanSearchPages asserts that every Search page is some row's; a search always is its page's.
+func assertNoOrphanSearchPages(t *testing.T, store *SessionService) {
+	t.Helper()
+
+	orphans, err := queryStrings(t.Context(), store.db, `WITH owned AS (
+    SELECT search_page FROM web_tabs UNION ALL SELECT search_page FROM web_shared_tabs UNION ALL SELECT search_page FROM web_closed_tabs
+    UNION ALL SELECT search_page FROM web_top_shelves
+)
+SELECT p.id::text FROM web_search_pages p LEFT JOIN owned o ON o.search_page = p.id WHERE o.search_page IS NULL`, "orphan search pages")
+	require.NoError(t, err)
+	assert.Empty(t, orphans)
+}
+
+// Two saves of one person's Top Shelf made at once take turns, so the shelf is one of the two, whole.
+func TestWebTopShelfConcurrentSaves(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
 	ctx := t.Context()
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"a": KindWebChat, "b": KindWebChat, "c": KindWebChat})
+	require.NoError(t, store.SaveTopShelf(ctx, "alice", &TopShelf{Tabs: []ShelfTab{{Path: "/cron"}}}))
 
-	later, earlier := time.Now().Add(time.Hour).Truncate(time.Second), time.Now().Add(-time.Hour)
-	mutes := func(username string) []string {
-		t.Helper()
+	tx, err := store.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
 
-		got, err := store.TabMutes(ctx, username)
-		require.NoError(t, err)
+	var holder int
+	require.NoError(t, tx.QueryRowContext(ctx, `SELECT pg_backend_pid() FROM web_tab_states WHERE username = 'alice' FOR UPDATE`).Scan(&holder))
 
-		out := make([]string, 0, len(got))
-		for _, mute := range got {
-			out = append(out, fmt.Sprint(mute.Path, " ", mute.Until != nil && mute.Until.Equal(later)))
-		}
-
-		return out
+	page := &SearchPage{Name: "x", Searches: []SavedSearch{{ID: "1", Query: "q"}}}
+	shelves := []TopShelf{
+		{Tabs: []ShelfTab{{Path: "/search/1", Search: page}, {Path: "/cron"}}, Collapsed: true},
+		{Tabs: []ShelfTab{{Path: "/cron"}, {Server: "work", Path: "/search/1"}, {Path: "/search/1", Search: page}}},
 	}
 
-	require.NoError(t, store.MuteTab(ctx, "alice", "/s/a", nil))
-	require.NoError(t, store.MuteTab(ctx, "alice", "/s/Yg", &later))
-	require.NoError(t, store.MuteTab(ctx, "alice", "/s/Yw", &earlier))
-	require.NoError(t, store.MuteTab(ctx, "alice", "/search", nil))
-	require.NoError(t, store.MuteTab(ctx, "alice", "/s/bm9uZQ", nil))
-	require.NoError(t, store.MuteTab(ctx, "bob", "/s/YQ", &later))
-	assert.Equal(t, []string{"/s/YQ false", "/s/Yg true"}, mutes("alice"),
-		"a mute or a snooze is kept under the canonical path; a past snooze, a page, and a missing session are not")
-	assert.Equal(t, []string{"/s/YQ true"}, mutes("bob"), "each person's mutes are their own")
+	var saves errgroup.Group
+	for _, shelf := range shelves {
+		saves.Go(func() error { return store.SaveTopShelf(ctx, "alice", &shelf) })
+	}
 
-	require.NoError(t, store.MuteTab(ctx, "alice", "/s/Yw", nil))
-	require.NoError(t, store.UnmuteTab(ctx, "alice", "/s/YQ"))
-	_, err := store.db.ExecContext(ctx, `DELETE FROM conversations WHERE conversation_id = 'b'`)
+	assert.Eventually(t, func() bool {
+		var waiting int
+
+		// Both saves wait behind the lock.
+		_ = store.db.QueryRowContext(ctx, `WITH RECURSIVE waiting AS (
+    SELECT $1::integer AS pid
+    UNION SELECT a.pid FROM pg_stat_activity a JOIN waiting w ON w.pid = ANY(pg_blocking_pids(a.pid))
+)
+SELECT count(*) - 1 FROM waiting`, holder).Scan(&waiting)
+
+		return waiting == 2
+	}, 5*time.Second, time.Millisecond)
+	require.NoError(t, tx.Commit())
+	require.NoError(t, saves.Wait())
+
+	shelf, err := store.TopShelf(ctx, "alice")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"/s/Yw false"}, mutes("alice"), "muting again replaces a snooze; unmuting or deleting the session clears a mute")
-	assert.Equal(t, []string{"/s/YQ true"}, mutes("bob"))
+	assert.Contains(t, shelves, shelf)
+	assertNoOrphanSearchPages(t, store)
 }
 
 func TestWebClosedTabs(t *testing.T) {
@@ -2728,8 +2795,8 @@ func TestWebClosedTabs(t *testing.T) {
 		return out
 	}
 
-	page := `{"name": "Triage"}`
-	a, b, cron, search := Tab{Path: "/s/YQ", Space: "main"}, Tab{Path: "/s/Yg", Space: "ops"}, Tab{Path: "/cron", Space: "main"}, Tab{Path: "/search/x", Space: "main", Search: []byte(page)}
+	page := &SearchPage{Name: "Triage", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}}}
+	a, b, cron, search := Tab{Path: "/s/YQ", Space: "main"}, Tab{Path: "/s/Yg", Space: "ops"}, Tab{Path: "/cron", Space: "main"}, Tab{Path: "/search/x", Space: "main", Search: page}
 	save("alice", Tab{Path: "/", Space: "main"}, Tab{Path: "group:g", Group: "g", Space: "main"}, a, b, search, cron)
 	save("alice", Tab{Path: "/s/a", Space: "main"}, b, search)
 	save("alice", Tab{Path: "/s/a", Space: "main"}, b)
@@ -2738,7 +2805,8 @@ func TestWebClosedTabs(t *testing.T) {
 
 	tabs, err := store.ClosedTabs(ctx, "alice")
 	require.NoError(t, err)
-	assert.JSONEq(t, page, string(tabs[0].Search))
+	assert.Equal(t, search, tabs[0])
+	assertNoOrphanSearchPages(t, store)
 
 	saved, err := store.SaveTabState(ctx, "alice", &TabState{Space: "main"}, 0)
 	require.NoError(t, err)
@@ -2747,6 +2815,17 @@ func TestWebClosedTabs(t *testing.T) {
 	save("alice", a, cron)
 	assert.Equal(t, []string{"/s/Yg ops false", "/search/x main true"}, closed("alice"), "a reopened tab is no longer closed")
 	assert.Empty(t, closed("bob"), "each person's closed tabs are their own")
+
+	// Reopened as the Web reopens it, with the page it closed with, and closed again.
+	save("alice", a, cron, search)
+
+	state, _, err := store.TabState(ctx, "alice")
+	require.NoError(t, err)
+	assert.Equal(t, []Tab{a, cron, search}, state.Tabs)
+	assert.Equal(t, []string{"/s/Yg ops false"}, closed("alice"))
+	save("alice", a, cron)
+	assert.Equal(t, []string{"/search/x main true", "/s/Yg ops false"}, closed("alice"))
+	assertNoOrphanSearchPages(t, store)
 
 	_, err = store.db.ExecContext(ctx, `DELETE FROM conversations WHERE conversation_id = 'b'`)
 	require.NoError(t, err)
@@ -2757,12 +2836,19 @@ func TestWebClosedTabs(t *testing.T) {
 		pages[i] = Tab{Path: fmt.Sprint("/pages/main/agent/", i), Space: "main"}
 	}
 
+	soon := time.Now().Add(time.Hour)
+	require.NoError(t, store.ChangeAttention(ctx, "alice", []string{"/cron"}, AttentionPark, &soon))
 	save("alice", pages...)
 	save("alice")
 
 	got := closed("alice")
-	assert.Len(t, got, 50, "only the newest 50 stay")
+	assert.Len(t, got, 51, "only the newest 50 stay, and a tab with a timer")
 	assert.NotContains(t, got, "/search/x main true")
+	assert.Contains(t, got, "/cron main false")
+
+	rows, err := queryStrings(ctx, store.db, `SELECT 'page' FROM web_search_pages UNION ALL SELECT 'search' FROM web_searches`, "search rows")
+	require.NoError(t, err)
+	assert.Empty(t, rows, "a closed tab's page and searches go with it")
 }
 
 // Each conversation-creating path stores what it creates and whether Web lists it, and Web lists,

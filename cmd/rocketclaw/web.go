@@ -110,6 +110,11 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 	rt.Log.Info("started Web HTTPS", "address", httpListener.Addr().String(), "self_signed", cfg.Web.TLSCertFile == "")
 
 	ctxSync, cancelSync := context.WithCancel(context.Background())
+	serving.Go(func() error {
+		rt.Sessions.WatchDashboards(ctxSync, channels)
+		return nil
+	})
+
 	if len(cfg.OpenCode) > 0 {
 		serving.Go(func() error {
 			rt.Sessions.SyncOpenCode(ctxSync, cfg.OpenCode)
@@ -126,7 +131,7 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 
 		server.Stop()
 
-		if err := errors.Join(append(errs, serving.Wait(), connection.Close())...); err != nil {
+		if err := errors.Join(append(errs, web.StopSearches(), serving.Wait(), connection.Close())...); err != nil {
 			return fmt.Errorf("stop Web: %w", err)
 		}
 

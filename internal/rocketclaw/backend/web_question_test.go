@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"iter"
@@ -18,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
@@ -148,6 +150,75 @@ func TestWebQuestionWithdrawsUnlessLeftForRestart(t *testing.T) {
 	assert.Empty(t, pending)
 }
 
+// A question the running turn of a listed session saves first reaches the people a turn end reaches: the people who
+// sent the turn or a steer it applied, its keepers, and everyone who sees it in Shared. A parked tab gets a quiet mark
+// and its park comes due at once, so the person's next poll ends it with a notification.
+func TestWebQuestionMarksItsReaders(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	questions := &webQuestions{store: service}
+
+	const (
+		session = "web:asks"
+		turnID  = "turn-asks"
+		carol   = "carol@example.com" // parked the session, which she sees only in Shared
+		dave    = "dave@example.com"  // parked it with a mark
+		erin    = "erin@example.com"  // steered the running turn from the Web
+		frank   = "frank@example.com" // sent a steer the turn has not applied
+	)
+
+	require.NoError(t, service.UpsertThread(session, ThreadState{Agent: "main"}))
+	require.NoError(t, service.ShareTab(ctx, "main", sessionPath(session), nil))
+	require.NoError(t, startTurnDB(ctx, service.db, turnID, session, webMessage(protocol.InboundKindPrompt, "ask", bob)))
+
+	// Mid-turn, only the turn's own step lists the steers it applied.
+	require.NoError(t, saveTestTurn(ctx, service, session, turnID, []string{"s-erin"}, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: turnID}))
+
+	steers, err := json.Marshal([]journaledSteer{{ID: "s-erin", Inbound: webMessage(protocol.InboundKindSteer, "also", erin)}, {ID: "s-frank", Inbound: webMessage(protocol.InboundKindSteer, "and", frank)}})
+	require.NoError(t, err)
+	require.NoError(t, service.SaveTurnStep(ctx, session, turnID+"/steers", steers))
+
+	for person, state := range map[string]*TabState{alice: {Tabs: []Tab{{Path: sessionPath(session), Space: "main"}}}, erin: {}, frank: {}} {
+		saved, err := service.SaveTabState(ctx, person, state, 0)
+		require.NoError(t, err)
+		require.True(t, saved)
+	}
+
+	until := time.Now().Add(time.Hour)
+	require.NoError(t, service.ChangeAttention(ctx, alice, []string{sessionPath(session)}, AttentionPark, &until))
+	require.NoError(t, service.ChangeAttention(ctx, carol, []string{sessionPath(session)}, AttentionPark, nil))
+	require.NoError(t, service.ChangeAttention(ctx, dave, []string{sessionPath(session)}, AttentionUnread, nil))
+	require.NoError(t, service.ChangeAttention(ctx, dave, []string{sessionPath(session)}, AttentionPark, nil))
+
+	ask := func(conversationID, key string) []string {
+		t.Helper()
+		require.NoError(t, questions.change(ctx, askWebQuestionSQL, conversationID, key, "{}"))
+
+		return attentionOn(t, service, conversationID)
+	}
+
+	assert.Equal(t, []string{alice + " quiet parked", bob + " loud", carol + " quiet parked", dave + " quiet parked", erin + " loud", frank + " loud"}, ask(session, turnID+"/call/c1"+webQuestionStep))
+
+	for _, person := range []string{alice, carol, dave} {
+		_, err := service.PollAttention(ctx, person, "", false)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, []string{alice + " loud", bob + " loud", carol + " loud", dave + " loud", erin + " loud", frank + " loud"}, attentionOn(t, service, session), "each park ends at its person's next poll")
+
+	// A resumed turn saves its unanswered question again, which marks no one again.
+	_, err = service.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
+	require.NoError(t, err)
+	assert.Empty(t, ask(session, turnID+"/call/c1"+webQuestionStep))
+
+	// A question saved in a hidden run marks no one, not even the person who sent its turn.
+	recordTestConversations(t, service, "main", map[string]ConversationKind{"run": KindExternalMCPRun})
+	require.NoError(t, startTurnDB(ctx, service.db, "turn-run", "run", webMessage(protocol.InboundKindPrompt, "ask", bob)))
+	assert.Empty(t, ask("run", "turn-run/call/c1"+webQuestionStep))
+}
+
 // A person's Web turn, here in a Slack-thread conversation, asks in Web, and its question
 // survives a restart: the resumed turn waits on it again and the Web answer continues the turn.
 func TestWebTurnQuestionContinuesAfterRestart(t *testing.T) {
@@ -201,11 +272,12 @@ func TestWebTurnQuestionContinuesAfterRestart(t *testing.T) {
 	first := newTestWebQuestions(service)
 	bridge := newBridge(first)
 	shutdown := runTestBridge(t, bridge)
-	require.NoError(t, bridge.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "ship it?", true)))
+	require.NoError(t, bridge.Submit(t.Context(), webMessage(protocol.InboundKindPrompt, "ship it?", alice)))
 	assert.Contains(t, <-bodies, "- ask_user_question(", "a person's Web turn gets the question tool")
 
 	asked := pending(first)
 	assert.Equal(t, "Ship?", asked[0].Question)
+	assert.Equal(t, []string{alice + " loud"}, attentionOn(t, service, conversationID), "the question reaches the person whose turn asks")
 
 	shutdown()
 	require.Eventually(t, func() bool { return !bridge.handlingSnapshot() }, 5*time.Second, 10*time.Millisecond)

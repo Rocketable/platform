@@ -62,6 +62,20 @@ func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
 	}
 }
 
+// webSessions is a session store on its own test database, which the Web's Dashboard watch reads from its start.
+func webSessions(t *testing.T) *backend.SessionService {
+	t.Helper()
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	return sessions
+}
+
 func TestWebRPCTailnetNode(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -72,7 +86,7 @@ func TestWebRPCTailnetNode(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:0"}}
-	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler)}
+	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Sessions: webSessions(t)}
 	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)
 	require.NoError(t, stop(t.Context()))
@@ -118,15 +132,7 @@ func fakeTailscaleWhois(t *testing.T) {
 func TestWebRPC(t *testing.T) {
 	fakeTailscaleWhois(t)
 
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-
-	logger := slog.New(slog.DiscardHandler)
-	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, logger)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
-
-	rt := &backend.Runtime{Sessions: sessions, Cfg: config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), Log: logger}
+	rt := &backend.Runtime{Sessions: webSessions(t), Cfg: config.NewLockedConfig(&config.Config{Workspace: t.TempDir()}), Log: slog.New(slog.DiscardHandler)}
 
 	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -264,7 +270,7 @@ func TestWebRPCServesConfiguredCertificate(t *testing.T) {
 	require.NoError(t, probe.Close())
 
 	cfg := &config.Config{Workspace: t.TempDir(), Web: config.WebConfig{ListenAddress: address, TLSCertFile: filepath.Join(dir, "cert.pem"), TLSKeyFile: filepath.Join(dir, "missing.pem")}}
-	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler)}
+	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Sessions: webSessions(t)}
 	_, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.ErrorContains(t, err, "load Web certificate")
 

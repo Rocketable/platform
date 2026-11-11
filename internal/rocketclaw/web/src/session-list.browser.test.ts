@@ -1443,7 +1443,7 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await search.fill("");
     await shown(sessionPalette, "backfilled preview");
     await page.waitForFunction(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts > 0);
-    expect(await page.evaluate(snapshot, ["alice", "test-protocol"])).toEqual({ rows: [row("kept", "backfilled preview")], version: "", remote: { servers: {}, agentTags: {} } });
+    expect(await page.evaluate(snapshot, ["alice", "test-protocol"])).toEqual({ rows: [row("kept", "backfilled preview")], version: "", remote: { servers: {}, agentTags: {} }, tabs: [] });
     blocked = Promise.withResolvers();
     await page.reload();
     await openSessions(page);

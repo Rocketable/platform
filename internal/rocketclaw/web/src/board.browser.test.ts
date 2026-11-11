@@ -60,7 +60,7 @@ function serve(board: string, lanes = fourLanes) {
       case "/api/Tabs": {
         const body = await request.json() as { state?: typeof state };
         if (body.state) [state, revision] = [body.state, revision + 1];
-        return Response.json({ spaces: [{ id: "main", name: "Main" }, { id: "other", name: "Other" }], state, revision: String(revision), shared: [], mutes: [] });
+        return Response.json({ spaces: [{ id: "main", name: "Main" }, { id: "other", name: "Other" }], state, revision: String(revision), shared: [] });
       }
       case "/api/Identity": return Response.json({ username: "tester" });
       case "/api/Protocol": return Response.json({ protoSha256: "board" });

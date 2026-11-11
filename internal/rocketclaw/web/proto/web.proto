@@ -5,13 +5,16 @@ package rpc;
 option go_package = "github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc";
 
 message ListSessionsRequest {
-  // The session of the caller's active tab while its window has focus, else empty.
+  // The location of the caller's active tab while its window has focus, else empty.
   string viewing = 1;
   // The version of the last complete listing the caller holds. When the server still knows it, the
   // listing sends only the rows that changed since; otherwise it sends every row.
   string since = 2;
-  // The caller marked the viewing session unread while it was in view: the view counts without clearing the mark.
+  // The caller marked the viewing tab unread while it was in view: the view counts without clearing the mark.
   bool hold = 3;
+  // Set by the server for a poll from a page it serves or trusts: only such a poll records the view and wakes the
+  // caller's timers that came due.
+  bool same_origin = 4;
 }
 
 message Session {
@@ -51,7 +54,7 @@ message Session {
   string remote_session_id = 25;
   // What the session is called when it has no name or preview.
   string label = 26;
-  // When a turn the caller sent into ended unseen, RFC3339Nano; empty once read.
+  // When something new started waiting for the caller, RFC3339Nano; empty once read.
   string unread_at = 27;
   // The session waits on a person: a running turn's unanswered question, or a remote OpenCode
   // session's pending form or permission request, its own or a child session's.
@@ -63,8 +66,29 @@ message Session {
   bool external = 31;
   // When its newest running or waiting turn was created, else its last update, RFC3339Nano.
   string arrived_at = 32;
-  // The caller marked it unread themselves, so the mark raises no notification.
+  // The caller's mark raises no notification: they set it themselves, or it was written while the tab was parked
+  // or was there when they parked it.
   bool marked_unread = 33;
+  // The caller parked its tab.
+  bool parked = 34;
+  // When its park ends, RFC3339Nano; empty for none.
+  string until = 35;
+  // With a mark, the notification text a timer wrote: "Park ended"; else empty.
+  string note = 36;
+  // The caller parked its tab until its next turn ends, which has no time.
+  bool until_done = 37;
+}
+
+// TabAttention is the caller's attention on a tab location that is not a session, as a Session row carries a
+// session's. A row with only its path says the location no longer has one.
+message TabAttention {
+  string path = 1;
+  string unread_at = 2;
+  bool quiet = 3;
+  bool parked = 4;
+  string until = 5;
+  // With a mark, the notification text the server wrote.
+  string note = 6;
 }
 
 // The first of these a session has: asking, running work, queued turns.
@@ -221,6 +245,11 @@ message ListSessionsResponse {
   string version = 7;
   repeated string removed = 9;
   string since = 10;
+  // The completion carries the caller's attention rows of tab locations that are not sessions, those changed since
+  // since, or every one.
+  repeated TabAttention tabs = 11;
+  // The first message carries the caller's tab-state revision, which a timer that brings a closed tab back raises.
+  int64 tab_revision = 12;
 }
 
 message TagChoices {
@@ -265,7 +294,20 @@ message SearchMessagesResponse {
   reserved 3;
 }
 // filters applies only the filters, leaving free text to the caller, and wins over messages.
-message SearchSessionsRequest { string query = 1; bool messages = 2; bool filters = 3; }
+// A Search page names its tab and search_id, and its search runs on the server past the request:
+// the same query joins that run or takes its finished answer, once; another query replaces it.
+// entered says the person entered the query, so the run marks the tab when it finishes. fresh says
+// the caller's session list changed since it last asked: the same query starts over, and a run still
+// going that the person entered hands that on.
+message SearchSessionsRequest {
+  string query = 1;
+  bool messages = 2;
+  bool filters = 3;
+  string tab = 4;
+  string search_id = 5;
+  bool entered = 6;
+  bool fresh = 7;
+}
 // A filter term; start and end are UTF-16 code-unit offsets in the submitted query.
 message SearchTerm {
   string key = 1;
@@ -778,20 +820,32 @@ message ShelfTab {
   SearchPage search = 4;
 }
 
-// TabMute is a session tab whose desktop notifications a person muted, by location. until is the
-// RFC 3339 time a snooze ends; empty mutes the tab until it is unmuted.
-message TabMute {
-  string path = 1;
-  string until = 2;
+// AttentionAction is what a person does to the attention of their tabs.
+enum AttentionAction {
+  MARK_READ = 0;
+  // A mark the person sets raises no notification.
+  MARK_UNREAD = 1;
+  // Park sets the tab aside until until, or until unparked when until is empty.
+  PARK = 2;
+  UNPARK = 3;
+  // Park until done sets a session's tab aside until its next turn ends; other locations are skipped.
+  PARK_UNTIL_DONE = 4;
+}
+
+// AttentionChange does action to the caller's attention on the tab locations paths. until is an RFC 3339 time.
+message AttentionChange {
+  repeated string paths = 1;
+  AttentionAction action = 2;
+  string until = 3;
 }
 
 // TabsRequest saves the caller's tab state when set, else creates, renames, or deletes one space,
-// adds one tab to or removes one from a space's Shared group, mutes or unmutes one session tab for the caller, marks
-// session tabs unread for the caller, or replaces the caller's Top Shelf.
+// adds one tab to or removes one from a space's Shared group, changes the caller's attention on tabs, or replaces the
+// caller's Top Shelf.
 // revision is the saved revision the state was made from.
 message TabsRequest {
-  reserved 8;
-  reserved "swap_shared";
+  reserved 8, 9, 10, 13;
+  reserved "swap_shared", "mute", "unmute", "mark_unread";
 
   TabState state = 1;
   string create_space = 2;
@@ -800,26 +854,25 @@ message TabsRequest {
   int64 revision = 5;
   SharedTab share = 6;
   SharedTab unshare = 7;
-  TabMute mute = 9;
-  string unmute = 10;
   // edit_shared saves a Shared Search page's one page; a page no longer shared stays unshared.
   SharedTab edit_shared = 11;
   TopShelf top_shelf = 12;
-  repeated string mark_unread = 13;
+  AttentionChange attention = 14;
 }
 
 // TabsResponse is every space, oldest first, and the caller's saved tab state and its revision.
 // stale reports a refused save: the state was made from an older revision than the one saved, or a Shared Search
 // page edit made from a page that has since changed.
-// shared is every space's Shared tabs, oldest added first. mutes is the caller's mutes and snoozes
-// that have not ended. top_shelf is the caller's Top Shelf.
+// shared is every space's Shared tabs, oldest added first. top_shelf is the caller's Top Shelf.
 message TabsResponse {
+  reserved 6;
+  reserved "mutes";
+
   repeated Space spaces = 1;
   TabState state = 2;
   int64 revision = 3;
   bool stale = 4;
   repeated SharedTab shared = 5;
-  repeated TabMute mutes = 6;
   // unshared is the Search page a Search tab taken out of Shared held.
   SearchPage unshared = 7;
   TopShelf top_shelf = 8;

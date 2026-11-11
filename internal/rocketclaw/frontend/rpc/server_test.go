@@ -773,7 +773,7 @@ func TestSearchSessionsUnreadPerCaller(t *testing.T) {
 	// The Slack thread's channel holds both searches at its room lookup until release.
 	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `UPDATE conversations SET slack_channel = 'C1' WHERE conversation_id = 'slack-thread:C1:1.1'`)
 	require.NoError(t, err)
-	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `INSERT INTO web_tabs (username, path, conversation_id, unread_at) VALUES ('alice', '/s/a', 'web-session:alice', now()), ('bob', '/s/b', 'web-session:bob', now())`)
+	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `INSERT INTO web_tab_attention (username, path, conversation_id, unread_at) VALUES ('alice', '/s/a', 'web-session:alice', now()), ('bob', '/s/b', 'web-session:bob', now())`)
 	require.NoError(t, err)
 
 	release := make(chan struct{})

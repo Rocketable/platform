@@ -1,7 +1,7 @@
 import { captureException } from "@sentry/react";
 import { hashKey, type QueryKey } from "@tanstack/react-query";
 import { server, serverURL } from "./navigation";
-import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TopShelf, TranscriptEvent, VoiceSettings, Workflow } from "./types";
+import type { AgentChoices, AttentionAction, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TopShelf, TranscriptEvent, VoiceSettings, Workflow } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -72,10 +72,10 @@ export async function* sse<T>(url: string, init: RequestInit): AsyncGenerator<T>
 export const queryKeyHash = (key: QueryKey) => hashKey(typeof key[0] === "object" ? key : [server(), ...key]);
 
 // SearchSessions on every server, each match tagged with its server. A remote that fails drops out; the local
-// server's failure fails the search.
-export async function searchAll(servers: string[], input: object, signal: AbortSignal): Promise<SearchSessionsResponse> {
+// server's failure fails the search. Only the page's server gets page: a Search page's tab and search, which it runs on.
+export async function searchAll(servers: string[], input: object, signal: AbortSignal, page?: { tab: string; searchId?: string; entered: boolean; fresh?: boolean }): Promise<SearchSessionsResponse> {
   // A remote gets 10 seconds, so one that is unreachable never holds up the others.
-  const replies = await Promise.all(servers.map((name) => rpc<SearchSessionsResponse>("SearchSessions", input, name ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : signal, name).then(
+  const replies = await Promise.all(servers.map((name) => rpc<SearchSessionsResponse>("SearchSessions", name === server() ? { ...input, ...page } : input, name ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : signal, name).then(
     (reply) => ({ ...reply, matches: reply.matches.map((match) => ({ ...match, rocketclaw: name })), messages: reply.messages.map((match) => ({ ...match, rocketclaw: name })) }),
     (error: Error) => { if (name) return undefined; throw error; })));
   const found = replies.filter((reply) => reply !== undefined);
@@ -120,5 +120,5 @@ export const mutations = {
   stopBackgroundJob: (input: { conversationId: string; jobId: string }) => rpc("StopBackgroundJob", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
   voiceSettings: (input: { action: "UPDATE"; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
-  tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; mute?: SavedTabs["mutes"][number]; unmute?: string; markUnread?: string[]; topShelf?: TopShelf }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),
+  tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; topShelf?: TopShelf; attention?: { paths: string[]; action: AttentionAction; until?: string } }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),
 };

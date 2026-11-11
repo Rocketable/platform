@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net"
@@ -383,13 +384,16 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 	require.Empty(t, bobs.Since)
 }
 
-// A refresh where nothing changed costs the same few bytes however many sessions there are.
+// A refresh where nothing changed costs the same few bytes however many sessions and tab rows there are; a changed
+// tab row is sent once, and a session's attention rides its own row.
 func TestQuietSessionRefreshSize(t *testing.T) {
 	t.Parallel()
 
 	server, ctx := sidebarChoicesFixture(t, 300)
-	list := func(since string) (size int, version string) {
-		require.NoError(t, server.listSessions(&ListSessionsRequest{Since: since}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
+	list := func(request *ListSessionsRequest) (size int, done *ListSessionsResponse, sessions map[string]*Session) {
+		sessions = map[string]*Session{}
+
+		require.NoError(t, server.listSessions(request, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
 			// The Web receives listing messages as protojson without default values.
 			response := message.(*ListSessionsResponse)
 			body, err := protojson.Marshal(response)
@@ -397,19 +401,66 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 
 			size += len(body)
 
+			for _, session := range response.Sessions {
+				sessions[session.Id] = session
+			}
+
 			if response.UpstreamSuccess {
-				version = response.Version
+				done = response
 			}
 
 			return nil
 		}}))
 
-		return size, version
+		return size, done, sessions
+	}
+	tabs := func(done *ListSessionsResponse) []string {
+		out := make([]string, 0, len(done.Tabs))
+		for _, tab := range done.Tabs {
+			out = append(out, fmt.Sprint(tab.Path, " parked=", tab.Parked, " timer=", tab.Until != ""))
+		}
+
+		return out
 	}
 
-	full, version := list("")
-	require.Greater(t, full, 2<<10)
+	soon := time.Now().Add(time.Hour)
+	pages := make([]string, 10)
 
-	quiet, _ := list(version)
-	require.LessOrEqual(t, quiet, 2<<10, "a quiet refresh must not grow with the session count")
+	for i := range pages {
+		pages[i] = fmt.Sprint("/pages/main/agent/", i)
+	}
+
+	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", pages, backend.AttentionPark, &soon))
+
+	full, done, _ := list(&ListSessionsRequest{})
+	require.Greater(t, full, 2<<10)
+	require.Len(t, done.Tabs, 10, "every tab row is sent")
+
+	quiet, done, _ := list(&ListSessionsRequest{Since: done.Version})
+	require.LessOrEqual(t, quiet, 2<<10, "a quiet refresh must not grow with the session or tab row count")
+	require.Empty(t, done.Tabs)
+
+	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", pages[:1], backend.AttentionPark, nil))
+	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", pages[1:2], backend.AttentionUnpark, nil))
+
+	_, done, _ = list(&ListSessionsRequest{Since: done.Version})
+	require.Equal(t, []string{pages[0] + " parked=true timer=false", pages[1] + " parked=false timer=false"}, tabs(done), "a changed row, and one with only its path for a row gone")
+
+	_, done, _ = list(&ListSessionsRequest{Since: done.Version})
+	require.Empty(t, tabs(done), "each change is sent once")
+
+	// A session's park, timer and a timer's note travel on its own row.
+	path := func(id string) string { return "/s/" + base64.RawURLEncoding.EncodeToString([]byte(id)) }
+	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-00")}, backend.AttentionPark, &soon))
+	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-01")}, backend.AttentionPark, new(time.Now().Add(-time.Second))))
+
+	_, done, sessions := list(&ListSessionsRequest{Since: done.Version, SameOrigin: true})
+	require.Len(t, sessions, 2)
+	require.True(t, sessions["chat-00"].Parked)
+	require.Equal(t, soon.UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano), sessions["chat-00"].Until)
+	require.NotEmpty(t, sessions["chat-01"].UnreadAt, "the poll ended the park")
+	require.False(t, sessions["chat-01"].MarkedUnread)
+	require.False(t, sessions["chat-01"].Parked)
+	require.Equal(t, "Park ended", sessions["chat-01"].Note)
+	require.Empty(t, tabs(done))
 }

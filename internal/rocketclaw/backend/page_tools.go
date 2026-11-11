@@ -78,7 +78,7 @@ func (p pageSpace) put(ctx context.Context, kind PageKind, name, contentType str
 		return fmt.Errorf("page %s %q is %d bytes, over the 10 MiB limit", kind, name, len(body))
 	}
 
-	return p.sessions.PutPage(ctx, &Page{Agent: p.agent, Kind: kind, Name: name, ContentType: contentType, Body: body, Conversation: p.conversation})
+	return p.sessions.PutPage(ctx, &Page{Agent: p.agent, Kind: kind, Name: name, ContentType: contentType, Body: body, Conversation: p.conversation, Space: p.space})
 }
 
 func (p pageSpace) storeFile(ctx context.Context, name string, file *protocol.OutboundAttachment) (string, error) {

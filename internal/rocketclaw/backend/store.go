@@ -1069,10 +1069,8 @@ type SidebarSession struct {
 	// Conversation.Agent is its selected agent. Both are empty until it has them.
 	// SearchSessions fills a RocketClaw chat's Model with its agent's configured model.
 	Model string
-	// UnreadAt is when a turn the listing person sent into ended unseen, zero once read.
-	UnreadAt time.Time
-	// MarkedUnread reports that the listing person marked it unread themselves.
-	MarkedUnread bool
+	// Attention is the listing person's attention on its tab; its Path is empty.
+	Attention Attention
 	// Origin holds the facts that decide its chat origin, as ChatOriginFacts reads them.
 	Origin ChatOriginFacts
 	// Work is the chat's work state, and StateSince when the turn defining it started, or its last
@@ -1323,7 +1321,8 @@ running AS (
 ), external_runs AS (
     SELECT DISTINCT reports_to AS conversation_id FROM conversations WHERE kind = 'external_mcp_run' AND reports_to IS NOT NULL
 ), reads AS (
-    SELECT conversation_id, unread_at, marked_unread FROM web_tabs WHERE username = $6 AND conversation_id IS NOT NULL
+    SELECT conversation_id, unread_at, quiet, parked, NULLIF(until, 'infinity') AS until, until = 'infinity' AS until_done, note
+    FROM web_tab_attention WHERE username = $6 AND conversation_id IS NOT NULL
 ), local AS (
 SELECT
     c.conversation_id,
@@ -1349,7 +1348,11 @@ SELECT
     c.kind,
     '' AS remote_session,
     u.unread_at,
-    COALESCE(u.marked_unread, FALSE) AS marked_unread,
+    COALESCE(u.quiet, FALSE) AS quiet,
+    COALESCE(u.parked, FALSE) AS parked,
+    u.until,
+    COALESCE(u.until_done, FALSE) AS until_done,
+    COALESCE(u.note, '') AS note,
     -- Idle chats read NULL and zeros, which cost no allocation per row.
     CASE WHEN k.conversation_id IS NOT NULL THEN 'needs_you' WHEN w.running_since IS NOT NULL THEN 'running' WHEN w.queued_since IS NOT NULL THEN 'queued' END AS work,
     COALESCE(w.running_since, w.queued_since, 0) AS state_since,
@@ -1367,7 +1370,8 @@ LEFT JOIN external_runs x ON x.conversation_id = c.conversation_id
 WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY($5))
 ), remote AS (
 SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.pinned, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
-    o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at, COALESCE(u.marked_unread, FALSE),
+    o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at, COALESCE(u.quiet, FALSE),
+    COALESCE(u.parked, FALSE), u.until, COALESCE(u.until_done, FALSE), COALESCE(u.note, ''),
     CASE WHEN o.asking THEN 'needs_you' WHEN o.running OR o.background THEN 'running' END, 0, FALSE AS queued, FALSE AS external_mcp, 0,
     '', '', '', 'null'::jsonb, '', '', '', NULL::bigint, FALSE
 FROM conversations o
@@ -1390,18 +1394,18 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			preview        pgtype.DriverBytes
 			tags           pgtype.DriverBytes // scanChatOrigin keeps a RawBytes destination until Next.
 			updated        sql.NullTime
-			unread         sql.NullTime
+			unread, until  sql.NullTime
 			work           sql.NullString
 			since, arrived int64
 		)
 
-		dest := make([]any, 0, 38)
+		dest := make([]any, 0, 42)
 
 		for rows.Next() {
 			var row SidebarSession
 
-			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.MarkedUnread,
-				&work, &since, &row.Queued, &row.External, &arrived)
+			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
+				&row.Attention.Parked, &until, &row.Attention.UntilDone, &row.Attention.Note, &work, &since, &row.Queued, &row.External, &arrived)
 			if err := scanChatOrigin(rows, &row.Origin, dest...); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
@@ -1411,7 +1415,8 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 				continue
 			}
 
-			row.Origin.ConversationID, row.Origin.CreatedBy, row.UnreadAt = row.Conversation.ID, ThreadCreator(row.Conversation.CreatedBy), unread.Time.UTC()
+			row.Origin.ConversationID, row.Origin.CreatedBy = row.Conversation.ID, ThreadCreator(row.Conversation.CreatedBy)
+			row.Attention.UnreadAt, row.Attention.Until = unread.Time.UTC(), until.Time.UTC()
 			row.Work, row.StateSince, row.ArrivedAt = cmp.Or(WorkState(work.String), WorkIdle), cmp.Or(timeFromUnixNano(since), updated.Time.UTC()), cmp.Or(timeFromUnixNano(arrived), updated.Time.UTC())
 
 			if err := json.Unmarshal(tags, &row.Tags); err != nil {

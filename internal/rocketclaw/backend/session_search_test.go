@@ -415,23 +415,26 @@ VALUES ('opencode:box:assigned', '', '', 'remote', FALSE, 'remote', 'box', 'assi
 	require.Empty(t, matches)
 }
 
-// Turn ends that mark sessions unread are written directly; alice's view of searchChatW clears its mark.
-// The fixture opens no tabs, so every marked session's tab is closed.
+// Turn ends that mark sessions unread are written directly; alice's view of searchChatW clears its mark, and her
+// parked searchChatH is not bold. The fixture opens no tabs, so every marked session's tab is closed.
 func TestSearchSessionsUnread(t *testing.T) {
 	t.Parallel()
 
 	s, slack := newSessionSearchFixture(t)
 	ctx := t.Context()
-	_, err := s.db.ExecContext(ctx, `INSERT INTO web_tabs (username, path, conversation_id, unread_at) VALUES ('alice', $1, $1, now()), ('alice', $2, $2, now()), ('alice', $3, $3, now()), ('alice', $4, $4, now()), ('bob', $5, $5, now())`,
-		searchChatA, searchChatH, searchChatD, searchChatW, searchChatB)
+	path := func(id string) string { return "/s/" + base64.RawURLEncoding.EncodeToString([]byte(id)) }
+	_, err := s.db.ExecContext(ctx, `INSERT INTO web_tab_attention (username, path, conversation_id, unread_at, parked)
+VALUES ('alice', $6, $1, now(), FALSE), ('alice', $7, $2, now(), TRUE), ('alice', $8, $3, now(), FALSE), ('alice', $9, $4, now(), FALSE), ('bob', $10, $5, now(), FALSE)`,
+		searchChatA, searchChatH, searchChatD, searchChatW, searchChatB, path(searchChatA), path(searchChatH), path(searchChatD), path(searchChatW), path(searchChatB))
 	require.NoError(t, err)
-	require.NoError(t, s.ViewSession(ctx, "alice", searchChatW, false))
+	_, err = s.PollAttention(ctx, "alice", path(searchChatW), false)
+	require.NoError(t, err)
 
 	for _, tc := range []struct {
 		username, query string
 		ids             []string
 	}{
-		{"alice", "is:unread", []string{searchChatA, searchChatH, searchChatD}},
+		{"alice", "is:unread", []string{searchChatA, searchChatD}},
 		{"alice", "IS:UNREAD agent:main", []string{searchChatA, searchChatD}},
 		{"alice", "is:unread support", []string{searchChatA}},
 		{"bob", "is:unread", []string{searchChatB}},

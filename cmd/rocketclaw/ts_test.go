@@ -77,7 +77,7 @@ func TestTailnetLogin(t *testing.T) {
 	var logs bytes.Buffer
 
 	cfg := &config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:0", Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}}}
-	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.NewTextHandler(&logs, nil))}
+	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.NewTextHandler(&logs, nil)), Sessions: webSessions(t)}
 
 	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)

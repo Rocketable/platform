@@ -1,7 +1,7 @@
 138	src/session-list.browser.test.ts
 128	src/notifications.browser.test.ts
-109	src/tabs.browser.test.ts
-73	src/search-page.browser.test.ts
+121	src/tabs.browser.test.ts
+76	src/search-page.browser.test.ts
 59	src/revert.browser.test.ts
 52	src/session-commands.browser.test.ts
 31	src/sentry.browser.test.ts

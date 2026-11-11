@@ -207,7 +207,7 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 		require.Equal(t, "helper", agent)
 		require.Equal(t, "Body", prompt)
 		require.Equal(t, destination, progress.SyncDestination)
-		require.Equal(t, &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "helper", RanAt: "2000-01-02T03:04:05Z"}, progress.Cronjob)
+		require.Equal(t, &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "helper", RanAt: "2000-01-02T03:04:05Z", Space: "Ops"}, progress.Cronjob, "a run from Web carries the cron's space")
 
 		sources = append(sources, progress.ConversationID)
 		if !strings.HasPrefix(progress.ConversationID, "one-off-cron:cron/daily.md:20000102T030405.000000006Z:") {
@@ -219,7 +219,7 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC) }
 
 	for _, destination = range []string{"slack-thread:C1:1.2", ""} {
-		_, err := m.RunOneOffCronjob(t.Context(), &protocol.OneOffCronjob{Agent: "helper", Prompt: "Body", RelativePath: "cron/daily.md", ConversationID: destination})
+		_, err := m.RunOneOffCronjob(t.Context(), &protocol.OneOffCronjob{Agent: "helper", Space: "Ops", Prompt: "Body", RelativePath: "cron/daily.md", ConversationID: destination})
 		require.NoError(t, err)
 	}
 

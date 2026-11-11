@@ -342,7 +342,7 @@ func (c *SidebarChat) passes(terms []SearchTerm, principals, sandboxed []string,
 
 func (c *SidebarChat) is(value string) bool {
 	return value == "pinned" && c.Session.Pinned || value == "forked" && c.Session.ForkedFrom != "" || value == "cron" && c.Cron ||
-		value == "unread" && !c.Session.UnreadAt.IsZero() || value == "running" && (c.Session.Running || c.Session.Background) ||
+		value == "unread" && !c.Session.Attention.UnreadAt.IsZero() && !c.Session.Attention.Parked || value == "running" && (c.Session.Running || c.Session.Background) ||
 		value == "queued" && c.Session.Queued || value == "waiting" && c.Session.Asking || value == "external" && c.Session.External
 }
 
