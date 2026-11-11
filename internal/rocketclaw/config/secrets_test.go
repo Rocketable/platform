@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
@@ -57,6 +58,9 @@ func TestAWSFetcherReadsSecretString(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, "secretsmanager.GetSecretValue", r.Header.Get("X-Amz-Target"))
+				body, err := io.ReadAll(r.Body)
+				assert.NoError(t, err)
+				assert.JSONEq(t, `{"SecretId":"`+testSecretARN+`"}`, string(body))
 				w.Header().Set("Content-Type", "application/x-amz-json-1.1")
 
 				if tt.status != 0 {
