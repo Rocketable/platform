@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, onTestFinished, test } from "bun:test";
 import path from "node:path";
 import type { HistoryView, ShadowBinding, TranscriptEvent } from "./types";
 
@@ -50,10 +50,14 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
       default: return Response.json({});
     }
   } });
+  const errors: string[] = [], failedReads: string[] = [];
+  let succeeded = false;
+  if (mode === "cached") onTestFinished(() => {
+    if (!succeeded) console.error("cached shadow refresh failure", JSON.stringify({ reads, streams, hold, correlation, childRevision: child.revision, childMessages: child.messages, errors, failedReads }));
+  });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    const errors: string[] = [], failedReads: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
     page.on("requestfailed", (request: { url(): string }) => { if (request.url().endsWith("/api/History")) failedReads.push(request.url()); });
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("parent").replace(/=+$/, "")}`, { waitUntil: "domcontentloaded" });
@@ -104,6 +108,7 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
       expect(await page.getByRole("alert").count()).toBe(0);
     }
     expect(errors).toEqual([]);
+    succeeded = true;
   } finally {
     delayed.resolve(Response.json(child));
     await browser.close();
