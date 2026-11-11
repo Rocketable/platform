@@ -288,6 +288,7 @@ func TestBuildImageLeavesNothing(t *testing.T) {
 	if err := os.Mkdir(cgroup, 0o755); err != nil {
 		t.Skipf("WARNING: skipping: this test may not make a cgroup for the build: %v", err)
 	}
+
 	t.Cleanup(func() { _ = unix.Rmdir(cgroup) })
 
 	dst := filepath.Join(t.TempDir(), "rootfs")
