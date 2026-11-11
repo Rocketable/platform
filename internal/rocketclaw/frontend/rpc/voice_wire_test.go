@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -276,7 +277,7 @@ func TestVoiceSeed(t *testing.T) {
 
 	cut := voiceSeed(long)
 	require.Len(t, cut, 20)
-	assert.Equal(t, strings.Repeat("é", 300), cut[0].Content[0].Text)
+	assert.Equal(t, slices.Repeat([]voiceItem{{Type: "message", Role: "user", Content: []voiceContent{{Type: "input_text", Text: strings.Repeat("é", 300)}}}}, 20), cut)
 
 	coded := voiceSeed([]*TranscriptEvent{{Role: "assistant", Text: "Here:\n```go\nfmt.Println(1)\n```", Complete: true}})
 	assert.Equal(t, []voiceContent{{Type: "output_text", Text: "Here:\n```go\nfmt.Println(1)\n```"}}, coded[0].Content, "the seed is sent as written (R14)")
