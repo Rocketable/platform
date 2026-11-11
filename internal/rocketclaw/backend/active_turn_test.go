@@ -2683,6 +2683,22 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 				require.NoError(t, nt.bridge(t, manager, root).Submit(t.Context(), prompt))
 			}
 
+			defer func() {
+				if !t.Failed() {
+					return
+				}
+
+				t.Logf("subagent root reply: expected_conversation=%s provider_requests=%d helper_requests=%d reviews=%d finals=%d database=%+v", root, len(nt.requests), len(helper), len(reviews), len(nt.finals), nt.service.db.Stats())
+				// Bound diagnostic SQL only; preserve the original final-reply wait.
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				defer cancel()
+
+				rows, err := queryStrings(ctx, nt.service.db, `SELECT format('turn=%s conversation=%s parent=%s phase=%s lane=%s terminal=%s kind=%s note=%s wake=%s claimed_by=%s outbound=%s',
+t.id, t.conversation_id, c.parent_conversation_id, t.phase, t.takes_lane, t.terminal, t.kind, t.note, t.wake, t.claimed_by, t.outbound_json IS NOT NULL)
+FROM turns t LEFT JOIN conversations c USING (conversation_id) ORDER BY t.id`, "subagent root reply state")
+				t.Logf("subagent root reply rows=%v query_error=%v", rows, err)
+			}()
+
 			final := readFinalFor(t, nt.finals, root)
 			if assert.Len(t, final.Attachments, 1, "the subagent's file reaches the top-level turn's reply") {
 				assert.Equal(t, []string{"report.txt", "hello"}, []string{final.Attachments[0].Name, string(final.Attachments[0].Data)})
