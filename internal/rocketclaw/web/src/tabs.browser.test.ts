@@ -1589,7 +1589,7 @@ test("a session opens in the space it was born in, and a moved one can be restor
   await page.keyboard.press("Escape");
 }), 30_000);
 
-test("Recently closed lists closed tabs newest first and reopens one where it was, as Cmd/Ctrl+Alt+T reopens the last", () => withPage({}, async (page, origin, _prompts, saved) => {
+test("Recently closed lists closed tabs newest first and reopens one where it was, as Cmd/Ctrl+Alt+T reopens the last, pressed twice the last two", () => withPage({}, async (page, origin, _prompts, saved) => {
   saved.spaces.push({ id: "ops", name: "OPS" });
   saved.closed = [{ path: href("echo"), space: "main" }];
   for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"]]) await openSaved(page, origin, href(id), name, saved);
@@ -1610,10 +1610,14 @@ test("Recently closed lists closed tabs newest first and reopens one where it wa
   await list.getByRole("button").filter({ hasText: "Echo" }).waitFor({ state: "detached" });
   expect(await rows()).toEqual(["CharlieMain", "BravoMain"]);
 
+  // Pressed again before the save reopening the first has answered, Cmd/Ctrl+Alt+T reopens the next.
+  await page.route("**/api/Tabs", async (route: any) => { await Bun.sleep(500); await route.continue(); });
   await page.keyboard.press("Control+Alt+t");
   await page.waitForURL(`**${href("charlie")}`);
-  await until(() => saved.closed.length === 1);
-  expect(await names(page)).toEqual(["Alpha", "Recently closed", "Charlie", "Echo"]);
+  await page.keyboard.press("Control+Alt+t");
+  await page.waitForURL(`**${href("bravo")}`);
+  await until(() => saved.closed.length === 0);
+  expect(await names(page)).toEqual(["Alpha", "Recently closed", "Charlie", "Bravo", "Echo"]);
   await page.getByRole("button", { name: "Space: Main" }).waitFor();
   expect(saved.state.tabs.find((tab) => tab.path === href("echo"))?.space).toBe("main");
 }), 30_000);

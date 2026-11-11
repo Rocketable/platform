@@ -1117,9 +1117,11 @@ function useTabs() {
   const identity = useQuery(queries.identity());
   const owner = identity.data?.username;
   const saved = useQuery({ ...queries.tabs(owner ?? "", name), enabled: owner !== undefined });
-  const shared = saved.data?.shared ?? noShared, mutes = saved.data?.mutes ?? noMutes, closed = saved.data?.closed ?? noClosed, shelf = useTopShelf();
+  const shared = saved.data?.shared ?? noShared, mutes = saved.data?.mutes ?? noMutes, shelf = useTopShelf();
   const pathname = usePathname() || "/";
   const [state, setState] = useState(() => loadTabs(pathname));
+  // A tab this window reopened leaves the list before the save that reopened it answers.
+  const closed = useMemo(() => (saved.data?.closed ?? noClosed).filter((tab) => !state.tabs.some((item) => item.path === tab.path)), [saved.data?.closed, state.tabs]);
   // This server's Top Shelf tabs open like Shared ones, without a tab; one of a deleted space opens in space. The spaces
   // are the saved ones, which a first load has before this state does.
   const shelved = useCallback((spaces: Space[], space: string) => (shelf?.tabs ?? []).flatMap((tab) => (tab.server ?? "") === name ? [{ ...tab, space: spaces.some((item) => item.id === tab.space) ? tab.space : space }] : []), [shelf, name]);
