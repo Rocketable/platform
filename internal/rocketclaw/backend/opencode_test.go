@@ -647,11 +647,26 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	turn(6000, false)
 	assert.Len(t, fake.reads, reads)
 
-	// A TUI-only turn and a /command turn with no user message mark no one.
+	// A TUI-only turn and a /command turn with no user message mark no one, as nobody has the session's tab.
 	turn(7000, false, prompt("", 6500), idle(6600), idle(7000))
 	assert.Empty(t, unread("alice"))
 	assert.Empty(t, unread("bob"))
 	assert.Empty(t, unread(""))
+
+	// A turn no prompt started, as a background job's result starts one, still ends a park until it is done; a moved
+	// time.updated with no new idle marker, as a rename's, does not.
+	require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionParkUntilDone, nil))
+
+	fake.sessions = []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", 7040)}
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	assert.Equal(t, "read parked until=done", attentionOf(t, s, "alice", path))
+
+	fake.sessions = []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", 7050)}
+	fake.messages["ses_new"] = append(fake.messages["ses_new"], idle(7050))
+
+	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
+	assert.Equal(t, "new quiet parked until=due", attentionOf(t, s, "alice", path))
 
 	// Two turns that ended between polls, after a sync saw the session busy, mark both senders.
 	turn(7000, true)
