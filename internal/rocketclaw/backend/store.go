@@ -407,15 +407,7 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 	defer releaseHistory(workers)
 
 	// The binding goes with its Web chat's row.
-	if _, err := deleteSessionEntries(ctx, tx, ids); err != nil {
-		return err
-	}
-
-	if err := deleteOwnedConversations(ctx, tx, ids); err != nil {
-		return err
-	}
-
-	if err := enqueueAttachmentDeletion(ctx, tx, ids); err != nil {
+	if _, err := deleteOwnedHistory(ctx, tx, ids); err != nil {
 		return err
 	}
 
@@ -1559,16 +1551,8 @@ func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, c
 		return rows, rows > 0, nil
 	}
 
-	rows, err = deleteSessionEntries(ctx, tx, ids)
+	rows, err = deleteOwnedHistory(ctx, tx, ids)
 	if err != nil {
-		return 0, false, err
-	}
-
-	if err := deleteOwnedConversations(ctx, tx, ids); err != nil {
-		return 0, false, err
-	}
-
-	if err := enqueueAttachmentDeletion(ctx, tx, ids); err != nil {
 		return 0, false, err
 	}
 
@@ -1755,13 +1739,6 @@ func (s *SessionService) removeRetainedResults(conversationIDs ...string) error 
 	}
 
 	return nil
-}
-
-func enqueueAttachmentDeletion(ctx context.Context, db stateStoreDB, ids []string) error {
-	_, err := execState(ctx, db, "enqueue deleted attachments", `WITH removed AS (DELETE FROM attachments WHERE conversation_id = ANY($1) RETURNING id)
-INSERT INTO pending_attachment_deletions (id) SELECT id FROM removed`, ids)
-
-	return err
 }
 
 // removeHistoryFiles also retries durable pending deletions during each prune.
@@ -2155,7 +2132,9 @@ WHERE r.conversation_id IS NULL AND ($3 = '' OR h.conversation_id = $3)
 GROUP BY h.conversation_id HAVING MAX(h.entry_timestamp) < $1`, "stale private session conversations", cutoff.UTC().Format(time.RFC3339Nano), notePending, conversationID)
 }
 
-func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs []string) (int64, error) {
+// deleteOwnedHistory shares full removal between retention and failed MCP creation.
+// Each table's family goes in one statement, since a conversation cannot go before its children.
+func deleteOwnedHistory(ctx context.Context, db stateStoreDB, conversationIDs []string) (int64, error) {
 	var deleted int64
 
 	for _, conversationID := range slices.Sorted(slices.Values(conversationIDs)) {
@@ -2171,7 +2150,20 @@ func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs 
 		deleted += rows
 	}
 
-	return deleted, refreshPrincipals(ctx, db, conversationIDs)
+	if err := refreshPrincipals(ctx, db, conversationIDs); err != nil {
+		return deleted, err
+	}
+
+	for _, table := range []string{"turns", "steps", "schedules", "conversations"} {
+		if _, err := db.ExecContext(ctx, `DELETE FROM `+table+` WHERE conversation_id = ANY($1)`, conversationIDs); err != nil {
+			return 0, fmt.Errorf("delete owned %s: %w", table, err)
+		}
+	}
+
+	_, err := execState(ctx, db, "enqueue deleted attachments", `WITH removed AS (DELETE FROM attachments WHERE conversation_id = ANY($1) RETURNING id)
+INSERT INTO pending_attachment_deletions (id) SELECT id FROM removed`, conversationIDs)
+
+	return deleted, err
 }
 
 type runLockWork interface {
