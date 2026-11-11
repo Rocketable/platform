@@ -38,7 +38,7 @@ func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) 
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, map[string]string{"topic": "billing"}, got.OriginPairs)
-	assert.Len(t, binding.OriginPairs, 3, "storing details must not mutate the caller's map")
+	assert.Equal(t, map[string]string{"topic": "billing", "external_conversation_id": "external", "rocketclaw_principal": "reader"}, binding.OriginPairs, "storing details must not mutate the caller's map")
 }
 
 func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
