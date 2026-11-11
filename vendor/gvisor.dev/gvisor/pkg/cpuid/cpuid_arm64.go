@@ -90,12 +90,31 @@ func (fs FeatureSet) HasFeature(feature Feature) bool {
 	return fs.hwCap.hwCap1&(1<<feature) != 0
 }
 
+// HasPointerAuth returns true if address pointer authentication is supported
+// (HWCAP_PACA).
+func (fs FeatureSet) HasPointerAuth() bool {
+	return fs.hwCap.hwCap1&HWCAP_PACA != 0
+}
+
+// CPUFreqMHz returns the CPU frequency to report in /proc/cpuinfo.
+func (fs FeatureSet) CPUFreqMHz() float64 {
+	return fs.cpuFreqMHz
+}
+
 // WriteCPUInfoTo is to generate a section of one cpu in /proc/cpuinfo. This is
-// a minimal /proc/cpuinfo, and the bogomips field is simply made up.
-func (fs FeatureSet) WriteCPUInfoTo(cpu, numCPU uint, w io.Writer) {
+// a minimal /proc/cpuinfo, and the bogomips field is simply made up. freqMHz
+// is reported as the CPU frequency; see CPUFreqMHz.
+func (fs FeatureSet) WriteCPUInfoTo(cpu, numCPU uint, freqMHz float64, w io.Writer) {
 	fmt.Fprintf(w, "processor\t: %d\n", cpu)
-	fmt.Fprintf(w, "BogoMIPS\t: %.02f\n", fs.cpuFreqMHz) // It's bogus anyway.
-	fmt.Fprintf(w, "Features\t\t: %s\n", fs.FlagString())
+	fmt.Fprintf(w, "BogoMIPS\t: %.02f\n", freqMHz) // It's bogus anyway.
+	// List only the features that apps are given in AT_HWCAP and AT_HWCAP2,
+	// as Linux derives both from the same elf_hwcap.
+	allowed := fs
+	allowed.hwCap = hwCap{
+		hwCap1: fs.AllowedHWCap1(),
+		hwCap2: fs.AllowedHWCap2(),
+	}
+	fmt.Fprintf(w, "Features\t\t: %s\n", allowed.FlagString())
 	fmt.Fprintf(w, "CPU implementer\t: 0x%x\n", fs.cpuImplHex)
 	fmt.Fprintf(w, "CPU architecture\t: %d\n", fs.cpuArchDec)
 	fmt.Fprintf(w, "CPU variant\t: 0x%x\n", fs.cpuVarHex)
@@ -151,4 +170,9 @@ func (fs FeatureSet) AllowedHWCap2() uint64 {
 	// a context switch.
 	allowed := 0
 	return fs.hwCap.hwCap2 & uint64(allowed)
+}
+
+// UnsetFSGSBASE unsets features that should not be exposed to the guest workload.
+func (fs FeatureSet) UnsetFSGSBASE() FeatureSet {
+	return fs
 }

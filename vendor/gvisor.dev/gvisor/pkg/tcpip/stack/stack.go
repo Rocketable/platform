@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"golang.org/x/time/rate"
+
 	"gvisor.dev/gvisor/pkg/atomicbitops"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/log"
@@ -100,9 +101,20 @@ type Stack struct {
 	loopbackNIC *nic `state:"nosave"`
 	// +checklocks:mu
 	defaultForwardingEnabled map[tcpip.NetworkProtocolNumber]struct{}
+	// +checklocks:mu
+	defaultDisabledNetworkProtocols map[tcpip.NetworkProtocolNumber]struct{}
+	// +checklocks:mu
+	globalDisabledNetworkProtocols map[tcpip.NetworkProtocolNumber]struct{}
 
 	// nicIDGen is used to generate NIC IDs.
 	nicIDGen atomicbitops.Int32 `state:"nosave"`
+
+	// preservedNICs and preservedRoutes hold virtual NICs (such as tun/tap) and
+	// their routes across save and restore.
+	// +checklocks:mu
+	preservedNICs map[tcpip.NICID]*nic
+	// +checklocks:mu
+	preservedRoutes []tcpip.Route
 
 	// cleanupEndpointsMu protects cleanupEndpoints.
 	cleanupEndpointsMu cleanupEndpointsMutex `state:"nosave"`
@@ -436,24 +448,27 @@ func New(opts Options) *Stack {
 	}
 
 	s := &Stack{
-		transportProtocols:           make(map[tcpip.TransportProtocolNumber]*transportProtocolState),
-		networkProtocols:             make(map[tcpip.NetworkProtocolNumber]NetworkProtocol),
-		nics:                         make(map[tcpip.NICID]*nic),
-		packetEndpointWriteSupported: opts.AllowPacketEndpointWrite,
-		defaultForwardingEnabled:     make(map[tcpip.NetworkProtocolNumber]struct{}),
-		cleanupEndpoints:             make(map[TransportEndpoint]struct{}),
-		PortManager:                  ports.NewPortManager(),
-		clock:                        clock,
-		clockResolution:              clockResolution,
-		stats:                        opts.Stats.FillIn(),
-		handleLocal:                  opts.HandleLocal,
-		tables:                       opts.IPTables,
-		icmpRateLimiter:              NewICMPRateLimiter(clock),
-		seed:                         secureRNG.Uint32(),
-		nudConfigs:                   opts.NUDConfigs,
-		nudDisp:                      opts.NUDDisp,
-		insecureRNG:                  insecureRNG,
-		secureRNG:                    secureRNG,
+		transportProtocols:              make(map[tcpip.TransportProtocolNumber]*transportProtocolState),
+		networkProtocols:                make(map[tcpip.NetworkProtocolNumber]NetworkProtocol),
+		nics:                            make(map[tcpip.NICID]*nic),
+		preservedNICs:                   make(map[tcpip.NICID]*nic),
+		packetEndpointWriteSupported:    opts.AllowPacketEndpointWrite,
+		defaultForwardingEnabled:        make(map[tcpip.NetworkProtocolNumber]struct{}),
+		defaultDisabledNetworkProtocols: make(map[tcpip.NetworkProtocolNumber]struct{}),
+		globalDisabledNetworkProtocols:  make(map[tcpip.NetworkProtocolNumber]struct{}),
+		cleanupEndpoints:                make(map[TransportEndpoint]struct{}),
+		PortManager:                     ports.NewPortManager(),
+		clock:                           clock,
+		clockResolution:                 clockResolution,
+		stats:                           opts.Stats.FillIn(),
+		handleLocal:                     opts.HandleLocal,
+		tables:                          opts.IPTables,
+		icmpRateLimiter:                 NewICMPRateLimiter(clock),
+		seed:                            secureRNG.Uint32(),
+		nudConfigs:                      opts.NUDConfigs,
+		nudDisp:                         opts.NUDDisp,
+		insecureRNG:                     insecureRNG,
+		secureRNG:                       secureRNG,
 		sendBufferSize: tcpip.SendBufferSizeOption{
 			Min:     MinBufferSize,
 			Default: DefaultBufferSize,
@@ -495,11 +510,23 @@ func New(opts Options) *Stack {
 
 // NextNICID allocates the next available NIC ID and returns it.
 func (s *Stack) NextNICID() tcpip.NICID {
-	next := s.nicIDGen.Add(1)
-	if next < 0 {
-		panic("NICID overflow")
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.nextNICIDLocked()
+}
+
+// +checklocksread:s.mu
+func (s *Stack) nextNICIDLocked() tcpip.NICID {
+	for {
+		next := s.nicIDGen.Add(1)
+		if next < 0 {
+			panic("NICID overflow")
+		}
+		id := tcpip.NICID(next)
+		if _, ok := s.preservedNICs[id]; !ok {
+			return id
+		}
 	}
-	return tcpip.NICID(next)
 }
 
 // SetNetworkProtocolOption allows configuring individual protocol level
@@ -662,6 +689,93 @@ func (s *Stack) SetForwardingDefaultAndAllNICs(protocol tcpip.NetworkProtocolNum
 	}
 
 	return nil
+}
+
+// SetNICNetworkProtocolEnabled enables/disables the network protocol on the
+// NIC.
+func (s *Stack) SetNICNetworkProtocolEnabled(id tcpip.NICID, protocol tcpip.NetworkProtocolNumber, enable bool) tcpip.Error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	nic, ok := s.nics[id]
+	if !ok {
+		return &tcpip.ErrUnknownNICID{}
+	}
+	return nic.setNetworkProtocolEnabled(protocol, enable)
+}
+
+// NICNetworkProtocolEnabled returns if the network protocol is enabled on the
+// NIC.
+func (s *Stack) NICNetworkProtocolEnabled(id tcpip.NICID, protocol tcpip.NetworkProtocolNumber) (bool, tcpip.Error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	nic, ok := s.nics[id]
+	if !ok {
+		return false, &tcpip.ErrUnknownNICID{}
+	}
+	return nic.networkProtocolEnabled(protocol)
+}
+
+// SetDefaultNetworkProtocolEnabled sets if the network protocol should be
+// enabled by default for new NICs.
+func (s *Stack) SetDefaultNetworkProtocolEnabled(protocol tcpip.NetworkProtocolNumber, enable bool) tcpip.Error {
+	if _, ok := s.networkProtocols[protocol]; !ok {
+		return &tcpip.ErrUnknownProtocol{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if enable {
+		delete(s.defaultDisabledNetworkProtocols, protocol)
+	} else {
+		s.defaultDisabledNetworkProtocols[protocol] = struct{}{}
+	}
+	return nil
+}
+
+// DefaultNetworkProtocolEnabled returns if the network protocol is enabled by
+// default for new NICs.
+func (s *Stack) DefaultNetworkProtocolEnabled(protocol tcpip.NetworkProtocolNumber) (bool, tcpip.Error) {
+	if _, ok := s.networkProtocols[protocol]; !ok {
+		return false, &tcpip.ErrUnknownProtocol{}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, disabled := s.defaultDisabledNetworkProtocols[protocol]
+	return !disabled, nil
+}
+
+// SetGlobalNetworkProtocolEnabled enables/disables the network protocol on all
+// NICs and sets the default for new NICs.
+func (s *Stack) SetGlobalNetworkProtocolEnabled(protocol tcpip.NetworkProtocolNumber, enable bool) tcpip.Error {
+	if _, ok := s.networkProtocols[protocol]; !ok {
+		return &tcpip.ErrUnknownProtocol{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if enable {
+		delete(s.globalDisabledNetworkProtocols, protocol)
+		delete(s.defaultDisabledNetworkProtocols, protocol)
+	} else {
+		s.globalDisabledNetworkProtocols[protocol] = struct{}{}
+		s.defaultDisabledNetworkProtocols[protocol] = struct{}{}
+	}
+	for _, nic := range s.nics {
+		if err := nic.setNetworkProtocolEnabled(protocol, enable); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GlobalNetworkProtocolEnabled returns the stack-wide network protocol
+// enabled state.
+func (s *Stack) GlobalNetworkProtocolEnabled(protocol tcpip.NetworkProtocolNumber) (bool, tcpip.Error) {
+	if _, ok := s.networkProtocols[protocol]; !ok {
+		return false, &tcpip.ErrUnknownProtocol{}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, disabled := s.globalDisabledNetworkProtocols[protocol]
+	return !disabled, nil
 }
 
 // AddMulticastRoute adds a multicast route to be used for the specified
@@ -940,6 +1054,10 @@ type NICOptions struct {
 	// LinkEndpoint.
 	Disabled bool
 
+	// Multicast specifies whether the interface reports multicast support.
+	// It does not control reception of multicast packets.
+	Multicast bool
+
 	// Context specifies user-defined data that will be returned in stack.NICInfo
 	// for the NIC. Clients of this library can use it to add metadata that
 	// should be tracked alongside a NIC, to avoid having to keep a
@@ -957,8 +1075,18 @@ type NICOptions struct {
 	// passing the experiment IP option.
 	EnableExperimentIPOption bool
 
+	// AllowExternalIPv4LoopbackTraffic indicates whether IPv4 loopback packets
+	// (source or destination in 127.0.0.0/8) should be accepted from external
+	// networks on this NIC.
+	AllowExternalIPv4LoopbackTraffic bool
+
 	// Kind specifies the link kind of the NIC (e.g. "veth", "bridge").
 	Kind string
+
+	// MinMTU and MaxMTU bound subsequent changes through SetNICMTU. A zero
+	// value leaves the corresponding bound unrestricted.
+	MinMTU uint32
+	MaxMTU uint32
 }
 
 // GetNICByID return a network device associated with the specified ID.
@@ -989,10 +1117,18 @@ func (s *Stack) CreateNICWithOptions(id tcpip.NICID, ep LinkEndpoint, opts NICOp
 	if _, ok := s.nics[id]; ok {
 		return &tcpip.ErrDuplicateNICID{}
 	}
+	if _, ok := s.preservedNICs[id]; ok {
+		return &tcpip.ErrDuplicateNICID{}
+	}
 
 	// Make sure name is unique, unless unnamed.
 	if opts.Name != "" {
 		for _, n := range s.nics {
+			if n.Name() == opts.Name {
+				return &tcpip.ErrDuplicateNICID{}
+			}
+		}
+		for _, n := range s.preservedNICs {
 			if n.Name() == opts.Name {
 				return &tcpip.ErrDuplicateNICID{}
 			}
@@ -1005,7 +1141,15 @@ func (s *Stack) CreateNICWithOptions(id tcpip.NICID, ep LinkEndpoint, opts NICOp
 			panic(fmt.Sprintf("newNIC(%d, ...).setForwarding(%d, true): %s", id, proto, err))
 		}
 	}
+	for proto := range s.defaultDisabledNetworkProtocols {
+		if err := n.setNetworkProtocolEnabled(proto, false); err != nil {
+			return err
+		}
+	}
 	s.nics[id] = n
+	if n.kind == "tun" {
+		s.preservedNICs[id] = n
+	}
 	if n.IsLoopback() {
 		s.loopbackNIC = n
 	}
@@ -1043,6 +1187,9 @@ func (s *Stack) GetLinkEndpointByName(name string) LinkEndpoint {
 
 // EnableNIC enables the given NIC so that the link-layer endpoint can start
 // delivering packets to it.
+//
+// EnableNIC also brings the NIC administratively up. While external networking
+// is paused, a non-loopback NIC stays disabled until EnableAllNonLoopbackNICs.
 func (s *Stack) EnableNIC(id tcpip.NICID) tcpip.Error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1052,10 +1199,13 @@ func (s *Stack) EnableNIC(id tcpip.NICID) tcpip.Error {
 		return &tcpip.ErrUnknownNICID{}
 	}
 
-	return nic.enable()
+	return nic.setAdminState(true /* up */, s.externalNetworkingDisabled && !nic.IsLoopback())
 }
 
 // DisableNIC disables the given NIC.
+//
+// DisableNIC also brings the NIC administratively down, so
+// EnableAllNonLoopbackNICs leaves it disabled.
 func (s *Stack) DisableNIC(id tcpip.NICID) tcpip.Error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1065,8 +1215,7 @@ func (s *Stack) DisableNIC(id tcpip.NICID) tcpip.Error {
 		return &tcpip.ErrUnknownNICID{}
 	}
 
-	nic.disable()
-	return nil
+	return nic.setAdminState(false /* up */, false /* paused */)
 }
 
 // CheckNIC checks if a NIC is usable.
@@ -1102,6 +1251,7 @@ func (s *Stack) removeNICLocked(id tcpip.NICID, closeLinkEndpoint bool) (func(),
 		return nil, &tcpip.ErrUnknownNICID{}
 	}
 	delete(s.nics, id)
+	delete(s.preservedNICs, id)
 
 	if nic.Primary != nil {
 		b := nic.Primary.NetworkLinkEndpoint.(CoordinatorNIC)
@@ -1202,6 +1352,9 @@ func (s *Stack) SetNICMTU(id tcpip.NICID, mtu uint32) tcpip.Error {
 	if !ok {
 		return &tcpip.ErrUnknownNICID{}
 	}
+	if mtu < nic.minMTU || (nic.maxMTU != 0 && mtu > nic.maxMTU) {
+		return &tcpip.ErrInvalidOptionValue{}
+	}
 	nic.NetworkLinkEndpoint.SetMTU(mtu)
 	return nil
 }
@@ -1274,10 +1427,11 @@ func forwardingValue(forwardingFn forwardingFn, proto tcpip.NetworkProtocolNumbe
 // precondition: s.mu is held.
 func (s *Stack) nicInfo(nic *nic, id tcpip.NICID) *NICInfo {
 	flags := NICStateFlags{
-		Up:          true, // Netstack interfaces are always up.
+		Up:          !nic.adminDown.Load(),
 		Running:     nic.Enabled(),
 		Promiscuous: nic.Promiscuous(),
 		Loopback:    nic.IsLoopback(),
+		Multicast:   nic.multicast,
 	}
 
 	netStats := make(map[tcpip.NetworkProtocolNumber]NetworkEndpointStats)
@@ -1354,6 +1508,9 @@ type NICStateFlags struct {
 
 	// Loopback indicates whether the interface is a loopback.
 	Loopback bool
+
+	// Multicast indicates whether the interface reports multicast support.
+	Multicast bool
 }
 
 // AddProtocolAddress adds an address to the specified NIC, possibly with extra
@@ -1405,6 +1562,18 @@ func (s *Stack) AllAddresses() map[tcpip.NICID][]tcpip.ProtocolAddress {
 	nics := make(map[tcpip.NICID][]tcpip.ProtocolAddress)
 	for id, nic := range s.nics {
 		nics[id] = nic.allPermanentAddresses()
+	}
+	return nics
+}
+
+// AllAddressInfo returns a map of NICIDs to their protocol address information.
+func (s *Stack) AllAddressInfo() map[tcpip.NICID][]ProtocolAddressInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	nics := make(map[tcpip.NICID][]ProtocolAddressInfo)
+	for id, nic := range s.nics {
+		nics[id] = nic.allAddressInfo()
 	}
 	return nics
 }
@@ -2169,7 +2338,7 @@ func (s *Stack) ReplaceConfig(st *Stack) {
 		} else if s.externalNetworkingDisabled {
 			nic.disable()
 		}
-		_ = s.NextNICID()
+		_ = s.nextNICIDLocked()
 	}
 }
 
@@ -2179,9 +2348,56 @@ func (s *Stack) Restore() {
 	// RestoredEndpoint.Restore() may call other methods on s, so we can't hold
 	// s.mu while restoring the endpoints.
 	s.mu.Lock()
+	for id, nic := range s.preservedNICs {
+		nic.stack = s
+		s.nics[id] = nic
+		nic.NetworkLinkEndpoint.SetOnCloseAction(func() {
+			s.RemoveNIC(id)
+		})
+		nic.packetEPsMu.Lock()
+		clear(nic.packetEPs)
+		nic.packetEPsMu.Unlock()
+		for _, ep := range nic.networkEndpoints {
+			if r, ok := ep.(RestorableNetworkEndpoint); ok {
+				r.Restore()
+			}
+		}
+	}
+	preservedRoutes := s.preservedRoutes
+	s.preservedRoutes = nil
+	for _, nic := range s.nics {
+		nic.linkResQueue.mu.Lock()
+		for _, resolver := range nic.linkAddrResolvers {
+			resolver.neigh.state.clock = s.clock
+			resolver.neigh.state.rng = s.insecureRNG
+			resolver.neigh.mu.Lock()
+			for _, entry := range resolver.neigh.mu.cache {
+				entry.mu.Lock()
+				switch entry.mu.neigh.State {
+				case Reachable, Delay, Probe:
+					entry.setStateLocked(entry.mu.neigh.State)
+				case Incomplete:
+					ch := make(chan struct{})
+					entry.mu.done = ch
+					if len(entry.mu.pendingPackets) != 0 {
+						nic.linkResQueue.mu.packets[ch] = entry.mu.pendingPackets
+						nic.linkResQueue.mu.cancelChans = append(nic.linkResQueue.mu.cancelChans, ch)
+						entry.mu.pendingPackets = nil
+					}
+					entry.scheduleMulticastProbeLocked()
+				}
+				entry.mu.Unlock()
+			}
+			resolver.neigh.mu.Unlock()
+		}
+		nic.linkResQueue.mu.Unlock()
+	}
 	eps := s.restoredEndpoints
 	s.restoredEndpoints = nil
 	s.mu.Unlock()
+	for _, r := range preservedRoutes {
+		s.AddRoute(r)
+	}
 	for _, e := range eps {
 		e.Restore(s)
 	}
@@ -2199,6 +2415,17 @@ func (s *Stack) Restore() {
 // Resume resumes the stack after a save.
 func (s *Stack) Resume() {
 	s.mu.Lock()
+	for _, nic := range s.preservedNICs {
+		for _, resolver := range nic.linkAddrResolvers {
+			resolver.neigh.mu.Lock()
+			for _, entry := range resolver.neigh.mu.cache {
+				entry.mu.Lock()
+				entry.mu.pendingPackets = nil
+				entry.mu.Unlock()
+			}
+			resolver.neigh.mu.Unlock()
+		}
+	}
 	eps := s.resumableEndpoints
 	s.resumableEndpoints = nil
 	s.mu.Unlock()
@@ -2501,12 +2728,14 @@ func (s *Stack) Seed() uint32 {
 // to generate random numbers as required. It is not cryptographically secure
 // and should not be used for security sensitive work.
 func (s *Stack) InsecureRNG() *rand.Rand {
+	s.ensureRNG()
 	return s.insecureRNG
 }
 
 // SecureRNG returns the stack's cryptographically secure random number
 // generator.
 func (s *Stack) SecureRNG() cryptorand.RNG {
+	s.ensureRNG()
 	return s.secureRNG
 }
 
@@ -2625,7 +2854,13 @@ func (s *Stack) SetNICStack(id tcpip.NICID, peer *Stack) (tcpip.NICID, tcpip.Err
 	}
 
 	linkEp := nic.NetworkLinkEndpoint.(LinkEndpoint)
-	name := nic.Name()
+	opts := NICOptions{
+		Name:      nic.Name(),
+		Kind:      nic.kind,
+		Multicast: nic.multicast,
+		MinMTU:    nic.minMTU,
+		MaxMTU:    nic.maxMTU,
+	}
 
 	deferAct, err := s.removeNICLocked(id, false /* closeLinkEndpoint */)
 	s.mu.Unlock()
@@ -2637,7 +2872,7 @@ func (s *Stack) SetNICStack(id tcpip.NICID, peer *Stack) (tcpip.NICID, tcpip.Err
 	}
 
 	id = tcpip.NICID(peer.NextNICID())
-	return id, peer.CreateNICWithOptions(id, linkEp, NICOptions{Name: name})
+	return id, peer.CreateNICWithOptions(id, linkEp, opts)
 }
 
 // SetRemoveConf sets the removeConf in stack to the given value.
@@ -2683,6 +2918,8 @@ func (s *Stack) SetAllowLiveTCPMigration(allow bool) {
 }
 
 // DisableAllNonLoopbackNICs disables all non-loopback NICs in the stack.
+//
+// It leaves the administrative state of each NIC unchanged.
 func (s *Stack) DisableAllNonLoopbackNICs() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2694,13 +2931,14 @@ func (s *Stack) DisableAllNonLoopbackNICs() {
 	}
 }
 
-// EnableAllNonLoopbackNICs enables all non-loopback NICs in the stack.
+// EnableAllNonLoopbackNICs enables all non-loopback NICs in the stack that are
+// administratively up.
 func (s *Stack) EnableAllNonLoopbackNICs() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.externalNetworkingDisabled = false
 	for _, nic := range s.nics {
-		if !nic.IsLoopback() {
+		if !nic.IsLoopback() && !nic.adminDown.Load() {
 			nic.enable()
 		}
 	}
