@@ -797,7 +797,7 @@ func TestGrepInventoryAllocations(t *testing.T) {
 	})
 	require.Positive(t, cost.N)
 	// Calibrate command buffering and path costs, leaving room for bookkeeping but not another inventory.
-	require.Less(t, cost.AllocedBytesPerOp()-listing.AllocedBytesPerOp()-65536*perFile.AllocedBytesPerOp(), int64(512<<10))
+	require.Less(t, cost.AllocedBytesPerOp()-listing.AllocedBytesPerOp()-65536*perFile.AllocedBytesPerOp(), int64(512<<10), "inventory=%d B/op listing=%d B/op denied_path=%d B/op", cost.AllocedBytesPerOp(), listing.AllocedBytesPerOp(), perFile.AllocedBytesPerOp())
 }
 
 func BenchmarkPatchUpdatePreview(b *testing.B) {
