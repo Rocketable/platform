@@ -538,11 +538,12 @@ active tab.
   tab in view keeps you there and keeps the mark while you read it, through
   reloads too; it clears the next time you go to another tab, a palette preview
   included, and come back.
-- **Park.** The menu's **Park** submenu offers **Until I unpark**, **Until it
-  is done** on session tabs, 1 hour, 4 hours, Tomorrow 9:00, Next Monday 9:00,
-  and **Pick a time…**, a dialog that starts at the next whole hour, today
-  unless that is past midnight, and refuses a time already past; times are the
-  browser's local time. Until it is done lasts until the session's next turn
+- **Park.** The menu's **Park** submenu offers, each set apart by a line,
+  **Until it is done** on session tabs; 1 hour, 4 hours, Tomorrow 9:00, Next
+  Monday 9:00, and **Pick a time…**; and **Until I unpark**. Pick a time… is a
+  dialog that starts at the next whole hour, today unless that is past
+  midnight, and refuses a time already past; times are the browser's local
+  time. Until it is done lasts until the session's next turn
   ends, finished, failed, or stopped, also when nothing runs yet. A parked tab
   leaves the strip for the **Parked** section
   at the bottom, which lists your parked tabs from every space, each with when

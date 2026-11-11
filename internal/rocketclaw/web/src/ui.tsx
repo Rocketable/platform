@@ -1448,6 +1448,8 @@ type TabCommand = { key: string; label: string; sub?: { menu: string; label: str
 // moving, then deleting. Its items come in that order.
 const menuSections = [/^rename/, /^close/, /^(share|unshare|duplicate|shelve|unshelve)/, /^(read|unread|park|unpark)/, /^(group|restore|space)/, /^delete/];
 const menuSection = (key: string) => menuSections.findIndex((pattern) => pattern.test(key));
+// A submenu draws its lines the same way: Park's are Until it is done, its times, then Until I unpark.
+const submenuSections = [/^park-done$/, /^park-/];
 type Attend = (paths: string[], action: AttentionAction, until?: string) => void;
 // A Park waiting for the person to pick its time.
 type Picking = { send: (until: string) => void };
@@ -1469,11 +1471,11 @@ function attentionItems(view: SidebarView | undefined, path: string, targets: It
     ...bold.length ? [{ key: "read", label: "Mark as read", run: () => send(bold, "MARK_READ") }] : [],
     ...read.length ? [{ key: "unread", label: "Mark as unread", run: () => send(read, "MARK_UNREAD") }] : [],
     ...of(path).parked ? [{ key: "unpark", label: "Unpark", run: () => send(paths, "UNPARK") }] : [
-      { key: "park", label: "Park until I unpark", sub: { menu: "Park", label: "Until I unpark" }, run: () => send(paths, "PARK") },
       // A session's tab can wait for its next turn to end.
       ...paths.every((item) => pathSession(item)) ? [{ key: "park-done", label: "Park until it is done", sub: { menu: "Park", label: "Until it is done" }, run: () => send(paths, "PARK_UNTIL_DONE") }] : [],
       ...laters.map(([key, label, park, at]) => ({ key: `park-${key}`, label: `Park ${park}`, sub: { menu: "Park", label },
         run: () => at ? send(paths, "PARK", new Date(at()).toISOString()) : pick({ send: (until) => send(paths, "PARK", until) }) })),
+      { key: "park", label: "Park until I unpark", sub: { menu: "Park", label: "Until I unpark" }, run: () => send(paths, "PARK") },
     ],
   ];
 }
@@ -1758,7 +1760,10 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
         {items.map((item, i) => {
           const entry = !item.sub ? option(item) : item !== items.find((other) => other.sub?.menu === item.sub!.menu) ? null : <Menu.SubmenuRoot key={item.sub.menu}>
             <Menu.SubmenuTrigger className={cn(itemClass, "justify-between gap-4 data-popup-open:bg-accent")}>{item.sub.menu}<ChevronRight className="size-4" /></Menu.SubmenuTrigger>
-            <Menu.Portal><Menu.Positioner className="z-50 outline-none"><Menu.Popup className={popupClass}>{items.filter((other) => other.sub?.menu === item.sub!.menu).map((other) => option({ ...other, label: other.sub!.label }))}</Menu.Popup></Menu.Positioner></Menu.Portal>
+            <Menu.Portal><Menu.Positioner className="z-50 outline-none"><Menu.Popup className={popupClass}>{items.filter((other) => other.sub?.menu === item.sub!.menu).map((other, j, subs) => {
+              const section = (key: string) => submenuSections.findIndex((pattern) => pattern.test(key)), entry = option({ ...other, label: other.sub!.label });
+              return j > 0 && section(other.key) !== section(subs[j - 1].key) ? [<Menu.Separator key={`line-${other.key}`} className="-mx-1 my-1 h-px bg-border" />, entry] : entry;
+            })}</Menu.Popup></Menu.Positioner></Menu.Portal>
           </Menu.SubmenuRoot>;
           return entry && i > 0 && menuSection(item.key) !== menuSection(items[i - 1].key) ? [<Menu.Separator key={`line-${item.key}`} className="-mx-1 my-1 h-px bg-border" />, entry] : entry;
         })}
