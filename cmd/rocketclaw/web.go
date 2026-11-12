@@ -130,8 +130,9 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		errs = append(errs, closeTailnet())
 
 		server.Stop()
+		web.StopSearches()
 
-		if err := errors.Join(append(errs, web.StopSearches(), serving.Wait(), connection.Close())...); err != nil {
+		if err := errors.Join(append(errs, serving.Wait(), connection.Close())...); err != nil {
 			return fmt.Errorf("stop Web: %w", err)
 		}
 

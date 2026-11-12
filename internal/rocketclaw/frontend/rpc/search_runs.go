@@ -128,7 +128,7 @@ func (s *Server) runSearch(ctx context.Context, request *SearchSessionsRequest, 
 
 // StopSearches cancels the searches running on the server, none of which marks, and waits for them. No search runs
 // after.
-func (s *Server) StopSearches() error {
+func (s *Server) StopSearches() {
 	s.runsMu.Lock()
 	s.runsStopped = true
 
@@ -141,9 +141,5 @@ func (s *Server) StopSearches() error {
 	clear(s.runs)
 	s.runsMu.Unlock()
 
-	if err := s.runGroup.Wait(); err != nil {
-		return fmt.Errorf("finish searches: %w", err)
-	}
-
-	return nil
+	_ = s.runGroup.Wait()
 }
