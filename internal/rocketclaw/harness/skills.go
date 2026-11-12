@@ -328,6 +328,11 @@ func composeSystemPromptWithSkills(base string, skills Skills, agent *Agent) str
 		prompts = append(prompts, prompt)
 	}
 
+	if dir := agent.CustomShell.Dir; dir != "" {
+		prompts = append(prompts, "## Working Directory\n\nYour working directory is `"+dir+"`. Shell commands start there and relative paths resolve from it. "+
+			"It is the only folder where changes persist: `/tmp` is cleared after every command and every other folder is read-only.")
+	}
+
 	return strings.TrimSpace(strings.Join(prompts, "\n\n"))
 }
 
