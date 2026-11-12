@@ -333,7 +333,7 @@ A parked tab is never bold and raises no notification: anything new on it leaves
 
 The server checks a person's park times each time one of their windows asks for the session list, which an open window does every few seconds, so a park ends on the first such poll after its time; one that comes due while no window is open shows bold without a notification when a window opens. A park time that comes due on a closed tab brings the tab back where it was: in its Space, in its group when that still exists, and at its old position when possible.
 
-A person can auto-park sessions: then each message they send a session that the agent acts on, from the Web or from a remote OpenCode session's view, first parks its tab until it is done. Their choice for one session wins over their choice for every session; both are theirs alone and kept by the server.
+A person auto-parks sessions until they turn it off: each message they send a session that the agent acts on, from the Web or from a remote OpenCode session's view, first parks its tab until it is done. Their choice for one session wins over their choice for every session; both are theirs alone and kept by the server.
 
 ## Hosted Pages
 

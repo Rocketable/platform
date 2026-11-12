@@ -565,7 +565,8 @@ active tab.
   not a stash or a command the server answers itself, such as `$agent`. For a
   remote OpenCode session it is each prompt you send from its view; one sent
   before RocketClaw has listed the session does not park. Config's **Tabs**
-  section has **Auto-park sessions**, your choice for every session, and a
+  section has **Auto-park sessions**, your choice for every session, on until
+  you turn it off, and a
   session tab's menu, Shared and Top Shelf rows included, offers **Auto-park
   when I send** or **Stop auto-parking** for that session alone, which then
   wins over the Config choice. Both are yours alone and kept by the server, so

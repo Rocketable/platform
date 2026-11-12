@@ -278,15 +278,26 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs())
 
 	// A prompt Alice sent parks until it is done only a session she auto-parks: by her choice for it, which keeps its
-	// row through an unpark, else by her choice for every session, which every reply of hers carries.
+	// row through an unpark, else by her choice for every session, which starts on and every reply of hers carries.
 	sent := func(paths ...string) {
 		t.Helper()
 
 		_, err := call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: paths, Action: AttentionAction_SENT}})
 		require.NoError(t, err)
 	}
+	response, err = call("127.0.0.1", &TabsRequest{})
+	require.NoError(t, err)
+	assert.True(t, response.AutoPark)
+
+	response, err = call("127.0.0.1", &TabsRequest{AutoPark: new(false)})
+	require.NoError(t, err)
+	assert.False(t, response.AutoPark)
 	sent("/s/YQ")
-	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs(), "nothing is auto-parked yet")
+	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs(), "nothing is auto-parked with it off")
+
+	response, err = call("192.0.2.2", &TabsRequest{})
+	require.NoError(t, err)
+	assert.True(t, response.AutoPark, "auto-park is each person's own")
 
 	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_AUTO_PARK}})
 	require.NoError(t, err)
@@ -305,10 +316,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	require.NoError(t, err)
 	sent("/s/YQ", "/s/Yw")
 	assert.Equal(t, []string{"/s/YQ 0", "/s/YQ f f", "/s/Yw t t"}, aliceTabs(), "her choice for a session wins over her choice for every session")
-
-	response, err = call("192.0.2.2", &TabsRequest{})
-	require.NoError(t, err)
-	assert.False(t, response.AutoPark, "auto-park is each person's own")
 
 	_, err = db.ExecContext(t.Context(), `DELETE FROM web_tab_attention WHERE username = 'alice' AND path <> '/s/Yw'; UPDATE web_tab_attention SET parked = FALSE, until = NULL WHERE username = 'alice'`)
 	require.NoError(t, err)
@@ -344,8 +351,8 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "an emptied shelf stays empty: %v", response.TopShelf)
 }
 
-// A prompt the agent acts on parks the sender's tab until it is done when they auto-park the session, before its turn
-// starts, and the turn's end makes the park due; a stash parks nothing.
+// A prompt the agent acts on parks the sender's tab until it is done when they auto-park the session, as everyone
+// does until they turn it off, before its turn starts, and the turn's end makes the park due; a stash parks nothing.
 func TestPromptAutoParks(t *testing.T) {
 	h := startVoiceHarness(t)
 	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
@@ -360,7 +367,6 @@ func TestPromptAutoParks(t *testing.T) {
 		return backend.Attention{}
 	}
 
-	require.NoError(t, h.rt.Sessions.SetAutoParkAll(t.Context(), "alice", true))
 	_, err := h.server.prompt(alice, &PromptRequest{Id: "worker", Text: "held", Delivery: PromptDelivery_STASH})
 	require.NoError(t, err)
 	require.False(t, attention().Parked, "a stash parks nothing")

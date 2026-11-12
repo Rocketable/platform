@@ -192,12 +192,11 @@ func TestOpenCodeProxy(t *testing.T) {
 		}
 	}
 
-	// A prompt to a session its sender auto-parks parks their tab until it is done before OpenCode gets it. The
-	// prompts above went through though no sync had recorded s1, so none could park.
+	// A prompt to a session its sender auto-parks, as everyone does until they turn it off, parks their tab until it is
+	// done before OpenCode gets it. The prompts above went through though no sync had recorded s1, so none could park.
 	_, err := db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, title, name, directory, last_updated, synced_at)
 VALUES ('opencode:box:s2', '', '', 'remote', FALSE, 'remote', 'box', 's2', '', '', '/srv', now(), now())`)
 	require.NoError(t, err)
-	require.NoError(t, sessions.SetAutoParkAll(t.Context(), "alice", true))
 	require.Equal(t, http.StatusOK, serve(http.MethodPost, "/oc/box/api/session/s2/prompt", "192.0.2.10:5000", nil).Code)
 
 	listed := 0

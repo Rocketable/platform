@@ -1358,7 +1358,7 @@ SELECT
     u.until,
     COALESCE(u.until_done, FALSE) AS until_done,
     COALESCE(u.note, '') AS note,
-    COALESCE(u.auto_park, e.auto_park, FALSE) AS auto_park,
+    COALESCE(u.auto_park, e.auto_park, TRUE) AS auto_park,
     -- Idle chats read NULL and zeros, which cost no allocation per row.
     CASE WHEN k.conversation_id IS NOT NULL THEN 'needs_you' WHEN w.running_since IS NOT NULL THEN 'running' WHEN w.queued_since IS NOT NULL THEN 'queued' END AS work,
     COALESCE(w.running_since, w.queued_since, 0) AS state_since,
@@ -1378,7 +1378,7 @@ WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY(
 ), remote AS (
 SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.pinned, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
     o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at, COALESCE(u.quiet, FALSE),
-    COALESCE(u.parked, FALSE), u.until, COALESCE(u.until_done, FALSE), COALESCE(u.note, ''), COALESCE(u.auto_park, e.auto_park, FALSE),
+    COALESCE(u.parked, FALSE), u.until, COALESCE(u.until_done, FALSE), COALESCE(u.note, ''), COALESCE(u.auto_park, e.auto_park, TRUE),
     CASE WHEN o.asking THEN 'needs_you' WHEN o.running OR o.background THEN 'running' END, 0, FALSE AS queued, FALSE AS external_mcp, 0,
     '', '', '', 'null'::jsonb, '', '', '', NULL::bigint, FALSE
 FROM conversations o
