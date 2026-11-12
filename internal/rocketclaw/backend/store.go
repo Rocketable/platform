@@ -1407,7 +1407,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			since, arrived int64
 		)
 
-		dest := make([]any, 0, 42)
+		dest := make([]any, 0, 43)
 
 		for rows.Next() {
 			var row SidebarSession

@@ -552,7 +552,8 @@ func TestSidebarSessionsAllocationBudgets(t *testing.T) {
 	require.Positive(t, result.N)
 	// Keep previews independently owned without a second full preview buffer.
 	require.Less(t, result.AllocedBytesPerOp(), int64(4<<20))
-	require.Less(t, result.AllocsPerOp(), int64(990))
+	// Leave room for every row's origin fields in the shared scan buffer.
+	require.Less(t, result.AllocsPerOp(), int64(880))
 	result = testing.Benchmark(BenchmarkSidebarSessionTags)
 	require.Positive(t, result.N)
 	require.Less(t, result.AllocedBytesPerOp(), int64(4<<20))
