@@ -193,7 +193,7 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 			}
 
 			require.Equal(t, []SidebarSession{
-				{Conversation: protocol.Conversation{ID: "history", Agent: "main"}, Kind: kind, Summary: &protocol.SessionSummary{ConversationID: "history", LastMessage: "assistant", LastUpdated: updated}, Tags: []string{}, Origin: origin,
+				{Conversation: protocol.Conversation{ID: "history", Agent: "main"}, Kind: kind, Summary: &protocol.SessionSummary{ConversationID: "history", LastMessage: "assistant", LastUpdated: updated}, Tags: []string{}, AutoPark: true, Origin: origin,
 					Work: WorkIdle, StateSince: updated, External: creation == "external MCP", ArrivedAt: updated},
 			}, rows)
 		})
@@ -457,7 +457,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT min(created_at_unix_ns), max(created_at_unix_ns) FROM turns WHERE conversation_id = 'a'`).Scan(&started, &newest))
 
 	for _, id := range []string{"Z", "a", "ä", "missing", "zero"} {
-		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main"}, Kind: KindWebChat, Running: id == "a", Origin: ChatOriginFacts{ConversationID: id}, Work: WorkIdle}
+		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main"}, Kind: KindWebChat, Running: id == "a", AutoPark: true, Origin: ChatOriginFacts{ConversationID: id}, Work: WorkIdle}
 
 		row.Tags = []string{"customer"}
 		if id == "zero" {

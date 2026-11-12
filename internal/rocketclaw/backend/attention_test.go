@@ -499,7 +499,7 @@ VALUES ($1, 0, CASE WHEN $3 THEN $2 ELSE '' END, now())`, username, session.Path
 }
 
 // Auto-park is a choice kept on the session's attention row: it leaves the row's park and timer alone, keeps the row
-// through an unpark, and skips a location that is no session. The choice for every session starts off.
+// through an unpark, and skips a location that is no session. The choice for every session starts on.
 func TestAttentionAutoPark(t *testing.T) {
 	t.Parallel()
 
@@ -520,7 +520,7 @@ func TestAttentionAutoPark(t *testing.T) {
 
 	on, err := service.AutoParkAll(ctx, alice)
 	require.NoError(t, err)
-	assert.False(t, on)
+	assert.True(t, on)
 }
 
 // A timer that comes due on a closed tab brings it back where it was, once, with its Search page.

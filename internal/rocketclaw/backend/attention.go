@@ -425,9 +425,10 @@ RETURNING s.revision`, username, woken).Scan(&revision)
 	return revision, nil
 }
 
-// AutoParkAll reports whether username auto-parks every session they chose nothing for.
+// AutoParkAll reports whether username auto-parks every session they chose nothing for, as they do until they turn
+// it off.
 func (s *SessionService) AutoParkAll(ctx context.Context, username string) (bool, error) {
-	var on bool
+	on := true
 
 	err := s.db.QueryRowContext(ctx, `SELECT auto_park FROM web_tab_states WHERE username = $1`, username).Scan(&on)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
