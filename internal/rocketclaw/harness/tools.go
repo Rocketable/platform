@@ -568,7 +568,7 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, raw json.RawMes
 
 	skill, ok := f.skills.Items[input.Name]
 	if !ok {
-		return skillToolParams{}, "", fmt.Errorf("skill %q not found. Available skills: %s", input.Name, strings.Join(f.availableSkillNames(), ", "))
+		return skillToolParams{}, "", fmt.Errorf("skill %q not found. Available skills: %s", input.Name, strings.Join(f.availableSkillSubjects(), ", "))
 	}
 
 	dir := path.Dir(skill.Location)
@@ -690,15 +690,6 @@ func renderSkillArguments(output, arguments string, appendUnused bool) string {
 	}
 
 	return output
-}
-
-func (f *toolFactory) availableSkillNames() []string {
-	names := make([]string, 0, len(f.skills.Items))
-	for _, skill := range f.skills.Available(f.agent) {
-		names = append(names, skill.Name)
-	}
-
-	return names
 }
 
 func (f *toolFactory) skillDescription() string {
