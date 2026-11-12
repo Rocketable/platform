@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	cirello.io/pglock v1.18.0
 	github.com/Arize-ai/openinference/go/openinference-instrumentation v0.1.2
-	github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.13
+	github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.14
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.18
@@ -130,5 +130,5 @@ require (
 	golang.zx2c4.com/wireguard/windows v1.1.1 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20261110000943-09e21b237f2c // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261110000943-09e21b237f2c // indirect
-	gvisor.dev/gvisor v0.0.0-20261112005329-767d006e9f86 // indirect
+	gvisor.dev/gvisor v0.0.0-20261112112706-d0f1c9730029 // indirect
 )
