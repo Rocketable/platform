@@ -71,7 +71,7 @@ func newSearchRunTest(t *testing.T) *searchRunTest {
 		return "support", nil, nil
 	}}}
 
-	t.Cleanup(func() { require.NoError(t, server.StopSearches(), "every mark was written") })
+	t.Cleanup(server.StopSearches)
 
 	gone, cancel := context.WithCancel(alice)
 	cancel()
@@ -289,21 +289,24 @@ func TestStopSearchesCancelsAndWaits(t *testing.T) {
 	rt.leave(t, searchRunRequest("s", "a b", true))
 	scan := rt.scan(t)
 
-	stopped := make(chan error, 1)
+	stopped := make(chan struct{})
 
-	go func() { stopped <- rt.server.StopSearches() }()
+	go func() {
+		rt.server.StopSearches()
+		close(stopped)
+	}()
 
 	<-scan.ctx.Done()
 	assert.Equal(t, searchEndError("stopped"), context.Cause(scan.ctx))
 
 	select {
-	case err := <-stopped:
-		t.Fatalf("stopping waits for the running search, got %v", err)
+	case <-stopped:
+		t.Fatal("stopping waits for the running search")
 	default:
 	}
 
 	close(scan.finish)
-	require.NoError(t, <-stopped)
+	<-stopped
 	assert.Empty(t, rt.marks(t), "a stopped search marks nothing")
 
 	_, err := rt.server.searchSessions(rt.alice, searchRunRequest("s", "a b", true))
