@@ -559,8 +559,8 @@ func (s *Server) transcriptEntry(ctx context.Context, root *os.Root, entry *back
 			return nil, fmt.Errorf("decode history identity: %w", err)
 		}
 
-		if identity.Role == "assistant" && identity.ID != "" {
-			replayText[identity.ID] = true // Even an empty authoritative item replaces its partial.
+		if identity.ID != "" {
+			replayText[identity.ID] = true // Even an empty authoritative message or reasoning item replaces its partial.
 		}
 
 		if identity.Type == "function_call_output" {
@@ -722,7 +722,7 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []harness.Pu
 		item := &progress[i]
 
 		switch {
-		case item.Kind == harness.PublicProgressText:
+		case item.Kind == harness.PublicProgressText || item.Kind == harness.PublicProgressThinking:
 			id := item.ID
 			if index := strings.LastIndexByte(id, '/'); index >= 0 {
 				id = id[:index]
@@ -739,16 +739,19 @@ func fallbackProgress(entry *backend.ObservedSessionEntry, progress []harness.Pu
 		}
 
 		event := &TranscriptEvent{Role: "tool", Text: string(item.State), EntryKey: entry.Key, TurnId: entry.Entry.TurnID}
-		if item.Kind == harness.PublicProgressText {
+		switch {
+		case item.Kind == harness.PublicProgressText:
 			event.Role, event.Text = "assistant", item.Text
-		} else if item.Kind == harness.PublicProgressTool && item.Text != "" {
+		case item.Kind == harness.PublicProgressThinking:
+			event.Role, event.Text = "thinking", item.Text
+		case item.Kind == harness.PublicProgressTool && item.Text != "":
 			event.Text = item.Text
 		}
 
 		event.attribute(entry.Entry.AttributionAt(len(entry.Entry.ReplayInput)), producer, conversationID, cronTrace)
 		event.publicProgress(item, entry, producer)
 
-		if item.Kind != harness.PublicProgressText {
+		if item.Kind != harness.PublicProgressText && item.Kind != harness.PublicProgressThinking {
 			if item.Kind == harness.PublicProgressDelegation || item.Text == "" {
 				event.Text = event.State
 			}
@@ -800,7 +803,7 @@ func (e *TranscriptEvent) publicProgress(item *harness.PublicProgress, entry *ba
 	}
 
 	e.Complete = e.State != "working" && e.State != "review"
-	if item.Kind == harness.PublicProgressText {
+	if item.Kind == harness.PublicProgressText || item.Kind == harness.PublicProgressThinking {
 		e.Complete = e.State == "completed"
 	} else {
 		e.ToolCallId = item.ID

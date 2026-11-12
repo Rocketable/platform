@@ -111,6 +111,9 @@ packages:
       directorySyncer:
         config:
           structname: directorySyncerMock
+      ResponseObserver:
+        config:
+          structname: responseObserverMock
   github.com/Rocketable/platform/internal/rocketclaw/protocol:
     interfaces:
       OutboundPublisher:

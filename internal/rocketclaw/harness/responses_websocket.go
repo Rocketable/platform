@@ -13,27 +13,28 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	"github.com/gorilla/websocket"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 )
 
 type responseObserver interface {
-	beginResponse(context.Context) error
-	observeResponse(context.Context, *responses.ResponseStreamEventUnion) error
+	BeginResponse(context.Context) error
+	ObserveResponse(context.Context, *responses.ResponseStreamEventUnion) error
 }
 
 type inertResponseObserver struct{}
 
-func (inertResponseObserver) beginResponse(context.Context) error {
+func (inertResponseObserver) BeginResponse(context.Context) error {
 	return nil
 }
 
-func (inertResponseObserver) observeResponse(context.Context, *responses.ResponseStreamEventUnion) error {
+func (inertResponseObserver) ObserveResponse(context.Context, *responses.ResponseStreamEventUnion) error {
 	return nil
 }
 
-// responseObservations buffers only public text, never provider replay or arguments.
+// responseObservations buffers only public text and reasoning summaries, never provider replay or arguments.
 // One provider request owns it across SDK, looper, and compaction retries.
 type responseObservations struct {
 	owner      *turnObservations
@@ -43,7 +44,7 @@ type responseObservations struct {
 	text       []PublicProgress
 }
 
-func (o *responseObservations) beginResponse(ctx context.Context) error {
+func (o *responseObservations) BeginResponse(ctx context.Context) error {
 	if len(o.text) > 0 {
 		if err := o.owner.replaceResponse(ctx, o.text[0].ParentID, nil); err != nil {
 			return err
@@ -55,23 +56,28 @@ func (o *responseObservations) beginResponse(ctx context.Context) error {
 	return nil
 }
 
-func (o *responseObservations) observeResponse(ctx context.Context, event *responses.ResponseStreamEventUnion) error {
+func (o *responseObservations) ObserveResponse(ctx context.Context, event *responses.ResponseStreamEventUnion) error {
 	parentID := o.owner.turnID + "/" + o.responseID
 
 	switch event.Type {
 	case "response.created":
 		o.responseID = event.Response.ID
 		return nil
-	case "response.output_text.delta", "response.output_text.done":
-		id := event.ItemID + "/" + strconv.FormatInt(event.ContentIndex, 10)
+	case "response.output_text.delta", "response.output_text.done", "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done":
+		kind, part := PublicProgressText, event.ContentIndex
+		if strings.HasPrefix(event.Type, "response.reasoning_summary_text.") {
+			kind, part = PublicProgressThinking, event.SummaryIndex
+		}
+
+		id := event.ItemID + "/" + strconv.FormatInt(part, 10)
 
 		index := slices.IndexFunc(o.text, func(item PublicProgress) bool { return item.ID == id })
 		if index < 0 {
 			index = len(o.text)
-			o.text = append(o.text, PublicProgress{ID: id, ParentID: parentID, Kind: PublicProgressText, State: PublicProgressWorking, Agent: o.agent, Model: o.model})
+			o.text = append(o.text, PublicProgress{ID: id, ParentID: parentID, Kind: kind, State: PublicProgressWorking, Agent: o.agent, Model: o.model})
 		}
 
-		if event.Type == "response.output_text.done" {
+		if strings.HasSuffix(event.Type, ".done") {
 			o.text[index].Text = event.Text
 		} else {
 			o.text[index].Text += event.Delta
@@ -82,6 +88,12 @@ func (o *responseObservations) observeResponse(ctx context.Context, event *respo
 
 		for i := range event.Response.Output {
 			item := &event.Response.Output[i]
+			if item.Type == "reasoning" {
+				for index := range item.Summary {
+					o.text = append(o.text, PublicProgress{ID: item.ID + "/" + strconv.Itoa(index), ParentID: parentID, Kind: PublicProgressThinking, State: PublicProgressCompleted, Text: item.Summary[index].Text, Agent: o.agent, Model: o.model})
+				}
+			}
+
 			if item.Type != "message" || item.Role != "assistant" {
 				continue
 			}
@@ -122,7 +134,8 @@ type responsesWebsocketDoer struct {
 
 func (d *responsesWebsocketDoer) middleware(req *http.Request, next option.MiddlewareNext, observer responseObserver) (*http.Response, error) {
 	if req.URL.Scheme != "ws" && req.URL.Scheme != "wss" {
-		return next(req)
+		// A ChatGPT client streams its responses to the observer this carries.
+		return next(req.WithContext(oai.WithResponseObserver(req.Context(), observer)))
 	}
 
 	if strings.Contains(req.URL.Path, "/compact") {
@@ -179,8 +192,8 @@ func (d *responsesWebsocketDoer) doCreate(req *http.Request, observer responseOb
 	// Decoded JSON values and the type string are always JSON-encodable.
 	create, _ := json.Marshal(payload)
 
-	if err := observer.beginResponse(req.Context()); err != nil {
-		return nil, err
+	if err := observer.BeginResponse(req.Context()); err != nil {
+		return nil, fmt.Errorf("begin responses websocket observation: %w", err)
 	}
 
 	if errWrite := d.writeCreate(req, create); errWrite != nil {
@@ -252,14 +265,15 @@ func (d *responsesWebsocketDoer) readCreate(req *http.Request, observer response
 		}
 
 		switch event.Type {
-		case "response.created", "response.output_text.delta", "response.output_text.done", "response.completed", "response.failed", "response.incomplete":
+		case "response.created", "response.output_text.delta", "response.output_text.done", "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done",
+			"response.completed", "response.failed", "response.incomplete":
 			var typed responses.ResponseStreamEventUnion
 			if err := json.Unmarshal(message, &typed); err != nil {
 				return nil, fmt.Errorf("decode typed responses websocket event: %w", err)
 			}
 
-			if err := observer.observeResponse(req.Context(), &typed); err != nil {
-				return nil, err
+			if err := observer.ObserveResponse(req.Context(), &typed); err != nil {
+				return nil, fmt.Errorf("observe responses websocket event: %w", err)
 			}
 		}
 

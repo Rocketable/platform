@@ -1536,7 +1536,7 @@ func TestJournalAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
 		require.NoError(t, observeTestResponseAttempt(ctx, observer, id))
 
 		if err == nil {
-			require.NoError(t, observer.observeResponse(ctx, &responses.ResponseStreamEventUnion{Type: "response.completed", Response: *resp}))
+			require.NoError(t, observer.ObserveResponse(ctx, &responses.ResponseStreamEventUnion{Type: "response.completed", Response: *resp}))
 		}
 
 		return resp, err
@@ -3426,7 +3426,7 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 				eventType = "response.failed"
 			}
 
-			require.NoError(t, observer.observeResponse(ctx, &responses.ResponseStreamEventUnion{Type: eventType, Response: *resp}))
+			require.NoError(t, observer.ObserveResponse(ctx, &responses.ResponseStreamEventUnion{Type: eventType, Response: *resp}))
 
 			return resp, err
 		}
@@ -3460,8 +3460,8 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 }
 
 func observeTestResponseAttempt(ctx context.Context, observer responseObserver, id string) error {
-	if err := observer.beginResponse(ctx); err != nil {
-		return err
+	if err := observer.BeginResponse(ctx); err != nil {
+		return fmt.Errorf("begin test response: %w", err)
 	}
 
 	events := []responses.ResponseStreamEventUnion{
@@ -3469,8 +3469,8 @@ func observeTestResponseAttempt(ctx context.Context, observer responseObserver, 
 		{Type: "response.output_text.delta", ItemID: "partial", Delta: id},
 	}
 	for i := range events {
-		if err := observer.observeResponse(ctx, &events[i]); err != nil {
-			return err
+		if err := observer.ObserveResponse(ctx, &events[i]); err != nil {
+			return fmt.Errorf("observe test response: %w", err)
 		}
 	}
 

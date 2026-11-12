@@ -1562,12 +1562,7 @@ func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion) ([
 		case "compaction", "compaction_summary":
 			input = append(input, compactionReplayInput(items[i].ID, items[i].EncryptedContent, responseItemText(&items[i])))
 		case "reasoning":
-			summary := ""
-			if len(items[i].Summary) > 0 {
-				summary = items[i].Summary[0].Text
-			}
-
-			input = append(input, reasoningReplayInput(items[i].ID, summary, items[i].EncryptedContent))
+			input = append(input, reasoningReplayInput(items[i].ID, items[i].Summary, items[i].EncryptedContent))
 		default:
 			return nil, fmt.Errorf("unsupported compacted output item kind %q", items[i].Type)
 		}
@@ -2426,14 +2421,12 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 		}
 
 		return responses.ResponseInputItemUnionParam{OfMessage: &assistant}, true
-	case "reasoning", "compaction", "compaction_summary":
+	case "reasoning":
+		return reasoningReplayInput(item.ID, item.Summary, item.EncryptedContent), true
+	case "compaction", "compaction_summary":
 		summary := ""
 		if len(item.Summary) > 0 {
 			summary = item.Summary[0].Text
-		}
-
-		if item.Type == "reasoning" {
-			return reasoningReplayInput(item.ID, summary, item.EncryptedContent), true
 		}
 
 		if summary == "" {
@@ -2476,10 +2469,16 @@ func responseItemText(item *responses.ResponseOutputItemUnion) string {
 	return text.String()
 }
 
-func reasoningReplayInput(id, summary, encryptedContent string) responses.ResponseInputItemUnionParam {
+// reasoningReplayInput keeps every summary part; one without parts keeps a blank part, as the field is required.
+func reasoningReplayInput(id string, summary []responses.ResponseReasoningItemSummary, encryptedContent string) responses.ResponseInputItemUnionParam {
+	parts := make([]responses.ResponseReasoningItemSummaryParam, max(len(summary), 1))
+	for i := range summary {
+		parts[i].Text = summary[i].Text
+	}
+
 	return responses.ResponseInputItemUnionParam{OfReasoning: &responses.ResponseReasoningItemParam{
 		ID:               id,
-		Summary:          []responses.ResponseReasoningItemSummaryParam{{Text: summary}},
+		Summary:          parts,
 		EncryptedContent: openai.String(encryptedContent),
 		Type:             "reasoning",
 	}}

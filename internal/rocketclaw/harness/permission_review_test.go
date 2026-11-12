@@ -52,7 +52,7 @@ func TestPermissionReviewDecisionUsesFinalAnswer(t *testing.T) {
 		trace  []json.RawMessage
 		want   PermissionReview
 	}{
-		{name: "http allow", answer: []responses.ResponseInputItemUnionParam{reasoningReplayInput("rsn-1", "checking", "ENCRYPTED"), final(`{"outcome":"allow","rationale":"The read-only check is within scope.","risk_level":"low","user_authorization":"high"}`)}, want: PermissionReview{Outcome: "allow", Rationale: "The read-only check is within scope."}},
+		{name: "http allow", answer: []responses.ResponseInputItemUnionParam{reasoningReplayInput("rsn-1", []responses.ResponseReasoningItemSummary{{Text: "checking"}}, "ENCRYPTED"), final(`{"outcome":"allow","rationale":"The read-only check is within scope.","risk_level":"low","user_authorization":"high"}`)}, want: PermissionReview{Outcome: "allow", Rationale: "The read-only check is within scope."}},
 		{name: "http deny", answer: []responses.ResponseInputItemUnionParam{final(`{"outcome":"deny","rationale":"The change is outside scope."}`)}, want: PermissionReview{Outcome: "deny", Rationale: "The change is outside scope."}},
 		{name: "websocket trace", answer: []responses.ResponseInputItemUnionParam{websocketAnswer}, trace: websocketTrace, want: PermissionReview{Outcome: "allow", Rationale: "The read-only check is within scope."}},
 		{name: "commentary then final", answer: []responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleAssistant, `{"outcome":"deny","rationale":"Commentary is not a final decision"}`, "commentary"), final(`{"outcome":"allow","rationale":"Final answer wins."}`)}, want: PermissionReview{Outcome: "allow", Rationale: "Final answer wins."}},
@@ -574,7 +574,7 @@ func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.
 func TestPermissionReviewTranscriptOmitsEncryptedReplayPayloads(t *testing.T) {
 	request := &permissionReviewRequest{
 		ReviewContext: []responses.ResponseInputItemUnionParam{
-			reasoningReplayInput("rsn-1", "safe reasoning summary", "ENCRYPTED_REASONING_SECRET"),
+			reasoningReplayInput("rsn-1", []responses.ResponseReasoningItemSummary{{Text: "safe reasoning summary"}}, "ENCRYPTED_REASONING_SECRET"),
 			compactionReplayInput("cmp-1", "ENCRYPTED_COMPACTION_SECRET", "safe compaction summary"),
 			compactionReplayInput("cmp-2", "ENCRYPTED_ONLY_SECRET", ""),
 		},

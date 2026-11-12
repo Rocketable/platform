@@ -26,10 +26,10 @@ func TestResponseOutputReplayText(t *testing.T) {
 			wantCompacted: `{"type":"message","role":"user","content":""}`,
 		},
 		{
-			name:          "reasoning uses first summary",
+			name:          "reasoning keeps every summary part",
 			input:         `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":" first\n"},{"text":"later"}],"content":[{"type":"output_text","text":"ignored"}]}`,
-			want:          `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":" first\n","type":"summary_text"}]}`,
-			wantCompacted: `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":" first\n","type":"summary_text"}]}`,
+			want:          `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":" first\n","type":"summary_text"},{"text":"later","type":"summary_text"}]}`,
+			wantCompacted: `{"type":"reasoning","id":"rsn","encrypted_content":"sealed","summary":[{"text":" first\n","type":"summary_text"},{"text":"later","type":"summary_text"}]}`,
 		},
 		{
 			name:          "empty reasoning does not use content",

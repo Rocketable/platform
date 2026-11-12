@@ -144,6 +144,13 @@ One model loop in the harness. It owns that loop's Spills.
 
 A Harness Turn is not a conversation's running turn. A conversation's turn usually drives one Harness Turn, but a workflow turn drives several, and the two lifetimes are not the same object.
 
+### Thought
+
+The summary a model gives of its own reasoning, which Web shows as a Thought row. It is never the model's private reasoning, which RocketClaw does not show.
+*Avoid:* thinking commentary, reasoning (for the shown text)
+
+A Thought can come in several parts, and every part is kept. A Thought can appear while its Harness Turn runs; the saved Thought replaces that live one when the model's response ends. How much a Thought says is up to the Provider and model, and some send only a short title per part.
+
 ### Delegation History
 
 A session history of work one tool call delegated: its Permission Reviews, made before the call runs and during it, or its Task subagent.

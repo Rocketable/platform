@@ -2,6 +2,7 @@
 package oai
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -437,6 +439,31 @@ func NewChatGPTClientIn(workspace, runtimeDir, provider string, logger *slog.Log
 	return &client, nil
 }
 
+// ResponseObserver sees a ChatGPT Codex response while it streams: BeginResponse before each
+// streamed attempt, then ObserveResponse for each of the attempt's events, in order.
+type ResponseObserver interface {
+	BeginResponse(context.Context) error
+	ObserveResponse(context.Context, *responses.ResponseStreamEventUnion) error
+}
+
+type responseObserverKey struct{}
+
+// WithResponseObserver returns ctx carrying observer, which sees the responses of requests made with it.
+func WithResponseObserver(ctx context.Context, observer ResponseObserver) context.Context {
+	return context.WithValue(ctx, responseObserverKey{}, observer)
+}
+
+// inertResponseObserver stands in for a request that carries no observer.
+type inertResponseObserver struct{}
+
+func (inertResponseObserver) BeginResponse(context.Context) error {
+	return nil
+}
+
+func (inertResponseObserver) ObserveResponse(context.Context, *responses.ResponseStreamEventUnion) error {
+	return nil
+}
+
 type transport struct {
 	base                            http.RoundTripper
 	log                             *slog.Logger
@@ -534,7 +561,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	if codexResponse && resp.StatusCode == http.StatusOK {
-		resp, err = codexStreamingResponse(resp)
+		resp, err = codexStreamingResponse(req.Context(), resp)
 		if err != nil {
 			errStream := err
 			if streamErr, ok := errors.AsType[*codexStreamError](errStream); ok && strings.TrimSpace(streamErr.Code) == "context_length_exceeded" {
@@ -931,7 +958,7 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 		return resp, true, nil
 	}
 
-	resp, err = codexStreamingResponse(resp)
+	resp, err = codexStreamingResponse(ctx, resp)
 
 	return resp, true, err
 }
@@ -974,7 +1001,8 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (it
 		return nil, false, nil
 	}
 
-	streamed, err := codexStreamingResponse(compactResp)
+	// A compaction is not the observed response.
+	streamed, err := codexStreamingResponse(WithResponseObserver(ctx, inertResponseObserver{}), compactResp)
 	// A failed compaction stream is the provider declining, like a non-200 status.
 	if _, failed := errors.AsType[*codexStreamError](err); failed {
 		return nil, false, nil
@@ -1042,19 +1070,45 @@ func codexInputHasUnansweredFunctionCall(data json.RawMessage) bool {
 	return len(pending) > 0
 }
 
-func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read Codex stream response: %w", err)
+// codexStreamingResponse adapts a Codex event stream to a JSON response, showing ctx's observer
+// (WithResponseObserver) each event as it arrives. The completed event it shows carries the
+// stream's output items.
+func codexStreamingResponse(ctx context.Context, resp *http.Response) (*http.Response, error) {
+	body := resp.Body
+	defer func() { _ = body.Close() }()
+
+	observer, ok := ctx.Value(responseObserverKey{}).(ResponseObserver)
+	if !ok {
+		observer = inertResponseObserver{}
 	}
 
-	_ = resp.Body.Close()
+	if err := observer.BeginResponse(ctx); err != nil {
+		return nil, fmt.Errorf("begin Codex response observation: %w", err)
+	}
+
+	observe := func(payload []byte) error {
+		var event responses.ResponseStreamEventUnion
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return fmt.Errorf("decode Codex stream event: %w", err)
+		}
+
+		if err := observer.ObserveResponse(ctx, &event); err != nil {
+			return fmt.Errorf("observe Codex stream event: %w", err)
+		}
+
+		return nil
+	}
+
 	outputs := make([]json.RawMessage, 0)
 
 	var errResponse error
 
-	for line := range strings.SplitSeq(string(data), "\n") {
-		line = strings.TrimSpace(line)
+	// A completed event holds the whole response, so lines have no length limit.
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(nil, math.MaxInt)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
@@ -1089,6 +1143,10 @@ func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
 				}
 			}
 
+			if err := observe(payload); err != nil {
+				return nil, err
+			}
+
 			errResponse = &codexStreamError{Code: response.Error.Code, Message: response.Error.Message}
 
 			continue
@@ -1107,12 +1165,20 @@ func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
 				}
 			}
 
+			if err := observe(payload); err != nil {
+				return nil, err
+			}
+
 			errResponse = fmt.Errorf("codex stream response incomplete: %s", cmp.Or(strings.TrimSpace(response.IncompleteDetails.Reason), "unknown"))
 
 			continue
 		}
 
 		if event.Type != "response.completed" {
+			if err := observe(payload); err != nil {
+				return nil, err
+			}
+
 			continue
 		}
 
@@ -1127,6 +1193,11 @@ func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
 			response["output"] = outputData
 
 			event.Response, _ = json.Marshal(response)
+			payload, _ = json.Marshal(map[string]json.RawMessage{"type": json.RawMessage(`"response.completed"`), "response": event.Response})
+		}
+
+		if err := observe(payload); err != nil {
+			return nil, err
 		}
 
 		resp.Body = io.NopCloser(bytes.NewReader(event.Response))
@@ -1134,6 +1205,10 @@ func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
 		resp.Header.Set("Content-Type", "application/json")
 
 		return resp, nil
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read Codex stream response: %w", err)
 	}
 
 	if errResponse != nil {
