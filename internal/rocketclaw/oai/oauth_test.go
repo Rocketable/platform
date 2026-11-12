@@ -24,6 +24,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sys/unix"
 )
 
@@ -978,7 +979,7 @@ func TestCodexStreamingResponseReportsFailedEvent(t *testing.T) {
 	body := `data: {"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"Rate limit reached. Please try again in 11.054s."}}}`
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
 
-	got, err := codexStreamingResponse(resp)
+	got, err := codexStreamingResponse(t.Context(), resp)
 	if got != nil {
 		defer func() { _ = got.Body.Close() }()
 	}
@@ -995,7 +996,7 @@ func TestCodexStreamingResponseReportsIncompleteEvent(t *testing.T) {
 	body := `data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}`
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
 
-	got, err := codexStreamingResponse(resp)
+	got, err := codexStreamingResponse(t.Context(), resp)
 	if got != nil {
 		defer func() { _ = got.Body.Close() }()
 	}
@@ -1007,7 +1008,7 @@ func TestCodexStreamingResponseReportsIncompleteEvent(t *testing.T) {
 func TestCodexStreamingResponseReportsMalformedEvents(t *testing.T) {
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader("data: {not-json}\n")), Header: make(http.Header)}
 
-	got, err := codexStreamingResponse(resp)
+	got, err := codexStreamingResponse(t.Context(), resp)
 	if got != nil {
 		defer func() { _ = got.Body.Close() }()
 	}
@@ -1019,13 +1020,56 @@ func TestCodexStreamingResponseReportsMalformedEvents(t *testing.T) {
 func TestCodexStreamingResponseUsesCompletedResponseWithoutOutputItems(t *testing.T) {
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp\",\"output\":[]}}\n")), Header: make(http.Header)}
 
-	got, err := codexStreamingResponse(resp)
+	got, err := codexStreamingResponse(t.Context(), resp)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, got.Body.Close()) })
 
 	data, err := io.ReadAll(got.Body)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"id":"resp","output":[]}`, string(data))
+}
+
+func TestCodexStreamingResponseObservesEventsAsTheyArrive(t *testing.T) {
+	observed := make(chan responses.ResponseStreamEventUnion, 4)
+	observer := &responseObserverMock{
+		BeginResponseFunc: func(context.Context) error { return nil },
+		ObserveResponseFunc: func(_ context.Context, event *responses.ResponseStreamEventUnion) error {
+			observed <- *event
+			return nil
+		},
+	}
+	reader, writer := io.Pipe()
+
+	var stream errgroup.Group
+
+	stream.Go(func() error {
+		resp, err := codexStreamingResponse(WithResponseObserver(t.Context(), observer), &http.Response{Body: reader, Header: make(http.Header)})
+		if err != nil {
+			return err
+		}
+
+		t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+
+		return nil
+	})
+
+	_, err := io.WriteString(writer, "data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs\",\"summary_index\":0,\"delta\":\"**Planning**\"}\n")
+	require.NoError(t, err)
+
+	delta := <-observed
+	require.Equal(t, "**Planning**", delta.Delta, "a delta is observed while its stream is still open")
+	require.Len(t, observer.BeginResponseCalls(), 1)
+
+	_, err = io.WriteString(writer, codexStream(`{"id":"resp","output":[]}`, `{"id":"rs","type":"reasoning","summary":[{"type":"summary_text","text":"**Planning**"}]}`))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, stream.Wait())
+
+	completed := <-observed
+	require.Equal(t, "response.completed", completed.Type)
+	require.Len(t, completed.Response.Output, 1, "the completed event carries the streamed output items")
+	require.Equal(t, "**Planning**", completed.Response.Output[0].Summary[0].Text)
+	require.Empty(t, observed)
 }
 
 func TestStripInputIDsRemovesIDsWhenStoreFalse(t *testing.T) {
@@ -1376,13 +1420,27 @@ func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
 		return nil, nil
 	})}
 
+	var observed []string
+
+	observer := &responseObserverMock{
+		BeginResponseFunc: func(context.Context) error {
+			observed = append(observed, "begin")
+			return nil
+		},
+		ObserveResponseFunc: func(_ context.Context, event *responses.ResponseStreamEventUnion) error {
+			observed = append(observed, event.Type+" "+event.Response.ID)
+			return nil
+		},
+	}
 	req := requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-6.1-sol","store":false,"context_management":[{"type":"compaction","compact_threshold":10}],"input":[{"id":"item-1","type":"message"}]}`)
+	req = req.WithContext(WithResponseObserver(req.Context(), observer))
 	req.Header.Set("X-Stainless-Retry-Count", "2")
 	resp, err := transport.RoundTrip(req)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 	require.Equal(t, 2, responseCalls)
 	require.Equal(t, 1, compactCalls)
+	require.Equal(t, []string{"begin", "response.failed ", "begin", "response.completed resp"}, observed, "each attempt begins anew; the compaction stream is not observed")
 
 	data, errRead := io.ReadAll(resp.Body)
 	require.NoError(t, errRead)
@@ -2153,7 +2211,7 @@ func TestCodexStreamingResponseReportsStreamErrors(t *testing.T) {
 
 			t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
 
-			resp, err := codexStreamingResponse(response)
+			resp, err := codexStreamingResponse(t.Context(), response)
 			if resp != nil {
 				t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 			}

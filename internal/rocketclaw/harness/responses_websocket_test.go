@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	"github.com/gorilla/websocket"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -171,6 +173,116 @@ func testWebsocketTextBeforeTerminal(t *testing.T, done, final string) {
 	require.Equal(t, PublicProgressCompleted, progress[0].State)
 
 	_ = loop.Client.(responseServiceClient).doer.conn.Close()
+}
+
+func TestChatGPTResponsesShowReasoningSummariesWhileStreaming(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	release := make(chan struct{})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+
+		for _, event := range []string{
+			`{"type":"response.created","response":{"id":"resp_live"}}`,
+			`{"type":"response.reasoning_summary_text.delta","item_id":"rs","summary_index":0,"delta":"**Planning**"}`,
+		} {
+			_, _ = io.WriteString(w, "data: "+event+"\n\n")
+		}
+
+		w.(http.Flusher).Flush()
+
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return
+		}
+
+		for _, event := range []string{
+			`{"type":"response.output_item.done","item":{"type":"reasoning","id":"rs","summary":[{"type":"summary_text","text":"**Planning**"}]}}`,
+			`{"type":"response.output_item.done","item":{"type":"message","id":"msg","role":"assistant","phase":"final_answer","status":"completed","content":[{"type":"output_text","text":"done","annotations":[]}]}}`,
+			`{"type":"response.completed","response":{"id":"resp_live","status":"completed","output":[]}}`,
+		} {
+			_, _ = io.WriteString(w, "data: "+event+"\n\n")
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	// The ChatGPT client sends through http.DefaultTransport, which must trust the test server.
+	defaultTransport := http.DefaultTransport
+	http.DefaultTransport = server.Client().Transport
+
+	t.Cleanup(func() { http.DefaultTransport = defaultTransport })
+
+	workspace := t.TempDir()
+	require.NoError(t, oai.SaveTokenIn(workspace, ".rocketclaw", "openai", oai.Token{Access: "access", Refresh: "refresh", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+	client, err := oai.NewChatGPTClientIn(workspace, ".rocketclaw", "openai", slog.New(slog.DiscardHandler), option.WithBaseURL(server.URL))
+	require.NoError(t, err)
+
+	loop := testLooper(mockResponses())
+	loop.agent.Name, loop.DisplayModel = "main", "openai/gpt-6.1-sol"
+	loop.Client = responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
+	sink := recordingJournal()
+	persisted := make(chan []PublicProgress, 10)
+	sink.SaveTraceFunc = func(_ context.Context, _ string, trace []json.RawMessage) error {
+		persisted <- PublicProgressFromTrace(trace)
+		return nil
+	}
+	loop.Journal = sink
+
+	var turn errgroup.Group
+
+	turn.Go(func() error {
+		_, _, _, err := loop.runTurn(ctx, make(chan ChatResponse, 10), nil, nil, nil, &PromptInput{Texts: []string{"hello"}, Role: PromptInputRoleUser})
+		return err
+	})
+
+	select {
+	case progress := <-persisted:
+		require.Equal(t, []PublicProgress{{ID: "rs/0", ParentID: progress[0].ParentID, Kind: PublicProgressThinking, State: PublicProgressWorking, Text: "**Planning**", Agent: "main", Model: "openai/gpt-6.1-sol"}}, progress)
+		require.True(t, strings.HasSuffix(progress[0].ParentID, "/resp_live"))
+	case <-ctx.Done():
+		t.Fatal("the reasoning summary was not shown while its response streamed")
+	}
+
+	close(release)
+	require.NoError(t, turn.Wait())
+}
+
+func TestResponseObservationsShowReasoningSummariesLive(t *testing.T) {
+	sink := recordingJournal()
+
+	var saved [][]PublicProgress
+
+	sink.SaveTraceFunc = func(_ context.Context, _ string, trace []json.RawMessage) error {
+		saved = append(saved, PublicProgressFromTrace(trace))
+		return nil
+	}
+	observer := &responseObservations{owner: &turnObservations{journal: sink, turnID: "turn"}, agent: "main", model: "openai/gpt"}
+
+	for _, raw := range []string{
+		`{"type":"response.created","response":{"id":"resp"}}`,
+		`{"type":"response.reasoning_text.delta","item_id":"rs","delta":"PRIVATE_REASONING"}`,
+		`{"type":"response.reasoning_summary_text.delta","item_id":"rs","summary_index":0,"delta":"**Plan"}`,
+		`{"type":"response.reasoning_summary_text.delta","item_id":"rs","summary_index":0,"delta":"ning**"}`,
+		`{"type":"response.reasoning_summary_text.done","item_id":"rs","summary_index":1,"text":"**Checking**"}`,
+		`{"type":"response.completed","response":{"id":"resp","output":[{"type":"reasoning","id":"rs","summary":[{"type":"summary_text","text":"**Planning**"},{"type":"summary_text","text":"**Checking**"}]},{"type":"message","id":"msg","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}}`,
+	} {
+		var event responses.ResponseStreamEventUnion
+		require.NoError(t, json.Unmarshal([]byte(raw), &event))
+		require.NoError(t, observer.ObserveResponse(t.Context(), &event))
+	}
+
+	thought := func(id, text string, state PublicProgressState) PublicProgress {
+		return PublicProgress{ID: id, ParentID: "turn/resp", Kind: PublicProgressThinking, State: state, Text: text, Agent: "main", Model: "openai/gpt"}
+	}
+	require.Equal(t, [][]PublicProgress{
+		{thought("rs/0", "**Plan", PublicProgressWorking)},
+		{thought("rs/0", "**Planning**", PublicProgressWorking)},
+		{thought("rs/0", "**Planning**", PublicProgressWorking), thought("rs/1", "**Checking**", PublicProgressWorking)},
+		{thought("rs/0", "**Planning**", PublicProgressCompleted), thought("rs/1", "**Checking**", PublicProgressCompleted),
+			{ID: "msg/0", ParentID: "turn/resp", Kind: PublicProgressText, State: PublicProgressCompleted, Text: "done", Agent: "main", Model: "openai/gpt"}},
+	}, saved, "summaries show while the response runs, never private reasoning text")
 }
 
 func TestWebsocketStorageFailureDoesNotRetryOrReuseUnreadEvents(t *testing.T) {

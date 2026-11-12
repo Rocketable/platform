@@ -731,9 +731,11 @@ func TestActiveTurnOutputTracePersistence(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, err)
 
-	trace := append(slices.Clone(checkpoint.OutputTrace), json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"response-1/item-1","kind":"text","state":"working","text":"hello","agent":"main","model":"model"}}`))
+	trace := append(slices.Clone(checkpoint.OutputTrace),
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"response-1/reasoning-1","kind":"thinking","state":"working","text":"**Planning**","agent":"main","model":"model"}}`),
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"response-1/item-1","kind":"text","state":"working","text":"hello","agent":"main","model":"model"}}`))
 	require.NoError(t, journal.SaveTrace(ctx, checkpoint.TurnID+"/retry/1", trace), "retry turns report progress on the request row")
-	require.NotContains(t, logs.String(), `"event":"operation_snapshot"`, "text is not a tool operation")
+	require.NotContains(t, logs.String(), `"event":"operation_snapshot"`, "text and reasoning summaries are not tool operations")
 
 	change, err, ok := next()
 	require.True(t, ok)
@@ -747,7 +749,10 @@ func TestActiveTurnOutputTracePersistence(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.True(t, entries[0].Active)
-	require.Equal(t, []harness.PublicProgress{{ID: "response-1/item-1", Kind: harness.PublicProgressText, State: harness.PublicProgressWorking, Text: "hello", Agent: "main", Model: "model"}}, harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace))
+	require.Equal(t, []harness.PublicProgress{
+		{ID: "response-1/reasoning-1", Kind: harness.PublicProgressThinking, State: harness.PublicProgressWorking, Text: "**Planning**", Agent: "main", Model: "model"},
+		{ID: "response-1/item-1", Kind: harness.PublicProgressText, State: harness.PublicProgressWorking, Text: "hello", Agent: "main", Model: "model"},
+	}, harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace))
 	require.Len(t, entries[0].Entry.ReplayInput, len(checkpoint.ReplayInput), "the transcript reads the journaled turn record")
 
 	require.NoError(t, journal.SaveTrace(ctx, checkpoint.TurnID, trace))
@@ -764,7 +769,7 @@ func TestActiveTurnOutputTracePersistence(t *testing.T) {
 	entries, err = s.ObserveTranscript(ctx, "main", 0, 0, nil)
 	require.NoError(t, err)
 	require.Equal(t, protocol.TerminalStopped, entries[0].Terminal)
-	require.Len(t, entries[0].Entry.OutputTrace, 2, "late writes cannot alter terminal progress")
+	require.Len(t, entries[0].Entry.OutputTrace, 3, "late writes cannot alter terminal progress")
 	require.Len(t, entries[0].Entry.ReplayInput, len(checkpoint.ReplayInput), "a stopped turn keeps its record for the transcript")
 	require.NoError(t, clearTestTurn(ctx, s, checkpoint.TurnID))
 	require.NoError(t, journal.SaveTrace(ctx, checkpoint.TurnID, trace))

@@ -1411,7 +1411,7 @@ func (j conversationJournal) SaveTrace(ctx context.Context, turnID string, trace
 		observed := harness.PublicProgressFromTrace(trace)
 		for i := range observed {
 			progress := &observed[i]
-			if progress.Kind != harness.PublicProgressText {
+			if progress.Kind != harness.PublicProgressText && progress.Kind != harness.PublicProgressThinking {
 				j.log.Info("operation observed", "event", "operation_snapshot", "conversation_id", j.conversationID, "turn_id", turnID, "operation_id", progress.ID, "parent_id", progress.ParentID, "kind", progress.Kind, "state", progress.State, "boundary", "journal_observation", "observation_elapsed_ms", time.Since(startedAt).Milliseconds(), "error_type", fmt.Sprintf("%T", err))
 			}
 		}

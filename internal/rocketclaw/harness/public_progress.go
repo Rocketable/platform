@@ -17,9 +17,10 @@ import (
 // PublicProgressKind identifies display-only root activity, never replay input.
 type PublicProgressKind string
 
-// Public progress kinds distinguish text, tools, and delegated activity.
+// Public progress kinds distinguish text, reasoning summaries, tools, and delegated activity.
 const (
 	PublicProgressText       PublicProgressKind = "text"
+	PublicProgressThinking   PublicProgressKind = "thinking"
 	PublicProgressTool       PublicProgressKind = "tool"
 	PublicProgressDelegation PublicProgressKind = "delegation"
 )
@@ -71,7 +72,7 @@ func PublicProgressFromTrace(traces []json.RawMessage) []PublicProgress {
 			continue
 		}
 
-		if !slices.Contains([]PublicProgressKind{PublicProgressText, PublicProgressTool, PublicProgressDelegation}, trace.Progress.Kind) ||
+		if !slices.Contains([]PublicProgressKind{PublicProgressText, PublicProgressThinking, PublicProgressTool, PublicProgressDelegation}, trace.Progress.Kind) ||
 			!slices.Contains([]PublicProgressState{PublicProgressWorking, PublicProgressReview, PublicProgressCompleted, PublicProgressBlocked, PublicProgressFailed, PublicProgressStopped, PublicProgressBackground}, trace.Progress.State) {
 			continue
 		}
@@ -286,8 +287,8 @@ func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicPr
 	return o.saveTraceLocked(ctx, trace)
 }
 
-// replaceResponse atomically replaces one attempt's public text, retaining other
-// observations and the response's original position. Empty progress removes it.
+// replaceResponse atomically replaces one attempt's public text and reasoning summaries,
+// retaining other observations and the response's original position. Empty progress removes it.
 func (o *turnObservations) replaceResponse(ctx context.Context, parentID string, progress []PublicProgress) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -302,7 +303,7 @@ func (o *turnObservations) replaceResponse(ctx context.Context, parentID string,
 
 	belongs := func(raw json.RawMessage) bool {
 		items := PublicProgressFromTrace([]json.RawMessage{raw})
-		return len(items) == 1 && items[0].Kind == PublicProgressText && items[0].ParentID == parentID
+		return len(items) == 1 && (items[0].Kind == PublicProgressText || items[0].Kind == PublicProgressThinking) && items[0].ParentID == parentID
 	}
 	index := slices.IndexFunc(o.trace, belongs)
 

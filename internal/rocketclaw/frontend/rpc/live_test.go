@@ -803,6 +803,45 @@ VALUES ('chat/D-0a1b2c3d', 'child', '', 'chat', 'subagent', FALSE, 'nested', 'tu
 	require.Equal(t, []string{"chat/D-0a1b2c3d", "chat/D-0a1b2c3d"}, linked)
 }
 
+func TestHistoryShowsLiveReasoningSummaries(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	seeded := openTestTurns(t, dsn)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
+	server := &Server{backend: withoutBackgroundJobs(), sessions: sessions, cfg: config.NewLockedConfig(cfg)}
+	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	checkpoint := &testCheckpoint{TurnID: "turn", ConversationKey: "chat", Agent: "main", DisplayModel: "root/model", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","input_id":"input","content":"ask"}`),
+	}, OutputTrace: []json.RawMessage{
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"rs/0","parent_id":"turn/response","kind":"thinking","state":"working","text":"**Planning**","agent":"main","model":"root/model"}}`),
+		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"msg/0","parent_id":"turn/response","kind":"text","state":"working","text":"partial","agent":"main","model":"root/model"}}`),
+	}}
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
+
+	type row struct{ role, text, toolCallID string }
+
+	rows := func() []row {
+		view, err := server.history(ctx, &HistoryRequest{Id: "chat"})
+		require.NoError(t, err)
+
+		got := make([]row, 0, len(view.Messages))
+		for _, message := range view.Messages {
+			got = append(got, row{message.Role, message.Text, message.ToolCallId})
+		}
+
+		return got
+	}
+	require.Equal(t, []row{{"user", "ask", ""}, {"thinking", "**Planning**", ""}, {"assistant", "partial", ""}}, rows(), "a running response shows its reasoning summary")
+
+	checkpoint.ReplayInput = append(checkpoint.ReplayInput, json.RawMessage(`{"type":"reasoning","id":"rs","summary":[{"type":"summary_text","text":"**Planning**"},{"type":"summary_text","text":"**Checking**"}],"encrypted_content":"sealed"}`))
+	require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
+	require.Equal(t, []row{{"user", "ask", ""}, {"thinking", "**Planning**\n**Checking**", ""}, {"assistant", "partial", ""}}, rows(), "the saved reasoning item replaces its live summary")
+}
+
 func TestHistoryPublicProgress(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
