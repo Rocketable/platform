@@ -17,7 +17,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/openai/openai-go/v3 v3.98.0
+	github.com/openai/openai-go/v3 v3.99.0
 	github.com/posthog/posthog-go v1.43.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rubenv/sql-migrate v1.8.1
@@ -39,7 +39,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	mvdan.cc/sh/v3 v3.14.1
 	sigs.k8s.io/yaml v1.6.0
-	tailscale.com v1.104.6
+	tailscale.com v1.104.7
 )
 
 require (
