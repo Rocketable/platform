@@ -411,7 +411,7 @@ github.com/modelcontextprotocol/go-sdk/internal/xcontext
 github.com/modelcontextprotocol/go-sdk/jsonrpc
 github.com/modelcontextprotocol/go-sdk/mcp
 github.com/modelcontextprotocol/go-sdk/oauthex
-# github.com/openai/openai-go/v3 v3.98.0
+# github.com/openai/openai-go/v3 v3.99.0
 ## explicit; go 1.26.0
 github.com/openai/openai-go/v3
 github.com/openai/openai-go/v3/auth
@@ -899,8 +899,8 @@ mvdan.cc/sh/v3/syntax
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
-# tailscale.com v1.104.6
-## explicit; go 1.27.3
+# tailscale.com v1.104.7
+## explicit; go 1.27.4
 tailscale.com
 tailscale.com/appc
 tailscale.com/atomicfile
