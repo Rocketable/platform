@@ -340,6 +340,14 @@ func TestPermissionPrompt(t *testing.T) {
 	})
 }
 
+// An emulated shell's agent is told its folder, the only one its writes persist in.
+func TestSystemPromptWorkingDirectory(t *testing.T) {
+	agent := Agent{CustomShell: CustomShell{Emulated: true, Dir: "/srv/agent"}}
+	require.Equal(t, "base prompt\n\n## Working Directory\n\nYour working directory is `/srv/agent`. Shell commands start there and relative paths resolve from it. "+
+		"It is the only folder where changes persist: `/tmp` is cleared after every command and every other folder is read-only.", composeSystemPromptWithSkills("base prompt", emptySkills(), &agent))
+	require.Equal(t, "base prompt", composeSystemPromptWithSkills("base prompt", emptySkills(), &Agent{}))
+}
+
 func TestFindSkillsTool(t *testing.T) {
 	skills := Skills{Root: "/tmp/skills", Items: map[string]Skill{
 		"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Metadata: nil, Location: "docs-helper/SKILL.md", Content: "documentation guides"},
