@@ -56,8 +56,8 @@ github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.12 h1:H0IaQayT3TLiG
 github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.20.12/go.mod h1:YuJJNxaOjnknLIrscBmkLhIpnmg9LzHd25sQRKUboGU=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10 h1:WBJb2VxRzzKnuN94YWqZPiu5a5zc3IleFqgZnmVCyvU=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10/go.mod h1:8NhAIBVYkVHq0hIbbzujdoou0VkKwMdG+De9e5oX6qI=
-github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.50.12 h1:3l6QhbrePQWfPEcNdtDUOeftM4hEoP3BZ8zq+bNb9rU=
-github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.50.12/go.mod h1:pvkKaFkbMw9ehRD+fraRB1pdNyIFMeMOOo5Y4+NWB58=
+github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.51.0 h1:caWOS7HN0IKMRSuxxcScg39MxIg4/DgFQbW6xNjQN1I=
+github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.51.0/go.mod h1:pvkKaFkbMw9ehRD+fraRB1pdNyIFMeMOOo5Y4+NWB58=
 github.com/aws/aws-sdk-go-v2/service/signin v1.13.1 h1:ssrDA6AKfXEc3h0Pf4EI4vQ8sN5Zd136SrU9Tjr0XPc=
 github.com/aws/aws-sdk-go-v2/service/signin v1.13.1/go.mod h1:LdwHjKqPE9VCC7sTlWcOAizZx3ZJYjmfwC/EW2tIIAE=
 github.com/aws/aws-sdk-go-v2/service/ssm v1.77.0 h1:JqKSBJlS68F4nxoPLwD7tB3lJ3gWEK9p+7eOiBE/lsM=
@@ -387,8 +387,8 @@ gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c/go.mod h1:JHkPIbrfpd72SG/EV
 gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-gvisor.dev/gvisor v0.0.0-20261112174234-86745ec8b802 h1:vVuIbdL+uXHWJr9U1DXX8K6ZFZSJv9MzEYyJ7AQE6AI=
-gvisor.dev/gvisor v0.0.0-20261112174234-86745ec8b802/go.mod h1:AGCFHJ8yer01MsPbOE1JJtEOoLx79kr4ranU2wAm67k=
+gvisor.dev/gvisor v0.0.0-20261112194259-12978bf73c11 h1:aogiLSUu1uBxy0iNIM/bZjA6YyMyku7X+ZldXIIKuTw=
+gvisor.dev/gvisor v0.0.0-20261112194259-12978bf73c11/go.mod h1:AGCFHJ8yer01MsPbOE1JJtEOoLx79kr4ranU2wAm67k=
 honnef.co/go/tools v0.8.2 h1:+jPbCzuYxYrcoOvCecYUFDj+XJQRmzIhJmlbpps21Zk=
 honnef.co/go/tools v0.8.2/go.mod h1:xG1Q4n+mg3bKZrO6RWFA9jFlkqplflmDRHGeuexiLDs=
 howett.net/plist v1.0.0 h1:7CrbWYbPPO/PyNy38b2EB/+gYbjCe2DXBxgtOOZbSQM=
