@@ -377,7 +377,7 @@ func TestWebsocketStorageFailureDoesNotRetryOrReuseUnreadEvents(t *testing.T) {
 		t.Fatal("unread socket was not dropped")
 	}
 
-	resp, err := api.New(ctx, &responses.ResponseNewParams{Model: "gpt-5"}, inertResponseObserver{})
+	resp, err := api.New(ctx, &responses.ResponseNewParams{Model: "gpt-5"}, oai.InertResponseObserver{})
 	require.NoError(t, err)
 	require.Equal(t, "resp_fresh", resp.ID, "later request cannot consume abandoned terminal events")
 	require.Len(t, creates, 2)
@@ -590,7 +590,7 @@ func TestNewResponsesAPIUsesWebsocketWhenURLIsWebsocket(t *testing.T) {
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(websocketAPIBaseURL(server.URL)))
 	api := responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
-	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, inertResponseObserver{})
+	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, oai.InertResponseObserver{})
 	require.NoError(t, err)
 	require.Equal(t, "resp_ws", resp.ID)
 
@@ -623,7 +623,7 @@ func TestNewResponsesAPIUsesClientHTTPClientWhenURLIsHTTPS(t *testing.T) {
 		option.WithHTTPClient(&http.Client{Transport: transport}),
 	)
 	api := responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
-	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, inertResponseObserver{})
+	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, oai.InertResponseObserver{})
 	require.NoError(t, err)
 	require.Equal(t, "resp_auth", resp.ID)
 	require.True(t, transport.used)
@@ -669,7 +669,7 @@ func TestNewResponsesAPIKeepsHTTPWhenURLIsNotWebsocket(t *testing.T) {
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL+"/v1"), option.WithUnsafeAllowHTTP())
 	api := responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
-	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, inertResponseObserver{})
+	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, oai.InertResponseObserver{})
 	require.NoError(t, err)
 	require.Equal(t, "resp_http", resp.ID)
 	require.False(t, sawWebsocket)
@@ -739,7 +739,7 @@ func TestNewResponsesAPIMapsWebsocketError(t *testing.T) {
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(websocketAPIBaseURL(server.URL)))
 	api := responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
-	_, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, inertResponseObserver{})
+	_, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-6.1-sol"}, oai.InertResponseObserver{})
 	require.Error(t, err)
 	errAPI, ok := errors.AsType[*openai.Error](err)
 	require.True(t, ok)

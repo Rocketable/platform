@@ -19,21 +19,6 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
-type responseObserver interface {
-	BeginResponse(context.Context) error
-	ObserveResponse(context.Context, *responses.ResponseStreamEventUnion) error
-}
-
-type inertResponseObserver struct{}
-
-func (inertResponseObserver) BeginResponse(context.Context) error {
-	return nil
-}
-
-func (inertResponseObserver) ObserveResponse(context.Context, *responses.ResponseStreamEventUnion) error {
-	return nil
-}
-
 // responseObservations buffers only public text and reasoning summaries, never provider replay or arguments.
 // One provider request owns it across SDK, looper, and compaction retries.
 type responseObservations struct {
@@ -132,7 +117,7 @@ type responsesWebsocketDoer struct {
 	conn *websocket.Conn
 }
 
-func (d *responsesWebsocketDoer) middleware(req *http.Request, next option.MiddlewareNext, observer responseObserver) (*http.Response, error) {
+func (d *responsesWebsocketDoer) middleware(req *http.Request, next option.MiddlewareNext, observer oai.ResponseObserver) (*http.Response, error) {
 	if req.URL.Scheme != "ws" && req.URL.Scheme != "wss" {
 		// A ChatGPT client streams its responses to the observer this carries.
 		return next(req.WithContext(oai.WithResponseObserver(req.Context(), observer)))
@@ -172,7 +157,7 @@ func (d *responsesWebsocketDoer) doCompactHTTP(req *http.Request) (*http.Respons
 	return resp, nil
 }
 
-func (d *responsesWebsocketDoer) doCreate(req *http.Request, observer responseObserver) (*http.Response, error) {
+func (d *responsesWebsocketDoer) doCreate(req *http.Request, observer oai.ResponseObserver) (*http.Response, error) {
 	body, errRead := io.ReadAll(req.Body)
 	_ = req.Body.Close()
 
@@ -237,7 +222,7 @@ func (d *responsesWebsocketDoer) writeCreate(req *http.Request, payload []byte) 
 	return nil
 }
 
-func (d *responsesWebsocketDoer) readCreate(req *http.Request, observer responseObserver) (*http.Response, error) {
+func (d *responsesWebsocketDoer) readCreate(req *http.Request, observer oai.ResponseObserver) (*http.Response, error) {
 	conn := d.conn
 
 	stop := context.AfterFunc(req.Context(), func() { _ = conn.Close() })

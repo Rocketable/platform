@@ -19,6 +19,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
@@ -39,7 +40,7 @@ func testResolverForResponsesAPI(api responsesAPI) *mockModelResolver {
 			return nil, fmt.Errorf("decode test SDK request: %w", err)
 		}
 
-		resp, err := api.New(req.Context(), &params, inertResponseObserver{})
+		resp, err := api.New(req.Context(), &params, oai.InertResponseObserver{})
 		if err != nil {
 			return nil, fmt.Errorf("invoke test responses API: %w", err)
 		}
@@ -130,7 +131,7 @@ func mockResponses(responseItems ...*responses.Response) *mockResponsesAPI {
 	remaining := slices.Clone(responseItems)
 
 	return &mockResponsesAPI{
-		NewFunc: func(context.Context, *responses.ResponseNewParams, responseObserver, ...option.RequestOption) (*responses.Response, error) {
+		NewFunc: func(context.Context, *responses.ResponseNewParams, oai.ResponseObserver, ...option.RequestOption) (*responses.Response, error) {
 			if len(remaining) == 0 {
 				return nil, errors.New("no mock response configured")
 			}
@@ -146,7 +147,7 @@ func mockResponses(responseItems ...*responses.Response) *mockResponsesAPI {
 
 func mockResponseError(err error) *mockResponsesAPI {
 	return &mockResponsesAPI{
-		NewFunc: func(context.Context, *responses.ResponseNewParams, responseObserver, ...option.RequestOption) (*responses.Response, error) {
+		NewFunc: func(context.Context, *responses.ResponseNewParams, oai.ResponseObserver, ...option.RequestOption) (*responses.Response, error) {
 			return nil, err
 		},
 		CompactFunc: unusedCompact,
@@ -155,7 +156,7 @@ func mockResponseError(err error) *mockResponsesAPI {
 
 func mockResponseFunc(newFunc func(context.Context, *responses.ResponseNewParams) (*responses.Response, error)) *mockResponsesAPI {
 	return &mockResponsesAPI{
-		NewFunc: func(ctx context.Context, params *responses.ResponseNewParams, _ responseObserver, _ ...option.RequestOption) (*responses.Response, error) {
+		NewFunc: func(ctx context.Context, params *responses.ResponseNewParams, _ oai.ResponseObserver, _ ...option.RequestOption) (*responses.Response, error) {
 			return newFunc(ctx, params)
 		},
 		CompactFunc: unusedCompact,
@@ -1031,7 +1032,7 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	queueCompactResponses(mock, compactedResponse("cmp-old", "encrypted-old"))
 
 	contextErr := contextLengthExceededError()
-	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ responseObserver, _ ...option.RequestOption) (*responses.Response, error) {
+	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ oai.ResponseObserver, _ ...option.RequestOption) (*responses.Response, error) {
 		if len(newParams(mock)) == 1 {
 			return nil, contextErr
 		}
@@ -1105,7 +1106,7 @@ func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
 			mock := mockResponses()
 			queueCompactResponses(mock, compactedResponse("cmp-one", "encrypted-one"), compactedResponse("cmp-two", "encrypted-two"))
 
-			mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ responseObserver, _ ...option.RequestOption) (*responses.Response, error) {
+			mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ oai.ResponseObserver, _ ...option.RequestOption) (*responses.Response, error) {
 				if len(newParams(mock)) < 3 {
 					if failedResponse {
 						return failedResponseWithCode("resp-large", responses.ResponseErrorCode("context_length_exceeded"), "too large"), nil
@@ -1149,7 +1150,7 @@ func TestLooperDoesNotCompactUnansweredToolCall(t *testing.T) {
 	queueCompactResponses(mock, compactedResponse("cmp-old", "encrypted-old"))
 
 	contextErr := contextLengthExceededError()
-	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ responseObserver, _ ...option.RequestOption) (*responses.Response, error) {
+	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ oai.ResponseObserver, _ ...option.RequestOption) (*responses.Response, error) {
 		if len(newParams(mock)) == 1 {
 			return nil, contextErr
 		}
@@ -1196,7 +1197,7 @@ func TestLooperStopsOnCompactedRetryError(t *testing.T) {
 			errProvider := &openai.Error{Code: "invalid_prompt", Message: "bad prompt", StatusCode: http.StatusBadRequest}
 			mock := mockResponses()
 			queueCompactResponses(mock, compactedResponse("cmp", "sealed"))
-			mock.NewFunc = func(context.Context, *responses.ResponseNewParams, responseObserver, ...option.RequestOption) (*responses.Response, error) {
+			mock.NewFunc = func(context.Context, *responses.ResponseNewParams, oai.ResponseObserver, ...option.RequestOption) (*responses.Response, error) {
 				if len(newParams(mock)) == 1 {
 					return nil, contextLengthExceededError()
 				}
@@ -1525,7 +1526,7 @@ func TestJournalAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
 	})
 	queueCompactResponses(mock, compactedResponse("cmp-old", "encrypted-old"))
 	newResponse := mock.NewFunc
-	mock.NewFunc = func(ctx context.Context, params *responses.ResponseNewParams, observer responseObserver, opts ...option.RequestOption) (*responses.Response, error) {
+	mock.NewFunc = func(ctx context.Context, params *responses.ResponseNewParams, observer oai.ResponseObserver, opts ...option.RequestOption) (*responses.Response, error) {
 		resp, err := newResponse(ctx, params, observer, opts...)
 
 		id := "resp-old"
@@ -1660,7 +1661,7 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 func TestLooperJournalsCompletedToolOutputBeforeContinuation(t *testing.T) {
 	sink := recordingJournal()
 	mock := mockResponses()
-	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ responseObserver, _ ...option.RequestOption) (*responses.Response, error) {
+	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ oai.ResponseObserver, _ ...option.RequestOption) (*responses.Response, error) {
 		if len(newParams(mock)) == 1 {
 			return responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "first", `{"step":1}`)}), nil
 		}
@@ -1702,7 +1703,7 @@ func TestLooperClosesObservationsAfterCompletedSessionEntry(t *testing.T) {
 	looper := testLooper(mock)
 	looper.Journal = sink
 	progress := PublicProgress{ID: "resp-final/item-1", Kind: PublicProgressText, State: PublicProgressWorking, Text: "partial", Agent: "main", Model: "model"}
-	mock.NewFunc = func(ctx context.Context, _ *responses.ResponseNewParams, _ responseObserver, _ ...option.RequestOption) (*responses.Response, error) {
+	mock.NewFunc = func(ctx context.Context, _ *responses.ResponseNewParams, _ oai.ResponseObserver, _ ...option.RequestOption) (*responses.Response, error) {
 		require.NoError(t, looper.observations.observe(ctx, &progress))
 		return responseWithMessage("resp-final", "done"), nil
 	}
@@ -3416,7 +3417,7 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 		)
 		sink := recordingJournal()
 		newResponse := mock.NewFunc
-		mock.NewFunc = func(ctx context.Context, params *responses.ResponseNewParams, observer responseObserver, opts ...option.RequestOption) (*responses.Response, error) {
+		mock.NewFunc = func(ctx context.Context, params *responses.ResponseNewParams, observer oai.ResponseObserver, opts ...option.RequestOption) (*responses.Response, error) {
 			resp, err := newResponse(ctx, params, observer, opts...)
 			require.NoError(t, err)
 			require.NoError(t, observeTestResponseAttempt(ctx, observer, resp.ID))
@@ -3459,7 +3460,7 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 	})
 }
 
-func observeTestResponseAttempt(ctx context.Context, observer responseObserver, id string) error {
+func observeTestResponseAttempt(ctx context.Context, observer oai.ResponseObserver, id string) error {
 	if err := observer.BeginResponse(ctx); err != nil {
 		return fmt.Errorf("begin test response: %w", err)
 	}

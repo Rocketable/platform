@@ -439,8 +439,8 @@ func NewChatGPTClientIn(workspace, runtimeDir, provider string, logger *slog.Log
 	return &client, nil
 }
 
-// ResponseObserver sees a ChatGPT Codex response while it streams: BeginResponse before each
-// streamed attempt, then ObserveResponse for each of the attempt's events, in order.
+// ResponseObserver sees a response while it streams: BeginResponse before each
+// streamed attempt, then ObserveResponse for the attempt's observed events, in order.
 type ResponseObserver interface {
 	BeginResponse(context.Context) error
 	ObserveResponse(context.Context, *responses.ResponseStreamEventUnion) error
@@ -453,14 +453,16 @@ func WithResponseObserver(ctx context.Context, observer ResponseObserver) contex
 	return context.WithValue(ctx, responseObserverKey{}, observer)
 }
 
-// inertResponseObserver stands in for a request that carries no observer.
-type inertResponseObserver struct{}
+// InertResponseObserver ignores response streaming notifications.
+type InertResponseObserver struct{}
 
-func (inertResponseObserver) BeginResponse(context.Context) error {
+// BeginResponse does nothing.
+func (InertResponseObserver) BeginResponse(context.Context) error {
 	return nil
 }
 
-func (inertResponseObserver) ObserveResponse(context.Context, *responses.ResponseStreamEventUnion) error {
+// ObserveResponse does nothing.
+func (InertResponseObserver) ObserveResponse(context.Context, *responses.ResponseStreamEventUnion) error {
 	return nil
 }
 
@@ -1002,7 +1004,7 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (it
 	}
 
 	// A compaction is not the observed response.
-	streamed, err := codexStreamingResponse(WithResponseObserver(ctx, inertResponseObserver{}), compactResp)
+	streamed, err := codexStreamingResponse(WithResponseObserver(ctx, InertResponseObserver{}), compactResp)
 	// A failed compaction stream is the provider declining, like a non-200 status.
 	if _, failed := errors.AsType[*codexStreamError](err); failed {
 		return nil, false, nil
@@ -1079,7 +1081,7 @@ func codexStreamingResponse(ctx context.Context, resp *http.Response) (*http.Res
 
 	observer, ok := ctx.Value(responseObserverKey{}).(ResponseObserver)
 	if !ok {
-		observer = inertResponseObserver{}
+		observer = InertResponseObserver{}
 	}
 
 	if err := observer.BeginResponse(ctx); err != nil {
