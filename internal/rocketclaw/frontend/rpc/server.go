@@ -31,6 +31,7 @@ import (
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
@@ -1220,7 +1221,7 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 		Workspace: cfg.Workspace, Overlays: cfg.Overlays,
 		LoggingLevel: cfg.Logging.Level, AutoApproverModel: cfg.AutoApproverModel,
 		InstrumentationEnabled: cfg.Instrumentation.Enabled, McpExternal: cfg.MCPExternal.Enabled,
-		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)),
+		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)), Providers: cfg.ProviderNames(),
 	}
 
 	if login := metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-login-bin"); len(login) == 1 {
@@ -1235,6 +1236,21 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 	}
 
 	return &ListConfigResponse{Config: view}, nil
+}
+
+// testModel sends one small request to the model the editor chose and reports how long it took, or
+// why it failed: in the provider's own words when it answered.
+func (s *Server) testModel(ctx context.Context, request *TestModelRequest) *TestModelResponse {
+	elapsed, err := backend.TestModel(ctx, s.cfg.Clone(), request.Model)
+	if errAPI, ok := errors.AsType[*openai.Error](err); ok {
+		return &TestModelResponse{Error: cmp.Or(errAPI.Message, err.Error())}
+	}
+
+	if err != nil {
+		return &TestModelResponse{Error: err.Error()}
+	}
+
+	return &TestModelResponse{ElapsedMs: elapsed.Milliseconds()}
 }
 
 // listWorkflows lists the saved workflows for the web $workflow picker.

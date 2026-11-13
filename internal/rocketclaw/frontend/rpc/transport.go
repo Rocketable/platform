@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -18,12 +19,16 @@ import (
 // maxIDBytes bounds an ID a request names; stored IDs are far shorter.
 const maxIDBytes = 1024
 
+// editorMethods are the agent editor's methods, closed to people limited to spaces: a draft can grant
+// itself any permission, and its test chats run real tools.
+const editorMethods = "TestModel"
+
 // Register publishes the implemented portion of rpc.Web. Other methods retain
 // gRPC's Unimplemented response; they are not successful empty handlers.
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
 
-	for _, method := range []string{"Protocol", "Identity", "Reload", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "Board", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "EditQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "VoiceSettings", "Tabs", "GetPage", "ListPages"} {
+	for _, method := range append([]string{"Protocol", "Identity", "Reload", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "Board", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "EditQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "VoiceSettings", "Tabs", "GetPage", "ListPages"}, strings.Fields(editorMethods)...) {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 
@@ -220,8 +225,27 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 	case "DeleteSessionEntries":
 		return s.DeleteSessionEntries(ctx, request.(*SessionEntriesRequest))
 	default:
+		return s.editorCall(ctx, method, request)
+	}
+}
+
+// editorCall answers the agent editor's methods, refusing people limited to spaces before any of them
+// runs, and any other method as pageCall.
+func (s *Server) editorCall(ctx context.Context, method string, request any) (any, error) {
+	if !slices.Contains(strings.Fields(editorMethods), method) {
 		return s.pageCall(ctx, request)
 	}
+
+	_, limit, err := s.spaceLimit(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if limit.Limited() {
+		return nil, fmt.Errorf("web %s: %w", method, status.Error(codes.PermissionDenied, "people limited to spaces cannot use the agent editor"))
+	}
+
+	return s.testModel(ctx, request.(*TestModelRequest)), nil
 }
 
 func (s *Server) identity(ctx context.Context) (*IdentityResponse, error) {

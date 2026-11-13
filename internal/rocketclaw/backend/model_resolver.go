@@ -16,6 +16,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 )
 
 type modelResolver struct {
@@ -89,6 +91,30 @@ func (r *modelResolver) Resolve(model string) (*openai.Client, harness.ProviderO
 	client := openai.NewClient(options...)
 
 	return &client, origin, nil
+}
+
+// TestModel sends one small request to the model ref names, "provider/model#effort", and returns how
+// long the provider took to answer.
+func TestModel(ctx context.Context, cfg *config.Config, ref string) (time.Duration, error) {
+	model, effort := harness.ParseModelRef(ref)
+
+	client, origin, err := newModelResolver(cfg, slog.Default()).Resolve(model)
+	if err != nil {
+		return 0, err
+	}
+
+	params := responses.ResponseNewParams{
+		Model: origin.Model, Input: responses.ResponseNewParamsInputUnion{OfString: openai.String("Reply with OK.")},
+		MaxOutputTokens: openai.Int(16), Store: openai.Bool(false), Reasoning: shared.ReasoningParam{Effort: shared.ReasoningEffort(effort)},
+	}
+
+	startedAt := time.Now()
+
+	if _, err := client.Responses.New(ctx, params); err != nil {
+		return 0, fmt.Errorf("test model %q: %w", ref, err)
+	}
+
+	return time.Since(startedAt), nil
 }
 
 func newDeciders(cfg *config.Config) map[string]harness.Decider {

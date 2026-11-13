@@ -597,12 +597,24 @@ message ConfigView {
   bool mcp_external = 9;
   reserved 10;
   string tailscale_user = 11;
+  // Configured provider names, the openai provider always included; the server never lists models.
+  repeated string providers = 12;
 }
 
 message ListConfigRequest {}
 
 message ListConfigResponse {
   ConfigView config = 1;
+}
+
+// TestModelRequest names the model to try, as "provider/model#effort".
+message TestModelRequest { string model = 1; }
+
+// TestModelResponse holds the provider's error text, empty when the model works, and how long the
+// request took.
+message TestModelResponse {
+  string error = 1;
+  int64 elapsed_ms = 2;
 }
 
 message UpdateSessionRequest {
@@ -948,6 +960,7 @@ service Web {
   rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
   rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse);
   rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
+  rpc TestModel(TestModelRequest) returns (TestModelResponse);
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
   rpc Identity(IdentityRequest) returns (IdentityResponse);
