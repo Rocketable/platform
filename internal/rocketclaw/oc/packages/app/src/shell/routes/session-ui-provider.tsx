@@ -18,6 +18,7 @@ import { useLanguage } from "@/runtime/i18n/language"
 import { showToast } from "@/shell/notifications/toast"
 import { SessionExportProvider } from "@/session/commands/export-session"
 import { createTurnDiffCache } from "@/session/timeline/turn-diffs"
+import { SessionReferenceMenu, type SessionReferenceMenuTarget } from "@/session/session-reference-menu"
 import { useSettings } from "@/settings/model"
 import {
   INITIAL_SESSION_UI_NAVIGATE_STATE,
@@ -26,6 +27,12 @@ import {
   type SessionUINavigateEffect,
   type SessionUINavigateEvent,
 } from "./session-ui-navigate-machine"
+import {
+  createSessionReferenceLookupState,
+  transitionSessionReferenceLookup,
+  type SessionReferenceLookupEffect,
+  type SessionReferenceLookupEvent,
+} from "./session-reference-lookup-machine"
 
 export function SessionUIProvider(
   props: ParentProps<{
@@ -143,12 +150,55 @@ export function SessionUIProvider(
   const openReferencedSession = (sessionID: string) =>
     dispatchNavigation({ type: "referenced.requested", origin: untrack(origin), targetSessionID: sessionID })
 
+  let referenceLookup = createSessionReferenceLookupState()
+  const referenceLookups = new Map<number, AbortController>()
+
+  const dispatchReferenceLookup = (event: SessionReferenceLookupEvent) => {
+    const next = transitionSessionReferenceLookup(referenceLookup, event)
+
+    referenceLookup = next.state
+    next.effects.forEach((effect) =>
+      Promise.try(() => runReferenceLookup(effect)).catch((cause: unknown) =>
+        console.error("[session.reference]", cause),
+      ),
+    )
+  }
+
+  function runReferenceLookup(effect: SessionReferenceLookupEffect) {
+    if (effect.type === "abort-all") {
+      referenceLookups.forEach((controller) => controller.abort())
+      referenceLookups.clear()
+
+      return
+    }
+
+    if (effect.type === "remember") return data.session.remember(effect.session)
+    const controller = new AbortController()
+    referenceLookups.set(effect.attempt, controller)
+    void Promise.try(() => serverSDK.api.session.get({ sessionID: effect.sessionID }, { signal: controller.signal }))
+      .finally(() => referenceLookups.delete(effect.attempt))
+      .then(
+        (session) =>
+          dispatchReferenceLookup({ type: "resolved", sessionID: effect.sessionID, attempt: effect.attempt, session }),
+        () => dispatchReferenceLookup({ type: "unavailable", sessionID: effect.sessionID, attempt: effect.attempt }),
+      )
+  }
+
+  createEffect(on(() => props.server, () => dispatchReferenceLookup({ type: "server.changed" }), { defer: true }))
+  onCleanup(() => dispatchReferenceLookup({ type: "disposed" }))
+
   const sessionTitle = (id: string) => {
+    if (id === params.id) return
     const session = data.session.get(id)
 
-    // rocketclaw: unknown mentions remain links, resolved on click (upstream packages/app/src/shell/routes/session-ui-provider.tsx)
+    // Markdown calls this inside its render effect.
+    if (!session) untrack(() => dispatchReferenceLookup({ type: "requested", sessionID: id }))
+
+    // rocketclaw: unknown mentions remain links, checked again on click (upstream packages/app/src/shell/routes/session-ui-provider.tsx)
     return session ? (!session.time.archived ? session.title || language.t("command.session.new") : undefined) : id
   }
+
+  const [referenceMenu, setReferenceMenu] = createSignal<SessionReferenceMenuTarget>()
 
   const providers = useProviders(directory)
 
@@ -225,8 +275,19 @@ export function SessionUIProvider(
         onSessionHref={href}
         backgroundCompaction={backgroundCompaction()}
       >
-        <MarkdownProvider readImage={readImage()} openSession={openReferencedSession} sessionTitle={sessionTitle}>
+        <MarkdownProvider
+          readImage={readImage()}
+          openSession={openReferencedSession}
+          sessionTitle={sessionTitle}
+          sessionMenu={(target) => setReferenceMenu({ ...target })}
+        >
           <SessionExportProvider>{props.children}</SessionExportProvider>
+          <SessionReferenceMenu
+            target={referenceMenu()}
+            currentSessionID={params.id}
+            onOpenSession={openReferencedSession}
+            onClose={() => setReferenceMenu(undefined)}
+          />
         </MarkdownProvider>
       </DataProvider>
     </LocalProvider>

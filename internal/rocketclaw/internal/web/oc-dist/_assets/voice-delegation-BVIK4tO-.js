@@ -1,0 +1,2 @@
+import{An as e,Sr as t,Zn as n,bs as r,in as i,ir as a,kn as o}from"./dist-TtmKBLe6.js";var s=n(a(e({instruction:o,transcript_delta:t(i(o)),voice:t(o)})));function c(e){if(!e.startsWith(`Voice delegation.`)&&!e.startsWith(`Voice delegation (continued).`))return;let t=e.indexOf(`
+`);if(t===-1)return;let n=r(s(e.slice(t+1).replace(/(\s*\nAttached file: `[^\n]*`)+\s*$/,``))),i=n?.instruction.trim();if(i)return e.slice(0,t)===`Voice delegation.`&&!n?.transcript_delta?{instruction:i,framing:void 0}:{instruction:i,framing:n?.voice?.trim()||void 0}}export{c as t};

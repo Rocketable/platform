@@ -175,6 +175,9 @@
       "@opencode/session-ui/timeline": [
         "./packages/session-ui/src/timeline/session-timeline.tsx"
       ],
+      "@opencode/session-ui/timeline-next": [
+        "./packages/session-ui/src/timeline-next/index.ts"
+      ],
       "@opencode/session-ui/basic-tool": [
         "./packages/session-ui/src/components/basic-tool.tsx"
       ],
@@ -369,6 +372,9 @@
       ],
       "@opencode/ui/radio": [
         "./packages/ui/src/forms/radio/radio.tsx"
+      ],
+      "@opencode/ui/redirect-paste": [
+        "./packages/ui/src/forms/redirect-paste/redirect-paste.tsx"
       ],
       "@opencode/ui/search-list": [
         "./packages/ui/src/forms/search-list/search-list.tsx"
