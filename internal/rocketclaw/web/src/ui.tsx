@@ -17,17 +17,17 @@ import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCErro
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
-import Link, { usePathname, useSearch, useServer, navigate, pagePath, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
+import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
+import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { flushSync } from "react-dom";
-import { PaletteChooser, ThemeToggle } from "@/components/theme";
+import { PaletteChooser, setThemeMode, THEME_MODES, ThemeModeChooser, useTheme } from "@/components/theme";
 import { CodeBlock, InlineText, MarkdownText, OUTPUT_KEY, TranscriptText, cleanText, copyText, mentionIds, setPreference, useCleanText, usePreference, useSlackNames } from "./transcript-text";
 import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
-import { ThreadPRContent } from "./thread-pr-panel";
+import { ThreadPRContent, ThreadPRWatch } from "./thread-pr-panel";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -93,21 +93,6 @@ const heldUnread = "held-unread";
 addEventListener("popstate", () => { if (sessionStorage.getItem(heldUnread) !== rowKey(pagePath(), server())) sessionStorage.removeItem(heldUnread); });
 
 const Delegations = createContext<Pick<HistoryView, "delegations" | "reviewRationales"> | undefined>(undefined);
-
-// A permission review can open at the approver's answer that gave a reason: the one saved under its
-// review turn, or, for reviews saved before turns were named, the first that gave the reason.
-function panelHref(id?: string, panel: "delegation" | "skill" | "shadow" | "pullRequests" = "delegation", reason?: string, turn?: string) {
-  const params = new URLSearchParams(location.search);
-  params.delete("delegation");
-  params.delete("skill");
-  params.delete("pullRequests");
-  params.delete("reason");
-  params.delete("answer");
-  if (id) params.set(panel, id);
-  if (reason !== undefined) params.set("reason", reason);
-  if (turn) params.set("answer", turn);
-  return `${pagePath()}${params.size ? `?${params}` : ""}`;
-}
 
 function useMedia(query: string) {
   const subscribe = useCallback((listener: () => void) => {
@@ -835,6 +820,18 @@ function SidebarToggle({ open, toggle }: { open: boolean; toggle: () => void }) 
   const label = open ? "Hide sidebar" : "Show sidebar";
   const Icon = open ? PanelLeftClose : PanelLeftOpen;
   return <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)]" />} aria-label={label} aria-expanded={open} aria-controls="tab-sidebar" onClick={toggle}>
+    <Icon className="size-[var(--navigation-icon)]" />
+  </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>;
+}
+
+// Closes whichever right pane is open, or opens the thread's pull requests.
+function PanelToggle() {
+  const session = pathSession(usePathname());
+  const search = new URLSearchParams(useSearch());
+  const open = ["delegation", "skill", "pullRequests"].some((panel) => search.has(panel));
+  const label = open ? "Hide right pane" : "Show pull requests";
+  const Icon = open ? PanelRightClose : PanelRightOpen;
+  return <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)]" disabled={!open && !session} />} aria-label={label} aria-expanded={open} onClick={() => navigate(panelHref(open ? undefined : "1", "pullRequests"))}>
     <Icon className="size-[var(--navigation-icon)]" />
   </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>;
 }
@@ -2033,6 +2030,7 @@ export function App() {
 }
 
 function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string }) {
+  useTheme();
   const [command, setCommand] = useState<SessionCommand>();
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
@@ -2138,7 +2136,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
                   <AttentionButton />
                 </div>
               </div>
-              <div className="justify-self-end"><ThemeToggle /></div>
+              <div className="justify-self-end"><PanelToggle /></div>
             </BottomNavigation>
           <TabDrawer {...sidebar}><TabStrip tabs={tabs} newChat={newChat} /></TabDrawer>
           <div className="flex min-h-0 min-w-0 flex-1">
@@ -2171,7 +2169,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
 
 function keyCommands({ step, closed, reopen }: ReturnType<typeof useTabs>, toggle: () => void, medium: boolean) {
   return [{ key: "tab-previous", label: "Tabs: Previous", run: () => step(true) }, { key: "tab-next", label: "Tabs: Next", run: () => step(false) },
-    ...closed.length ? [{ key: "tab-reopen", label: "Tabs: Reopen closed tab", run: reopen }] : [], ...medium ? [{ key: "tab-sidebar", label: "Tabs: Toggle sidebar", run: toggle }] : []];
+    ...closed.length ? [{ key: "tab-reopen", label: "Tabs: Reopen closed tab", run: reopen }] : [], ...medium ? [{ key: "tab-sidebar", label: "Tabs: Toggle sidebar", run: toggle }] : [],
+    ...THEME_MODES.map(({ id, label }) => ({ key: `theme-${id}`, label: `Theme: ${label}`, run: () => setThemeMode(id) }))];
 }
 
 // Pick a time parks tabs until a local date and time, starting at the next whole hour, today unless that is past
@@ -4581,13 +4580,20 @@ function DelegationTranscript({ id, child }: { id: string; child: string }) {
   return <SidePanel label="Delegation" close={close}>{body}</SidePanel>;
 }
 
+// On desktop the pane opens by itself when the thread gains a pull request or one gets new commits.
 function ThreadPRPanel() {
   const id = pathSession(usePathname());
   const search = new URLSearchParams(useSearch());
   const sidebar = useContext(Sidebar);
-  if (!id || !search.has("pullRequests")) return null;
+  const wide = useMedia("(min-width: 64rem)");
+  if (!id) return null;
+  const version = sidebar.rows.find((row) => row.id === id)?.updatedAt;
+  const selected = search.get("pullRequests");
   const close = () => navigate(panelHref());
-  return <SidePanel label="Pull requests" close={close}><ThreadPRContent key={id} id={id} version={sidebar.rows.find((row) => row.id === id)?.updatedAt} close={close} /></SidePanel>;
+  return <>
+    {wide ? <ThreadPRWatch key={id} id={id} version={version} /> : null}
+    {selected === null ? null : <SidePanel label="Pull requests" close={close}><ThreadPRContent key={`${id} ${selected}`} id={id} version={version} selected={selected} close={close} /></SidePanel>}
+  </>;
 }
 
 function SidePanel({ label, close, children }: { label: string; close: () => void; children: ReactNode }) {
@@ -6070,6 +6076,10 @@ function ConfigPage() {
         <div className="flex flex-wrap items-center justify-between gap-4 border-b py-2">
           <span className="text-sm text-muted-foreground">Theme</span>
           <PaletteChooser />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b py-2">
+          <span className="text-sm text-muted-foreground">Light or dark</span>
+          <ThemeModeChooser />
         </div>
       </ConfigSection>
       <ConfigSection title="Timeline">

@@ -293,6 +293,14 @@ The server stores each copy of a page as its own row, with one row per search. A
 
 A session on a configured OpenCode coding server that RocketClaw keeps a synced copy of, so the Web lists, opens, creates, forks, and deletes it beside RocketClaw's own sessions; its agent runs on that server, not in the Harness.
 
+Its subagents run as child sessions on that server that record it as their parent, so its own history does not hold their work; anything that asks what the session did must read its child sessions too, and theirs.
+
+### Pull Requests Pane
+
+The pane beside a conversation that lists the GitHub pull requests the conversation created and lets a person read them without leaving the conversation. On desktop it opens by itself on a pull request the conversation in view has just created, or one whose head commit moved.
+
+A pull request counts as created in the conversation only when a successful recorded create command or script in it printed the pull request's link; mentioned links, dry runs, and failed calls do not count, and for a Remote OpenCode Session the conversation includes its subagents' sessions. A Remote OpenCode Session also shows the current checkout's pull request, found from the branch the session folder is on; that reflects the folder's state, not proof the conversation made it, since several sessions may share a folder.
+
 ### Dashboard
 
 A Search Page shown as a board in one of several styles, whose searches are its lanes, tracking the work of the space its tab sits in.

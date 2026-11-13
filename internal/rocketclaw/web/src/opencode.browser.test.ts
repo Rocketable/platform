@@ -37,6 +37,7 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
         { type: "text", text: "https://github.com/sample/fixture-repository-marker/pull/99" },
         { type: "tool", name: "shell", state: { status: "completed", input: { command: "gh pr create --title 'Sample' --body 'Sample'" }, metadata: { exit: 0 }, content: [{ type: "text", text: "https://github.com/sample/fixture-repository-marker/pull/7" }] } },
       ] }] : [], cursor: {} } });
+      if (url.pathname.endsWith("/api/session")) return request.fulfill({ json: { data: [], cursor: {} } });
       if (url.pathname.includes("/session/")) return request.fulfill({ json: { data: { location: { directory: url.pathname.endsWith("/ses_child") ? "/repo/child" : directory }, time: { created: 1 } } } });
       if (request.request().method() === "POST") {
         const body = request.request().postDataJSON(); commands.push(body);
@@ -67,6 +68,10 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
     await pane.getByRole("alert").getByText("Could not read the current checkout's pull request using this OpenCode server's gh login.", { exact: true }).waitFor();
     expect(await pane.getByLabel("Personal read token").count()).toBe(0);
     expect(await pane.getByRole("combobox", { name: "Thread pull request" }).textContent()).toContain("#7");
+    await pane.getByRole("combobox", { name: "Thread pull request" }).click();
+    const option = page.getByRole("option", { name: "sample/fixture-repository-marker #7", exact: true });
+    expect(await option.evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true);
+    await page.keyboard.press("Escape");
     expect(await pane.textContent()).not.toContain("#99");
     await draft.fill("OpenCode draft edited beside the PR");
     await pane.getByRole("button", { name: "Load files", exact: true }).click();
@@ -105,7 +110,7 @@ test("thread PR pane reads with the OpenCode host's gh login beside the real emb
     await pane.getByText("Created in this thread", { exact: true }).waitFor();
     await pane.getByRole("button", { name: "Close pull requests", exact: true }).click();
     expect(await draft.textContent()).toBe("OpenCode draft edited beside the PR");
-    expect(commands.every(({ cwd, command }) => ["/repo", "/repo/child", "/repo/moved"].includes(cwd) && /^GH_PROMPT_DISABLED=1 gh (?:pr view --json|api --hostname github.com --method GET)/.test(command))).toBe(true);
+    expect(commands.every(({ cwd, command }) => ["/repo", "/repo/child", "/repo/moved"].includes(cwd) && /^GH_PROMPT_DISABLED=1 gh (?:pr view \$\(git symbolic-ref -q HEAD >\/dev\/null \|\| jj log .+ \| head -n1\) --json|api --hostname github.com --method GET)/.test(command))).toBe(true);
     expect(removed).toHaveLength(commands.length);
     expect(prompts).toEqual([]);
     expect(errors).toEqual([]);

@@ -69,21 +69,34 @@ request tracing. Browser extensions and clipboard managers remain outside the
 application's control. No remote images or executable description content load.
 
 The conversation tab's **⋯ → Pull requests** menu item opens the existing right
-pane for a RocketClaw or OpenCode thread, without adding a bottom-bar button.
-On desktop the conversation stays editable beside
-it; on narrow screens it uses a sheet. It replaces an open delegation or skill
-pane. Select a PR to read its description and changed-file patches.
+pane for a RocketClaw or OpenCode thread. So does the bottom bar's right-end
+button, which closes whichever right pane is open. On desktop the conversation
+stays editable beside it; on narrow screens it uses a sheet. It replaces an open
+delegation or skill pane. Select a PR to read its description and changed-file
+patches.
 
-**Created in this thread** comes from a successful recorded shell call running a
-simple `gh pr create` command and returning one GitHub PR URL. Prompts, ordinary
-links, permission-review plans, failed calls, and compound scripts do not establish
-ownership. Native RocketClaw uses the existing bounded Code Mode call summaries;
-clipped summaries and older history without actual-call records can miss a PR.
-Discovery reads older history pages too. It runs when the pane opens, refreshes
-after thread updates, and can be repeated with **Find again**.
+On desktop the pane also opens by itself, on that PR, when the thread in view
+gains a PR or one of its PRs gets a new head commit. Discovery then runs after
+every update of that thread, open pane or not. Head commits are read through an
+OpenCode server's `gh` login only, so for a native RocketClaw thread only a new
+PR opens the pane. The first look at a thread, a PR missing from one look, and a
+head that could not be read never open it.
+
+**Created in this thread** comes from a successful recorded shell call that runs
+`gh pr create`, alone or in a script: each GitHub PR URL it prints alone on a line
+counts, as `gh pr create` prints them. A script that also prints some other PR URL
+alone on a line claims it too. Prompts, ordinary links, quoted mentions,
+permission-review plans, dry runs, and failed calls do not establish ownership.
+OpenCode discovery also reads the thread's subagent sessions, and theirs, since
+subagents often open the PRs. Native RocketClaw uses the existing bounded Code Mode
+call summaries; clipped summaries and older history without actual-call records can
+miss a PR. Discovery reads older history pages too. It runs when the pane opens,
+refreshes after thread updates, and can be repeated with **Find again**.
 
 OpenCode also checks the session folder using its server's installed `gh` and
-existing GitHub login. **Current checkout** names the branch result, not proof
+existing GitHub login. In a jj workspace, whose Git checkout has no current branch,
+it asks `gh` about the nearest jj bookmark at or below the working copy.
+**Current checkout** names the branch result, not proof
 that the PR belongs to this thread: several sessions may share that folder. A PR
 that finished before the session existed is not suggested from the checkout.
 OpenCode PR details and patches use that same server login, including private
@@ -851,7 +864,7 @@ visible when the controls are hidden and supports Enter/Space when focused.
 Touch devices and narrow screens use 48px navigation targets and 8px gaps;
 desktop uses 32px targets and 4px gaps. Screens narrower than 22rem keep 48px
 targets but tighten gaps and side padding to 4px. Icons are 24px in all layouts.
-The sidebar toggle sits at the bar's left end and the theme toggle at its right end;
+The sidebar toggle sits at the bar's left end and the right pane toggle at its right end;
 between them, centered, are New session, Search sessions and commands, Voice, and
 Copy page link.
 When remote RocketClaws or OpenCode servers are configured, New session opens a
@@ -1242,7 +1255,7 @@ deleting its record or its Slack messages.
 On desktop, the page header's close button closes that page's tab (see
 [Tabs](#tabs)), and Escape on a page does too unless a dialog or tooltip is open.
 New chat and search form a centered group in the footer.
-The theme toggle sits at the right end of the footer and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
+The **Theme: Auto**, **Theme: Light**, and **Theme: Dark** commands, in both command palettes, and Config's **Light or dark** select switch between following the system, light, and dark. Config also has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
 Config's Timeline section has the **Timeline detail** card, following OpenCode v2. A
 five-stop slider picks Messages only, Quiet, Compact, Detailed, or Everything, and an
 Advanced table sets visibility, Group, and Collapse per category; settings that match

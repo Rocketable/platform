@@ -40,6 +40,8 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`background jobs a
       case "/api/MoveToBackground": calls.push({ path: url.pathname, body: input }); return Response.json({ moved: true });
       case "/api/StopBackgroundJob": calls.push({ path: url.pathname, body: input }); return Response.json({ stopped: true });
       case "/api/History": {
+        // The desktop pull request watch reads history too; these reads are the transcript's.
+        if (url.searchParams.has("pull-request-discovery")) return Response.json({ messages: [], more: false });
         const base = { origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [] };
         if (input.id !== "chat") return Response.json({ ...base, backgroundJobs: input.id === "chat/call-sub" ? [job("j-own", "execute", "running", "subagent script", { toolCallId: "call-own" })] : [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
         if (input.before) {

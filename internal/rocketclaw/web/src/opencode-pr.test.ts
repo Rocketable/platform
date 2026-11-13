@@ -11,7 +11,7 @@ test("discovers the checkout PR through the configured server's gh login, withou
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       expect(body.cwd).toBe(source.directory);
-      expect(body.command).toBe("GH_PROMPT_DISABLED=1 gh pr view --json url,headRefName,closedAt,mergedAt");
+      expect(body.command).toBe(`GH_PROMPT_DISABLED=1 gh pr view $(git symbolic-ref -q HEAD >/dev/null || jj log --ignore-working-copy --no-graph -r 'latest(heads(::@ & bookmarks()))' -T 'local_bookmarks.map(|b| b.name()).join("\\n")' 2>/dev/null | head -n1) --json url,headRefName,closedAt,mergedAt`);
       expect(body.metadata).toBeUndefined();
       return Response.json({ data: { id: "sh_read", status: "running" } });
     }

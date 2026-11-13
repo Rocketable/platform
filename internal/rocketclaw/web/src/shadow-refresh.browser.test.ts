@@ -40,6 +40,8 @@ for (const mode of ["initial", "cached", "earlier"] as const) test(`shadow refre
       case "/api/ListSkills": return Response.json({ skills: [] });
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/History": {
+        // The desktop pull request watch reads history too; these reads are the transcript's.
+        if (url.searchParams.has("pull-request-discovery")) return Response.json({ messages: [], more: false });
         reads.push(input);
         if (input.id === "parent") return Response.json(mode === "earlier" && !input.before ? { ...tail, reset: !input.revision } : parent);
         if (input.id === "b") return Response.json({ code: 14, message: "Shadow history unavailable" }, { status: 503 });

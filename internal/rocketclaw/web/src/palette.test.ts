@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { applyPalette, PALETTE_KEY, PALETTES, PaletteChooser, parsePalette, ThemeToggle } from "./components/theme";
+import { applyPalette, PALETTE_KEY, PALETTES, PaletteChooser, parsePalette, ThemeModeChooser } from "./components/theme";
 
 test("parsePalette keeps a known theme and falls back", () => {
   expect(parsePalette("harbor")).toBe("harbor");
@@ -26,8 +26,9 @@ test("applyPalette writes the chosen theme onto the document", () => {
 });
 
 test("theme controls initially show system mode and the neutral palette", () => {
-  const mode = renderToStaticMarkup(createElement(ThemeToggle));
-  expect(mode).toMatch(/<button[^>]+aria-label="Theme system"/);
+  const mode = renderToStaticMarkup(createElement(ThemeModeChooser));
+  expect(mode).toMatch(/<button[^>]+aria-label="Light or dark theme"/);
+  expect(mode).toMatch(/>Auto</);
   const palette = renderToStaticMarkup(createElement(PaletteChooser));
   expect(palette).toMatch(/<button[^>]+role="combobox"/);
   expect(palette).toMatch(/<button[^>]+aria-label="Color theme"/);

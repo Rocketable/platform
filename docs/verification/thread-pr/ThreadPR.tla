@@ -118,7 +118,7 @@ HistoryAndCheckout:
         await DiscoveryCase;
         either
             await historyPhase = "page1";
-            \* Abstract a successful recorded simple create with one accepted URL.
+            \* Abstract a successful recorded create command or script with an accepted URL.
             gathered := Accepted({Evidence(historyThread, "create")});
             historyPhase := "page2";
         or
