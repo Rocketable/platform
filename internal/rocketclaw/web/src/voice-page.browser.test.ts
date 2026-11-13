@@ -122,6 +122,9 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
   const origin = `http://127.0.0.1:${server.port}`;
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(`page: ${error.message}`));
+    openai.on("pageerror", (error: Error) => errors.push(`openai: ${error.message}`));
     const alerts: string[] = [];
     page.on("dialog", (dialog: { message(): string; accept(): Promise<void> }) => { alerts.push(dialog.message()); void dialog.accept(); });
     // Chrome drops what reaches the page's channel before it reports open, so OpenAI speaks first only after that.
@@ -229,7 +232,23 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     expect(await page.getByLabel("Transcript", { exact: true }).count()).toBe(0); // The transcript is off until asked for.
     await page.getByRole("button", { name: "Show transcript" }).click(); // The orb shrinks below the transcript.
     await page.locator('.voice-orb[data-size="small"]').waitFor();
-    await page.getByLabel("Transcript", { exact: true }).getByText("Voice: Hi!").waitFor();
+    try {
+      await page.getByLabel("Transcript", { exact: true }).getByText("Voice: Hi!").waitFor();
+    } catch (error) {
+      console.error("Voice transcript wait failed", error, JSON.stringify({ calls, spoken, errors }));
+      await Promise.all([
+        status.allTextContents(),
+        page.getByLabel("Transcript", { exact: true }).locator("p").allTextContents(),
+        openai.evaluate(() => {
+          const { channel } = window as unknown as { channel?: RTCDataChannel & { spoke?: boolean } };
+          return { channel: channel?.readyState, spoke: channel?.spoke, bufferedAmount: channel?.bufferedAmount };
+        }),
+      ]).then(
+        ([status, transcript, openai]) => console.error("Voice transcript snapshot", JSON.stringify({ status, transcript, openai })),
+        (errSnapshot) => console.error("Voice transcript snapshot failed", errSnapshot),
+      );
+      throw error;
+    }
     expect(await page.getByLabel("Transcript", { exact: true }).locator("p").allTextContents()).toEqual(["You: Hello there", "Voice: Hi!"]);
     await page.waitForFunction(() => Number(document.querySelector<HTMLElement>(".voice-orb")?.style.getPropertyValue("--level")) > 0.01); // The orb swells with the model's voice.
     expect(await page.locator(".voice-orb-core").evaluate((core: Element) => getComputedStyle(core).animationName)).toContain("voice-orb-churn"); // Its inner light keeps moving.
