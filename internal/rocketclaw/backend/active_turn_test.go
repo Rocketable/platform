@@ -616,6 +616,124 @@ func TestOverdueScheduledTurnRunsOnceAfterRestart(t *testing.T) {
 	require.Never(t, func() bool { return len(requests) > 0 }, 300*time.Millisecond, 10*time.Millisecond, "the reminder ran once")
 }
 
+// A reply running when the agent pauses finishes, also across restarts, and takes no agent's steer;
+// the pause line posts at once, above it. The pause holds the queued work and the steer's row; resume posts
+// its line before the turns it releases, which run both and answer the steer's writer.
+func TestPausedChatFinishesInterruptedReply(t *testing.T) {
+	t.Parallel()
+
+	newBridge, service, requests, finals := newResumeTestBridges(t, true)
+	crashed := newBridge()
+	conversationID := crashed.config.ConversationID
+	manager := newThreadBridgeManager(crashed.runtime, service, crashed.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return crashed }})
+	rt := &Runtime{Sessions: service, threads: manager, Cfg: crashed.runtime}
+
+	seedActiveTurn(t, service, conversationID, "turn-mid", nil)
+	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "queued work", Source: protocol.SourceWeb}))
+
+	for range 2 {
+		require.NoError(t, rt.SetAgentPaused(t.Context(), conversationID, "Bob", true))
+	}
+
+	const pauseLine = `message:"Bob" paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you.`
+	assert.Equal(t, []string{pauseLine}, observedEntryTexts(t, service, conversationID), "pausing a paused chat writes no second line")
+
+	interrupted := newBridge()
+	manager.bridges[conversationID] = interrupted
+	shutdown := runTestBridge(t, interrupted)
+	require.Contains(t, <-requests, "seed")
+
+	require.NoError(t, service.UpsertThread("web:caller", ThreadState{Agent: "main"}))
+
+	reply := testReply("web:caller", "turn-1/call/steer", conversationID)
+	outcome, _, err := manager.writeSession(t.Context(), conversationID, reply.jobID, sessionWriteSteer, agentWrite("also check 2025"), reply)
+	require.NoError(t, err)
+	assert.Equal(t, sessionQueued, outcome, "the reply a restart resumed in a paused chat takes no steer")
+
+	shutdown()
+	require.Eventually(t, func() bool { return !interrupted.handlingSnapshot() }, 5*time.Second, 10*time.Millisecond)
+
+	restarted := newBridge()
+	manager.bridges[conversationID] = restarted
+	runTestBridge(t, restarted)
+	assert.NotContains(t, <-requests, "also check 2025")
+	assert.Equal(t, "turn-mid", readFinal(t, finals).TurnID, "the interrupted reply finishes")
+	require.Eventually(t, func() bool {
+		entries, err := service.ObserveEntries(t.Context(), conversationID)
+		require.NoError(t, err)
+
+		return len(entries) == 2
+	}, 5*time.Second, 10*time.Millisecond, "the interrupted reply posts")
+	assert.Equal(t, pauseLine, observedEntryTexts(t, service, conversationID)[0], "the pause line stays above the reply")
+	require.Never(t, func() bool { return len(requests) > 0 }, 300*time.Millisecond, 10*time.Millisecond, "the pause holds the queued work and the steer")
+	assert.Equal(t, []string{"q1", reply.jobID}, queueIDs(t, service, conversationID))
+
+	require.NoError(t, rt.SetAgentPaused(t.Context(), conversationID, "Ann", false))
+
+	body := <-requests
+	assert.Less(t, strings.Index(body, "resumed the agent."), strings.Index(body, "queued work"), "the resume line is history before the released turn")
+	assert.Contains(t, <-requests, "also check 2025")
+	readFinal(t, finals)
+	readFinal(t, finals)
+	require.Eventually(t, func() bool {
+		return slices.Equal([]string{"web:caller " + reply.jobID + " completed pending true"}, replyQueueItems(t, service))
+	}, 5*time.Second, 10*time.Millisecond, "the steer's writer gets its reply once the turn that took it ends")
+}
+
+// A paused chat's goal, queued item, due schedules and Completion Note wake all wait across a restart,
+// and refusing the goal's continuation leaves the goal active. Resume runs the goal's turn first, which takes
+// the Completion Note, then each of the rest once, a recurring schedule that came due several times included.
+func TestPausedChatHoldsWorkUntilResume(t *testing.T) {
+	t.Parallel()
+
+	newBridge, service, requests, finals := newResumeTestBridges(t, false)
+	cfg, conversationID := newBridge().runtime, newBridge().config.ConversationID
+	require.NoError(t, service.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 1}))
+	require.NoError(t, service.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "queued work", Source: protocol.SourceWeb}))
+	require.NoError(t, service.PutScheduledMessage("once", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "one-time reminder", DueAt: time.Now().Add(-time.Hour)}))
+	require.NoError(t, service.PutScheduledMessage("hourly", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "recurring reminder", DueAt: time.Now().Add(-3 * time.Hour), Recurring: true, Interval: time.Hour}))
+
+	job := testBackgroundJob(conversationID, "job-1")
+	createTestBackgroundJob(t, service, job)
+	finishTestBackgroundJob(t, service, job, backgroundCompleted, true)
+
+	manager, shutdown := newTestBridgeManager(t, cfg, service, finals)
+	require.NoError(t, (&Runtime{Sessions: service, threads: manager, Cfg: cfg}).SetAgentPaused(t.Context(), conversationID, "Bob", true))
+	shutdown()
+
+	manager, _ = newTestBridgeManager(t, cfg, service, finals)
+	require.NoError(t, manager.StartActiveTurns(t.Context()))
+	require.NoError(t, manager.StartPendingScheduledMessages(t.Context()))
+	require.NoError(t, manager.StartActiveGoals(t.Context()))
+	require.NoError(t, manager.StartQueuedConversations(t.Context()))
+	require.Never(t, func() bool { return len(requests) > 0 }, 300*time.Millisecond, 10*time.Millisecond, "nothing runs in a paused chat after a restart")
+
+	goal, _, err := service.Goal(conversationID)
+	require.NoError(t, err)
+	assert.Equal(t, GoalStatusActive, goal.Status, "the refused continuation leaves the goal active")
+
+	require.NoError(t, (&Runtime{Sessions: service, threads: manager, Cfg: cfg}).SetAgentPaused(t.Context(), conversationID, "Ann", false))
+
+	first := <-requests
+	assert.Contains(t, first, "Continue the active goal loop.", "the goal takes the first turn")
+	assert.Less(t, strings.Index(first, "paused the agent."), strings.Index(first, "resumed the agent."))
+
+	released := []string{"queued work", "one-time reminder", "recurring reminder", "job-1"}
+	for range released {
+		body := <-requests
+		released = slices.DeleteFunc(released, func(text string) bool { return strings.Contains(body, text) && !strings.Contains(first, text) })
+	}
+
+	assert.Empty(t, released, "each held item runs after the goal")
+
+	// The Completion Note joins the goal's running turn at its next step rather than waking a turn of its own.
+	for range 4 {
+		readFinal(t, finals)
+	}
+
+	require.Never(t, func() bool { return len(requests) > 0 }, 300*time.Millisecond, 10*time.Millisecond, "each runs once")
+}
+
 // newCronTestManager returns a manager and the published finals.
 func newCronTestManager(t *testing.T, service *SessionService) (manager *threadBridgeManager, cfg *config.Config, finals chan *protocol.OutboundMessage) {
 	t.Helper()
@@ -1077,7 +1195,7 @@ BEGIN
     RAISE EXCEPTION 'producer metadata unavailable';
 END $$;
 CREATE VIEW conversations AS
-SELECT conversation_id, revert_message_id, reports_to, unavailable_producer(producer_inbound_json) AS producer_inbound_json,
+SELECT conversation_id, revert_message_id, paused, reports_to, unavailable_producer(producer_inbound_json) AS producer_inbound_json,
     shadow_parent, running, preview, last_updated, parent_conversation_id, call_id FROM unavailable_conversations`)
 				require.NoError(t, err)
 

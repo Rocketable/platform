@@ -36,6 +36,13 @@ test("transcript and entry HTTP proxy reach Go", async () => {
     if (details.pinned !== undefined) expect(session.pinned ?? false).toBe(details.pinned);
     if (details.name !== undefined) expect(session.name ?? "").toBe(details.name.trim());
   }
+  // The agent of a chat a person started pauses and resumes; a listing leaves out a live chat's paused.
+  for (const paused of [true, false]) {
+    await call("UpdateSession", { id: "empty-web", paused });
+    const listed = (await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).flatMap((batch) => batch.sessions ?? []);
+    const session = listed.find((row) => row.id === "empty-web");
+    expect([session?.pausable, session?.paused]).toEqual([true, paused || undefined]);
+  }
   const history: { messages: TranscriptEvent[] } = await call("History", { id: process.env.ROCKETCLAW_HISTORY_TEST_ID! });
   expect(history.messages[1]).toMatchObject({ model: "legacy-model", agent: "", origin: "canonical" });
   expect(history.messages[1].reasoningEffort).toBeUndefined();

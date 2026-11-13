@@ -10,7 +10,9 @@ import (
 	"io/fs"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -82,6 +84,31 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 
 	if !found {
 		return "", errors.New("fork message is no longer in the session")
+	}
+
+	// A fork starts live. Its copy says whether it leaves the agent paused: the last line saying who paused or
+	// resumed it, which a fork taken at an earlier message may hold even after the source resumed.
+	var paused bool
+
+	for i := range entries {
+		messages, err := replayInputMessages(entries[i].ReplayInput)
+		if err != nil {
+			return "", err
+		}
+
+		for _, message := range messages {
+			switch {
+			case message.role != "developer":
+			case strings.HasSuffix(message.text, agentPausedLine):
+				paused = true
+			case strings.HasSuffix(message.text, agentResumedLine):
+				paused = false
+			}
+		}
+	}
+
+	if paused {
+		entries = append(entries, harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: replayInputForMessage("developer", strconv.Quote(destination.CreatedBy)+agentResumedLine)})
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)

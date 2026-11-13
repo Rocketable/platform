@@ -197,6 +197,57 @@ func TestForkConversation(t *testing.T) {
 	require.Len(t, kept[0].Entry.ReplayInput, 2, "a wipe keeps the copied Slack message and its answer, as undo does")
 }
 
+// A fork of a paused chat starts live. When its copied history leaves the agent paused, it ends with a line
+// saying the person forking resumed the agent; a fork taken before the pause, or after the resume, gets none.
+func TestForkPausedChatStartsLive(t *testing.T) {
+	t.Parallel()
+
+	sessions := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, sessions.UpsertThread("source", ThreadState{Agent: "main"}))
+
+	for _, text := range []string{"first", "second"} {
+		_, err := sessions.AppendEntryID(ctx, "source", testSessionEntry(text, text+" answer"))
+		require.NoError(t, err)
+	}
+
+	rt := pausedTestChat(t, sessions, "source")
+	for _, sender := range []string{"Ann", "Bob"} {
+		require.NoError(t, rt.PostPausedMessage(ctx, pausedWebMessage("source", sender, &protocol.InboundContent{Text: sender + " says lunch"})))
+	}
+
+	require.NoError(t, rt.SetAgentPaused(ctx, "source", "Ann", false))
+
+	entries, err := sessions.ObserveEntries(ctx, "source")
+	require.NoError(t, err)
+	require.Len(t, entries, 6)
+
+	for name, tt := range map[string]struct {
+		before string
+		want   []string
+	}{
+		"paused": {fmt.Sprintf("%d:0", entries[4].ID), []string{
+			"message:first", "message:first answer", "message:second", "message:second answer",
+			"message:\"Bob\" paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you.",
+			"message:[Web principal=\"Ann\"]\n\nAnn says lunch", "message:\"Cid\" resumed the agent.",
+		}},
+		"live": {fmt.Sprintf("%d:0", entries[1].ID), []string{"message:first", "message:first answer"}},
+		"resumed": {"", []string{
+			"message:first", "message:first answer", "message:second", "message:second answer",
+			"message:\"Bob\" paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you.",
+			"message:[Web principal=\"Ann\"]\n\nAnn says lunch", "message:[Web principal=\"Bob\"]\n\nBob says lunch", "message:\"Ann\" resumed the agent.",
+		}},
+	} {
+		_, err := sessions.ForkConversation(ctx, "source", protocol.Conversation{ID: name, Agent: "main", CreatedBy: "Cid"}, tt.before)
+		require.NoError(t, err)
+		require.Equal(t, tt.want, observedEntryTexts(t, sessions, name), name)
+
+		var paused bool
+		require.NoError(t, queryScalar(ctx, sessions.db, "read fork pause", `SELECT paused FROM conversations WHERE conversation_id = $1`, &paused, name))
+		require.False(t, paused, name)
+	}
+}
+
 func TestForkConversationRollsBackFailedCopies(t *testing.T) {
 	t.Parallel()
 

@@ -282,6 +282,10 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		return err
 	}
 
+	if err := rt.resumeScheduledSessions(runCtx); err != nil {
+		return err
+	}
+
 	pruneCtx, cancelPrune := context.WithCancel(workCtx)
 
 	var prune errgroup.Group

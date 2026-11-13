@@ -79,6 +79,10 @@ message Session {
   bool until_done = 37;
   // A prompt the caller sends parks its tab until it is done: by their choice for the session, else for every session.
   bool auto_park = 38;
+  // Someone paused the agent: messages sent here start no turn until someone resumes it.
+  bool paused = 39;
+  // A person started the session in the Web and nothing outside reports into it, so its agent can pause.
+  bool pausable = 40;
 }
 
 // TabAttention is the caller's attention on a tab location that is not a session, as a Session row carries a
@@ -637,6 +641,8 @@ message UpdateSessionRequest {
   reserved 4, 5;
   // Toggles a tag a person chose: any tag on a remote OpenCode session, or one its agent allows.
   optional string tag = 6;
+  // Pauses or resumes the agent of a Web chat.
+  optional bool paused = 7;
 }
 
 message UpdateSessionResponse {}

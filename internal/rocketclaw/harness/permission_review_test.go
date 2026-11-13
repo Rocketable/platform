@@ -26,7 +26,7 @@ func testPermissionReviewEntry(tb testing.TB, request *permissionReviewRequest, 
 	require.NoError(tb, err)
 
 	texts := permissionReviewPrompt(request, "", string(payload))
-	replay, err := ReplayInputFromParams(append([]responses.ResponseInputItemUnionParam{promptInputMessage(&PromptInput{Role: PromptInputRoleUser, Texts: texts})}, answer...))
+	replay, err := ReplayInputFromParams(append([]responses.ResponseInputItemUnionParam{PromptInputMessage(&PromptInput{Role: PromptInputRoleUser, Texts: texts})}, answer...))
 	require.NoError(tb, err)
 
 	return SessionEntry{Type: "turn", TurnID: "review", ResponseID: "final", ReplayInput: replay}
@@ -598,7 +598,7 @@ func TestPermissionReviewTranscriptMarksAttachmentOnlyMessages(t *testing.T) {
 	}}}
 	request := &permissionReviewRequest{
 		ReviewContext: []responses.ResponseInputItemUnionParam{
-			promptInputMessage(&PromptInput{Attachments: []Attachment{
+			PromptInputMessage(&PromptInput{Attachments: []Attachment{
 				{MIME: "image/png", URL: "data:image/png;base64,SECRET_IMAGE"},
 			}}),
 			{OfFunctionCallOutput: &toolResult},
