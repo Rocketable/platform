@@ -31,7 +31,7 @@ type agentDraftSave struct {
 	stop      func()
 }
 
-func startAgentDraftSave(t *testing.T, workspace, dsn string) *agentDraftSave {
+func startAgentDraftSave(t *testing.T, workspace, dsn string, overlays ...string) *agentDraftSave {
 	t.Helper()
 
 	ds := &agentDraftSave{workspace: workspace, validate: func(string) error { return nil }}
@@ -44,7 +44,7 @@ func startAgentDraftSave(t *testing.T, workspace, dsn string) *agentDraftSave {
 		},
 	}
 
-	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, AutoApproverModel: "gpt-review", OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: "http://127.0.0.1:1"}}
+	cfg := &config.Config{Workspace: workspace, Overlays: overlays, DatabaseURL: dsn, AutoApproverModel: "gpt-review", OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: "http://127.0.0.1:1"}}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 
@@ -420,7 +420,8 @@ func TestAgentDraftLayers(t *testing.T) {
 
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
-	overlays := []string{"github.com/acme/team@main", "github.com/acme/more"}
+	// Overlays no Git reaches, so asking for their branches fails at once.
+	overlays := []string{filepath.Join(workspace, "team.git") + "@main", filepath.Join(workspace, "more.git")}
 	store.definitions = config.NewLockedConfig(&config.Config{Workspace: workspace, Overlays: overlays})
 	team := skel.OverlayInfos(workspace, config.DefaultRuntimeDir, overlays)[0].ClonePath
 	builtin := skel.BuiltinAgent("main")

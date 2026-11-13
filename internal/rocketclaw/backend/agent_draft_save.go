@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -23,10 +24,11 @@ type agentDraftRuntime interface {
 }
 
 // AgentDraftSave asks to save Variant of draft ID to Destination for Author. Reviewed says Author reviewed
-// the destination's file ReviewedFile, nil when it had none, which the save then expects to find there.
+// the destination's file ReviewedFile, nil when it had none, which the save then expects to find there. To
+// a Git overlay, PullRequest opens a pull request instead of pushing to the overlay's branch.
 type AgentDraftSave struct {
 	ID, Variant, Destination, Author string
-	Reviewed                         bool
+	Reviewed, PullRequest            bool
 	ReviewedFile                     *string
 }
 
@@ -40,12 +42,13 @@ type AgentLayer struct {
 // AgentDraftLayers is where saving a draft to a destination puts its agent: every layer in precedence
 // order, each later one winning; HiddenBy, the later layer whose file hides the destination; Replaces, the
 // earlier layer whose agent the save takes over; Recreated, that startup copies the built-in agent into
-// workspace agents/ again, hiding an overlay destination; and Next, the file the save writes.
+// workspace agents/ again, hiding an overlay destination; Next, the file the save writes; and for an overlay
+// destination Branch, the branch a save pushes to, or Unpushable, why it cannot push there.
 type AgentDraftLayers struct {
-	Layers             []AgentLayer
-	HiddenBy, Replaces string
-	Recreated          bool
-	Next               string
+	Layers                   []AgentLayer
+	HiddenBy, Replaces       string
+	Recreated                bool
+	Next, Branch, Unpushable string
 }
 
 // AgentDraftReview is a destination file that changed since the draft began, or since it was reviewed: the
@@ -98,8 +101,9 @@ func (s *SessionService) AgentDraftLayers(ctx context.Context, id, variant, dest
 
 	cfg := s.definitions.Clone()
 	layers := []AgentLayer{{Layer: "built-in", File: skel.BuiltinAgent(draft.Name)}}
+	overlays := skel.OverlayInfos("", cfg.RuntimeDirName(), cfg.Overlays)
 
-	for _, overlay := range skel.OverlayInfos("", cfg.RuntimeDirName(), cfg.Overlays) {
+	for _, overlay := range overlays {
 		layers = append(layers, AgentLayer{Layer: overlay.Spec, Ref: overlay.Ref, File: bases[overlay.Spec]})
 	}
 
@@ -132,26 +136,37 @@ func (s *SessionService) AgentDraftLayers(ctx context.Context, id, variant, dest
 		report.Replaces = replaced.Layer
 	}
 
+	if at < len(layers)-1 {
+		if report.Branch, err = overlayBranch(ctx, overlays[at-1]); err != nil {
+			report.Unpushable = err.Error()
+		}
+	}
+
 	return report, nil
 }
 
-// SaveAgentDraft saves a variant of a draft to workspace agents/ and reloads, returning the draft's save
-// state after: live, or editing when the draft changed during the save or Reload loaded another file. The
-// save claims the draft, one save at a time; checks that the destination holds what the draft expects; checks
-// the variant, then a stage of Reload's holding it; and renames its file into place after checking the
-// destination again. A save that writes nothing returns the draft to editing and an *AgentDraftSaveError, or
-// an error for a stored name or variant that is not one.
+// SaveAgentDraft saves a variant of a draft to workspace agents/ and reloads, or to a Git overlay (see
+// saveAgentDraftToOverlay), returning the draft's save state after: live, waiting for an overlay's merge, or
+// editing when the draft changed during the save or Reload loaded another file. The save claims the draft,
+// one save at a time; checks that the destination holds what the draft expects; checks the variant, then a
+// stage of Reload's holding it; and renames its file into place after checking the destination again. A
+// save that writes nothing returns the draft to editing and an *AgentDraftSaveError, or an error for a
+// stored name or variant that is not one.
 func (s *SessionService) SaveAgentDraft(ctx context.Context, rt agentDraftRuntime, save *AgentDraftSave) (AgentDraftSaveState, error) {
-	if save.Destination != agentDraftWorkspaceLayer {
+	cfg := s.definitions.Clone()
+	overlays := skel.OverlayInfos("", cfg.RuntimeDirName(), cfg.Overlays)
+	at := slices.IndexFunc(overlays, func(overlay skel.OverlayInfo) bool { return overlay.Spec == save.Destination })
+
+	if save.Destination != agentDraftWorkspaceLayer && at < 0 {
 		return "", &AgentDraftSaveError{Problem: "That is not a save destination."}
 	}
 
 	var expected map[string]*string
 	if save.Reviewed {
-		expected = map[string]*string{agentDraftWorkspaceLayer: save.ReviewedFile}
+		expected = map[string]*string{save.Destination: save.ReviewedFile}
 	}
 
-	draft, claimed, err := s.moveAgentDraft(ctx, save.ID, save.Author, AgentDraftSaving, expected, func(draft *AgentDraft) bool {
+	draft, claimed, err := s.moveAgentDraft(ctx, save.ID, save.Author, AgentDraftSaving, expected, nil, func(draft *AgentDraft) bool {
 		return draft.SaveState != AgentDraftSaving && draft.SaveState != AgentDraftWaiting
 	})
 	if err != nil {
@@ -162,9 +177,8 @@ func (s *SessionService) SaveAgentDraft(ctx context.Context, rt agentDraftRuntim
 		return "", &AgentDraftSaveError{Problem: "Someone is saving this draft already."}
 	}
 
-	always := func(*AgentDraft) bool { return true }
 	refuse := func(err error) (AgentDraftSaveState, error) {
-		if _, _, errRelease := s.moveAgentDraft(ctx, draft.ID, save.Author, AgentDraftEditing, nil, always); errRelease != nil {
+		if _, _, errRelease := s.moveAgentDraft(ctx, draft.ID, save.Author, AgentDraftEditing, nil, nil, func(*AgentDraft) bool { return true }); errRelease != nil {
 			return "", errRelease
 		}
 
@@ -178,46 +192,37 @@ func (s *SessionService) SaveAgentDraft(ctx context.Context, rt agentDraftRuntim
 		return refuse(&AgentDraftNameError{Name: draft.Name})
 	case i < 0:
 		return refuse(&AgentDraftOpError{Problem: "That variant does not exist."})
+	case at >= 0:
+		state, err := s.saveAgentDraftToOverlay(ctx, rt, save, draft, &draft.Variants[i], overlays[at])
+		if state == "" {
+			return refuse(err)
+		}
+
+		return state, err
 	}
 
-	variant, base, file := &draft.Variants[i], draft.Bases[agentDraftWorkspaceLayer], filepath.Join("agents", draft.Name+".md")
+	variant, file := &draft.Variants[i], filepath.Join("agents", draft.Name+".md")
 	data := renderAgentDraftFile(draft.Mode, variant)
 
-	// changed reads the destination itself, never the loaded copy, and reviews it when it is not the base.
+	// changed reads the destination itself, never the loaded copy.
 	changed := func() error {
 		_, files, err := s.agentLayerFiles(draft.Name)
-
-		switch live := files[agentDraftWorkspaceLayer]; {
-		case err != nil:
+		if err != nil {
 			return err
-		case sameAgentFile(live, base):
-			return nil
-		default:
-			return &AgentDraftSaveError{Problem: "The agent's file changed since this draft began: review the changes before saving.", Review: reviewAgentDraft(draft, variant, base, live)}
 		}
+
+		return staleAgentDraft(draft, variant, draft.Bases[agentDraftWorkspaceLayer], files[agentDraftWorkspaceLayer])
 	}
 
 	if err := changed(); err != nil {
 		return refuse(err)
 	}
 
-	one := *draft
-	one.Variants = draft.Variants[i : i+1]
-
-	problems, err := s.ValidateAgentDraft(&one)
-
-	switch {
-	case err != nil:
+	if err := s.checkAgentDraftVariant(rt, draft, variant); err != nil {
 		return refuse(err)
-	case len(problems) > 0:
-		return refuse(&AgentDraftSaveError{Problem: "Fix the draft's settings before saving it.", Problems: problems})
 	}
 
-	if err := rt.ValidateAgentFile(draft.Name, data); err != nil {
-		return refuse(&AgentDraftSaveError{Problem: "Saving it would keep RocketClaw from reloading: " + err.Error()})
-	}
-
-	root, err := os.OpenRoot(s.definitions.Clone().Workspace)
+	root, err := os.OpenRoot(cfg.Workspace)
 	if err != nil {
 		return refuse(err)
 	}
@@ -248,22 +253,49 @@ func (s *SessionService) SaveAgentDraft(ctx context.Context, rt agentDraftRuntim
 		return refuse(err)
 	}
 
-	// The draft is live only unchanged since the claim and with the saved file loaded; either way the saved
-	// file is what its next save expects there.
-	saved := new(string(data))
+	return s.reloadAgentDraft(ctx, rt, draft, save.Author, agentDraftWorkspaceLayer, string(data), draft.Revision)
+}
 
+// checkAgentDraftVariant refuses variant of draft when its settings do not load, or when Reload would not
+// load the runtime files with it.
+func (s *SessionService) checkAgentDraftVariant(rt agentDraftRuntime, draft *AgentDraft, variant *AgentDraftVariant) error {
+	one := *draft
+	one.Variants = []AgentDraftVariant{*variant}
+
+	problems, err := s.ValidateAgentDraft(&one)
+
+	switch {
+	case err != nil:
+		return err
+	case len(problems) > 0:
+		return &AgentDraftSaveError{Problem: "Fix the draft's settings before saving it.", Problems: problems}
+	}
+
+	if err := rt.ValidateAgentFile(draft.Name, renderAgentDraftFile(draft.Mode, variant)); err != nil {
+		return &AgentDraftSaveError{Problem: "Saving it would keep RocketClaw from reloading: " + err.Error()}
+	}
+
+	return nil
+}
+
+// reloadAgentDraft runs Reload once saved went to destination, and moves draft, as of its save state, to
+// live when it is still at revision and the loaded file is saved, else to editing; either way saved is what
+// its next save expects at destination.
+func (s *SessionService) reloadAgentDraft(ctx context.Context, rt agentDraftRuntime, draft *AgentDraft, author, destination, saved string, revision int64) (AgentDraftSaveState, error) {
 	var loaded *string
-	if _, err = rt.Reload("save agent " + draft.Name); err == nil {
+
+	_, err := rt.Reload("save agent " + draft.Name)
+	if err == nil {
 		loaded, _, err = s.agentLayerFiles(draft.Name)
 	}
 
-	expected = map[string]*string{agentDraftWorkspaceLayer: saved}
+	expected := map[string]*string{destination: &saved}
 
-	_, live, errMove := s.moveAgentDraft(ctx, draft.ID, save.Author, AgentDraftLive, expected, func(now *AgentDraft) bool {
-		return now.Revision == draft.Revision && sameAgentFile(loaded, saved)
+	_, live, errMove := s.moveAgentDraft(ctx, draft.ID, author, AgentDraftLive, expected, nil, func(now *AgentDraft) bool {
+		return now.Revision == revision && sameAgentFile(loaded, &saved)
 	})
 	if errMove == nil && !live {
-		_, _, errMove = s.moveAgentDraft(ctx, draft.ID, save.Author, AgentDraftEditing, expected, always)
+		_, _, errMove = s.moveAgentDraft(ctx, draft.ID, author, AgentDraftEditing, expected, nil, func(now *AgentDraft) bool { return now.SaveState == draft.SaveState })
 	}
 
 	if err = errors.Join(err, errMove); err != nil || !live {
@@ -297,7 +329,7 @@ func (s *SessionService) resetSavingAgentDrafts(ctx context.Context) error {
 
 	for i := range drafts {
 		if err == nil {
-			_, _, err = s.moveAgentDraft(ctx, drafts[i].ID, "rocketclaw", AgentDraftEditing, nil, func(draft *AgentDraft) bool { return draft.SaveState == AgentDraftSaving })
+			_, _, err = s.moveAgentDraft(ctx, drafts[i].ID, "rocketclaw", AgentDraftEditing, nil, nil, func(draft *AgentDraft) bool { return draft.SaveState == AgentDraftSaving })
 		}
 	}
 
@@ -305,9 +337,10 @@ func (s *SessionService) resetSavingAgentDrafts(ctx context.Context) error {
 }
 
 // moveAgentDraft commits on draft id, once allowed holds of the draft as read, a set_save_state op by
-// author to state that makes expected its destinations' expected files; the op commits only on the revision
-// read, else the draft is read again. It returns the draft as moved, or false when allowed failed.
-func (s *SessionService) moveAgentDraft(ctx context.Context, id, author string, state AgentDraftSaveState, expected map[string]*string, allowed func(*AgentDraft) bool) (*AgentDraft, bool, error) {
+// author to state that makes expected its destinations' expected files and, unless nil, pending its pending
+// save; the op commits only on the revision read, else the draft is read again. It returns the draft as
+// moved, or false when allowed failed.
+func (s *SessionService) moveAgentDraft(ctx context.Context, id, author string, state AgentDraftSaveState, expected map[string]*string, pending *AgentDraftPending, allowed func(*AgentDraft) bool) (*AgentDraft, bool, error) {
 	for {
 		draft, err := s.LoadAgentDraft(ctx, id)
 		if err != nil || !allowed(draft) {
@@ -317,6 +350,7 @@ func (s *SessionService) moveAgentDraft(ctx context.Context, id, author string, 
 		op := AgentDraftOp{BaseRevision: draft.Revision, Author: author, Kind: AgentDraftSetSaveState, Value: string(state), Bases: expected}
 		draft.Revision, draft.SaveState, draft.Bases = draft.Revision+1, state, maps.Clone(draft.Bases)
 		maps.Copy(draft.Bases, expected)
+		draft.Pending = cmp.Or(pending, draft.Pending)
 
 		doc, _ := json.Marshal(draft) // Strings, maps and slices of them always encode.
 		opJSON, _ := json.Marshal(op)
@@ -332,6 +366,16 @@ SELECT pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_o
 			return draft, err == nil, err
 		}
 	}
+}
+
+// staleAgentDraft asks for a review when live, the file at the destination of a save of variant of draft, is
+// not base, the file the draft expects there.
+func staleAgentDraft(draft *AgentDraft, variant *AgentDraftVariant, base, live *string) error {
+	if sameAgentFile(live, base) {
+		return nil
+	}
+
+	return &AgentDraftSaveError{Problem: "The agent's file changed since this draft began: review the changes before saving.", Review: reviewAgentDraft(draft, variant, base, live)}
 }
 
 // reviewAgentDraft compares the destination's expected file base, its file live, and variant of draft,

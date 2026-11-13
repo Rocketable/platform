@@ -95,6 +95,8 @@ type AgentDraft struct {
 	// Bases holds each save destination's file for Name, nil for none, as of when the draft took the name:
 	// workspace agents/ as "workspace" and each configured Git overlay by its spec.
 	Bases map[string]*string `json:"bases"`
+	// Pending is the draft's last save to a Git overlay, kept after it stops waiting for its merge.
+	Pending *AgentDraftPending `json:"pending,omitempty"`
 }
 
 // AgentDraftVariant is one version of a draft's agent file: its settings other than mode, and its instructions.

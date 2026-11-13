@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"slices"
 	"time"
 	"unicode/utf8"
@@ -39,7 +40,16 @@ func (s *Server) listAgentDrafts(ctx context.Context) (*ListAgentDraftsResponse,
 	return response, nil
 }
 
-func (s *Server) getAgentDraft(ctx context.Context, request *GetAgentDraftRequest) (*GetAgentDraftResponse, error) {
+// getAgentDraft answers request's draft, its ops after since and the places seen. Opening the draft, with
+// since unset, first checks whether the save it waits for was merged, as username; a check that fails
+// leaves the draft waiting and is logged.
+func (s *Server) getAgentDraft(ctx context.Context, username string, request *GetAgentDraftRequest) (*GetAgentDraftResponse, error) {
+	if request.Since == 0 {
+		if _, err := s.sessions.CheckAgentDraftMerge(ctx, s.backend, request.Id, username); err != nil {
+			slog.Warn("check agent draft merge", "draft", request.Id, "error", err)
+		}
+	}
+
 	draft, err := s.sessions.LoadAgentDraft(ctx, request.Id)
 	if err != nil {
 		return nil, agentDraftError("GetAgentDraft", err)
@@ -171,7 +181,7 @@ func (s *Server) draftLayers(ctx context.Context, request *DraftLayersRequest) (
 		return nil, agentDraftError("DraftLayers", err)
 	}
 
-	response := &DraftLayersResponse{HiddenBy: layers.HiddenBy, Replaces: layers.Replaces, Recreated: layers.Recreated, Next: layers.Next}
+	response := &DraftLayersResponse{HiddenBy: layers.HiddenBy, Replaces: layers.Replaces, Recreated: layers.Recreated, Next: layers.Next, Branch: layers.Branch, Unpushable: layers.Unpushable}
 	for _, layer := range layers.Layers {
 		response.Layers = append(response.Layers, &AgentLayer{Layer: layer.Layer, Ref: layer.Ref, File: layer.File})
 	}
@@ -183,7 +193,7 @@ func (s *Server) draftLayers(ctx context.Context, request *DraftLayersRequest) (
 // was written.
 func (s *Server) saveDraft(ctx context.Context, username string, request *SaveDraftRequest) (*SaveDraftResponse, error) {
 	state, err := s.sessions.SaveAgentDraft(ctx, s.backend, &backend.AgentDraftSave{ID: request.Id, Variant: request.Variant, Destination: request.Destination, Author: username,
-		Reviewed: request.Reviewed, ReviewedFile: request.ReviewedFile})
+		Reviewed: request.Reviewed, ReviewedFile: request.ReviewedFile, PullRequest: request.PullRequest})
 
 	errSave, refused := errors.AsType[*backend.AgentDraftSaveError](err)
 	if !refused && err != nil {
@@ -213,6 +223,17 @@ func (s *Server) saveDraft(ctx context.Context, username string, request *SaveDr
 	return response, nil
 }
 
+// stopWaiting returns request's draft from waiting for a merge to editing as the caller, and answers its
+// save state.
+func (s *Server) stopWaiting(ctx context.Context, username string, request *StopWaitingRequest) (*SaveDraftResponse, error) {
+	state, err := s.sessions.StopAgentDraftWaiting(ctx, request.Id, username)
+	if err != nil {
+		return nil, agentDraftError("StopWaiting", err)
+	}
+
+	return &SaveDraftResponse{SaveState: string(state)}, nil
+}
+
 // agentSettings returns the setting help for the requested mode, in agent-file order.
 func agentSettings(request *AgentSettingsRequest) *AgentSettingsResponse {
 	response := &AgentSettingsResponse{}
@@ -234,6 +255,10 @@ func agentDraftView(draft *backend.AgentDraft) *AgentDraft {
 
 	for _, base := range draft.Bases {
 		view.Existing = view.Existing || base != nil
+	}
+
+	if pending := draft.Pending; pending != nil {
+		view.Pending = &AgentDraftPending{Destination: pending.Destination, Base: pending.Base, Branch: pending.Branch, Commit: pending.Commit, Number: int32(pending.Number), Link: pending.Link}
 	}
 
 	for _, variant := range draft.Variants {

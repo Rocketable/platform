@@ -263,7 +263,7 @@ it does not change access to other private source conversations.
 
 The agent editor's methods are `TestModel`, `CreateAgentDraft`, `ListAgentDrafts`,
 `GetAgentDraft`, `ApplyAgentDraftOp`, `SetAgentDraftPresence`, `AgentSettings`,
-`DraftPrompt`, `RestartDraftChat`, `DraftLayers`, and `SaveDraft` (`editorMethods`
+`DraftPrompt`, `RestartDraftChat`, `DraftLayers`, `SaveDraft`, and `StopWaiting` (`editorMethods`
 in `transport.go`, which both
 gRPC and the HTTP routes read). People limited to spaces cannot use any of them:
 `editorCall` refuses them with
@@ -335,10 +335,13 @@ bytes; `replaces` names the earlier layer whose agent the save takes over, so it
 updates stop reaching this workspace, which still holds while the destination is
 startup's byte-equal copy of a built-in; `recreated` says startup copies the built-in
 agent into workspace `agents/` again, hiding an overlay destination; `next` is the
-file the save writes, settings in the standard order and comments dropped.
+file the save writes, settings in the standard order and comments dropped. For a Git
+overlay destination, `branch` is the branch a save pushes to (the pinned ref, or the
+remote's default branch for an overlay pinned without one), or `unpushable` says why
+a save cannot push there, such as an overlay pinned to a tag or commit.
 
-`SaveDraft` saves one variant to workspace `agents/` (Git overlays are not saved
-yet). It claims the draft (`saving`, one save at a time: another answers `refused`),
+`SaveDraft` saves one variant to workspace `agents/` or to a configured Git overlay
+(below). It claims the draft (`saving`, one save at a time: another answers `refused`),
 then compares workspace `agents/<name>.md` itself, never the loaded copy, with the
 file the draft recorded there when it took its name (absent counts). A difference
 writes nothing and answers `review`: the recorded file, the file now and the draft's,
@@ -353,6 +356,26 @@ file renamed into place, and Reload runs. The answer is `live` only when nobody 
 the draft meanwhile and the loaded file is the saved one; otherwise `editing`, with
 the saved file as what the next save expects. Nothing restores old bytes, and a
 server start returns drafts left `saving` to `editing`.
+
+A save to a Git overlay clones the overlay's branch into a stage under the workspace,
+compares the file there with the one the draft recorded, checks the variant as above,
+and commits exactly the checked bytes with the caller as author, using the host's Git
+credentials. Every Git command in the stage runs without hooks or a file system
+monitor. By default it pushes to the branch; with `pull_request` it pushes a new
+branch, `rocketclaw-agent-draft-` plus the draft's ID and the save's revision, so no
+save ever pushes over an open pull request, and opens a pull request with `gh` when
+`gh` is installed and logged in, or else shows a GitHub page comparing the branches.
+Nothing is force-pushed: when the branch moved before the push, the save starts again
+from a new clone, which asks for a review only if the agent's file changed. The draft
+then answers `waiting`, and its `pending` holds the branch, commit, and pull request
+number or link. It goes `live` once the overlay's branch holds the commit (a push
+already does) or `gh` reports the pull request merged, after Reload loads the saved
+file; `GetAgentDraft` checks that each time a page opens the draft (`since` unset).
+With `gh`, a closed pull request returns the draft to `editing`. A squash or rebase
+merge without `gh`, a pull request closed without `gh`, or one nobody acts on keeps
+the draft waiting until an editor calls `StopWaiting`, which returns it to `editing`
+for everyone and answers its `save_state`. The pull request stays open, and `pending`
+stays on the draft so the page can still link to it.
 
 ## Attachments
 

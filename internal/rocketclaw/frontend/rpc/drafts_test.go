@@ -115,7 +115,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 	}}
 	handler := NewTailnetHandler(whois, nil, NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil))
 
-	for _, method := range []string{"TestModel", "CreateAgentDraft", "ListAgentDrafts", "GetAgentDraft", "ApplyAgentDraftOp", "SetAgentDraftPresence", "AgentSettings", "DraftPrompt", "RestartDraftChat", "DraftLayers", "SaveDraft"} {
+	for _, method := range []string{"TestModel", "CreateAgentDraft", "ListAgentDrafts", "GetAgentDraft", "ApplyAgentDraftOp", "SetAgentDraftPresence", "AgentSettings", "DraftPrompt", "RestartDraftChat", "DraftLayers", "SaveDraft", "StopWaiting"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/"+method, strings.NewReader(`{}`)))
 		require.Equal(t, http.StatusForbidden, response.Code, "%s: %s", method, response.Body)
@@ -345,6 +345,31 @@ func TestAgentDraftRPCs(t *testing.T) {
 	reviewed, err := invoke[SaveDraftResponse](bob, connection, "SaveDraft", &SaveDraftRequest{Id: probe.Id, Variant: "a", Destination: "workspace", Reviewed: true, ReviewedFile: new(theirs)})
 	require.NoError(t, err)
 	require.Equal(t, "live", reviewed.SaveState)
+
+	// A draft waiting for a merge shows its pull request, opening it checks for the merge, which here cannot
+	// be told, and anyone can stop waiting, which keeps the pull request shown.
+	_, err = db.ExecContext(t.Context(), `UPDATE agent_drafts SET draft = jsonb_set(draft, '{pending}', '{"destination": "github.com/acme/team", "base": "main", "branch": "b", "commit": "c", "number": 7, "link": "https://github.com/acme/team/pull/7"}') WHERE id = $1`, drafts["pushed"].Id)
+	require.NoError(t, err)
+
+	pending := &AgentDraftPending{Destination: "github.com/acme/team", Base: "main", Branch: "b", Commit: "c", Number: 7, Link: "https://github.com/acme/team/pull/7"}
+	opened, err := invoke[GetAgentDraftResponse](bob, connection, "GetAgentDraft", &GetAgentDraftRequest{Id: drafts["pushed"].Id})
+	require.NoError(t, err)
+	require.Equal(t, "waiting", opened.Draft.SaveState)
+	require.True(t, proto.Equal(pending, opened.Draft.Pending), "%v", opened.Draft.Pending)
+
+	stopped, err := invoke[SaveDraftResponse](carol, connection, "StopWaiting", &StopWaitingRequest{Id: drafts["pushed"].Id})
+	require.NoError(t, err)
+	require.True(t, proto.Equal(&SaveDraftResponse{SaveState: "editing"}, stopped), "%v", stopped)
+
+	opened, err = invoke[GetAgentDraftResponse](bob, connection, "GetAgentDraft", &GetAgentDraftRequest{Id: drafts["pushed"].Id})
+	require.NoError(t, err)
+	require.Equal(t, "editing", opened.Draft.SaveState)
+	require.True(t, proto.Equal(pending, opened.Draft.Pending), "%v", opened.Draft.Pending)
+
+	_, err = invoke[GetAgentDraftResponse](bob, connection, "GetAgentDraft", &GetAgentDraftRequest{Id: "missing"})
+	require.Equal(t, codes.NotFound, status.Code(err), "%v", err)
+	_, err = invoke[SaveDraftResponse](bob, connection, "StopWaiting", &StopWaitingRequest{Id: "missing"})
+	require.Equal(t, codes.NotFound, status.Code(err), "%v", err)
 
 	// A limited person cannot follow a draft's test chat.
 	response = httptest.NewRecorder()

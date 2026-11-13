@@ -619,7 +619,8 @@ message TestModelResponse {
 
 // AgentDraft is an agent being written in the agent editor. Its first variant is the agent itself and the
 // others its comparison shadows; all share mode, easy or advanced. save_state is editing, saving, waiting
-// (for a merge) or live; existing says a save destination already holds an agent of this name.
+// (for a merge) or live; existing says a save destination already holds an agent of this name; pending is
+// the draft's last save to a Git overlay, kept after it stops waiting so the page can show its pull request.
 message AgentDraft {
   string id = 1;
   int64 revision = 2;
@@ -630,6 +631,19 @@ message AgentDraft {
   string test_chat = 7;
   string save_state = 8;
   bool existing = 9;
+  AgentDraftPending pending = 10;
+}
+
+// AgentDraftPending is a save pushed to the Git overlay destination: commit on branch, which is base, the
+// branch the overlay pins, or a branch of the save's own for a pull request into base. number is the pull
+// request gh opened, and link its page or, without gh, a GitHub page that compares branch with base.
+message AgentDraftPending {
+  string destination = 1;
+  string base = 2;
+  string branch = 3;
+  string commit = 4;
+  int32 number = 5;
+  string link = 6;
 }
 
 // AgentDraftVariant is one version of the draft's agent file: its settings other than mode, and its
@@ -822,24 +836,28 @@ message AgentLayer {
 // later layer whose file hides the destination, whatever its bytes; replaces names the earlier layer whose
 // agent the save takes over, so its updates stop reaching this workspace; recreated says startup copies the
 // built-in agent into workspace agents/ again, which hides an overlay destination; next is the file the save
-// writes, settings in the standard order and comments dropped.
+// writes, settings in the standard order and comments dropped. For an overlay destination, branch is the
+// branch a save pushes to, or unpushable says why it cannot push there.
 message DraftLayersResponse {
   repeated AgentLayer layers = 1;
   string hidden_by = 2;
   string replaces = 3;
   bool recreated = 4;
   string next = 5;
+  string branch = 6;
+  string unpushable = 7;
 }
 
 // SaveDraftRequest saves variant of draft id to destination. reviewed says the caller reviewed the
 // destination's file reviewed_file, unset when it had none; that file becomes what the save expects to
-// find there.
+// find there. To a Git overlay, pull_request opens a pull request instead of pushing to its branch.
 message SaveDraftRequest {
   string id = 1;
   string variant = 2;
   string destination = 3;
   bool reviewed = 4;
   optional string reviewed_file = 5;
+  bool pull_request = 6;
 }
 
 // AgentDraftReviewSetting is one setting's YAML in the base, the destination's file and the draft, empty
@@ -866,8 +884,8 @@ message AgentDraftReview {
   repeated AgentDraftSplice splices = 6;
 }
 
-// SaveDraftResponse is the draft's save state after a save: live, or editing when the draft changed during
-// the save or the reload loaded another file. When refused is set nothing was written: problems are the
+// SaveDraftResponse is the draft's save state after a save: live, waiting for a Git overlay's merge, or
+// editing when the draft changed during the save or the reload loaded another file. When refused is set nothing was written: problems are the
 // variant's settings that do not load, and review the destination's changes to review before saving again.
 message SaveDraftResponse {
   string save_state = 1;
@@ -875,6 +893,9 @@ message SaveDraftResponse {
   repeated AgentDraftProblem problems = 3;
   AgentDraftReview review = 4;
 }
+
+// StopWaitingRequest returns draft id from waiting for a merge to editing; its pull request stays open.
+message StopWaitingRequest { string id = 1; }
 
 message UpdateSessionRequest {
   string id = 1;
@@ -1230,6 +1251,7 @@ service Web {
   rpc RestartDraftChat(RestartDraftChatRequest) returns (DraftPromptResponse);
   rpc DraftLayers(DraftLayersRequest) returns (DraftLayersResponse);
   rpc SaveDraft(SaveDraftRequest) returns (SaveDraftResponse);
+  rpc StopWaiting(StopWaitingRequest) returns (SaveDraftResponse);
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
   rpc Identity(IdentityRequest) returns (IdentityResponse);

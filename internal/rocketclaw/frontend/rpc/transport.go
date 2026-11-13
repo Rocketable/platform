@@ -22,7 +22,7 @@ const maxIDBytes = 1024
 
 // editorMethods are the agent editor's methods, closed to people limited to spaces: a draft can grant
 // itself any permission, and its test chats run real tools.
-const editorMethods = "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat DraftLayers SaveDraft"
+const editorMethods = "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat DraftLayers SaveDraft StopWaiting"
 
 // Register publishes the implemented portion of rpc.Web. Other methods retain
 // gRPC's Unimplemented response; they are not successful empty handlers.
@@ -248,7 +248,7 @@ func (s *Server) editorCall(ctx context.Context, method string, request any) (an
 	case "ListAgentDrafts":
 		return s.listAgentDrafts(ctx)
 	case "GetAgentDraft":
-		return s.getAgentDraft(ctx, request.(*GetAgentDraftRequest))
+		return s.getAgentDraft(ctx, username, request.(*GetAgentDraftRequest))
 	case "ApplyAgentDraftOp":
 		return s.applyAgentDraftOp(ctx, username, request.(*ApplyAgentDraftOpRequest))
 	case "SetAgentDraftPresence":
@@ -263,6 +263,8 @@ func (s *Server) editorCall(ctx context.Context, method string, request any) (an
 		return s.draftLayers(ctx, request.(*DraftLayersRequest))
 	case "SaveDraft":
 		return s.saveDraft(ctx, username, request.(*SaveDraftRequest))
+	case "StopWaiting":
+		return s.stopWaiting(ctx, username, request.(*StopWaitingRequest))
 	default:
 		return s.testModel(ctx, request.(*TestModelRequest)), nil
 	}
