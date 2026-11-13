@@ -1,0 +1,1 @@
+import{n as e}from"./dialog-BKEw1eb2.js";export{e as DialogCommandPalette};

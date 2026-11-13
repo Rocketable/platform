@@ -76,7 +76,7 @@ export function mount(element: HTMLElement, options: MountOptions): Mounted {
                 router={(props) => <MemoryRouter {...props} history={history} explicitLinks preload={false} />}
               >
                 <Palette />
-                <ViewHistory history={history} />
+                <ViewHistory history={history} server={key} sessionID={opened()} />
                 <SessionTab server={key} sessionID={opened()} keep={kept()} />
                 <VersionPill server={key} />
                 <ServerState server={key} name={options.server} />
