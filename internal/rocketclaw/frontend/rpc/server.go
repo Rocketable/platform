@@ -1007,7 +1007,7 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 // conversationKinds is each recorded conversation kind as Web names it.
 func conversationKind(kind backend.ConversationKind) ConversationKind {
 	switch kind {
-	case backend.KindWebChat:
+	case backend.KindWebChat, backend.KindAgentDraft:
 		return ConversationKind_WEB_CHAT
 	case backend.KindSlackThread:
 		return ConversationKind_SLACK_THREAD

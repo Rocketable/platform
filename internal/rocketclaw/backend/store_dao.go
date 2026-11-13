@@ -40,6 +40,8 @@ const (
 	KindReview         ConversationKind = "review"
 	KindShadow         ConversationKind = "shadow"
 	KindRemote         ConversationKind = "remote"
+	// KindAgentDraft is an agent draft's test chat, bound to its draft and never listed.
+	KindAgentDraft ConversationKind = "agent_draft"
 )
 
 // conversationFacts are what its creator knows a new conversation is: its kind, a Slack
