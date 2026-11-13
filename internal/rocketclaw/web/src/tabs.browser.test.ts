@@ -772,6 +772,24 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
   await page.waitForURL(origin + href("asked-new"));
   await page.getByRole("button", { name: "Next session needing you", exact: true }).click();
   await page.waitForURL(origin + href("unread-old"));
+  await page.keyboard.press(`${key}+Alt+a`);
+  await page.getByRole("textbox", { name: "Search sessions", exact: true }).waitFor();
+  await until(() => saved.state.last.main === "/search/dash");
+  saved.state.tabs.find((tab) => tab.path === "/search/dash")!.search!.searches[0].query = "changed elsewhere";
+  saved.revision++;
+  // Leave as a refreshed query reaches the DOM, before passive effects can write the old page's URL.
+  const leaving = await page.evaluate((modifier: string) => new Promise<string>((resolve) => {
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="Search sessions"]')!;
+    const observer = new MutationObserver(() => {
+      if (input.value !== "changed elsewhere") return;
+      observer.disconnect();
+      dispatchEvent(new KeyboardEvent("keydown", { key: "a", code: "KeyA", altKey: true, [modifier]: true, bubbles: true, cancelable: true }));
+      resolve(location.pathname);
+    });
+    observer.observe(input, { attributes: true, attributeFilter: ["value"] });
+    dispatchEvent(new Event("focus"));
+  }), key === "Meta" ? "metaKey" : "ctrlKey");
+  expect(leaving).toBe(href("shelved"));
 }), 60_000);
 
 test("collapsed Shared with a tab unread for this person shows a bold name", () => withPage({}, async (page, origin, _prompts, saved) => {

@@ -3133,7 +3133,8 @@ function SearchTabs({ path, owner, inShared, page, link, consumeLink }: { path: 
   const selected = saved.searches.findIndex((tab) => tab.id === saved.active);
   const tab = saved.searches[selected];
   const search = useSearch();
-  useEffect(() => {
+  // Finish this page's URL write with its commit, before a later navigation can leave it.
+  useLayoutEffect(() => {
     const params = new URLSearchParams(tab.query ? { q: tab.query } : {});
     history.replaceState(history.state, "", `${serverPath(path)}${params.size ? `?${params}` : ""}`);
   }, [tab, search, path]);
