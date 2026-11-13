@@ -164,6 +164,19 @@ func TestSpacePermissions(t *testing.T) {
 				return nil
 			}})
 		}, codes.OK},
+		{"WatchTyping", func(ctx context.Context, id string) error {
+			ctx, cancel := context.WithCancel(ctx)
+			defer cancel()
+
+			return server.watchTyping(&WatchTypingRequest{Id: id}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(any) error {
+				cancel()
+				return nil
+			}})
+		}, codes.OK},
+		{"ReportTyping", func(ctx context.Context, id string) error {
+			_, err := server.reportTyping(ctx, &ReportTypingRequest{Id: id, Typing: true})
+			return err
+		}, codes.OK},
 		{"DownloadAttachment", func(ctx context.Context, id string) error {
 			return server.downloadAttachment(&mockServerStream{ContextFunc: func() context.Context { return ctx }, RecvMsgFunc: func(message any) error {
 				proto.Merge(message.(*Attachment), &Attachment{ConversationId: id, Id: "file"})
@@ -174,6 +187,20 @@ func TestSpacePermissions(t *testing.T) {
 		require.Equal(t, codes.PermissionDenied, status.Code(tc.read(alice, "main-born")), tc.name)
 		require.Equal(t, tc.allowed, status.Code(tc.read(alice, "switched")), tc.name)
 		require.Equal(t, tc.allowed, status.Code(tc.read(bob, "main-born")), tc.name)
+	}
+
+	// Typing keeps to the rules for viewing a chat, which close shadow sessions and private conversations, here a
+	// cron run, even to people with every space.
+	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "ops-shadow", Agent: "ops-agent", Space: "Ops"}))
+	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `UPDATE conversations SET shadow_parent = 'ops-born', parent_agent = 'ops-agent', shadow_agent = 'ops-agent/a' WHERE conversation_id = 'ops-shadow'`)
+	require.NoError(t, err)
+
+	for _, id := range []string{"ops-shadow", "cron:ops"} {
+		_, err := server.reportTyping(bob, &ReportTypingRequest{Id: id, Typing: true})
+		require.Equal(t, codes.PermissionDenied, status.Code(err), "%s: %v", id, err)
+
+		err = server.watchTyping(&WatchTypingRequest{Id: id}, &mockServerStream{ContextFunc: func() context.Context { return bob }})
+		require.Equal(t, codes.PermissionDenied, status.Code(err), "%s: %v", id, err)
 	}
 
 	for _, tc := range []struct {

@@ -136,6 +136,8 @@ function start(shelf?: TopShelf) {
   const creates = { hold: Promise.resolve() };
   // Loads of the view's entry left to fail, as a network blip or a deploy mid-load would.
   const entryFailures = { remaining: 0 };
+  // Typing watches the page holds open, by the chat each watches; a test pushes frames into them.
+  const typing = new Map<ReadableStreamDefaultController<string>, string>();
   const web = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, websocket: { open(socket) {
     terminals.open++;
     socket.send(JSON.stringify({ type: "attached", inputProtocol: 1, info: { size: { cols: 80, rows: 24 } }, role: "controller" }));
@@ -160,6 +162,15 @@ function start(shelf?: TopShelf) {
     if (url.pathname === "/stream") {
       calls.push({ path: url.pathname, body: { id: url.searchParams.get("id") ?? "" } });
       return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    }
+    if (url.pathname === "/typing") {
+      const id = url.searchParams.get("id")!;
+      calls.push({ path: url.pathname, body: { id } });
+      let own: ReadableStreamDefaultController<string>;
+      return new Response(new ReadableStream<string>({
+        start(controller) { own = controller; typing.set(controller, id); controller.enqueue(`data: ${JSON.stringify({ principal: "", typing: false })}\n\n`); },
+        cancel() { typing.delete(own); },
+      }), { headers: { "Content-Type": "text/event-stream" } });
     }
     if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: true, opencodeServers: { box }, agentTags: { main: { tags: ["customer"] } } })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
     if (!url.pathname.startsWith("/api/")) {
@@ -192,7 +203,7 @@ function start(shelf?: TopShelf) {
       default: return Response.json({});
     }
   } });
-  return { web, calls, release, terminals, creates, entryFailures, shelved: () => shelf, base: `http://127.0.0.1:${web.port}` };
+  return { web, calls, release, terminals, creates, entryFailures, typing, shelved: () => shelf, base: `http://127.0.0.1:${web.port}` };
 }
 
 async function until(check: () => boolean | Promise<boolean>) {
@@ -772,6 +783,166 @@ test("a shelf row offers its server's attention items, one of an offline server 
     await until(() => !fake.sessions.has("ses_a"));
     await until(() => shelved()?.tabs?.map((tab) => tab.path).join() === "/cron");
     expect(await shelf.locator("[data-tab]").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.dataset.tab))).toEqual(["/cron"]);
+    expect(errors).toEqual([]);
+  } finally {
+    await browser.close();
+    web.stop(true);
+  }
+}, 60_000);
+
+test("OpenCode's composer reports typing for the session the view shows, and the pill sits below its header", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const { web, calls, release, terminals, typing, base } = start();
+  release();
+  // A server on another release shows RocketClaw's version pill over OpenCode's header, which the pill must clear.
+  fake.version = "1.0.0";
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(error.message));
+    const view = page.locator("main [data-oc-view]");
+    const composer = view.locator("[data-component=composer] [contenteditable=true]");
+    // The pill's live region, beside the view rather than inside OpenCode's DOM.
+    const status = page.locator('main :has(> * > [data-oc-view]) > [role="status"][aria-live="polite"]');
+    // The reports in the order the tab numbered them, which they may reach the server out of.
+    const reports = () => calls.filter(({ path }) => path === "/api/ReportTyping").map(({ body }) => body).sort((a, b) => Number(a.seq) - Number(b.seq)).map(({ id, typing }) => ({ id, typing }));
+    const sent: string[] = [];
+    // The fake server has no models and answers sends with the wrong status; these answers let OpenCode's own send
+    // paths run to the end (packages/client/src/promise/generated/client.ts).
+    const catalog: Record<string, unknown> = {
+      agent: [{ id: "build", name: "build", request: { settings: {}, headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+      model: [{ id: "m", modelID: "m", providerID: "p", name: "Model", capabilities: { tools: true, input: ["text"], output: ["text"] }, variants: [], time: { released: 0 }, cost: [], status: "active", enabled: true, limit: { context: 1000, output: 100 } }],
+      provider: [{ id: "p", name: "Provider", activation: "enabled", package: "p" }],
+    };
+    await page.route(/\/oc\/box\/api\/(agent|model|provider)(\?|$)/, (request: any) => request.fulfill({ json: { location: { directory: "/repo" }, data: catalog[new URL(request.request().url()).pathname.split("/").at(-1)!] } }));
+    await page.route(/\/oc\/box\/api\/session\/ses_a\/(agent|model|shell|prompt|generate)$/, (request: any) => {
+      const kind = new URL(request.request().url()).pathname.split("/").at(-1)!;
+      sent.push(kind);
+      if (kind === "prompt") return request.fulfill({ json: { data: { id: request.request().postDataJSON().id, sessionID: "ses_a", time: { created: 1 }, type: "user", payload: { text: "hello" }, delivery: "steer" } } });
+      if (kind === "generate") return request.fulfill({ json: { data: { text: "by the way", tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0 } } });
+      return request.fulfill({ status: 204 });
+    });
+    // The reports after the first `from` are exactly `expected`.
+    const reported = async (from: number, ...expected: { id: string; typing: boolean }[]) => {
+      await until(() => reports().length >= from + expected.length);
+      await Bun.sleep(200);
+      expect(reports().slice(from)).toEqual(expected);
+    };
+    const ses = (id: string, typing: boolean) => ({ id: `opencode:box:${id}`, typing });
+    await page.goto(`${base}${route("opencode:box:ses_a")}`);
+    await view.getByText("answer in ses_a", { exact: true }).waitFor();
+
+    // Typing reports, and deleting the whole draft, line break included, reports not typing.
+    await composer.pressSequentially("hel");
+    await reported(0, ses("ses_a", true));
+    for (let count = 0; count < 3; count++) await composer.press("Backspace");
+    await reported(1, ses("ses_a", false));
+    await composer.pressSequentially("a");
+    await composer.press("Shift+Enter");
+    await composer.pressSequentially("b");
+    await reported(2, ses("ses_a", true));
+    await composer.press("ControlOrMeta+a");
+    await composer.press("Backspace");
+    await reported(3, ses("ses_a", false));
+
+    // Every send empties the composer in OpenCode's own code: a picked slash command, /btw, and a shell command.
+    await composer.pressSequentially("/fork");
+    await view.locator('[data-suggestion-id="session.fork"][data-active]').waitFor();
+    await page.keyboard.press("Enter");
+    await page.locator("[data-oc-portal]").getByText("Choose a message to fork from").waitFor();
+    await reported(4, ses("ses_a", true), ses("ses_a", false));
+    await page.keyboard.press("Escape");
+    await composer.pressSequentially("/btw hi");
+    await composer.press("Enter");
+    await until(() => sent.includes("generate"));
+    await reported(6, ses("ses_a", true), ses("ses_a", false));
+    // The answer opens beside the conversation; closing it gives the conversation the whole view again.
+    await view.locator('[data-pane-tab^="btw:"]').getByRole("button", { name: "Close tab", exact: true }).click();
+    // "!" turns the composer to shell mode and leaves it empty.
+    await composer.pressSequentially("!ls");
+    await composer.press("Enter");
+    await until(() => sent.includes("shell"));
+    await reported(8, ses("ses_a", true), ses("ses_a", false), ses("ses_a", true), ses("ses_a", false));
+    expect(await composer.textContent()).toBe("");
+
+    // OpenCode's terminal and its settings search are not its composer.
+    await page.keyboard.press("Control+Backquote");
+    await view.locator('[data-component="terminal"]').click();
+    await page.keyboard.press("x");
+    await until(() => terminals.input.join("").endsWith("x"));
+    await composer.click();
+    await page.keyboard.press("Control+Backquote");
+    await page.keyboard.press("ControlOrMeta+Comma");
+    const search = page.locator("[data-oc-view] input[type=search]");
+    await search.fill("theme");
+    await search.pressSequentially("s");
+    await Bun.sleep(300);
+    expect(reports()).toHaveLength(12);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
+
+    // A send while the last report hangs reports not typing at once, numbered after it.
+    const held = Promise.withResolvers<void>();
+    let requested = 0;
+    await page.route("**/api/ReportTyping", async (request: any) => { if (++requested === 1) await held.promise; await request.continue(); });
+    await composer.pressSequentially("hello");
+    await until(() => requested === 1);
+    await composer.press("Enter");
+    await until(() => sent.includes("prompt"));
+    await reported(12, ses("ses_a", false));
+    expect(await composer.textContent()).toBe("");
+    held.resolve();
+    await reported(12, ses("ses_a", true), ses("ses_a", false));
+    await page.unroute("**/api/ReportTyping");
+
+    // The pill shows another person's typing below OpenCode's header and RocketClaw's version pill, clear of the
+    // composer and what sits above it, and lets clicks through to the conversation.
+    const push = (id: string, principal: string) => { for (const [stream, watched] of typing) if (watched === `opencode:box:${id}`) stream.enqueue(`data: ${JSON.stringify({ principal, typing: true })}\n\n`); };
+    const bounds = (selector: string) => page.locator(selector).first().evaluate((node: HTMLElement) => node.getBoundingClientRect().toJSON());
+    // OpenCode's header: its title bar, or on a narrow view its tabs and the location bar below them.
+    const placed = async (id: string, shot: string, header = "[data-session-title] > div", text = "Ana is typing") => {
+      push(id, "Ana");
+      await status.getByText(text, { exact: true }).waitFor();
+      const pill = await status.locator("> *").evaluate((node: HTMLElement) => node.getBoundingClientRect().toJSON());
+      const top = await bounds(`[data-oc-view] ${header}`);
+      const dock = await bounds("[data-oc-view] [data-component=session-composer-dock]");
+      const version = await bounds("[data-oc-view] [data-component=rocketclaw-version-pill]");
+      expect(pill.top).toBeGreaterThanOrEqual(top.bottom);
+      expect(pill.top - top.bottom).toBeLessThan(12);
+      expect(pill.top).toBeGreaterThanOrEqual(version.bottom);
+      expect(pill.bottom).toBeLessThanOrEqual(dock.top);
+      // Nothing of the view paints over it: taking the pointer for a moment, it is what the pointer finds.
+      expect(await status.evaluate((node: HTMLElement, { x, y }: { x: number; y: number }) => {
+        node.style.pointerEvents = "auto";
+        const found = node.contains(document.elementFromPoint(x, y));
+        node.style.pointerEvents = "";
+        return found;
+      }, { x: pill.left + pill.width / 2, y: pill.top + pill.height / 2 })).toBe(true);
+      await page.screenshot({ path: path.join(shots, `opencode-typing-pill-${shot}.png`) });
+      return pill;
+    };
+    const pill = await placed("ses_a", "1280");
+    await view.evaluate((node: HTMLElement & { clicked?: string }) => node.addEventListener("click", (event) => { node.clicked = (event.target as HTMLElement).closest("[data-component=user-message]")?.textContent ?? ""; }, { once: true }));
+    await page.mouse.click(pill.left + pill.width / 2, pill.top + pill.height / 2);
+    expect(await view.evaluate((node: HTMLElement & { clicked?: string }) => node.clicked)).toContain("question in ses_a");
+
+    // A subagent session the view opens takes no prompts, so it has no composer to type in: the pill goes on watching
+    // the tab's own session, and says so.
+    await view.locator("[data-component=task-tool-card]").first().click();
+    await view.getByText("answer in ses_child").waitFor();
+    expect(await composer.count()).toBe(0);
+    await placed("ses_a", "child", undefined, "Ana is typing in the main session");
+    expect([...typing.values()]).toEqual(["opencode:box:ses_a"]);
+
+    // The view moves to another tab of its server; typing there reports that session.
+    await page.evaluate((href: string) => { history.pushState(null, "", href); window.dispatchEvent(new PopStateEvent("popstate")); }, route(`opencode:box:${linked}`));
+    await view.getByText(`answer in ${linked}`).waitFor();
+    await composer.pressSequentially("hi");
+    await reported(14, ses(linked, true));
+    await page.setViewportSize({ width: 390, height: 664 });
+    await placed(linked, "390", "[data-slot=session-location-bar]");
+    expect(calls.filter(({ path, body }) => (path === "/api/History" || path === "/stream" || path === "/api/ListQueue") && body.id?.startsWith("opencode:"))).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();

@@ -376,6 +376,29 @@ message ConversationChange {
   string revision = 2;
 }
 
+// The caller started or stopped typing in conversation id. The draft's text never travels. tab names the browser
+// tab reporting and seq numbers its reports from 1: the server drops a report numbered no higher than one it took
+// from that tab, so a report that arrives late never undoes a later one.
+message ReportTypingRequest {
+  string id = 1;
+  bool typing = 2;
+  string tab = 3;
+  uint32 seq = 4;
+}
+
+message ReportTypingResponse {}
+
+message WatchTypingRequest {
+  string id = 1;
+}
+
+// Another person started or stopped typing in the watched conversation. principal is their display name, or their
+// login when it is blank, as on their prompts. A watch opens with an empty event.
+message TypingEvent {
+  string principal = 1;
+  bool typing = 2;
+}
+
 message TranscriptEvent {
   string text = 1;
   reserved 2;
@@ -928,6 +951,8 @@ service Web {
   rpc ListSessions(ListSessionsRequest) returns (stream ListSessionsResponse);
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc Join(JoinRequest) returns (stream ConversationChange);
+  rpc WatchTyping(WatchTypingRequest) returns (stream TypingEvent);
+  rpc ReportTyping(ReportTypingRequest) returns (ReportTypingResponse);
   rpc Voice(VoiceRequest) returns (stream VoiceEvent);
   rpc VoiceSettings(VoiceSettingsRequest) returns (VoiceSettingsResponse);
   rpc Tabs(TabsRequest) returns (TabsResponse);

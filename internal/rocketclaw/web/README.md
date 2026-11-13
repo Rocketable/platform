@@ -1275,6 +1275,28 @@ their existing failure visibility.
 The down-arrow appears above the chat composer when away from the latest message.
 It scrolls to the latest message and resumes following live replies. Reading earlier
 messages keeps automatic scrolling paused.
+When other people type in a chat you have on screen, a pill floats at the top of the
+conversation, centered, without moving it or taking clicks: the first typist's
+initial, "Ana is typing" and animated dots, "Ana and Cy are typing" for two, all
+three names for three, and "Ana, Cy and 2 others are typing" for more. Long names are
+cut short so it fits the pane. Screen readers hear the sentence once per change,
+without the dots, which stop moving under reduced motion. A typist leaves it when
+their draft empties, by sending, a `$command`, an answer, or deleting, and 5 seconds
+after their last keystroke report; you never see your own typing. Your composer
+reports on the first keystroke, then at most every 2 seconds while you type, and once
+more when the draft empties. Each report leaves at once, so one that hangs holds back
+nothing, and the server drops one that arrives after a later one from the same tab.
+Opening a saved draft and the New session page report nothing. Only the chat on screen
+watches: a chat kept hidden on another page does not. In an OpenCode tab, a subagent
+session the view opens takes no prompts, so its pill names who types in the tab's own
+session: "Ana is typing in the main session".
+
+An executable [PlusCal model](../../../docs/verification/typing/README.md), checked
+with TLC by `make -C docs/verification/typing`, checks that you never see your own
+typing, that a pill never follows you into another chat, that once you heard someone
+stop, a late report never shows them typing again, and that the pill always goes once
+their draft stays empty. A pill can still come back for at most 5 seconds when a viewer
+never heard the stop: its stream was full, or it opened after the stop arrived.
 
 Pin a session from the command palette.
 Pinned sessions sort first and keep their normal recent-first order within that
@@ -1451,6 +1473,14 @@ offers **Refresh**; nothing refreshes without that click, and a rollback to the
 page's build removes the bar. `GET /stream?id=<url-encoded-raw-id>` delivers only
 content-free conversation-change hints via EventSource. Each hint triggers a History
 delta read from the last applied revision; opening or reconnecting also catches up.
+`GET /typing?id=<url-encoded-raw-id>` is the chat's typing stream, opened with
+EventSource only while the chat is on screen: an empty `{"principal":"","typing":false}`
+event first, then `{"principal":"<display name, or login when blank>","typing":true|false}` for other
+people. The composer reports with `POST /api/ReportTyping` and
+`{"id":"<raw-id>","typing":true|false,"tab":"<random per page load>","seq":<n>}`, never
+the draft text, by plain `fetch`: `seq` counts the tab's reports from 1, and the server
+drops one that arrives after a later one. A refused stream is not retried, and failed
+reports show no error and reach no Sentry.
 
 - `POST /api/UploadAttachment?conversationId=<visible-id>&name=<filename>` takes the raw
   file as its body and returns JSON attachment metadata. Query values use normal
