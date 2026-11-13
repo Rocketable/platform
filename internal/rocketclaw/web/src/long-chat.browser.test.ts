@@ -28,6 +28,8 @@ test("long chats open at the newest turns, load earlier ones near the top, and l
     if (url.pathname === "/api/ListConfig") return Response.json({ config: { workspace: "long-chat" } });
     if (url.pathname === "/api/Protocol") return Response.json({ protoSha256: "long" });
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
+    // The desktop pull request watch reads history too; these reads are the transcript's.
+    if (url.pathname === "/api/History" && url.searchParams.has("pull-request-discovery")) return Response.json({ messages: [], more: false });
     if (url.pathname === "/api/History") {
       const input = await request.json() as { revision?: string; limit?: number; before?: string; from?: string };
       await opened.promise;

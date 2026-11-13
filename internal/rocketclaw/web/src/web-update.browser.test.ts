@@ -60,12 +60,13 @@ for (const [width, height] of [[1280, 900], [390, 664]]) test(`web app update ba
     await recheck();
     await notice.waitFor();
     expect(await page.getByRole("status").filter({ hasText: "A new version of RocketClaw is available." }).count()).toBe(1);
-    // Nothing on the page may hide behind the bar, and the bar may not hide the theme toggle.
+    // Nothing on the page may hide behind the bar, and the bar may not hide the right pane toggle's slot (the toggle is
+    // disabled without a thread, so it takes no pointer).
     const unobstructed = async (locator: { evaluate<T>(fn: (el: Element) => T): Promise<T> }) => locator.evaluate((el: Element) => {
       const box = el.getBoundingClientRect();
       return box.width > 0 && box.top >= 0 && box.left >= 0 && box.bottom <= innerHeight && box.right <= innerWidth && el.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
     });
-    for (const target of [refresh, page.getByRole("button", { name: /^Theme / }), tabs, page.locator("footer").getByRole("button", { name: "New session", exact: true })]) expect(await unobstructed(target)).toBe(true);
+    for (const target of [refresh, page.getByRole("button", { name: "Show pull requests", exact: true }).locator(".."), tabs, page.locator("footer").getByRole("button", { name: "New session", exact: true })]) expect(await unobstructed(target)).toBe(true);
     await page.screenshot({ path: path.join(shots, `web-update-${width}.png`) });
 
     // A failed check keeps what the last successful check showed.

@@ -1,10 +1,7 @@
 "use client";
 
-import { Monitor, Moon, Sun } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export const PALETTE_KEY = "palette";
 
@@ -41,42 +38,64 @@ function isPalette(value: string | null | undefined): value is Palette {
   return PALETTES.some((item) => item.id === value);
 }
 
-type Mode = "system" | "light" | "dark";
+export const THEME_MODES = [
+  { id: "system", label: "Auto" },
+  { id: "light", label: "Light" },
+  { id: "dark", label: "Dark" },
+] as const;
+
+type Mode = (typeof THEME_MODES)[number]["id"];
+
+const modeItems = THEME_MODES.map((item) => ({ value: item.id, label: item.label }));
+
+function storedMode(): Mode {
+  const stored = localStorage.getItem("theme");
+  return stored === "light" || stored === "dark" ? stored : "system";
+}
 
 function apply(mode: Mode) {
   const dark = mode === "dark" || (mode === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.classList.toggle("dark", dark);
 }
 
-export function ThemeToggle() {
-  const [mode, setMode] = useState<Mode>("system");
+export function setThemeMode(mode: Mode) {
+  localStorage.setItem("theme", mode);
+  apply(mode);
+  window.dispatchEvent(new Event("themechange"));
+}
+
+// Applies the saved theme and palette, and follows the system while the theme is Auto.
+export function useTheme() {
   useEffect(() => {
-    const stored = localStorage.getItem("theme");
-    if (stored === "light" || stored === "dark" || stored === "system") {
-      setMode(stored);
-    }
+    apply(storedMode());
     applyPalette(document.documentElement, parsePalette(localStorage.getItem(PALETTE_KEY)));
-  }, []);
-  useEffect(() => {
-    apply(mode);
-    localStorage.setItem("theme", mode);
-    if (mode !== "system") {
-      return;
-    }
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = () => apply("system");
+    const onChange = () => apply(storedMode());
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
-  }, [mode]);
-  const next: Mode = mode === "system" ? "light" : mode === "light" ? "dark" : "system";
-  const Icon = mode === "system" ? Monitor : mode === "dark" ? Moon : Sun;
+  }, []);
+}
+
+function subscribeMode(listener: () => void) {
+  window.addEventListener("themechange", listener);
+  return () => window.removeEventListener("themechange", listener);
+}
+
+export function ThemeModeChooser() {
+  const mode = useSyncExternalStore(subscribeMode, storedMode, () => "system" as const);
   return (
-    <Tooltip>
-      <TooltipTrigger render={<Button type="button" variant="ghost" size="icon" className="size-[var(--navigation-button)]" />} aria-label={`Theme ${mode}`} onClick={() => setMode(next)}>
-        <Icon className="size-[var(--navigation-icon)]" />
-      </TooltipTrigger>
-      <TooltipContent>Switch to {next} theme</TooltipContent>
-    </Tooltip>
+    <Select items={modeItems} value={mode} onValueChange={(value) => { if (value) setThemeMode(value); }}>
+      <SelectTrigger aria-label="Light or dark theme" className="min-w-40">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent align="end">
+        <SelectGroup>
+          {THEME_MODES.map((item) => (
+            <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>
+          ))}
+        </SelectGroup>
+      </SelectContent>
+    </Select>
   );
 }
 

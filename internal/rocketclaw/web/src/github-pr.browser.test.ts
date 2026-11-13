@@ -349,6 +349,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
   const message = (id: string, text: string): TranscriptEvent => ({ role: "assistant", text, complete: true, turnId: id, entryKey: id, itemId: id, inputId: "" });
   let updatedAt = "2026-01-01T00:00:00Z";
   let prompts = 0;
+  let second = false;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -371,7 +372,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
         return Response.json(tabs);
       case "/api/History": {
         const text = input.id === session ? `[Synthetic change](${href})` : input.id === child ? "Existing delegation fixture" : "Other conversation fixture";
-        const created: TranscriptEvent[] = input.id === session ? [{ ...message(input.id, "execute\n{}"), role: "tool", toolName: "execute", toolCallId: "pr-create", itemId: "pr-create", codeModeCalls: [{ name: "bash", arguments: JSON.stringify({ command: "gh pr create --title 'Sample change' --body 'Sample'" }), status: "ok", summary: href.replace(/\/files$/, "") }] }] : [];
+        const created: TranscriptEvent[] = input.id === session ? [{ ...message(input.id, "execute\n{}"), role: "tool", toolName: "execute", toolCallId: "pr-create", itemId: "pr-create", codeModeCalls: [href.replace(/\/files$/, ""), ...second ? [href.replace(/7\/files$/, "8")] : []].map((summary) => ({ name: "bash", arguments: JSON.stringify({ command: "gh pr create --title 'Sample change' --body 'Sample'" }), status: "ok", summary })) }] : [];
         return Response.json({ messages: [message(input.id, text), ...created], delegations: input.id === session ? [child] : [], lineage: input.id === child ? [{ id: session }, { id: child, kind: "SUBAGENT" }] : undefined, origin: "", revision: input.id, reset: true, replacedKeys: [], removedKeys: [], entryKeys: [input.id], running: false, terminal: "", backgroundJobs: [], pendingQuestions: [], start: "0", more: false });
       }
       default: return Response.json({});
@@ -493,6 +494,22 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     expect(await page.getByRole("dialog", { name: "Tabs", exact: true }).isVisible()).toBe(true);
     await page.waitForFunction((node: HTMLElement) => document.activeElement === node, await actions.elementHandle());
     expect(await composer.inputValue()).toBe("Draft still editable beside the PR pane");
+    // On desktop a PR the thread has just created opens the closed pane on that PR.
+    await page.keyboard.press("Escape");
+    // The watch's first look sets what counts as new, so let it answer before the thread creates another PR.
+    const firstLook = page.waitForResponse((response: any) => response.url().includes("/api/History?pull-request-discovery"));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await firstLook;
+    await page.getByRole("button", { name: "Show pull requests", exact: true }).waitFor();
+    expect(await prs.count()).toBe(0);
+    second = true;
+    updatedAt = "2026-01-03T00:00:00Z";
+    await prs.getByText("Created in this thread", { exact: true }).waitFor();
+    expect(await prs.getByRole("combobox", { name: "Thread pull request" }).textContent()).toContain("#8");
+    await page.getByRole("button", { name: "Hide right pane", exact: true }).click();
+    await prs.waitFor({ state: "detached" });
+    await page.getByRole("button", { name: "Show pull requests", exact: true }).click();
+    await prs.getByText("Created in this thread", { exact: true }).waitFor();
     expect(prompts).toBe(0);
     expect(unexpected).toEqual([]);
     expect(errors).toEqual([]);

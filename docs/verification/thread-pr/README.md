@@ -73,14 +73,15 @@ a later branch update does not invalidate an already accepted snapshot.
 
 `Evidence`/`ProvenCreate` separate `recordedSuccess` from `parserAccepts`.
 The former represents native bash `status === "ok"`, or completed/exited
-OpenCode bash/shell with exit 0. The latter represents the restricted command
-and URL parser returning exactly one reference. A successful checkout `view`
+OpenCode bash/shell with exit 0. The latter represents the command and URL
+parser returning a reference: a command or script running `gh pr create` owns
+each PR URL it prints alone on a line. A successful checkout `view`
 has no create evidence. Mentioned links and failed creates have no success
 evidence. The model checks propagation of these predicates, **not whether any
 arbitrary command/output string actually satisfies them**. Truthful tool
 records, the meaning of `gh pr create`, and parser soundness are assumptions.
 Native history supplies a last-line, length-limited summary, not the complete
-shell output; its uniqueness test cannot establish full-output uniqueness.
+shell output, so it misses a script's earlier URLs.
 
 ## Async steps and fairness
 
@@ -179,9 +180,11 @@ counterexamples are retained findings, not properties claimed to hold.
 Paths below are under `internal/rocketclaw/web/src/`. These tests are separate
 implementation evidence; TLC does not execute them:
 
-- `thread-pr.test.ts`: restricted create commands/dry-run/quoted and compound
-  commands; reject multiple accepted URLs; native pagination and successful
-  calls; paged OpenCode tool/shell history rejects failures/running/text links.
+- `thread-pr.test.ts`: create commands and scripts, rejecting dry-run, quoted
+  mentions and URLs not alone on a line; native pagination and successful
+  calls; paged OpenCode tool/shell history of the thread and its nested
+  subagent sessions rejects failures/running/text links. The model's history is
+  one session; the subagent-session walk is not modeled.
 - `opencode-pr.test.ts`: checkout uses configured server/directory, not session
   prompting; excludes PRs finished before session creation; distinguishes
   absence/access failure and retains source for a recorded PR; cancellation

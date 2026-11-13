@@ -15,6 +15,21 @@ export const at = (path: string, name = server()) => name ? `/r/${name}${path}` 
 // The page's path on its server, without the /r/<name> prefix.
 export const pagePath = () => location.pathname.slice(server() ? server().length + 3 : 0) || "/";
 
+// A permission review can open at the approver's answer that gave a reason: the one saved under its
+// review turn, or, for reviews saved before turns were named, the first that gave the reason.
+export function panelHref(id?: string, panel: "delegation" | "skill" | "shadow" | "pullRequests" = "delegation", reason?: string, turn?: string) {
+  const params = new URLSearchParams(location.search);
+  params.delete("delegation");
+  params.delete("skill");
+  params.delete("pullRequests");
+  params.delete("reason");
+  params.delete("answer");
+  if (id) params.set(panel, id);
+  if (reason !== undefined) params.set("reason", reason);
+  if (turn) params.set("answer", turn);
+  return `${pagePath()}${params.size ? `?${params}` : ""}`;
+}
+
 export function navigate(path: string, replace = false, name = server()) {
   history[replace ? "replaceState" : "pushState"](null, "", at(path, name));
   window.dispatchEvent(new PopStateEvent("popstate"));

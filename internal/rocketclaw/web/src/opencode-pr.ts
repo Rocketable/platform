@@ -42,7 +42,8 @@ export async function discoverOpenCodePR(api: string, sessionID: string, signal:
   });
   const source = { api, directory: session.location.directory };
   try {
-    const result = await run(source, "gh pr view --json url,headRefName,closedAt,mergedAt", signal);
+    // jj leaves Git on a detached HEAD, which gh cannot name, so pass the nearest jj bookmark; on a Git branch the substitution is empty.
+    const result = await run(source, `gh pr view $(git symbolic-ref -q HEAD >/dev/null || jj log --ignore-working-copy --no-graph -r 'latest(heads(::@ & bookmarks()))' -T 'local_bookmarks.map(|b| b.name()).join("\\n")' 2>/dev/null | head -n1) --json url,headRefName,closedAt,mergedAt`, signal);
     if (result.exit !== 0) {
       if (/^no pull requests found for branch /m.test(result.output)) return { ...source, url: null, branch: "" };
       throw new Error(unavailable);

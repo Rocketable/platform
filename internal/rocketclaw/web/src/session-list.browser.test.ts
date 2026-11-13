@@ -814,21 +814,24 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
         return request;
       };
     });
+    const theme = async (label: string) => {
+      await page.keyboard.press("ControlOrMeta+Shift+p");
+      await page.getByPlaceholder("Type a command").fill(`Theme: ${label}`);
+      await page.getByRole("button", { name: `Theme: ${label}`, exact: true }).click();
+    };
     await page.goto(origin);
     await page.emulateMedia({ colorScheme: "dark" });
-    await page.getByRole("button", { name: "Theme system", exact: true }).waitFor();
-    expect(await page.getByRole("button", { name: "Theme system", exact: true }).innerText()).toBe("");
+    await page.getByRole("button", { name: "Show pull requests", exact: true }).waitFor();
+    expect(await page.locator("#bottom-navigation").getByRole("button", { name: /^Theme/ }).count()).toBe(0);
     await page.waitForFunction(() => document.documentElement.classList.contains("dark"));
-    await page.getByRole("button", { name: "Theme system", exact: true }).click();
-    expect(await page.getByRole("button", { name: "Theme light", exact: true }).innerText()).toBe("");
+    await theme("Light");
     await page.waitForFunction(() => !document.documentElement.classList.contains("dark"));
-    await page.getByRole("button", { name: "Theme light", exact: true }).click();
-    expect(await page.getByRole("button", { name: "Theme dark", exact: true }).innerText()).toBe("");
+    await theme("Dark");
     await page.waitForFunction(() => document.documentElement.classList.contains("dark"));
     await page.emulateMedia({ colorScheme: "light" });
     expect(await page.evaluate(() => document.documentElement.classList.contains("dark"))).toBe(true);
     expect(await page.evaluate(() => localStorage.getItem("theme"))).toBe("dark");
-    await page.getByRole("button", { name: "Theme dark", exact: true }).click();
+    await theme("Auto");
     await page.waitForFunction(() => !document.documentElement.classList.contains("dark"));
     await page.emulateMedia({ colorScheme: "dark" });
     await page.waitForFunction(() => document.documentElement.classList.contains("dark"));
@@ -956,7 +959,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Cron: Dashboard", "Cron: Run", "Cron: Timeline", "Help: Keyboard Shortcuts", "List Agents", "List Skills", "New dashboard",
+    // The theme commands run earlier in this test come first, as recently used.
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Theme: Auto", "Theme: Dark", "Theme: Light", "Cron: Dashboard", "Cron: Run", "Cron: Timeline", "Help: Keyboard Shortcuts", "List Agents", "List Skills", "New dashboard",
       "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Copy link", "Tabs: Next⌘]", "Tabs: Previous⌘[", "Tabs: Recently closed", "Tabs: Toggle sidebar⌘B",
       // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
       "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
