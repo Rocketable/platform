@@ -360,7 +360,7 @@ func parseApproverDecision(approver *yaml.Node, agent *Agent, cfg AgentLoadConfi
 		return errShape
 	}
 
-	if err := checkKeys(node, "approver.decision.", "not an approver.decision key", "model", "minConfidence", "prompt"); err != nil {
+	if err := checkKeys(node, "approver.decision.", "not an approver.decision key", easyKeys()["approver.decision"]...); err != nil {
 		return err
 	}
 
