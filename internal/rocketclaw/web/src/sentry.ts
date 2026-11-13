@@ -20,6 +20,11 @@ if (sentryConfig) {
         const value = span.attributes[key];
         if (typeof value === "string") span.attributes[key] = value.replace(/^([^?#]*)\?[^#]*/, "$1");
       }
+      // Element descriptions carry ids, classes and labels, such as a PR file tree's file names, and quote them
+      // unescaped. Keep a slow listener's tag and event, and drop the descriptions of interaction and layout targets.
+      const invoker = span.attributes["browser.script.invoker"];
+      if (typeof invoker === "string") span.attributes["browser.script.invoker"] = invoker.replace(/^([A-Z][A-Z\d-]*)[#[].*(\.on[a-z]+)$/s, "$1$2");
+      for (const key of Object.keys(span.attributes)) if (/^(?:browser\.web_vital\.)?(?:inp\.target|lcp\.element|cls\.source\.\d+)$/.test(key)) delete span.attributes[key];
       return span;
     },
     beforeSendLog: () => null,
