@@ -604,7 +604,8 @@ test("remote sessions list, tag, go offline, and start", async () => {
     await view.evaluate((node: HTMLElement & { built?: number }) => { node.built = 1; });
     await view.locator(`button[data-session-id="${linked}"]`).click();
     await page.waitForURL(`${base}${route(`opencode:box:${linked}`)}`);
-    await view.getByText(`answer in Session ${linked}`).waitFor();
+    // v2.3.0 leaves references to the shown session as plain text (packages/app/src/shell/routes/session-ui-provider.tsx).
+    await view.getByText(`answer in ${linked}`).waitFor();
     await page.getByRole("tablist", { name: "Open tabs" }).getByRole("tab", { name: "Alpha work", exact: true }).click();
     await view.getByText("answer in ses_a").waitFor();
     await Bun.sleep(200);

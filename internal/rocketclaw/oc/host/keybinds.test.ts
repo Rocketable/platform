@@ -6,7 +6,7 @@ import { DEFAULT_PALETTE_KEYBIND, matchKeybind, parseKeybind } from "@/shell/com
 // menu's accelerators belong to the desktop app's native menu, which the web view never has.
 const packages = new URL("../packages/", import.meta.url).pathname
 const sources = [...new Glob("{app,gui-plugins,plugin,session-ui,ui}/src/**/*.{ts,tsx}").scanSync(packages)]
-  .filter((path) => !/\.test\.tsx?$/.test(path) && path !== "app/src/shell/commands/desktop-menu.ts")
+  .filter((path) => !/\.test\.tsx?$/.test(path) && !path.includes("/storybook/") && path !== "app/src/shell/commands/desktop-menu.ts")
   .map((path) => ({ path, text: Bun.file(packages + path).text() }))
 const modifier = "(?:ctrl|control|mod|meta|cmd|command|alt|option|shift)"
 const combo = new RegExp(`^${modifier}\\+(?:${modifier}\\+)*[^+,\\s]+$`, "i")
