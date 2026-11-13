@@ -188,12 +188,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	reviewCtx, cancel := context.WithTimeout(ctx, permissionReviewTimeout)
 	defer cancel()
 
-	var observer chatObserver = inertChatObserver{}
-	if f.diagnostics {
-		observer = &permissionReviewDiagnostics{output: parentOutput, reviewer: agent.Name}
-	}
-
-	last, err := child.runPrompt(reviewCtx, request.Turn, texts, f.childSession, childSessionWriter{factory: &childFactory}, observer)
+	last, err := child.runPrompt(reviewCtx, request.Turn, texts, f.childSession, childSessionWriter{factory: &childFactory}, parentOutput)
 	if err != nil {
 		if reviewCtx.Err() == context.DeadlineExceeded {
 			return permissionReviewFailure("automatic permission review timed out while evaluating the requested approval")
@@ -312,31 +307,6 @@ func permissionReviewQuestions() []DecisionQuestion {
 		{Name: "outcome", Type: DecisionChoice, Instructions: permissionReviewOutcomeDescription, Options: []DecisionOption{{Value: "allow"}, {Value: "deny"}}},
 		{Name: "needs_investigation", Type: DecisionPredicate, Instructions: "Would judging this action's risk need file contents, script bodies, repository or system state, or truncated data that the transcript and planned action do not show?"},
 	}
-}
-
-// permissionReviewDiagnostics streams a permission review's output items to output as
-// diagnostics of reviewer.
-type permissionReviewDiagnostics struct {
-	output   chan<- ChatResponse
-	reviewer string
-}
-
-func (d *permissionReviewDiagnostics) observe(item ChatResponse) {
-	if item.Kind == ChatResponseAssistantMessage {
-		return
-	}
-
-	emitSubagentDiagnostic(d.output, &SubagentDiagnostic{
-		Name:  d.reviewer,
-		Label: "auto-approver",
-		Subagent: &SubagentDiagnostic{
-			Label:    nestedDiagnosticLabel(item),
-			Text:     item.Text,
-			Tool:     item.Tool,
-			Subagent: item.Subagent,
-			Provider: item.Provider,
-		},
-	})
 }
 
 func emitPermissionReviewResult(output chan<- ChatResponse, reviewer string, decision permissionReviewDecision) {

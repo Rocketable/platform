@@ -454,7 +454,7 @@ func TestSteerSwitchesRunningSessionType(t *testing.T) {
 				loop.PermissionReviewer.(*toolFactory).baseTools["probe"] = probe
 				loop.Tools["probe"], loop.SteerDrain = probe, drain
 
-				return loop.runPrompt(t.Context(), "turn-1", []string{"probe it"}, func(func(SessionEntry, error) bool) {}, &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error { saved = append(saved, *entry); return nil }}, inertChatObserver{})
+				return loop.runPrompt(t.Context(), "turn-1", []string{"probe it"}, func(func(SessionEntry, error) bool) {}, &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error { saved = append(saved, *entry); return nil }}, make(chan ChatResponse, 1))
 			}
 			call := responseWithFunctionCalls("probe", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-p", "probe", `{}`)})
 			crashed, mock := mockResponses(call), mockResponses(call, responseWithMessage("answer", "reviewed"))
@@ -567,7 +567,7 @@ func TestSteerSwitchConvertsTurnForProvider(t *testing.T) {
 
 	var saved []SessionEntry
 
-	got, err := loop.runPrompt(t.Context(), "", []string{"probe it"}, func(yield func(SessionEntry, error) bool) { yield(history, nil) }, &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error { saved = append(saved, *entry); return nil }}, inertChatObserver{})
+	got, err := loop.runPrompt(t.Context(), "", []string{"probe it"}, func(yield func(SessionEntry, error) bool) { yield(history, nil) }, &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error { saved = append(saved, *entry); return nil }}, make(chan ChatResponse, 1))
 	require.NoError(t, err)
 	require.Equal(t, "done", got)
 
