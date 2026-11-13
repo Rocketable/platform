@@ -319,160 +319,40 @@ test("a palette preview stays in its window: never saved, and kept while other w
   expect(await names(page)).toEqual(["Alpha", "Charlie"]);
 }), 30_000);
 
-for (const width of [1280, 320]) test(`copy page link across pages at ${width}px`, () => withPage({ viewport: { width, height: 800 }, hasTouch: width === 320, permissions: ["clipboard-read", "clipboard-write"] }, async (page, origin) => {
-  const copy = page.getByRole("button", { name: "Copy page link", exact: true });
-  const status = page.locator("footer").getByRole("status");
-  for (const pathname of ["/", `${href("alpha")}?view=one%20%26%20two#result%2Fthree`, "/search?q=tag%3A%22two%20words%22%20%26%20%2B%25#result%2Ftwo", "/cron", "/agents", "/skills", "/skills/example", "/config", "/voice", "/shortcuts"]) {
-    await page.goto(`${origin}${pathname}`);
-    // Search normalizes its address after identity loads; compare the clipboard with that settled URL.
-    if (pathname.startsWith("/search")) await page.waitForURL(`${origin}/search?q=tag%3A%22two+words%22+%26+%2B%25`);
-    if (pathname.startsWith("/s/")) expect(page.url()).toBe(`${origin}${pathname}`);
-    await copy.waitFor();
-    if (width === 320) await copy.tap();
-    else { await copy.focus(); await page.keyboard.press("Enter"); }
-    await status.filter({ hasText: "Page link copied" }).waitFor();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(page.url());
-    expect(await copy.locator("svg.lucide-check").count()).toBe(1);
-    const buttons = page.locator("#bottom-navigation").getByRole("button");
-    const boxes = await buttons.evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => {
-      const { x, y, width, height } = node.getBoundingClientRect();
-      return { x, y, width, height };
-    }));
-    // The sidebar toggle, the four middle buttons, and the theme toggle, left to right without overlap.
-    expect(boxes).toHaveLength(6);
-    expect(boxes[0].x).toBeLessThan(16);
-    expect(boxes[5].x + boxes[5].width).toBeGreaterThan(width - 16);
-    for (const [index, box] of boxes.entries()) {
-      expect(box.x).toBeGreaterThanOrEqual(0);
-      expect(box.x + box.width).toBeLessThanOrEqual(width);
-      expect(Math.round(box.width)).toBe(width === 320 ? 48 : 32);
-      expect(Math.round(box.height)).toBe(width === 320 ? 48 : 32);
-      if (index) expect(boxes[index - 1].x + boxes[index - 1].width).toBeLessThanOrEqual(box.x);
-    }
-  }
-  if (width === 1280) {
-    // Config can finish after Search canonicalizes its URL; that must not replace a focused copy control.
-    const config = Promise.withResolvers<void>();
-    await page.route("**/api/ListConfig", async (route: any) => { await config.promise; await route.continue(); });
-    await page.goto(`${origin}/search?q=two%20words`);
-    await page.waitForURL(`${origin}/search?q=two+words`);
-    const focusedCopy = await copy.elementHandle();
-    await copy.focus();
-    config.resolve();
-    await page.waitForFunction(() => !document.querySelector("main fieldset")!.hasAttribute("disabled"));
-    expect(await focusedCopy.evaluate((node: HTMLElement) => ({ connected: node.isConnected, focused: document.activeElement === node }))).toEqual({ connected: true, focused: true });
-    await page.keyboard.press("Enter");
-    await status.filter({ hasText: "Page link copied" }).waitFor();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/search?q=two+words`);
-    await page.unroute("**/api/ListConfig");
-    for (const name of ["Cron", "Agents", "Cron"]) {
-      await page.getByRole("tab", { name, exact: true }).click();
-      await page.waitForURL(`${origin}/${name.toLowerCase()}`);
-    }
-    const tabCopy = await copy.elementHandle();
-    await copy.focus();
-    await page.keyboard.press("Control+BracketRight");
-    await page.waitForURL(`${origin}/agents`);
-    expect(await tabCopy.evaluate((node: HTMLElement) => ({ connected: node.isConnected, focused: document.activeElement === node }))).toEqual({ connected: true, focused: true });
-    await page.keyboard.press("Enter");
-    await status.filter({ hasText: "Page link copied" }).waitFor();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/agents`);
-  }
-  await page.getByRole("button", { name: "New session", exact: true }).click();
-  await page.waitForURL(`${origin}/`);
-  await copy.click();
-  await status.filter({ hasText: "Page link copied" }).waitFor();
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${origin}/`);
-  await page.getByRole("button", { name: "Search sessions and commands", exact: true }).click();
-  await page.getByRole("dialog", { name: "Go to session" }).waitFor();
-  await page.keyboard.press("Escape");
-  await page.keyboard.press("Control+Shift+p");
-  await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Sessions: Search", exact: true }).click();
-  await page.getByRole("dialog").waitFor({ state: "detached" });
-  await page.waitForURL((url: URL) => url.pathname.startsWith("/search/"));
-  await page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true }).fill("two words & +%");
-  await page.waitForURL((url: URL) => url.searchParams.get("q") === "two words & +%");
-  await page.evaluate(() => { location.hash = "match%2Ftwo"; });
-  await copy.click();
-  await status.filter({ hasText: "Page link copied" }).waitFor();
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(page.url());
-  for (const pathname of ["/search", href("alpha")]) {
-    await page.goto(`${origin}${pathname}`);
-    await copy.click();
-    await status.filter({ hasText: "Page link copied" }).waitFor();
-    const input = pathname === "/search" ? page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true }) : page.getByPlaceholder("Message or $command");
-    await input.focus();
-    await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new Error("Copy denied"); } } }));
-    await copy.click();
-    await status.filter({ hasText: "Could not copy page link" }).waitFor();
-    await input.focus();
-    expect(await copy.locator("svg.lucide-circle-alert").isVisible()).toBe(true);
-    expect(await copy.locator("svg.lucide-check").count()).toBe(0);
-    expect(await status.textContent()).not.toContain("Page link copied");
-    expect(await page.getByRole("tooltip").count()).toBe(0);
-    if (pathname.startsWith("/s/")) {
-      await input.fill("next message");
-      expect(await page.getByRole("button", { name: "Send", exact: true }).evaluate((node: HTMLElement) => {
-        const rect = node.getBoundingClientRect();
-        const status = document.querySelector('footer [role="status"]')!.getBoundingClientRect();
-        return {
-          tappable: node.contains(document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2)),
-          unobscured: status.right <= rect.left || status.left >= rect.right || status.bottom <= rect.top || status.top >= rect.bottom,
-        };
-      })).toEqual({ tappable: true, unobscured: true });
-    }
-  }
-}), 60_000);
-
-test("page-link feedback expires and clears when switching sessions", () => withPage({ permissions: ["clipboard-read", "clipboard-write"] }, async (page, origin) => {
-  await page.clock.install();
+for (const width of [1280, 320]) test(`the bottom bar's buttons fit without overlap at ${width}px`, () => withPage({ viewport: { width, height: 800 }, hasTouch: width === 320 }, async (page, origin) => {
   await page.goto(`${origin}${href("alpha")}`);
-  const copy = page.getByRole("button", { name: "Copy page link", exact: true });
-  const status = page.locator("footer").getByRole("status");
-  await copy.click();
-  await status.filter({ hasText: "Page link copied" }).waitFor();
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 100));
-  await page.clock.runFor(1_000);
-  await copy.click();
-  await status.filter({ hasText: "Page link copied" }).waitFor();
-  await page.clock.runFor(1_100);
-  expect(await copy.locator("svg.lucide-check").isVisible()).toBe(true);
-  await page.clock.runFor(1_000);
-  await copy.locator("svg.lucide-share").waitFor({ timeout: 2_000 });
-  expect(await status.textContent()).toBe("");
-
-  await copy.click();
-  await status.filter({ hasText: "Page link copied" }).waitFor();
-  const button = await copy.elementHandle();
-  await follow(page, "bravo");
-  await copy.locator("svg.lucide-share").waitFor({ timeout: 2_000 });
-  expect(await status.textContent()).toBe("");
-  expect(await button.evaluate((node: HTMLElement) => node.isConnected)).toBe(true);
-  await follow(page, "alpha");
-  expect(await copy.locator("svg.lucide-check").count()).toBe(0);
-  for (const failed of [false, true]) {
-    await page.evaluate((failed: boolean) => {
-      const pending = Promise.withResolvers<void>();
-      window.addEventListener("settle-copy", () => failed ? pending.reject(new Error("Copy denied")) : pending.resolve(), { once: true });
-      let first = true;
-      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: () => {
-        if (first) { first = false; return pending.promise; }
-        return Promise.resolve();
-      } } });
-    }, failed);
-    await copy.click();
-    await follow(page, "bravo");
-    await copy.click();
-    await status.filter({ hasText: "Page link copied" }).waitFor();
-    await page.evaluate(() => dispatchEvent(new Event("settle-copy")));
-    await page.clock.runFor(100);
-    expect(await copy.locator("svg.lucide-check").isVisible()).toBe(true);
-    await follow(page, "alpha");
+  const buttons = page.locator("#bottom-navigation").getByRole("button");
+  await buttons.first().waitFor();
+  const boxes = await buttons.evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => {
+    const { x, y, width, height } = node.getBoundingClientRect();
+    return { x, y, width, height };
+  }));
+  // The sidebar toggle, the four middle buttons, and the theme toggle, left to right without overlap.
+  expect(boxes).toHaveLength(6);
+  expect(boxes[0].x).toBeLessThan(16);
+  expect(boxes[5].x + boxes[5].width).toBeGreaterThan(width - 16);
+  for (const [index, box] of boxes.entries()) {
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(width);
+    expect(Math.round(box.width)).toBe(width === 320 ? 48 : 32);
+    expect(Math.round(box.height)).toBe(width === 320 ? 48 : 32);
+    if (index) expect(boxes[index - 1].x + boxes[index - 1].width).toBeLessThanOrEqual(box.x);
   }
-  await page.clock.resume();
 }), 30_000);
 
-test("copy page link on plain HTTP without Clipboard API", () => withPage({ permissions: ["clipboard-read", "clipboard-write"] }, async (page, origin) => {
+test("a tab menu's Copy link copies the tab in view's whole address, and another tab's own", () => withPage({ permissions: ["clipboard-read", "clipboard-write"] }, async (page, origin, _prompts, saved) => {
+  await openSaved(page, origin, href("bravo"), "Bravo", saved);
+  const url = `${origin}${href("alpha")}?view=one%20%26%20two#result%2Fthree`;
+  await page.goto(url);
+  await strip(page).getByRole("button", { name: "Tab actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
+  const copied = (link: string) => page.waitForFunction(async (expected: string) => await navigator.clipboard.readText() === expected, link);
+  await copied(url);
+  await menu(page, "Bravo", "Copy link");
+  await copied(`${origin}${href("bravo")}`);
+}), 30_000);
+
+test("Copy link on plain HTTP without Clipboard API", () => withPage({ permissions: ["clipboard-read", "clipboard-write"] }, async (page, origin) => {
   await page.route("http://copy.test/**", async (route: any) => {
     if (new URL(route.request().url()).pathname === "/stream") return route.fulfill({ contentType: "text/event-stream", body: ": connected\n\n" });
     await route.fulfill({ response: await route.fetch({ url: route.request().url().replace("http://copy.test", origin) }) });
@@ -480,20 +360,13 @@ test("copy page link on plain HTTP without Clipboard API", () => withPage({ perm
   const url = `http://copy.test${href("alpha")}?view=one%20%26%20two#result%2Fthree`;
   await page.goto(url);
   expect(await page.evaluate(() => ({ secure: isSecureContext, clipboard: typeof navigator.clipboard }))).toEqual({ secure: false, clipboard: "undefined" });
-  const copy = page.getByRole("button", { name: "Copy page link", exact: true });
-  await copy.click();
-  const status = page.locator("footer").getByRole("status");
-  await status.filter({ hasText: "Page link copied" }).waitFor();
-  expect(await copy.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
+  await strip(page).getByRole("button", { name: "Tab actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
+  await page.getByRole("menu").waitFor({ state: "hidden" });
   const reader = await page.context().browser().newPage({ permissions: ["clipboard-read", "clipboard-write"] });
   await reader.goto(origin);
   expect(await reader.evaluate(() => navigator.clipboard.readText())).toBe(url);
   await reader.close();
-  await page.evaluate(() => { document.execCommand = () => false; });
-  await copy.click();
-  await status.filter({ hasText: "Could not copy page link" }).waitFor();
-  expect(await status.isVisible()).toBe(true);
-  expect(await copy.locator("svg.lucide-check").count()).toBe(0);
 }), 30_000);
 
 test("saved tabs, deep links, keyboard, page close, palette commands, and the sidebar", () => withPage({}, async (page, origin, _prompts, saved) => {
@@ -857,7 +730,7 @@ test("a tab waiting on this person's answer stops shimmering and needs them, as 
   expect(await header.getByRole("button", { name: "Work", exact: true }).locator("span").evaluate((name: HTMLElement) => getComputedStyle(name).fontWeight)).toBe("500");
 }), 60_000);
 
-for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["Linux x86_64", "Ctrl", "Alt"]]) test(`Cmd/Ctrl+Alt+A and its command open the next waiting tab, sessions asking a question first, longest waiting first, and the title counts them on ${platform}`, () => withPage({}, async (page, origin, _prompts, saved) => {
+for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["Linux x86_64", "Ctrl", "Alt"]]) test(`Cmd/Ctrl+Alt+A, its command and its bottom bar button open the next waiting tab, sessions asking a question first, longest waiting first, and the title counts them on ${platform}`, () => withPage({}, async (page, origin, _prompts, saved) => {
   await page.addInitScript((value: string) => Object.defineProperty(navigator, "platform", { value }), platform);
   const key = modifier === "⌘" ? "Meta" : "Control";
   const at = (minute: number) => `2026-10-22T10:0${minute}:00Z`;
@@ -895,6 +768,8 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
   expect(await command.locator("kbd").allTextContents()).toEqual([modifier, alternate, "A"]);
   await command.click();
   await page.waitForURL(origin + href("asked-new"));
+  await page.getByRole("button", { name: "Next session needing you", exact: true }).click();
+  await page.waitForURL(origin + href("unread-old"));
 }), 60_000);
 
 test("collapsed Shared with a tab unread for this person shows a bold name", () => withPage({}, async (page, origin, _prompts, saved) => {
@@ -1352,7 +1227,7 @@ test("Search pages are tabs of their own: renamed in place, shared as one page, 
   await until(() => JSON.stringify(saved.shared[0].search?.searches.map((item) => item.query)) === JSON.stringify(["rollback", "other person", "mine"]));
   // Taken out of Shared, the page as saved stays as this person's own, with their own searches there, so nothing anyone
   // added is lost.
-  expect(await sharedMenu(page, "Prod deploys")).toEqual(["Rename search", "—", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park"]);
+  expect(await sharedMenu(page, "Prod deploys")).toEqual(["Rename search", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park"]);
   await page.getByRole("menuitem", { name: "Remove from Shared", exact: true }).click();
   await row("Prod deploys").waitFor({ state: "detached" });
   await tab("Prod deploys").waitFor();
@@ -1543,7 +1418,7 @@ test("a group lives in one space: menus offer only this space's groups, groups m
   await page.getByRole("button", { name: "Space: Ops" }).waitFor();
   await tab("New session").click({ button: "right" });
   await page.getByRole("menuitem").first().waitFor();
-  expect(await menuLines(page)).toEqual(["Close", "Close others", "Close to the right", "Close all", "—", "Add to group", "Move to space"]);
+  expect(await menuLines(page)).toEqual(["Close", "Close others", "Close to the right", "Close all", "—", "Copy link", "—", "Add to group", "Move to space"]);
   await page.getByRole("menuitem", { name: "Move to space", exact: true }).click();
   const spaces = page.getByRole("menu").nth(1);
   await spaces.waitFor();
@@ -1737,7 +1612,7 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
 
   // A Shared row has no close button, offers no closing, ignores middle-clicks, and takes no drops of this person's tabs.
   expect(await shared(page).getByRole("button", { name: "Close Alpha" }).count()).toBe(0);
-  expect(await sharedMenu(page, "Alpha")).toEqual(["Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
+  expect(await sharedMenu(page, "Alpha")).toEqual(["Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
   await page.keyboard.press("Escape");
   await page.getByRole("menu").waitFor({ state: "hidden" });
   await row("Alpha").click({ button: "middle" });
@@ -2155,16 +2030,16 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   saved.state = { ...saved.state, tabs: [{ path: href("alpha"), space: "main" }], space: "main" };
   saved.shared = [{ space: "main", path: href("bravo") }, { space: "main", path: "/search/d", search: { name: "Ops", board: "kanban", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" } }];
   await page.goto(`${origin}${href("alpha")}`);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
   await close();
-  expect(await sharedMenu(page, "Ops")).toEqual(["Rename search", "—", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park"]);
+  expect(await sharedMenu(page, "Ops")).toEqual(["Rename search", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park"]);
   await close();
 
   await shared(page).getByRole("tab", { name: "Bravo", exact: true }).click({ button: "right" });
   for (const item of ["Park", "Until I unpark"]) await page.getByRole("menuitem", { name: item, exact: true }).click();
   await row("Bravo").and(page.locator('[aria-description="Shared, Space: Main, Parked"]')).waitFor();
   expect([await sharedNames(page), await opacity(href("bravo")), await names(page)]).toEqual([["Bravo", "Ops"], "0.6", ["Alpha"]]);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Remove from Shared", "—", "Unpark", "Auto-park when I send"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send"]);
   await close();
   // Another person's session list carries none of this person's parks, so for them the row is as it was.
   saved.attention = [];

@@ -1,9 +1,9 @@
 # RocketClaw Web
 
-Every page has a **Copy page link** share icon in the bottom navigation, on desktop
-and mobile. It copies the full current address, including query and fragment,
-and shows whether copying succeeded. The success checkmark clears after two seconds
-or when switching pages. Plain HTTP uses the same clipboard fallback as message copying.
+Every tab's menu, Shared rows included, has **Copy link** (also **Tabs: Copy link**
+in the command palette). On the tab in view it copies the full current address,
+including query and fragment; on another tab, that tab's address. Plain HTTP uses
+the same clipboard fallback as message copying.
 
 Assistant replies show a smaller, muted footer with known
 `agent (provider/model#effort)` details; `#effort` is omitted when absent.
@@ -487,15 +487,16 @@ active tab.
   Reopen closed tab**) reopens the newest, in a remote OpenCode session too, whose
   New terminal command has no default key for that reason. A reopened tab leaves the list, and so
   does a deleted session's tab. A preview tab is never saved, so it never lists.
-- **Next tab needing you.** Cmd/Ctrl+Alt+A (or **Sessions: Next needing
-  you**) opens the next bold tab, of any kind (see Unread below): first
+- **Next tab needing you.** Cmd/Ctrl+Alt+A, the inbox button in the bottom
+  navigation, or **Sessions: Next needing you** opens the next bold tab, of any kind (see Unread below): first
   sessions asking a question, then the rest, each longest waiting first.
   Pressing it again moves on to the next one and wraps around. Only tabs you
   see as a tab count: your own tabs in any space, Shared rows, and Top Shelf
   rows, on any server. Parked tabs, a session of a server that stopped
   answering, and a marked tab you no longer have do not. A Shared or Top Shelf
   row opens in its space without a tab of its own. The window title counts the
-  same tabs, as "(2) …". The command shows only while another tab waits.
+  same tabs, as "(2) …". The command shows, and the button is enabled, only
+  while another tab waits.
 - **Remote OpenCode sessions.** A remote session's tab shows OpenCode's own
   session view, copied into RocketClaw at `internal/rocketclaw/oc/` and mounted in
   the page with no frame. It reaches its server through the Web's
