@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { AgentDraft, AgentDraftPresence, AgentSettingHelp } from "@/types";
 import { codePoints, editor, spliceBetween, type CoEdit } from "./coedit";
 import { useCaret } from "./file";
+import { ModelPicker } from "./model-picker";
 
 type Variant = AgentDraft["variants"][number];
 type Shared = { coedit: CoEdit; variant: Variant; presence: AgentDraftPresence[]; onFile: (key: string) => void };
@@ -85,6 +86,7 @@ function Control({ setting, value, onSet, onFile }: { setting: AgentSettingHelp;
     <Button size="xs" variant="outline" onClick={onFile}><FileCode2 />Edit in File</Button>
   </div>;
   if (setting.control === "switch") return <Switch aria-label={setting.label} checked={/^(true|on|yes|1)$/i.test(text)} onCheckedChange={(on) => onSet(String(on))} />;
+  if (setting.control === "model") return <ModelPicker label={setting.label} value={text} onModel={(ref) => onSet(ref && yamlScalar(ref))} />;
   if (setting.control === "choice") return <ButtonGroup aria-label={setting.label}>
     {setting.choices.map((choice) => <Button key={choice} size="sm" variant={text === choice ? "secondary" : "outline"} aria-pressed={text === choice} onClick={() => onSet(choice)}>{choice}</Button>)}
   </ButtonGroup>;

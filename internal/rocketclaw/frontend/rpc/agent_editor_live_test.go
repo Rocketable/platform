@@ -2,6 +2,8 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -26,7 +29,28 @@ func TestAgentEditorRealBackendBrowser(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Permissions: map[string][]string{"bob": {"Ops"}}}
+	// The work provider, unknown to models.dev, serves only llama-4-maverick.
+	work := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if body.Model != "llama-4-maverick" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":{"message":"This gateway serves no such model; it serves llama-4-maverick","type":"invalid_request_error","code":"model_not_found"}}`)
+
+			return
+		}
+
+		_, _ = io.WriteString(w, `{"id":"r","object":"response","created_at":0,"status":"completed","model":"llama-4-maverick","output":[]}`)
+	}))
+	t.Cleanup(work.Close)
+
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Permissions: map[string][]string{"bob": {"Ops"}},
+		Providers: map[string]config.OpenAIConfig{"work": {APIKey: "key", APIBaseURL: work.URL, Auth: "api_key"}}}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })

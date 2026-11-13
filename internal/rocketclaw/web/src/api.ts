@@ -126,6 +126,8 @@ export const mutations = {
   createAgentDraft: (input: { name: string; mode?: string; template?: string; copy?: boolean }) => rpc<AgentDraft>("CreateAgentDraft", input),
   applyAgentDraftOp: (input: { id: string; op: AgentDraftOp }) => rpc<{ revision: string; invalidLine: number }>("ApplyAgentDraftOp", input),
   setAgentDraftPresence: (input: { id: string; presence: AgentDraftPresence }) => rpc("SetAgentDraftPresence", input),
+  // One small request to a model as provider/model#effort: the provider's error text, or none and how long it took.
+  testModel: (input: { model: string }) => rpc<{ error?: string; elapsedMs?: string }>("TestModel", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
   voiceSettings: (input: { action: "UPDATE"; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
   tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; topShelf?: TopShelf; attention?: { paths: string[]; action: AttentionAction; until?: string }; autoPark?: boolean }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),

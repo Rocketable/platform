@@ -185,3 +185,81 @@ test("two people co-edit a draft live in the Form and the File, with history and
     await browser.close();
   }
 }, 180_000);
+
+// models.dev answers from this fixture; the RocketClaw server only names its providers, openai and work.
+const modelsDev = { openai: { id: "openai", name: "OpenAI", models: {
+  "gpt-5": { id: "gpt-5", name: "GPT-5", reasoning: true, reasoning_options: [{ type: "effort", values: ["minimal", "low", "medium", "high"] }], limit: { context: 400000, output: 128000 }, cost: { input: 1.25, output: 10 } },
+  "gpt-6.1-sol": { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", reasoning: true, reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }], limit: { context: 1050000, output: 128000 }, cost: { input: 2, output: 10 } },
+} } };
+
+test("the model picker offers the server's providers, models.dev suggestions, and Test", async () => {
+  const alice = process.env.ROCKETCLAW_EDITOR_ALICE_URL!;
+  const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!);
+  const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
+  try {
+    const errors: string[] = [];
+    const call = async <T>(method: string, data: object) => {
+      const response = await fetch(`${alice}/api/${method}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
+      expect(response.status).toBe(200);
+      return await response.json() as T;
+    };
+    const until = async (what: string, check: () => Promise<boolean>) => {
+      for (const deadline = Date.now() + 15_000; !await check();) if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`); else await Bun.sleep(100);
+    };
+    expect((await fetch(`${alice}/test/unlimit`, { method: "POST" })).ok).toBe(true);
+    const { id } = await call<{ id: string }>("CreateAgentDraft", { name: "picker", mode: "easy" });
+    const model = async () => (await call<AgentDraftView>("GetAgentDraft", { id, since: "1" })).draft.variants[0].settings.find(({ key }) => key === "model")?.value;
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    page.on("pageerror", (error: Error) => errors.push(error.message));
+    let fetched = 0;
+    await page.route("https://models.dev/api.json", (route: { fulfill(options: object): Promise<void> }) => { fetched++; return route.fulfill({ json: modelsDev, headers: { "access-control-allow-origin": "*" } }); });
+    await page.goto(`${alice}/agents/drafts/${id}`);
+    const picker = page.getByRole("group", { name: "Model", exact: true });
+
+    // models.dev is fetched once the picker is first used, not with the page; only this installation's providers are
+    // offered.
+    await picker.getByText("None: every agent must name a model.", { exact: true }).waitFor();
+    expect(fetched).toBe(0);
+    await picker.getByRole("combobox", { name: "Model provider" }).click();
+    await page.getByRole("option", { name: "openai", exact: true }).waitFor();
+    expect(await page.getByRole("option").allTextContents()).toEqual(["work", "openai"]);
+    await page.getByRole("option", { name: "openai", exact: true }).click();
+
+    // openai matches models.dev's openai: each suggestion has its price, context and efforts, and links to slopalytics.
+    await picker.getByRole("combobox", { name: "Model", exact: true }).click();
+    const suggestions = picker.getByRole("list", { name: "Suggestions from models.dev for openai" });
+    const gpt5 = suggestions.getByRole("listitem").filter({ hasText: "GPT-5gpt-5" });
+    await gpt5.getByText("$1.25 in · $10 out per 1M tokens · 400K context · effort minimal, low, medium, high", { exact: true }).waitFor();
+    await suggestions.getByRole("listitem").filter({ hasText: "GPT-6.1 Sol" }).getByText("$2 in · $10 out per 1M tokens · 1.1M context · effort low, medium, high, xhigh, max", { exact: true }).waitFor();
+    expect(await suggestions.getByRole("link", { name: "Compare GPT-5 on slopalytics" }).getAttribute("href")).toBe("https://slopalytics.com/");
+    expect(fetched).toBe(1);
+
+    // A suggestion fills the model, and its efforts fill the effort choice.
+    await gpt5.getByRole("button").click();
+    await until("the model is gpt-5", async () => await model() === "gpt-5");
+    await picker.getByRole("combobox", { name: "Model effort" }).click();
+    await page.getByRole("option", { name: "Effort: low", exact: true }).waitFor();
+    expect(await page.getByRole("option").allTextContents()).toEqual(["Effort: default", "Effort: minimal", "Effort: low", "Effort: medium", "Effort: high"]);
+    await page.getByRole("option", { name: "Effort: low", exact: true }).click();
+    await until("the effort is low", async () => await model() === "gpt-5#low");
+
+    // models.dev has no provider called work: no suggestions, any name can be typed, and Test answers in plain words.
+    await picker.getByRole("combobox", { name: "Model provider" }).click();
+    await page.getByRole("option", { name: "work", exact: true }).click();
+    const typed = picker.getByRole("combobox", { name: "Model", exact: true });
+    await typed.fill("llama-4-maverik");
+    await picker.getByText("models.dev has no provider called “work”, so there are no suggestions. Type the exact model name it serves, then Test it.", { exact: true }).waitFor();
+    expect(await picker.getByRole("listitem").count()).toBe(0);
+    await until("the model is work's", async () => await model() === "work/llama-4-maverik#low");
+    await picker.getByText("Test sends one small paid request, only when you click.", { exact: true }).waitFor();
+    await picker.getByRole("button", { name: "Test", exact: true }).click();
+    await picker.getByRole("alert").getByText("This gateway serves no such model; it serves llama-4-maverick", { exact: true }).waitFor();
+    await typed.fill("llama-4-maverick");
+    await picker.getByRole("button", { name: "Test", exact: true }).click();
+    await picker.getByRole("status").getByText(/^Works\. work answered in \d+\.\d s\.$/).waitFor();
+    await until("the model is the one that works", async () => await model() === "work/llama-4-maverick#low");
+    expect(errors).toEqual([]);
+  } finally {
+    await browser.close();
+  }
+}, 120_000);

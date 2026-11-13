@@ -38,7 +38,7 @@ export type Agent = { name: string; model?: string; reasoning?: string; descript
 export type Skill = { name: string; description?: string; license?: string; compatibility?: string; content?: string; origin?: string };
 export type Workflow = { name: string; description?: string };
 export type PageEntry = { agent: string; space?: string; path: string };
-export type ConfigView = { workspace?: string; overlays?: string[]; slackChannels?: { channel?: string; agents?: string[] }[]; mcpServers?: string[]; loggingLevel?: string; autoApproverModel?: string; instrumentationEnabled?: boolean; mcpExternal?: boolean; tailscaleUser?: string };
+export type ConfigView = { workspace?: string; overlays?: string[]; slackChannels?: { channel?: string; agents?: string[] }[]; mcpServers?: string[]; loggingLevel?: string; autoApproverModel?: string; instrumentationEnabled?: boolean; mcpExternal?: boolean; tailscaleUser?: string; providers?: string[] };
 // An agent draft as the agent editor's RPCs answer it: revisions are int64 strings, and its first variant is the
 // agent itself. saveState is editing, saving, waiting (for a Git overlay's merge) or live.
 export type AgentDraft = { id: string; revision: string; name: string; mode: string; variants: { name: string; settings: { key: string; value: string }[]; body: string }[]; testChat: string; saveState: "editing" | "saving" | "waiting" | "live"; existing: boolean };
