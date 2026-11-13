@@ -1,4 +1,4 @@
-import { createEffect, createSignal, on, useContext, onCleanup, type JSX } from "solid-js"
+import { createEffect, createSignal, createUniqueId, on, useContext, onCleanup, type JSX } from "solid-js"
 // rocketclaw: navigation that leaves this session goes to RocketClaw (upstream packages/app/src/session/commands/use-session-commands.tsx)
 import { NavigationContext } from "@rocketclaw/host/navigation"
 import { createEventListener } from "@solid-primitives/event-listener"
@@ -57,6 +57,7 @@ export type SessionCommandContext = {
     move: () => Promise<void>
   }
   navigateMessageByOffset: (offset: number) => void
+  jumpToMessage: (id: string) => void
   revert: Pick<SessionRevert, "undo" | "redo" | "canUndo" | "canRedo">
   focusInput: () => void
   // The composer's model, which a compaction runs with.
@@ -71,7 +72,13 @@ const withCategory = (category: string) => {
 }
 
 // Loads a dialog's chunk and returns its renderer.
-async function loadDialog(kind: SessionDialogKind): Promise<() => JSX.Element> {
+async function loadDialog(kind: SessionDialogKind, context: SessionCommandContext): Promise<() => JSX.Element> {
+  if (kind === "jump") {
+    const { DialogJumpToMessage } = await import("./dialog-jump-to-message")
+
+    return () => <DialogJumpToMessage session={context.session} onJump={context.jumpToMessage} />
+  }
+
   if (kind === "fork") {
     const { DialogFork } = await import("@/session/commands/fork-dialog")
 
@@ -232,6 +239,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const permissionsCommand = withCategory(language.t("command.category.permissions"))
 
   const [commandsState, setCommandsState] = createSignal(createSessionCommandsState())
+  const jumpDialog = createUniqueId()
+  onCleanup(() => dialog.close(jumpDialog))
   // Renders each dialog once its chunk has loaded.
   const dialogs: Partial<Record<SessionDialogKind, () => JSX.Element>> = {}
   let dialogTimer: ReturnType<typeof setTimeout> | undefined
@@ -261,7 +270,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       const kind = effect.kind
       clearTimeout(dialogTimer)
       dialogTimer = setTimeout(() => dispatchCommands({ type: "dialog.timed-out", attempt }), effect.timeoutMs)
-      loadDialog(kind).then(
+      loadDialog(kind, actions).then(
         (render) => {
           dialogs[kind] = render
           dispatchCommands({ type: "dialog.loaded", attempt })
@@ -282,7 +291,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     if (effect.type === "dialog.show") {
       const render = dialogs[effect.kind]
 
-      if (render) dialog.show(render)
+      if (render) dialog.show(render, undefined, effect.kind === "jump" ? jumpDialog : undefined)
 
       return
     }
@@ -669,6 +678,14 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   ]
 
   const messageCmds = () => [
+    sessionCommand({
+      id: "session.jumpToMessage",
+      title: language.t("dialog.jump.title"),
+      description: language.t("command.session.jumpToMessage.description"),
+      keybind: "mod+alt+g",
+      disabled: !actions.session.identity.params.id,
+      onSelect: () => openDialog("jump"),
+    }),
     sessionCommand({
       id: "message.previous",
       title: language.t("command.message.previous"),
