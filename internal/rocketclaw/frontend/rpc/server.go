@@ -29,6 +29,7 @@ import (
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
@@ -954,7 +955,7 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 
 func conversationKind(kind backend.ConversationKind) ConversationKind {
 	switch kind {
-	case backend.KindWebChat:
+	case backend.KindWebChat, backend.KindAgentDraft:
 		return ConversationKind_WEB_CHAT
 	case backend.KindSlackThread:
 		return ConversationKind_SLACK_THREAD
@@ -1194,7 +1195,7 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 		Workspace: cfg.Workspace, Overlays: cfg.Overlays,
 		LoggingLevel: cfg.Logging.Level, AutoApproverModel: cfg.AutoApproverModel,
 		InstrumentationEnabled: cfg.Instrumentation.Enabled, McpExternal: cfg.MCPExternal.Enabled,
-		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)),
+		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)), Providers: cfg.ProviderNames(),
 	}
 
 	if login := metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-login-bin"); len(login) == 1 {
@@ -1209,6 +1210,19 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 	}
 
 	return &ListConfigResponse{Config: view}, nil
+}
+
+func (s *Server) testModel(ctx context.Context, request *TestModelRequest) *TestModelResponse {
+	elapsed, err := backend.TestModel(ctx, s.cfg.Clone(), request.Model)
+	if errAPI, ok := errors.AsType[*openai.Error](err); ok {
+		return &TestModelResponse{Error: cmp.Or(errAPI.Message, err.Error())}
+	}
+
+	if err != nil {
+		return &TestModelResponse{Error: err.Error()}
+	}
+
+	return &TestModelResponse{ElapsedMs: elapsed.Milliseconds()}
 }
 
 func (s *Server) listWorkflows(ctx context.Context) (*ListWorkflowsResponse, error) {
@@ -1573,7 +1587,8 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return nil, err
 	}
 
-	if err := s.promptable(ctx, request.Id); err != nil {
+	conversation, err := s.promptable(ctx, request.Id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1596,6 +1611,10 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		}
 
 		return &PromptResponse{}, nil
+	}
+
+	if conversation == backend.KindAgentDraft {
+		return nil, fmt.Errorf("web prompt: %w", status.Error(codes.FailedPrecondition, "A test chat takes messages only from its agent editor's Send."))
 	}
 
 	if len(words) > 0 && words[0] == "$agent" {
@@ -1835,6 +1854,10 @@ func (s *Server) queueItem(ctx context.Context, method string, request *QueueIte
 		return nil, fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "queue item ID is required"))
 	}
 
+	if err := s.queueKeptAsSent(ctx, request.Id); err != nil {
+		return nil, err
+	}
+
 	if method != "RemoveQueueItem" {
 		if err := s.turnFeedable(ctx, request.Id, method == "SteerQueueItem"); err != nil {
 			return nil, err
@@ -1873,11 +1896,28 @@ func (s *Server) reorderQueue(ctx context.Context, request *ReorderQueueRequest)
 		return nil, err
 	}
 
+	if err := s.queueKeptAsSent(ctx, request.Id); err != nil {
+		return nil, err
+	}
+
 	if err := s.backend.ReorderQueueItems(request.Id, request.ItemIds); err != nil {
 		return nil, fmt.Errorf("reorder web queue: %w", err)
 	}
 
 	return &QueueItemResponse{}, nil
+}
+
+func (s *Server) queueKeptAsSent(ctx context.Context, id string) error {
+	kind, _, err := s.sessions.ConversationKind(ctx, id)
+	if err != nil {
+		return fmt.Errorf("resolve web conversation kind: %w", err)
+	}
+
+	if kind == backend.KindAgentDraft {
+		return fmt.Errorf("web queue: %w", status.Error(codes.FailedPrecondition, "A test chat's messages run as they were sent, in order: restart the chat to change them."))
+	}
+
+	return nil
 }
 
 func (s *Server) listPending(ctx context.Context, response *HistoryResponse, request *HistoryRequest) error {
@@ -1975,12 +2015,13 @@ func (s *Server) answerQuestion(ctx context.Context, request *AnswerQuestionRequ
 	return &AnswerQuestionResponse{}, nil
 }
 
-func (s *Server) promptable(ctx context.Context, id string) error {
-	if kind, _, err := s.sessions.ConversationKind(ctx, id); err != nil || kind == backend.KindRemote {
-		return fmt.Errorf("web prompt: %w", cmp.Or(err, status.Error(codes.InvalidArgument, "remote OpenCode sessions are driven in their own frame")))
+func (s *Server) promptable(ctx context.Context, id string) (backend.ConversationKind, error) {
+	kind, _, err := s.sessions.ConversationKind(ctx, id)
+	if err != nil || kind == backend.KindRemote {
+		return kind, fmt.Errorf("web prompt: %w", cmp.Or(err, status.Error(codes.InvalidArgument, "remote OpenCode sessions are driven in their own frame")))
 	}
 
-	return s.visibleConversation(ctx, id)
+	return kind, s.visibleConversation(ctx, id)
 }
 
 func (s *Server) turnFeedable(ctx context.Context, id string, joins bool) error {
@@ -2019,13 +2060,17 @@ func (s *Server) visibleConversation(ctx context.Context, id string) error {
 		return fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "conversation ID is required"))
 	}
 
-	_, found, err := s.sessions.ConversationKind(ctx, id)
+	kind, found, err := s.sessions.ConversationKind(ctx, id)
 	if err != nil {
 		return fmt.Errorf("resolve web conversation visibility: %w", err)
 	}
 
 	if !found {
 		return fmt.Errorf("web conversation: %w", status.Error(codes.NotFound, "conversation is not recorded"))
+	}
+
+	if kind == backend.KindAgentDraft && limit.Limited() {
+		return agentEditorRefusal()
 	}
 
 	parent, err := s.sessions.ShadowParent(ctx, id)
@@ -2076,7 +2121,11 @@ func (s *Server) readableConversation(ctx context.Context, id string) error {
 }
 
 func (s *Server) join(request *JoinRequest, stream grpc.ServerStream) error {
-	if err := s.visibleConversation(stream.Context(), request.Id); err != nil {
+	if strings.HasPrefix(request.Id, "draft:") {
+		if _, err := s.editor(stream.Context()); err != nil {
+			return err
+		}
+	} else if err := s.visibleConversation(stream.Context(), request.Id); err != nil {
 		return err
 	}
 

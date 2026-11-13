@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"testing/fstest"
 	"time"
 	"unicode"
 
@@ -2093,22 +2094,29 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	shared := &turnRoot{root: root, users: 1}
 	defer shared.release()
 
-	agents, skills, err := loadRocketCodeDefinitionsIn(root, b.runtime, runtimeCfg.RuntimeDirName(), toolModePersistent)
+	self, rootAgent, replyTurn, origin := b.config.ConversationID, agentName, turnID, msg
+
+	var jobs []backgroundKey
+
+	if b.parent != "" {
+		if self, replyTurn, origin, jobs, err = b.config.SessionService.subagentLineage(ctx, b.config.ConversationID); err != nil {
+			return runResult{}, err
+		}
+	}
+
+	layer, err := agentDraftFiles(origin)
+	if err != nil {
+		return runResult{}, err
+	}
+
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, b.runtime, runtimeCfg.RuntimeDirName(), toolModePersistent, layer)
 	if err != nil {
 		return runResult{}, fmt.Errorf("open workspace agent and skills: %w", err)
 	}
 
 	appendOverlayPromptToAgent(agents, agentName, runtimeCfg)
 
-	self, rootAgent, replyTurn, origin := b.config.ConversationID, agentName, turnID, msg
-
-	var jobs []backgroundKey
-
 	if agent, ok := agents.Items[agentName]; ok && b.parent != "" {
-		if self, replyTurn, origin, jobs, err = b.config.SessionService.subagentLineage(ctx, b.config.ConversationID); err != nil {
-			return runResult{}, err
-		}
-
 		var owner *Bridge
 		if owner, err = b.threads.recordedBridge(ctx, self); err != nil {
 			return runResult{}, err
@@ -2269,7 +2277,13 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, customTools...)
 
 	rocketcodeConfig.ChildContext, rocketcodeConfig.OriginHeader = childContext, originHeader
-	if !b.shadow && !b.underShadow {
+
+	switch {
+	case layer != nil:
+		rocketcodeConfig.CustomTools = slices.DeleteFunc(rocketcodeConfig.CustomTools, func(tool harness.Tool) bool {
+			return slices.Contains([]string{sessionsWriteToolName, scheduleMessageToolName, resetScheduledMessagesToolName, updateGoalToolName}, tool.Name)
+		})
+	case !b.shadow && !b.underShadow:
 		rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: b.background, root: shared, conversationID: b.config.ConversationID, origin: msg}
 	}
 
@@ -2343,6 +2357,21 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	if captured {
 		prepared = snapshot.Inputs[0]
+
+		if b.shadow && layer != nil {
+			var data []byte
+			if err := queryScalar(ctx, b.config.SessionService.db, "read shadow admission", `SELECT inbound_json FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = $2`, &data, b.config.ConversationID, turnID); err != nil {
+				return runResult{}, err
+			}
+
+			parent := new(protocol.InboundMessage)
+			if err := json.Unmarshal(data, parent); err != nil {
+				return runResult{}, fmt.Errorf("decode shadow admission: %w", err)
+			}
+
+			prepared.Texts = []string{buildPrompt(parent, &agent, false)}
+			prepared.Header, _, _ = strings.Cut(prepared.Texts[0], "\n\n")
+		}
 	} else {
 		agent := agents.Items[agentName]
 
@@ -2352,7 +2381,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 
 		header, _, _ = strings.Cut(prompt, "\n\n")
-		prepared = harness.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey], turnID+"/initial"), TurnID: turnID, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: inboundDirectSkill(msg)}
+		prepared = harness.PromptInput{ID: cmp.Or(msg.Metadata["web_message_id"], msg.Metadata[backgroundNotesMetadataKey], msg.Metadata[agentDraftMessageMetadataKey], turnID+"/initial"), TurnID: turnID, Texts: []string{prompt}, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: inboundDirectSkill(msg)}
 		prepared.ExpandShellCommands = msg.Cronjob != nil && msg.Metadata[backgroundNotesMetadataKey] == ""
 		snapshot.Inputs, snapshot.Environment, snapshot.ChildContext = []harness.PromptInput{prepared}, shellEnv, childContext
 
@@ -2729,21 +2758,48 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 	return strings.Join(lines, "\n")
 }
 
-func loadRocketCodeDefinitionsIn(root *os.Root, locked *config.LockedConfig, runtimeDir string, mode toolMode) (agents harness.Agents, skills harness.Skills, err error) {
+func loadRocketCodeDefinitionsIn(root *os.Root, locked *config.LockedConfig, runtimeDir string, mode toolMode, layer map[string]string) (agents harness.Agents, skills harness.Skills, err error) {
 	err = locked.Do(func(cfg *config.Config) error {
-		agents, skills, err = readRocketCodeDefinitionsIn(root, cfg, runtimeDir, mode)
+		agents, skills, err = readRocketCodeDefinitionsIn(root, cfg, runtimeDir, mode, layer)
 		return err
 	})
 
 	return agents, skills, err
 }
 
-func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir string, mode toolMode) (harness.Agents, harness.Skills, error) {
+func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir string, mode toolMode, layer map[string]string) (harness.Agents, harness.Skills, error) {
 	rootFS := root.FS()
 
 	agentsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(runtimeDir, "agents")))
 	if err != nil {
 		return harness.Agents{}, harness.Skills{}, fmt.Errorf("open agents dir: %w", err)
+	}
+
+	if layer != nil {
+		files := fstest.MapFS{}
+
+		if err := fs.WalkDir(agentsFS, ".", func(name string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+
+			data, err := fs.ReadFile(agentsFS, name)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", name, err)
+			}
+
+			files[name] = &fstest.MapFile{Data: data}
+
+			return nil
+		}); err != nil {
+			return harness.Agents{}, harness.Skills{}, fmt.Errorf("read agents dir: %w", err)
+		}
+
+		for name, text := range layer {
+			files[name] = &fstest.MapFile{Data: []byte(text)}
+		}
+
+		agentsFS = files
 	}
 
 	skillsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(runtimeDir, "skills")))
@@ -2767,18 +2823,7 @@ func readRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 	for name := range agents.Items {
 		agent := agents.Items[name]
 
-		tagsKey := "permission.rocketclaw." + setTagToolName
-		if agent.Mode == harness.AgentModeEasy {
-			tagsKey = "tags"
-		}
-
-		groups, err := agentTagGroups(&agent)
-		if err != nil {
-			err = fmt.Errorf("%s: %w", tagsKey, err)
-		} else if _, _, errRecipients := agentRecipients(&agent); errRecipients != nil {
-			err = fmt.Errorf("permission.rocketclaw.%s: %w", recipientSetting, errRecipients)
-		}
-
+		groups, err := checkedAgentTagGroups(&agent)
 		if err != nil {
 			if strings.Contains(name, "/") {
 				slog.Warn("load shadow definition", "path", agent.Location, "error", err)
@@ -2862,7 +2907,7 @@ func LoadRuntimeDefinitions(cfg *config.LockedConfig, runtimeDir string) (harnes
 
 	defer func() { _ = root.Close() }()
 
-	return loadRocketCodeDefinitionsIn(root, cfg, runtimeDir, toolModePersistent)
+	return loadRocketCodeDefinitionsIn(root, cfg, runtimeDir, toolModePersistent, nil)
 }
 
 func ExternalMCPAgentsIn(cfg *config.LockedConfig, runtimeDir string) ([]string, error) {
@@ -3534,17 +3579,20 @@ func externalMCPMetadataEnv(conversationID string, metadata map[string]string) m
 	env := map[string]string{rocketclawConversationIDEnv: strings.TrimSpace(conversationID)}
 
 	for key, value := range metadata {
-		key = strings.Map(func(r rune) rune {
-			if 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' {
-				return r
-			}
-
-			return '_'
-		}, strings.ToUpper(key))
-		env[rocketclawMetadataEnvPrefix+key] = value
+		env[externalMCPMetadataVariable(key)] = value
 	}
 
 	return env
+}
+
+func externalMCPMetadataVariable(key string) string {
+	return rocketclawMetadataEnvPrefix + strings.Map(func(r rune) rune {
+		if 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' {
+			return r
+		}
+
+		return '_'
+	}, strings.ToUpper(key))
 }
 
 func externalMCPStoredMetadataEnv(conversationID string, entries []ObservedSessionEntry) (map[string]string, bool) {

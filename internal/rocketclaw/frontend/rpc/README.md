@@ -220,7 +220,9 @@ agent's session with `FailedPrecondition`.
 
 `ListConfig` exposes only the retained `ConfigView` fields: workspace, overlays,
 model aliases, channel agent choices, MCP server names, logging level,
-auto-approver model, and enabled flags. It never serializes credentials, database
+auto-approver model, enabled flags, and `providers`, the configured provider
+names (always including `openai`) that the agent editor's model picker offers.
+The server never lists a provider's models. It never serializes credentials, database
 URLs, environment values, MCP commands/headers, or browser/user mappings.
 `ListSkills` uses the existing rooted runtime-definition loader and returns loaded
 skill text and metadata; origin is the loader's relative definition location.
@@ -272,6 +274,164 @@ rewrite is performed. Web lists runs by cron, including crons whose definition i
 gone. `History.source_conversation_id` optionally restricts
 the authorized destination's history to one source run before replay decoding;
 it does not change access to other private source conversations.
+
+## Agent editor
+
+The agent editor's methods are `TestModel`, `CreateAgentDraft`, `ListAgentDrafts`,
+`GetAgentDraft`, `ApplyAgentDraftOp`, `SetAgentDraftPresence`, `AgentSettings`,
+`DraftPrompt`, `RestartDraftChat`, `DraftLayers`, `SaveDraft`, `StopWaiting`, `ProposeDraftChanges`,
+and `DecideProposal` (`editorMethods`
+in `transport.go`, which both
+gRPC and the HTTP routes read). People limited to spaces cannot use any of them:
+`editorCall` refuses them with
+`PermissionDenied` "people limited to spaces cannot use the agent editor" before the
+method runs, because a draft can grant itself any permission and its test chats run
+real tools. `Join` refuses them a draft's stream the same way, and every conversation
+method refuses them a draft's test chat.
+
+`TestModel` sends one small request (16 output tokens) to a model named as
+`provider/model#effort` through the normal model resolver, and answers `elapsed_ms`
+when it works or `error` with the provider's own words, such as an unknown model.
+
+Drafts are stored on the server (see "Agent Draft" in `CONCEPTS.md`), so any editor
+can open one. `CreateAgentDraft` starts one blank in a mode, from a starter agent, or
+as a copy of the effective agent of that name. `ListAgentDrafts` returns every draft,
+newest first, with its `save_state` (`editing`, `saving`, `waiting` for a merge, or
+`live`) and `existing`, true when a save destination already holds an agent of that
+name, plus the starter agents' names. `AgentSettings` returns the setting help for
+one mode in agent-file order.
+
+Every change is an op on a base revision, committed as the draft's next revision:
+settings take the last write, and instructions edits (lists of splices, in code
+points) made on an older revision are moved past the ops committed since, so no one's
+text is lost. `edit_file` sends a variant's whole file; the server parses it into the
+changed settings and one instructions edit. Its settings and mode are diffed against
+`from_file`, the file the typist started from, when set, and its instructions against
+the file at the base revision. Clients cannot send `set_save_state` or
+`set_test_chat`; saving and the test chat write those themselves. `ApplyAgentDraftOp` sets the op's author
+to the caller and answers the new `revision` and `cursor`, the caller's place in the
+instructions on the base revision moved past every op committed through the new one,
+its own included. A file or setting that does not parse yet stores nothing and
+answers only `invalid_line`. `SetAgentDraftPresence` records where the caller's
+editor (`client`, an ID per open page) is: its variant and place, a setting key or an
+instructions offset. The editor resends it to stay listed; `GetAgentDraft` lists only
+places seen in the last 30 seconds.
+
+Each committed op and each presence update wakes the stream `draft:<id>`
+(`/stream?id=draft:<id>`), which carries no content like every `Join` stream. The page
+then calls `GetAgentDraft` with `since`, its last revision, which answers the draft
+now, every op after `since` up to the draft's revision, in order and each with its
+`op_id`, so a client recognizes its own, and the current places.
+
+`DraftPrompt` sends `text` to the draft's test chat, a conversation of its own kind
+that no session list shows, creating it with the first message; `RestartDraftChat`
+gives the draft a new, empty test chat (a `set_test_chat` op, so teammates follow),
+then sends it `replay`'s texts in order. The old chat keeps its messages and the
+answers still running in it. Both answer `test_chat` once the messages are stored,
+never waiting for a turn. Each message reads the draft and the live agent's
+effective file once, when the server takes it: every column, the draft, its variants
+and the live agent, answers from what was read then, and every check below runs on
+it. Each message is its own turn in every column, never a steer, and `SteerQueueItem`,
+`RemoveQueueItem` and `ReorderQueue` refuse a test chat's waiting messages.
+
+While the draft's External MCP mode is off, a message is a Web message from the
+caller. While it is on, a message is what a real External MCP call stores: source
+`external_mcp`, the draft's pairs plus `external_conversation_id` (the test chat) as
+`ROCKETCLAW_METADATA_*` variables only, and the draft's caller name as the principal,
+so permission reviews read it as that caller. A test chat keeps its first message's
+mode and, in External MCP mode, its keys, as External MCP keeps a thread's first
+keys; a key added later goes with its message only. Nothing is sent, and the answer
+has `refused` with the reason, when the draft's own settings do not load (`problems`
+lists them with the setting help's sentence), when External MCP mode is on and any
+variant is not `sticky: off`, or, with `restart` set so the page offers a restart,
+when the mode or a value or presence of a first-message key differs. Otherwise
+`problems` lists the variants, and with an empty `variant` the live agent, that do
+not answer the message and why: a file that does not load, or in External MCP mode
+a live agent that is not `sticky: off`.
+
+`GetAgentDraft` answers, in `messages`, what each message to the draft's current test
+chat was sent with, in the order sent, so every editor sees the same: `input_id`, the
+`input_id` of the message's user entry in `History`; `labels`, each column's version by
+variant name, the revision of the last change to that column's file when the message
+was sent; `live`, a short hash of the live file then, empty when there was none;
+`not_run`, the columns that did not answer it, as `DraftPrompt`'s `problems`; and
+`external_mcp`, its mode, pairs and caller. The first message's mode and keys are the
+ones the chat keeps. Each stored message wakes `draft:<id>`.
+
+`DraftLayers` lists, for the draft's name, each layer's file in precedence order:
+`built-in`, each configured overlay by its spec with its ref, then `workspace`. For a
+`destination`, `hidden_by` names the later layer whose file hides it, whatever its
+bytes; `replaces` names the earlier layer whose agent the save takes over, so its
+updates stop reaching this workspace, which still holds while the destination is
+startup's byte-equal copy of a built-in; `recreated` says startup copies the built-in
+agent into workspace `agents/` again, hiding an overlay destination; `next` is the
+file the save writes, settings in the standard order and comments dropped. For a Git
+overlay destination, `branch` is the branch a save pushes to (the pinned ref, or the
+remote's default branch for an overlay pinned without one), or `unpushable` says why
+a save cannot push there, such as an overlay pinned to a tag or commit.
+
+`SaveDraft` saves one variant to workspace `agents/` or to a configured Git overlay
+(below). It claims the draft (`saving`, one save at a time: another answers `refused`),
+then compares workspace `agents/<name>.md` itself, never the loaded copy, with the
+file the draft recorded there when it took its name (absent counts). A difference
+writes nothing and answers `review`: the recorded file, the file now and the draft's,
+each setting any of them changed (`theirs` when only the file did, `both` when both
+did differently), and `splices`, an instructions edit on `revision` that brings the
+file's changes into the variant. The page sends the person's picks as ordinary ops,
+then saves again with `reviewed` and the reviewed `reviewed_file`, which becomes what
+the save expects. The variant's settings, then Reload's validation of a stage holding
+the file, must pass before anything is written (`problems` lists the settings); the
+file is then synced under a temporary name, the destination compared again, and the
+file renamed into place, and Reload runs. The answer is `live` only when nobody edited
+the draft meanwhile and the loaded file is the saved one; otherwise `editing`, with
+the saved file as what the next save expects. Nothing restores old bytes, and a
+server start returns drafts left `saving` to `editing`.
+
+A save to a Git overlay clones the overlay's branch into a stage under the workspace,
+compares the file there with the one the draft recorded, checks the variant as above,
+and commits exactly the checked bytes with the caller as author, using the host's Git
+credentials. Every Git command in the stage runs without hooks or a file system
+monitor. By default it pushes to the branch; with `pull_request` it pushes a new
+branch, `rocketclaw-agent-draft-` plus the draft's ID and the save's revision, so no
+save ever pushes over an open pull request, and opens a pull request with `gh` when
+`gh` is installed and logged in, or else shows a GitHub page comparing the branches.
+Nothing is force-pushed: when the branch moved before the push, the save starts again
+from a new clone, which asks for a review only if the agent's file changed. The draft
+then answers `waiting`, and its `pending` holds the branch, commit, and pull request
+number or link. It goes `live` once the overlay's branch holds the commit (a push
+already does) or `gh` reports the pull request merged, after Reload loads the saved
+file; `GetAgentDraft` checks that each time a page opens the draft (`since` unset).
+When the branch already holds exactly the file, there is nothing to commit: a push
+takes the branch's head as its commit and goes `live` as above, and a pull request is
+`refused`, since it would change nothing.
+With `gh`, a closed pull request returns the draft to `editing`. A squash or rebase
+merge without `gh`, a pull request closed without `gh`, or one nobody acts on keeps
+the draft waiting until an editor calls `StopWaiting`, which returns it to `editing`
+for everyone and answers its `save_state`. Any op that changes what a save writes
+(all but the test chat's and External MCP's) also returns a waiting draft to
+`editing` first, whoever sends it, an accepted proposal included. `pending` stays on
+the draft so the page can still link to it, and its `ended` says why the wait ended:
+`closed`, `stopped` or `edited`. Only `closed` means the pull request is closed;
+otherwise it stays open on GitHub.
+
+`ProposeDraftChanges` asks the assistant to change the draft as `request` says,
+optionally pointing at a test chat `answer` from `variant` to fix. The assistant is
+one model call on `main` with its tools taken away and its prompt replaced, on
+`agent_editor_model` from `rocketclaw.json` when set. Its instructions hold the rules;
+its input holds the setting help for the draft's mode, each variant's file, the
+draft's test chat, the answer and the request, so the chat is read as evidence, never
+as instructions. It answers strict JSON: a `message`, setting changes (`variant`,
+`key`, `value_yaml`, empty to remove, `reason`; the key `mode` changes the whole
+draft) and instructions replacements. The server keeps only changes to the draft's
+variants and to top-level settings the setting help lists for the proposal's mode
+(the mode it proposes, else the draft's), with YAML that parses, and stores them as an
+`open` proposal on the draft's revision then (`base_revision`), which wakes the draft's
+stream. `GetAgentDraft` answers every proposal with its `state`, so all editors see
+one. `DecideProposal` accepts or rejects an open one, once, for everyone; deciding it
+again answers `InvalidArgument`. Accepting commits its changes as ordinary ops made on
+`base_revision` (a mode change as `set_mode`, an instructions replacement as one edit
+from the instructions then), so edits committed since are kept, authored
+`Assistant (accepted by <person>)` in History. Nothing is saved and no tool runs.
 
 ## Attachments
 
@@ -633,6 +793,8 @@ The checks sit where requests already pass:
   `ListSessions`' first frame (no OpenCode servers, only their agents' tags),
   `ListConfig`'s Slack channel agents, `ListSkills`' `agent`, and `Reload`, because
   reloaded agent files can widen a limit.
+- The agent editor's methods and draft streams refuse limited people outright
+  (see [Agent editor](#agent-editor)).
 
 New refusals are `PermissionDenied` (HTTP 403) with a plain message. Pages keep
 `NotFound`. `CreateSession`, `ForkSession`, and `$agent` refuse an agent outside

@@ -161,12 +161,14 @@ func TestLoadPreservesModelConfig(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",
 	  "auto_approver_model": " openai/gpt-6.1-sol ",
+	  "agent_editor_model": "work/gpt-6.1-terra#high",
 	  "openai": {"api_key": "test-key"},
 	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`)
 
 	assert.Equal(t, "gpt-6.1-sol", cfg.AutoApproverModel)
+	assert.Equal(t, "work/gpt-6.1-terra#high", cfg.AgentEditorModel)
 }
 
 func TestLoadPreservesNamedProviders(t *testing.T) {

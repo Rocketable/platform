@@ -20,6 +20,8 @@ const (
 	AgentModeEasy     AgentMode = "easy"
 )
 
+func (m AgentMode) Valid() bool { return m == AgentModeEasy || m == AgentModeAdvanced }
+
 type AgentLoadConfig struct {
 	MCPToolGroups     map[string]map[string][]string
 	Providers         []string
@@ -33,9 +35,8 @@ type AgentRoutine struct {
 }
 
 func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
-	node := agent.FrontmatterNode
-	if err := checkKeys(node, "", "not an easy-mode key", "mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN",
-		"commands", "mcp", "rocketclaw", "tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema", "sticky", "decision"); err != nil {
+	node, keys := agent.FrontmatterNode, easyKeys()
+	if err := checkKeys(node, "", "not an easy-mode key", keys[""]...); err != nil {
 		return err
 	}
 
@@ -43,8 +44,8 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 		return errors.New("space: required non-empty string")
 	}
 
-	for _, nested := range [][]string{{"approver", "model", "prompt", "decision"}, {"schema", "output"}} {
-		if err := checkKeys(frontmatterField(node, nested[0]), nested[0]+".", "not an easy-mode key", nested[1:]...); err != nil {
+	for _, parent := range []string{"approver", "schema"} {
+		if err := checkKeys(frontmatterField(node, parent), parent+".", "not an easy-mode key", keys[parent]...); err != nil {
 			return err
 		}
 	}
@@ -324,6 +325,16 @@ func checkKeys(node *yaml.Node, prefix, problem string, keys ...string) error {
 	}
 
 	return nil
+}
+
+func easyKeys() map[string][]string {
+	return map[string][]string{
+		"": {"mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN", "commands", "mcp", "rocketclaw",
+			"tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema", "sticky", "decision"},
+		"approver":          {"model", "prompt", "decision"},
+		"approver.decision": {"model", "minConfidence", "prompt"},
+		"schema":            {"output"},
+	}
 }
 
 func easyList(node *yaml.Node, key string) ([]string, error) {

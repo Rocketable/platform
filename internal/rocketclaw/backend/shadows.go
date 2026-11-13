@@ -645,7 +645,7 @@ func (b *Bridge) startShadowWorkers(ctx context.Context, turn string) error {
 
 func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, parent, agent string) ([]string, error) {
 	var unshadowed bool
-	if err := queryScalar(ctx, db, "read shadow ownership", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND (shadow_parent IS NOT NULL OR cron_path LIKE 'agents/%')`, &unshadowed, parent); err != nil || unshadowed {
+	if err := queryScalar(ctx, db, "read shadow ownership", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND (shadow_parent IS NOT NULL OR cron_path LIKE 'agents/%' OR kind = $2)`, &unshadowed, parent, KindAgentDraft); err != nil || unshadowed {
 		return nil, err
 	}
 
@@ -683,16 +683,21 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 	}
 
 	names := definitions.ShadowNames(agent)
+
+	return names, s.bindShadows(ctx, db, parent, agent, names)
+}
+
+func (s *SessionService) bindShadows(ctx context.Context, db stateStoreDB, parent, agent string, names []string) error {
 	if len(names) > 0 {
 		if _, err := (stateDAO{db: db}).createConversation(ctx, protocol.Conversation{ID: parent, Agent: agent}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	for _, name := range names {
 		var exists bool
 		if err := db.QueryRowContext(ctx, `SELECT count(*) > 0 FROM conversations WHERE shadow_parent = $1 AND parent_agent = $2 AND shadow_agent = $3`, parent, agent, name).Scan(&exists); err != nil {
-			return nil, fmt.Errorf("read shadow binding: %w", err)
+			return fmt.Errorf("read shadow binding: %w", err)
 		}
 
 		if exists {
@@ -701,16 +706,16 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 
 		id := rand.Text()
 		if _, err := (stateDAO{db: db}).createConversation(ctx, protocol.Conversation{ID: id, Agent: name}, conversationFacts{kind: KindShadow}, harness.AgentStickyOff); err != nil {
-			return nil, err
+			return err
 		}
 
 		if _, err := db.ExecContext(ctx, `UPDATE conversations SET shadow_parent = $2, parent_agent = $3, shadow_agent = $4 WHERE conversation_id = $1`, id, parent, agent, name); err != nil {
-			return nil, fmt.Errorf("attach shadow binding: %w", err)
+			return fmt.Errorf("attach shadow binding: %w", err)
 		}
 
 		observed, err := (stateDAO{db: db}).observedEntries(ctx, parent)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		var entries []harness.SessionEntry
@@ -733,11 +738,11 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 		}
 
 		if _, err := s.copySessionPrefix(ctx, db, id, entries, producers, ""); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
-	return names, nil
+	return nil
 }
 
 func (b *Bridge) admitShadowInputs(ctx context.Context, db stateStoreDB, request *bridgeRequest, agent, turn string) error {
@@ -751,7 +756,29 @@ func (b *Bridge) admitShadowInputs(ctx context.Context, db stateStoreDB, request
 }
 
 func (s *SessionService) startShadowManifests(ctx context.Context, db stateStoreDB, parent, agent, turnID string, inbound *protocol.InboundMessage) error {
-	names, err := s.reconcileShadows(ctx, db, parent, agent)
+	files, err := agentDraftFiles(inbound)
+	if err != nil {
+		return err
+	}
+
+	var names []string
+
+	if files == nil {
+		names, err = s.reconcileShadows(ctx, db, parent, agent)
+	} else {
+		for file := range files {
+			if variant, ok := strings.CutPrefix(file, agent+"/"); ok {
+				names = append(names, agent+"/"+strings.TrimSuffix(variant, ".md"))
+			}
+		}
+
+		if _, ok := inbound.Metadata[agentDraftLiveMetadataKey]; ok {
+			names = append(names, agent)
+		}
+
+		err = s.bindShadows(ctx, db, parent, agent, names)
+	}
+
 	if err != nil || len(names) == 0 {
 		return err
 	}
@@ -766,6 +793,20 @@ ORDER BY shadow_agent`, parent, agent, turnID, string(removeSessionEntryNUL(data
 	return err
 }
 
+func agentDraftFiles(msg *protocol.InboundMessage) (map[string]string, error) {
+	data, ok := msg.Metadata[agentDraftFilesMetadataKey]
+	if !ok {
+		return nil, nil
+	}
+
+	var files map[string]string
+	if err := json.Unmarshal([]byte(data), &files); err != nil {
+		return nil, fmt.Errorf("decode agent draft files: %w", err)
+	}
+
+	return files, nil
+}
+
 func (s *SessionService) claimShadowTurn(ctx context.Context, child string) (activeTurn, bool, error) {
 	tx, err := s.beginStateTx(ctx, "shadow turn claim")
 	if err != nil {
@@ -778,14 +819,16 @@ func (s *SessionService) claimShadowTurn(ctx context.Context, child string) (act
 	}
 
 	var (
-		id   int64
-		data []byte
+		id                       int64
+		data                     []byte
+		shadowAgent, parentAgent string
 	)
 
 	err = tx.QueryRowContext(ctx, `WITH head AS (
 SELECT id, inbound_json, inputs FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = '' AND terminal = '' ORDER BY id LIMIT 1),
 busy AS (SELECT count(*) AS n FROM turns WHERE conversation_id = $1 AND phase NOT IN ('waiting', 'done'))
-SELECT h.id, h.inbound_json FROM head h CROSS JOIN busy b WHERE jsonb_array_length(h.inputs) > 0 AND b.n = 0`, child).Scan(&id, &data)
+SELECT h.id, h.inbound_json, c.shadow_agent, c.parent_agent FROM head h CROSS JOIN busy b JOIN conversations c ON c.conversation_id = $1
+WHERE jsonb_array_length(h.inputs) > 0 AND b.n = 0`, child).Scan(&id, &data, &shadowAgent, &parentAgent)
 	if errors.Is(err, sql.ErrNoRows) {
 		return activeTurn{}, false, nil
 	}
@@ -805,6 +848,19 @@ SELECT h.id, h.inbound_json FROM head h CROSS JOIN busy b WHERE jsonb_array_leng
 	inbound.PreserveWhitespace = parent.PreserveWhitespace
 	if name := parent.Metadata[protocol.InboundPrincipalNameMetadataKey]; name != "" {
 		inbound.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: name, protocol.InboundPrincipalEmailMetadataKey: parent.Metadata[protocol.InboundPrincipalEmailMetadataKey]}
+	}
+
+	if files, ok := parent.Metadata[agentDraftFilesMetadataKey]; ok {
+		if shadowAgent == parentAgent {
+			live, _ := json.Marshal(map[string]string{shadowAgent + ".md": parent.Metadata[agentDraftLiveMetadataKey]})
+			files = string(live)
+		}
+
+		if inbound.Metadata == nil {
+			inbound.Metadata = map[string]string{}
+		}
+
+		inbound.Metadata[agentDraftFilesMetadataKey] = files
 	}
 
 	turnID := fmt.Sprintf("shadow-turn-%d", id)
