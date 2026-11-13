@@ -504,6 +504,8 @@ active tab.
   the view first opens shows a notice; once open, the view shows its own
   reconnecting banner. Forks and other referenced sessions open in new tabs, child
   sessions open inside the view, and deleting the shown session closes its tab.
+  The view shows the session its tab names or one of that session's child
+  sessions, even when tabs change while a session loads.
   Escape never closes a remote session's tab. RocketClaw's global shortcuts win
   throughout the view, including while OpenCode's terminal has focus, without
   also sending the shortcut to the terminal. ⌘P and ⌘⇧P open RocketClaw's palette.

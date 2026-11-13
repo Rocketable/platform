@@ -319,6 +319,28 @@ test("moving the view back before the session it left for shows stays on the ses
   expect(view.root.textContent).toContain("answer in ses_a")
 })
 
+// docs/verification/oc-view-session: closing the shown tab moves the view and prunes that tab while the view still
+// shows it, and OpenCode then moves to the pruned tab's neighbour, which must not win over the move.
+test("closing the shown tab moves the view to the tab RocketClaw shows, not to the closed tab's neighbour", async () => {
+  const response = await fetch(`${url}/api/session/ses_a/fork`, { method: "POST", body: "{}" })
+  const other: string = (await response.json()).data.id
+  const view = show()
+  await answered(view)
+  view.keep(["ses_a", linked, other])
+
+  for (const id of [linked, other, "ses_a"]) {
+    view.show(id)
+    await answered(view, id)
+  }
+
+  view.show(other)
+  view.keep([linked, other])
+  // Without the fix the view lands on the linked session, ses_a's neighbour among OpenCode's tabs.
+  await new Promise((resolve) => setTimeout(resolve, 1000))
+  expect(calls.reported.at(-1)).toBe(other)
+  expect(view.root.textContent).toContain(`answer in ${other}`)
+})
+
 test("Back stops at the session the view was moved to", async () => {
   const { createViewHistory } = await import("./navigation")
   const history = createViewHistory("/a")
