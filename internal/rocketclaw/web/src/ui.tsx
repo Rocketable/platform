@@ -17,7 +17,7 @@ import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCErro
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Layers, LayoutGrid, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Layers, LayoutGrid, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, Fragment, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -232,6 +232,8 @@ function QueuePanel({
   const saving = useRef(false);
   const update = useMutation({ mutationKey: ["editQueueItem", conversationId], mutationFn: mutations.editQueueItem, onSettled: () => queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const settling = useIsMutating({ mutationKey: ["editQueueItem", conversationId] }) > 0;
+  // A paused agent runs queued work only after it is resumed; stashed items still pop into the queue.
+  const held = usePausedChats()(conversationId) ? "Runs after the agent is resumed" : undefined;
   if (edit && !settling && !items.some((item) => item.id === edit.id && item.delivery !== "STEER")) setEdit(undefined);
   const queueActionLabel = busy ? "Steer" : "Send";
   if (items.length === 0 && !jobs && !update.error) {
@@ -304,7 +306,8 @@ function QueuePanel({
               type="button"
               variant="ghost"
               size="sm"
-              disabled={sending || settling || edit?.id === item.id || (item.delivery === "STASH" && poppingId !== "") || item.id === steeringId}
+              disabled={sending || settling || edit?.id === item.id || (item.delivery === "STASH" ? poppingId !== "" : !!held) || item.id === steeringId}
+              title={item.delivery === "STASH" ? undefined : held}
               onClick={async () => {
                 if (item.delivery !== "STASH") {
                   // The first steer claims the row; a second click would find it gone.
@@ -371,7 +374,8 @@ function BackgroundJobs({ id, jobs, openCall, onChange }: { id: string; jobs: Ba
 
 // QuestionCard asks a Web turn's pending question as a Questionnaire
 // (https://ui.shadcn.com/docs/components/base/questionnaire): Submit sends the picked option, or every checked one.
-function QuestionCard({ question, sending, answer }: { question: PendingQuestion; sending: boolean; answer: (selected: string[]) => void }) {
+// While the agent is paused, the message box goes to the people here, so only the card answers.
+function QuestionCard({ question, sending, paused, answer }: { question: PendingQuestion; sending: boolean; paused: boolean; answer: (selected: string[]) => void }) {
   return <Questionnaire aria-label="Question" className="my-1" onSubmit={(event) => {
     event.preventDefault();
     answer(new FormData(event.currentTarget).getAll("answer").map(String));
@@ -388,32 +392,56 @@ function QuestionCard({ question, sending, answer }: { question: PendingQuestion
       <QuestionnaireError />
     </QuestionnaireItem>
     <QuestionnaireActions>
-      <p className="text-xs text-muted-foreground">Or send your own answer from the message box.</p>
+      {paused ? null : <p className="text-xs text-muted-foreground">Or send your own answer from the message box.</p>}
       <QuestionnaireSubmit size="sm" />
     </QuestionnaireActions>
   </Questionnaire>;
 }
 
 // useQuestion answers the conversation's first pending Web question, from its card or with Send's
-// text, unless that stops the turn. A question no longer pending leaves its card when History refreshes.
-function useQuestion(id: string, draft: ComposerDraft, onChange: () => Promise<unknown>, setSendError: (value: string) => void) {
+// text, unless that stops the turn or the agent is paused, when Send's text goes to the people here.
+// A question no longer pending leaves its card when History refreshes.
+function useQuestion(id: string, draft: ComposerDraft, paused: boolean, onChange: () => Promise<unknown>, setSendError: (value: string) => void) {
   const mutation = useMutation({ mutationFn: mutations.answerQuestion, onSettled: onChange });
   const limited = useQuery(queries.identity()).data?.limited, agents = useQuery(queries.agents({ conversationId: id })).data;
   const answerable = !limited || agents?.agents.some((agent) => agent.name === agents.currentAgent);
   const question = answerable ? draft.questions?.[0] : undefined;
   const answer = (input: { selected?: string[]; custom?: string }) => mutation.mutateAsync({ conversationId: id, askId: question!.id, ...input })
     .then(() => { setSendError(""); return true; }, (err: unknown) => { setSendError(err instanceof RPCError && err.code === 5 ? "This question was already answered or ended" : err instanceof Error ? err.message : "answer failed"); return false; });
-  const card = question ? <QuestionCard key={question.id} question={question} sending={mutation.isPending} answer={(selected) => void answer({ selected })} /> : null;
-  const take = (delivery: PromptDelivery | undefined, setText: (value: string) => void) => question && delivery === undefined && draft.text.trim() && !isStopCommand(draft.text)
+  const card = question ? <QuestionCard key={question.id} question={question} sending={mutation.isPending} paused={paused} answer={(selected) => void answer({ selected })} /> : null;
+  const take = (delivery: PromptDelivery | undefined, setText: (value: string) => void) => question && !paused && delivery === undefined && draft.text.trim() && !isStopCommand(draft.text)
     ? answer({ custom: draft.text }).then((saved) => { if (saved) setText(""); }) : undefined;
   return { answering: mutation.isPending, pending: !!question, take, card };
 }
 
-// composerLabels says what Send does: answer the pending question, queue behind the running turn, or send.
-function composerLabels(asking: boolean, busy: boolean, id: string) {
+// composerLabels says what Send does: post to the people here while the agent is paused, answer the pending question,
+// queue behind the running turn, or send.
+function composerLabels(paused: boolean, asking: boolean, busy: boolean, id: string) {
+  if (paused) return { placeholder: "Message the people here", sendLabel: "Send to the people here" };
   if (asking) return { placeholder: "Answer the question", sendLabel: "Send answer" };
   if (busy) return { placeholder: "Queue a follow-up", sendLabel: "Send to queue" };
   return { placeholder: id ? "Message or $command" : "Message a new session", sendLabel: "Send message" };
+}
+
+// Whether someone paused the agent of a chat, by its id: its messages then go to the people there, starting no turn.
+function usePausedChats() {
+  const rows = useContext(Sidebar).rows;
+  return (id: string) => !!rows.find((row) => row.id === id)?.paused;
+}
+
+// The toggle button of a session a person started in the Web, next to Send, pauses or resumes its agent for everyone
+// in it, and says why beside it when the server refuses, as the voice call button does.
+function AgentPauseToggle({ id }: { id: string }) {
+  const session = useContext(Sidebar).rows.find((row) => row.id === id), invalidate = useContext(SidebarInvalidation);
+  const change = useMutation({ mutationFn: mutations.updateSession, onSuccess: invalidate });
+  if (!session?.pausable) return null;
+  const paused = !!session.paused;
+  return <>
+    {change.error ? <span role="alert" title={change.error.message} className="max-w-48 truncate text-xs text-destructive">{change.error.message}</span> : null}
+    <Tooltip><TooltipTrigger render={<Button type="button" variant={paused ? "default" : "ghost"} size="icon" className="size-11 sm:size-7" disabled={change.isPending} />} aria-label="Pause agent" aria-pressed={paused} onMouseDown={(event) => event.preventDefault()} onClick={() => change.mutate({ id, paused: !paused })}>
+      <CirclePause />
+    </TooltipTrigger><TooltipContent>{paused ? "Resume agent" : "Pause agent"}</TooltipContent></Tooltip>
+  </>;
 }
 
 // offeredAgent is the first of names the catalog offers, else the catalog's first agent.
@@ -2071,11 +2099,11 @@ const needsYou = <span className="ml-auto shrink-0 rounded-full bg-amber-200 px-
 
 // Waiting on this person's answer wins over the running turn that asks, which wins over background work, which
 // can wake the session after its turn. Only a turn not waiting on this person is working, so its title shimmers.
-// A forked session shows a fork glyph in place of the chat icon.
+// A chat whose agent is paused shows a pause glyph in place of the chat icon, else a forked session a fork glyph.
 function tabActivity(session: Session, unread: boolean) {
-  const Chat = session.forkedFrom ? GitFork : MessageSquare;
+  const Chat = session.paused ? CirclePause : session.forkedFrom ? GitFork : MessageSquare;
   const [activity, Icon] = session.asking ? ["Needs your answer", Chat] as const : session.running ? ["Turn running", Chat] as const : session.background ? ["Background work running", Hourglass] as const : ["", Chat] as const;
-  return [[session.forkedFrom && "Forked session", activity, unread && "Unread"].filter(Boolean).join(", "), Icon, session.running && !session.asking] as const;
+  return [[session.forkedFrom && "Forked session", session.paused && "Agent paused", activity, unread && "Unread"].filter(Boolean).join(", "), Icon, session.running && !session.asking] as const;
 }
 
 const tabLabel = (tab: Pick<Tab, "path" | "search">, session: Session, SessionIcon: typeof Search): [string, typeof Search] =>
@@ -3122,6 +3150,11 @@ function PageIndex({ show }: { show: boolean }) {
   );
 }
 
+// The palette of a session whose agent can pause offers Pause agent, or Resume agent while it is paused.
+function pauseActions(session: Session, pause: (paused: boolean) => void) {
+  return session.pausable ? [{ key: "pause", label: session.paused ? "Resume agent" : "Pause agent", keep: true, run: () => pause(!session.paused) }] : [];
+}
+
 function useSessionActions(session: Session | undefined, onSuccess?: () => void) {
   const invalidate = useContext(SidebarInvalidation);
   const remote = useContext(Sidebar).remote;
@@ -3137,6 +3170,7 @@ function useSessionActions(session: Session | undefined, onSuccess?: () => void)
     ...(session.forkedFrom ? [{ key: "origin", label: "Open original conversation", run: () => navigate(rowPath({ id: session.forkedFrom!, kind: session.kind })) }] : []),
     { key: "name", label: "Name session", run: () => setCommand({ mode: "name", source: id }) },
     { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
+    ...pauseActions(session, (paused) => update.mutate({ id, paused })),
     ...choices.map((tag) => ({ key: `tag-${tag}`, label: `${tags.has(tag) ? "Remove" : "Add"} tag ${tag}`, keep: true, run: () => update.mutate({ id, tag }) })),
     ...(session.server ? [{ key: "add-tag", label: "Add tag…", run: () => setCommand({ mode: "tag", source: id }) }, { key: "delete", label: "Delete session", run: () => setCommand({ mode: "delete", source: id }) }, ...remoteActions(id, remote?.servers[session.server] ?? "", session.remoteSessionId ?? "")] : []),
   ].map((item) => ({ ...item, disabled: update.isPending })) : [];
@@ -4852,6 +4886,8 @@ async function sendComposer(input: {
   delivery?: PromptDelivery;
   principal?: string;
   busy: boolean;
+  // Whether the agent of a session, by its id, is paused; New session's send may resume a paused sticky session.
+  paused?: (id: string) => boolean;
   sessionId: string;
   selected: string;
   currentAgent: string;
@@ -4868,7 +4904,8 @@ async function sendComposer(input: {
 }) {
   const name = server();
   let { draft } = input;
-  let delivery = input.delivery ?? (input.busy ? "QUEUE" : "STEER");
+  // While the agent is paused, a message goes to the people here at once: no turn waits for it.
+  let delivery = input.delivery ?? (input.busy && !input.paused?.(input.sessionId) ? "QUEUE" : "STEER");
   // Match strings.Fields/unicode.IsSpace in frontend/rpc/server.go, not JavaScript's whitespace.
   const command = input.delivery === "STASH" ? null : /^\p{White_Space}*\$(enqueue|stash|steer)(?=\p{White_Space}|$)\p{White_Space}*/u.exec(input.text);
   const followUp: PromptDelivery = command ? command[1] === "enqueue" ? "QUEUE" : command[1] === "stash" ? "STASH" : "STEER" : delivery;
@@ -4913,14 +4950,15 @@ async function sendComposer(input: {
         draft.sending = true;
         draft.error = "";
         submission = ++draft.submission;
-        delivery = input.delivery ?? (input.busy ? "QUEUE" : "STEER");
+        delivery = input.delivery ?? (input.busy && !input.paused?.(sessionId) ? "QUEUE" : "STEER");
         enqueue = command ? followUp !== "STEER" : delivery !== "STEER" && !stopping;
       } else firstMessages.set(sessionId, optimistic.text.trim().split("\n", 1)[0]);
       input.goSession(sessionId, created.resumed);
     }
-    if (!input.busy && !enqueue) input.setBusy(true);
+    const paused = input.paused?.(sessionId);
+    if (!input.busy && !enqueue && !paused) input.setBusy(true);
     optimistic.attachments = input.files.map(({ id, file }) => ({ id, name: file.name, mimeType: file.type, size: String(file.size), conversationId: sessionId, file }));
-    if (!enqueue && input.busy && !stopping) {
+    if (!enqueue && input.busy && !stopping && !paused) {
       draft.parked = [...(draft.parked ?? []), optimistic];
       input.onDraftChange();
     } else if (!enqueue) input.setLines((current) => [...current, optimistic]);
@@ -5202,8 +5240,8 @@ function SessionComposer({
     setDollarOff(invocation !== "$skill " && invocation !== "$workflow ");
     setAgentOpen(false);
   };
-  const question = useQuestion(id, draft, refreshHistory, setSendError);
-  const { placeholder, sendLabel } = composerLabels(question.pending, busy, id);
+  const pausedIn = usePausedChats(), paused = pausedIn(id), question = useQuestion(id, draft, paused, refreshHistory, setSendError);
+  const { placeholder, sendLabel } = composerLabels(paused, question.pending, busy, id);
   const goSession = (sessionId: string, resumed = false) => {
     void draftContent(JSON.stringify([scope, ""]), { text: "", files: [], agent: "" }).catch(() => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; onDraftChange(); });
     draft.sessionId = sessionId;
@@ -5249,6 +5287,7 @@ function SessionComposer({
       delivery,
       principal: identity.isSuccess && !identity.isFetching ? identity.data.principal : undefined,
       busy,
+      paused: pausedIn,
       sessionId: draft.sessionId,
       selected,
       currentAgent,
@@ -5439,7 +5478,7 @@ function Composer({
   const actions = <>
     <VoiceToggle sessionId={sessionId} agent={selected} sending={sending} call={call} />
     <ComposerMore sending={sending} empty={empty} stash={() => void send("STASH")} />
-    <ComposerSend touch={touch} busy={busy} sending={sending} empty={empty} stoppingCommand={isStopCommand(text)} sendLabel={sendLabel} mac={mac} send={send} stop={stop} />
+    <ComposerSend sessionId={sessionId} touch={touch} busy={busy} sending={sending} empty={empty} stoppingCommand={isStopCommand(text)} sendLabel={sendLabel} mac={mac} send={send} stop={stop} />
   </>;
   const attach = <Tooltip disabled={touch}><TooltipTrigger render={<InputGroupButton size="icon-sm" className={touch ? "size-11" : "size-7"} disabled={sending} />} aria-label="Add files" onMouseDown={(event) => event.preventDefault()} onClick={() => fileInput.current?.click()}><Plus /></TooltipTrigger><TooltipContent>Add files</TooltipContent></Tooltip>;
   const pickerOpen = matches.length > 0;
@@ -5558,12 +5597,16 @@ function ComposerMore({ sending, empty, stash }: { sending: boolean; empty: bool
   </DropdownMenu>;
 }
 
-function ComposerSend({ touch, busy, sending, empty, stoppingCommand, sendLabel, mac, send, stop }: {
-  touch: boolean; busy: boolean; sending: boolean; empty: boolean; stoppingCommand: boolean; sendLabel: string; mac: boolean;
+function ComposerSend({ sessionId, touch, busy, sending, empty, stoppingCommand, sendLabel, mac, send, stop }: {
+  sessionId: string; touch: boolean; busy: boolean; sending: boolean; empty: boolean; stoppingCommand: boolean; sendLabel: string; mac: boolean;
   send: (delivery?: PromptDelivery) => Promise<void>; stop: () => Promise<void>;
 }) {
+  // Steer and the pause toggle take turns, so the row fits a phone: a paused chat's Send already posts, and the
+  // toggle steps aside while Steer shows.
+  const paused = usePausedChats()(sessionId), steer = busy && !empty && !stoppingCommand && !paused;
   return <div data-slot="composer-delivery" className="ml-auto flex shrink-0 items-center gap-1">
-    {busy && !empty && !stoppingCommand ? <Tooltip disabled={touch}>
+    {!steer ? <AgentPauseToggle id={sessionId} /> : null}
+    {steer ? <Tooltip disabled={touch}>
       <TooltipTrigger render={<InputGroupButton size="sm" disabled={sending} />} aria-label="Steer" onMouseDown={(event) => event.preventDefault()} onClick={() => void send("STEER")}>
         Steer{!touch ? <span className="hidden sm:inline"><ModEnterKeys mac={mac} /></span> : null}
       </TooltipTrigger>
@@ -5573,9 +5616,9 @@ function ComposerSend({ touch, busy, sending, empty, stoppingCommand, sendLabel,
   </div>;
 }
 
-function ComposerSubmit({ touch, busy, sending, empty, sendLabel, send, stop }: Omit<ComponentProps<typeof ComposerSend>, "mac" | "stoppingCommand">) {
+function ComposerSubmit({ touch, busy, sending, empty, sendLabel, send, stop }: Omit<ComponentProps<typeof ComposerSend>, "sessionId" | "mac" | "stoppingCommand">) {
   const stopping = busy && empty;
-  const label = stopping ? "Stop" : touch && busy && sendLabel !== "Send answer" ? "Queue" : "Send";
+  const label = stopping ? "Stop" : touch && sendLabel === "Send to queue" ? "Queue" : "Send";
   const Icon = sending ? LoaderCircle : stopping ? Square : ArrowUp;
   return <Tooltip disabled={touch}><TooltipTrigger data-composer-submit render={<InputGroupButton size={touch ? "sm" : "icon-sm"} variant={stopping ? "secondary" : "default"} disabled={sending || (!stopping && empty)} />} aria-label={label} onMouseDown={(event) => event.preventDefault()} onClick={() => void (stopping ? stop() : send())}>
     {touch ? label : null}<Icon className={cn(sending && "animate-spin")} />

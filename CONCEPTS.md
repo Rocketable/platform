@@ -60,6 +60,15 @@ Input sent into a conversation's running turn so the agent takes it into that tu
 
 A steer joins a running turn that still takes input, whoever sent it and whoever started the turn; otherwise it runs as the next turn. Workflow turns, and the hidden runs of cron and External MCP, always take a steer as their next turn. Steers come from Web and from agents; a Slack mention never steers.
 
+### Agent Pause
+
+A shared switch on a Web session a person started, which anyone who may prompt it can flip, keeping its agent from taking any new turn so people can talk to each other there.
+*Avoid:* paused tab, mute (Parked is a person's tab state; Mute is retired)
+
+Only a session a person started in the Web pauses, whatever its agent's sticky setting, and only while nothing outside reports into it: never a cron report chat, an External MCP chat, a Slack thread, a Remote OpenCode Session, a Shadow or Subagent Session, a chat a run reports into, or the Sticky Session of a `sticky: global` agent that a cron job or Routine runs. When a restart or Reload gives such an agent one, RocketClaw resumes its paused Sticky Session.
+
+While paused, a person's plain message posts straight into the chat under their name at once, above a reply still running, and starts no turn; queued and stashed items, Goals, Scheduled Messages, other agents' writes and Completion Note wakes wait, and Voice Hand-offs, `$goal`, a named `$workflow` and promoting a queued item are refused. A reply already running finishes without taking steers, and a turn already starting when someone pauses still runs; Send never answers the agent's pending question, which its card still does. A message sent as someone resumes reaches the agent as usual. The chat records who paused and who resumed the agent, and a fork whose copy ends paused starts live with a line saying the forker resumed it. Resuming starts no turn just to read what was said; waiting work runs in its usual order, and the next turn reads the paused messages as people talking among themselves. Background Jobs keep running; only their wakes wait.
+
 ### Scheduled Message
 
 A message an agent schedules into its own conversation to arrive after a delay, once or repeating until the conversation's schedule is reset; when due it runs as a turn of that conversation.

@@ -12,6 +12,7 @@ import (
 	"net"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/openai/openai-go/v3/responses"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -263,18 +265,236 @@ func (m *threadBridgeManager) StartActiveGoals(ctx context.Context) error {
 			return fmt.Errorf("load active goal: %w", err)
 		}
 
-		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.", false)
-		inbound.GoalAction, inbound.OriginHeader = protocol.GoalActionContinue, goal.Origin
-		inbound.ConversationID = conversationID
-		inbound.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: goal.PrincipalName, protocol.InboundPrincipalEmailMetadataKey: goal.PrincipalEmail}
-		inbound.SlackReply = &protocol.SlackReplyTarget{}
-
-		if err := managed.Submit(ctx, inbound); err != nil {
+		if err := managed.Submit(ctx, goalContinuation(conversationID, &goal)); err != nil {
 			return fmt.Errorf("submit active goal continuation: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// goalContinuation is the next turn of conversationID's active goal when no turn of it ends to continue it.
+func goalContinuation(conversationID string, goal *GoalState) *protocol.InboundMessage {
+	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.", false)
+	inbound.GoalAction, inbound.OriginHeader = protocol.GoalActionContinue, goal.Origin
+	inbound.ConversationID = conversationID
+	inbound.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: goal.PrincipalName, protocol.InboundPrincipalEmailMetadataKey: goal.PrincipalEmail}
+	inbound.SlackReply = &protocol.SlackReplyTarget{}
+
+	return inbound
+}
+
+// The lines saying who paused or resumed a chat's agent, after that person's quoted name.
+const (
+	agentPausedLine  = " paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you."
+	agentResumedLine = " resumed the agent."
+)
+
+// AgentPausedError refuses work that needs the agent of a paused Web chat now.
+type AgentPausedError struct{}
+
+func (AgentPausedError) Error() string {
+	return "the agent is paused in this chat"
+}
+
+// AgentPaused reports whether the agent of the Web chat conversationID is paused.
+func (r *Runtime) AgentPaused(ctx context.Context, conversationID string) (bool, error) {
+	var paused bool
+
+	err := queryScalar(ctx, r.Sessions.db, "read agent pause", `SELECT COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, &paused, conversationID)
+
+	return paused, err
+}
+
+// SetAgentPaused pauses or resumes the agent of the Web chat conversationID for the person named by,
+// and adds a line to the chat saying so; asking for the state the chat already has changes nothing.
+// Frontends check that the chat may pause. A reply running when the agent pauses finishes without
+// taking more input. Resuming releases what the pause held: the chat's goal first, then its later work.
+func (r *Runtime) SetAgentPaused(ctx context.Context, conversationID, by string, paused bool) error {
+	text := strconv.Quote(by) + agentResumedLine
+	if paused {
+		text = strconv.Quote(by) + agentPausedLine
+	}
+
+	b, err := r.threads.recordedBridge(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+
+	b.mu.Lock()
+	changed, err := r.recordAgentPauseLocked(ctx, b, conversationID, paused, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: replayInputForMessage("developer", text)})
+	b.mu.Unlock()
+
+	if err != nil || !changed || paused {
+		return err
+	}
+
+	goal, found, err := r.Sessions.Goal(conversationID)
+	if err != nil {
+		return fmt.Errorf("load resumed goal: %w", err)
+	}
+
+	running, err := r.Sessions.HasActiveTurn(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+
+	b.mu.Lock()
+	held := b.goalHeld
+	b.goalHeld = false
+	b.mu.Unlock()
+
+	// The pause dropped the goal's continuation, which has no row to pick again.
+	if held && found && goal.Status == GoalStatusActive && !running {
+		if err := b.Submit(ctx, goalContinuation(conversationID, &goal)); err != nil {
+			return fmt.Errorf("submit resumed goal continuation: %w", err)
+		}
+	}
+
+	return b.pickLaterWork(ctx, false)
+}
+
+// recordAgentPauseLocked, under b.mu as admitWeb's transaction is, records whether the Web chat conversationID's
+// agent is paused, and adds line, the line saying who changed it, to its history, and reports whether the state
+// changed. Like a person's Web message it first settles the chat's staged undo, so the line stays in the history
+// the undo leaves. Pausing closes the running reply's input.
+func (r *Runtime) recordAgentPauseLocked(ctx context.Context, b *Bridge, conversationID string, paused bool, line *harness.SessionEntry) (bool, error) {
+	if b.historyMutation {
+		return false, errors.New("conversation history is busy")
+	}
+
+	tx, err := r.Sessions.beginStateTx(ctx, "agent pause")
+	if err != nil {
+		return false, err
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockShadowHistory(ctx, tx, conversationID); err != nil {
+		return false, err
+	}
+
+	var current bool
+	if err := queryScalar(ctx, tx, "read agent pause", `SELECT paused FROM conversations WHERE conversation_id = $1`, &current, conversationID); err != nil || current == paused {
+		return false, err
+	}
+
+	committed, err := settleRevertDB(ctx, tx, conversationID)
+	if err != nil {
+		return false, err
+	}
+
+	if _, err := execState(ctx, tx, "record agent pause", `UPDATE conversations SET paused = $2 WHERE conversation_id = $1`, conversationID, paused); err != nil {
+		return false, err
+	}
+
+	if _, err := appendSessionEntryDB(ctx, tx, conversationID, line); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit agent pause: %w", err)
+	}
+
+	if committed {
+		b.dropRevertedWaitingLocked()
+	}
+
+	b.inputOpen = b.inputOpen && !paused
+
+	return true, nil
+}
+
+// PostPausedMessage posts a person's Web message into the paused Web chat it names at once, under their
+// name, and starts no turn. Like any Web message it first settles the chat's staged undo, and it marks the
+// chat's readers but its sender. Posting a message again changes nothing, and one sent into a chat whose
+// agent was resumed meanwhile runs as any Web message does.
+func (r *Runtime) PostPausedMessage(ctx context.Context, inbound *protocol.InboundMessage) error {
+	provenance := provenanceFromInbound(inbound)
+	header := provenanceHeader(&provenance)
+	// The message reads as a turn's prompt would, without the instructions to answer it.
+	_, body, _ := strings.Cut(buildPrompt(inbound, nil, false), "\n\n")
+
+	replay, _ := harness.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{harness.PromptInputMessage(&harness.PromptInput{
+		ID: inbound.Metadata["web_message_id"], Texts: []string{header + "\n\n" + body}, Header: header, Attachments: attachmentsFromInbound(inbound.Attachments),
+	})}) // A message of text, image and file strings cannot fail to encode.
+
+	b, err := r.threads.recordedBridge(ctx, inbound.ConversationID)
+	if err != nil {
+		return err
+	}
+
+	b.mu.Lock()
+	live, err := r.postPausedMessageLocked(ctx, b, inbound, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: replay})
+	b.mu.Unlock()
+
+	if live {
+		return r.RunTurn(ctx, inbound)
+	}
+
+	return err
+}
+
+// postPausedMessageLocked, under b.mu as admitWeb's transaction is, settles the staged undo of the paused chat
+// inbound names, adds line, inbound's message, to its history, and marks the chat's readers but its sender. It
+// reports a chat whose agent is not paused, where the message goes to the agent instead.
+func (r *Runtime) postPausedMessageLocked(ctx context.Context, b *Bridge, inbound *protocol.InboundMessage, line *harness.SessionEntry) (bool, error) {
+	if b.historyMutation {
+		return false, errors.New("conversation history is busy")
+	}
+
+	tx, err := r.Sessions.beginStateTx(ctx, "paused message")
+	if err != nil {
+		return false, err
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockShadowHistory(ctx, tx, inbound.ConversationID); err != nil {
+		return false, err
+	}
+
+	accepted, err := reconcileWebDB(ctx, tx, inbound)
+	if err != nil || accepted {
+		return false, err
+	}
+
+	var paused bool
+	if err := queryScalar(ctx, tx, "read paused message chat", `SELECT COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, &paused, inbound.ConversationID); err != nil {
+		return false, err
+	}
+
+	if !paused {
+		return true, nil
+	}
+
+	committed, err := settleRevertDB(ctx, tx, inbound.ConversationID)
+	if err != nil {
+		return false, err
+	}
+
+	if _, err := appendSessionEntryDB(ctx, tx, inbound.ConversationID, line); err != nil {
+		return false, err
+	}
+
+	if _, err := execState(ctx, tx, "mark paused message readers", `WITH readers AS (
+    WITH events AS (
+        SELECT conversation_id, kind, FALSE AS waking, '' AS username FROM conversations WHERE conversation_id = $1
+    )`+sessionReadersSQL+`
+    SELECT username, path, conversation_id, waking, note FROM readers WHERE username <> $2
+)`+markTabsSQL+` SELECT count(*) FROM marked`, inbound.ConversationID, inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey]); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit paused message: %w", err)
+	}
+
+	if committed {
+		b.dropRevertedWaitingLocked()
+	}
+
+	return false, nil
 }
 
 // SwitchConversationAgent persists selection and updates the existing live bridge.

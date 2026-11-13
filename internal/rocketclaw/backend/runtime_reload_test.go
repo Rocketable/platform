@@ -48,7 +48,7 @@ func TestRuntimeReload(t *testing.T) {
 				return nil
 			}}
 			refresh, cron := &runtimeRefresherMock{}, &runtimeRefresherMock{}
-			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, RunCtx: t.Context(), Sessions: &SessionService{}, assemble: assembler, sandboxes: sandbox.None{}, ExternalMCPAgents: refresh, CronJobs: cron}
+			rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: log, RunCtx: t.Context(), Sessions: newTestSessionService(t), assemble: assembler, sandboxes: sandbox.None{}, ExternalMCPAgents: refresh, CronJobs: cron}
 			refreshed := func(failure string) error {
 				require.False(t, rt.reloadMu.TryLock(), "reload remains serialized through each refresh")
 				live, err := root.ReadFile(cfg.RuntimeDirName() + "/agents/main.md")

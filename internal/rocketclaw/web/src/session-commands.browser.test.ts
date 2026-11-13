@@ -19,7 +19,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
   const prompts: { id: string; text: string; delivery?: PromptDelivery }[] = [];
   const forks: { id: string; before?: string }[] = [];
   const forkParents: Record<string, string> = {};
-  const details: Record<string, Partial<Session>> = { destination: { agent: "a-very-long-agent-name-that-must-not-hide-the-session-age", updatedAt: "2026-09-09T00:00:00.123456Z", tags: ["customer", "a-very-long-tag-name-that-must-not-hide-the-session-age", "<b>literal</b>"] } };
+  const details: Record<string, Partial<Session>> = { destination: { agent: "a-very-long-agent-name-that-must-not-hide-the-session-age", updatedAt: "2026-09-09T00:00:00.123456Z", tags: ["customer", "a-very-long-tag-name-that-must-not-hide-the-session-age", "<b>literal</b>"] }, source: { pausable: true } };
   let failPin = true;
   let agentChoices = true;
   const handoffs: string[] = [];
@@ -238,6 +238,20 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await commands.getByRole("button", { name: "Sessions: Unpin session", exact: true }).click();
     await commands.waitFor({ state: "hidden" });
     expect(details.source.pinned).toBe(false);
+    // A Web chat's agent pauses and resumes from the palette, which offers whichever the chat needs.
+    await page.keyboard.press("Meta+Shift+p");
+    await commandSearch.fill("agent");
+    await commands.getByRole("button", { name: "Sessions: Pause agent", exact: true }).click();
+    await commands.waitFor({ state: "hidden" });
+    expect(details.source.paused).toBe(true);
+    await page.keyboard.press("Meta+Shift+p");
+    await commandSearch.fill("agent");
+    const resume = commands.getByRole("button", { name: "Sessions: Resume agent", exact: true });
+    await resume.waitFor();
+    expect(await commands.getByRole("button", { name: "Sessions: Pause agent", exact: true }).count()).toBe(0);
+    await resume.click();
+    await commands.waitFor({ state: "hidden" });
+    expect(details.source.paused).toBe(false);
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Name session");
     await commands.getByRole("button", { name: "Sessions: Name session" }).click();

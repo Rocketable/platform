@@ -444,8 +444,18 @@ func (c *voiceCall) handOff(ctx context.Context, event voiceEvent) error {
 
 	message += "</realtime_delegation>"
 
-	// The session can leave the caller's agents during the call; the lines said wait for a later hand-off.
-	if err := c.server.turnFeedable(c.stream.Context(), c.conversationID, true); err != nil {
+	// During the call someone may pause the session's agent, or it may leave the caller's agents; the lines said wait
+	// for a later hand-off.
+	paused, err := c.server.backend.AgentPaused(c.stream.Context(), c.conversationID)
+	if err == nil && paused {
+		err = backend.AgentPausedError{}
+	}
+
+	if err == nil {
+		err = c.server.turnFeedable(c.stream.Context(), c.conversationID, true)
+	}
+
+	if err != nil {
 		_ = c.stream.SendMsg(&VoiceEvent{Event: &VoiceEvent_Notice{Notice: status.Convert(err).Message()}})
 		return nil
 	}

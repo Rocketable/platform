@@ -24,6 +24,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
@@ -393,6 +394,175 @@ func (h *voiceHarness) prompt(group *errgroup.Group, text string) {
 
 		return nil
 	})
+}
+
+// Only a chat a person started pauses. A paused Web chat posts a person's plain message and $steer under their
+// name at once, starting no turn and parking nothing. Queued and stashed input waits for resume; a $goal, a $workflow, a promoted item and a Voice Hand-off,
+// which need the agent now, are refused, the hand-off keeping what was said for the next one. $agent and $stop
+// work as ever.
+func TestPausedChat(t *testing.T) {
+	h := startVoiceHarness(t)
+
+	const id = "worker"
+
+	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	prompt := func(messageID, text string, delivery PromptDelivery) (*PromptResponse, error) {
+		return h.server.prompt(alice, &PromptRequest{Id: id, Text: text, Delivery: delivery, MessageId: messageID})
+	}
+	pause := func(paused bool) {
+		t.Helper()
+
+		_, err := h.server.updateSession(alice, &UpdateSessionRequest{Id: id, Paused: &paused})
+		require.NoError(t, err)
+	}
+	listed := func() (*Session, backend.Attention) {
+		t.Helper()
+
+		for chat, err := range h.rt.Sessions.SidebarChats(t.Context(), "alice", h.server.channels, []string{id}) {
+			require.NoError(t, err)
+			return sidebarSession(&chat), chat.Session.Attention
+		}
+
+		return nil, backend.Attention{}
+	}
+	queue := func() []string {
+		t.Helper()
+
+		items, err := h.rt.QueueItems(id)
+		require.NoError(t, err)
+
+		waiting := make([]string, len(items))
+		for i := range items {
+			waiting[i] = items[i].ID + ":" + string(items[i].Kind)
+		}
+
+		return waiting
+	}
+	idle := func() {
+		t.Helper()
+		require.Eventually(t, func() bool {
+			active, err := h.rt.Sessions.HasActiveTurn(t.Context(), id)
+			return err == nil && !active
+		}, 10*time.Second, 10*time.Millisecond)
+	}
+
+	// A cron report chat never pauses; a chat a person started does.
+	require.NoError(t, h.rt.CreateConversation(t.Context(), protocol.Conversation{ID: "report", Agent: id, CreatedBy: "cron"}))
+
+	for _, chat := range []string{id, "report"} {
+		_, err := h.rt.Sessions.AppendEntryID(t.Context(), chat, &harness.SessionEntry{Timestamp: time.Now().UTC()})
+		require.NoError(t, err)
+	}
+
+	_, err := h.server.updateSession(alice, &UpdateSessionRequest{Id: "report", Paused: new(true)})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
+
+	pause(true)
+
+	session, _ := listed()
+	require.True(t, session.GetPaused(), "the chat lists as paused")
+	require.True(t, session.GetPausable())
+
+	_, err = prompt("m1", "lunch at noon?", PromptDelivery_STEER)
+	require.NoError(t, err)
+	_, err = prompt("m2", "$steer noon works for me", PromptDelivery_STEER)
+	require.NoError(t, err)
+
+	view, err := h.server.history(alice, &HistoryRequest{Id: id})
+	require.NoError(t, err)
+
+	var posted []string
+
+	for _, message := range view.Messages {
+		if message.Role == "user" {
+			posted = append(posted, message.InputId+" "+message.Principal+": "+message.Text)
+		}
+	}
+
+	assert.Equal(t, []string{"m1 alice: lunch at noon?", "m2 alice: noon works for me"}, posted, "each message posts under its sender")
+
+	_, attention := listed()
+	assert.False(t, attention.Parked, "a message posted while the agent is paused parks nothing")
+	assert.Empty(t, h.requests, "and starts no turn")
+	idle()
+
+	for _, send := range []struct {
+		id, text string
+		delivery PromptDelivery
+	}{{"q1", "queued item", PromptDelivery_QUEUE}, {"q2", "$enqueue enqueued item", PromptDelivery_STEER}, {"s1", "stashed item", PromptDelivery_STASH}} {
+		_, err := prompt(send.id, send.text, send.delivery)
+		require.NoError(t, err, send.text)
+	}
+
+	waiting := queue()
+	assert.ElementsMatch(t, []string{"q1:enqueue", "q2:enqueue", "s1:held"}, waiting)
+
+	for _, text := range []string{"$goal ship it", "$workflow deploy"} {
+		_, err := prompt("refused", text, PromptDelivery_STEER)
+		_, refused := errors.AsType[backend.AgentPausedError](err)
+		assert.True(t, refused, "%s: %v", text, err)
+	}
+
+	_, found, err := h.rt.Sessions.Goal(id)
+	require.NoError(t, err)
+	assert.False(t, found, "no goal starts")
+
+	_, err = h.server.queueItem(alice, "SteerQueueItem", &QueueItemRequest{Id: id, ItemId: "q2"})
+	_, refused := errors.AsType[backend.AgentPausedError](err)
+	assert.True(t, refused, "%v", err)
+	assert.Equal(t, waiting, queue(), "a refused promote leaves the item in its place")
+
+	for _, agent := range []string{"nokey", id} {
+		switched, err := prompt("agent", "$agent "+agent, PromptDelivery_STEER)
+		require.NoError(t, err)
+		assert.Equal(t, "Agent: "+agent, switched.PrivateText)
+	}
+
+	reader, cancel, peer := h.call(t, id, "offer-paused")
+	handOff(t, peer, "refused", "please continue")
+	assert.Contains(t, frame(t, reader), `"notice":"the agent is paused in this chat"`)
+	assert.Equal(t, waiting, queue(), "a refused hand-off queues nothing")
+	assert.Empty(t, h.requests)
+
+	pause(false)
+
+	request := <-h.requests
+	assert.Contains(t, request, "noon works for me", "the agent reads the paused chat")
+	assert.Contains(t, request, "queued item")
+
+	h.replies <- voiceModelText("r1", "Queued done.")
+
+	assert.Contains(t, <-h.requests, "enqueued item")
+
+	h.replies <- voiceModelText("r2", "Enqueued done.")
+
+	idle()
+	handOff(t, peer, "admitted", "go ahead")
+
+	request = <-h.requests
+	assert.Contains(t, request, "please continue", "what was said before the refused hand-off reaches the next one")
+	assert.Contains(t, request, "go ahead")
+
+	h.replies <- voiceModelText("r3", "Continued.")
+
+	peer.expect(t, "Continued.")
+	cancel()
+	h.ended(t)
+
+	var turn errgroup.Group
+
+	turn.Go(func() error {
+		_, err := prompt("w1", "work", PromptDelivery_STEER)
+		return err
+	})
+	assert.Contains(t, <-h.requests, "work")
+	pause(true)
+
+	_, err = prompt("stop", "$stop", PromptDelivery_STEER)
+	require.NoError(t, err)
+	require.NoError(t, turn.Wait())
+	idle()
+	assert.Empty(t, h.requests, "the stopped reply in the paused chat is followed by nothing")
 }
 
 // The subtests share one backend and run in order on conversation main.

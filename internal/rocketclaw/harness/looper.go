@@ -1108,7 +1108,7 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 			*turnItems = append(*turnItems, item)
 		}
 
-		steer := promptInputMessage(input)
+		steer := PromptInputMessage(input)
 		if err := appendReplayInput(record, &steer); err != nil {
 			return false, err
 		}
@@ -1194,7 +1194,7 @@ func (l *looper) promptTurnItems(ctx context.Context, input *PromptInput) ([]res
 		input.Texts = texts
 	}
 
-	turnItems := []responses.ResponseInputItemUnionParam{promptInputMessage(input)}
+	turnItems := []responses.ResponseInputItemUnionParam{PromptInputMessage(input)}
 
 	if input.DirectSkill != nil {
 		directSkillItem, err := l.directSkillInput(ctx, input.DirectSkill)

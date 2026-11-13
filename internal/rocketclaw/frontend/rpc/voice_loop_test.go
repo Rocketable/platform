@@ -238,7 +238,7 @@ func TestVoiceLoopHandOffs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				engine := &mockBackend{SandboxErrorFunc: noSandboxError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
+				engine := &mockBackend{SandboxErrorFunc: noSandboxError, AgentPausedFunc: notPaused, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
 				peer, _, cancel, wait := startVoiceLoop(t, tc.auth, engine, &mockServerStream{}, nil, nil)
 
 				for _, event := range tc.events {
@@ -274,7 +274,7 @@ func TestVoiceLoopHandOffs(t *testing.T) {
 func TestVoiceLoopReplies(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		snapshots := make(chan voiceSnapshot)
-		engine := &mockBackend{SandboxErrorFunc: noSandboxError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
+		engine := &mockBackend{SandboxErrorFunc: noSandboxError, AgentPausedFunc: notPaused, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
 		stream := &mockServerStream{SendMsgFunc: func(any) error { return nil }}
 		peer, _, cancel, wait := startVoiceLoop(t, "api_key", engine, stream, snapshots, nil)
 		dialect := &publicVoice{}
@@ -368,7 +368,7 @@ func TestVoiceLoopAdmission(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				engine := &mockBackend{SandboxErrorFunc: noSandboxError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return tc.refusal }}
+				engine := &mockBackend{SandboxErrorFunc: noSandboxError, AgentPausedFunc: notPaused, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return tc.refusal }}
 				stream := &mockServerStream{SendMsgFunc: func(any) error { return nil }}
 				peer, _, cancel, wait := startVoiceLoop(t, "api_key", engine, stream, nil, nil)
 
@@ -403,7 +403,7 @@ func TestVoiceLoopAdmission(t *testing.T) {
 func TestVoiceLoopResendsAfterDrop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		snapshots := make(chan voiceSnapshot)
-		engine := &mockBackend{SandboxErrorFunc: noSandboxError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
+		engine := &mockBackend{SandboxErrorFunc: noSandboxError, AgentPausedFunc: notPaused, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
 		peer, peers, cancel, wait := startVoiceLoop(t, "chatgpt", engine, &mockServerStream{SendMsgFunc: func(any) error { return nil }}, snapshots, nil)
 		dialect := newCodexVoice()
 
@@ -576,7 +576,7 @@ func TestVoiceLoopBackoff(t *testing.T) {
 func TestVoiceLoopStopDuringAdmission(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		admitting, release := make(chan struct{}), make(chan struct{})
-		engine := &mockBackend{SandboxErrorFunc: noSandboxError, StashQueueItemFunc: func(ctx context.Context, _ string, _ *protocol.ThreadQueueItem) error {
+		engine := &mockBackend{SandboxErrorFunc: noSandboxError, AgentPausedFunc: notPaused, StashQueueItemFunc: func(ctx context.Context, _ string, _ *protocol.ThreadQueueItem) error {
 			close(admitting)
 			<-release
 
