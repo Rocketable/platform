@@ -397,18 +397,9 @@ func (f *toolFactory) childSession(yield func(SessionEntry, error) bool) {
 	}
 }
 
-// chatObserver receives each output item of a turn runPrompt runs, as it arrives.
-type chatObserver interface {
-	observe(ChatResponse)
-}
-
-type inertChatObserver struct{}
-
-func (inertChatObserver) observe(ChatResponse) {}
-
-// runPrompt runs texts as the only turn of l, journaled under turnID, passes each output item to
-// observer as it arrives, and returns the turn's last assistant message.
-func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, sessionIn iter.Seq2[SessionEntry, error], sessionOut sessionWriter, observer chatObserver) (last string, err error) {
+// runPrompt runs texts as the only turn of l, journaled under turnID, emits permission-review
+// diagnostics to parentOutput, and returns the turn's last assistant message.
+func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, sessionIn iter.Seq2[SessionEntry, error], sessionOut sessionWriter, parentOutput chan<- ChatResponse) (last string, err error) {
 	output := make(chan ChatResponse)
 
 	input := make(chan PromptInput, 1)
@@ -420,10 +411,20 @@ func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, s
 
 	group.Go(func() error {
 		for item := range output {
-			observer.observe(item)
-
 			if item.Kind == ChatResponseAssistantMessage {
 				last = item.Text
+			} else if l.Diagnostics {
+				emitSubagentDiagnostic(parentOutput, &SubagentDiagnostic{
+					Name:  l.agent.Name,
+					Label: "auto-approver",
+					Subagent: &SubagentDiagnostic{
+						Label:    nestedDiagnosticLabel(item),
+						Text:     item.Text,
+						Tool:     item.Tool,
+						Subagent: item.Subagent,
+						Provider: item.Provider,
+					},
+				})
 			}
 		}
 
