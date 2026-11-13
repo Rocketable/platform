@@ -19,6 +19,9 @@ type Backend interface {
 	RunTurn(context.Context, *protocol.InboundMessage) error
 	StageRevert(context.Context, string, string) (string, string, error)
 	ClearRevert(context.Context, string) error
+	AgentPaused(context.Context, string) (bool, error)
+	SetAgentPaused(context.Context, string, string, bool) error
+	PostPausedMessage(context.Context, *protocol.InboundMessage) error
 	QueueItems(string) ([]protocol.ThreadQueueItem, error)
 	PromoteQueueItem(context.Context, string, string) (bool, error)
 	PopQueueItem(context.Context, string, string) (bool, error)

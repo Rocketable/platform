@@ -838,6 +838,184 @@ SELECT COUNT(*) FROM entries, running WHERE conversation_id = $1 AND turns > 0`,
 	assert.Contains(t, backgroundNote(&replies[0]), "Session "+nt.conversationID+"'s turn that your stop interrupted is over (state stopped).")
 }
 
+// pausedTestChat records the Web chat conversationID and has Bob pause its agent. It returns a runtime whose
+// bridge for the chat only takes requests.
+func pausedTestChat(t *testing.T, s *SessionService, conversationID string) *Runtime {
+	t.Helper()
+
+	require.NoError(t, s.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+
+	bridge := &Bridge{config: Config{ConversationID: conversationID, SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
+	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})}
+	require.NoError(t, rt.SetAgentPaused(t.Context(), conversationID, "Bob", true))
+
+	return rt
+}
+
+// pausedWebMessage is sender's Web message of content in conversationID, as Web sends it; its message ID is its
+// text and sender's username their lowercased name at example.com.
+func pausedWebMessage(conversationID, sender string, content *protocol.InboundContent) *protocol.InboundMessage {
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, content, true)
+	inbound.ConversationID, inbound.Metadata["web_message_id"] = conversationID, content.Text
+	inbound.Metadata[protocol.InboundPrincipalMetadataKey], inbound.Metadata[protocol.InboundPrincipalNameMetadataKey] = sender, sender
+	inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey] = strings.ToLower(sender) + "@example.com"
+
+	return inbound
+}
+
+// Only a session a person started in the Web can pause its agent, and only while nothing outside reports into it:
+// not a cron report chat, an External MCP chat, a chat a run reports into, or the sticky: global session of an
+// agent cron jobs or routines run, whatever its sticky setting otherwise. Once its agent gets a cron job or routine,
+// RocketClaw resumes that session.
+func TestPausableSessions(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+
+	for id, sticky := range map[string]harness.AgentSticky{"web": harness.AgentStickyOff, "mine": harness.AgentStickyUser, "team": harness.AgentStickyGlobal, "report-run": harness.AgentStickyOff} {
+		_, err := s.recordConversation(ctx, &protocol.Conversation{ID: id, Agent: id, CreatedBy: "alice"}, conversationFacts{kind: KindWebChat}, sticky)
+		require.NoError(t, err)
+	}
+
+	_, err := s.recordConversation(ctx, &protocol.Conversation{ID: "report", Agent: "main", CreatedBy: string(ThreadCreatedByCron)}, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
+	require.NoError(t, err)
+	require.NoError(t, s.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "main", PrivateConversationID: "external_mcp:main:ticket", ManagedConversationID: "mcp"}))
+	recordTestConversations(t, s, "main", map[string]ConversationKind{"one-off-run": KindOneOffCronRun})
+	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'report-run' WHERE conversation_id = 'one-off-run'`)
+	require.NoError(t, err)
+
+	pausable := func() map[string]bool {
+		listed := map[string]bool{}
+
+		for chat, err := range s.SidebarChats(ctx, "alice", noSlackLookups{}, nil) {
+			require.NoError(t, err)
+
+			listed[chat.Session.Conversation.ID] = chat.Session.Pausable
+		}
+
+		return listed
+	}
+
+	for _, id := range []string{"web", "mine", "team", "report", "mcp", "report-run"} {
+		_, err := s.AppendEntryID(ctx, id, testSessionEntry("hello", "answer"))
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, map[string]bool{"web": true, "mine": true, "team": true, "report": false, "mcp": false, "report-run": false}, pausable())
+
+	bridge := &Bridge{config: Config{ConversationID: "team", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
+	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})}
+	require.NoError(t, rt.SetAgentPaused(ctx, "team", "Bob", true))
+
+	s.ScheduleAgents([]string{"web", "mine", "team"})
+	require.NoError(t, rt.resumeScheduledSessions(ctx))
+
+	assert.Equal(t, map[string]bool{"web": true, "mine": true, "team": false, "report": false, "mcp": false, "report-run": false}, pausable())
+
+	paused, err := rt.AgentPaused(ctx, "team")
+	require.NoError(t, err)
+	assert.False(t, paused)
+	assert.Equal(t, "message:\"RocketClaw\" resumed the agent.", observedEntryTexts(t, s, "team")[3])
+}
+
+// In a paused chat, people's messages post at once, also above a reply still running, in the order sent, and
+// once however often each is sent, with its image; search finds them under their senders, and none starts a
+// turn. A message sent once the agent is resumed runs as any Web message does, reading the paused chat in order.
+func TestPausedMessagesPostAtOnce(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	nt := newNoteTest(t, holdNoteTest(release, 0))
+	manager, _ := nt.run(t, ignoreOutbound)
+	rt := &Runtime{Sessions: nt.service, threads: manager}
+	ctx, chat := t.Context(), nt.conversationID
+
+	require.NoError(t, nt.bridge(t, manager, chat).Submit(ctx, nt.slackPrompt("hello")))
+	nt.request(t)
+	require.NoError(t, rt.SetAgentPaused(ctx, chat, "Bob", true))
+	require.NoError(t, rt.PostPausedMessage(ctx, pausedWebMessage(chat, "Ann", &protocol.InboundContent{Text: "lunch at noon?"})))
+	require.NoError(t, rt.PostPausedMessage(ctx, pausedWebMessage(chat, "Bob", &protocol.InboundContent{Text: "noon works for me"})))
+
+	posted := []string{
+		"message:\"Bob\" paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you.",
+		"message:[Web principal=\"Ann\"]\n\nlunch at noon?", "message:[Web principal=\"Bob\"]\n\nnoon works for me",
+	}
+	assert.Equal(t, posted, observedEntryTexts(t, nt.service, chat), "the lines post while the reply runs")
+
+	close(release)
+	readFinal(t, nt.finals)
+	nt.waitIdle(t, manager, chat)
+
+	texts := observedEntryTexts(t, nt.service, chat)
+	assert.Equal(t, posted, texts[:3])
+	assert.Equal(t, "message:answer", texts[len(texts)-1], "the reply posts after them")
+
+	before, err := nt.service.ObserveEntries(ctx, chat)
+	require.NoError(t, err)
+
+	image := []byte("\x89PNG\r\n\x1a\npixels")
+	require.NoError(t, nt.service.SaveAttachment(ctx, chat, "", &protocol.OutboundAttachment{ID: "photo", Name: "menu.png", MIMEType: "image/png", Data: image}, true))
+
+	photo := pausedWebMessage(chat, "Ann", &protocol.InboundContent{Text: "the menu", TextAttachments: []string{`attachment:photo "menu.png" (workspace path "artifacts/uploads/photo/menu.png")`},
+		Attachments: []protocol.InboundAttachment{{Name: "menu.png", MIMEType: "image/png", Data: image}}})
+	for range 2 {
+		require.NoError(t, rt.PostPausedMessage(ctx, photo))
+	}
+
+	entries, err := nt.service.ObserveEntries(ctx, chat)
+	require.NoError(t, err)
+	require.Len(t, entries, len(before)+1, "a message sent again posts once")
+	require.Len(t, entries[len(entries)-1].Entry.ReplayInput, 1)
+
+	var item struct {
+		Role    string
+		Header  string `json:"prompt_header"`
+		InputID string `json:"input_id"`
+		Content []struct {
+			Type, Text string
+			ImageURL   string `json:"image_url"`
+		}
+	}
+	require.NoError(t, json.Unmarshal(entries[len(entries)-1].Entry.ReplayInput[0], &item))
+	assert.Equal(t, []string{"user", `[Web principal="Ann"]`, "the menu"}, []string{item.Role, item.Header, item.InputID}, "a person's message in the sender's name, which Web matches to its bubble")
+	require.Len(t, item.Content, 2)
+	assert.Equal(t, "data:image/png;base64,"+base64.StdEncoding.EncodeToString(image), item.Content[1].ImageURL, "the agent sees the image")
+
+	messages, err := replayInputMessages(entries[len(entries)-1].Entry.ReplayInput)
+	require.NoError(t, err)
+	shown, attachments, err := nt.service.InputAttachments(ctx, chat, messages[0].text)
+	require.NoError(t, err)
+	assert.Equal(t, "the menu", shown)
+	require.Len(t, attachments, 1)
+	assert.Equal(t, []string{"photo", "image/png"}, []string{attachments[0].ID, attachments[0].MIMEType}, "History shows the image")
+
+	hits, err := nt.service.SearchMessages(ctx, "lunch at noon", nil)
+	require.NoError(t, err)
+	require.Len(t, hits, 1)
+	assert.Equal(t, []string{chat, "user", "lunch at noon?"}, []string{hits[0].ConversationID, hits[0].Role, hits[0].Text})
+	assert.Subset(t, storedPrincipals(t, nt.service)[chat], []string{"Ann", "Bob"}, "search finds the chat by its senders")
+
+	inputs, err := queryStrings(ctx, nt.service.db, `SELECT input_id FROM turns WHERE conversation_id = $1`, "chat turns", chat)
+	require.NoError(t, err)
+	assert.NotContains(t, inputs, "the menu", "no message started a turn")
+	assert.Empty(t, nt.requests)
+
+	require.NoError(t, rt.SetAgentPaused(ctx, chat, "Ann", false))
+	require.NoError(t, rt.PostPausedMessage(ctx, pausedWebMessage(chat, "Cid", &protocol.InboundContent{Text: "what did we decide?"})))
+
+	body := nt.request(t)
+	order := []string{"paused the agent.", "lunch at noon?", "noon works for me", "the menu", "resumed the agent.", "what did we decide?"}
+	positions := make([]int, len(order))
+
+	for i, text := range order {
+		positions[i] = strings.Index(body, text)
+	}
+
+	assert.True(t, positions[0] >= 0 && slices.IsSorted(positions), "the turn reads the paused chat in order: %v", positions)
+	readFinal(t, nt.finals)
+}
+
 // AE6, AE7: the target agent's rocketclaw_sessions_recipient decides which calling agents may create,
 // steer, enqueue into, or stop its sessions. The calling agent counts, not the top-level turn's agent
 // main, and a refused write leaves nothing behind.

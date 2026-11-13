@@ -120,6 +120,11 @@ type SessionService struct {
 
 	lastTurnIDMu sync.Mutex
 	lastTurnID   int64
+
+	// scheduled names the agents of the cron definitions and routines the cron jobs last loaded. Their
+	// runs report into the sticky: global sessions of these agents, whose agents therefore never pause.
+	scheduledMu sync.Mutex
+	scheduled   []string
 }
 
 // ObservedSessionEntry carries saved or checkpoint metadata and an optional payload.
@@ -558,6 +563,13 @@ func (s *SessionService) SyncCronSchedules(schedules []CronScheduleState) error 
 DELETE FROM schedules WHERE cron_path IS NOT NULL AND id <> ALL($1)`, ids, paths, due)
 
 	return err
+}
+
+// ScheduleAgents records agents, those of the cron definitions and routines the cron jobs just loaded.
+func (s *SessionService) ScheduleAgents(agents []string) {
+	s.scheduledMu.Lock()
+	s.scheduled = agents
+	s.scheduledMu.Unlock()
 }
 
 // ResetCronSchedules clears scheduled cron state at daemon observation start.
@@ -1050,6 +1062,7 @@ type SidebarSession struct {
 	// remote OpenCode session's pending form or permission request, its own or a child session's.
 	Asking     bool
 	Pinned     bool
+	Paused     bool
 	Name       string
 	ForkedFrom string
 	Tags       []string
@@ -1084,6 +1097,9 @@ type SidebarSession struct {
 	Queued bool
 	// External reports an External MCP binding, the chat's own or a run's reporting to it.
 	External bool
+	// Pausable reports a session a person started in the Web that nothing outside reports into: no cron run,
+	// External MCP run or, for a sticky: global session, cron job or routine of its agent.
+	Pausable bool
 	// ArrivedAt is when the chat's newest running or waiting turn was created, else its last update:
 	// delivered turns are deleted.
 	ArrivedAt time.Time
@@ -1136,7 +1152,7 @@ const shownChatsSQL = `, reporting AS (
     UNION SELECT c.conversation_id FROM conversations c JOIN conversations r ON r.conversation_id = c.continues WHERE c.continues IS NOT NULL
 ), shown AS (
     -- A chat whose history is its hidden runs' has a summary time once their first entry lands.
-    SELECT c.*, c.has_entries OR p.conversation_id IS NOT NULL AND c.last_updated > '0001-01-01' IS TRUE AS found
+    SELECT c.*, c.has_entries OR p.conversation_id IS NOT NULL AND c.last_updated > '0001-01-01' IS TRUE AS found, p.conversation_id IS NOT NULL AS reported
     FROM origins c LEFT JOIN reporting p USING (conversation_id)
 )`
 
@@ -1287,6 +1303,14 @@ func (s *SessionService) Stop() error {
 	return nil
 }
 
+// scheduledAgents names the agents ScheduleAgents last recorded.
+func (s *SessionService) scheduledAgents() []string {
+	s.scheduledMu.Lock()
+	defer s.scheduledMu.Unlock()
+
+	return s.scheduled
+}
+
 // sidebarSessions yields pinned records first, then recent-first, bytewise-ID order, of chats when
 // not nil. Conversations without stored history are omitted until their first entry arrives,
 // except while a turn runs: then its prompt is the preview and its start the update time.
@@ -1339,6 +1363,8 @@ SELECT
     COALESCE(w.background, FALSE) AS background,
     k.conversation_id IS NOT NULL AS asking,
     c.pinned,
+    c.paused,
+    c.kind = 'web_chat' AND c.created_by NOT IN ('', $2) AND c.cron_run IS NULL AND NOT c.reported AND NOT (c.sticky = 'global' AND COALESCE(c.agent = ANY($7), FALSE)) AS pausable,
     c.name,
     c.forked_from,
     COALESCE(c.tags, '[]'::jsonb) AS tags,
@@ -1376,7 +1402,7 @@ LEFT JOIN asking k ON k.conversation_id = c.conversation_id
 LEFT JOIN external_runs x ON x.conversation_id = c.conversation_id
 WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY($5))
 ), remote AS (
-SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.pinned, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
+SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.pinned, FALSE AS paused, FALSE AS pausable, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
     o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at, COALESCE(u.quiet, FALSE),
     COALESCE(u.parked, FALSE), u.until, COALESCE(u.until_done, FALSE), COALESCE(u.note, ''), COALESCE(u.auto_park, e.auto_park, TRUE),
     CASE WHEN o.asking THEN 'needs_you' WHEN o.running OR o.background THEN 'running' END, 0, FALSE AS queued, FALSE AS external_mcp, 0,
@@ -1390,7 +1416,7 @@ WHERE o.kind = 'remote' AND o.server = ANY($4) AND ($5::text[] IS NULL OR o.conv
 SELECT * FROM local UNION ALL SELECT * FROM remote
 )
 SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, KindOneOffCronRun,
-			slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)), chats, username)
+			slices.Collect(maps.Keys(s.definitions.Clone().OpenCode)), chats, username, s.scheduledAgents())
 		if err != nil {
 			yield(SidebarSession{}, fmt.Errorf("query sidebar sessions: %w", err))
 			return
@@ -1407,12 +1433,12 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			since, arrived int64
 		)
 
-		dest := make([]any, 0, 43)
+		dest := make([]any, 0, 45)
 
 		for rows.Next() {
 			var row SidebarSession
 
-			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Pinned, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
+			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Pinned, &row.Paused, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
 				&row.Attention.Parked, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &work, &since, &row.Queued, &row.External, &arrived)
 			if err := scanChatOrigin(rows, &row.Origin, dest...); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))

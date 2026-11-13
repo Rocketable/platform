@@ -317,7 +317,7 @@ func sidebarSession(chat *backend.SidebarChat) *Session {
 	conversation := row.Conversation
 	workStates := map[backend.WorkState]WorkState{backend.WorkIdle: WorkState_IDLE, backend.WorkNeedsYou: WorkState_NEEDS_YOU, backend.WorkRunning: WorkState_RUNNING, backend.WorkQueued: WorkState_QUEUED}
 
-	session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
+	session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Pinned: row.Pinned, Paused: row.Paused, Pausable: row.Pausable, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
 		Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label(), External: row.External, WorkState: workStates[row.Work]}
 
 	if !row.StateSince.IsZero() {
@@ -1215,6 +1215,36 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 		s.channels.RenameThreadSession(ctx, request.Id, *request.Name)
 	}
 
+	// Whoever may prompt the session may pause its agent, where that agent can pause, and resume it.
+	if request.Paused != nil {
+		username, principal, err := s.principal(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := s.turnFeedable(ctx, request.Id, false); err != nil {
+			return nil, err
+		}
+
+		var pausable bool
+
+		for chat, err := range s.sessions.SidebarChats(ctx, username, s.channels, []string{request.Id}) {
+			if err != nil {
+				return nil, fmt.Errorf("update web conversation: %w", err)
+			}
+
+			pausable = chat.Session.Pausable
+		}
+
+		if *request.Paused && !pausable {
+			return nil, fmt.Errorf("update web conversation: %w", status.Error(codes.InvalidArgument, "only a session a person started in the Web, with nothing reporting into it, can pause its agent"))
+		}
+
+		if err := s.backend.SetAgentPaused(ctx, request.Id, principal, *request.Paused); err != nil {
+			return nil, fmt.Errorf("update web conversation: %w", err)
+		}
+	}
+
 	return &UpdateSessionResponse{}, nil
 }
 
@@ -1690,13 +1720,19 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return nil, err
 	}
 
+	paused, err := s.pausedSend(ctx, request.Id, kind, text)
+	if err != nil {
+		return nil, err
+	}
+
 	content, err := s.uploadContent(ctx, request.Id, text, request.AttachmentIds)
 	if err != nil {
 		return nil, err
 	}
 
-	// Input the agent acts on parks the sender's tab until it is done when they auto-park the session; a stash does not.
-	if kind != protocol.InboundKindHeld {
+	// Input the agent acts on parks the sender's tab until it is done when they auto-park the session; a stash, or a
+	// message posted while the agent is paused, does not.
+	if kind != protocol.InboundKindHeld && !paused {
 		if err := s.sessions.ChangeAttention(ctx, username, []string{"/s/" + base64.RawURLEncoding.EncodeToString([]byte(request.Id))}, backend.AttentionSent, nil); err != nil {
 			return nil, fmt.Errorf("web prompt: %w", err)
 		}
@@ -1725,7 +1761,29 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		inbound.Metadata["web_goal_prompt"] = request.Text + strings.TrimPrefix(inbound.Text, text)
 	}
 
-	return s.submitPrompt(ctx, inbound, goal)
+	return s.submitPrompt(ctx, inbound, goal, paused)
+}
+
+// pausedSend reports whether a person's input of kind, with text after any delivery command, posts into the
+// chat id for the people there instead of reaching its agent, which it does when that agent is paused and the
+// input would reach it at once. Queued and stashed input waits for resume as ever; a $goal or a named $workflow,
+// which need the agent now, is refused.
+func (s *Server) pausedSend(ctx context.Context, id string, kind protocol.InboundKind, text string) (bool, error) {
+	if kind == protocol.InboundKindEnqueue || kind == protocol.InboundKindHeld {
+		return false, nil
+	}
+
+	paused, err := s.backend.AgentPaused(ctx, id)
+	words := strings.Fields(text)
+
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("web prompt: %w", err)
+	case paused && (kind == protocol.InboundKindPrompt || len(words) > 1 && strings.EqualFold(words[0], "$workflow")):
+		return false, fmt.Errorf("web prompt: %w", backend.AgentPausedError{})
+	}
+
+	return paused, nil
 }
 
 // webGoal parses a web $goal command. It returns the goal with its objective as
@@ -1783,12 +1841,17 @@ func (s *Server) workflowListReply() (*PromptResponse, error) {
 	return &PromptResponse{PrivateText: cmp.Or(strings.Join(lines, "\n"), "No workflows are configured.")}, nil
 }
 
-// submitPrompt starts a parsed $goal, or runs any other prompt as a turn.
-func (s *Server) submitPrompt(ctx context.Context, inbound *protocol.InboundMessage, goal protocol.GoalRequest) (*PromptResponse, error) {
+// submitPrompt posts a message sent while the chat's agent is paused, starts a parsed $goal, or runs any other
+// prompt as a turn.
+func (s *Server) submitPrompt(ctx context.Context, inbound *protocol.InboundMessage, goal protocol.GoalRequest, paused bool) (*PromptResponse, error) {
 	var err error
-	if goal.Objective != "" {
+
+	switch {
+	case paused:
+		err = s.backend.PostPausedMessage(ctx, inbound)
+	case goal.Objective != "":
 		err = s.backend.StartGoal(ctx, inbound, goal)
-	} else {
+	default:
 		err = s.backend.RunTurn(ctx, inbound)
 	}
 

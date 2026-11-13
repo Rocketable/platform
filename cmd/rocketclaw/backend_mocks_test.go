@@ -23,6 +23,9 @@ var _ frontend.Backend = &BackendMock{}
 //
 //		// make and configure a mocked frontend.Backend
 //		mockedBackend := &BackendMock{
+//			AgentPausedFunc: func(context1 context.Context, s string) (bool, error) {
+//				panic("mock out the AgentPaused method")
+//			},
 //			AnswerQuestionFunc: func(context1 context.Context, s string, s1 string, askUserQuestionAnswer protocol.AskUserQuestionAnswer) error {
 //				panic("mock out the AnswerQuestion method")
 //			},
@@ -56,6 +59,9 @@ var _ frontend.Backend = &BackendMock{}
 //			PopQueueItemFunc: func(context1 context.Context, s string, s1 string) (bool, error) {
 //				panic("mock out the PopQueueItem method")
 //			},
+//			PostPausedMessageFunc: func(context1 context.Context, inboundMessage *protocol.InboundMessage) error {
+//				panic("mock out the PostPausedMessage method")
+//			},
 //			PromoteQueueItemFunc: func(context1 context.Context, s string, s1 string) (bool, error) {
 //				panic("mock out the PromoteQueueItem method")
 //			},
@@ -76,6 +82,9 @@ var _ frontend.Backend = &BackendMock{}
 //			},
 //			SandboxErrorFunc: func() string {
 //				panic("mock out the SandboxError method")
+//			},
+//			SetAgentPausedFunc: func(context1 context.Context, s string, s1 string, b bool) error {
+//				panic("mock out the SetAgentPaused method")
 //			},
 //			StageRevertFunc: func(context1 context.Context, s string, s1 string) (string, string, error) {
 //				panic("mock out the StageRevert method")
@@ -105,6 +114,9 @@ var _ frontend.Backend = &BackendMock{}
 //
 //	}
 type BackendMock struct {
+	// AgentPausedFunc mocks the AgentPaused method.
+	AgentPausedFunc func(context1 context.Context, s string) (bool, error)
+
 	// AnswerQuestionFunc mocks the AnswerQuestion method.
 	AnswerQuestionFunc func(context1 context.Context, s string, s1 string, askUserQuestionAnswer protocol.AskUserQuestionAnswer) error
 
@@ -138,6 +150,9 @@ type BackendMock struct {
 	// PopQueueItemFunc mocks the PopQueueItem method.
 	PopQueueItemFunc func(context1 context.Context, s string, s1 string) (bool, error)
 
+	// PostPausedMessageFunc mocks the PostPausedMessage method.
+	PostPausedMessageFunc func(context1 context.Context, inboundMessage *protocol.InboundMessage) error
+
 	// PromoteQueueItemFunc mocks the PromoteQueueItem method.
 	PromoteQueueItemFunc func(context1 context.Context, s string, s1 string) (bool, error)
 
@@ -158,6 +173,9 @@ type BackendMock struct {
 
 	// SandboxErrorFunc mocks the SandboxError method.
 	SandboxErrorFunc func() string
+
+	// SetAgentPausedFunc mocks the SetAgentPaused method.
+	SetAgentPausedFunc func(context1 context.Context, s string, s1 string, b bool) error
 
 	// StageRevertFunc mocks the StageRevert method.
 	StageRevertFunc func(context1 context.Context, s string, s1 string) (string, string, error)
@@ -182,6 +200,13 @@ type BackendMock struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
+		// AgentPaused holds details about calls to the AgentPaused method.
+		AgentPaused []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+		}
 		// AnswerQuestion holds details about calls to the AnswerQuestion method.
 		AnswerQuestion []struct {
 			// Context1 is the context1 argument value.
@@ -277,6 +302,13 @@ type BackendMock struct {
 			// S1 is the s1 argument value.
 			S1 string
 		}
+		// PostPausedMessage holds details about calls to the PostPausedMessage method.
+		PostPausedMessage []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// InboundMessage is the inboundMessage argument value.
+			InboundMessage *protocol.InboundMessage
+		}
 		// PromoteQueueItem holds details about calls to the PromoteQueueItem method.
 		PromoteQueueItem []struct {
 			// Context1 is the context1 argument value.
@@ -317,6 +349,17 @@ type BackendMock struct {
 		}
 		// SandboxError holds details about calls to the SandboxError method.
 		SandboxError []struct {
+		}
+		// SetAgentPaused holds details about calls to the SetAgentPaused method.
+		SetAgentPaused []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// S1 is the s1 argument value.
+			S1 string
+			// B is the b argument value.
+			B bool
 		}
 		// StageRevert holds details about calls to the StageRevert method.
 		StageRevert []struct {
@@ -370,6 +413,7 @@ type BackendMock struct {
 		WorkflowDescriptions []struct {
 		}
 	}
+	lockAgentPaused             sync.RWMutex
 	lockAnswerQuestion          sync.RWMutex
 	lockBackgroundJobs          sync.RWMutex
 	lockClearRevert             sync.RWMutex
@@ -381,6 +425,7 @@ type BackendMock struct {
 	lockMoveToBackground        sync.RWMutex
 	lockPendingQuestions        sync.RWMutex
 	lockPopQueueItem            sync.RWMutex
+	lockPostPausedMessage       sync.RWMutex
 	lockPromoteQueueItem        sync.RWMutex
 	lockQueueItems              sync.RWMutex
 	lockReload                  sync.RWMutex
@@ -388,6 +433,7 @@ type BackendMock struct {
 	lockRunTurn                 sync.RWMutex
 	lockRunningAgent            sync.RWMutex
 	lockSandboxError            sync.RWMutex
+	lockSetAgentPaused          sync.RWMutex
 	lockStageRevert             sync.RWMutex
 	lockStartGoal               sync.RWMutex
 	lockStashQueueItem          sync.RWMutex
@@ -395,6 +441,42 @@ type BackendMock struct {
 	lockSubscribe               sync.RWMutex
 	lockSwitchConversationAgent sync.RWMutex
 	lockWorkflowDescriptions    sync.RWMutex
+}
+
+// AgentPaused calls AgentPausedFunc.
+func (mock *BackendMock) AgentPaused(context1 context.Context, s string) (bool, error) {
+	if mock.AgentPausedFunc == nil {
+		panic("BackendMock.AgentPausedFunc: method is nil but Backend.AgentPaused was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+	}{
+		Context1: context1,
+		S:        s,
+	}
+	mock.lockAgentPaused.Lock()
+	mock.calls.AgentPaused = append(mock.calls.AgentPaused, callInfo)
+	mock.lockAgentPaused.Unlock()
+	return mock.AgentPausedFunc(context1, s)
+}
+
+// AgentPausedCalls gets all the calls that were made to AgentPaused.
+// Check the length with:
+//
+//	len(mockedBackend.AgentPausedCalls())
+func (mock *BackendMock) AgentPausedCalls() []struct {
+	Context1 context.Context
+	S        string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+	}
+	mock.lockAgentPaused.RLock()
+	calls = mock.calls.AgentPaused
+	mock.lockAgentPaused.RUnlock()
+	return calls
 }
 
 // AnswerQuestion calls AnswerQuestionFunc.
@@ -829,6 +911,42 @@ func (mock *BackendMock) PopQueueItemCalls() []struct {
 	return calls
 }
 
+// PostPausedMessage calls PostPausedMessageFunc.
+func (mock *BackendMock) PostPausedMessage(context1 context.Context, inboundMessage *protocol.InboundMessage) error {
+	if mock.PostPausedMessageFunc == nil {
+		panic("BackendMock.PostPausedMessageFunc: method is nil but Backend.PostPausedMessage was just called")
+	}
+	callInfo := struct {
+		Context1       context.Context
+		InboundMessage *protocol.InboundMessage
+	}{
+		Context1:       context1,
+		InboundMessage: inboundMessage,
+	}
+	mock.lockPostPausedMessage.Lock()
+	mock.calls.PostPausedMessage = append(mock.calls.PostPausedMessage, callInfo)
+	mock.lockPostPausedMessage.Unlock()
+	return mock.PostPausedMessageFunc(context1, inboundMessage)
+}
+
+// PostPausedMessageCalls gets all the calls that were made to PostPausedMessage.
+// Check the length with:
+//
+//	len(mockedBackend.PostPausedMessageCalls())
+func (mock *BackendMock) PostPausedMessageCalls() []struct {
+	Context1       context.Context
+	InboundMessage *protocol.InboundMessage
+} {
+	var calls []struct {
+		Context1       context.Context
+		InboundMessage *protocol.InboundMessage
+	}
+	mock.lockPostPausedMessage.RLock()
+	calls = mock.calls.PostPausedMessage
+	mock.lockPostPausedMessage.RUnlock()
+	return calls
+}
+
 // PromoteQueueItem calls PromoteQueueItemFunc.
 func (mock *BackendMock) PromoteQueueItem(context1 context.Context, s string, s1 string) (bool, error) {
 	if mock.PromoteQueueItemFunc == nil {
@@ -1061,6 +1179,50 @@ func (mock *BackendMock) SandboxErrorCalls() []struct {
 	mock.lockSandboxError.RLock()
 	calls = mock.calls.SandboxError
 	mock.lockSandboxError.RUnlock()
+	return calls
+}
+
+// SetAgentPaused calls SetAgentPausedFunc.
+func (mock *BackendMock) SetAgentPaused(context1 context.Context, s string, s1 string, b bool) error {
+	if mock.SetAgentPausedFunc == nil {
+		panic("BackendMock.SetAgentPausedFunc: method is nil but Backend.SetAgentPaused was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+		S1       string
+		B        bool
+	}{
+		Context1: context1,
+		S:        s,
+		S1:       s1,
+		B:        b,
+	}
+	mock.lockSetAgentPaused.Lock()
+	mock.calls.SetAgentPaused = append(mock.calls.SetAgentPaused, callInfo)
+	mock.lockSetAgentPaused.Unlock()
+	return mock.SetAgentPausedFunc(context1, s, s1, b)
+}
+
+// SetAgentPausedCalls gets all the calls that were made to SetAgentPaused.
+// Check the length with:
+//
+//	len(mockedBackend.SetAgentPausedCalls())
+func (mock *BackendMock) SetAgentPausedCalls() []struct {
+	Context1 context.Context
+	S        string
+	S1       string
+	B        bool
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+		S1       string
+		B        bool
+	}
+	mock.lockSetAgentPaused.RLock()
+	calls = mock.calls.SetAgentPaused
+	mock.lockSetAgentPaused.RUnlock()
 	return calls
 }
 

@@ -440,7 +440,11 @@ type Session struct {
 	// The caller parked its tab until its next turn ends, which has no time.
 	UntilDone bool `protobuf:"varint,37,opt,name=until_done,json=untilDone,proto3" json:"until_done,omitempty"`
 	// A prompt the caller sends parks its tab until it is done: by their choice for the session, else for every session.
-	AutoPark      bool `protobuf:"varint,38,opt,name=auto_park,json=autoPark,proto3" json:"auto_park,omitempty"`
+	AutoPark bool `protobuf:"varint,38,opt,name=auto_park,json=autoPark,proto3" json:"auto_park,omitempty"`
+	// Someone paused the agent: messages sent here start no turn until someone resumes it.
+	Paused bool `protobuf:"varint,39,opt,name=paused,proto3" json:"paused,omitempty"`
+	// A person started the session in the Web and nothing outside reports into it, so its agent can pause.
+	Pausable      bool `protobuf:"varint,40,opt,name=pausable,proto3" json:"pausable,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -709,6 +713,20 @@ func (x *Session) GetUntilDone() bool {
 func (x *Session) GetAutoPark() bool {
 	if x != nil {
 		return x.AutoPark
+	}
+	return false
+}
+
+func (x *Session) GetPaused() bool {
+	if x != nil {
+		return x.Paused
+	}
+	return false
+}
+
+func (x *Session) GetPausable() bool {
+	if x != nil {
+		return x.Pausable
 	}
 	return false
 }
@@ -5392,7 +5410,9 @@ type UpdateSessionRequest struct {
 	Pinned *bool                  `protobuf:"varint,2,opt,name=pinned,proto3,oneof" json:"pinned,omitempty"`
 	Name   *string                `protobuf:"bytes,3,opt,name=name,proto3,oneof" json:"name,omitempty"`
 	// Toggles a tag a person chose: any tag on a remote OpenCode session, or one its agent allows.
-	Tag           *string `protobuf:"bytes,6,opt,name=tag,proto3,oneof" json:"tag,omitempty"`
+	Tag *string `protobuf:"bytes,6,opt,name=tag,proto3,oneof" json:"tag,omitempty"`
+	// Pauses or resumes the agent of a Web chat.
+	Paused        *bool `protobuf:"varint,7,opt,name=paused,proto3,oneof" json:"paused,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5453,6 +5473,13 @@ func (x *UpdateSessionRequest) GetTag() string {
 		return *x.Tag
 	}
 	return ""
+}
+
+func (x *UpdateSessionRequest) GetPaused() bool {
+	if x != nil && x.Paused != nil {
+		return *x.Paused
+	}
+	return false
 }
 
 type UpdateSessionResponse struct {
@@ -7918,7 +7945,7 @@ const file_web_proto_rawDesc = "" +
 	"\x05since\x18\x02 \x01(\tR\x05since\x12\x12\n" +
 	"\x04hold\x18\x03 \x01(\bR\x04hold\x12\x1f\n" +
 	"\vsame_origin\x18\x04 \x01(\bR\n" +
-	"sameOrigin\"\xd9\a\n" +
+	"sameOrigin\"\x8d\b\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -7962,7 +7989,9 @@ const file_web_proto_rawDesc = "" +
 	"\x04note\x18$ \x01(\tR\x04note\x12\x1d\n" +
 	"\n" +
 	"until_done\x18% \x01(\bR\tuntilDone\x12\x1b\n" +
-	"\tauto_park\x18& \x01(\bR\bautoParkJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\x0eallowed_agents\"\x97\x01\n" +
+	"\tauto_park\x18& \x01(\bR\bautoPark\x12\x16\n" +
+	"\x06paused\x18' \x01(\bR\x06paused\x12\x1a\n" +
+	"\bpausable\x18( \x01(\bR\bpausableJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\x0eallowed_agents\"\x97\x01\n" +
 	"\fTabAttention\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1b\n" +
 	"\tunread_at\x18\x02 \x01(\tR\bunreadAt\x12\x14\n" +
@@ -8334,15 +8363,17 @@ const file_web_proto_rawDesc = "" +
 	"\x10\v\"\x13\n" +
 	"\x11ListConfigRequest\"=\n" +
 	"\x12ListConfigResponse\x12'\n" +
-	"\x06config\x18\x01 \x01(\v2\x0f.rpc.ConfigViewR\x06config\"\x9b\x01\n" +
+	"\x06config\x18\x01 \x01(\v2\x0f.rpc.ConfigViewR\x06config\"\xc3\x01\n" +
 	"\x14UpdateSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\x06pinned\x18\x02 \x01(\bH\x00R\x06pinned\x88\x01\x01\x12\x17\n" +
 	"\x04name\x18\x03 \x01(\tH\x01R\x04name\x88\x01\x01\x12\x15\n" +
-	"\x03tag\x18\x06 \x01(\tH\x02R\x03tag\x88\x01\x01B\t\n" +
+	"\x03tag\x18\x06 \x01(\tH\x02R\x03tag\x88\x01\x01\x12\x1b\n" +
+	"\x06paused\x18\a \x01(\bH\x03R\x06paused\x88\x01\x01B\t\n" +
 	"\a_pinnedB\a\n" +
 	"\x05_nameB\x06\n" +
-	"\x04_tagJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06\"\x17\n" +
+	"\x04_tagB\t\n" +
+	"\a_pausedJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06\"\x17\n" +
 	"\x15UpdateSessionResponse\"\x11\n" +
 	"\x0fProtocolRequest\"5\n" +
 	"\x10ProtocolResponse\x12!\n" +

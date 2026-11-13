@@ -229,7 +229,7 @@ func (f *toolFactory) decideReview(ctx context.Context, request *permissionRevie
 	answer, _ := json.Marshal(decision) // The decision has only string fields.
 
 	replay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
-		promptInputMessage(&PromptInput{Role: PromptInputRoleUser, Texts: texts}),
+		PromptInputMessage(&PromptInput{Role: PromptInputRoleUser, Texts: texts}),
 		inputMessageParam(responses.EasyInputMessageRoleAssistant, easyInputStringContent(string(answer))),
 	})
 	if err != nil {

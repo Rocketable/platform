@@ -96,6 +96,9 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	_, err = server.updateSession(ctx, &UpdateSessionRequest{Id: created.Id, Name: new(" Renamed ")})
 	require.NoError(t, err, "a remote session is renamed on its server")
 
+	_, err = server.updateSession(ctx, &UpdateSessionRequest{Id: created.Id, Paused: new(true)})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "only a Web chat's agent pauses")
+
 	require.NoError(t, sessions.UpsertThread("web", backend.ThreadState{Agent: "main"}))
 
 	_, err = server.updateSession(ctx, &UpdateSessionRequest{Id: "web", Tag: new("customer")})
@@ -108,6 +111,8 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a remote session is recorded from its creation, before any sync")
 
 	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `INSERT INTO web_tab_attention (username, path, conversation_id, unread_at, parked, until, note) VALUES ('alice', '/oc/a', $1, '2026-10-22T10:00:00Z', TRUE, '2026-10-22T11:00:00Z', 'Park ended')`, created.Id)
+	require.NoError(t, err)
+	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `UPDATE conversations SET paused = TRUE WHERE conversation_id = $1`, created.Id)
 	require.NoError(t, err)
 
 	var (
@@ -138,6 +143,7 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	assert.Equal(t, "Renamed", rows[0].GetPreview(), "a remote row carries its title as its preview")
 	assert.Equal(t, "Renamed", rows[0].GetName(), "the name is the server title")
 	assert.False(t, rows[0].GetOffline())
+	assert.False(t, rows[0].GetPaused(), "only Web chats pause, whatever a remote row stores")
 	assert.Equal(t, []any{"2026-10-22T10:00:00Z", true, "2026-10-22T11:00:00Z", "Park ended"}, []any{rows[0].GetUnreadAt(), rows[0].GetParked(), rows[0].GetUntil(), rows[0].GetNote()},
 		"a remote session carries the caller's attention")
 	assert.True(t, proto.Equal(&ListSessionsResponse{

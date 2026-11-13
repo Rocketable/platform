@@ -476,6 +476,10 @@ func TestSpacePermissionTurns(t *testing.T) {
 		{"Voice", func(ctx context.Context) error {
 			return h.server.voice(&VoiceRequest{ConversationId: "switched", Sdp: "offer-x"}, &mockServerStream{ContextFunc: func() context.Context { return ctx }})
 		}, nil},
+		{"UpdateSession", func(ctx context.Context) error {
+			_, err := h.server.updateSession(ctx, &UpdateSessionRequest{Id: "switched", Paused: new(true)})
+			return err
+		}, nil},
 	} {
 		err := tc.feed(alice)
 		require.Equal(t, codes.PermissionDenied, status.Code(err), "%s: %v", tc.name, err)
@@ -483,6 +487,20 @@ func TestSpacePermissionTurns(t *testing.T) {
 
 		if tc.bob != nil {
 			require.Equal(t, *tc.bob, status.Code(tc.feed(bob)), tc.name)
+		}
+	}
+
+	// Pausing follows prompting: alice pauses and resumes the chat, with history, whose agent is in her spaces.
+	_, err = h.rt.Sessions.AppendEntryID(t.Context(), "ops-chat", &harness.SessionEntry{Timestamp: time.Now().UTC()})
+	require.NoError(t, err)
+
+	for _, paused := range []bool{true, false} {
+		_, err = h.server.updateSession(alice, &UpdateSessionRequest{Id: "ops-chat", Paused: &paused})
+		require.NoError(t, err)
+
+		for chat, err := range h.rt.Sessions.SidebarChats(t.Context(), "alice", h.server.channels, []string{"ops-chat"}) {
+			require.NoError(t, err)
+			require.Equal(t, paused, chat.Session.Paused)
 		}
 	}
 
