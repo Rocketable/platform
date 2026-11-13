@@ -175,6 +175,23 @@ test("mounting a session renders its timeline from the server's proxy route", as
   expect(calls.reported.at(-1)).toBe("ses_a")
 })
 
+test("the new timeline keeps sender labels in RocketClaw", async () => {
+  const view = show()
+  await answered(view)
+  press(document.body, ",", modK)
+  ;(await until(() => byText(view.root, "button, [role=tab]", "Experimental"))).click()
+  const toggle = await until(() => view.root.querySelector<HTMLInputElement>("[data-action=settings-new-timeline] input"))
+  toggle.click()
+  view.root.querySelector<HTMLElement>(".settings-back")!.click()
+  await until(() => view.root.querySelector('[data-timeline="next"] [data-slot=message-author]'))
+  expect(view.root.querySelector('[data-timeline="next"] [data-slot=message-author]')?.textContent).toBe("alice")
+  expect(calls.reported.at(-1)).toBe("ses_a")
+
+  press(document.body, ",", modK)
+  ;(await until(() => byText(view.root, "button, [role=tab]", "Experimental"))).click()
+  ;(await until(() => view.root.querySelector<HTMLInputElement>("[data-action=settings-new-timeline] input"))).click()
+})
+
 test("closing an image preview marks only its view's portal and cleans it on disposal", async () => {
   server.extraText = "![preview](https://example.test/preview.png)"
   const view = show()

@@ -2,7 +2,6 @@ import { Suspense, type ParentProps } from "solid-js"
 import { createMediaQuery } from "@solid-primitives/media"
 import { usePlatform } from "@/runtime/platform/platform"
 import { ToastRegion } from "@/shell/notifications/toast"
-import { createTipToasts } from "@/tips/model"
 import { UploadToastHost } from "@/composer/attachments/uploads"
 import { useSettingsSurface } from "@/settings/surface"
 import { PluginServerCover } from "@/runtime/plugin/server-shell"
@@ -15,7 +14,7 @@ export default function Layout(props: ParentProps) {
   const settings = useSettingsSurface()
   const mobile = createMediaQuery("(max-width: 767px)")
 
-  createTipToasts()
+  // rocketclaw: desktop-app tips do not apply to remote sessions (upstream packages/app/src/shell/shell.tsx)
 
   return (
     <>
