@@ -310,7 +310,10 @@ detect a crashed browser. Browsers with the Long Animation Frames API (Chromium)
 report slow frames as `ui.long_animation_frame` with the script that caused them
 (`browser.script.invoker`, `code.file.path`, `code.function.name`, and
 `browser.script.source_char_position`); frames with no script attached, such as
-pure layout or style work, are not reported. Other browsers report
+pure layout or style work, are not reported. A slow event listener is named by
+tag and event only, such as `INPUT.onclick`, and interaction, largest-paint and
+layout-shift targets are not sent: Sentry would describe them by id, classes and
+labels, which can hold private text such as a PR's file names. Other browsers report
 `ui.long_task` without a cause. Browser support determines which metrics
 are available. Click tracing uses Sentry's experimental Interactions integration.
 Page loads and navigations are named by screen (`/s/:id` for any session).

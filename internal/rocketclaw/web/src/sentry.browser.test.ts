@@ -127,6 +127,8 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       await tracing.promise;
       // Exercise a click after pageload/navigation have ended, not just startup stalls.
       const search = page.getByRole("textbox", { name: "Search sessions" });
+      // Element ids, classes and labels can carry private text, such as a PR file tree's file names.
+      await search.evaluate((node: HTMLElement) => { node.id = "private-element-id"; node.classList.add("private-element-class"); });
       await search.evaluate((node: HTMLElement) => node.addEventListener("click", () => {
         const until = performance.now() + 150;
         while (performance.now() < until) {}
@@ -134,15 +136,18 @@ for (const rate of [undefined, 0, 1]) test(`Sentry errors and tracing at sample 
       }, { once: true }));
       await search.click();
       await interaction.promise;
+      // Interaction, largest-paint and layout-shift targets are element descriptions; none is sent.
+      expect(spans.flatMap((span) => Object.keys(span.attributes)).filter((key) => /^(?:browser\.web_vital\.)?(?:inp\.target|lcp\.element|cls\.source\.\d+)$/.test(key))).toEqual([]);
       const script = spans.find((span) => span.attributes["sentry.op"]?.value === "ui.long_animation_frame" && span.attributes["browser.script.invoker_type"]?.value === "classic-script")!;
       for (const key of ["browser.script.invoker", "code.file.path"] as const) expect(script.attributes[key]?.value).toBe(`http://127.0.0.1:${server.port}/`);
       // Chromium reports slow frames with the script that caused them.
-      expect(spans.some((span) => span.attributes["sentry.op"]?.value === "ui.long_animation_frame" && span.attributes["browser.script.invoker_type"]?.value === "event-listener")).toBe(true);
+      expect(spans.some((span) => span.attributes["sentry.op"]?.value === "ui.long_animation_frame" && span.attributes["browser.script.invoker_type"]?.value === "event-listener" && span.attributes["browser.script.invoker"]?.value === "INPUT.onclick")).toBe(true);
       const data = envelopes.join("\n");
       expect(spans.some((span) => span.name === "/search/:id" && !!span.attributes["url.path"]?.value.startsWith("/search/") && span.attributes["sentry.op"]?.value === "navigation")).toBe(true);
       expect(data).toContain("browser-test");
       expect(data).toContain("v9.8.7-browser-test");
       expect(data).not.toContain("private-search");
+      expect(data).not.toContain("private-element");
       expect(data).not.toContain('"type":"replay_event"');
       expect(data).not.toContain('"type":"replay_recording"');
     }
