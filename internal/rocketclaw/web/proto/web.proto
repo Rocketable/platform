@@ -728,12 +728,13 @@ message GetAgentDraftRequest {
   int64 since = 2;
 }
 
-// GetAgentDraftResponse is the draft now, the changes after since in order, and the editors seen in the
-// last 30 seconds.
+// GetAgentDraftResponse is the draft now, the changes after since in order, the editors seen in the
+// last 30 seconds, and every assistant proposal on the draft, oldest first.
 message GetAgentDraftResponse {
   AgentDraft draft = 1;
   repeated AgentDraftOp ops = 2;
   repeated AgentDraftPresence presence = 3;
+  repeated AgentDraftProposal proposals = 4;
 }
 
 // ApplyAgentDraftOpRequest commits op to draft id. cursor is the caller's place in the variant's
@@ -896,6 +897,49 @@ message SaveDraftResponse {
 
 // StopWaitingRequest returns draft id from waiting for a merge to editing; its pull request stays open.
 message StopWaitingRequest { string id = 1; }
+
+// ProposeDraftChangesRequest asks the assistant to change draft id as request says. answer is the test chat
+// answer the caller points at, from variant, to fix; empty when they point at none.
+message ProposeDraftChangesRequest {
+  string id = 1;
+  string request = 2;
+  string answer = 3;
+  string variant = 4;
+}
+
+// AgentDraftProposedSetting sets a top-level setting key of variant to the YAML value_yaml, or removes it when
+// empty; the key mode changes the whole draft's mode.
+message AgentDraftProposedSetting {
+  string variant = 1;
+  string key = 2;
+  string value_yaml = 3;
+  string reason = 4;
+}
+
+// AgentDraftProposedBody replaces variant's instructions with body.
+message AgentDraftProposedBody {
+  string variant = 1;
+  string body = 2;
+  string reason = 3;
+}
+
+// AgentDraftProposal is the assistant's suggested change to a draft, made on base_revision: its message, setting
+// changes and instructions replacements. state is open until an editor accepts or rejects it.
+message AgentDraftProposal {
+  string id = 1;
+  int64 base_revision = 2;
+  string state = 3;
+  string message = 4;
+  repeated AgentDraftProposedSetting settings = 5;
+  repeated AgentDraftProposedBody bodies = 6;
+}
+
+// DecideProposalRequest accepts, or rejects, draft id's open proposal proposal_id.
+message DecideProposalRequest {
+  string id = 1;
+  string proposal_id = 2;
+  bool accept = 3;
+}
 
 message UpdateSessionRequest {
   string id = 1;
@@ -1252,6 +1296,8 @@ service Web {
   rpc DraftLayers(DraftLayersRequest) returns (DraftLayersResponse);
   rpc SaveDraft(SaveDraftRequest) returns (SaveDraftResponse);
   rpc StopWaiting(StopWaitingRequest) returns (SaveDraftResponse);
+  rpc ProposeDraftChanges(ProposeDraftChangesRequest) returns (AgentDraftProposal);
+  rpc DecideProposal(DecideProposalRequest) returns (AgentDraftProposal);
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
   rpc Identity(IdentityRequest) returns (IdentityResponse);

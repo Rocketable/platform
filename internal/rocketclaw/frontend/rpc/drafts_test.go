@@ -3,7 +3,9 @@ package rpc
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net"
@@ -39,13 +41,26 @@ func TestAgentDraftRPCs(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Permissions: map[string][]string{"alice@example.com": {"Ops"}}}
+	// The assistant's model answers one proposal: new instructions and a model for variant a.
+	asked := make(chan string, 1)
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked <- string(body)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"id":"r","object":"response","created_at":0,"status":"completed","model":"m","output":[{"id":"m","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%q,"annotations":[]}]}]}`,
+			`{"message": "Greets.", "settings": [{"variant": "a", "key": "model", "value_yaml": "gpt-6.1-terra", "reason": "faster"}], "bodies": [{"variant": "a", "body": "Hi.\n", "reason": "asked"}]}`)
+	}))
+	t.Cleanup(model.Close)
+
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Permissions: map[string][]string{"alice@example.com": {"Ops"}}, OpenAI: config.OpenAIConfig{APIBaseURL: model.URL}}
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	require.NoError(t, os.MkdirAll(filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(cfg.Workspace, "agents"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Workspace, "agents", "support.md"), []byte("---\nmodel: gpt-5\n---\nHelp.\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents", "main.md"), []byte("---\nmodel: gpt-5\n---\nRun.\n"), 0o600))
 
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
@@ -115,7 +130,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 	}}
 	handler := NewTailnetHandler(whois, nil, NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil))
 
-	for _, method := range []string{"TestModel", "CreateAgentDraft", "ListAgentDrafts", "GetAgentDraft", "ApplyAgentDraftOp", "SetAgentDraftPresence", "AgentSettings", "DraftPrompt", "RestartDraftChat", "DraftLayers", "SaveDraft", "StopWaiting"} {
+	for _, method := range []string{"TestModel", "CreateAgentDraft", "ListAgentDrafts", "GetAgentDraft", "ApplyAgentDraftOp", "SetAgentDraftPresence", "AgentSettings", "DraftPrompt", "RestartDraftChat", "DraftLayers", "SaveDraft", "StopWaiting", "ProposeDraftChanges", "DecideProposal"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/"+method, strings.NewReader(`{}`)))
 		require.Equal(t, http.StatusForbidden, response.Code, "%s: %s", method, response.Body)
@@ -370,6 +385,40 @@ func TestAgentDraftRPCs(t *testing.T) {
 	require.Equal(t, codes.NotFound, status.Code(err), "%v", err)
 	_, err = invoke[SaveDraftResponse](bob, connection, "StopWaiting", &StopWaitingRequest{Id: "missing"})
 	require.Equal(t, codes.NotFound, status.Code(err), "%v", err)
+
+	// The assistant reads the test chat and its proposal is shared through the draft; accepting it commits its
+	// changes, once.
+	_, err = invoke[AgentDraftProposal](bob, connection, "ProposeDraftChanges", &ProposeDraftChangesRequest{Id: "missing"})
+	require.Equal(t, codes.NotFound, status.Code(err), "%v", err)
+
+	_, err = sessions.AppendEntryID(t.Context(), restarted.TestChat, &harness.SessionEntry{Type: "turn", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"Where is my refund?"}`)}})
+	require.NoError(t, err)
+
+	proposed, err := invoke[AgentDraftProposal](bob, connection, "ProposeDraftChanges", &ProposeDraftChangesRequest{Id: probe.Id, Request: "Greet people", Answer: "Help.", Variant: "a"})
+	require.NoError(t, err)
+	require.Contains(t, <-asked, "## user\\nWhere is my refund?")
+
+	wantProposal := &AgentDraftProposal{Id: proposed.Id, BaseRevision: proposed.BaseRevision, State: "open", Message: "Greets.",
+		Settings: []*AgentDraftProposedSetting{{Variant: "a", Key: "model", ValueYaml: "gpt-6.1-terra", Reason: "faster"}}, Bodies: []*AgentDraftProposedBody{{Variant: "a", Body: "Hi.\n", Reason: "asked"}}}
+	require.True(t, proto.Equal(wantProposal, proposed), "%v", proposed)
+
+	shared, err := invoke[GetAgentDraftResponse](carol, connection, "GetAgentDraft", &GetAgentDraftRequest{Id: probe.Id})
+	require.NoError(t, err)
+	require.Equal(t, shared.Draft.Revision, proposed.BaseRevision)
+	require.Len(t, shared.Proposals, 1)
+	require.True(t, proto.Equal(wantProposal, shared.Proposals[0]), "%v", shared.Proposals)
+
+	decided, err := invoke[AgentDraftProposal](carol, connection, "DecideProposal", &DecideProposalRequest{Id: probe.Id, ProposalId: proposed.Id, Accept: true})
+	require.NoError(t, err)
+	require.Equal(t, "accepted", decided.State)
+
+	accepted, err := invoke[GetAgentDraftResponse](bob, connection, "GetAgentDraft", &GetAgentDraftRequest{Id: probe.Id})
+	require.NoError(t, err)
+	require.Equal(t, "Hi.\n", accepted.Draft.Variants[0].Body)
+	require.Equal(t, "Assistant (accepted by carol@example.com)", accepted.Ops[len(accepted.Ops)-1].Author)
+
+	_, err = invoke[AgentDraftProposal](carol, connection, "DecideProposal", &DecideProposalRequest{Id: probe.Id, ProposalId: proposed.Id})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
 
 	// A limited person cannot follow a draft's test chat.
 	response = httptest.NewRecorder()

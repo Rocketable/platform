@@ -88,7 +88,45 @@ func (s *Server) getAgentDraft(ctx context.Context, username string, request *Ge
 		response.Presence = append(response.Presence, &AgentDraftPresence{Client: presence.Client, Username: presence.Username, Variant: presence.Variant, Place: presence.Place})
 	}
 
+	proposals, err := s.sessions.AgentDraftProposals(ctx, request.Id)
+	if err != nil {
+		return nil, fmt.Errorf("web agent draft proposals: %w", err)
+	}
+
+	for i := range proposals {
+		response.Proposals = append(response.Proposals, agentDraftProposalView(&proposals[i]))
+	}
+
 	return response, nil
+}
+
+// proposeDraftChanges asks the assistant, as the caller, for changes to request's draft given its test chat so
+// far, and answers the proposal every editor of the draft now sees.
+func (s *Server) proposeDraftChanges(ctx context.Context, username string, request *ProposeDraftChangesRequest) (*AgentDraftProposal, error) {
+	draft, err := s.sessions.LoadAgentDraft(ctx, request.Id)
+	if err != nil {
+		return nil, agentDraftError("ProposeDraftChanges", err)
+	}
+
+	ask := backend.AgentDraftAsk{Request: request.Request, Answer: request.Answer, Variant: request.Variant}
+
+	if draft.TestChat != "" {
+		history, err := s.history(ctx, &HistoryRequest{Id: draft.TestChat})
+		if err != nil {
+			return nil, err
+		}
+
+		for _, message := range history.Messages {
+			ask.Transcript += fmt.Sprintf("## %s\n%s\n\n", message.Role, message.Text)
+		}
+	}
+
+	proposal, err := s.sessions.ProposeAgentDraftChanges(ctx, request.Id, username, &ask)
+	if err != nil {
+		return nil, agentDraftError("ProposeDraftChanges", err)
+	}
+
+	return agentDraftProposalView(proposal), nil
 }
 
 // applyAgentDraftOp commits request's op as username's and moves the caller's cursor past every op
@@ -268,6 +306,19 @@ func agentDraftView(draft *backend.AgentDraft) *AgentDraft {
 		}
 
 		view.Variants = append(view.Variants, shown)
+	}
+
+	return view
+}
+
+func agentDraftProposalView(proposal *backend.AgentDraftProposal) *AgentDraftProposal {
+	view := &AgentDraftProposal{Id: proposal.ID, BaseRevision: proposal.BaseRevision, State: string(proposal.State), Message: proposal.Message}
+	for _, change := range proposal.Settings {
+		view.Settings = append(view.Settings, &AgentDraftProposedSetting{Variant: change.Variant, Key: change.Key, ValueYaml: change.ValueYAML, Reason: change.Reason})
+	}
+
+	for _, body := range proposal.Bodies {
+		view.Bodies = append(view.Bodies, &AgentDraftProposedBody{Variant: body.Variant, Body: body.Body, Reason: body.Reason})
 	}
 
 	return view

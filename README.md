@@ -490,6 +490,8 @@ model: work/gpt-6.1-sol
 
 `work/gpt-6.1-sol` uses the `work` provider, and a bare `gpt-6.1-sol` uses `openai`. RocketClaw never switches to another provider on its own. Each provider compacts conversation history at 200000 tokens unless you set `autocompaction_threshold`.
 
+The agent editor's assistant runs on `main`'s model. To give it another one, set `"agent_editor_model"` in `rocketclaw.json`, written as an agent file's `model` is (`work/gpt-6.1-sol#high`).
+
 Set `prompt_cache_markers_relative_position` (a negative number) only on a provider that accepts Anthropic `cache_control` markers, such as CLIProxyAPI in front of Claude. RocketClaw then marks one text piece of the last request message, counted from the end: `-2` marks the piece before the last. Automatic permission reviews send the planned action as the last piece, so `-2` lets the next review reuse the cached transcript. Leave it unset for OpenAI and other providers that reject unknown fields.
 
 `auth` sets how a provider signs in: `api_key` (the default) uses `api_key`, and `chatgpt` uses a ChatGPT login. The older name `rocketcode_auth` still works; `auth` wins when both are set.

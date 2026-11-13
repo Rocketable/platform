@@ -22,7 +22,7 @@ const maxIDBytes = 1024
 
 // editorMethods are the agent editor's methods, closed to people limited to spaces: a draft can grant
 // itself any permission, and its test chats run real tools.
-const editorMethods = "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat DraftLayers SaveDraft StopWaiting"
+const editorMethods = "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat DraftLayers SaveDraft StopWaiting ProposeDraftChanges DecideProposal"
 
 // Register publishes the implemented portion of rpc.Web. Other methods retain
 // gRPC's Unimplemented response; they are not successful empty handlers.
@@ -265,6 +265,17 @@ func (s *Server) editorCall(ctx context.Context, method string, request any) (an
 		return s.saveDraft(ctx, username, request.(*SaveDraftRequest))
 	case "StopWaiting":
 		return s.stopWaiting(ctx, username, request.(*StopWaitingRequest))
+	case "ProposeDraftChanges":
+		return s.proposeDraftChanges(ctx, username, request.(*ProposeDraftChangesRequest))
+	case "DecideProposal":
+		decision := request.(*DecideProposalRequest)
+
+		proposal, err := s.sessions.DecideAgentDraftProposal(ctx, decision.Id, decision.ProposalId, username, decision.Accept)
+		if err != nil {
+			return nil, agentDraftError("DecideProposal", err)
+		}
+
+		return agentDraftProposalView(proposal), nil
 	default:
 		return s.testModel(ctx, request.(*TestModelRequest)), nil
 	}

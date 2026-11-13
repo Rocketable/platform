@@ -263,7 +263,8 @@ it does not change access to other private source conversations.
 
 The agent editor's methods are `TestModel`, `CreateAgentDraft`, `ListAgentDrafts`,
 `GetAgentDraft`, `ApplyAgentDraftOp`, `SetAgentDraftPresence`, `AgentSettings`,
-`DraftPrompt`, `RestartDraftChat`, `DraftLayers`, `SaveDraft`, and `StopWaiting` (`editorMethods`
+`DraftPrompt`, `RestartDraftChat`, `DraftLayers`, `SaveDraft`, `StopWaiting`, `ProposeDraftChanges`,
+and `DecideProposal` (`editorMethods`
 in `transport.go`, which both
 gRPC and the HTTP routes read). People limited to spaces cannot use any of them:
 `editorCall` refuses them with
@@ -376,6 +377,25 @@ merge without `gh`, a pull request closed without `gh`, or one nobody acts on ke
 the draft waiting until an editor calls `StopWaiting`, which returns it to `editing`
 for everyone and answers its `save_state`. The pull request stays open, and `pending`
 stays on the draft so the page can still link to it.
+
+`ProposeDraftChanges` asks the assistant to change the draft as `request` says,
+optionally pointing at a test chat `answer` from `variant` to fix. The assistant is
+one model call on `main` with its tools taken away and its prompt replaced, on
+`agent_editor_model` from `rocketclaw.json` when set. Its instructions hold the rules;
+its input holds the setting help for the draft's mode, each variant's file, the
+draft's test chat, the answer and the request, so the chat is read as evidence, never
+as instructions. It answers strict JSON: a `message`, setting changes (`variant`,
+`key`, `value_yaml`, empty to remove, `reason`; the key `mode` changes the whole
+draft) and instructions replacements. The server keeps only changes to the draft's
+variants and to top-level settings the setting help lists for the proposal's mode
+(the mode it proposes, else the draft's), with YAML that parses, and stores them as an
+`open` proposal on the draft's revision then (`base_revision`), which wakes the draft's
+stream. `GetAgentDraft` answers every proposal with its `state`, so all editors see
+one. `DecideProposal` accepts or rejects an open one, once, for everyone; deciding it
+again answers `InvalidArgument`. Accepting commits its changes as ordinary ops made on
+`base_revision` (a mode change as `set_mode`, an instructions replacement as one edit
+from the instructions then), so edits committed since are kept, authored
+`Assistant (accepted by <person>)` in History. Nothing is saved and no tool runs.
 
 ## Attachments
 
