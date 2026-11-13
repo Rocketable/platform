@@ -22,6 +22,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"gopkg.in/yaml.v3"
 )
@@ -60,6 +61,13 @@ const (
 
 // agentDraftWorkspaceLayer names workspace agents/ among a draft's save destinations.
 const agentDraftWorkspaceLayer = "workspace"
+
+// The metadata of a draft test message: the agent files it was sent with, by their path under agents/, as
+// JSON, and the live agent's file then, absent when there is none.
+const (
+	agentDraftFilesMetadataKey = "rocketclaw_agent_draft_files"
+	agentDraftLiveMetadataKey  = "rocketclaw_agent_draft_live"
+)
 
 // An agent name is one path segment that Git and the shell cannot read as an option or a hidden file.
 var agentDraftNamePattern = regexp.MustCompile(`\A[A-Za-z0-9_][A-Za-z0-9._-]*\z`)
@@ -249,6 +257,42 @@ func (s *SessionService) LoadAgentDraft(ctx context.Context, id string) (*AgentD
 	draft, err := scanAgentDraft(s.db.QueryRowContext(ctx, `SELECT id, revision, draft FROM agent_drafts WHERE id = $1`, id))
 
 	return &draft, err
+}
+
+// CaptureAgentDraft records on inbound, a message to draft id's test chat, the draft's agent files as they
+// stand now and the live agent's effective file, and makes inbound run as the draft's agent. Every column
+// answering inbound runs these files, never what the draft or the disk holds when it runs. It returns the
+// draft and the live file it captured, nil when there is none.
+func (s *SessionService) CaptureAgentDraft(ctx context.Context, id string, inbound *protocol.InboundMessage) (*AgentDraft, *string, error) {
+	draft, err := s.LoadAgentDraft(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	live, _, err := s.agentLayerFiles(draft.Name)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	files := map[string]string{}
+
+	for i := range draft.Variants {
+		file := path.Join(draft.Name, draft.Variants[i].Name+".md")
+		if i == 0 {
+			file = draft.Name + ".md"
+		}
+
+		files[file] = string(renderAgentDraftFile(draft.Mode, &draft.Variants[i]))
+	}
+
+	data, _ := json.Marshal(files) // Strings always encode.
+	inbound.Metadata[agentDraftFilesMetadataKey], inbound.Metadata[inboundAgentMetadataKey] = string(data), draft.Name
+
+	if live != nil {
+		inbound.Metadata[agentDraftLiveMetadataKey] = *live
+	}
+
+	return draft, live, nil
 }
 
 // ListAgentDrafts returns every draft, newest first.
