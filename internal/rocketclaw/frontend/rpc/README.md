@@ -204,7 +204,9 @@ agent's session with `FailedPrecondition`.
 
 `ListConfig` exposes only the retained `ConfigView` fields: workspace, overlays,
 model aliases, channel agent choices, MCP server names, logging level,
-auto-approver model, and enabled flags. It never serializes credentials, database
+auto-approver model, enabled flags, and `providers`, the configured provider
+names (always including `openai`) that the agent editor's model picker offers.
+The server never lists a provider's models. It never serializes credentials, database
 URLs, environment values, MCP commands/headers, or browser/user mappings.
 `ListSkills` uses the existing rooted runtime-definition loader and returns loaded
 skill text and metadata; origin is the loader's relative definition location.
@@ -256,6 +258,47 @@ rewrite is performed. Web lists runs by cron, including crons whose definition i
 gone. `History.source_conversation_id` optionally restricts
 the authorized destination's history to one source run before replay decoding;
 it does not change access to other private source conversations.
+
+## Agent editor
+
+The agent editor's methods are `TestModel`, `CreateAgentDraft`, `ListAgentDrafts`,
+`GetAgentDraft`, `ApplyAgentDraftOp`, `SetAgentDraftPresence`, and `AgentSettings`
+(`editorMethods` in `transport.go`, which both gRPC and the HTTP routes read). People
+limited to spaces cannot use any of them: `editorCall` refuses them with
+`PermissionDenied` "people limited to spaces cannot use the agent editor" before the
+method runs, because a draft can grant itself any permission and its test chats run
+real tools. `Join` refuses them a draft's stream the same way.
+
+`TestModel` sends one small request (16 output tokens) to a model named as
+`provider/model#effort` through the normal model resolver, and answers `elapsed_ms`
+when it works or `error` with the provider's own words, such as an unknown model.
+
+Drafts are stored on the server (see "Agent Draft" in `CONCEPTS.md`), so any editor
+can open one. `CreateAgentDraft` starts one blank in a mode, from a starter agent, or
+as a copy of the effective agent of that name. `ListAgentDrafts` returns every draft,
+newest first, with its `save_state` (`editing`, `saving`, `waiting` for a merge, or
+`live`) and `existing`, true when a save destination already holds an agent of that
+name, plus the starter agents' names. `AgentSettings` returns the setting help for
+one mode in agent-file order.
+
+Every change is an op on a base revision, committed as the draft's next revision:
+settings take the last write, and instructions edits (lists of splices, in code
+points) made on an older revision are moved past the ops committed since, so no one's
+text is lost. `edit_file` sends a variant's whole file; the server parses it into the
+changed settings and one instructions edit. `ApplyAgentDraftOp` sets the op's author
+to the caller and answers the new `revision` and `cursor`, the caller's place in the
+instructions on the base revision moved past every op committed through the new one,
+its own included. A file or setting that does not parse yet stores nothing and
+answers only `invalid_line`. `SetAgentDraftPresence` records where the caller's
+editor (`client`, an ID per open page) is: its variant and place, a setting key or an
+instructions offset. The editor resends it to stay listed; `GetAgentDraft` lists only
+places seen in the last 30 seconds.
+
+Each committed op and each presence update wakes the stream `draft:<id>`
+(`/stream?id=draft:<id>`), which carries no content like every `Join` stream. The page
+then calls `GetAgentDraft` with `since`, its last revision, which answers the draft
+now, every op after `since` up to the draft's revision, in order and each with its
+`op_id`, so a client recognizes its own, and the current places.
 
 ## Attachments
 
@@ -617,6 +660,8 @@ The checks sit where requests already pass:
   `ListSessions`' first frame (no OpenCode servers, only their agents' tags),
   `ListConfig`'s Slack channel agents, `ListSkills`' `agent`, and `Reload`, because
   reloaded agent files can widen a limit.
+- The agent editor's methods and draft streams refuse limited people outright
+  (see [Agent editor](#agent-editor)).
 
 New refusals are `PermissionDenied` (HTTP 403) with a plain message. Pages keep
 `NotFound`. `CreateSession`, `ForkSession`, and `$agent` refuse an agent outside

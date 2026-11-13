@@ -617,6 +617,158 @@ message TestModelResponse {
   int64 elapsed_ms = 2;
 }
 
+// AgentDraft is an agent being written in the agent editor. Its first variant is the agent itself and the
+// others its comparison shadows; all share mode, easy or advanced. save_state is editing, saving, waiting
+// (for a merge) or live; existing says a save destination already holds an agent of this name.
+message AgentDraft {
+  string id = 1;
+  int64 revision = 2;
+  string name = 3;
+  string mode = 4;
+  repeated AgentDraftVariant variants = 5;
+  AgentDraftExternalMCP external_mcp = 6;
+  string test_chat = 7;
+  string save_state = 8;
+  bool existing = 9;
+}
+
+// AgentDraftVariant is one version of the draft's agent file: its settings other than mode, and its
+// instructions.
+message AgentDraftVariant {
+  string name = 1;
+  repeated AgentDraftSetting settings = 2;
+  string body = 3;
+}
+
+// AgentDraftSetting is one top-level setting of an agent file; value is its YAML.
+message AgentDraftSetting {
+  string key = 1;
+  string value = 2;
+}
+
+// AgentDraftExternalMCP is how the draft's test chat poses as an External MCP call.
+message AgentDraftExternalMCP {
+  bool on = 1;
+  string caller = 2;
+  map<string, string> metadata = 3;
+}
+
+// AgentDraftSplice removes remove code points of the instructions at at, then inserts insert there.
+message AgentDraftSplice {
+  int32 at = 1;
+  int32 remove = 2;
+  string insert = 3;
+}
+
+// AgentDraftOp is one change to a draft, made on base_revision. op_id is the client's id and a sequence
+// number, so a client recognizes its own change among the committed ones. kind is set_field, edit_body,
+// add_variant, rename_variant, remove_variant, set_mode, set_external_mcp, set_test_chat, set_save_state,
+// rename, or, as requests the server commits as those kinds, edit_file and restore. value is a setting's
+// YAML (empty removes it), a variant's new name, the variant a new one copies, the mode, test chat, save
+// state or agent name, or an edit_file's whole file. from is the revision a restore brings back. revision,
+// at (RFC 3339) and author are the server's, set when the change committed.
+message AgentDraftOp {
+  int64 revision = 1;
+  string at = 2;
+  int64 base_revision = 3;
+  string op_id = 4;
+  string author = 5;
+  string kind = 6;
+  string variant = 7;
+  string key = 8;
+  string value = 9;
+  repeated AgentDraftSplice splices = 10;
+  AgentDraftExternalMCP external_mcp = 11;
+  int64 from = 12;
+}
+
+// AgentDraftPresence is where an open editor is in a draft: its variant, and its place, a setting key or
+// an offset in the instructions. username is the server's.
+message AgentDraftPresence {
+  string client = 1;
+  string username = 2;
+  string variant = 3;
+  string place = 4;
+}
+
+// CreateAgentDraftRequest starts a draft named name: blank in mode, from the starter agent template, or,
+// with copy, as a copy of the effective agent name.
+message CreateAgentDraftRequest {
+  string name = 1;
+  string mode = 2;
+  string template = 3;
+  bool copy = 4;
+}
+
+message ListAgentDraftsRequest {}
+
+// ListAgentDraftsResponse is every draft, newest first, and the starter agents a draft can begin from.
+message ListAgentDraftsResponse {
+  repeated AgentDraft drafts = 1;
+  repeated string templates = 2;
+}
+
+// GetAgentDraftRequest reads draft id and the changes committed after revision since.
+message GetAgentDraftRequest {
+  string id = 1;
+  int64 since = 2;
+}
+
+// GetAgentDraftResponse is the draft now, the changes after since in order, and the editors seen in the
+// last 30 seconds.
+message GetAgentDraftResponse {
+  AgentDraft draft = 1;
+  repeated AgentDraftOp ops = 2;
+  repeated AgentDraftPresence presence = 3;
+}
+
+// ApplyAgentDraftOpRequest commits op to draft id. cursor is the caller's place in the variant's
+// instructions on op's base revision, before op.
+message ApplyAgentDraftOpRequest {
+  string id = 1;
+  AgentDraftOp op = 2;
+  int32 cursor = 3;
+}
+
+// ApplyAgentDraftOpResponse is the draft's new revision and the cursor moved past every change committed
+// through it, op included. invalid_line, when set, is the line of the file or setting YAML that is not
+// valid yet: nothing was stored.
+message ApplyAgentDraftOpResponse {
+  int64 revision = 1;
+  int32 cursor = 2;
+  int32 invalid_line = 3;
+}
+
+// SetAgentDraftPresenceRequest records where the caller's editor is in draft id.
+message SetAgentDraftPresenceRequest {
+  string id = 1;
+  AgentDraftPresence presence = 2;
+}
+
+message SetAgentDraftPresenceResponse {}
+
+// AgentSettingsRequest asks for the setting help of mode, easy or advanced.
+message AgentSettingsRequest { string mode = 1; }
+
+// AgentSettingsResponse is the help for every setting mode allows, in agent-file order.
+message AgentSettingsResponse { repeated AgentSettingHelp settings = 1; }
+
+// AgentSettingHelp explains one agent file setting for someone who is not an engineer. key joins nested
+// keys with dots; default_text says what leaving it out does, allowed which values load; control is text,
+// switch, choice, list, model or file.
+message AgentSettingHelp {
+  string key = 1;
+  string group = 2;
+  string label = 3;
+  string explanation = 4;
+  string default_text = 5;
+  string allowed = 6;
+  string control = 7;
+  repeated string choices = 8;
+  bool required = 9;
+  bool common = 10;
+}
+
 message UpdateSessionRequest {
   string id = 1;
   optional bool pinned = 2;
@@ -961,6 +1113,12 @@ service Web {
   rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse);
   rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
   rpc TestModel(TestModelRequest) returns (TestModelResponse);
+  rpc CreateAgentDraft(CreateAgentDraftRequest) returns (AgentDraft);
+  rpc ListAgentDrafts(ListAgentDraftsRequest) returns (ListAgentDraftsResponse);
+  rpc GetAgentDraft(GetAgentDraftRequest) returns (GetAgentDraftResponse);
+  rpc ApplyAgentDraftOp(ApplyAgentDraftOpRequest) returns (ApplyAgentDraftOpResponse);
+  rpc SetAgentDraftPresence(SetAgentDraftPresenceRequest) returns (SetAgentDraftPresenceResponse);
+  rpc AgentSettings(AgentSettingsRequest) returns (AgentSettingsResponse);
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
   rpc Identity(IdentityRequest) returns (IdentityResponse);

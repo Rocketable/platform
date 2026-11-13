@@ -149,6 +149,12 @@ type AgentDraftOrigin struct {
 	Copy     bool
 }
 
+// AgentDraftPresence is where an open editor is in a draft: its variant, and its place, a setting key or an
+// offset in the instructions.
+type AgentDraftPresence struct {
+	Client, Username, Variant, Place string
+}
+
 // AgentDraftProblem is why a draft's variant would not load, by the setting at fault.
 type AgentDraftProblem struct {
 	Variant, Key, Sentence string
@@ -322,6 +328,35 @@ SELECT pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_o
 			return revision + int64(len(ops)), nil
 		}
 	}
+}
+
+// SetAgentDraftPresence records where presence's client is in draft id, forgets the other editors not seen
+// for 30 seconds, and wakes the stream "draft:<id>".
+func (s *SessionService) SetAgentDraftPresence(ctx context.Context, id string, presence AgentDraftPresence) error {
+	_, err := execState(ctx, s.db, "record agent draft presence", `WITH gone AS (
+    DELETE FROM agent_draft_presence WHERE draft_id = $1 AND client <> $2 AND seen_at < clock_timestamp() - interval '30 seconds'
+), seen AS (
+    INSERT INTO agent_draft_presence (draft_id, client, username, variant, place) VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (draft_id, client) DO UPDATE SET username = excluded.username, variant = excluded.variant, place = excluded.place, seen_at = excluded.seen_at
+    RETURNING draft_id
+)
+SELECT pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_object('conversationId', 'draft:' || draft_id, 'revision', pg_current_xact_id()::text)::text) FROM seen`,
+		id, presence.Client, presence.Username, presence.Variant, presence.Place)
+
+	return err
+}
+
+// AgentDraftPresences returns the editors seen in draft id in the last 30 seconds, by client.
+func (s *SessionService) AgentDraftPresences(ctx context.Context, id string) ([]AgentDraftPresence, error) {
+	return queryRows(ctx, s.db, `SELECT client, username, variant, place FROM agent_draft_presence
+WHERE draft_id = $1 AND seen_at >= clock_timestamp() - interval '30 seconds' ORDER BY client`, "agent draft presence", func(row rowScanner) (AgentDraftPresence, error) {
+		var presence AgentDraftPresence
+		if err := row.Scan(&presence.Client, &presence.Username, &presence.Variant, &presence.Place); err != nil {
+			return presence, fmt.Errorf("read agent draft presence: %w", err)
+		}
+
+		return presence, nil
+	}, id)
 }
 
 // ValidateAgentDraft loads each variant's file as the agent loader loads a saved one, and checks an easy

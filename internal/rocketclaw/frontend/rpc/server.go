@@ -2124,8 +2124,14 @@ func (s *Server) readableConversation(ctx context.Context, id string) error {
 	return s.visibleConversation(ctx, id)
 }
 
+// join streams wake-ups for a conversation, or with a "draft:<id>" ID for an agent draft's changes, which
+// only the agent editor's people may follow.
 func (s *Server) join(request *JoinRequest, stream grpc.ServerStream) error {
-	if err := s.visibleConversation(stream.Context(), request.Id); err != nil {
+	if strings.HasPrefix(request.Id, "draft:") {
+		if _, err := s.editor(stream.Context()); err != nil {
+			return err
+		}
+	} else if err := s.visibleConversation(stream.Context(), request.Id); err != nil {
 		return err
 	}
 

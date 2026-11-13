@@ -21,7 +21,7 @@ const maxIDBytes = 1024
 
 // editorMethods are the agent editor's methods, closed to people limited to spaces: a draft can grant
 // itself any permission, and its test chats run real tools.
-const editorMethods = "TestModel"
+const editorMethods = "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings"
 
 // Register publishes the implemented portion of rpc.Web. Other methods retain
 // gRPC's Unimplemented response; they are not successful empty handlers.
@@ -236,16 +236,41 @@ func (s *Server) editorCall(ctx context.Context, method string, request any) (an
 		return s.pageCall(ctx, request)
 	}
 
-	_, limit, err := s.spaceLimit(ctx)
+	username, err := s.editor(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	if limit.Limited() {
-		return nil, fmt.Errorf("web %s: %w", method, status.Error(codes.PermissionDenied, "people limited to spaces cannot use the agent editor"))
+	switch method {
+	case "CreateAgentDraft":
+		return s.createAgentDraft(ctx, username, request.(*CreateAgentDraftRequest))
+	case "ListAgentDrafts":
+		return s.listAgentDrafts(ctx)
+	case "GetAgentDraft":
+		return s.getAgentDraft(ctx, request.(*GetAgentDraftRequest))
+	case "ApplyAgentDraftOp":
+		return s.applyAgentDraftOp(ctx, username, request.(*ApplyAgentDraftOpRequest))
+	case "SetAgentDraftPresence":
+		return s.setAgentDraftPresence(ctx, username, request.(*SetAgentDraftPresenceRequest))
+	case "AgentSettings":
+		return agentSettings(request.(*AgentSettingsRequest)), nil
+	default:
+		return s.testModel(ctx, request.(*TestModelRequest)), nil
+	}
+}
+
+// editor returns the caller's username, refusing people limited to spaces.
+func (s *Server) editor(ctx context.Context) (string, error) {
+	username, limit, err := s.spaceLimit(ctx)
+	if err != nil {
+		return "", err
 	}
 
-	return s.testModel(ctx, request.(*TestModelRequest)), nil
+	if limit.Limited() {
+		return "", fmt.Errorf("web agent editor: %w", status.Error(codes.PermissionDenied, "people limited to spaces cannot use the agent editor"))
+	}
+
+	return username, nil
 }
 
 func (s *Server) identity(ctx context.Context) (*IdentityResponse, error) {
