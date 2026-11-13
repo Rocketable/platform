@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -46,7 +48,8 @@ func TestAgentDraftRPCs(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+	core := &mockBackend{SandboxErrorFunc: noSandboxError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
+	New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
 	serving.Go(func() error { return transport.Serve(listener) })
@@ -95,7 +98,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 	}}
 	handler := NewTailnetHandler(whois, nil, NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil))
 
-	for _, method := range []string{"TestModel", "CreateAgentDraft", "ListAgentDrafts", "GetAgentDraft", "ApplyAgentDraftOp", "SetAgentDraftPresence", "AgentSettings"} {
+	for _, method := range []string{"TestModel", "CreateAgentDraft", "ListAgentDrafts", "GetAgentDraft", "ApplyAgentDraftOp", "SetAgentDraftPresence", "AgentSettings", "DraftPrompt", "RestartDraftChat"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/"+method, strings.NewReader(`{}`)))
 		require.Equal(t, http.StatusForbidden, response.Code, "%s: %s", method, response.Body)
@@ -229,4 +232,67 @@ func TestAgentDraftRPCs(t *testing.T) {
 		require.Equal(t, "text", space.Control)
 		require.Equal(t, "Basics", space.Group)
 	}
+
+	// A draft whose own settings do not load is refused with them, and nothing is sent.
+	refused, err := invoke[DraftPromptResponse](bob, connection, "DraftPrompt", &DraftPromptRequest{Id: id, Text: "hello"})
+	require.NoError(t, err)
+	require.Equal(t, "Fix the draft's settings before testing it.", refused.Refused)
+	require.NotEmpty(t, refused.Problems)
+	require.Equal(t, "a", refused.Problems[0].Variant)
+	require.Empty(t, core.StashQueueItemCalls())
+
+	// The first message creates the test chat and goes to it as the caller's Web message; a restart gives the
+	// draft a new chat, whose first message here is an External MCP call: its pairs only become variables, and
+	// the caller is its only principal.
+	probe, err := invoke[AgentDraft](bob, connection, "CreateAgentDraft", &CreateAgentDraftRequest{Name: "probe", Mode: "advanced"})
+	require.NoError(t, err)
+
+	applyProbe := func(op *AgentDraftOp) {
+		t.Helper()
+
+		_, err := invoke[ApplyAgentDraftOpResponse](bob, connection, "ApplyAgentDraftOp", &ApplyAgentDraftOpRequest{Id: probe.Id, Op: op})
+		require.NoError(t, err)
+	}
+	applyProbe(&AgentDraftOp{BaseRevision: 1, OpId: "bob-probe-1", Kind: "edit_file", Variant: "a", Value: "---\nmodel: gpt-6.1-sol\n---\nHelp.\n"})
+
+	sent, err := invoke[DraftPromptResponse](bob, connection, "DraftPrompt", &DraftPromptRequest{Id: probe.Id, Text: "hello"})
+	require.NoError(t, err)
+	require.True(t, proto.Equal(&DraftPromptResponse{TestChat: sent.TestChat}, sent), "%v", sent)
+	require.NotEmpty(t, sent.TestChat)
+
+	web := core.StashQueueItemCalls()[0]
+	require.Equal(t, sent.TestChat, web.S)
+	require.Equal(t, "hello", web.ThreadQueueItem.Inbound.Text)
+	require.Equal(t, protocol.SourceWeb, web.ThreadQueueItem.Inbound.Source)
+	require.Equal(t, protocol.InboundKindEnqueue, web.ThreadQueueItem.Inbound.Kind)
+	require.Equal(t, "bob@example.com", web.ThreadQueueItem.Inbound.Metadata[protocol.InboundPrincipalEmailMetadataKey])
+
+	restarted, err := invoke[DraftPromptResponse](bob, connection, "RestartDraftChat", &RestartDraftChatRequest{Id: probe.Id})
+	require.NoError(t, err)
+	require.NotEqual(t, sent.TestChat, restarted.TestChat)
+	require.Len(t, core.StashQueueItemCalls(), 1)
+
+	current, err := invoke[GetAgentDraftResponse](bob, connection, "GetAgentDraft", &GetAgentDraftRequest{Id: probe.Id})
+	require.NoError(t, err)
+	require.Equal(t, restarted.TestChat, current.Draft.TestChat)
+	applyProbe(&AgentDraftOp{BaseRevision: current.Draft.Revision, OpId: "bob-probe-2", Kind: "set_external_mcp", ExternalMcp: &AgentDraftExternalMCP{On: true, Caller: "zendesk-bridge", Metadata: map[string]string{"customer_id": "acme-042"}}})
+
+	_, err = invoke[DraftPromptResponse](bob, connection, "DraftPrompt", &DraftPromptRequest{Id: probe.Id, Text: "as a call"})
+	require.NoError(t, err)
+
+	call := core.StashQueueItemCalls()[1]
+	require.Equal(t, restarted.TestChat, call.S)
+	require.Equal(t, protocol.SourceExternalMCP, call.ThreadQueueItem.Inbound.Source)
+	require.Equal(t, protocol.InboundKindPrompt, call.ThreadQueueItem.Inbound.Kind)
+	require.Equal(t, map[string]string{"customer_id": "acme-042", "external_conversation_id": restarted.TestChat}, call.ThreadQueueItem.Inbound.ExternalMCPMetadata)
+
+	shown := maps.Clone(call.ThreadQueueItem.Inbound.Metadata)
+	maps.DeleteFunc(shown, func(key, _ string) bool { return strings.HasPrefix(key, "rocketclaw_agent") }) // The captured files.
+	require.Equal(t, map[string]string{protocol.InboundPrincipalMetadataKey: "zendesk-bridge"}, shown)
+
+	// A limited person cannot follow a draft's test chat.
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/stream?id="+restarted.TestChat, http.NoBody))
+	require.Equal(t, http.StatusForbidden, response.Code)
+	require.Contains(t, response.Body.String(), "people limited to spaces cannot use the agent editor")
 }

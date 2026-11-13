@@ -262,12 +262,14 @@ it does not change access to other private source conversations.
 ## Agent editor
 
 The agent editor's methods are `TestModel`, `CreateAgentDraft`, `ListAgentDrafts`,
-`GetAgentDraft`, `ApplyAgentDraftOp`, `SetAgentDraftPresence`, and `AgentSettings`
-(`editorMethods` in `transport.go`, which both gRPC and the HTTP routes read). People
-limited to spaces cannot use any of them: `editorCall` refuses them with
+`GetAgentDraft`, `ApplyAgentDraftOp`, `SetAgentDraftPresence`, `AgentSettings`,
+`DraftPrompt`, and `RestartDraftChat` (`editorMethods` in `transport.go`, which both
+gRPC and the HTTP routes read). People limited to spaces cannot use any of them:
+`editorCall` refuses them with
 `PermissionDenied` "people limited to spaces cannot use the agent editor" before the
 method runs, because a draft can grant itself any permission and its test chats run
-real tools. `Join` refuses them a draft's stream the same way.
+real tools. `Join` refuses them a draft's stream the same way, and every conversation
+method refuses them a draft's test chat.
 
 `TestModel` sends one small request (16 output tokens) to a model named as
 `provider/model#effort` through the normal model resolver, and answers `elapsed_ms`
@@ -299,6 +301,31 @@ Each committed op and each presence update wakes the stream `draft:<id>`
 then calls `GetAgentDraft` with `since`, its last revision, which answers the draft
 now, every op after `since` up to the draft's revision, in order and each with its
 `op_id`, so a client recognizes its own, and the current places.
+
+`DraftPrompt` sends `text` to the draft's test chat, a conversation of its own kind
+that no session list shows, creating it with the first message; `RestartDraftChat`
+gives the draft a new, empty test chat (a `set_test_chat` op, so teammates follow),
+then sends it `replay`'s texts in order. The old chat keeps its messages and the
+answers still running in it. Both answer `test_chat` once the messages are stored,
+never waiting for a turn. Each message reads the draft and the live agent's
+effective file once, when the server takes it: every column, the draft, its variants
+and the live agent, answers from what was read then, and every check below runs on
+it. Each message is its own turn in every column, never a steer.
+
+While the draft's External MCP mode is off, a message is a Web message from the
+caller. While it is on, a message is what a real External MCP call stores: source
+`external_mcp`, the draft's pairs plus `external_conversation_id` (the test chat) as
+`ROCKETCLAW_METADATA_*` variables only, and the draft's caller name as the principal,
+so permission reviews read it as that caller. A test chat keeps its first message's
+mode and, in External MCP mode, its keys, as External MCP keeps a thread's first
+keys; a key added later goes with its message only. Nothing is sent, and the answer
+has `refused` with the reason, when the draft's own settings do not load (`problems`
+lists them with the setting help's sentence), when External MCP mode is on and any
+variant is not `sticky: off`, or, with `restart` set so the page offers a restart,
+when the mode or a value or presence of a first-message key differs. Otherwise
+`problems` lists the variants, and with an empty `variant` the live agent, that do
+not answer the message and why: a file that does not load, or in External MCP mode
+a live agent that is not `sticky: off`.
 
 ## Attachments
 

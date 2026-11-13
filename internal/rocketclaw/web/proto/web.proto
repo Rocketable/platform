@@ -769,6 +769,39 @@ message AgentSettingHelp {
   bool common = 10;
 }
 
+// DraftPromptRequest sends text to draft id's test chat, as a Web message or, while the draft is in External
+// MCP mode, as an External MCP call with the draft's pairs and caller. The server reads the draft, the mode
+// and the live agent's file when it takes the message, and every column answers from what it read.
+message DraftPromptRequest {
+  string id = 1;
+  string text = 2;
+}
+
+// RestartDraftChatRequest gives draft id a new, empty test chat, then sends it replay's texts, in order, with
+// one read of the draft. The old chat keeps its messages and the answers still running in it.
+message RestartDraftChatRequest {
+  string id = 1;
+  repeated string replay = 2;
+}
+
+// AgentDraftProblem is a setting of a draft's variant, or with an empty variant of the live agent's file,
+// that keeps it from running, with the setting help's sentence for what it allows or the reason in plain words.
+message AgentDraftProblem {
+  string variant = 1;
+  string key = 2;
+  string sentence = 3;
+}
+
+// DraftPromptResponse names the draft's test chat. When refused is set nothing was sent: restart says a new
+// test chat would take the message, and problems are the draft's own settings to fix. Otherwise each
+// problem is a variant, or with an empty variant the live agent, that does not answer the message, and why.
+message DraftPromptResponse {
+  string test_chat = 1;
+  string refused = 2;
+  bool restart = 3;
+  repeated AgentDraftProblem problems = 4;
+}
+
 message UpdateSessionRequest {
   string id = 1;
   optional bool pinned = 2;
@@ -1119,6 +1152,8 @@ service Web {
   rpc ApplyAgentDraftOp(ApplyAgentDraftOpRequest) returns (ApplyAgentDraftOpResponse);
   rpc SetAgentDraftPresence(SetAgentDraftPresenceRequest) returns (SetAgentDraftPresenceResponse);
   rpc AgentSettings(AgentSettingsRequest) returns (AgentSettingsResponse);
+  rpc DraftPrompt(DraftPromptRequest) returns (DraftPromptResponse);
+  rpc RestartDraftChat(RestartDraftChatRequest) returns (DraftPromptResponse);
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
   rpc Identity(IdentityRequest) returns (IdentityResponse);

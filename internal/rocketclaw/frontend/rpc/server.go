@@ -2068,13 +2068,18 @@ func (s *Server) visibleConversation(ctx context.Context, id string) error {
 		return fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "conversation ID is required"))
 	}
 
-	_, found, err := s.sessions.ConversationKind(ctx, id)
+	kind, found, err := s.sessions.ConversationKind(ctx, id)
 	if err != nil {
 		return fmt.Errorf("resolve web conversation visibility: %w", err)
 	}
 
 	if !found {
 		return fmt.Errorf("web conversation: %w", status.Error(codes.NotFound, "conversation is not recorded"))
+	}
+
+	// An agent draft's test chat runs the draft's real tools, which only the agent editor's people may use.
+	if kind == backend.KindAgentDraft && limit.Limited() {
+		return fmt.Errorf("web agent editor: %w", status.Error(codes.PermissionDenied, "people limited to spaces cannot use the agent editor"))
 	}
 
 	parent, err := s.sessions.ShadowParent(ctx, id)

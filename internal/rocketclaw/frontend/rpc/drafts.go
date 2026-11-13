@@ -136,6 +136,35 @@ func (s *Server) setAgentDraftPresence(ctx context.Context, username string, req
 	return &SetAgentDraftPresenceResponse{}, nil
 }
 
+// sendAgentDraft sends send's texts to its draft's test chat as the caller, and answers the chat and the
+// columns that do not answer, or the refusal when nothing was sent.
+func (s *Server) sendAgentDraft(ctx context.Context, send *backend.AgentDraftSend) (*DraftPromptResponse, error) {
+	_, principal, err := s.principal(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	send.Principal = principal
+	response := &DraftPromptResponse{}
+
+	var problems []backend.AgentDraftProblem
+
+	response.TestChat, problems, err = s.sessions.SendAgentDraft(ctx, s.backend, send)
+	if errRefused, ok := errors.AsType[*backend.AgentDraftRefusedError](err); ok {
+		response.Refused, response.Restart, problems, err = errRefused.Problem, errRefused.Restart, errRefused.Problems, nil
+	}
+
+	if err != nil {
+		return nil, agentDraftError("DraftPrompt", err)
+	}
+
+	for _, problem := range problems {
+		response.Problems = append(response.Problems, &AgentDraftProblem{Variant: problem.Variant, Key: problem.Key, Sentence: problem.Sentence})
+	}
+
+	return response, nil
+}
+
 // agentSettings returns the setting help for the requested mode, in agent-file order.
 func agentSettings(request *AgentSettingsRequest) *AgentSettingsResponse {
 	response := &AgentSettingsResponse{}

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -21,7 +22,7 @@ const maxIDBytes = 1024
 
 // editorMethods are the agent editor's methods, closed to people limited to spaces: a draft can grant
 // itself any permission, and its test chats run real tools.
-const editorMethods = "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings"
+const editorMethods = "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat"
 
 // Register publishes the implemented portion of rpc.Web. Other methods retain
 // gRPC's Unimplemented response; they are not successful empty handlers.
@@ -254,6 +255,10 @@ func (s *Server) editorCall(ctx context.Context, method string, request any) (an
 		return s.setAgentDraftPresence(ctx, username, request.(*SetAgentDraftPresenceRequest))
 	case "AgentSettings":
 		return agentSettings(request.(*AgentSettingsRequest)), nil
+	case "DraftPrompt":
+		return s.sendAgentDraft(ctx, &backend.AgentDraftSend{ID: request.(*DraftPromptRequest).Id, Username: username, Texts: []string{request.(*DraftPromptRequest).Text}})
+	case "RestartDraftChat":
+		return s.sendAgentDraft(ctx, &backend.AgentDraftSend{ID: request.(*RestartDraftChatRequest).Id, Username: username, Restart: true, Texts: request.(*RestartDraftChatRequest).Replay})
 	default:
 		return s.testModel(ctx, request.(*TestModelRequest)), nil
 	}
