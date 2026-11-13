@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"slices"
 	"strings"
 	"testing"
@@ -1147,6 +1148,11 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 				case <-requests:
 				case <-time.After(3 * time.Second):
 					t.Logf("shadow mutation startup: received=%d buffered_requests=%d finals=%d cancellations=%d database=%+v", received, len(requests), len(finals), len(cancelled), store.db.Stats())
+					// Capture blocked workers before diagnostic SQL and cleanup change their state.
+					var stacks bytes.Buffer
+
+					errStacks := pprof.Lookup("goroutine").WriteTo(&stacks, 2)
+					t.Logf("shadow mutation startup goroutines: snapshot_error=%v\n%s", errStacks, stacks.Bytes())
 					// Bound diagnostic SQL only; preserve the startup wait and failure below.
 					ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 					rows, err := queryStrings(ctx, store.db, `SELECT format('conversation=%s agent=%s shadow_parent=%s turn=%s phase=%s lane=%s outbound=%s manifest=%s parent_turn=%s child_turn=%s inputs=%s input_closed=%s terminal=%s',
