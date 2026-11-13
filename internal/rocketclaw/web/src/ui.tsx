@@ -17,7 +17,7 @@ import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCErro
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, ScrollText, Search, Settings, Share, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -868,35 +868,6 @@ function NewSessionButton({ newChat, openCode }: { newChat: () => void; openCode
   </DropdownMenu>;
 }
 
-function CopyPageLink() {
-  const pathname = usePathname();
-  const [result, setResult] = useState<{ pathname: string; status?: "copied" | "error" }>();
-  if (result && result.pathname !== pathname) setResult(undefined);
-  useEffect(() => {
-    if (result?.status !== "copied") return;
-    const timer = setTimeout(() => setResult(undefined), 2000);
-    return () => clearTimeout(timer);
-  }, [result]);
-  const status = result?.status;
-  const Icon = status === "copied" ? Check : status === "error" ? CircleAlert : Share;
-  const message = status === "copied" ? "Page link copied" : status === "error" ? "Could not copy page link. Copy the address from your browser." : "";
-  return <div className="shrink-0">
-    <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)]" />} aria-label="Copy page link" onClick={async () => {
-      const pending = { pathname };
-      setResult(pending);
-      try {
-        await copyText(location.href, document.body);
-        setResult((current) => current === pending ? { pathname, status: "copied" } : current);
-      } catch {
-        setResult((current) => current === pending ? { pathname, status: "error" } : current);
-      }
-    }}>
-      <Icon className={cn("size-[var(--navigation-icon)]", status === "error" && "text-destructive")} />
-    </TooltipTrigger><TooltipContent side="top">{message || "Copy page link"}</TooltipContent></Tooltip>
-    <span role="status" className="sr-only">{message}</span>
-  </div>;
-}
-
 // Comparison columns share the existing panels' pointer/keyboard width policy.
 function useAsideWidth(side: "tabs" | "delegation" | "shadow") {
   const [edge, label, fallback, min, max] = side === "tabs" ? [1, "Resize tabs", 224, 192, 512] : [-1, `Resize ${side} panel`, 384, 288, Math.round(innerWidth * 0.6)];
@@ -1377,14 +1348,16 @@ function useTabs() {
       const shelve = rocketclaws().length && shelf && path !== "/" && !shelf.tabs?.some((item) => (item.server ?? "") === name && item.path === path)
         ? [{ key: "shelve", label: "Add to Top Shelf", run: () => saveShelf((current) => ({ ...current, tabs: [...current.tabs ?? [], { server: name, space: tab?.space ?? state.space, path, search: source }] })) }] : [];
       const attention = attentionItems(view, path, paths, attend, setPicking), closing = { key: "close", label: "Close", run: () => close([...paths]) };
+      // The tab in view copies its whole address, with the view state in its query and fragment.
+      const link = { key: "link", label: "Copy link", run: () => void copyText(path === pagePath() ? location.href : location.origin + serverPath(path, name), document.body) };
       // A parked tab's menu has none of the strip's commands but Close.
-      if (!shown.some((item) => item.path === path)) return [...tab ? [closing] : [], ...share, ...copy, ...shelve, ...attention];
+      if (!shown.some((item) => item.path === path)) return [...tab ? [closing] : [], link, ...share, ...copy, ...shelve, ...attention];
       return [
         closing,
         { key: "close-others", label: "Close others", run: () => close(spaceTabs.flatMap((tab) => tab.path === path ? [] : [tab.path]), path) },
         { key: "close-right", label: "Close to the right", run: () => close(spaceTabs.slice(spaceTabs.findIndex((tab) => tab.path === path) + 1).map((tab) => tab.path), path) },
         { key: "close-all", label: "Close all", run: () => close(spaceTabs.map((tab) => tab.path)) },
-        ...share, ...copy, ...shelve, ...attention,
+        link, ...share, ...copy, ...shelve, ...attention,
         { key: "group-new", label: "Add to new group", sub: { menu: "Add to group", label: "New group" }, run: () => {
           const id = crypto.getRandomValues(new Uint32Array(2)).join("-");
           setState((current) => ({ ...current, groups: [...current.groups, { id, name: "", color: Object.keys(groupColors)[groups.length % Object.keys(groupColors).length] }] }));
@@ -1414,7 +1387,7 @@ function useTabs() {
 }
 
 // Sessions follow their sidebar rows to the spaces they were born in, and the tabs this server lists as parked leave the
-// strip for Parked. Only this, TabNotifications and AttentionShortcut read the rows at the top, so their updates do not
+// strip for Parked. Only this, TabNotifications and AttentionButton read the rows at the top, so their updates do not
 // redraw the whole app.
 function TabSettling() {
   const { rows, marks } = useContext(Sidebar), { settle, setParked } = useContext(TabActions);
@@ -1452,7 +1425,7 @@ function attentionOf(view: Pick<SidebarView, "rows" | "marks"> | undefined, path
 type TabCommand = { key: string; label: string; sub?: { menu: string; label: string }; run: () => void };
 // A tab menu draws a line between its sections, as a macOS menu does: renaming, closing, sharing, attention, grouping and
 // moving, then deleting. Its items come in that order.
-const menuSections = [/^rename/, /^close/, /^(share|unshare|duplicate|shelve|unshelve)/, /^(read|unread|park|unpark)/, /^(group|restore|space)/, /^delete/];
+const menuSections = [/^rename/, /^close/, /^(link|share|unshare|duplicate|shelve|unshelve)/, /^(read|unread|park|unpark)/, /^(group|restore|space)/, /^delete/];
 const menuSection = (key: string) => menuSections.findIndex((pattern) => pattern.test(key));
 // A submenu draws its lines the same way: Park's are Until it is done, its times, then Until I unpark.
 const submenuSections = [/^park-done$/, /^park-/];
@@ -1522,8 +1495,8 @@ function useNextAttention(path: string) {
   return next && (() => visit(next.server, next.path));
 }
 
-// Cmd/Ctrl+Alt+A opens the next tab waiting for this person.
-function AttentionShortcut() {
+// Cmd/Ctrl+Alt+A, or this bottom bar button, opens the next tab waiting for this person.
+function AttentionButton() {
   const next = useNextAttention(usePathname());
   const onKey = useEffectEvent((event: KeyboardEvent) => {
     if (event.defaultPrevented || !(event.metaKey || event.ctrlKey) || !event.altKey || event.shiftKey || event.code !== "KeyA" || !next) return;
@@ -1536,7 +1509,9 @@ function AttentionShortcut() {
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
   }, []);
-  return null;
+  return <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Next session needing you" disabled={!next} onClick={next}>
+    <Inbox className="size-[var(--navigation-icon)]" />
+  </TooltipTrigger><TooltipContent side="top">Next session needing you</TooltipContent></Tooltip>;
 }
 
 // The server decides who is marked, on a session's row or a tab location's row: a mark that moves past the one this window
@@ -1628,12 +1603,12 @@ function tabKeys(event: React.KeyboardEvent<HTMLElement>, pathname: string, open
 }
 
 // Sessions and Search pages can be renamed from their tab, and a Search page from its Shared row, which otherwise offers
-// only its Shared, Duplicate, Top Shelf, Add to my tabs, and attention items. A remote OpenCode session's own tab can
-// also delete it.
+// only its Copy link, Shared, Duplicate, Top Shelf, Add to my tabs, and attention items. A remote OpenCode session's own
+// tab can also delete it.
 function menuItems(commands: ReturnType<typeof useTabs>["commands"], menu: { path: string; shared?: boolean }, view: SidebarView, targets: Set<string>, rename: () => void, remove: (id: string) => void) {
   const renaming = targets.size === 1 && (isSearch(menu.path) || (pathSession(menu.path) && !menu.shared)) ? [{ key: "rename", label: isSearch(menu.path) ? "Rename search" : "Rename session", run: rename }] : [];
   const remote = targets.size === 1 && !menu.shared ? view.rows.find((row) => row.id === pathSession(menu.path) && row.server) : undefined;
-  return [...renaming, ...menu.shared ? commands(menu.path, view).filter(({ key }) => /^(unshare|duplicate|shelve|own|read|unread|park|unpark)/.test(key)) : commands(menu.path, view, targets), ...remote ? [{ key: "delete", label: "Delete session", run: () => remove(remote.id) }] : []];
+  return [...renaming, ...menu.shared ? commands(menu.path, view).filter(({ key }) => /^(link|unshare|duplicate|shelve|own|read|unread|park|unpark)/.test(key)) : commands(menu.path, view, targets), ...remote ? [{ key: "delete", label: "Delete session", run: () => remove(remote.id) }] : []];
 }
 
 function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat: () => void }) {
@@ -2141,7 +2116,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     setConversation({ id: route.id, created: "", key: created ? conversation.key : conversation.key + 1 });
   }
   return (
-          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabSettling /><TabNotifications /><AttentionShortcut />
+          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabSettling /><TabNotifications />
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
             {tabs.picking ? <PickTimeDialog picking={tabs.picking} /> : null}
             <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} keyCommands={keyCommands(tabs, sidebar.toggle, sidebar.medium)} opencode={palette.opencode} />
@@ -2156,7 +2131,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
                       <Icon className="size-[var(--navigation-icon)]" />
                     </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>
                   ))}
-                  <CopyPageLink />
+                  <AttentionButton />
                 </div>
               </div>
               <div className="justify-self-end"><ThemeToggle /></div>
