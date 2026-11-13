@@ -448,7 +448,16 @@ test("saved tabs, deep links, keyboard, page close, palette commands, and the si
 test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and double-clicking empty strip opens a new session", () => withPage({}, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
   for (const [id, name] of [["alpha", "Alpha"], ["bravo", "Bravo"], ["charlie", "Charlie"]]) {
-    await openSaved(page, origin, href(id), name, saved);
+    await openSaved(page, origin, href(id), name, saved).catch(async (error: unknown) => {
+      console.error("Rename test could not open saved tab", JSON.stringify({ expectedPath: href(id), expectedName: name, actualURL: page.url(), saved }), error);
+      await page.evaluate(() => ({
+        url: location.href, title: document.title, readyState: document.readyState, focused: document.hasFocus(), activeElement: document.activeElement?.outerHTML,
+        tabs: [...document.querySelectorAll('[data-tab] [role="tab"]')].map((node) => ({
+          path: node.closest("[data-tab]")!.getAttribute("data-tab"), label: node.getAttribute("aria-label"), selected: node.getAttribute("aria-selected"), description: node.getAttribute("aria-description"), text: node.textContent,
+        })),
+      })).then((state: unknown) => console.error("Rename test browser state", JSON.stringify(state)), (errSnapshot: unknown) => console.error("Rename test snapshot failed", errSnapshot));
+      throw error;
+    });
   }
   await page.getByPlaceholder("Message or $command").focus();
   await page.keyboard.press("Control+BracketRight");
