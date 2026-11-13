@@ -6,7 +6,6 @@ const unreadable = "Could not read this thread's pull requests.";
 
 // Like t3code's apps/server/src/orchestration-v2/PullRequestSyncReactor.ts at 1d61dd3:
 // use a create command's output, not arbitrary links or permission-review plans.
-// ponytail: a script that also prints another PR link alone on a line claims it too; exact attribution needs per-invocation provenance.
 export function createdPRs(command: string, output: string): string[] {
   const code = command.split("\n").map((line) => line.replace(/'[^']*'|"(?:\\.|[^"\\])*"/g, (quoted) => /^['"]--dry-run(?:=[^'"]*)?['"]$/.test(quoted) ? "--dry-run" : "''")).join("\n");
   if (!/(?:^|[\s;&|(){])gh\s+pr\s+create(?:\s|$)/.test(code) || /gh\s+pr\s+create(?:\s[^\n;&|]*)?\s--dry-run(?:[=\s]|$)/.test(code)) return [];
@@ -49,7 +48,6 @@ export async function loadThreadPRs(id: string, signal: AbortSignal) {
     if (id.startsWith("opencode:")) {
       const { api, sessionID } = openCodePRAPI(id);
       // Children are listed like upstream packages/client/src/solid/data.ts listChildren.
-      // ponytail: each refresh rereads the whole session tree, finished subagents included; cache per session by time.updated if that gets slow.
       for (let sessions = [sessionID]; sessions.length;) {
         const level = await Promise.all(sessions.map(async (session) => {
           const [messages, children] = await Promise.all([
