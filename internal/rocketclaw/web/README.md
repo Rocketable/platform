@@ -38,6 +38,69 @@ links, and Slack tags look as in Raw; raw HTML stays literal. The command
 palette's **Output: Raw** and **Output: Markdown** switch between them, and this
 browser remembers the choice across reloads and tabs. Search results, previews,
 and voice transcripts always use Raw.
+
+GitHub pull-request links have an explicit **Preview** action beside the ordinary
+external link, in Raw and Markdown. Preview starts as a modal sheet on the right; its
+layout selector also offers Dialog, Inline and Full-screen without fetching again.
+Its compact header and **Summary / Code** tabs follow t3code's PR detail layout.
+The header shows lifecycle status, author/update time and branch/change counts
+when GitHub supplies them. **Code** uses Pierre CodeView and FileTree, bundled
+locally: a scrolling diff, file navigation, and Unified/Split layouts. No iframe,
+hosted DiffsHub request, external renderer service, or renderer credential is used.
+Files still load on demand. Counts show partial results;
+GitHub exposes at most 3,000 files, and patches can be omitted or incomplete.
+Revision checks before and after each file page reject observed base/head/count
+changes. They are not an atomic snapshot: a branch changing A→B→A between checks
+can evade detection. Refresh or open GitHub when the branch is changing.
+
+Public previews use anonymous browser GETs directly to `api.github.com` and have
+a limited GitHub request quota. Your own fine-grained token with **Pull requests:
+read** can increase that quota or provide private access. Token entry is available
+after read failures, including file-page failures, and requires a secure browser
+context and a trusted certificate. The token and result stay only in that open
+preview's memory: closing, navigating away, hiding the conversation tab or
+unmounting clears them and cancels requests. Switching browser tabs keeps the
+preview open. Reopening a closed preview is anonymous. **Cancel** while files
+are loading stops that request and keeps loaded content; **Close preview**
+discards the preview.
+Tokens are not saved, shared with the application server, or sent to telemetry.
+Preview DOM and GitHub network data are excluded from PostHog recording and Sentry
+request tracing. Browser extensions and clipboard managers remain outside the
+application's control. No remote images or executable description content load.
+
+The conversation tab's **⋯ → Pull requests** menu item opens the existing right
+pane for a RocketClaw or OpenCode thread, without adding a bottom-bar button.
+On desktop the conversation stays editable beside
+it; on narrow screens it uses a sheet. It replaces an open delegation or skill
+pane. Select a PR to read its description and changed-file patches.
+
+**Created in this thread** comes from a successful recorded shell call running a
+simple `gh pr create` command and returning one GitHub PR URL. Prompts, ordinary
+links, permission-review plans, failed calls, and compound scripts do not establish
+ownership. Native RocketClaw uses the existing bounded Code Mode call summaries;
+clipped summaries and older history without actual-call records can miss a PR.
+Discovery reads older history pages too. It runs when the pane opens, refreshes
+after thread updates, and can be repeated with **Find again**.
+
+OpenCode also checks the session folder using its server's installed `gh` and
+existing GitHub login. **Current checkout** names the branch result, not proof
+that the PR belongs to this thread: several sessions may share that folder. A PR
+that finished before the session existed is not suggested from the checkout.
+OpenCode PR details and patches use that same server login, including private
+repositories; anyone allowed to use that OpenCode server through RocketClaw can
+therefore read those PRs. No GitHub token enters the browser. Lookups use standalone
+shell commands, not prompts or conversation turns. While the browser continues
+running and DELETE succeeds, it removes lookup shell records after use, including
+caller cancellation. Browser loss or a failed DELETE can leave a record behind.
+Discovery traffic, ordinary History responses, and pane content are
+excluded from telemetry. There is no automatic settlement, archive, deletion, or merge.
+
+An executable [PlusCal model](../../../docs/verification/thread-pr/README.md)
+checks bounded discovery, reader and shell-lifecycle cases with TLC, including
+negative cases that must produce counterexamples. Its source mapping, bounds,
+fairness assumptions, ABA counterexample and cleanup limits are documented there.
+This is model verification, not a proof of the TypeScript, renderer, or network.
+
 Code blocks and tool output are shadcn/ui
 [Code Blocks](https://ui.shadcn.com/docs/components/base/code-block) and scroll
 sideways by default. A fenced block whose language is bash/sh, CSS, diff, Go, HTML,

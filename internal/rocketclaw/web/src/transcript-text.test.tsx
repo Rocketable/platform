@@ -168,6 +168,16 @@ test("InlineText formats the first line only", () => {
   expect(markup).not.toContain("<a ");
 });
 
+test("raw and Markdown PR links keep their anchor and gain explicit Preview, except code and passive snippets", () => {
+  const url = "https://github.com/sample/example/pull/7/files";
+  for (const ui of [<TranscriptText key="raw-url" text={url} />, <TranscriptText key="raw-link" text={`[change](${url})`} />, <MarkdownText key="markdown-link" text={`[change](${url})`} />]) {
+    const markup = html(ui);
+    expect(markup).toContain(`href="${url}" class="underline" target="_blank" rel="noopener noreferrer"`);
+    expect(markup).toContain('aria-label="Preview pull request"');
+  }
+  for (const ui of [<InlineText key="snippet" text={url} />, <TranscriptText key="passive" text={url} interactive={false} />, <TranscriptText key="raw-code" text={`\`${url}\``} />, <MarkdownText key="markdown-code" text={`\`${url}\``} />, <MarkdownText key="fenced-code" text={`\`\`\`\n${url}\n\`\`\``} />]) expect(html(ui)).not.toContain('aria-label="Preview pull request"');
+});
+
 test("cleanText drops markers and substitutes resolved names", () => {
   expect(cleanText("<!subteam^S0BA868QQ90> *Allen now says*", names)).toBe("@cs-operators Allen now says");
   expect(html(<Clean text={"<!subteam^S0BA868QQ90> *Allen now says*"} />)).toBe("@cs-operators Allen now says");

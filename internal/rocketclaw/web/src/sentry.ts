@@ -25,7 +25,10 @@ if (sentryConfig) {
     beforeSendLog: () => null,
     defaultIntegrations: false,
     integrations: [globalHandlersIntegration(), linkedErrorsIntegration(), dedupeIntegration(), captureConsoleIntegration({ levels: ["error"] }), browserTracingIntegration({
-      shouldCreateSpanForRequest: (url) => !refreshed.has(new URL(url, location.href).pathname),
+      shouldCreateSpanForRequest: (url) => {
+        const target = new URL(url, location.href);
+        return target.hostname !== "api.github.com" && !target.searchParams.has("pull-request-discovery") && !refreshed.has(target.pathname);
+      },
       beforeStartSpan: (options) => {
         // A remote's page under /r/<name> is named as that page.
         const page = path.replace(/^\/r\/[^/]+(?=\/)/, "");

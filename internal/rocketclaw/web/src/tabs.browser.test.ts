@@ -329,6 +329,7 @@ for (const width of [1280, 320]) test(`the bottom bar's buttons fit without over
   }));
   // The sidebar toggle, the four middle buttons, and the theme toggle, left to right without overlap.
   expect(boxes).toHaveLength(6);
+  expect(await page.locator("#bottom-navigation").getByRole("button", { name: "Pull requests", exact: true }).count()).toBe(0);
   expect(boxes[0].x).toBeLessThan(16);
   expect(boxes[5].x + boxes[5].width).toBeGreaterThan(width - 16);
   for (const [index, box] of boxes.entries()) {
@@ -478,9 +479,9 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   expect(page.url()).toEndWith(href("bravo"));
   expect(await tab(long).evaluate((node: HTMLElement) => node.getBoundingClientRect().right <= node.closest('[role="tablist"]')!.getBoundingClientRect().right)).toBe(true);
   await tab(long).hover();
-  expect(await page.locator('[data-slot="tooltip-content"]').innerText()).toBe(long);
+  expect(await page.locator('[data-slot="tooltip-content"][data-open]').innerText()).toBe(long);
   await page.mouse.move(640, 700);
-  await page.locator('[data-slot="tooltip-content"]').waitFor({ state: "hidden" });
+  await page.locator('[data-slot="tooltip-content"][data-open]').waitFor({ state: "hidden" });
   await tab("Bravo").focus();
   await page.keyboard.press("ArrowLeft");
   await page.locator('[data-slot="tooltip-content"]').filter({ hasText: long }).waitFor();
@@ -496,6 +497,7 @@ test("tab menu renames sessions in place, bracket shortcuts cycle tabs, and doub
   expect(await names(page)).toEqual(["Renamed", "Bravo", "New session", "Charlie"]);
   await tab("New session").click({ button: "right" });
   expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Rename session");
+  expect(await page.getByRole("menuitem").allInnerTexts()).not.toContain("Pull requests");
 }), 60_000);
 
 test("running tabs keep a reachable close control, and closing hands focus to the next tab", () => withPage({}, async (page, origin, _prompts, saved) => {
@@ -870,7 +872,9 @@ test("Cmd/Ctrl+click and Shift+click select tabs that the tab menu groups and un
   expect(await tab("Charlie").getAttribute("aria-description")).toBe("In selection, Space: Main");
   // An unselected tab's menu acts on it alone, and a selected one's menu has no Rename session.
   expect(await items("Bravo")).toContain("Rename session");
+  expect(await items("Bravo")).toContain("Pull requests");
   expect(await items("Charlie")).not.toContain("Rename session");
+  expect(await items("Charlie")).not.toContain("Pull requests");
   await menu(page, "Charlie", "Add to group", "New group");
   await page.keyboard.type("Work");
   await page.keyboard.press("Escape");
@@ -1612,7 +1616,7 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
 
   // A Shared row has no close button, offers no closing, ignores middle-clicks, and takes no drops of this person's tabs.
   expect(await shared(page).getByRole("button", { name: "Close Alpha" }).count()).toBe(0);
-  expect(await sharedMenu(page, "Alpha")).toEqual(["Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
+  expect(await sharedMenu(page, "Alpha")).toEqual(["Pull requests", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
   await page.keyboard.press("Escape");
   await page.getByRole("menu").waitFor({ state: "hidden" });
   await row("Alpha").click({ button: "middle" });
@@ -1627,7 +1631,7 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
     await page.getByRole("menu").waitFor({ state: "hidden" });
   }
 
-  // A Shared tab that is not this person's opens, and reloads, without joining their tabs, and offers only Remove from Shared.
+  // A Shared tab that is not this person's opens and reloads without joining their tabs.
   await menu(page, "Bravo", "Add to Shared");
   await row("Bravo").waitFor();
   await menu(page, "Bravo", "Close");
@@ -1639,6 +1643,12 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
   await tab("Alpha").waitFor();
   expect(await names(page)).toEqual(["New session", "Alpha"]);
   expect(await row("Bravo").getAttribute("aria-selected")).toBe("true");
+  await shared(page).getByRole("button", { name: "Tab actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
+  await page.getByRole("complementary", { name: "Pull requests", exact: true }).getByText("No pull requests found for this thread.", { exact: true }).waitFor();
+  expect(new URL(page.url()).pathname).toBe(href("bravo"));
+  expect(await names(page)).toEqual(["New session", "Alpha"]);
+  await page.getByRole("button", { name: "Close pull requests", exact: true }).click();
   await page.keyboard.press("Control+Shift+p");
   await commands.getByRole("button", { name: "Tabs: Remove from Shared", exact: true }).waitFor();
   expect(await commands.getByRole("button", { name: "Tabs: Close", exact: true }).count()).toBe(0);
@@ -2030,7 +2040,7 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   saved.state = { ...saved.state, tabs: [{ path: href("alpha"), space: "main" }], space: "main" };
   saved.shared = [{ space: "main", path: href("bravo") }, { space: "main", path: "/search/d", search: { name: "Ops", board: "kanban", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" } }];
   await page.goto(`${origin}${href("alpha")}`);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
   await close();
   expect(await sharedMenu(page, "Ops")).toEqual(["Rename search", "—", "Copy link", "Remove from Shared", "Duplicate", "—", "Mark as unread", "Park"]);
   await close();
@@ -2039,7 +2049,7 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   for (const item of ["Park", "Until I unpark"]) await page.getByRole("menuitem", { name: item, exact: true }).click();
   await row("Bravo").and(page.locator('[aria-description="Shared, Space: Main, Parked"]')).waitFor();
   expect([await sharedNames(page), await opacity(href("bravo")), await names(page)]).toEqual([["Bravo", "Ops"], "0.6", ["Alpha"]]);
-  expect(await sharedMenu(page, "Bravo")).toEqual(["Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send"]);
+  expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Copy link", "Remove from Shared", "—", "Unpark", "Auto-park when I send"]);
   await close();
   // Another person's session list carries none of this person's parks, so for them the row is as it was.
   saved.attention = [];

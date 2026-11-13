@@ -14,6 +14,8 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
+    "@pierre/diffs": "^1.6.4",
+    "@pierre/trees": "^1.0.0",
     "@sentry/react": "^11.12.0",
     "@shadcn/react": "^0.3.1",
     "@tailwindcss/postcss": "^4.3.5",

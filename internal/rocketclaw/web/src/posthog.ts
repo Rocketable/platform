@@ -11,6 +11,13 @@ posthog.init(config.project_token, {
   capture_performance: { network_timing: true, web_vitals: true },
   enable_heatmaps: true,
   enable_recording_console_log: true,
-  session_recording: { maskAllInputs: false, recordHeaders: true, recordBody: true },
+  session_recording: {
+    maskAllInputs: false, recordHeaders: true, recordBody: true,
+    // The replay network plugin applies this to bodies, headers AND network_timing entries.
+    maskCapturedNetworkRequestFn: (request) => {
+      const url = new URL(request.name, location.href);
+      return url.hostname === "api.github.com" || url.pathname.endsWith("/api/History") || url.searchParams.has("pull-request-discovery") ? null : request;
+    },
+  },
 });
 void rpc<{ username: string }>("Identity").then(({ username }) => posthog.identify(username), () => {});

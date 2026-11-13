@@ -10,6 +10,7 @@ import { Dialog, DialogTrigger, DialogContent, DialogTitle } from "@/components/
 import { CodeBlock as CodeBlockFrame, CodeBlockActions, CodeBlockContent, CodeBlockHeader, CodeBlockTitle } from "@/components/ui/code-block";
 import { useHighlightedCode } from "@/hooks/use-highlighted-code";
 import { queries } from "./api";
+import { GitHubPRLink } from "./github-pr-preview";
 
 export async function copyText(text: string, container: Element) {
   try {
@@ -180,7 +181,7 @@ function inlineNodes(text: string, needle?: string, interactive = true): ReactNo
     nodes.push(highlight(text.slice(last, match.index), needle));
     if (href) {
       const label = mdLabel ?? slackLabel ?? href;
-      nodes.push(interactive ? <a key={key} href={href} className="underline" target="_blank" rel="noopener noreferrer">{highlight(label, needle)}</a> : highlight(label, needle));
+      nodes.push(interactive ? <GitHubPRLink key={key} href={href}>{highlight(label, needle)}</GitHubPRLink> : highlight(label, needle));
     } else if (userId) nodes.push(userLabel ? tagSpan(userLabel[0] === "@" ? userLabel : "@" + userLabel, needle, key) : <SlackTag key={key} id={userId} sigil="@" needle={needle} />);
     else if (channelId) nodes.push(channelLabel ? tagSpan("#" + channelLabel, needle, key) : <SlackTag key={key} id={channelId} sigil="#" needle={needle} />);
     else if (teamId) nodes.push(teamLabel ? tagSpan(teamLabel, needle, key) : <SlackTag key={key} id={teamId} sigil="@" needle={needle} />);
@@ -286,7 +287,7 @@ function remarkSlackTags() {
 
 // Markdown output has no raw HTML, so every span is a Slack tag.
 const markdownComponents: Components = {
-  a: ({ href, children }) => <a href={href} className="underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+  a: ({ href, children }) => <GitHubPRLink href={href}>{children}</GitHubPRLink>,
   code: ({ children }) => <code className="rounded-sm bg-muted px-1 font-mono text-[0.9em]">{children}</code>,
   pre: ({ children }) => {
     const { className = "", children: text = "" } = (children as ReactElement<{ className?: string; children?: string }>).props;

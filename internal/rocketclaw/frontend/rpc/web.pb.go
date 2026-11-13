@@ -3437,13 +3437,15 @@ func (x *TranscriptEvent) GetScriptOutcome() string {
 // review_turn, the turn under which the script's review saves the approver's answer on this call,
 // are set only when the automatic approver ran.
 type CodeModeCall struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Arguments     string                 `protobuf:"bytes,2,opt,name=arguments,proto3" json:"arguments,omitempty"`
-	Status        string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
-	Outcome       string                 `protobuf:"bytes,5,opt,name=outcome,proto3" json:"outcome,omitempty"`
-	Reason        string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
-	ReviewTurn    string                 `protobuf:"bytes,7,opt,name=review_turn,json=reviewTurn,proto3" json:"review_turn,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Name       string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Arguments  string                 `protobuf:"bytes,2,opt,name=arguments,proto3" json:"arguments,omitempty"`
+	Status     string                 `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
+	Outcome    string                 `protobuf:"bytes,5,opt,name=outcome,proto3" json:"outcome,omitempty"`
+	Reason     string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
+	ReviewTurn string                 `protobuf:"bytes,7,opt,name=review_turn,json=reviewTurn,proto3" json:"review_turn,omitempty"`
+	// The actual call's existing bounded output summary; absent from permission-review plans.
+	Summary       string `protobuf:"bytes,8,opt,name=summary,proto3" json:"summary,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3516,6 +3518,13 @@ func (x *CodeModeCall) GetReason() string {
 func (x *CodeModeCall) GetReviewTurn() string {
 	if x != nil {
 		return x.ReviewTurn
+	}
+	return ""
+}
+
+func (x *CodeModeCall) GetSummary() string {
+	if x != nil {
+		return x.Summary
 	}
 	return ""
 }
@@ -7984,7 +7993,7 @@ const file_web_proto_rawDesc = "" +
 	"\vreview_turn\x18\x1a \x01(\tR\n" +
 	"reviewTurn\x12%\n" +
 	"\x0escript_outcome\x18\x1b \x01(\tR\rscriptOutcomeB\x13\n" +
-	"\x11_reasoning_effortJ\x04\b\x02\x10\x03\"\xb1\x01\n" +
+	"\x11_reasoning_effortJ\x04\b\x02\x10\x03\"\xcb\x01\n" +
 	"\fCodeModeCall\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\targuments\x18\x02 \x01(\tR\targuments\x12\x16\n" +
@@ -7992,7 +8001,8 @@ const file_web_proto_rawDesc = "" +
 	"\aoutcome\x18\x05 \x01(\tR\aoutcome\x12\x16\n" +
 	"\x06reason\x18\x06 \x01(\tR\x06reason\x12\x1f\n" +
 	"\vreview_turn\x18\a \x01(\tR\n" +
-	"reviewTurnJ\x04\b\x03\x10\x04\"\xcf\x01\n" +
+	"reviewTurn\x12\x18\n" +
+	"\asummary\x18\b \x01(\tR\asummaryJ\x04\b\x03\x10\x04\"\xcf\x01\n" +
 	"\n" +
 	"Attachment\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +

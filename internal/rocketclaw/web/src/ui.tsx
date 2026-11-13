@@ -27,6 +27,7 @@ import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, InlineText, MarkdownText, OUTPUT_KEY, TranscriptText, cleanText, copyText, mentionIds, setPreference, useCleanText, usePreference, useSlackNames } from "./transcript-text";
 import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
+import { ThreadPRContent } from "./thread-pr-panel";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -93,13 +94,13 @@ addEventListener("popstate", () => { if (sessionStorage.getItem(heldUnread) !== 
 
 const Delegations = createContext<Pick<HistoryView, "delegations" | "reviewRationales"> | undefined>(undefined);
 
-// The right panel shows one delegation or one skill, so opening either replaces the other.
 // A permission review can open at the approver's answer that gave a reason: the one saved under its
 // review turn, or, for reviews saved before turns were named, the first that gave the reason.
-function panelHref(id?: string, panel: "delegation" | "skill" | "shadow" = "delegation", reason?: string, turn?: string) {
+function panelHref(id?: string, panel: "delegation" | "skill" | "shadow" | "pullRequests" = "delegation", reason?: string, turn?: string) {
   const params = new URLSearchParams(location.search);
   params.delete("delegation");
   params.delete("skill");
+  params.delete("pullRequests");
   params.delete("reason");
   params.delete("answer");
   if (id) params.set(panel, id);
@@ -1632,8 +1633,11 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
   // The menu of a selected tab acts on every selected tab; any other tab's menu acts on that tab alone.
   const targets = menu && !selection.has(menu.path) ? new Set([menu.path]) : selection;
   const { setCommand } = useContext(SessionCommands);
-  const items: TabCommand[] = !menu ? [] : menu.shelf ? [...attentionItems(sidebar.servers[menu.shelf.server ?? ""], menu.path, [menu.path], send(menu.shelf.server ?? ""), setPicking), { key: "unshelve", label: "Remove from Top Shelf", run: () => unshelve(menu.shelf!) }]
-    : menuItems(commands, menu, sidebar, targets, () => setEditing(`${menu.shared ? "shared:" : ""}${menu.path}`), (id) => setCommand({ mode: "delete", source: id }));
+  const items: TabCommand[] = !menu ? [] : [
+    ...pathSession(menu.path) && (menu.shared || menu.shelf || targets.size === 1) ? [{ key: "pull-requests", label: "Pull requests", run: () => navigate(`${menu.path}?pullRequests=1`, false, menu.shelf ? menu.shelf.server ?? "" : server()) }] : [],
+    ...menu.shelf ? [...attentionItems(sidebar.servers[menu.shelf.server ?? ""], menu.path, [menu.path], send(menu.shelf.server ?? ""), setPicking), { key: "unshelve", label: "Remove from Top Shelf", run: () => unshelve(menu.shelf!) }]
+      : menuItems(commands, menu, sidebar, targets, () => setEditing(`${menu.shared ? "shared:" : ""}${menu.path}`), (id) => setCommand({ mode: "delete", source: id })),
+  ];
   // The active tab is the list's keyboard stop, else, while it shows only in Shared or Parked, the first rendered tab.
   const stop = shown.some((tab) => tab.path === pathname) ? pathname : shown.find((tab) => !groups.find((item) => item.id === tab.group)?.collapsed)?.path;
   // Only this person's tabs and Parked rows leave their list; Shared and Top Shelf rows stay where they are.
@@ -2157,7 +2161,8 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
                 </MessageScrollerProvider>
               </TabPane>
              </ServerGate></main>
-             {showChat ? <><DelegationPanel id={route.id} /><SkillPanel /></> : null}
+              {showChat ? <><DelegationPanel id={route.id} /><SkillPanel /></> : null}
+              <ThreadPRPanel />
            </div>
           </div>
           </TabActions></SessionCommands></DraftScope>
@@ -4573,6 +4578,15 @@ function DelegationTranscript({ id, child }: { id: string; child: string }) {
     </MessageScroller>
   </>;
   return <SidePanel label="Delegation" close={close}>{body}</SidePanel>;
+}
+
+function ThreadPRPanel() {
+  const id = pathSession(usePathname());
+  const search = new URLSearchParams(useSearch());
+  const sidebar = useContext(Sidebar);
+  if (!id || !search.has("pullRequests")) return null;
+  const close = () => navigate(panelHref());
+  return <SidePanel label="Pull requests" close={close}><ThreadPRContent key={id} id={id} version={sidebar.rows.find((row) => row.id === id)?.updatedAt} close={close} /></SidePanel>;
 }
 
 function SidePanel({ label, close, children }: { label: string; close: () => void; children: ReactNode }) {
