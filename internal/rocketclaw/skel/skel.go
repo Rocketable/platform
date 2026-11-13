@@ -142,16 +142,7 @@ func ReplaceRuntimeAssetsAfterValidation(workspace, runtimeDir string, overlays 
 
 	defer func() { _ = os.RemoveAll(stage) }()
 
-	if err := SyncEffectiveRuntimeAssets(workspace, stage, overlays, logger); err != nil {
-		return err
-	}
-
-	stagedWorkDir, err := filepath.Rel(workspace, stage)
-	if err != nil {
-		return fmt.Errorf("compute rocketclaw reload stage path: %w", err)
-	}
-
-	if err := validate(filepath.ToSlash(stagedWorkDir)); err != nil {
+	if err := validateStage(workspace, stage, overlays, logger, nil, validate); err != nil {
 		return err
 	}
 
@@ -175,6 +166,52 @@ func ReplaceRuntimeAssetsAfterValidation(workspace, runtimeDir string, overlays 
 	}
 
 	return nil
+}
+
+func ValidateRuntimeAssetsWith(workspace string, overlays []string, logger *slog.Logger, files map[string][]byte, validate func(string) error) error {
+	stage, err := os.MkdirTemp(workspace, ".rocketclaw-reload-*")
+	if err != nil {
+		return fmt.Errorf("create rocketclaw reload stage: %w", err)
+	}
+
+	defer func() { _ = os.RemoveAll(stage) }()
+
+	return validateStage(workspace, stage, overlays, logger, files, validate)
+}
+
+func validateStage(workspace, stage string, overlays []string, logger *slog.Logger, files map[string][]byte, validate func(string) error) error {
+	if err := SyncEffectiveRuntimeAssets(workspace, stage, overlays, logger); err != nil {
+		return err
+	}
+
+	root, err := os.OpenRoot(stage)
+	if err != nil {
+		return fmt.Errorf("open rocketclaw reload stage: %w", err)
+	}
+
+	defer func() { _ = root.Close() }()
+
+	for name, data := range files {
+		if err := root.WriteFile(name, data, 0o644); err != nil {
+			return fmt.Errorf("write staged file %s: %w", name, err)
+		}
+	}
+
+	stagedWorkDir, err := filepath.Rel(workspace, stage)
+	if err != nil {
+		return fmt.Errorf("compute rocketclaw reload stage path: %w", err)
+	}
+
+	return validate(filepath.ToSlash(stagedWorkDir))
+}
+
+func BuiltinAgent(name string) *string {
+	data, err := fs.ReadFile(payload, agentsRoot+"/"+name+".md")
+	if err != nil {
+		return nil
+	}
+
+	return new(string(data))
 }
 
 func commitStagedRuntimeAssets(stage, live string) error {

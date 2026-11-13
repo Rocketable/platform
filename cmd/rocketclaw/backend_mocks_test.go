@@ -104,6 +104,9 @@ var _ frontend.Backend = &BackendMock{}
 //			SwitchConversationAgentFunc: func(s string, s1 string) (bool, error) {
 //				panic("mock out the SwitchConversationAgent method")
 //			},
+//			ValidateAgentFileFunc: func(s string, bytes []byte) error {
+//				panic("mock out the ValidateAgentFile method")
+//			},
 //			WorkflowDescriptionsFunc: func() ([]protocol.WorkflowDescription, error) {
 //				panic("mock out the WorkflowDescriptions method")
 //			},
@@ -194,6 +197,9 @@ type BackendMock struct {
 
 	// SwitchConversationAgentFunc mocks the SwitchConversationAgent method.
 	SwitchConversationAgentFunc func(s string, s1 string) (bool, error)
+
+	// ValidateAgentFileFunc mocks the ValidateAgentFile method.
+	ValidateAgentFileFunc func(s string, bytes []byte) error
 
 	// WorkflowDescriptionsFunc mocks the WorkflowDescriptions method.
 	WorkflowDescriptionsFunc func() ([]protocol.WorkflowDescription, error)
@@ -409,6 +415,13 @@ type BackendMock struct {
 			// S1 is the s1 argument value.
 			S1 string
 		}
+		// ValidateAgentFile holds details about calls to the ValidateAgentFile method.
+		ValidateAgentFile []struct {
+			// S is the s argument value.
+			S string
+			// Bytes is the bytes argument value.
+			Bytes []byte
+		}
 		// WorkflowDescriptions holds details about calls to the WorkflowDescriptions method.
 		WorkflowDescriptions []struct {
 		}
@@ -440,6 +453,7 @@ type BackendMock struct {
 	lockStopBackgroundJob       sync.RWMutex
 	lockSubscribe               sync.RWMutex
 	lockSwitchConversationAgent sync.RWMutex
+	lockValidateAgentFile       sync.RWMutex
 	lockWorkflowDescriptions    sync.RWMutex
 }
 
@@ -1451,6 +1465,42 @@ func (mock *BackendMock) SwitchConversationAgentCalls() []struct {
 	mock.lockSwitchConversationAgent.RLock()
 	calls = mock.calls.SwitchConversationAgent
 	mock.lockSwitchConversationAgent.RUnlock()
+	return calls
+}
+
+// ValidateAgentFile calls ValidateAgentFileFunc.
+func (mock *BackendMock) ValidateAgentFile(s string, bytes []byte) error {
+	if mock.ValidateAgentFileFunc == nil {
+		panic("BackendMock.ValidateAgentFileFunc: method is nil but Backend.ValidateAgentFile was just called")
+	}
+	callInfo := struct {
+		S     string
+		Bytes []byte
+	}{
+		S:     s,
+		Bytes: bytes,
+	}
+	mock.lockValidateAgentFile.Lock()
+	mock.calls.ValidateAgentFile = append(mock.calls.ValidateAgentFile, callInfo)
+	mock.lockValidateAgentFile.Unlock()
+	return mock.ValidateAgentFileFunc(s, bytes)
+}
+
+// ValidateAgentFileCalls gets all the calls that were made to ValidateAgentFile.
+// Check the length with:
+//
+//	len(mockedBackend.ValidateAgentFileCalls())
+func (mock *BackendMock) ValidateAgentFileCalls() []struct {
+	S     string
+	Bytes []byte
+} {
+	var calls []struct {
+		S     string
+		Bytes []byte
+	}
+	mock.lockValidateAgentFile.RLock()
+	calls = mock.calls.ValidateAgentFile
+	mock.lockValidateAgentFile.RUnlock()
 	return calls
 }
 

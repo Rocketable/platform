@@ -202,6 +202,24 @@ func agentRecipients(agent *harness.Agent) (all bool, names []string, err error)
 	return false, names, nil
 }
 
+func checkedAgentTagGroups(agent *harness.Agent) ([][]string, error) {
+	tagsKey := "permission.rocketclaw." + setTagToolName
+	if agent.Mode == harness.AgentModeEasy {
+		tagsKey = "tags"
+	}
+
+	groups, err := agentTagGroups(agent)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", tagsKey, err)
+	}
+
+	if _, _, err := agentRecipients(agent); err != nil {
+		return nil, fmt.Errorf("permission.rocketclaw.%s: %w", recipientSetting, err)
+	}
+
+	return groups, nil
+}
+
 func checkRecipient(agents harness.Agents, target, sender string) error {
 	definition := agents.Items[target]
 	if all, names, _ := agentRecipients(&definition); all || slices.Contains(names, sender) {

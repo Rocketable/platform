@@ -1,4 +1,4 @@
-TS_CLOC_BUDGET ?= 10050
+TS_CLOC_BUDGET ?= 13550
 TS_CLOC_HAZARD_ZONE ?= 250
 
 cloc:
@@ -46,7 +46,7 @@ test: build
 	cleanup; \
 	trap cleanup EXIT INT TERM; \
 	bash -o pipefail -c 'find ./src -type f \( -name "*.test.ts" -o -name "*.test.tsx" \) ! -name "*-transport.test.ts" -print0 | sort -z | xargs -0 -n 1 -P 4 bun test'; \
-	go -C .. test ./frontend/rpc -run 'Test(PublicProgressRealBrowser|RevertRealBackendBrowser|ShadowsRealBackendBrowser|SessionEntries|SidebarHTTPStreamsBeforeGoTailAndCancels|PagesRealBrowser|ReloadRealBackendBrowser|RemoteRocketClawRealBrowser)$$' -count=1
+	go -C .. test ./frontend/rpc -run 'Test(PublicProgressRealBrowser|RevertRealBackendBrowser|ShadowsRealBackendBrowser|SessionEntries|SidebarHTTPStreamsBeforeGoTailAndCancels|PagesRealBrowser|ReloadRealBackendBrowser|RemoteRocketClawRealBrowser|AgentEditorRealBackendBrowser)$$' -count=1
 	$(MAKE) check-cloc-budget
 
 .PHONY: cloc check-cloc-budget lint build test

@@ -1,7 +1,7 @@
 import { captureException } from "@sentry/react";
 import { hashKey, type QueryKey } from "@tanstack/react-query";
 import { server, serverURL } from "./navigation";
-import type { AgentChoices, AttentionAction, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TopShelf, TranscriptEvent, VoiceSettings, Workflow } from "./types";
+import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TopShelf, TranscriptEvent, VoiceSettings, Workflow } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -93,6 +93,9 @@ export const queries = {
   cronJobs: () => ({ queryKey: ["cronJobs"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ jobs: CronJob[] }>("ListCronJobs", {}, signal)).jobs }),
   pages: () => ({ queryKey: ["pages"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ pages?: PageEntry[] }>("ListPages", {}, signal)).pages ?? [] }),
   config: () => ({ queryKey: ["config"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ config: ConfigView }>("ListConfig", {}, signal)).config }),
+  agentDrafts: () => ({ queryKey: ["agentDrafts"], queryFn: ({ signal }: { signal?: AbortSignal }) => rpc<{ drafts: AgentDraft[]; templates: string[] }>("ListAgentDrafts", {}, signal) }),
+  agentSettings: (mode: string) => ({ queryKey: ["agentSettings", mode], staleTime: Infinity, queryFn: async ({ signal }: { signal?: AbortSignal }) => (await rpc<{ settings: AgentSettingHelp[] }>("AgentSettings", { mode }, signal)).settings }),
+  draftLayers: ({ revision, ...input }: { id: string; variant: string; destination: string; revision: string }) => ({ queryKey: ["draftLayers", input, revision], queryFn: ({ signal }: { signal?: AbortSignal }) => rpc<DraftLayers>("DraftLayers", input, signal) }),
   history: (input: { id: string; sourceConversationId?: string; revision?: string; limit?: number; before?: string; from?: string }) => ({ queryKey: ["history", input], queryFn: async ({ signal }: { signal?: AbortSignal }): Promise<HistoryView> => {
     const body = await rpc<Omit<HistoryView, "origin"> & { origin: string }>("History", input, signal);
     return { ...body, origin: body.origin ? JSON.parse(body.origin) as ChatOrigin : undefined };
@@ -118,6 +121,16 @@ export const mutations = {
   reorderQueue: (input: { id: string; itemIds: string[] }) => rpc("ReorderQueue", input),
   moveToBackground: (input: { conversationId: string }) => rpc("MoveToBackground", input),
   stopBackgroundJob: (input: { conversationId: string; jobId: string }) => rpc("StopBackgroundJob", input),
+  createAgentDraft: (input: { name: string; mode?: string; template?: string; copy?: boolean }) => rpc<AgentDraft>("CreateAgentDraft", input),
+  applyAgentDraftOp: (input: { id: string; op: AgentDraftOp }) => rpc<{ revision: string; invalidLine: number }>("ApplyAgentDraftOp", input),
+  setAgentDraftPresence: (input: { id: string; presence: AgentDraftPresence }) => rpc("SetAgentDraftPresence", input),
+  draftPrompt: (input: { id: string; text: string }) => rpc<DraftPromptResponse>("DraftPrompt", input),
+  restartDraftChat: (input: { id: string; replay: string[]; replayEarlier?: boolean }) => rpc<DraftPromptResponse>("RestartDraftChat", input),
+  saveDraft: (input: { id: string; variant: string; destination: string; pullRequest?: boolean; reviewed?: boolean; reviewedFile?: string }) => rpc<SaveDraftResponse>("SaveDraft", input),
+  stopWaiting: (input: { id: string }) => rpc<SaveDraftResponse>("StopWaiting", input),
+  proposeDraftChanges: (input: { id: string; request: string; answer?: string; variant?: string }) => rpc<AgentDraftProposal>("ProposeDraftChanges", input),
+  decideProposal: (input: { id: string; proposalId: string; accept: boolean }) => rpc<AgentDraftProposal>("DecideProposal", input),
+  testModel: (input: { model: string }) => rpc<{ error?: string; elapsedMs?: string }>("TestModel", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
   voiceSettings: (input: { action: "UPDATE"; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
   tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; topShelf?: TopShelf; attention?: { paths: string[]; action: AttentionAction; until?: string }; autoPark?: boolean }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),

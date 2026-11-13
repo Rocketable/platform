@@ -35,6 +35,7 @@ type Config struct {
 	OpenAI               OpenAIConfig                                `json:"openai"`
 	Providers            map[string]OpenAIConfig                     `json:"providers,omitempty"`
 	AutoApproverModel    string                                      `json:"auto_approver_model"`
+	AgentEditorModel     string                                      `json:"agent_editor_model,omitempty"`
 	Decision             map[DecisionProvider]DecisionProviderConfig `json:"decision,omitempty"`
 	AutoApproverDecision AutoApproverDecisionConfig                  `json:"auto_approver_decision,omitzero"`
 	Instrumentation      InstrumentationConfig                       `json:"instrumentation"`

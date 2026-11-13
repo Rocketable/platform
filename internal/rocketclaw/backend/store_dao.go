@@ -37,6 +37,7 @@ const (
 	KindReview         ConversationKind = "review"
 	KindShadow         ConversationKind = "shadow"
 	KindRemote         ConversationKind = "remote"
+	KindAgentDraft     ConversationKind = "agent_draft"
 )
 
 type conversationFacts struct {
