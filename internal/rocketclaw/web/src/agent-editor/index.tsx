@@ -1,6 +1,7 @@
 // The agent editor: a workbench of settings, the test chat and the assistant over one draft stored on the server.
 import { useEffect, useState, type ReactNode } from "react";
 import { Menu } from "@base-ui/react/menu";
+import { Tabs } from "@base-ui/react/tabs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, ChevronDown, Copy, FileCode2, Files, Lock, Pencil, Plus, Share2, ShieldCheck, Wand2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -12,11 +13,10 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/compon
 import { mutations, queries, rpc } from "@/api";
 import { copyText } from "@/transcript-text";
 import type { AgentDraft, AgentDraftPresence, AgentDraftView } from "@/types";
-
-// This page's editor, as its presence and its ops name it.
-const editor = crypto.getRandomValues(new Uint32Array(2)).join("-");
-let sent = 0;
-const opId = () => `${editor}-${++sent}`;
+import { CoEdit, editor, opId } from "./coedit";
+import { FileTab, missing } from "./file";
+import { FormTab } from "./form";
+import { History, ModeBanner } from "./history";
 
 const saveStates: Record<AgentDraft["saveState"], string> = { editing: "Draft · saved on the server", saving: "Saving…", waiting: "Waiting for merge", live: "Live" };
 const drafts = (path: string) => `/agents/drafts/${path}`;
@@ -48,27 +48,42 @@ function Refusal() {
   </div>;
 }
 
-// A draft follows its stream, which only wakes the page, by reading what changed since the revision it has. The page
-// also says it is here every 10 seconds, since the server lists editors seen in the last 30.
+// A draft follows its stream, which only wakes the page, by reading what changed since the revision its co-editing
+// client has. The page also says where it is every 10 seconds, since the server lists editors seen in the last 30.
 function useAgentDraft(id: string) {
   const client = useQueryClient();
-  const view = useQuery({ queryKey: ["agentDraft", id], queryFn: ({ signal }) => rpc<AgentDraftView>("GetAgentDraft", { id, since: client.getQueryData<AgentDraftView>(["agentDraft", id])?.draft.revision ?? "0" }, signal) });
+  const [, setVersion] = useState(0);
+  const [coedit] = useState(() => {
+    let timer = 0;
+    const edit: CoEdit = new CoEdit({
+      send: (op) => mutations.applyAgentDraftOp({ id, op }),
+      fetch: () => void client.invalidateQueries({ queryKey: ["agentDraft", id] }),
+      present: () => { timer ||= window.setTimeout(() => { timer = 0; void mutations.setAgentDraftPresence({ id, presence: { client: editor, ...edit.here } }).catch(() => {}); }, 300); },
+      changed: () => setVersion((version) => version + 1),
+    }, opId);
+    return edit;
+  });
+  const view = useQuery({ queryKey: ["agentDraft", id], queryFn: async ({ signal }) => {
+    const read = await rpc<AgentDraftView>("GetAgentDraft", { id, since: String(coedit.rev) }, signal);
+    coedit.receive(read);
+    return read;
+  } });
   useEffect(() => {
     const stream = new EventSource(`${serverURL()}/stream?${new URLSearchParams({ id: `draft:${id}` })}`);
     stream.onopen = stream.onmessage = () => void client.invalidateQueries({ queryKey: ["agentDraft", id] });
-    const here = () => void mutations.setAgentDraftPresence({ id, presence: { client: editor, variant: "", place: "" } }).catch(() => {});
-    here();
-    const timer = setInterval(here, 10_000);
+    coedit.present();
+    const timer = setInterval(() => coedit.present(), 10_000);
     return () => { stream.close(); clearInterval(timer); };
-  }, [id, client]);
-  return view;
+  }, [id, client, coedit]);
+  return { view, coedit };
 }
 
 function DraftEditor({ id }: { id: string }) {
-  const view = useAgentDraft(id);
-  const draft = view.data?.draft;
+  const { view, coedit } = useAgentDraft(id);
+  const draft = coedit.view;
   if (!draft) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">{view.error?.message ?? "Loading…"}</p>;
-  return <Workbench title={draft.existing ? `Edit ${draft.name}` : "Create New Agent"} draft={draft} presence={view.data!.presence} settings={<Variants draft={draft} />} />;
+  const presence = view.data?.presence ?? [];
+  return <Workbench title={draft.existing ? `Edit ${draft.name}` : "Create New Agent"} draft={draft} presence={presence} settings={<Settings coedit={coedit} draft={draft} presence={presence} />} />;
 }
 
 // Settings on the left, the test chat in the middle and the assistant on the right, under one header.
@@ -100,11 +115,39 @@ function Pane({ label, note, children }: { label: string; note: string; children
   </section>;
 }
 
+// The settings of one variant at a time, in the Form or as the agent file, and the draft's history.
+function Settings({ coedit, draft, presence }: { coedit: CoEdit; draft: AgentDraft; presence: AgentDraftPresence[] }) {
+  const client = useQueryClient();
+  const [tab, setTab] = useState("form");
+  const [chosen, setChosen] = useState("");
+  const [focus, setFocus] = useState<string>();
+  const easy = useQuery(queries.agentSettings("easy")).data, advanced = useQuery(queries.agentSettings("advanced")).data;
+  if (!easy || !advanced) return <p role="status" className="m-auto p-4 text-sm text-muted-foreground">Loading…</p>;
+  const variant = draft.variants.find(({ name }) => name === chosen) ?? draft.variants[0], help = draft.mode === "easy" ? easy : advanced;
+  const order = [...new Set([...help, ...easy, ...advanced].map(({ key }) => key.split(".")[0]))], needed = missing(help, variant).length > 0;
+  const restore = (from: string) => void mutations.applyAgentDraftOp({ id: draft.id, op: { baseRevision: String(coedit.rev), opId: opId(), kind: "restore", from } })
+    .then(() => client.invalidateQueries({ queryKey: ["agentDraft", draft.id] }));
+  const shared = { coedit, variant, presence };
+  return <Tabs.Root value={tab} onValueChange={(value: string) => { setTab(value); setFocus(undefined); }} className="flex min-h-0 flex-1 flex-col">
+    <Variants draft={draft} chosen={variant.name} onChoose={setChosen} />
+    <Tabs.List aria-label="Settings view" className="flex shrink-0 gap-1 border-b px-3 py-1.5">
+      {[["form", "Form"], ["file", needed ? "File, needs fixes" : "File"], ["history", "History"]].map(([value, name]) => <Tabs.Tab key={value} value={value} aria-label={name} className="flex items-center gap-1 rounded-md px-3 py-1 text-xs text-muted-foreground data-active:bg-muted data-active:text-foreground">
+        {name.split(",")[0]}{value === "file" && needed ? <span className="size-1.5 rounded-full bg-destructive" /> : null}
+      </Tabs.Tab>)}
+    </Tabs.List>
+    {coedit.error ? <p role="alert" className="border-b px-4 py-2 text-xs text-destructive">{coedit.error}</p> : null}
+    <ModeBanner coedit={coedit} help={{ easy, advanced }} restore={restore} />
+    <Tabs.Panel value="form" className="flex min-h-0 flex-1 flex-col"><FormTab key={variant.name} help={help} onFile={(key) => { setTab("file"); setFocus(key); }} {...shared} /></Tabs.Panel>
+    <Tabs.Panel value="file" keepMounted className="flex min-h-0 flex-1 flex-col data-hidden:hidden"><FileTab key={variant.name} mode={draft.mode} order={order} help={help} focus={focus} {...shared} /></Tabs.Panel>
+    <Tabs.Panel value="history" className="flex min-h-0 flex-1 flex-col"><History coedit={coedit} help={{ easy, advanced }} restore={restore} /></Tabs.Panel>
+  </Tabs.Root>;
+}
+
 // Every variant's agent file, the first being the agent's own; all share the draft's mode.
-function Variants({ draft }: { draft: AgentDraft }) {
-  return <div className="flex flex-col gap-1 p-4">
-    <h2 className="text-sm font-medium">Variants</h2>
-    {draft.variants.map((variant, i) => <p key={variant.name} className="font-mono text-xs text-muted-foreground">{i ? `${draft.name}/${variant.name}` : draft.name}.md · {draft.mode}</p>)}
+function Variants({ draft, chosen, onChoose }: { draft: AgentDraft; chosen: string; onChoose: (name: string) => void }) {
+  return <div role="group" aria-label="Variant to edit" className="flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-2">
+    <span className="text-xs text-muted-foreground">Editing</span>
+    {draft.variants.map((variant, i) => <Button key={variant.name} size="xs" variant={variant.name === chosen ? "secondary" : "ghost"} aria-pressed={variant.name === chosen} onClick={() => onChoose(variant.name)}>{i ? `${draft.name}/${variant.name}` : draft.name}.md · {draft.mode}</Button>)}
   </div>;
 }
 

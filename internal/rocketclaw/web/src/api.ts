@@ -1,7 +1,7 @@
 import { captureException } from "@sentry/react";
 import { hashKey, type QueryKey } from "@tanstack/react-query";
 import { server, serverURL } from "./navigation";
-import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftPresence, AttentionAction, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TopShelf, TranscriptEvent, VoiceSettings, Workflow } from "./types";
+import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TopShelf, TranscriptEvent, VoiceSettings, Workflow } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -95,6 +95,8 @@ export const queries = {
   config: () => ({ queryKey: ["config"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ config: ConfigView }>("ListConfig", {}, signal)).config }),
   // Every agent draft, newest first, and the starter agents a draft can begin from.
   agentDrafts: () => ({ queryKey: ["agentDrafts"], queryFn: ({ signal }: { signal?: AbortSignal }) => rpc<{ drafts: AgentDraft[]; templates: string[] }>("ListAgentDrafts", {}, signal) }),
+  // The help for every setting an easy or advanced agent allows, in agent-file order; it changes only with the server.
+  agentSettings: (mode: string) => ({ queryKey: ["agentSettings", mode], staleTime: Infinity, queryFn: async ({ signal }: { signal?: AbortSignal }) => (await rpc<{ settings: AgentSettingHelp[] }>("AgentSettings", { mode }, signal)).settings }),
   history: (input: { id: string; sourceConversationId?: string; revision?: string; limit?: number; before?: string; from?: string }) => ({ queryKey: ["history", input], queryFn: async ({ signal }: { signal?: AbortSignal }): Promise<HistoryView> => {
     const body = await rpc<Omit<HistoryView, "origin"> & { origin: string }>("History", input, signal);
     return { ...body, origin: body.origin ? JSON.parse(body.origin) as ChatOrigin : undefined };

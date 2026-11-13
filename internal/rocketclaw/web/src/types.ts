@@ -42,7 +42,13 @@ export type ConfigView = { workspace?: string; overlays?: string[]; slackChannel
 // An agent draft as the agent editor's RPCs answer it: revisions are int64 strings, and its first variant is the
 // agent itself. saveState is editing, saving, waiting (for a Git overlay's merge) or live.
 export type AgentDraft = { id: string; revision: string; name: string; mode: string; variants: { name: string; settings: { key: string; value: string }[]; body: string }[]; testChat: string; saveState: "editing" | "saving" | "waiting" | "live"; existing: boolean };
-export type AgentDraftOp = { baseRevision: string; opId: string; kind: string; variant?: string; key?: string; value?: string };
+// A splice removes remove code points of the instructions at at, then inserts insert there.
+export type AgentDraftSplice = { at: number; remove?: number; insert?: string };
+// revision, at and author are the server's, set when the op committed; from is the revision a restore brings back.
+export type AgentDraftOp = { revision?: string; at?: string; author?: string; baseRevision: string; opId: string; kind: string; variant?: string; key?: string; value?: string; splices?: AgentDraftSplice[]; from?: string };
+// The plain help for one agent file setting; key joins nested keys with dots, and control is text, switch, choice,
+// list, model or file.
+export type AgentSettingHelp = { key: string; group: string; label: string; explanation: string; defaultText: string; allowed: string; control: string; choices: string[]; required: boolean; common: boolean };
 export type AgentDraftPresence = { client: string; username?: string; variant: string; place: string };
 // GetAgentDraft's answer: the draft now, the ops after the revision asked for, and the editors seen lately.
 export type AgentDraftView = { draft: AgentDraft; ops: AgentDraftOp[]; presence: AgentDraftPresence[] };
