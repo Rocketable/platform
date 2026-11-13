@@ -375,8 +375,21 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
       await page.keyboard.press("Control+Backquote");
       releaseList.resolve();
       await view.locator('[data-pane-content="bottom"] [data-component="terminal"]').waitFor();
-      await until(() => terminals.open === 1).catch((error: unknown) => {
+      await until(() => terminals.open === 1).catch(async (error: unknown) => {
         console.error("Terminal reopen socket wait failed", { close, expectedOpenSockets: 1, observedOpenSockets: terminals.open, requests: fake.requests, errors });
+        try {
+          const dom = await view.locator('[data-component="terminal"], [data-pane-tab^="terminal:"]').evaluateAll((nodes: Element[]) => nodes.map((node) => ({
+            component: node.getAttribute("data-component"),
+            tab: node.getAttribute("data-pane-tab"),
+            pane: node.closest("[data-pane-content]")?.getAttribute("data-pane-content"),
+            wrapper: node.closest('[id^="terminal-wrapper-"]')?.id,
+            visible: node.checkVisibility(),
+            text: node.textContent,
+          })));
+          console.error("Terminal reopen DOM after socket wait", dom);
+        } catch (snapshotError: unknown) {
+          console.error("Terminal reopen DOM snapshot failed", snapshotError);
+        }
         throw error;
       });
     }
