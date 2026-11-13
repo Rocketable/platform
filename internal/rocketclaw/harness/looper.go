@@ -18,6 +18,7 @@ import (
 	"time"
 
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
+	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
@@ -96,7 +97,7 @@ func (InertSteerDrain) Drain(context.Context, string, TurnPhase, []string) ([]Pr
 }
 
 type responsesAPI interface {
-	New(context.Context, *responses.ResponseNewParams, responseObserver, ...option.RequestOption) (*responses.Response, error)
+	New(context.Context, *responses.ResponseNewParams, oai.ResponseObserver, ...option.RequestOption) (*responses.Response, error)
 	Compact(context.Context, *responses.ResponseCompactParams, ...option.RequestOption) (*responses.CompactedResponse, error)
 }
 
@@ -105,7 +106,7 @@ type responseServiceClient struct {
 	doer    *responsesWebsocketDoer
 }
 
-func (c responseServiceClient) New(ctx context.Context, params *responses.ResponseNewParams, observer responseObserver, opts ...option.RequestOption) (*responses.Response, error) {
+func (c responseServiceClient) New(ctx context.Context, params *responses.ResponseNewParams, observer oai.ResponseObserver, opts ...option.RequestOption) (*responses.Response, error) {
 	var errLocal error
 
 	middleware := func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
@@ -134,7 +135,7 @@ func (c responseServiceClient) New(ctx context.Context, params *responses.Respon
 
 func (c responseServiceClient) Compact(ctx context.Context, params *responses.ResponseCompactParams, opts ...option.RequestOption) (*responses.CompactedResponse, error) {
 	middleware := func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-		return c.doer.middleware(req, next, inertResponseObserver{})
+		return c.doer.middleware(req, next, oai.InertResponseObserver{})
 	}
 
 	resp, err := c.service.Compact(ctx, *params, append(slices.Clone(opts), option.WithMiddleware(middleware))...)
@@ -1262,7 +1263,7 @@ func appendReplayInput(record *SessionEntry, item *responses.ResponseInputItemUn
 func (l *looper) newProviderResponse(
 	ctx context.Context,
 	params *responses.ResponseNewParams,
-	observer responseObserver,
+	observer oai.ResponseObserver,
 	output chan<- ChatResponse,
 	checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error,
 ) (resp *responses.Response, err error) {
@@ -1293,7 +1294,7 @@ func (l *looper) newProviderResponse(
 	return l.newResponseWithProviderRetry(ctx, params, observer, output, checkpointCompacted)
 }
 
-func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, observer responseObserver, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
+func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, observer oai.ResponseObserver, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
 	attempt := 0
 
 	for {
@@ -1415,7 +1416,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 	}
 }
 
-func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, observer responseObserver, errOriginal error, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
+func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, observer oai.ResponseObserver, errOriginal error, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
 	original := params.Input.OfInputItemList
 
 	blocks := compactionBlocks(original)
