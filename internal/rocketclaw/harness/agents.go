@@ -16,7 +16,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var agentFrontmatterPattern = regexp.MustCompile(`\A---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|\z)`)
+// AgentFrontmatterPattern splits an agent file into its frontmatter, the first group, and its prompt.
+var AgentFrontmatterPattern = regexp.MustCompile(`\A---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|\z)`)
 
 // Agent contains a single preloaded markdown agent definition.
 type Agent struct {
@@ -220,7 +221,7 @@ func loadAgent(fsys fs.FS, filePath string, cfg AgentLoadConfig) (Agent, error) 
 
 	// Non-scalar nodes have an empty Value and fail both checks too.
 	mode := AgentMode(frontmatterValue(frontmatterNode, "mode", string(AgentModeAdvanced)))
-	if !slices.Contains([]AgentMode{AgentModeAdvanced, AgentModeEasy}, mode) {
+	if !mode.Valid() {
 		return Agent{}, fmt.Errorf("%s: mode: must be easy or advanced", filePath)
 	}
 
@@ -360,7 +361,7 @@ func parseApproverDecision(approver *yaml.Node, agent *Agent, cfg AgentLoadConfi
 		return errShape
 	}
 
-	if err := checkKeys(node, "approver.decision.", "not an approver.decision key", "model", "minConfidence", "prompt"); err != nil {
+	if err := checkKeys(node, "approver.decision.", "not an approver.decision key", easyKeys()["approver.decision"]...); err != nil {
 		return err
 	}
 
@@ -389,7 +390,7 @@ func checkDecisionModels(cfg AgentLoadConfig, models ...string) error {
 }
 
 func parseAgentFrontmatter(content []byte) (frontmatter map[string]any, frontmatterNode *yaml.Node, prompt string, err error) {
-	match := agentFrontmatterPattern.FindSubmatchIndex(content)
+	match := AgentFrontmatterPattern.FindSubmatchIndex(content)
 	if match == nil {
 		return nil, nil, "", errors.New("missing YAML frontmatter")
 	}

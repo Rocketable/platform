@@ -622,12 +622,372 @@ message ConfigView {
   bool mcp_external = 9;
   reserved 10;
   string tailscale_user = 11;
+  // Configured provider names, the openai provider always included; the server never lists models.
+  repeated string providers = 12;
 }
 
 message ListConfigRequest {}
 
 message ListConfigResponse {
   ConfigView config = 1;
+}
+
+// TestModelRequest names the model to try, as "provider/model#effort".
+message TestModelRequest { string model = 1; }
+
+// TestModelResponse holds the provider's error text, empty when the model works, and how long the
+// request took.
+message TestModelResponse {
+  string error = 1;
+  int64 elapsed_ms = 2;
+}
+
+// AgentDraft is an agent being written in the agent editor. Its first variant is the agent itself and the
+// others its comparison shadows; all share mode, easy or advanced. save_state is editing, saving, waiting
+// (for a merge) or live; existing says a save destination already holds an agent of this name; pending is
+// the draft's last save to a Git overlay, kept after it stops waiting so the page can show its pull request.
+message AgentDraft {
+  string id = 1;
+  int64 revision = 2;
+  string name = 3;
+  string mode = 4;
+  repeated AgentDraftVariant variants = 5;
+  AgentDraftExternalMCP external_mcp = 6;
+  string test_chat = 7;
+  string save_state = 8;
+  bool existing = 9;
+  AgentDraftPending pending = 10;
+}
+
+// AgentDraftPending is a save pushed to the Git overlay destination: commit on branch, which is base, the
+// branch the overlay pins, or a branch of the save's own for a pull request into base. number is the pull
+// request gh opened, and link its page or, without gh, a GitHub page that compares branch with base. ended
+// says why the draft stopped waiting without going live: closed (gh saw the pull request closed), stopped
+// (an editor stopped waiting) or edited (someone edited the draft); empty until then.
+message AgentDraftPending {
+  string destination = 1;
+  string base = 2;
+  string branch = 3;
+  string commit = 4;
+  int32 number = 5;
+  string link = 6;
+  string ended = 7;
+}
+
+// AgentDraftVariant is one version of the draft's agent file: its settings other than mode, and its
+// instructions.
+message AgentDraftVariant {
+  string name = 1;
+  repeated AgentDraftSetting settings = 2;
+  string body = 3;
+}
+
+// AgentDraftSetting is one top-level setting of an agent file; value is its YAML.
+message AgentDraftSetting {
+  string key = 1;
+  string value = 2;
+}
+
+// AgentDraftExternalMCP is how the draft's test chat poses as an External MCP call.
+message AgentDraftExternalMCP {
+  bool on = 1;
+  string caller = 2;
+  map<string, string> metadata = 3;
+}
+
+// AgentDraftSplice removes remove code points of the instructions at at, then inserts insert there.
+message AgentDraftSplice {
+  int32 at = 1;
+  int32 remove = 2;
+  string insert = 3;
+}
+
+// AgentDraftOp is one change to a draft, made on base_revision. op_id is the client's id and a sequence
+// number, so a client recognizes its own change among the committed ones. kind is set_field, edit_body,
+// add_variant, rename_variant, remove_variant, set_mode, set_external_mcp, set_test_chat, set_save_state,
+// rename, or, as requests the server commits as those kinds, edit_file and restore. value is a setting's
+// YAML (empty removes it), a variant's new name, the variant a new one copies, the mode, test chat, save
+// state or agent name, or an edit_file's whole file. from is the revision a restore brings back. from_file
+// is the whole file an edit_file's typist started from: the head shown at their first keystroke, then their
+// last acknowledged edit_file's value; its settings and mode are diffed against it, its instructions against
+// the file at base_revision. revision, at (RFC 3339) and author are the server's, set when the change
+// committed.
+message AgentDraftOp {
+  int64 revision = 1;
+  string at = 2;
+  int64 base_revision = 3;
+  string op_id = 4;
+  string author = 5;
+  string kind = 6;
+  string variant = 7;
+  string key = 8;
+  string value = 9;
+  repeated AgentDraftSplice splices = 10;
+  AgentDraftExternalMCP external_mcp = 11;
+  int64 from = 12;
+  string from_file = 13;
+}
+
+// AgentDraftPresence is where an open editor is in a draft: its variant, and its place, a setting key or
+// an offset in the instructions. username is the server's.
+message AgentDraftPresence {
+  string client = 1;
+  string username = 2;
+  string variant = 3;
+  string place = 4;
+}
+
+// CreateAgentDraftRequest starts a draft named name: blank in mode, from the starter agent template, or,
+// with copy, as a copy of the effective agent name.
+message CreateAgentDraftRequest {
+  string name = 1;
+  string mode = 2;
+  string template = 3;
+  bool copy = 4;
+}
+
+message ListAgentDraftsRequest {}
+
+// ListAgentDraftsResponse is every draft, newest first, and the starter agents a draft can begin from.
+message ListAgentDraftsResponse {
+  repeated AgentDraft drafts = 1;
+  repeated string templates = 2;
+}
+
+// GetAgentDraftRequest reads draft id and the changes committed after revision since.
+message GetAgentDraftRequest {
+  string id = 1;
+  int64 since = 2;
+}
+
+// GetAgentDraftResponse is the draft now, the changes after since in order, the editors seen in the
+// last 30 seconds, every assistant proposal on the draft, oldest first, and what each message to its
+// test chat was sent with, in the order sent.
+message GetAgentDraftResponse {
+  AgentDraft draft = 1;
+  repeated AgentDraftOp ops = 2;
+  repeated AgentDraftPresence presence = 3;
+  repeated AgentDraftProposal proposals = 4;
+  repeated AgentDraftMessage messages = 5;
+}
+
+// AgentDraftMessage is what a message to a draft's test chat was sent with, known by input_id, the
+// input_id of its user message in History. labels gives each column, by variant name, the revision of
+// the last change to its file; live is the live file's version, empty when there was none; not_run
+// lists the columns that did not answer it, as DraftPromptResponse's problems do; external_mcp is its
+// mode, pairs and caller. The chat's first message fixes the mode and those keys for the whole chat.
+message AgentDraftMessage {
+  string input_id = 1;
+  map<string, int64> labels = 2;
+  string live = 3;
+  repeated AgentDraftProblem not_run = 4;
+  AgentDraftExternalMCP external_mcp = 5;
+}
+
+// ApplyAgentDraftOpRequest commits op to draft id. cursor is the caller's place in the variant's
+// instructions on op's base revision, before op.
+message ApplyAgentDraftOpRequest {
+  string id = 1;
+  AgentDraftOp op = 2;
+  int32 cursor = 3;
+}
+
+// ApplyAgentDraftOpResponse is the draft's new revision and the cursor moved past every change committed
+// through it, op included. invalid_line, when set, is the line of the file or setting YAML that is not
+// valid yet: nothing was stored.
+message ApplyAgentDraftOpResponse {
+  int64 revision = 1;
+  int32 cursor = 2;
+  int32 invalid_line = 3;
+}
+
+// SetAgentDraftPresenceRequest records where the caller's editor is in draft id.
+message SetAgentDraftPresenceRequest {
+  string id = 1;
+  AgentDraftPresence presence = 2;
+}
+
+message SetAgentDraftPresenceResponse {}
+
+// AgentSettingsRequest asks for the setting help of mode, easy or advanced.
+message AgentSettingsRequest { string mode = 1; }
+
+// AgentSettingsResponse is the help for every setting mode allows, in agent-file order.
+message AgentSettingsResponse { repeated AgentSettingHelp settings = 1; }
+
+// AgentSettingHelp explains one agent file setting for someone who is not an engineer. key joins nested
+// keys with dots; default_text says what leaving it out does, allowed which values load; control is text,
+// switch, choice, list, model or file.
+message AgentSettingHelp {
+  string key = 1;
+  string group = 2;
+  string label = 3;
+  string explanation = 4;
+  string default_text = 5;
+  string allowed = 6;
+  string control = 7;
+  repeated string choices = 8;
+  bool required = 9;
+  bool common = 10;
+}
+
+// DraftPromptRequest sends text to draft id's test chat, as a Web message or, while the draft is in External
+// MCP mode, as an External MCP call with the draft's pairs and caller. The server reads the draft, the mode
+// and the live agent's file when it takes the message, and every column answers from what it read.
+message DraftPromptRequest {
+  string id = 1;
+  string text = 2;
+}
+
+// RestartDraftChatRequest gives draft id a new, empty test chat, then sends it replay's texts, in order, with
+// one read of the draft; with replay_earlier, the old chat's messages go first, in the order they were
+// stored. The old chat keeps its messages and the answers still running in it.
+message RestartDraftChatRequest {
+  string id = 1;
+  repeated string replay = 2;
+  bool replay_earlier = 3;
+}
+
+// AgentDraftProblem is a setting of a draft's variant, or with an empty variant of the live agent's file,
+// that keeps it from running, with the setting help's sentence for what it allows or the reason in plain words.
+message AgentDraftProblem {
+  string variant = 1;
+  string key = 2;
+  string sentence = 3;
+}
+
+// DraftPromptResponse names the draft's test chat. When refused is set nothing was sent: restart says a new
+// test chat would take the message, and problems are the draft's own settings to fix. Otherwise each
+// problem is a variant, or with an empty variant the live agent, that does not answer the message, and why.
+message DraftPromptResponse {
+  string test_chat = 1;
+  string refused = 2;
+  bool restart = 3;
+  repeated AgentDraftProblem problems = 4;
+}
+
+// DraftLayersRequest asks which layers hold an agent named as draft id, and what saving variant to
+// destination, "workspace" or a configured overlay's spec, would replace and write.
+message DraftLayersRequest {
+  string id = 1;
+  string variant = 2;
+  string destination = 3;
+}
+
+// AgentLayer is one layer's file for the draft's name: layer is "built-in", a configured overlay's spec, or
+// "workspace"; ref is an overlay's pinned ref; file is unset where the layer has none.
+message AgentLayer {
+  string layer = 1;
+  string ref = 2;
+  optional string file = 3;
+}
+
+// DraftLayersResponse lists the layers in precedence order, each later one winning. hidden_by names the
+// later layer whose file hides the destination, whatever its bytes; replaces names the earlier layer whose
+// agent the save takes over, so its updates stop reaching this workspace; recreated says startup copies the
+// built-in agent into workspace agents/ again, which hides an overlay destination; next is the file the save
+// writes, settings in the standard order and comments dropped. For an overlay destination, branch is the
+// branch a save pushes to, or unpushable says why it cannot push there.
+message DraftLayersResponse {
+  repeated AgentLayer layers = 1;
+  string hidden_by = 2;
+  string replaces = 3;
+  bool recreated = 4;
+  string next = 5;
+  string branch = 6;
+  string unpushable = 7;
+}
+
+// SaveDraftRequest saves variant of draft id to destination. reviewed says the caller reviewed the
+// destination's file reviewed_file, unset when it had none; that file becomes what the save expects to
+// find there. To a Git overlay, pull_request opens a pull request instead of pushing to its branch.
+message SaveDraftRequest {
+  string id = 1;
+  string variant = 2;
+  string destination = 3;
+  bool reviewed = 4;
+  optional string reviewed_file = 5;
+  bool pull_request = 6;
+}
+
+// AgentDraftReviewSetting is one setting's YAML in the base, the destination's file and the draft, empty
+// where absent; mode is the setting "mode". theirs says the review starts on the file's value, which only
+// the file changed; both says the file and the draft each changed it differently.
+message AgentDraftReviewSetting {
+  string key = 1;
+  string base = 2;
+  string live = 3;
+  string draft = 4;
+  bool theirs = 5;
+  bool both = 6;
+}
+
+// AgentDraftReview is a destination file that changed since the draft began, or since the caller reviewed
+// it: the base the draft expected, the file now and the draft's file, the settings any of them changed, and
+// the instructions edit, on revision, that brings the file's changes into the draft's variant.
+message AgentDraftReview {
+  int64 revision = 1;
+  optional string base = 2;
+  optional string live = 3;
+  string draft = 4;
+  repeated AgentDraftReviewSetting settings = 5;
+  repeated AgentDraftSplice splices = 6;
+}
+
+// SaveDraftResponse is the draft's save state after a save: live, waiting for a Git overlay's merge, or
+// editing when the draft changed during the save or the reload loaded another file. When refused is set nothing was written: problems are the
+// variant's settings that do not load, and review the destination's changes to review before saving again.
+message SaveDraftResponse {
+  string save_state = 1;
+  string refused = 2;
+  repeated AgentDraftProblem problems = 3;
+  AgentDraftReview review = 4;
+}
+
+// StopWaitingRequest returns draft id from waiting for a merge to editing; its pull request stays open.
+message StopWaitingRequest { string id = 1; }
+
+// ProposeDraftChangesRequest asks the assistant to change draft id as request says. answer is the test chat
+// answer the caller points at, from variant, to fix; empty when they point at none.
+message ProposeDraftChangesRequest {
+  string id = 1;
+  string request = 2;
+  string answer = 3;
+  string variant = 4;
+}
+
+// AgentDraftProposedSetting sets a top-level setting key of variant to the YAML value_yaml, or removes it when
+// empty; the key mode changes the whole draft's mode.
+message AgentDraftProposedSetting {
+  string variant = 1;
+  string key = 2;
+  string value_yaml = 3;
+  string reason = 4;
+}
+
+// AgentDraftProposedBody replaces variant's instructions with body.
+message AgentDraftProposedBody {
+  string variant = 1;
+  string body = 2;
+  string reason = 3;
+}
+
+// AgentDraftProposal is the assistant's suggested change to a draft, made on base_revision: its message, setting
+// changes and instructions replacements. state is open until an editor accepts or rejects it.
+message AgentDraftProposal {
+  string id = 1;
+  int64 base_revision = 2;
+  string state = 3;
+  string message = 4;
+  repeated AgentDraftProposedSetting settings = 5;
+  repeated AgentDraftProposedBody bodies = 6;
+}
+
+// DecideProposalRequest accepts, or rejects, draft id's open proposal proposal_id.
+message DecideProposalRequest {
+  string id = 1;
+  string proposal_id = 2;
+  bool accept = 3;
 }
 
 message UpdateSessionRequest {
@@ -975,6 +1335,20 @@ service Web {
   rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
   rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse);
   rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
+  rpc TestModel(TestModelRequest) returns (TestModelResponse);
+  rpc CreateAgentDraft(CreateAgentDraftRequest) returns (AgentDraft);
+  rpc ListAgentDrafts(ListAgentDraftsRequest) returns (ListAgentDraftsResponse);
+  rpc GetAgentDraft(GetAgentDraftRequest) returns (GetAgentDraftResponse);
+  rpc ApplyAgentDraftOp(ApplyAgentDraftOpRequest) returns (ApplyAgentDraftOpResponse);
+  rpc SetAgentDraftPresence(SetAgentDraftPresenceRequest) returns (SetAgentDraftPresenceResponse);
+  rpc AgentSettings(AgentSettingsRequest) returns (AgentSettingsResponse);
+  rpc DraftPrompt(DraftPromptRequest) returns (DraftPromptResponse);
+  rpc RestartDraftChat(RestartDraftChatRequest) returns (DraftPromptResponse);
+  rpc DraftLayers(DraftLayersRequest) returns (DraftLayersResponse);
+  rpc SaveDraft(SaveDraftRequest) returns (SaveDraftResponse);
+  rpc StopWaiting(StopWaitingRequest) returns (SaveDraftResponse);
+  rpc ProposeDraftChanges(ProposeDraftChangesRequest) returns (AgentDraftProposal);
+  rpc DecideProposal(DecideProposalRequest) returns (AgentDraftProposal);
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
   rpc Identity(IdentityRequest) returns (IdentityResponse);

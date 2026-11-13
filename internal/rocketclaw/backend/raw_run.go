@@ -268,7 +268,7 @@ func prepareRocketCode(locked *config.LockedConfig, agent string, logger *slog.L
 		return nil, harness.Agents{}, harness.Skills{}, nil, fmt.Errorf("open workspace root: %w", err)
 	}
 
-	agents, skills, err := loadRocketCodeDefinitionsIn(root, locked, cfg.RuntimeDirName(), mode)
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, locked, cfg.RuntimeDirName(), mode, nil)
 	if err != nil {
 		_ = root.Close()
 		return nil, harness.Agents{}, harness.Skills{}, nil, fmt.Errorf("open workspace agent and skills: %w", err)

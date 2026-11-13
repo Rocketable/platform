@@ -1,7 +1,7 @@
 import { captureException } from "@sentry/react";
 import { hashKey, type QueryKey } from "@tanstack/react-query";
 import { server, serverURL } from "./navigation";
-import type { AgentChoices, AttentionAction, ChatOrigin, ConfigView, CronJob, HistoryView, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TopShelf, TranscriptEvent, VoiceSettings, Workflow } from "./types";
+import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TopShelf, TranscriptEvent, VoiceSettings, Workflow } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -93,6 +93,12 @@ export const queries = {
   cronJobs: () => ({ queryKey: ["cronJobs"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ jobs: CronJob[] }>("ListCronJobs", {}, signal)).jobs }),
   pages: () => ({ queryKey: ["pages"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ pages?: PageEntry[] }>("ListPages", {}, signal)).pages ?? [] }),
   config: () => ({ queryKey: ["config"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ config: ConfigView }>("ListConfig", {}, signal)).config }),
+  // Every agent draft, newest first, and the starter agents a draft can begin from.
+  agentDrafts: () => ({ queryKey: ["agentDrafts"], queryFn: ({ signal }: { signal?: AbortSignal }) => rpc<{ drafts: AgentDraft[]; templates: string[] }>("ListAgentDrafts", {}, signal) }),
+  // The help for every setting an easy or advanced agent allows, in agent-file order; it changes only with the server.
+  agentSettings: (mode: string) => ({ queryKey: ["agentSettings", mode], staleTime: Infinity, queryFn: async ({ signal }: { signal?: AbortSignal }) => (await rpc<{ settings: AgentSettingHelp[] }>("AgentSettings", { mode }, signal)).settings }),
+  // What saving a draft's variant to destination would do, read again at each draft revision.
+  draftLayers: ({ revision, ...input }: { id: string; variant: string; destination: string; revision: string }) => ({ queryKey: ["draftLayers", input, revision], queryFn: ({ signal }: { signal?: AbortSignal }) => rpc<DraftLayers>("DraftLayers", input, signal) }),
   history: (input: { id: string; sourceConversationId?: string; revision?: string; limit?: number; before?: string; from?: string }) => ({ queryKey: ["history", input], queryFn: async ({ signal }: { signal?: AbortSignal }): Promise<HistoryView> => {
     const body = await rpc<Omit<HistoryView, "origin"> & { origin: string }>("History", input, signal);
     return { ...body, origin: body.origin ? JSON.parse(body.origin) as ChatOrigin : undefined };
@@ -118,6 +124,22 @@ export const mutations = {
   reorderQueue: (input: { id: string; itemIds: string[] }) => rpc("ReorderQueue", input),
   moveToBackground: (input: { conversationId: string }) => rpc("MoveToBackground", input),
   stopBackgroundJob: (input: { conversationId: string; jobId: string }) => rpc("StopBackgroundJob", input),
+  // A draft starts blank in mode, from the starter agent template, or with copy as a copy of the agent name.
+  createAgentDraft: (input: { name: string; mode?: string; template?: string; copy?: boolean }) => rpc<AgentDraft>("CreateAgentDraft", input),
+  applyAgentDraftOp: (input: { id: string; op: AgentDraftOp }) => rpc<{ revision: string; invalidLine: number }>("ApplyAgentDraftOp", input),
+  setAgentDraftPresence: (input: { id: string; presence: AgentDraftPresence }) => rpc("SetAgentDraftPresence", input),
+  // A test message to the draft's test chat; a restart gives it a new chat, then sends replay's texts in order.
+  draftPrompt: (input: { id: string; text: string }) => rpc<DraftPromptResponse>("DraftPrompt", input),
+  restartDraftChat: (input: { id: string; replay: string[]; replayEarlier?: boolean }) => rpc<DraftPromptResponse>("RestartDraftChat", input),
+  // Saves variant to destination, "workspace" or an overlay's spec. reviewed says the caller reviewed the destination's
+  // file reviewedFile, left out when it had none.
+  saveDraft: (input: { id: string; variant: string; destination: string; pullRequest?: boolean; reviewed?: boolean; reviewedFile?: string }) => rpc<SaveDraftResponse>("SaveDraft", input),
+  stopWaiting: (input: { id: string }) => rpc<SaveDraftResponse>("StopWaiting", input),
+  // Asks the assistant for a suggestion on the draft, with the test answer of variant it points at, if any.
+  proposeDraftChanges: (input: { id: string; request: string; answer?: string; variant?: string }) => rpc<AgentDraftProposal>("ProposeDraftChanges", input),
+  decideProposal: (input: { id: string; proposalId: string; accept: boolean }) => rpc<AgentDraftProposal>("DecideProposal", input),
+  // One small request to a model as provider/model#effort: the provider's error text, or none and how long it took.
+  testModel: (input: { model: string }) => rpc<{ error?: string; elapsedMs?: string }>("TestModel", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
   voiceSettings: (input: { action: "UPDATE"; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
   tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; topShelf?: TopShelf; attention?: { paths: string[]; action: AttentionAction; until?: string }; autoPark?: boolean }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),

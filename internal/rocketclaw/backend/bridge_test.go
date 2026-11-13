@@ -1981,7 +1981,7 @@ Prompt
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	agents, skills, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent, nil)
 	require.NoError(t, err)
 
 	resolver := newModelResolver(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", Auth: "api_key"}}, slog.New(slog.DiscardHandler))
@@ -3566,6 +3566,26 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 
 	assert.Equal(t, 1, metadataEntries)
 	assert.Len(t, entries, 4, "only the metadata prompt and three turns belong in history")
+
+	// A real External MCP message's input id is its turn's; only a draft test message brings its own.
+	var inputIDs []string
+
+	for i := range entries {
+		for _, raw := range entries[i].Entry.ReplayInput {
+			var item struct {
+				Role    string `json:"role"`
+				InputID string `json:"input_id"`
+			}
+
+			require.NoError(t, json.Unmarshal(raw, &item))
+
+			if item.Role == "user" {
+				inputIDs = append(inputIDs, item.InputID)
+			}
+		}
+	}
+
+	assert.Equal(t, []string{"turn-1/initial", "turn-2/initial", "turn-3/initial"}, inputIDs)
 
 	binding, found, err := service.ExternalMCPSession("public-1")
 	require.NoError(t, err)

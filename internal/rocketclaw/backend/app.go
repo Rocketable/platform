@@ -179,6 +179,10 @@ func (s *lockedRun) Run(runCtx context.Context) error {
 		logger.Warn("sweep expired retained execute results", "error", err)
 	}
 
+	if err := rocketcodeSessions.resetSavingAgentDrafts(runCtx); err != nil {
+		return err
+	}
+
 	if err := skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, logger); err != nil {
 		return fmt.Errorf("sync rocketclaw skeleton: %w", err)
 	}

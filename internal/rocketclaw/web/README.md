@@ -172,6 +172,91 @@ show only the turn number. Side-by-side alignment applies when both columns are 
 edit files or repeat external effects under its own permissions. Its replies and
 attachments stay in comparison and do not create extra connector deliveries.
 
+## Agent editor
+
+`/agents/new` creates an agent, and `/agents/drafts/<id>` opens one of the
+drafts the server stores (see "Agent Draft" in `CONCEPTS.md`). The page's address
+is the draft's link: **Share** copies it, and any teammate without space limits
+who opens it edits the same draft. People limited to spaces get a plain refusal
+and a link back to the read-only Agents page instead, because a draft can give
+itself any permission and its test chats run real tools; the server refuses them
+every editor call too.
+
+The Agents page has **Create New Agent** and, on each agent, **Edit**, which
+reopens the newest draft of that agent still in editing, or else starts one as a
+copy. People limited to spaces do not see either button.
+
+The page is a workbench: settings on the left, the test chat in the middle, and
+the assistant on the right, under a header with the draft's save state, **Save…**,
+**Easy** and **Advanced**, **Drafts**, the people who have the draft open, and
+**Share**. Easy or advanced is the whole draft's: switching it converts every
+variant at once, for everyone who has the draft open. **Drafts** lists every draft
+on the server with its save state, mode and variant count, and **Start a new
+agent**.
+
+Before there is a draft, the settings pane asks "Easy agent or advanced agent?"
+first, then how to start: **Describe it** (name the agent, then describe it to the
+assistant), **Template** (a starter agent, which brings its own settings,
+instructions and mode), **Copy an agent** (a new agent, named after the original
+with `-copy` unless you name it, leaving the original as it is), or **Blank**. The
+copy list also offers **Edit** on each agent.
+
+**Form, File and History.** The settings pane edits one variant at a time. The
+Form shows required, common and changed settings with a plain explanation each,
+and folds the rest into groups that say their defaults in words. The File tab is
+the same variant as its agent file. Everyone's edits in either tab, and their
+cursors, appear for everyone else as they type. A setting takes the last write;
+instructions typed at the same time keep everyone's text. File-tab YAML that does
+not parse yet stays with the person typing it until it does. History lists every
+change by person and setting, and **Restore** brings an earlier version back as a
+new change.
+
+**Model picker.** A model setting offers only the providers this RocketClaw has
+configured. For a provider that models.dev knows by the same name, the browser
+fetches models.dev when the picker is first used and suggests models with their
+price, context size and effort levels, each linking to slopalytics to compare. Any
+model name can be typed. **Test** sends one small paid request to that model, only
+when clicked, and says "Works" or shows the provider's error.
+
+**Test chat.** One message goes to every variant, and to the live agent when
+editing an existing one, and the answers line up side by side under it. Each
+answer names the version that gave it and fades once its column changes. The page
+warns that test messages run real tools once per column. **Restart** starts an
+empty chat; **Restart & replay** sends the earlier messages again. **Test as
+External MCP** makes every column answer as an External MCP call, with a caller
+name and metadata pairs; it is only for `sticky: off` agents. Keys sent with the
+first message stay fixed for the chat, so changing one offers **Restart with new
+metadata**, and a key added later goes with that message only. When the
+instructions read `$ROCKETCLAW_METADATA_*`, the page suggests this mode first.
+
+**Assistant.** Describe what to change, or press **Fix this** on a test answer.
+The assistant answers with a card of suggested changes, each with a reason, and
+marks the ones that change what the agent may do. The Form and the File preview an
+open card. Anyone on the draft can accept or reject it; the assistant never saves
+and never runs tools.
+
+**Saving.** **Save…** saves one variant to one place: the workspace's `agents/`
+folder or a Git overlay from `rocketclaw.json`. The dialog lists the layers with
+the one that wins on top, says which provides the agent now, and warns when a
+later layer hides the destination or when the save replaces a built-in or overlay
+agent whose updates then stop reaching this workspace. It shows the file the save
+writes against the one there now: settings go in a standard order and comments
+are dropped. For an overlay it asks every time whether to push to its branch or
+open a pull request. If the destination file changed since the draft began, a
+review lists each changed setting with **Keep mine** or **Take theirs**, flags the
+ones both sides changed, and offers the file's instruction changes; then it saves
+again. A pull request leaves the draft "Waiting for merge", with a link to it and
+**Stop waiting**, until it merges and the agent goes live. Stop waiting, or the
+next edit, returns the draft to editing, and the page notes that the pull request
+is still open on GitHub; a pull request `gh` reports closed returns it too, with a
+note that it was closed. Settings that do not load stop the save, and the Form
+says why under each one.
+
+An open page follows the draft's stream, `/stream?id=draft:<id>`, which only wakes
+it: the page then reads what changed since its revision. It also tells the server
+every 10 seconds that it is open, since the server lists only editors seen in the
+last 30 seconds.
+
 ## Revert, Undo, and Redo
 
 Recorded user messages in Web chats, Slack threads, and shadows have a **Revert

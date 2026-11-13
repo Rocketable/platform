@@ -39,6 +39,9 @@ type Config struct {
 	OpenAI             OpenAIConfig            `json:"openai"`
 	Providers          map[string]OpenAIConfig `json:"providers,omitempty"`
 	AutoApproverModel  string                  `json:"auto_approver_model"`
+	// AgentEditorModel is the model the agent editor's assistant runs on, as an agent file names one; main's
+	// model when empty.
+	AgentEditorModel string `json:"agent_editor_model,omitempty"`
 	// Decision configures decision-model providers by name, openai or typesafe.
 	Decision map[DecisionProvider]DecisionProviderConfig `json:"decision,omitempty"`
 	// AutoApproverDecision is the decision model the built-in guardian's reviews ask first.

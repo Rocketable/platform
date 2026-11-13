@@ -353,6 +353,84 @@ func TestTailnetIdentity(t *testing.T) {
 	}
 }
 
+// The agent editor's Test button sends one small request to the chosen model and answers in the provider's
+// words; people limited to spaces cannot use it.
+func TestTestModel(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model           string `json:"model"`
+			MaxOutputTokens int64  `json:"max_output_tokens"`
+			Reasoning       struct {
+				Effort string `json:"effort"`
+			} `json:"reasoning"`
+		}
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Equal(t, int64(16), body.MaxOutputTokens)
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if body.Model != "known" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":{"message":"The model 'nope' does not exist","type":"invalid_request_error","code":"model_not_found"}}`)
+
+			return
+		}
+
+		assert.Equal(t, "low", body.Reasoning.Effort)
+		time.Sleep(10 * time.Millisecond)
+
+		_, _ = io.WriteString(w, `{"id":"r","object":"response","created_at":0,"status":"completed","model":"known","output":[]}`)
+	}))
+	t.Cleanup(provider.Close)
+
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Permissions: map[string][]string{"alice@example.com": {"Ops"}}, Providers: map[string]config.OpenAIConfig{
+		"work": {APIKey: "key", APIBaseURL: provider.URL, Auth: "api_key"},
+		"chat": {Auth: "chatgpt"},
+	}}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+	require.NoError(t, os.MkdirAll(filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents"), 0o755))
+
+	listener, err := net.Listen("unix", testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+	New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() { transport.Stop(); require.NoError(t, serving.Wait()) })
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	alice := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-tailnet-login-bin", "alice@example.com", "rocketclaw-tailnet-name-bin", "Alice"))
+	_, err = invoke[TestModelResponse](alice, connection, "TestModel", &TestModelRequest{Model: "work/known#low"})
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.ErrorContains(t, err, "people limited to spaces cannot use the agent editor")
+
+	bob := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-tailnet-login-bin", "bob@example.com", "rocketclaw-tailnet-name-bin", "Bob"))
+	works, err := invoke[TestModelResponse](bob, connection, "TestModel", &TestModelRequest{Model: "work/known#low"})
+	require.NoError(t, err)
+	require.Empty(t, works.Error)
+	require.GreaterOrEqual(t, works.ElapsedMs, int64(10))
+
+	for model, want := range map[string]string{
+		"work/nope":   "The model 'nope' does not exist",
+		"chat/gpt-x":  `create ChatGPT OAuth client for provider "chat": read OpenAI OAuth token: open ` + filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "auth.json") + ": no such file or directory",
+		"other/gpt-x": `unknown provider "other"`,
+	} {
+		failed, err := invoke[TestModelResponse](bob, connection, "TestModel", &TestModelRequest{Model: model})
+		require.NoError(t, err)
+		require.True(t, proto.Equal(&TestModelResponse{Error: want}, failed), "%s: %v", model, failed)
+	}
+}
+
 // A RocketClaw page this server trusts drives it as the person on the connection; every other page stays
 // cross-site, even one served from this tailnet, which could otherwise act as whoever opens it.
 func TestTailnetCrossSitePages(t *testing.T) {
@@ -2035,6 +2113,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	cfg.Logging.Level, cfg.AutoApproverModel = "info", "gpt-6.1-sol"
 	cfg.MCPExternal.Enabled, cfg.Instrumentation.Enabled = true, true
 	cfg.OpenAI.APIKey, cfg.OpenAI.Auth = "secret-provider-key", "secret-auth-path"
+	cfg.Providers = map[string]config.OpenAIConfig{"work": {APIKey: "secret-work-key", APIBaseURL: "https://secret-work"}, "anthropic": {APIKey: "secret-anthropic-key"}}
 	cfg.Slack.BotToken, cfg.Slack.AppToken = "secret-bot-token", "secret-app-token"
 	cfg.Instrumentation.APIKey = "secret-telemetry-key"
 	cfg.Environment = []string{"TOKEN=secret-environment"}
@@ -2047,7 +2126,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	view, err := invoke[ListConfigResponse](ctx, connection, "ListConfig", &ListConfigRequest{})
 	require.NoError(t, err)
 
-	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-6.1-sol", InstrumentationEnabled: true, McpExternal: true, TailscaleUser: "alice"}
+	wantConfig := &ConfigView{Workspace: cfg.Workspace, Overlays: []string{"local-overlay"}, SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main"}}}, McpServers: []string{"alpha", "zeta"}, LoggingLevel: "info", AutoApproverModel: "gpt-6.1-sol", InstrumentationEnabled: true, McpExternal: true, TailscaleUser: "alice", Providers: []string{"anthropic", "work", "openai"}}
 	require.True(t, proto.Equal(wantConfig, view.Config), "unexpected config view: %v", view.Config)
 	encodedView, err := proto.Marshal(view)
 	require.NoError(t, err)

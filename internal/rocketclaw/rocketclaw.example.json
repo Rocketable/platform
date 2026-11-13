@@ -94,6 +94,7 @@
     }
   },
   "auto_approver_model": "",
+  "agent_editor_model": "",
   "instrumentation": {
     "enabled": false,
     "collector_endpoint": "http://localhost:6006",
