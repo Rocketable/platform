@@ -13,6 +13,105 @@ const route = (id: string) => `/oc/${encode(id)}`;
 // The box server's own address, which RocketClaw only ever sends as an origin.
 const box = "http://box.test:4096";
 
+test("thread PR pane reads with the OpenCode host's gh login beside the real embedded conversation", async () => {
+  const { chromium: engine } = await import(playwright!);
+  const { web, release, base } = start();
+  release();
+  fake.sessions.get("ses_child")!.location = { directory: "/repo/child" };
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  const commands: { command: string; cwd: string }[] = [], removed: string[] = [], prompts: string[] = [];
+  const outputs = new Map<string, string>();
+  let checkoutUnavailable = true;
+  let directory = "/repo";
+  let holdMetadata = false;
+  const pendingMetadata = Promise.withResolvers<void>(), releaseMetadata = Promise.withResolvers<void>();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(error.message));
+    page.on("request", (request: any) => { if (request.method() === "POST" && /\/session\/[^/]+\/(?:prompt|message|shell)(?:\?|$)/.test(request.url())) prompts.push(request.url()); });
+    await page.route("**/oc/box/api/**", async (request: any) => {
+      const url = new URL(request.request().url());
+      if (!url.searchParams.has("pull-request-discovery")) return request.continue();
+      if (url.pathname.endsWith("/message")) return request.fulfill({ json: { data: url.pathname.includes("/ses_a/") ? [{ type: "assistant", content: [
+        { type: "text", text: "https://github.com/sample/fixture-repository-marker/pull/99" },
+        { type: "tool", name: "shell", state: { status: "completed", input: { command: "gh pr create --title 'Sample' --body 'Sample'" }, metadata: { exit: 0 }, content: [{ type: "text", text: "https://github.com/sample/fixture-repository-marker/pull/7" }] } },
+      ] }] : [], cursor: {} } });
+      if (url.pathname.includes("/session/")) return request.fulfill({ json: { data: { location: { directory: url.pathname.endsWith("/ses_child") ? "/repo/child" : directory }, time: { created: 1 } } } });
+      if (request.request().method() === "POST") {
+        const body = request.request().postDataJSON(); commands.push(body);
+        const command = body.command as string;
+        const output = command.includes("gh pr view") ? checkoutUnavailable ? "could not determine current branch" : JSON.stringify({ url: `https://github.com/sample/fixture-repository-marker/pull/${body.cwd === "/repo/child" ? 8 : 7}`, headRefName: "feature/pr-pane", mergedAt: null, closedAt: null })
+          : command.includes("/files?") ? JSON.stringify([{ filename: "private-file-marker.ts", status: "modified", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+private-patch-marker <script>text only</script>" }])
+          : JSON.stringify({ title: command.includes("/pulls/8") ? "Second thread PR marker" : "Remote private PR marker", body: "Private description marker", state: "open", draft: true, merged: false, changed_files: 1, user: { login: "demo-author" }, updated_at: "2026-11-12T12:00:00Z", additions: 1, deletions: 0, head: { sha: "head", ref: "feature/pr-reader" }, base: { sha: "base", ref: "main" } });
+        const id = `sh_pr_${outputs.size}`; outputs.set(id, output);
+        if (holdMetadata && body.cwd === "/repo/moved" && command.endsWith("/pulls/7'")) { pendingMetadata.resolve(); await releaseMetadata.promise; }
+        return request.fulfill({ json: { data: { id, status: "exited", exit: command.includes("gh pr view") && checkoutUnavailable ? 1 : 0 } } });
+      }
+      const id = url.pathname.split("/").find((part) => part.startsWith("sh_pr_"))!;
+      if (request.request().method() === "DELETE") { removed.push(id); return request.fulfill({ status: 204 }); }
+      const output = outputs.get(id)!;
+      return request.fulfill({ json: { data: { output, cursor: output.length, size: output.length, truncated: false } } });
+    });
+    await page.goto(`${base}${route("opencode:box:ses_a")}`);
+    const view = page.locator("main [data-oc-view]");
+    await view.getByText("answer in ses_a", { exact: true }).waitFor();
+    const draft = view.locator('[contenteditable="true"]').first();
+    await draft.fill("OpenCode draft before reading a PR");
+    expect(await page.locator("#bottom-navigation").getByRole("button").count()).toBe(6);
+    await page.getByRole("button", { name: "Tab actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
+    const pane = page.getByRole("complementary", { name: "Pull requests", exact: true });
+    await pane.getByText("Remote private PR marker", { exact: true }).waitFor();
+    await pane.getByText("Created in this thread", { exact: true }).waitFor();
+    await pane.getByRole("alert").getByText("Could not read the current checkout's pull request using this OpenCode server's gh login.", { exact: true }).waitFor();
+    expect(await pane.getByLabel("Personal read token").count()).toBe(0);
+    expect(await pane.getByRole("combobox", { name: "Thread pull request" }).textContent()).toContain("#7");
+    expect(await pane.textContent()).not.toContain("#99");
+    await draft.fill("OpenCode draft edited beside the PR");
+    await pane.getByRole("button", { name: "Load files", exact: true }).click();
+    await pane.getByRole("treeitem", { name: "private-file-marker.ts", exact: true }).click();
+    await pane.getByText("private-patch-marker <script>text only</script>", { exact: true }).waitFor();
+    const resize = pane.getByRole("separator", { name: "Resize delegation panel", exact: true });
+    await resize.focus();
+    for (let step = 0; step < 16; step++) await resize.press("ArrowLeft");
+    const patchBox = (await pane.getByRole("region", { name: "File patch", exact: true }).boundingBox())!;
+    const treeBox = (await pane.getByRole("region", { name: "Changed files", exact: true }).boundingBox())!;
+    expect(treeBox.x).toBeGreaterThanOrEqual(patchBox.x + patchBox.width - 1);
+    checkoutUnavailable = false;
+    directory = "/repo/moved";
+    holdMetadata = true;
+    await pane.getByRole("button", { name: "Find again", exact: true }).click();
+    await pendingMetadata.promise;
+    expect(await pane.getByText("Remote private PR marker", { exact: true }).count()).toBe(0);
+    expect(await pane.getByRole("treeitem").count()).toBe(0);
+    releaseMetadata.resolve();
+    await pane.getByText("0 of 1 files loaded", { exact: true }).waitFor();
+    expect(await pane.getByRole("region", { name: "File patch", exact: true }).count()).toBe(0);
+    // Preserve the open pane across navigation: it must use the new thread's query and reader.
+    await page.evaluate((href: string) => { history.pushState(null, "", href); window.dispatchEvent(new PopStateEvent("popstate")); }, `${route("opencode:box:ses_child")}?pullRequests=1`);
+    await pane.getByText("Second thread PR marker", { exact: true }).waitFor();
+    expect(await pane.getByText("Remote private PR marker", { exact: true }).count()).toBe(0);
+    expect(await pane.getByRole("region", { name: "File patch", exact: true }).count()).toBe(0);
+    await pane.getByText("Current checkout · feature/pr-pane", { exact: true }).waitFor();
+    await page.evaluate((href: string) => { history.pushState(null, "", href); window.dispatchEvent(new PopStateEvent("popstate")); }, `${route(`opencode:box:${linked}`)}?pullRequests=1`);
+    await pane.getByText("Remote private PR marker", { exact: true }).waitFor();
+    await pane.getByText("Current checkout · feature/pr-pane", { exact: true }).waitFor();
+    expect(await pane.getByText("Created in this thread", { exact: true }).count()).toBe(0);
+    await page.getByRole("tab", { name: "Alpha work", exact: true }).click();
+    await view.getByText("answer in ses_a", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Tab actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
+    await pane.getByText("Created in this thread", { exact: true }).waitFor();
+    await pane.getByRole("button", { name: "Close pull requests", exact: true }).click();
+    expect(await draft.textContent()).toBe("OpenCode draft edited beside the PR");
+    expect(commands.every(({ cwd, command }) => ["/repo", "/repo/child", "/repo/moved"].includes(cwd) && /^GH_PROMPT_DISABLED=1 gh (?:pr view --json|api --hostname github.com --method GET)/.test(command))).toBe(true);
+    expect(removed).toHaveLength(commands.length);
+    expect(prompts).toEqual([]);
+    expect(errors).toEqual([]);
+  } finally { releaseMetadata.resolve(); await browser.close(); web.stop(true); }
+}, 30_000);
+
 // A RocketClaw Web serving the built view at /oc-ui/ and the fake OpenCode server behind /oc/box/api/.
 function start(shelf?: TopShelf) {
   reset();
@@ -625,7 +724,12 @@ test("a shelf row offers its server's attention items, one of an offline server 
       return items;
     };
     await shelf.getByRole("tab", { name: "Alpha work", exact: true }).waitFor();
-    expect(await menu(shelf.getByRole("tab", { name: "Alpha work", exact: true }))).toEqual(["Mark as unread", "Park", "Auto-park when I send", "Remove from Top Shelf"]);
+    expect(await menu(shelf.getByRole("tab", { name: "Alpha work", exact: true }))).toEqual(["Pull requests", "Mark as unread", "Park", "Auto-park when I send", "Remove from Top Shelf"]);
+    await shelf.getByRole("button", { name: "Tab actions", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
+    await page.getByRole("complementary", { name: "Pull requests", exact: true }).waitFor();
+    expect(new URL(page.url()).pathname).toBe(route("opencode:box:ses_a"));
+    await page.getByRole("button", { name: "Close pull requests", exact: true }).click();
     await shelf.locator('[role="tab"][aria-label="Cron"][aria-description="Top Shelf, work, Server offline"]').waitFor();
     expect(await shelf.locator('[data-tab="/cron"]').evaluate((node: HTMLElement) => getComputedStyle(node).opacity)).toBe("0.6");
     await offline.hover();

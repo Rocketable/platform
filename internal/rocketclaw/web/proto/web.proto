@@ -428,6 +428,8 @@ message CodeModeCall {
   string outcome = 5;
   string reason = 6;
   string review_turn = 7;
+  // The actual call's existing bounded output summary; absent from permission-review plans.
+  string summary = 8;
 }
 
 // Attachment download frames carry at most 256 KiB. History carries metadata only.

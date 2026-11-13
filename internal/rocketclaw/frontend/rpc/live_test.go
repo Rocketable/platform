@@ -1297,13 +1297,16 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	}
 
 	require.Len(t, calls, 5)
+	encoded, err := json.Marshal(calls["new"].GetCodeModeCalls())
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"summary":"one"`, "actual tool output reaches PR discovery; permission-review plans carry no summary")
 
 	for id, want := range map[string]*TranscriptEvent{
 		// Each reviewed call names the turn its review saved the approver's answer under.
 		"new": {ScriptReason: "script reason", ScriptOutcome: "allow", ReviewTurn: harness.ReviewTurn("turn/call/new"), CodeModeCalls: []*CodeModeCall{
-			{Name: "bash", Arguments: `{"command":"printf one"}`, Status: "ok"},
-			{Name: "read", Arguments: `{"filePath":"a.txt"}`, Status: "ok"},
-			{Name: "bash", Arguments: `{"command":"PARSED"}`, Status: "denied", Outcome: "deny", Reason: "checked", ReviewTurn: harness.ReviewTurn("turn/call/new/host/2")},
+			{Name: "bash", Arguments: `{"command":"printf one"}`, Status: "ok", Summary: "one"},
+			{Name: "read", Arguments: `{"filePath":"a.txt"}`, Status: "ok", Summary: "(End of file - total 2 lines)"},
+			{Name: "bash", Arguments: `{"command":"PARSED"}`, Status: "denied", Summary: "denied", Outcome: "deny", Reason: "checked", ReviewTurn: harness.ReviewTurn("turn/call/new/host/2")},
 		}},
 		"old": {ScriptReason: "script ok", ScriptOutcome: "allow", ReviewTurn: "old-0", CodeModeCalls: []*CodeModeCall{
 			{Name: "bash", Arguments: `{"command":"ls -la"}`, Outcome: "allow", Reason: "ls is safe", ReviewTurn: "old-1"},
