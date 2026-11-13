@@ -71,6 +71,13 @@ type Server struct {
 	// naming one it holds receives only the rows changed since.
 	listingsMu sync.Mutex
 	listings   map[string][]sessionListing
+
+	// typingWatchers holds the open typing watches by conversation ID, each watch's events mapped to the username of
+	// the person watching. typingNewest holds, for each conversation in typingWatchers, the newest report number it
+	// took from each browser tab, by username and tab.
+	typingMu       sync.Mutex
+	typingWatchers map[string]map[chan *TypingEvent]string
+	typingNewest   map[string]map[[2]string]uint32
 }
 
 // sessionListing is one complete session listing: its version, each row's fingerprint by ID, and each tab
@@ -117,7 +124,7 @@ type CronJobs interface {
 // New builds the Web handlers. The host must restrict RPC access to the trusted Web proxy:
 // the metadata carries the browser IP, not an independently authenticated network peer.
 func New(core frontend.Backend, sessions *backend.SessionService, cfg *config.LockedConfig, channels ChannelAgentChoices, cronjobs CronJobs) *Server {
-	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, runs: map[string][]*searchRun{}, voiceCalls: map[string]*context.CancelCauseFunc{}, listings: map[string][]sessionListing{}}
+	return &Server{backend: core, sessions: sessions, cfg: cfg, channels: channels, cronjobs: cronjobs, runs: map[string][]*searchRun{}, voiceCalls: map[string]*context.CancelCauseFunc{}, listings: map[string][]sessionListing{}, typingWatchers: map[string]map[chan *TypingEvent]string{}, typingNewest: map[string]map[[2]string]uint32{}}
 }
 
 // ListSessionEntries returns ordered entry identifiers and metadata.

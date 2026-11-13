@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// pageCall answers GetPage, ListPages, Tabs and Board, and any other request as Protocol.
+// pageCall answers GetPage, ListPages, Tabs, Board and ReportTyping, and any other request as Protocol.
 func (s *Server) pageCall(ctx context.Context, request any) (any, error) {
 	switch request := request.(type) {
 	case *PageRequest:
@@ -22,6 +22,8 @@ func (s *Server) pageCall(ctx context.Context, request any) (any, error) {
 		return s.tabs(ctx, request)
 	case *BoardRequest:
 		return s.board(ctx, request)
+	case *ReportTypingRequest:
+		return s.reportTyping(ctx, request)
 	default:
 		return &ProtocolResponse{ProtoSha256: protoSHA256}, nil
 	}

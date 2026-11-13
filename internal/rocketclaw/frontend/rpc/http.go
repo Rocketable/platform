@@ -50,7 +50,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, pos
 		mux.HandleFunc(route, servePage(connection, app))
 	}
 
-	for method := range strings.FieldsSeq("Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions Board SlackNames Handoff ListAgents CreateSession ListConfig ListSkills ListWorkflows UpdateSession ListCronJobs RunCronJob GetPage ListPages ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs") {
+	for method := range strings.FieldsSeq("Protocol Identity Reload Prompt History ForkSession StageRevert ClearRevert SearchMessages SearchSessions Board SlackNames Handoff ListAgents CreateSession ListConfig ListSkills ListWorkflows UpdateSession ListCronJobs RunCronJob GetPage ListPages ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem EditQueueItem ReorderQueue MoveToBackground StopBackgroundJob AnswerQuestion VoiceSettings Tabs ReportTyping") {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 		responseType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Output().FullName())
@@ -79,18 +79,18 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, pos
 		})
 	}
 
-	for _, route := range []string{"GET /api/ListSessions", "GET /stream", "GET /api/DownloadAttachment", "POST /api/UploadAttachment", "POST /api/Voice"} {
+	for _, route := range []string{"GET /api/ListSessions", "GET /stream", "GET /typing", "GET /api/DownloadAttachment", "POST /api/UploadAttachment", "POST /api/Voice"} {
 		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
 			method := strings.TrimPrefix(r.URL.Path, "/api/")
 
 			var (
-				request  proto.Message = &ListSessionsRequest{}
+				request  proto.Message
 				response proto.Message = &ListSessionsResponse{}
 				required string
 			)
 
 			switch method {
-			case "ListSessions":
+			default: // ListSessions
 				// Recording views, which clears marks, and waking timers take a same-origin poll, by the rule
 				// protection holds unsafe methods to; it lets every GET through.
 				post := *r
@@ -104,6 +104,8 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, pos
 				request = list
 			case "/stream":
 				method, request, response, required = "Join", &JoinRequest{Id: r.URL.Query().Get("id")}, &ConversationChange{}, "id"
+			case "/typing":
+				method, request, response, required = "WatchTyping", &WatchTypingRequest{Id: r.URL.Query().Get("id")}, &TypingEvent{}, "id"
 			case "DownloadAttachment", "UploadAttachment":
 				request = &Attachment{ConversationId: r.URL.Query().Get("conversationId"), Id: r.URL.Query().Get("id"), Name: r.URL.Query().Get("name")}
 				response, required = &Attachment{}, map[string]string{"DownloadAttachment": "conversationId id", "UploadAttachment": "conversationId name"}[method]
@@ -451,7 +453,7 @@ func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, me
 	switch method {
 	case "Prompt":
 		required = "id text"
-	case "History", "ForkSession", "StageRevert", "ClearRevert", "Handoff", "UpdateSession", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue":
+	case "History", "ForkSession", "StageRevert", "ClearRevert", "Handoff", "UpdateSession", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "ReportTyping":
 		required = "id"
 	case "SearchMessages", "SearchSessions":
 		required = "query"

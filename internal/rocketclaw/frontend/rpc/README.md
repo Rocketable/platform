@@ -30,6 +30,22 @@ entry when that entry is not returned. SearchSessions applies the same origin ru
 when it matches the query against every chat the caller may see; cron runs and
 private External MCP conversations never match.
 
+`WatchTyping` (`GET /typing?id=`) and `ReportTyping` (`POST /api/ReportTyping`) relay
+who is typing in a chat. Unlike Join they are not content-free: a `TypingEvent`
+carries the typist's display name, or their login when it is blank as on their
+prompts, and whether they are typing. A
+report carries no draft text; the server takes the typist from the caller's
+identity. It sends the event to the chat's other watchers, skipping the typist's own
+watches, and drops it for a watch whose buffer is full. A report names its browser
+`tab` and numbers it `seq` from 1; while a chat has watches the server keeps the newest
+number from each person's tab and drops a report that arrives after a later one, so a
+late "typing" never undoes a "stopped". A chat nobody watches keeps nothing, and its
+reports go nowhere. A watch opens with an empty event once it listens. The relay lives
+in memory only: no database, timers or stored typists. Both calls admit a chat by the
+rules for viewing it; an `opencode:` session needs no stored row but is closed to
+people limited to spaces. `docs/verification/typing` holds a PlusCal model of the
+relay.
+
 A Search page's `SearchSessions` names its `tab` and `search_id`, and its search
 runs on the server past the request. The same query joins the run or takes its
 finished answer, which only one request receives; another query cancels and

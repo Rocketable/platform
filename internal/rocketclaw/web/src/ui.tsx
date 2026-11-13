@@ -28,6 +28,7 @@ import { CodeBlock, InlineText, MarkdownText, OUTPUT_KEY, TranscriptText, cleanT
 import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { ThreadPRContent, ThreadPRWatch } from "./thread-pr-panel";
+import { reportTyping, TypingPill } from "./typing";
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -2822,6 +2823,10 @@ const SessionRowContent = memo(function SessionRowContent({ session, age = relat
 
 const remoteView = { route: "", shown: "", openPalette: () => {} };
 
+// OpenCode's composer is empty when its text holds only line breaks and zero-width spaces, as its own isEditorDomBlank
+// (oc/packages/app/src/composer/editor/dom.ts) decides; a mention pill's text counts.
+const blankDraft = (element: Element) => /^[\n\u200b]*$/.test(element.textContent!);
+
 // A remote session's link on its own server, for the session the open view shows, and that view's palette.
 // The link is OpenCode's own session route; the server asks whoever opens it to sign in.
 function remoteActions(id: string, origin: string, remoteSessionId: string) {
@@ -2849,7 +2854,15 @@ function RemoteSession({ id }: { id: string }) {
   const sessionID = rest.join(":");
   const configured = !!sidebar.remote?.servers[server];
   const offline = sidebar.rows.find((row) => row.id === id)?.offline;
-  const [reported, setReported] = useState(false);
+  // The session the view last reported for its route, which can be a subagent's; the route's own until it reports.
+  const [report, setReport] = useState({ route: "", shown: "" });
+  const reported = report.route !== "";
+  const typingId = `opencode:${server}:${report.route === sessionID ? report.shown : sessionID}`;
+  // A subagent's session takes no prompts, so the pill names who types in the tab's own session, its main one.
+  const mainId = `opencode:${server}:${sessionID}`;
+  const name = useServer();
+  // The composer that last took input, whose emptying by OpenCode's own code (a send of any kind) fires no input event.
+  const [composer, setComposer] = useState<Element>();
   const [failed, setFailed] = useState("");
   // Each retry loads the entry from a fresh URL, as browsers may keep a failed module load.
   const [retries, setRetries] = useState(0);
@@ -2869,7 +2882,21 @@ function RemoteSession({ id }: { id: string }) {
     create.mutate({ opencodeServer: server, directory, spaceId: tabs.state.space }, { onSettled: () => { creating.current = false; } });
   });
   const closeTab = useEffectEvent(() => tabs.deleted(rowPath({ id, kind: "REMOTE_OPENCODE" })));
-  const reportSession = useEffectEvent((other: string) => { remoteView.shown = other; setReported(true); });
+  const reportSession = useEffectEvent((other: string) => { remoteView.shown = other; setReport({ route: sessionID, shown: other }); });
+  const emptied = useEffectEvent(() => { if (blankDraft(composer!)) reportTyping(name, typingId, false); });
+  useEffect(() => {
+    if (!composer) return;
+    const observer = new MutationObserver(emptied);
+    observer.observe(composer, { subtree: true, characterData: true, childList: true });
+    return () => observer.disconnect();
+  }, [composer]);
+  // Only OpenCode's composer is typing, not its terminal or other fields.
+  const typed = (event: SyntheticEvent) => {
+    const target = event.target as Element;
+    if (!target.matches("[role=textbox][contenteditable]")) return;
+    reportTyping(name, typingId, !blankDraft(target));
+    setComposer(target);
+  };
   // One view per server: switching between its sessions' tabs moves the view, as OpenCode's own app moves between
   // sessions, so what OpenCode holds in memory carries over. Leaving for any other tab disposes it.
   const view = useRef<{ mounted: Mounted; sessionID: string }>(undefined);
@@ -2906,7 +2933,14 @@ function RemoteSession({ id }: { id: string }) {
   return <>
     {reported || failed ? null : <p role="status" className="p-4 text-sm text-muted-foreground">Loading…</p>}
     {failed || create.error ? <p role="alert" className="px-3 text-sm text-destructive">{failed || create.error?.message}{failed ? <> <button type="button" className="underline" onClick={() => { setFailed(""); setRetries((count) => count + 1); }}>Retry</button></> : null}</p> : null}
-    <div ref={container} className="flex min-h-0 w-full flex-1 flex-col" />
+    {/* The pill sits beside the view, over the view's own layers, below OpenCode's header: 48 px, or about 81 px of
+        tabs and location bar once OpenCode's 768 px breakpoint (oc/host/media.ts) finds the view narrow. OpenCode
+        measures the view's content box (oc/host/mount.tsx), inside the 1 px padding of oc/host/scope.css, so the
+        wrapper switches at 770 px. */}
+    <div className="@container relative flex min-h-0 w-full flex-1 flex-col">
+      <div ref={container} onInput={typed} className="isolate flex min-h-0 w-full flex-1 flex-col" />
+      <TypingPill server={name} id={mainId} shown top="top-22 @min-[770px]:top-16" main={typingId !== mainId} />
+    </div>
   </>;
 }
 
@@ -4113,6 +4147,7 @@ function TranscriptLog({
   children?: ReactNode;
 }) {
   const search = new URLSearchParams(useSearch());
+  const route = useRoute(), name = useServer();
   const selected = ["delegation", "skill"].some((panel) => search.has(panel)) ? undefined : shadows.find((binding) => binding.childConversationId === search.get("shadow")) ?? shadows[0];
   const wide = useMedia("(min-width: 64rem)");
   const mobileComparison = !!selected && !wide;
@@ -4177,6 +4212,8 @@ function TranscriptLog({
         <TranscriptBody conversationId={conversationId} working={working} terminal={terminal} origin={origin} hasSandboxed={hasSandboxed} movable={movable} refreshHistory={refreshHistory} turns={turns} rows={pairedRows} binding={selected} detail={detail} wide={wide} loading={loading} emptyMessage={emptyMessage} delegations={shadow.data?.delegations} />
       </div>
     </MessageScrollerViewport>
+    {/* Only the chat on screen watches; this transcript stays mounted, hidden, on other pages. */}
+    <TypingPill server={name} id={conversationId} shown={route.id === conversationId} />
     {turns.length > 0 ? (
       <nav aria-label="Conversation turns" className="group/rail absolute top-12 bottom-0 right-[6px] flex w-8 items-center justify-end py-3">
         <div role="group" aria-label="Message previews" className="absolute right-full top-1/2 hidden max-h-[calc(100%-1.5rem)] w-[min(20rem,calc(100vw-4rem))] -translate-y-1/2 overflow-y-auto overscroll-contain rounded-md border bg-popover p-1 text-popover-foreground shadow-lg group-hover/rail:block group-focus-within/rail:block">
@@ -4764,6 +4801,7 @@ async function sendComposer(input: {
     }
     // Prompt waits for the whole turn. Consume only this submission before waiting.
     draft.text = "";
+    reportTyping(name, input.sessionId, false);
     draft.files = [];
     draft.agent = "";
     dispatchedEdit = ++draft.edit;
@@ -4995,6 +5033,7 @@ function SessionComposer({
   const setText = (value: string) => {
     draft.text = value;
     draft.edit++;
+    reportTyping(name, id, value !== "");
     setTyped((count) => count + 1);
     const error = draft.persistenceError ?? "";
     void persistComposerDraft(draft)?.finally(() => { if (draft.persistenceError !== error) onDraftChange(); });

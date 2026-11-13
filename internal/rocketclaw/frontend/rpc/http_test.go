@@ -144,6 +144,7 @@ func TestHTTPBoundary(t *testing.T) {
 		{"AnswerQuestion", `{"conversationId":"chat"}`, "askId is required"},
 		{"Voice", `{"sdp":"offer"}`, "conversationId is required"},
 		{"Voice", `{"conversationId":"chat"}`, "sdp is required"},
+		{"ReportTyping", `{"typing":true}`, "id is required"},
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/"+tc.method, strings.NewReader(tc.body)))
@@ -177,6 +178,7 @@ func TestHTTPBoundary(t *testing.T) {
 
 	for _, tc := range []struct{ method, path, message string }{
 		{http.MethodGet, "/stream", "id is required"},
+		{http.MethodGet, "/typing", "id is required"},
 		{http.MethodPost, "/api/UploadAttachment?conversationId=x", "name is required"},
 		{http.MethodGet, "/api/DownloadAttachment?id=file", "conversationId is required"},
 	} {
@@ -256,7 +258,7 @@ func TestHTTPStreams(t *testing.T) {
 		httpCode int
 	}{
 		{name: "unary"}, {name: "large-history"}, {name: "stash"}, {name: "pop"}, {name: "complete"}, {name: "post-terminal-error"}, {name: "wirecut"}, {name: "oversized"}, {name: "invalid-text"},
-		{name: "cancel"}, {name: "idle-cancel"}, {name: "upload"}, {name: "upload-read-error"}, {name: "download"}, {name: "invalid-mime"}, {name: "inline"}, {name: "forced-download"}, {name: "truncated"},
+		{name: "cancel"}, {name: "idle-cancel"}, {name: "typing"}, {name: "upload"}, {name: "upload-read-error"}, {name: "download"}, {name: "invalid-mime"}, {name: "inline"}, {name: "forced-download"}, {name: "truncated"},
 		{"auth", codes.Unauthenticated, http.StatusUnauthorized},
 		{"permission", codes.PermissionDenied, http.StatusForbidden},
 		{"not-found", codes.NotFound, http.StatusNotFound},
@@ -385,6 +387,16 @@ func TestHTTPStreams(t *testing.T) {
 					close(canceled)
 
 					return stream.Context().Err()
+				case "typing":
+					method, _ := grpc.MethodFromServerStream(stream)
+					require.Equal(t, "/rpc.Web/WatchTyping", method)
+
+					request := &WatchTypingRequest{}
+					require.NoError(t, stream.RecvMsg(request))
+					require.Equal(t, "visible", request.Id)
+					require.NoError(t, stream.SendMsg(&TypingEvent{}))
+
+					return stream.SendMsg(&TypingEvent{Principal: "Ana", Typing: true})
 				default:
 					require.NoError(t, stream.RecvMsg(&ListSessionsRequest{}))
 
@@ -451,6 +463,8 @@ func TestHTTPStreams(t *testing.T) {
 			switch scenario {
 			case "cancel", "idle-cancel", "auth":
 				path = "/stream?id=visible"
+			case "typing":
+				path = "/typing?id=visible"
 			case "upload", "upload-rejected", "upload-final-error":
 				path, method = "/api/UploadAttachment?conversationId=visible&name=original.bin", http.MethodPost
 			case "download", "invalid-mime", "inline", "forced-download", "truncated":
@@ -572,6 +586,21 @@ func TestHTTPStreams(t *testing.T) {
 			case "pop":
 				require.Equal(t, http.StatusOK, response.StatusCode)
 				require.JSONEq(t, `{}`, string(body))
+			case "typing":
+				require.Equal(t, http.StatusOK, response.StatusCode)
+				require.Equal(t, "text/event-stream", response.Header.Get("Content-Type"))
+
+				frames, complete := strings.CutSuffix(string(body), "event: complete\ndata: {}\n\n")
+				require.True(t, complete, "%s", body)
+
+				var events []string
+				for frame := range strings.SplitSeq(strings.TrimSuffix(frames, "\n\n"), "\n\n") {
+					events = append(events, strings.TrimPrefix(frame, "data: "))
+				}
+
+				require.Len(t, events, 2)
+				require.JSONEq(t, `{"principal":"","typing":false}`, events[0])
+				require.JSONEq(t, `{"principal":"Ana","typing":true}`, events[1])
 			case "unary", "stash":
 				require.Equal(t, http.StatusOK, response.StatusCode)
 				require.JSONEq(t, `{"privateText":""}`, string(body))
