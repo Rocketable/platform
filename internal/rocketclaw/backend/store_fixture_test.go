@@ -10,7 +10,10 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -24,6 +27,21 @@ func TestMain(m *testing.M) {
 	code := 0
 
 	err := func() (errResult error) {
+		if err := os.MkdirAll("../../../.tmp", 0o755); err != nil {
+			return fmt.Errorf("create fixture temporary directory: %w", err)
+		}
+
+		directory, err := os.MkdirTemp("../../../.tmp", "backend-tests-")
+		if err != nil {
+			return fmt.Errorf("create fixture binary directory: %w", err)
+		}
+		defer func() { errResult = errors.Join(errResult, os.RemoveAll(directory)) }()
+
+		// The shared binary outlives every parallel guard and its child.
+		if err := os.Setenv("ROCKETCLAW_TEST_BACKEND_BINARY", filepath.Join(directory, "backend.test")); err != nil {
+			return fmt.Errorf("remember backend test binary: %w", err)
+		}
+
 		base := strings.TrimSpace(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
 		if base == "" || os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL") != "" {
 			// Unit tests need no PostgreSQL; children reuse their parent's template.
@@ -101,6 +119,29 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(code)
+}
+
+func backendTestBinary(t *testing.T) string {
+	t.Helper()
+
+	binary := os.Getenv("ROCKETCLAW_TEST_BACKEND_BINARY")
+	lock, err := os.OpenFile(binary+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, lock.Close()) }()
+
+	require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX))
+
+	if _, err := os.Stat(binary); !errors.Is(err, os.ErrNotExist) {
+		require.NoError(t, err)
+
+		return binary
+	}
+
+	output, err := exec.CommandContext(t.Context(), "go", "test", "-c", "-race=false", "-cover=false", "-o", binary, ".").CombinedOutput()
+	require.NoError(t, err, "%s", output)
+
+	return binary
 }
 
 func newMigratedTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
