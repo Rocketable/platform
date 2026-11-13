@@ -1,7 +1,9 @@
 import { Dialog as Kobalte, useDialogContext } from "@kobalte/core/dialog"
 import { makeEventListener } from "@solid-primitives/event-listener"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
-import { createMemo, createSignal, onCleanup } from "solid-js"
+import { createMemo, createSignal, onCleanup, useContext } from "solid-js"
+// rocketclaw: preview gestures belong only to the mounted view (upstream packages/ui/src/components/diagram-preview.tsx)
+import { inView, ViewContext } from "@rocketclaw/host/fences"
 import { useI18n } from "../context/i18n"
 import { Button } from "@opencode/ui/button"
 import { Icon } from "@opencode/ui/icon"
@@ -44,6 +46,7 @@ const CENTER = { x: 0, y: 0 }
  * redrawn sharp at every zoom and keeps the page's fonts and theme.
  */
 export function DiagramPreview(props: DiagramPreviewProps) {
+  const scope = useContext(ViewContext)
   const i18n = useI18n()
   const dialog = useDialogContext()
   let viewport!: HTMLDivElement
@@ -171,6 +174,8 @@ export function DiagramPreview(props: DiagramPreviewProps) {
     window,
     "wheel",
     (event: WheelEvent) => {
+      // rocketclaw: leave the surrounding page's gestures alone (upstream packages/ui/src/components/diagram-preview.tsx)
+      if (!inView(scope, event.target)) return
       const inside = event.target instanceof Node && viewport.contains(event.target)
       const zoom = event.ctrlKey || event.metaKey
 
@@ -209,6 +214,8 @@ export function DiagramPreview(props: DiagramPreviewProps) {
     window,
     "keydown",
     (event: KeyboardEvent) => {
+      // rocketclaw: leave the surrounding page's shortcuts alone (upstream packages/ui/src/components/diagram-preview.tsx)
+      if (!inView(scope, event.target)) return
       const bare = !event.metaKey && !event.ctrlKey && !event.altKey
       const arrow = bare ? arrowDirection(event.key) : undefined
 
