@@ -102,10 +102,21 @@ func TestAgentDraftRPCs(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	for name, state := range map[string]string{"pushed": "waiting", "saved": "live"} {
-		applied, err := invoke[ApplyAgentDraftOpResponse](bob, connection, "ApplyAgentDraftOp", &ApplyAgentDraftOpRequest{Id: drafts[name].Id, Op: &AgentDraftOp{BaseRevision: 1, OpId: "bob-" + name, Kind: "set_save_state", Value: state}})
+	// The save state and the test chat are the server's: a client's op setting either is refused, and the
+	// draft stays as it was.
+	for _, op := range []*AgentDraftOp{{Kind: "set_save_state", Value: "live"}, {Kind: "set_test_chat", Value: "elsewhere"}} {
+		op.BaseRevision, op.OpId = 1, "bob-"+op.Kind
+		_, err := invoke[ApplyAgentDraftOpResponse](bob, connection, "ApplyAgentDraftOp", &ApplyAgentDraftOpRequest{Id: drafts["saved"].Id, Op: op})
+		require.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
+	}
+
+	unchanged, err := invoke[GetAgentDraftResponse](bob, connection, "GetAgentDraft", &GetAgentDraftRequest{Id: drafts["saved"].Id})
+	require.NoError(t, err)
+	require.True(t, proto.Equal(drafts["saved"], unchanged.Draft), "%v", unchanged.Draft)
+
+	for name, state := range map[string]backend.AgentDraftSaveState{"pushed": backend.AgentDraftWaiting, "saved": backend.AgentDraftLive} {
+		_, err := sessions.ApplyAgentDraftOp(t.Context(), drafts[name].Id, &backend.AgentDraftOp{BaseRevision: 1, Author: "bob@example.com", Kind: backend.AgentDraftSetSaveState, Value: string(state)})
 		require.NoError(t, err)
-		require.Equal(t, int64(2), applied.Revision)
 	}
 
 	listed, err := invoke[ListAgentDraftsResponse](bob, connection, "ListAgentDrafts", &ListAgentDraftsRequest{})

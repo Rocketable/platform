@@ -289,7 +289,8 @@ Every change is an op on a base revision, committed as the draft's next revision
 settings take the last write, and instructions edits (lists of splices, in code
 points) made on an older revision are moved past the ops committed since, so no one's
 text is lost. `edit_file` sends a variant's whole file; the server parses it into the
-changed settings and one instructions edit. `ApplyAgentDraftOp` sets the op's author
+changed settings and one instructions edit. Clients cannot send `set_save_state` or
+`set_test_chat`; saving and the test chat write those themselves. `ApplyAgentDraftOp` sets the op's author
 to the caller and answers the new `revision` and `cursor`, the caller's place in the
 instructions on the base revision moved past every op committed through the new one,
 its own included. A file or setting that does not parse yet stores nothing and

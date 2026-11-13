@@ -224,9 +224,14 @@ func TestAgentDraftChatWebMessages(t *testing.T) {
 	fresh, _, err := ct.send(t, true)
 	require.NoError(t, err)
 	require.NotEqual(t, chat, fresh)
+	// Checked while held: once delivered, the turn's row gives way to the old chat's entries.
+	require.Equal(t, 1, ct.count(t, `SELECT count(*) FROM turns WHERE conversation_id = $1 AND inbound_json->>'Text' = 'MSG-HOLD6'`, chat))
 	close(gate)
 	ct.collect(t, "COL-A/MSG-HOLD6", "COL-B/MSG-HOLD6")
-	require.Equal(t, 1, ct.count(t, `SELECT count(*) FROM turns WHERE conversation_id = $1 AND inbound_json->>'Text' = 'MSG-HOLD6'`, chat))
+	require.Eventually(t, func() bool {
+		active, err := dt.rt.Sessions.HasActiveTurn(t.Context(), chat)
+		return err == nil && !active
+	}, time.Minute, 10*time.Millisecond)
 	require.Zero(t, ct.count(t, `SELECT count(*) FROM turns WHERE conversation_id = $1`, fresh))
 	require.Zero(t, ct.count(t, `SELECT count(*) FROM entries WHERE conversation_id = $1`, fresh))
 

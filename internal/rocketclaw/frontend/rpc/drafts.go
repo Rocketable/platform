@@ -131,9 +131,13 @@ func (s *Server) proposeDraftChanges(ctx context.Context, username string, reque
 
 // applyAgentDraftOp commits request's op as username's and moves the caller's cursor past every op
 // committed since its base, in order. A file or setting that does not parse yet stores nothing and answers
-// with its line.
+// with its line. The save state and the test chat are the server's, set only by saving and the test chat.
 func (s *Server) applyAgentDraftOp(ctx context.Context, username string, request *ApplyAgentDraftOpRequest) (*ApplyAgentDraftOpResponse, error) {
 	in := request.GetOp()
+	if slices.Contains([]backend.AgentDraftOpKind{backend.AgentDraftSetSaveState, backend.AgentDraftSetTestChat}, backend.AgentDraftOpKind(in.GetKind())) {
+		return nil, agentDraftError("ApplyAgentDraftOp", &backend.AgentDraftOpError{Problem: "Saving and the test chat make that change themselves."})
+	}
+
 	op := backend.AgentDraftOp{BaseRevision: in.GetBaseRevision(), OpID: in.GetOpId(), Author: username, Kind: backend.AgentDraftOpKind(in.GetKind()), Variant: in.GetVariant(), Key: in.GetKey(), Value: in.GetValue(), From: in.GetFrom(),
 		ExternalMCP: backend.AgentDraftExternalMCP{On: in.GetExternalMcp().GetOn(), Caller: in.GetExternalMcp().GetCaller(), Metadata: in.GetExternalMcp().GetMetadata()}}
 
