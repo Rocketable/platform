@@ -40,6 +40,7 @@ import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigg
 import { cn } from "@/lib/utils";
 import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, TabAttention, TopShelf, TranscriptEvent, VoiceSettings } from "@/types";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
+import { AgentEditorPage } from "@/agent-editor";
 import type { MountOptions, Mounted } from "../../oc/host/api";
 import {
   invalidatePendingSaves,
@@ -451,6 +452,7 @@ function useRoute() {
     cron: pathname === "/cron",
     timeline: pathname.startsWith("/cron/") ? decodeSessionId(pathname.slice("/cron/".length)) : "",
     agents: pathname === "/agents",
+    editor: /^\/agents\/(new|drafts\/[^/]+)$/.test(pathname),
     skills: pathname === "/skills",
     // Skill names are lowercase letters, digits and hyphens (internal/rocketclaw/harness skills.go), so paths hold them as-is.
     skill: pathname.startsWith("/skills/") ? pathname.slice("/skills/".length) : "",
@@ -941,7 +943,7 @@ type Space = { id: string; name: string };
 // last names each space's last active tab; sharedOrder is this person's order of Shared tabs by path.
 type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string; last: Record<string, string>; sharedOrder: string[] };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
-const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard], "/closed": ["Recently closed", History] };
+const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/agents/new": ["Create New Agent", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard], "/closed": ["Recently closed", History] };
 
 // A Search page is /search or a location under it, each its own tab; it is titled with its name, else the query it shows.
 const isSearch = (path: string) => /^\/search(\/|$)/.test(path);
@@ -959,6 +961,7 @@ function pageLabel(page: string) {
 function pageTab(path: string): [string, typeof Search] | undefined {
   if (path.startsWith("/pages/")) return [pageLabel(path.split("/").slice(3).join("/")), FileText];
   if (path.startsWith("/cron/")) return [decodeSessionId(path.slice("/cron/".length)), Clock];
+  if (path.startsWith("/agents/drafts/")) return ["Agent draft", Bot];
   return pageTabs[path] ?? (path.startsWith("/skills/") ? [path.slice("/skills/".length), Sparkles] : undefined);
 }
 
@@ -2058,7 +2061,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = ![route.cron, route.timeline, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.pages, route.shortcuts, route.closed, route.page, route.remote].some(Boolean);
+  const showChat = ![route.editor, route.cron, route.timeline, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.pages, route.shortcuts, route.closed, route.page, route.remote].some(Boolean);
   // The screen stays on while the Voice page is open or a call runs.
   const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
   useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
@@ -2171,6 +2174,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               {route.voice ? <VoicePage /> : null}
               <PageIndex show={route.pages} />
               <ShortcutsPage show={route.shortcuts} />
+              <AgentEditorPage show={route.editor} />
               <ClosedTabsPage show={route.closed} />
               <HostedPage key={route.page} page={route.page} />
               <SkillPage name={route.skill} />

@@ -93,6 +93,36 @@ show only the turn number. Side-by-side alignment applies when both columns are 
 edit files or repeat external effects under its own permissions. Its replies and
 attachments stay in comparison and do not create extra connector deliveries.
 
+## Agent editor
+
+`/agents/new` creates an agent, and `/agents/drafts/<id>` opens one of the
+drafts the server stores (see "Agent Draft" in `CONCEPTS.md`). The page's address
+is the draft's link: **Share** copies it, and any teammate without space limits
+who opens it edits the same draft. People limited to spaces get a plain refusal
+and a link back to the read-only Agents page instead, because a draft can give
+itself any permission and its test chats run real tools; the server refuses them
+every editor call too.
+
+The page is a workbench: settings on the left, the test chat in the middle, and
+the assistant on the right, under a header with the draft's save state, **Easy**
+and **Advanced**, **Drafts**, the people who have the draft open, and **Share**.
+Easy or advanced is the whole draft's: switching it converts every variant at
+once, for everyone who has the draft open. **Drafts** lists every draft on the
+server with its save state, mode and variant count, and **Start a new agent**.
+
+Before there is a draft, the settings pane asks "Easy agent or advanced agent?"
+first, then how to start: **Describe it** (name the agent, then describe it to the
+assistant), **Template** (a starter agent, which brings its own settings,
+instructions and mode), **Copy an agent** (a new agent, named after the original
+with `-copy` unless you name it, leaving the original as it is), or **Blank**. The
+copy list also offers **Edit** on each agent, which reopens the newest draft of
+that agent still in editing, or else starts one.
+
+An open page follows the draft's stream, `/stream?id=draft:<id>`, which only wakes
+it: the page then reads what changed since its revision. It also tells the server
+every 10 seconds that it is open, since the server lists only editors seen in the
+last 30 seconds.
+
 ## Revert, Undo, and Redo
 
 Recorded user messages in Web chats, Slack threads, and shadows have a **Revert

@@ -39,6 +39,13 @@ export type Skill = { name: string; description?: string; license?: string; comp
 export type Workflow = { name: string; description?: string };
 export type PageEntry = { agent: string; space?: string; path: string };
 export type ConfigView = { workspace?: string; overlays?: string[]; slackChannels?: { channel?: string; agents?: string[] }[]; mcpServers?: string[]; loggingLevel?: string; autoApproverModel?: string; instrumentationEnabled?: boolean; mcpExternal?: boolean; tailscaleUser?: string };
+// An agent draft as the agent editor's RPCs answer it: revisions are int64 strings, and its first variant is the
+// agent itself. saveState is editing, saving, waiting (for a Git overlay's merge) or live.
+export type AgentDraft = { id: string; revision: string; name: string; mode: string; variants: { name: string; settings: { key: string; value: string }[]; body: string }[]; testChat: string; saveState: "editing" | "saving" | "waiting" | "live"; existing: boolean };
+export type AgentDraftOp = { baseRevision: string; opId: string; kind: string; variant?: string; key?: string; value?: string };
+export type AgentDraftPresence = { client: string; username?: string; variant: string; place: string };
+// GetAgentDraft's answer: the draft now, the ops after the revision asked for, and the editors seen lately.
+export type AgentDraftView = { draft: AgentDraft; ops: AgentDraftOp[]; presence: AgentDraftPresence[] };
 export type SlackNamesResponse = { names?: Record<string, string> };
 // The first Voice frame carries the answer SDP and its wire dialect; notices may follow; a call ends with at most one ended frame.
 export type VoiceRoute = "public" | "codex";
