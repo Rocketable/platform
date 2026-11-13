@@ -24,7 +24,7 @@ tags:
 # Permission Review Reasons Were Read From a Transport-Specific Trace
 
 ## Problem
-The Web showed no approver reason for any permission review on wallace, which reaches models over HTTPS. The old reader (`PermissionReviewRationale`) only accepted a reason backed by a `rocketcode_public_progress` text record in the review entry's `OutputTrace`. Only the Responses WebSocket transport writes those records (`responseObservations` in `internal/rocketclaw/harness/responses_websocket.go`), so HTTP reviews never had one.
+The Web showed no approver reason for any permission review on wallace, which reaches models over HTTPS. The old reader (`PermissionReviewRationale`) only accepted a reason backed by a `rocketcode_public_progress` text record in the review entry's `OutputTrace`. Only transports whose responses RocketClaw reads as a stream write those records (`responseObservations` in `internal/rocketclaw/harness/responses_websocket.go`). Then that was only the Responses WebSocket transport, so HTTP reviews never had one. ChatGPT sign-in requests write them too since PR #1086; plain API-key HTTPS requests still never do.
 
 ## Symptoms
 - All 110 saved reviews in wallace chat `AHWNE3GO6MMDBJ3V7OGHZDRH2S` had a final answer such as `{"outcome":"allow","rationale":"..."}` in `ReplayInput`, and none had a progress record.
@@ -36,7 +36,7 @@ The Web showed no approver reason for any permission review on wallace, which re
 ## Solution
 Read the decision the way `reviewPermission` makes it. `(*SessionEntry).PermissionReviewDecision` in `internal/rocketclaw/harness/permission_review.go` scans `ReplayInput` from the end. It takes the last assistant message outside the commentary phase whose content decodes as an allow or deny decision. It never runs the SDK replay decode.
 
-Reading the reviewed action for older chats has a second trap. The review prompt's first message can be hundreds of kilobytes of transcript, followed by the planned action that `permissionReviewPrompt` writes between `Planned action JSON:\n` and `\n>>> APPROVAL REQUEST END`. `(PermissionReview).CodeModeCall` finds the last JSON-escaped `Planned action JSON:\n` in the raw item with `bytes.LastIndex`. It decodes only the tail from there, so History does not pay for decoding the whole transcript. A transcript line that tries to forge the delimiter is escaped once more by JSON, so it never matches the raw search.
+Reading the reviewed action has a second trap, the size of the review prompt. The comments on `(PermissionReview).CodeModeCall` in the same file explain how it decodes only the prompt's tail and why a forged delimiter never matches.
 
 ## Why This Works
 `ReplayInput` is saved the same way for every transport, and it holds the exact message the review decided from. The trace only holds what a given transport chose to stream.
