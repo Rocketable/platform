@@ -802,6 +802,80 @@ message DraftPromptResponse {
   repeated AgentDraftProblem problems = 4;
 }
 
+// DraftLayersRequest asks which layers hold an agent named as draft id, and what saving variant to
+// destination, "workspace" or a configured overlay's spec, would replace and write.
+message DraftLayersRequest {
+  string id = 1;
+  string variant = 2;
+  string destination = 3;
+}
+
+// AgentLayer is one layer's file for the draft's name: layer is "built-in", a configured overlay's spec, or
+// "workspace"; ref is an overlay's pinned ref; file is unset where the layer has none.
+message AgentLayer {
+  string layer = 1;
+  string ref = 2;
+  optional string file = 3;
+}
+
+// DraftLayersResponse lists the layers in precedence order, each later one winning. hidden_by names the
+// later layer whose file hides the destination, whatever its bytes; replaces names the earlier layer whose
+// agent the save takes over, so its updates stop reaching this workspace; recreated says startup copies the
+// built-in agent into workspace agents/ again, which hides an overlay destination; next is the file the save
+// writes, settings in the standard order and comments dropped.
+message DraftLayersResponse {
+  repeated AgentLayer layers = 1;
+  string hidden_by = 2;
+  string replaces = 3;
+  bool recreated = 4;
+  string next = 5;
+}
+
+// SaveDraftRequest saves variant of draft id to destination. reviewed says the caller reviewed the
+// destination's file reviewed_file, unset when it had none; that file becomes what the save expects to
+// find there.
+message SaveDraftRequest {
+  string id = 1;
+  string variant = 2;
+  string destination = 3;
+  bool reviewed = 4;
+  optional string reviewed_file = 5;
+}
+
+// AgentDraftReviewSetting is one setting's YAML in the base, the destination's file and the draft, empty
+// where absent; mode is the setting "mode". theirs says the review starts on the file's value, which only
+// the file changed; both says the file and the draft each changed it differently.
+message AgentDraftReviewSetting {
+  string key = 1;
+  string base = 2;
+  string live = 3;
+  string draft = 4;
+  bool theirs = 5;
+  bool both = 6;
+}
+
+// AgentDraftReview is a destination file that changed since the draft began, or since the caller reviewed
+// it: the base the draft expected, the file now and the draft's file, the settings any of them changed, and
+// the instructions edit, on revision, that brings the file's changes into the draft's variant.
+message AgentDraftReview {
+  int64 revision = 1;
+  optional string base = 2;
+  optional string live = 3;
+  string draft = 4;
+  repeated AgentDraftReviewSetting settings = 5;
+  repeated AgentDraftSplice splices = 6;
+}
+
+// SaveDraftResponse is the draft's save state after a save: live, or editing when the draft changed during
+// the save or the reload loaded another file. When refused is set nothing was written: problems are the
+// variant's settings that do not load, and review the destination's changes to review before saving again.
+message SaveDraftResponse {
+  string save_state = 1;
+  string refused = 2;
+  repeated AgentDraftProblem problems = 3;
+  AgentDraftReview review = 4;
+}
+
 message UpdateSessionRequest {
   string id = 1;
   optional bool pinned = 2;
@@ -1154,6 +1228,8 @@ service Web {
   rpc AgentSettings(AgentSettingsRequest) returns (AgentSettingsResponse);
   rpc DraftPrompt(DraftPromptRequest) returns (DraftPromptResponse);
   rpc RestartDraftChat(RestartDraftChatRequest) returns (DraftPromptResponse);
+  rpc DraftLayers(DraftLayersRequest) returns (DraftLayersResponse);
+  rpc SaveDraft(SaveDraftRequest) returns (SaveDraftResponse);
   rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
   rpc Identity(IdentityRequest) returns (IdentityResponse);

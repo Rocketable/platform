@@ -165,6 +165,54 @@ func (s *Server) sendAgentDraft(ctx context.Context, send *backend.AgentDraftSen
 	return response, nil
 }
 
+func (s *Server) draftLayers(ctx context.Context, request *DraftLayersRequest) (*DraftLayersResponse, error) {
+	layers, err := s.sessions.AgentDraftLayers(ctx, request.Id, request.Variant, request.Destination)
+	if err != nil {
+		return nil, agentDraftError("DraftLayers", err)
+	}
+
+	response := &DraftLayersResponse{HiddenBy: layers.HiddenBy, Replaces: layers.Replaces, Recreated: layers.Recreated, Next: layers.Next}
+	for _, layer := range layers.Layers {
+		response.Layers = append(response.Layers, &AgentLayer{Layer: layer.Layer, Ref: layer.Ref, File: layer.File})
+	}
+
+	return response, nil
+}
+
+// saveDraft saves request's variant as the caller, and answers the draft's save state after, or why nothing
+// was written.
+func (s *Server) saveDraft(ctx context.Context, username string, request *SaveDraftRequest) (*SaveDraftResponse, error) {
+	state, err := s.sessions.SaveAgentDraft(ctx, s.backend, &backend.AgentDraftSave{ID: request.Id, Variant: request.Variant, Destination: request.Destination, Author: username,
+		Reviewed: request.Reviewed, ReviewedFile: request.ReviewedFile})
+
+	errSave, refused := errors.AsType[*backend.AgentDraftSaveError](err)
+	if !refused && err != nil {
+		return nil, agentDraftError("SaveDraft", err)
+	}
+
+	if !refused {
+		return &SaveDraftResponse{SaveState: string(state)}, nil
+	}
+
+	response := &SaveDraftResponse{Refused: errSave.Problem}
+	for _, problem := range errSave.Problems {
+		response.Problems = append(response.Problems, &AgentDraftProblem{Variant: problem.Variant, Key: problem.Key, Sentence: problem.Sentence})
+	}
+
+	if review := errSave.Review; review != nil {
+		response.Review = &AgentDraftReview{Revision: review.Revision, Base: review.Base, Live: review.Live, Draft: review.Draft}
+		for _, setting := range review.Settings {
+			response.Review.Settings = append(response.Review.Settings, &AgentDraftReviewSetting{Key: setting.Key, Base: setting.Base, Live: setting.Live, Draft: setting.Draft, Theirs: setting.Theirs, Both: setting.Both})
+		}
+
+		for _, splice := range review.Splices {
+			response.Review.Splices = append(response.Review.Splices, &AgentDraftSplice{At: int32(splice.At), Remove: int32(splice.Remove), Insert: splice.Insert})
+		}
+	}
+
+	return response, nil
+}
+
 // agentSettings returns the setting help for the requested mode, in agent-file order.
 func agentSettings(request *AgentSettingsRequest) *AgentSettingsResponse {
 	response := &AgentSettingsResponse{}

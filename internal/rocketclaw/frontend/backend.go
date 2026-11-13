@@ -11,6 +11,7 @@ import (
 // Backend owns conversation execution, recording, ordering, and live output.
 type Backend interface {
 	Reload(string) (string, error)
+	ValidateAgentFile(string, []byte) error
 	Subscribe(context.Context) iter.Seq[protocol.Event]
 	CreateConversation(context.Context, protocol.Conversation) error
 	ContinueRun(context.Context, string, string, bool) (string, error)

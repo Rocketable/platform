@@ -22,7 +22,7 @@ const maxIDBytes = 1024
 
 // editorMethods are the agent editor's methods, closed to people limited to spaces: a draft can grant
 // itself any permission, and its test chats run real tools.
-const editorMethods = "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat"
+const editorMethods = "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat DraftLayers SaveDraft"
 
 // Register publishes the implemented portion of rpc.Web. Other methods retain
 // gRPC's Unimplemented response; they are not successful empty handlers.
@@ -259,6 +259,10 @@ func (s *Server) editorCall(ctx context.Context, method string, request any) (an
 		return s.sendAgentDraft(ctx, &backend.AgentDraftSend{ID: request.(*DraftPromptRequest).Id, Username: username, Texts: []string{request.(*DraftPromptRequest).Text}})
 	case "RestartDraftChat":
 		return s.sendAgentDraft(ctx, &backend.AgentDraftSend{ID: request.(*RestartDraftChatRequest).Id, Username: username, Restart: true, Texts: request.(*RestartDraftChatRequest).Replay})
+	case "DraftLayers":
+		return s.draftLayers(ctx, request.(*DraftLayersRequest))
+	case "SaveDraft":
+		return s.saveDraft(ctx, username, request.(*SaveDraftRequest))
 	default:
 		return s.testModel(ctx, request.(*TestModelRequest)), nil
 	}

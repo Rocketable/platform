@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net"
@@ -22,8 +23,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"tailscale.com/client/tailscale/apitype"
 	"tailscale.com/tailcfg"
@@ -48,7 +51,21 @@ func TestAgentDraftRPCs(t *testing.T) {
 	require.NoError(t, err)
 
 	transport := grpc.NewServer()
-	core := &mockBackend{SandboxErrorFunc: noSandboxError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil }}
+	// Reload makes the saved probe agent the loaded one.
+	core := &mockBackend{SandboxErrorFunc: noSandboxError, StashQueueItemFunc: func(context.Context, string, *protocol.ThreadQueueItem) error { return nil },
+		ValidateAgentFileFunc: func(string, []byte) error { return nil },
+		ReloadFunc: func(string) (string, error) {
+			data, err := os.ReadFile(filepath.Join(cfg.Workspace, "agents", "probe.md"))
+			if err == nil {
+				err = os.WriteFile(filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents", "probe.md"), data, 0o600)
+			}
+
+			if err != nil {
+				return "", fmt.Errorf("reload the probe agent: %w", err)
+			}
+
+			return "reloaded", nil
+		}}
 	New(core, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
 	var serving errgroup.Group
@@ -98,7 +115,7 @@ func TestAgentDraftRPCs(t *testing.T) {
 	}}
 	handler := NewTailnetHandler(whois, nil, NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil))
 
-	for _, method := range []string{"TestModel", "CreateAgentDraft", "ListAgentDrafts", "GetAgentDraft", "ApplyAgentDraftOp", "SetAgentDraftPresence", "AgentSettings", "DraftPrompt", "RestartDraftChat"} {
+	for _, method := range []string{"TestModel", "CreateAgentDraft", "ListAgentDrafts", "GetAgentDraft", "ApplyAgentDraftOp", "SetAgentDraftPresence", "AgentSettings", "DraftPrompt", "RestartDraftChat", "DraftLayers", "SaveDraft"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/"+method, strings.NewReader(`{}`)))
 		require.Equal(t, http.StatusForbidden, response.Code, "%s: %s", method, response.Body)
@@ -289,6 +306,45 @@ func TestAgentDraftRPCs(t *testing.T) {
 	shown := maps.Clone(call.ThreadQueueItem.Inbound.Metadata)
 	maps.DeleteFunc(shown, func(key, _ string) bool { return strings.HasPrefix(key, "rocketclaw_agent") }) // The captured files.
 	require.Equal(t, map[string]string{protocol.InboundPrincipalMetadataKey: "zendesk-bridge"}, shown)
+
+	// The layers say which layer provides a name, and what a save would write.
+	layers, err := invoke[DraftLayersResponse](bob, connection, "DraftLayers", &DraftLayersRequest{Id: drafts["support"].Id, Variant: "a", Destination: "workspace"})
+	require.NoError(t, err)
+	require.True(t, proto.Equal(&DraftLayersResponse{Layers: []*AgentLayer{{Layer: "built-in"}, {Layer: "workspace", File: new("---\nmodel: gpt-5\n---\nHelp.\n")}}, Next: "---\nmode: easy\n---\n"}, layers), "%v", layers)
+
+	_, err = invoke[DraftLayersResponse](bob, connection, "DraftLayers", &DraftLayersRequest{Id: drafts["support"].Id, Variant: "a", Destination: "built-in"})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
+	_, err = invoke[SaveDraftResponse](bob, connection, "SaveDraft", &SaveDraftRequest{Id: drafts["support"].Id, Variant: "zz", Destination: "workspace"})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "%v", err)
+
+	// A draft whose settings do not load is refused with them; a valid one is written, reloaded and live.
+	refusedSave, err := invoke[SaveDraftResponse](bob, connection, "SaveDraft", &SaveDraftRequest{Id: drafts["support"].Id, Variant: "a", Destination: "workspace"})
+	require.NoError(t, err)
+	require.NotEmpty(t, refusedSave.Refused)
+	require.NotEmpty(t, refusedSave.Problems)
+	require.Empty(t, core.ReloadCalls())
+
+	saved, err := invoke[SaveDraftResponse](bob, connection, "SaveDraft", &SaveDraftRequest{Id: probe.Id, Variant: "a", Destination: "workspace"})
+	require.NoError(t, err)
+	require.True(t, proto.Equal(&SaveDraftResponse{SaveState: "live"}, saved), "%v", saved)
+	require.Len(t, core.ReloadCalls(), 1)
+
+	// A file changed since is reviewed first, setting by setting.
+	theirs := "---\nmodel: gpt-6.1-terra\n---\nHelp.\nMore.\n"
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Workspace, "agents", "probe.md"), []byte(theirs), 0o600))
+
+	stale, err := invoke[SaveDraftResponse](bob, connection, "SaveDraft", &SaveDraftRequest{Id: probe.Id, Variant: "a", Destination: "workspace"})
+	require.NoError(t, err)
+	require.NotEmpty(t, stale.Refused)
+	require.Equal(t, theirs, stale.Review.GetLive())
+	require.Equal(t, "---\nmodel: gpt-6.1-sol\n---\nHelp.\n", stale.Review.GetBase())
+	require.True(t, proto.Equal(&AgentDraftReviewSetting{Key: "model", Base: "gpt-6.1-sol", Live: "gpt-6.1-terra", Draft: "gpt-6.1-sol", Theirs: true}, stale.Review.Settings[0]), "%v", stale.Review.Settings)
+	require.Len(t, stale.Review.Splices, 1)
+	require.True(t, proto.Equal(&AgentDraftSplice{At: 6, Insert: "More.\n"}, stale.Review.Splices[0]), "%v", stale.Review.Splices)
+
+	reviewed, err := invoke[SaveDraftResponse](bob, connection, "SaveDraft", &SaveDraftRequest{Id: probe.Id, Variant: "a", Destination: "workspace", Reviewed: true, ReviewedFile: new(theirs)})
+	require.NoError(t, err)
+	require.Equal(t, "live", reviewed.SaveState)
 
 	// A limited person cannot follow a draft's test chat.
 	response = httptest.NewRecorder()

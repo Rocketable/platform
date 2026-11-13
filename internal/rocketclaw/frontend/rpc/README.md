@@ -263,7 +263,8 @@ it does not change access to other private source conversations.
 
 The agent editor's methods are `TestModel`, `CreateAgentDraft`, `ListAgentDrafts`,
 `GetAgentDraft`, `ApplyAgentDraftOp`, `SetAgentDraftPresence`, `AgentSettings`,
-`DraftPrompt`, and `RestartDraftChat` (`editorMethods` in `transport.go`, which both
+`DraftPrompt`, `RestartDraftChat`, `DraftLayers`, and `SaveDraft` (`editorMethods`
+in `transport.go`, which both
 gRPC and the HTTP routes read). People limited to spaces cannot use any of them:
 `editorCall` refuses them with
 `PermissionDenied` "people limited to spaces cannot use the agent editor" before the
@@ -326,6 +327,32 @@ when the mode or a value or presence of a first-message key differs. Otherwise
 `problems` lists the variants, and with an empty `variant` the live agent, that do
 not answer the message and why: a file that does not load, or in External MCP mode
 a live agent that is not `sticky: off`.
+
+`DraftLayers` lists, for the draft's name, each layer's file in precedence order:
+`built-in`, each configured overlay by its spec with its ref, then `workspace`. For a
+`destination`, `hidden_by` names the later layer whose file hides it, whatever its
+bytes; `replaces` names the earlier layer whose agent the save takes over, so its
+updates stop reaching this workspace, which still holds while the destination is
+startup's byte-equal copy of a built-in; `recreated` says startup copies the built-in
+agent into workspace `agents/` again, hiding an overlay destination; `next` is the
+file the save writes, settings in the standard order and comments dropped.
+
+`SaveDraft` saves one variant to workspace `agents/` (Git overlays are not saved
+yet). It claims the draft (`saving`, one save at a time: another answers `refused`),
+then compares workspace `agents/<name>.md` itself, never the loaded copy, with the
+file the draft recorded there when it took its name (absent counts). A difference
+writes nothing and answers `review`: the recorded file, the file now and the draft's,
+each setting any of them changed (`theirs` when only the file did, `both` when both
+did differently), and `splices`, an instructions edit on `revision` that brings the
+file's changes into the variant. The page sends the person's picks as ordinary ops,
+then saves again with `reviewed` and the reviewed `reviewed_file`, which becomes what
+the save expects. The variant's settings, then Reload's validation of a stage holding
+the file, must pass before anything is written (`problems` lists the settings); the
+file is then synced under a temporary name, the destination compared again, and the
+file renamed into place, and Reload runs. The answer is `live` only when nobody edited
+the draft meanwhile and the loaded file is the saved one; otherwise `editing`, with
+the saved file as what the next save expects. Nothing restores old bytes, and a
+server start returns drafts left `saving` to `editing`.
 
 ## Attachments
 
