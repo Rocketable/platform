@@ -451,7 +451,6 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
     const prs = page.getByRole("complementary", { name: "Pull requests", exact: true });
     await prs.getByText(metadata.title, { exact: true }).waitFor();
-    await prs.getByText("Created in this thread", { exact: true }).waitFor();
     expect(await page.getByRole("complementary", { name: "Delegation", exact: true }).count()).toBe(0);
     expect(await composer.inputValue()).toBe("App composer draft edited beside preview");
     await composer.fill("Draft still editable beside the PR pane");
@@ -471,13 +470,19 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     const held = Promise.withResolvers<void>();
     discovery = held.promise;
     updatedAt = "2026-01-02T00:00:00Z";
-    await prs.locator("button:disabled", { hasText: "Find again" }).waitFor();
+    await prs.locator('button:disabled[aria-label="Refresh"]').waitFor();
     expect(await prs.getByText("Finding pull requests…", { exact: true }).count()).toBe(0);
     expect((await title.boundingBox())!.y).toBe(top);
     held.resolve();
-    await prs.locator("button:enabled", { hasText: "Find again" }).waitFor();
+    await prs.locator('button:enabled[aria-label="Refresh"]').waitFor();
     await title.waitFor();
     expect(await prs.getByText("patch-marker <script>example</script>", { exact: true }).count()).toBe(1);
+    // Refresh also reads the shown PR again, which starts its file list over.
+    const reread = page.waitForResponse((response: any) => new URL(response.url()).pathname.endsWith("/pulls/7"));
+    await prs.getByRole("button", { name: "Refresh", exact: true }).click();
+    await reread;
+    await prs.getByText("0 of 1 files loaded", { exact: true }).waitFor();
+    await title.waitFor();
     await page.getByRole("tab", { name: "Other fixture", exact: true }).click({ button: "right" });
     await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
     await page.getByText("Other conversation fixture", { exact: true }).waitFor();
@@ -513,18 +518,23 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     expect(await prs.count()).toBe(0);
     second = true;
     updatedAt = "2026-01-03T00:00:00Z";
-    await prs.getByText("Created in this thread", { exact: true }).waitFor();
+    // The picker shows only once the thread has more than one PR.
+    await prs.getByRole("combobox", { name: "Thread pull request" }).waitFor();
     expect(await prs.getByRole("combobox", { name: "Thread pull request" }).textContent()).toContain("#8");
+    await prs.getByRole("combobox", { name: "Thread pull request" }).click();
+    const option = page.getByRole("option", { name: "sample/fixture-repository-marker #7", exact: true });
+    expect(await option.evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true);
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Hide right pane", exact: true }).click();
     await prs.waitFor({ state: "detached" });
     await page.getByRole("button", { name: "Show pull requests", exact: true }).click();
-    await prs.getByText("Created in this thread", { exact: true }).waitFor();
+    await prs.getByText(metadata.title, { exact: true }).waitFor();
     // Cmd/Ctrl+Shift+B does what the button does, also while the message box has focus.
     await composer.focus();
     await page.keyboard.press("ControlOrMeta+Shift+B");
     await prs.waitFor({ state: "detached" });
     await page.keyboard.press("ControlOrMeta+Shift+B");
-    await prs.getByText("Created in this thread", { exact: true }).waitFor();
+    await prs.getByText(metadata.title, { exact: true }).waitFor();
     expect(prompts).toBe(0);
     expect(unexpected).toEqual([]);
     expect(errors).toEqual([]);

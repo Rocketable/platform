@@ -74,8 +74,8 @@ button, which closes whichever right pane is open, and Cmd/Ctrl+Shift+B, which d
 what that button does. The key is RocketClaw's even while the button is disabled,
 so Chrome's bookmarks bar toggle never takes it. On desktop the conversation
 stays editable beside it; on narrow screens it uses a sheet. It replaces an open
-delegation or skill pane. Select a PR to read its description and changed-file
-patches.
+delegation or skill pane. It shows a PR's description and changed-file patches;
+when the thread has more than one PR, a picker in the pane's header selects it.
 
 On desktop the pane also opens by itself, on that PR, when the thread in view
 gains a PR or one of its PRs gets a new head commit. Discovery then runs after
@@ -84,7 +84,7 @@ OpenCode server's `gh` login only, so for a native RocketClaw thread only a new
 PR opens the pane. The first look at a thread, a PR missing from one look, and a
 head that could not be read never open it.
 
-**Created in this thread** comes from a successful recorded shell call that runs
+A PR counts as created in this thread when a successful recorded shell call runs
 `gh pr create`, alone or in a script: each GitHub PR URL it prints alone on a line
 counts, as `gh pr create` prints them. A script that also prints some other PR URL
 alone on a line claims it too. Prompts, ordinary links, quoted mentions,
@@ -93,7 +93,8 @@ OpenCode discovery also reads the thread's subagent sessions, and theirs, since
 subagents often open the PRs. Native RocketClaw uses the existing bounded Code Mode
 call summaries; clipped summaries and older history without actual-call records can
 miss a PR. Discovery reads older history pages too. It runs when the pane opens,
-refreshes after thread updates, and can be repeated with **Find again**.
+refreshes after thread updates, and can be repeated with the header's **Refresh**
+button, which also reads the PR shown again.
 
 OpenCode also checks the session folder using its server's installed `gh` and
 existing GitHub login. In a jj workspace, whose Git checkout has no current branch,
