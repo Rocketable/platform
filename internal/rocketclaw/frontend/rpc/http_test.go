@@ -55,7 +55,7 @@ func TestHTTPEventFramingAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkHTTPEventFraming)
 	require.Positive(t, result.N)
 	// Plain transport uses about 2 MiB; a fresh JSON buffer for every row exceeds 3 MiB.
-	require.Less(t, result.AllocedBytesPerOp(), int64(3<<20))
+	require.Less(t, result.AllocedBytesPerOp(), int64(3<<20), "N=%d T=%s MemBytes=%d MemAllocs=%d GOMAXPROCS=%d", result.N, result.T, result.MemBytes, result.MemAllocs, runtime.GOMAXPROCS(0))
 }
 
 func BenchmarkHTTPEventFraming(b *testing.B) {
