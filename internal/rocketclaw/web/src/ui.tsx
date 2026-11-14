@@ -798,7 +798,7 @@ function TabDrawer({ medium, open, toggle, children }: ReturnType<typeof useTabS
     };
   }, [medium, open]);
   if (medium) return null;
-  return <Drawer.Root open={open} onOpenChange={toggle} swipeDirection="left">
+  return <><TabTitle /><Drawer.Root open={open} onOpenChange={toggle} swipeDirection="left">
     <Drawer.Portal>
       <Drawer.Backdrop className="fixed inset-0 z-50 bg-black/10 opacity-[calc(1-var(--drawer-swipe-progress))] transition-opacity duration-200 data-swiping:duration-0 data-starting-style:opacity-0 data-ending-style:opacity-0 supports-backdrop-filter:backdrop-blur-xs" />
       <Drawer.Viewport className="fixed inset-0 z-50 flex">
@@ -813,7 +813,19 @@ function TabDrawer({ medium, open, toggle, children }: ReturnType<typeof useTabS
         </Drawer.Popup>
       </Drawer.Viewport>
     </Drawer.Portal>
-  </Drawer.Root>;
+  </Drawer.Root></>;
+}
+
+// Narrow screens keep the tabs in the drawer, so the active tab's name, as its tab shows it, heads the page.
+function TabTitle() {
+  const { state, shared, pathname } = useContext(TabActions), id = pathSession(pathname);
+  const session = useContext(Sidebar).rows.find((row) => row.id === id) ?? { id };
+  const search = (state.tabs.find((tab) => tab.path === pathname) ?? sharedTab(shared, state.space, pathname))?.search;
+  const [label, Icon] = tabLabel({ path: pathname, search }, session, MessageSquare);
+  const title = useCleanText(label);
+  return <header className="flex shrink-0 items-center gap-2 border-b px-4 py-1.5 text-sm">
+    <Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /><span className="truncate font-semibold">{title}</span>
+  </header>;
 }
 
 function SidebarToggle({ open, toggle }: { open: boolean; toggle: () => void }) {

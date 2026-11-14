@@ -425,6 +425,8 @@ test("saved tabs, deep links, keyboard, page close, palette commands, and the si
   expect((await strip(page).boundingBox()).x + (await strip(page).boundingBox()).width).toBeLessThanOrEqual(mainBox.x);
   await page.locator("footer").getByRole("button", { name: "Hide sidebar", exact: true }).click();
   await strip(page).waitFor({ state: "hidden" });
+  // Only the drawer's narrow screens head the page with the tab's name.
+  expect(await page.getByRole("banner").count()).toBe(0);
   await page.keyboard.press("Control+b");
   await strip(page).waitFor();
   expect(await page.locator("footer").getByRole("button", { name: "Hide sidebar", exact: true }).getAttribute("aria-expanded")).toBe("true");
@@ -536,20 +538,23 @@ test("running tabs keep a reachable close control, and closing hands focus to th
   await page.waitForFunction(() => document.activeElement === document.querySelector('[aria-label="Open tabs"] [role="tab"][aria-label="Charlie"]'));
 }), 60_000);
 
-test("narrow screens show the tabs in a drawer opened by the footer's sidebar button or a right swipe and closed by a pick, Escape, or a left swipe", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin, _prompts, saved) => {
+test("narrow screens show the tabs in a drawer opened by the footer's sidebar button or a right swipe and closed by a pick, Escape, or a left swipe, and head the page with the tab's name", () => withPage({ viewport: { width: 375, height: 700 }, hasTouch: true }, async (page, origin, _prompts, saved) => {
   const tab = (name: string) => strip(page).getByRole("tab", { name, exact: true });
+  const title = page.getByRole("banner");
   for (const id of ["alpha", "bravo"]) {
     await page.goto(`${origin}${href(id)}`);
     await until(() => saved.state.tabs.some((tab) => tab.path === href(id)));
   }
   const toggle = page.locator("footer").getByRole("button", { name: "Show sidebar", exact: true });
   expect(await strip(page).count()).toBe(0);
+  await title.getByText("Bravo", { exact: true }).waitFor();
 
   await toggle.tap();
   expect(await strip(page).getAttribute("aria-orientation")).toBe("vertical");
   await tab("Alpha").tap();
   await page.waitForURL(`**${href("alpha")}`);
   await strip(page).waitFor({ state: "detached" });
+  expect(await title.textContent()).toBe("Alpha");
   // Picking the tab already shown closes the drawer too, by touch or mouse.
   for (const pick of ["tap", "click"]) {
     await toggle[pick]();
@@ -580,6 +585,7 @@ test("narrow screens show the tabs in a drawer opened by the footer's sidebar bu
 
   // Escape closes only the drawer, not the non-chat tab behind it.
   await page.goto(`${origin}/config`);
+  await title.getByText("Settings", { exact: true }).waitFor();
   await toggle.tap();
   expect(await names(page)).toContain("Settings");
   await page.keyboard.press("Escape");

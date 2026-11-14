@@ -812,6 +812,8 @@ active tab.
   drawer: the same footer button or a swipe right opens it, and picking a
   tab, tapping outside, Escape, or a swipe left closes it. A swipe that starts on
   a text field, a slider, or something that scrolls sideways is left to that element.
+  While the sidebar is a drawer, a bar at the top of the page shows the current
+  tab's name, as its tab shows it.
 - **Storage.** The server keeps each person's tabs, so they follow you to every
   device: open tabs, their order, each tab's group and
   space, the groups' names, colors, and collapsed state, the current space, and each
