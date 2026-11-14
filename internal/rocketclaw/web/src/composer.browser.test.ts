@@ -59,12 +59,15 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
       await page.screenshot({ path: path.join(shots, `native-composer-idle-${width}-${touch ? "touch" : "desktop"}.png`) });
 
       await input.fill("First line");
+      // Clearing is optimistic; the fixture records each prompt before its response.
+      const firstPrompt = page.waitForResponse("**/api/Prompt");
       await input.press("Enter");
       if (touch) {
         expect(await input.inputValue()).toBe("First line\n");
         expect(calls).toEqual([]);
         await page.getByRole("button", { name: "Send", exact: true }).click();
       }
+      await firstPrompt;
       await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
       expect(calls[0]).toMatchObject({ text: touch ? "First line\n" : "First line", delivery: "STEER" });
 
@@ -83,7 +86,7 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
       await page.mouse.move(0, 0);
       await page.getByRole("tooltip").waitFor({ state: "hidden" });
       await page.screenshot({ path: path.join(shots, `native-composer-working-${width}-${touch ? "touch" : "desktop"}.png`) });
-      await primary.click();
+      await Promise.all([page.waitForResponse("**/api/Prompt"), primary.click()]);
       await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
       expect(calls.at(-1)).toMatchObject({ text: "Please focus on the composer layout.", delivery: "QUEUE" });
       await page.locator("[data-queue-id]").waitFor();
@@ -91,13 +94,13 @@ for (const [width, touch] of [[390, true], [320, true], [820, true], [1280, fals
       await page.mouse.move(0, 0);
       await page.getByRole("tooltip").waitFor({ state: "hidden" });
       await page.screenshot({ path: path.join(shots, `native-composer-queued-${width}-${touch ? "touch" : "desktop"}.png`) });
-      await steer.click();
+      await Promise.all([page.waitForResponse("**/api/Prompt"), steer.click()]);
       await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
       expect(calls.at(-1)).toMatchObject({ text: "Keep the voice control.", delivery: "STEER" });
       expect(await input.evaluate((element: HTMLTextAreaElement) => document.activeElement === element)).toBe(true);
       await input.fill("Save this for later");
       await page.getByRole("button", { name: "Composer actions", exact: true }).click();
-      await page.getByRole("menuitem", { name: "Stash", exact: true }).click();
+      await Promise.all([page.waitForResponse("**/api/Prompt"), page.getByRole("menuitem", { name: "Stash", exact: true }).click()]);
       await page.waitForFunction(() => document.querySelector("textarea")?.value === "");
       expect(calls.at(-1)).toMatchObject({ text: "Save this for later", delivery: "STASH" });
       expect(errors).toEqual([]);
