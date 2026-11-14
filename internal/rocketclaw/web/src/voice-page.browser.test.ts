@@ -6,7 +6,7 @@ const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
 type Probe = { locks: number; mics: number; heard: number; audio?: HTMLMediaElement };
-type TransportProbe = { peer?: RTCPeerConnection; channel?: RTCDataChannel & { spoke?: boolean } };
+type TransportProbe = { peer?: RTCPeerConnection; channel?: RTCDataChannel & { spoke?: boolean }; arrived?: RTCDataChannelState };
 
 test("Voice page calls each person's sticky session of a sticky: user agent, keeps settings on the server, and the composer toggle ends its call on leaving the session", async () => {
   const { chromium: engine } = await import(playwright!);
@@ -97,7 +97,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
         const pc = new RTCPeerConnection(), counts = window as unknown as { closes?: number; messages?: number };
         Object.assign(window, { peer: pc });
         pc.ondatachannel = ({ channel }) => {
-          Object.assign(window, { channel }); // The test speaks on the newest call's channel, once the page says it opened.
+          Object.assign(window, { channel, arrived: channel.readyState }); // The test speaks on the newest call's channel, once the page says it opened.
           channel.onmessage = () => { counts.messages = (counts.messages ?? 0) + 1; };
           channel.onclose = () => { counts.closes = (counts.closes ?? 0) + 1; };
         };
@@ -240,7 +240,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     } catch (error) {
       console.error("Voice transcript wait failed", error, JSON.stringify({ calls, spoken, errors }));
       const transport = async () => {
-        const { peer, channel } = window as unknown as TransportProbe;
+        const { peer, channel, arrived } = window as unknown as TransportProbe;
         const stats: object[] = [];
         (await peer?.getStats())?.forEach((report) => {
           if (["transport", "data-channel", "candidate-pair"].includes(report.type)) stats.push(report);
@@ -249,7 +249,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
           connection: peer?.connectionState, signaling: peer?.signalingState,
           ice: peer?.iceConnectionState, gathering: peer?.iceGatheringState,
           sctp: peer?.sctp?.state, dtls: peer?.sctp?.transport.state,
-          channel: channel?.readyState, id: channel?.id, spoke: channel?.spoke,
+          channel: channel?.readyState, arrived, id: channel?.id, spoke: channel?.spoke,
           bufferedAmount: channel?.bufferedAmount, stats,
         };
       };
@@ -369,6 +369,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     await page.getByRole("button", { name: "Send", exact: true }).click();
     await failure.waitFor({ state: "detached" });
     voiceFails = false;
+    while (!(prompts as { text: string }[]).some((prompt) => prompt.text === "hello")) await Bun.sleep(10); // The error clears before the send leaves.
     prompts.length = 0;
     await page.goto(`${origin}/s/${Buffer.from("voice-1").toString("base64url")}`);
     await page.getByPlaceholder("Message or $command").fill("keep my unsent draft");
@@ -408,12 +409,17 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
     await page.goto(origin);
     await pick("main");
     await shownAgent("main");
-    // A draft saves to IndexedDB asynchronously; a reload before the save finishes would drop it.
-    const saved = (text: string) => page.waitForFunction(async (draft: string) => {
-      const db = await new Promise<IDBDatabase>((resolve) => { const open = indexedDB.open("rocketclaw-drafts", 1); open.onsuccess = () => resolve(open.result); });
-      const rows = await new Promise<{ text: string }[]>((resolve) => { const request = db.transaction("content").objectStore("content").getAll(); request.onsuccess = () => resolve(request.result); });
-      db.close(); return rows.some((row) => row.text === draft);
-    }, text);
+    // A draft saves to IndexedDB asynchronously; a reload before the save finishes would drop it. waitForFunction
+    // takes a returned promise as truthy, so this polls; and only voice-1's row counts, as the new session's holds
+    // the same text until its clear lands.
+    const saved = async (text: string) => {
+      while (!await page.evaluate(async (draft: string) => {
+        const db = await new Promise<IDBDatabase>((resolve) => { const open = indexedDB.open("rocketclaw-drafts", 1); open.onsuccess = () => resolve(open.result); });
+        const store = db.transaction("content").objectStore("content"), keys = store.getAllKeys(), rows = store.getAll();
+        await new Promise((resolve) => { rows.onsuccess = resolve; });
+        db.close(); return rows.result.some((row: { text: string }, index: number) => JSON.parse(keys.result[index] as string)[1] === "voice-1" && row.text === draft);
+      }, text)) await Bun.sleep(10);
+    };
     await page.getByPlaceholder("Message a new session").fill("hello main");
     await page.locator('input[type="file"]').setInputFiles({ name: "new.txt", mimeType: "text/plain", buffer: Buffer.from("new file") });
     promptFailure = "hello main";

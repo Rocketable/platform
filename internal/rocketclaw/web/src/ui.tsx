@@ -2026,7 +2026,7 @@ function TabRename({ session, tab, shared, placeholder, endEdit }: { session: Se
 function persistComposerDraft(draft: ComposerDraft) {
   if (!draft.hydrated || !draft.persistenceKey || draft.persistedEdit === draft.edit) return;
   draft.persistedEdit = draft.edit;
-  return draftContent(draft.persistenceKey, { text: draft.text, files: draft.files, agent: draft.agent }).then(
+  return draftContent(draft.persistenceKey, () => ({ text: draft.text, files: draft.files, agent: draft.agent })).then(
     () => { draft.persistenceError = ""; },
     () => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; },
   );
@@ -2091,7 +2091,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     draft.reverting = true;
     draft.persistenceError = "";
     onDraftChange();
-    return draftContent(JSON.stringify([scope, ""]), { text: "", files: [], agent: "" }).then(() => {
+    return draftContent(JSON.stringify([scope, ""]), () => ({ text: "", files: [], agent: "" })).then(() => {
       if (drafts.get("") === draft) { draft.text = ""; draft.files = []; draft.agent = ""; draft.edit++; }
       if (newChatOwner.current !== owner) return;
       drafts.delete("");
@@ -5085,7 +5085,7 @@ function SessionComposer({
   const question = useQuestion(id, draft, refreshHistory, setSendError);
   const { placeholder, sendLabel } = composerLabels(question.pending, busy, id);
   const goSession = (sessionId: string, resumed = false) => {
-    void draftContent(JSON.stringify([scope, ""]), { text: "", files: [], agent: "" }).catch(() => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; onDraftChange(); });
+    void draftContent(JSON.stringify([scope, ""]), () => ({ text: "", files: [], agent: "" })).catch(() => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; onDraftChange(); });
     draft.sessionId = sessionId;
     if (!resumed) {
       draft.persistenceKey = JSON.stringify([scope, sessionId]);
