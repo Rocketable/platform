@@ -53,7 +53,7 @@ test("real child-only changes refresh paired shadow turns through the parent str
     for (let settled = -1; pendingReads || settled !== reads.length; await page.waitForTimeout(100)) settled = reads.length;
     const heldReads = reads.length;
     await page.waitForTimeout(300);
-    expect(reads.length).toBe(heldReads);
+    expect(reads.slice(heldReads)).toStrictEqual([]);
     expect(reads).not.toContain(bindingB.childConversationId);
     expect((await fetch(`${url}/test/release/a`, { method: "POST" })).ok).toBe(true);
     await page.locator("[data-shadow-cell]").getByText("gpt-shadow-a answer 2", { exact: false }).first().waitFor();
