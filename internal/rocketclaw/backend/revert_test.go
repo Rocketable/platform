@@ -461,6 +461,9 @@ func TestRevertEligibility(t *testing.T) {
 
 	require.NoError(t, s.UpsertExternalMCPSession("binding", &ExternalMCPSessionState{ManagedConversationID: "external", PrivateConversationID: "private", Agent: "planner"}))
 
+	log := slog.New(slog.DiscardHandler)
+	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, log, &bridgeFactoryMock{newBridgeFunc: func(c *Config) directBridge { return &Bridge{config: *c, log: log} }})}
+
 	// Each chat Web lists, and each shadow, whoever started it; never a hidden run or a delegation.
 	for id, want := range map[string]bool{"slack-thread:C1:1.1": true, "web:cron:job:1": true, "external": true, "copied": true, "valid": true, "cron:job:1": false, "child/call": false, "private": false, "missing": false} {
 		_, allowed, _, err := s.RevertState(ctx, id)
@@ -470,6 +473,12 @@ func TestRevertEligibility(t *testing.T) {
 		if !want {
 			_, _, err = stageRevertDB(ctx, s.db, id, "")
 			require.ErrorIs(t, err, errRevertConversation, id)
+			_, _, err = rt.StageRevert(ctx, id, "")
+			require.ErrorIs(t, err, errRevertConversation, id)
+		}
+
+		if !want && id != "missing" {
+			require.ErrorIs(t, rt.ClearRevert(ctx, id), errRevertConversation, id)
 		}
 	}
 }
@@ -1097,8 +1106,9 @@ func TestRevertBranchCancelsPreservedOwners(t *testing.T) {
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager}
 
-	for _, id := range []string{"withdraw", "discard"} {
-		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: id}, true)
+	// A system input is not a person's to preserve.
+	for _, id := range []string{"withdraw", "system", "discard"} {
+		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: id}, id != "system")
 		inbound.ConversationID, inbound.Metadata["web_message_id"] = "main", id
 		request := bridgeRequest{inbound: inbound, queueItemID: id, completion: &turnCompletion{done: make(chan struct{})}}
 
@@ -1107,6 +1117,8 @@ func TestRevertBranchCancelsPreservedOwners(t *testing.T) {
 		b.mu.Unlock()
 		require.NoError(t, err)
 	}
+
+	require.Len(t, b.waiting, 2)
 
 	withdrawn, discarded := b.waiting[0].completion, b.waiting[1].completion
 	changed, err := rt.DeleteQueueItem(ctx, "main", "discard")
@@ -1215,13 +1227,28 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 
 	s := newTestSessionService(t)
 
-	for _, failure := range []struct{ table, operation, phase string }{
-		{"entries", "DELETE", ""}, {"entries", "UPDATE", ""},
-		{"turns", "DELETE", "done"}, {"steps", "DELETE", ""},
-		{"turns", "DELETE", "waiting"}, {"conversations", "UPDATE", ""},
-		{"turns", "INSERT", "waiting"},
+	const (
+		laterAsSlack  = `UPDATE entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input,0,prompt_header}', '"[Slack]"')::json WHERE COALESCE(entry_json->>'turn_id', '') = '';`
+		markerChanges = `CREATE TRIGGER reject_branch BEFORE UPDATE ON conversations FOR EACH ROW WHEN (OLD.revert_message_id <> NEW.revert_message_id) EXECUTE FUNCTION reject_branch()`
+	)
+
+	for _, failure := range []struct{ name, setup, want string }{
+		{"entries delete", `CREATE TRIGGER reject_branch BEFORE DELETE ON entries FOR EACH ROW EXECUTE FUNCTION reject_branch()`, "branch write failed"},
+		{"entries update", `CREATE TRIGGER reject_branch BEFORE UPDATE ON entries FOR EACH ROW EXECUTE FUNCTION reject_branch()`, "branch write failed"},
+		{"done turns delete", `CREATE TRIGGER reject_branch BEFORE DELETE ON turns FOR EACH ROW WHEN (OLD.phase = 'done') EXECUTE FUNCTION reject_branch()`, "branch write failed"},
+		{"steps delete", `CREATE TRIGGER reject_branch BEFORE DELETE ON steps FOR EACH ROW EXECUTE FUNCTION reject_branch()`, "branch write failed"},
+		{"waiting turns delete", `CREATE TRIGGER reject_branch BEFORE DELETE ON turns FOR EACH ROW WHEN (OLD.phase = 'waiting') EXECUTE FUNCTION reject_branch()`, "branch write failed"},
+		{"conversations update", `CREATE TRIGGER reject_branch BEFORE UPDATE ON conversations FOR EACH ROW EXECUTE FUNCTION reject_branch()`, "branch write failed"},
+		{"waiting turns insert", `CREATE TRIGGER reject_branch BEFORE INSERT ON turns FOR EACH ROW WHEN (NEW.phase = 'waiting') EXECUTE FUNCTION reject_branch()`, "branch write failed"},
+		{"marker commit", markerChanges, "commit revert marker"},
+		{"summary reset", `CREATE TRIGGER reject_branch BEFORE UPDATE ON conversations FOR EACH ROW WHEN (OLD.last_updated IS NOT NULL AND NEW.last_updated IS NULL) EXECUTE FUNCTION reject_branch()`, "reset reverted summary"},
+		{"unknown marker", `UPDATE conversations SET revert_message_id = '999:0'`, ErrRevertMessageGone.Error()},
+		{"unreadable kept summary", `UPDATE entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input,0,prompt_header}', '42')::json WHERE entry_json->>'turn_id' = 'old-turn'`, "decode session summary replay input"},
+		{"unreadable admitted input", `UPDATE turns SET inbound_json = '{"Text":5,"Metadata":{"web_message_id":"replacement"}}' WHERE id = 'old-turn'`, "decode admitted Web input"},
+		{"later Slack message cancel", laterAsSlack + markerChanges, "cancel staged revert"},
+		{"later Slack message principals", laterAsSlack + `CREATE TRIGGER reject_branch BEFORE UPDATE ON conversations FOR EACH ROW WHEN (OLD.revert_message_id = NEW.revert_message_id) EXECUTE FUNCTION reject_branch()`, "refresh message principals"},
 	} {
-		t.Run(failure.table+"/"+failure.operation+"/"+failure.phase, func(t *testing.T) {
+		t.Run(failure.name, func(t *testing.T) {
 			// Cases run serially in this parent's schema; retain migrations, not prior case state.
 			_, err := s.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
@@ -1245,6 +1272,15 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 			marker := fmt.Sprintf("%d:2", id)
 			_, _, err = stageRevertDB(ctx, s.db, "main", marker)
 			require.NoError(t, err)
+			_, err = s.db.ExecContext(ctx, `CREATE FUNCTION reject_branch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'branch write failed'; END $$`)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, err := s.db.Exec(`DROP FUNCTION reject_branch() CASCADE`)
+				require.NoError(t, err)
+			})
+
+			_, err = s.db.ExecContext(ctx, failure.setup)
+			require.NoError(t, err)
 
 			const snapshot = `WITH entry_rows AS (
 				SELECT jsonb_agg(to_jsonb(e) ORDER BY id) AS agg FROM entries e
@@ -1260,27 +1296,13 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 
 			var before, after string
 			require.NoError(t, s.db.QueryRowContext(ctx, snapshot).Scan(&before))
-			_, err = s.db.ExecContext(ctx, `CREATE FUNCTION reject_branch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'branch write failed'; END $$`)
-			require.NoError(t, err)
-
-			when := "TRUE"
-			if failure.phase != "" {
-				when = map[string]string{"INSERT": "NEW", "DELETE": "OLD"}[failure.operation] + ".phase = '" + failure.phase + "'"
-			}
-
-			_, err = s.db.ExecContext(ctx, fmt.Sprintf("CREATE TRIGGER reject_branch BEFORE %s ON %s FOR EACH ROW WHEN (%s) EXECUTE FUNCTION reject_branch()", failure.operation, failure.table, when))
-			require.NoError(t, err)
-			t.Cleanup(func() {
-				_, err := s.db.Exec(`DROP FUNCTION reject_branch() CASCADE`)
-				require.NoError(t, err)
-			})
 
 			b := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler)}
 			rt := &Runtime{Sessions: s}
 			replacement := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindHeld, &protocol.InboundContent{Text: "edited"}, true)
 			replacement.ConversationID, replacement.Metadata["web_message_id"] = "main", "replacement"
 			fresh, err := rt.admitWeb(ctx, b, &bridgeRequest{inbound: replacement}, protocol.GoalRequest{})
-			require.ErrorContains(t, err, "branch write failed")
+			require.ErrorContains(t, err, failure.want)
 			require.False(t, fresh)
 			require.NoError(t, s.db.QueryRowContext(ctx, snapshot).Scan(&after))
 			require.JSONEq(t, before, after, "cutoff, suffix, journals, pending inputs and summary must all survive failed admission")
@@ -1329,6 +1351,21 @@ func TestRevertStorageFailuresAreNotEmptySuccess(t *testing.T) {
 	require.ErrorContains(t, err, "database is closed")
 	_, _, err = stageRevertDB(ctx, s.db, "main", "1:0")
 	require.ErrorContains(t, err, "database is closed")
+	_, err = revertTargetDB(ctx, s.db, "main", "1:0")
+	require.ErrorContains(t, err, "read revert boundary")
+	_, err = saveRevertTurnDB(ctx, s.db, "main", "new", "turn")
+	require.ErrorContains(t, err, "read reverted input")
+	require.ErrorContains(t, commitRevertDB(ctx, s.db, "main", "1:0"), "lock session history")
+
+	preserved := &turnCompletion{done: make(chan struct{})}
+
+	b.mu.Lock()
+	err = b.preserveRevertRequestLocked(ctx, &bridgeRequest{inbound: inbound, completion: preserved})
+	b.mu.Unlock()
+	require.ErrorContains(t, err, "classify waiting reverted input")
+	<-preserved.done
+	require.ErrorIs(t, preserved.err, err, "a failed transfer releases its caller")
+	require.Empty(t, b.waiting)
 	require.ErrorContains(t, s.closeTurn(ctx, "turn"), "database is closed")
 	require.ErrorContains(t, s.PutThreadQueueItem("new", &protocol.ThreadQueueItem{}), "database is closed")
 	require.Empty(t, b.requestCh, "storage failure must never wake execution")
@@ -1339,7 +1376,11 @@ func TestRevertStageFailurePreservesHistory(t *testing.T) {
 
 	s := newTestSessionService(t)
 
-	for _, unavailable := range []string{"goal", "turns", "conversations update", "settled delivery"} {
+	for _, tc := range []struct{ unavailable, want string }{
+		{"conversations.goal_objective", "read goal"}, {"turns", `relation "turns" does not exist`}, {"conversations update", "stage failed"}, {"settled delivery", "revert requires settled delivery"},
+		{"entries.audience", "observe session revert"}, {"turns.inbound_json", "read reverted goal prompt"},
+	} {
+		unavailable := tc.unavailable
 		t.Run(unavailable, func(t *testing.T) {
 			_, err := s.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
@@ -1353,15 +1394,17 @@ func TestRevertStageFailurePreservesHistory(t *testing.T) {
 			manager.bridges["main"] = b
 			rt := &Runtime{Sessions: s, threads: manager}
 
-			switch unavailable {
-			case "goal":
-				_, err = s.db.ExecContext(ctx, `ALTER TABLE conversations RENAME COLUMN goal_objective TO unavailable_goal_objective`)
+			table, column, renamed := strings.Cut(unavailable, ".")
+
+			switch {
+			case renamed:
+				_, err = s.db.ExecContext(ctx, "ALTER TABLE "+table+" RENAME COLUMN "+column+" TO unavailable_"+column)
 				require.NoError(t, err)
 				t.Cleanup(func() {
-					_, err := s.db.Exec(`ALTER TABLE conversations RENAME COLUMN unavailable_goal_objective TO goal_objective`)
+					_, err := s.db.Exec("ALTER TABLE " + table + " RENAME COLUMN unavailable_" + column + " TO " + column)
 					require.NoError(t, err)
 				})
-			case "conversations update":
+			case unavailable == "conversations update":
 				_, err = s.db.ExecContext(ctx, `CREATE FUNCTION reject_stage() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'stage failed'; END $$;
 					CREATE TRIGGER reject_stage BEFORE UPDATE ON conversations FOR EACH ROW EXECUTE FUNCTION reject_stage()`)
 				require.NoError(t, err)
@@ -1369,7 +1412,7 @@ func TestRevertStageFailurePreservesHistory(t *testing.T) {
 					_, err := s.db.Exec(`DROP FUNCTION reject_stage() CASCADE`)
 					require.NoError(t, err)
 				})
-			case "settled delivery":
+			case unavailable == "settled delivery":
 				err = startTurnDB(ctx, s.db, "delivering", "main", protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "running", true))
 				require.NoError(t, err)
 				_, err = s.finishTurn(ctx, "delivering", &turnFinish{conversationID: strings.TrimSpace("main"), outbound: &protocol.OutboundMessage{ConversationID: "main"}})
@@ -1384,7 +1427,7 @@ func TestRevertStageFailurePreservesHistory(t *testing.T) {
 
 			require.NoError(t, err)
 			_, _, err = rt.StageRevert(ctx, "main", fmt.Sprintf("%d:0", id))
-			require.Error(t, err)
+			require.ErrorContains(t, err, tc.want)
 			require.False(t, b.historyMutation, "failed staging must release the transient barrier")
 
 			var marker string
@@ -1403,9 +1446,10 @@ func TestRevertCorruptHistoryCannotBeAdmitted(t *testing.T) {
 
 	s := newTestSessionService(t)
 
-	for _, corrupt := range []struct{ name, raw string }{
-		{"trace", `{"type":"turn","output_trace":1,"replay_input":[{"role":"user","type":"message","content":"old"}]}`},
-		{"replay", `{"type":"turn","replay_input":[{"role":"user","type":"message","input_id":"old","prompt_header":42,"content":"old"}]}`},
+	for _, corrupt := range []struct{ name, raw, want string }{
+		{"trace", `{"type":"turn","output_trace":1,"replay_input":[{"role":"user","type":"message","content":"old"}]}`, "decode revert boundary"},
+		{"replay", `{"type":"turn","replay_input":[{"role":"user","type":"message","input_id":"old","prompt_header":42,"content":"old"}]}`, "decode revert boundary"},
+		{"synced", `{"type":"turn","sync_source_entry_id":"1","replay_input":[42]}`, "read visible replay item type"},
 	} {
 		t.Run(corrupt.name, func(t *testing.T) {
 			_, err := s.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
@@ -1416,7 +1460,7 @@ func TestRevertCorruptHistoryCannotBeAdmitted(t *testing.T) {
 			var id int64
 			require.NoError(t, s.db.QueryRowContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', $1, '') RETURNING id`, corrupt.raw).Scan(&id))
 			_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
-			require.ErrorContains(t, err, "decode revert boundary")
+			require.ErrorContains(t, err, corrupt.want)
 
 			_, err = s.ObserveHistory(ctx, "main", "", 0, 0, 0, &HistoryInventory{})
 			if corrupt.name == "trace" {

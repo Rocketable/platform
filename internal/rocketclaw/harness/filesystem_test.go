@@ -276,8 +276,18 @@ func TestTSandboxedFileSystem(t *testing.T) {
 	}
 
 	{
+		file := sfs.ReadResult("offset.txt", 0).Output
+		require.Equal(t, "offset must be greater than or equal to 1", file)
+	}
+
+	{
 		file := sfs.ReadResult("file_b.txt", 30).Output
 		require.Equal(t, "File not found: file_b.txt", file)
+	}
+
+	{
+		file := sfs.ReadResult("secret", 1).Output
+		require.Equal(t, "failed to read file: secret", file)
 	}
 
 	{
@@ -414,6 +424,10 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 		got := sfs.Glob(context.Background(), "*.txt", "missing")
 		require.Contains(t, got, "missing")
 		require.Contains(t, got, "no such file or directory")
+	})
+
+	t.Run("denies symlinked search path", func(t *testing.T) {
+		require.Equal(t, "symlink access denied: glob/linkdir", sfs.Glob(context.Background(), "*.txt", "glob/linkdir"))
 	})
 
 	t.Run("filters denied env files", func(t *testing.T) {
@@ -580,6 +594,22 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 
 	t.Run("no matches", func(t *testing.T) {
 		require.Equal(t, "No files found", sfs.Grep(context.Background(), "missing", "grep", ""))
+	})
+
+	t.Run("requires pattern", func(t *testing.T) {
+		require.Equal(t, "pattern is required", sfs.Grep(context.Background(), "", "grep", ""))
+	})
+
+	t.Run("include matches no files", func(t *testing.T) {
+		require.Equal(t, "No files found", sfs.Grep(context.Background(), "needle", "grep", "*.pdf"))
+	})
+
+	t.Run("reports invalid include", func(t *testing.T) {
+		require.Equal(t, "rg: error parsing glob '[': unclosed character class; missing ']'", sfs.Grep(context.Background(), "needle", "grep", "["))
+	})
+
+	t.Run("searches file in sandbox root", func(t *testing.T) {
+		require.Equal(t, "Found 1 matches\n"+filepath.Join(dir, "grep-ripgreprc")+":\n  Line 1: --bad-flag", sfs.Grep(context.Background(), "bad", "grep-ripgreprc", ""))
 	})
 
 	t.Run("searches directory sorted by newest file then path and line", func(t *testing.T) {
@@ -946,6 +976,33 @@ func TestApplyPatchAbsolutePaths(t *testing.T) {
 	require.Contains(t, result.Error, "path escapes root")
 }
 
+func TestApplyPatchFailures(t *testing.T) {
+	for _, tt := range []struct {
+		name, patch, want string
+	}{
+		{"empty path", "*** Add File:\n+x", "apply_patch verification failed: empty patch path"},
+		{"parent path", "*** Add File: ../x.txt\n+x", "apply_patch verification failed: invalid patch path: ../x.txt"},
+		{"delete symlink", "*** Delete File: link", "apply_patch verification failed: symlink access denied: link"},
+		{"missing change context", "*** Update File: file.txt\n@@ missing\n-old\n+new", "apply_patch verification failed: Error: Failed to find context 'missing' in <root>/file.txt"},
+		{"missing blank line", "*** Update File: file.txt\n@@\n \n+new", "apply_patch verification failed: Error: Failed to find expected lines in <root>/file.txt:\n"},
+		{"add below a file", "*** Add File: file.txt/child.txt\n+x", `apply_patch verification failed: lstat "file.txt/child.txt": statat file.txt/child.txt: not a directory`},
+		{"add over a directory", "*** Add File: dir\n+x", `apply_patch verification failed: write text file "dir": openat dir: is a directory`},
+		{"move into symlinked directory", "*** Update File: file.txt\n*** Move to: link/moved.txt\n@@\n-old\n+new", "apply_patch verification failed: symlink access denied: link"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root, err := os.OpenRoot(t.TempDir())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
+			require.NoError(t, root.WriteFile("file.txt", []byte("old\n"), 0o644))
+			require.NoError(t, root.Mkdir("dir", 0o755))
+			require.NoError(t, root.Symlink("dir", "link"))
+			sfs := &sandboxedFileSystem{root: root}
+
+			require.Equal(t, strings.ReplaceAll(tt.want, "<root>", root.Name()), sfs.ApplyPatch("*** Begin Patch\n"+tt.patch+"\n*** End Patch"))
+		})
+	}
+}
+
 func TestApplyPatchParity(t *testing.T) {
 	t.Parallel()
 
@@ -957,6 +1014,7 @@ func TestApplyPatchParity(t *testing.T) {
 		{"append", "first\n", "+last", "first\nlast\n"},
 		{"blank context", "first\nlast\nmore\n", "-last\n+changed\n ", "first\nchanged\nmore\n"},
 		{"introduced BOM", "first\n", "-first\n+\ufefflast", "\ufefflast\n"},
+		{"insert before trailing blank line", "first\n\n", "+last", "first\nlast\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, err := os.OpenRoot(t.TempDir())

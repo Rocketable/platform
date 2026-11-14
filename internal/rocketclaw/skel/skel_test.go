@@ -87,27 +87,55 @@ func TestSyncRejectsRootSetupDirectory(t *testing.T) {
 
 func TestSyncReportsWorkspaceDirectoryConflicts(t *testing.T) {
 	tests := []struct {
-		name string
-		path string
-		want string
+		name    string
+		path    string
+		symlink string
+		dirMode os.FileMode
+		want    string
 	}{
 		{name: "agents file", path: agentsRoot, want: "unpack embedded rocketclaw overlay agents"},
 		{name: "skills file", path: skillsRoot, want: "create rocketclaw skills overlay directory"},
 		{name: "target file", path: targetRoot, want: "reset rocketclaw target"},
 		{name: "scripts file", path: scriptsRoot, want: "apply rocketclaw overlay: rocketclaw overlay path is not a directory"},
 		{name: "overlay clones file", path: targetRoot + "/" + overlaysRoot, want: "reconcile configured rocketclaw overlays: configured overlay clone path is not a directory"},
+		{name: "root setup symlink loop", path: "AGENTS.md", symlink: "AGENTS.md", want: "stat root setup path"},
+		{name: "root setup dangling symlink", path: "AGENTS.md", symlink: "missing/AGENTS.md", want: "write root setup file"},
+		{name: "scripts symlink loop", path: scriptsRoot, symlink: scriptsRoot, want: "remove stale workspace script symlinks: stat workspace scripts directory"},
+		{name: "scripts unreadable", path: scriptsRoot, dirMode: os.ModeDir, want: "remove stale workspace script symlinks: walk workspace scripts: walk workspace scripts"},
+		{name: "workflows symlink loop", path: workflowsRoot, symlink: workflowsRoot, want: "apply rocketclaw overlay: stat rocketclaw overlay directory"},
+		{name: "workflows dangling symlink", path: workflowsRoot, symlink: "missing", want: "create rocketclaw workflows overlay directory"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmp := t.TempDir()
-			path := filepath.Join(tmp, tt.path)
-			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-			require.NoError(t, os.WriteFile(path, []byte("file"), 0o644))
+			placeConflict(t, filepath.Join(tmp, tt.path), tt.symlink, tt.dirMode)
 
 			err := SyncInWithOverlays(tmp, targetRoot, nil, testLogger())
 			require.ErrorContains(t, err, tt.want)
+
+			_, err = os.Lstat(filepath.Join(tmp, "missing"))
+			require.ErrorIs(t, err, os.ErrNotExist, "sync must not write through dangling symlinks")
 		})
+	}
+}
+
+// placeConflict replaces path with a symlink to symlink when set, a directory with dirMode's permissions when dirMode has os.ModeDir, or a regular file otherwise.
+func placeConflict(t *testing.T, path, symlink string, dirMode os.FileMode) {
+	t.Helper()
+
+	require.NoError(t, os.RemoveAll(path))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+
+	switch {
+	case symlink != "":
+		require.NoError(t, os.Symlink(symlink, path))
+	case dirMode.IsDir():
+		require.NoError(t, os.Mkdir(path, 0o755))
+		require.NoError(t, os.Chmod(path, dirMode.Perm()))
+		t.Cleanup(func() { require.NoError(t, os.Chmod(path, 0o755)) })
+	default:
+		require.NoError(t, os.WriteFile(path, []byte("file"), 0o644))
 	}
 }
 
@@ -475,14 +503,39 @@ func TestSyncWorkspaceScriptSymlinksPreservesRegularFilesAndUnrelatedSymlinks(t 
 	assert.Equal(t, "../external.sh", target)
 }
 
-func TestSyncWorkspaceScriptSymlinksRejectsDirectoryConflict(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, targetRoot, "scripts"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "scripts", "tool.sh"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"), []byte("runtime script"), 0o644))
+func TestSyncWorkspaceScriptSymlinksReportsConflicts(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		symlink string
+		dirMode os.FileMode
+		want    string
+	}{
+		{name: "workspace script directory", path: "scripts/nested/tool.sh", dirMode: os.ModeDir | 0o755, want: "workspace script path is a directory"},
+		{name: "workspace scripts symlink loop", path: "scripts", symlink: "scripts", want: "stat workspace scripts directory"},
+		{name: "runtime scripts symlink loop", path: targetRoot + "/scripts", symlink: "scripts", want: "stat runtime scripts directory"},
+		{name: "runtime scripts file", path: targetRoot + "/scripts", want: "runtime scripts path is not a directory"},
+		{name: "runtime scripts unreadable", path: targetRoot + "/scripts/nested", dirMode: os.ModeDir, want: "walk runtime scripts: walk runtime scripts"},
+		{name: "workspace script parent file", path: "scripts/nested", want: "walk runtime scripts: stat workspace script"},
+		{name: "workspace script parent dangling symlink", path: "scripts/nested", symlink: "missing", want: "walk runtime scripts: create workspace script directory"},
+		{name: "workspace script parent read-only", path: "scripts/nested", dirMode: os.ModeDir | 0o500, want: "walk runtime scripts: create workspace script symlink"},
+		{name: "git directory symlink loop", path: ".git", symlink: ".git", want: "stat git directory"},
+		{name: "git exclude directory", path: ".git/info/exclude", dirMode: os.ModeDir | 0o755, want: "read git exclude file"},
+		{name: "git info dangling symlink", path: ".git/info", symlink: "missing", want: "create git info directory"},
+		{name: "git info read-only", path: ".git/info", dirMode: os.ModeDir | 0o500, want: "write git exclude file"},
+	}
 
-	err := syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger())
-	require.ErrorContains(t, err, "workspace script path is a directory")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(workspace, targetRoot, "scripts", "nested"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(workspace, targetRoot, "scripts", "nested", "tool.sh"), []byte("runtime script"), 0o644))
+			placeConflict(t, filepath.Join(workspace, tt.path), tt.symlink, tt.dirMode)
+
+			err := syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger())
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
 }
 
 func TestSyncWorkspaceScriptSymlinksWithoutRuntimeScriptsDoesNotCreateWorkspaceScripts(t *testing.T) {
