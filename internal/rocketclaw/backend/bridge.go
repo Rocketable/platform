@@ -929,7 +929,13 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 
 	admitted, errHandle := b.activateInbound(ctx, request)
 	if !admitted && errHandle == nil {
+		// Its input ran under the turn that claimed it, or keeps its row for later work.
+		if request.completion != nil {
+			close(request.completion.done)
+		}
+
 		b.pickLaterWorkLogged(ctx, b, &protocol.InboundMessage{})
+
 		return
 	}
 
@@ -981,6 +987,7 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 	b.mu.Lock()
 	if b.historyMutation {
 		err := b.preserveRevertRequestLocked(ctx, request)
+		request.completion = nil // Preservation answered the caller or holds it with the input.
 		b.mu.Unlock()
 
 		return false, err
