@@ -6,6 +6,10 @@ ifeq ($(shell uname -s),Darwin)
 
 LINUX_PROFILE ?= rocketclaw-linux
 linux_docker := docker --context colima-$(LINUX_PROFILE)
+# Every workspace's runs share the volume, so each gets its own emulated shell test folder there: runs from two
+# workspaces at once would otherwise run each other's test binary and clear each other's image state. Only the
+# image's package cache is shared. A folder whose workspace is gone, about 400 MB, goes at the next test run.
+linux_sandbox := /sandbox/$(subst /,_,$(abspath ../..))
 
 # The command line's variables, such as GOTESTRUN='^(TestA|TestB)$$', go to the container's make as given: make
 # lists them in MAKEOVERRIDES with spaces escaped and each $ doubled, so each is undone and quoted for the shell.
@@ -20,7 +24,8 @@ Makefile: ;
 %: linux-container
 	$(linux_docker) run --rm --privileged --network host -v $(HOME):$(HOME) -w $(CURDIR) \
 		-v /var/run/docker.sock:/var/run/docker.sock -v rocketclaw-linux-home:/home/dev \
-		-v rocketclaw-linux-sandbox:/sandbox -e SANDBOX_TEST_DIR=/sandbox \
+		-v rocketclaw-linux-sandbox:/sandbox -e SANDBOX_TEST_DIR=$(linux_sandbox) -e SANDBOX_PACKAGE_CACHE=/sandbox/packages \
+		-e SANDBOX_TEST_WORKSPACES=/sandbox \
 		rocketclaw-linux make $(linux_overrides) $@
 
 # The VM is Ubuntu, whose AppArmor lets bubblewrap make user namespaces only with a profile saying so.
@@ -72,6 +77,7 @@ build: generate lint
 # prerequisite fails them. The guest image, built on the first run, and the test folders must be on a local
 # filesystem. The image's packages and indexes stay in its packages folder, for the next build.
 SANDBOX_TEST_DIR ?= $(abspath ../../.tmp)/sandbox-test
+SANDBOX_PACKAGE_CACHE ?= $(SANDBOX_TEST_DIR)/packages
 # -race needs cgo: SANDBOX_TEST_FLAGS=-race SANDBOX_TEST_CGO=1 (the binary then needs the rootfs's glibc).
 # SANDBOX_TEST_SCOPE starts the tests in a delegated cgroup; CI, without a user systemd, runs them as a
 # transient service under sudo, since only a service's cgroup is handed to its --uid. A shell stays there as
@@ -90,14 +96,19 @@ SANDBOX_TEST_SCOPE ?= /bin/sh -c 'cg=/sys/fs/cgroup$$(cut -d: -f3 /proc/self/cgr
 endif
 SANDBOX_TEST_SCOPE ?= systemd-run --user --scope --quiet -p Delegate=yes
 SANDBOX_TEST_COVERPROFILE ?=
+# SANDBOX_TEST_WORKSPACES, when set, holds one SANDBOX_TEST_DIR per workspace, each naming its workspace in a
+# .workspace file; a folder whose workspace no longer exists is removed.
+SANDBOX_TEST_WORKSPACES ?=
 sandbox-test:
 	rm -rf $(SANDBOX_TEST_DIR)/gocover
 	mkdir -p $(SANDBOX_TEST_DIR)/tmp $(SANDBOX_TEST_DIR)/gocover
+	$(if $(SANDBOX_TEST_WORKSPACES),echo '$(abspath ../..)' > $(SANDBOX_TEST_DIR)/.workspace; \
+		for d in $(SANDBOX_TEST_WORKSPACES)/*/; do if w=$$(cat "$$d.workspace" 2>/dev/null) && [ ! -d "$$w" ]; then rm -rf "$$d"; fi; done)
 	CGO_ENABLED=$(SANDBOX_TEST_CGO) go test -c $(SANDBOX_TEST_FLAGS) $(if $(SANDBOX_TEST_COVERPROFILE),-cover -covermode=atomic -coverpkg=$(COVERPKG)) -o $(SANDBOX_TEST_DIR)/harness.test ./harness
 	cd harness && $(SANDBOX_TEST_SCOPE) /bin/sh -c '"$$@"; exit $$?' sh /usr/bin/env ROCKETCLAW_SANDBOX_REQUIRE=1 \
 		ROCKETCLAW_SANDBOX_DIR=$(SANDBOX_TEST_DIR)/sandbox TMPDIR=$(SANDBOX_TEST_DIR)/tmp \
 		$(if $(SANDBOX_TEST_PACKAGE_MIRROR),ROCKETCLAW_SANDBOX_PACKAGE_MIRROR=$(SANDBOX_TEST_PACKAGE_MIRROR)) \
-		ROCKETCLAW_SANDBOX_PACKAGE_CACHE=$(SANDBOX_TEST_DIR)/packages \
+		ROCKETCLAW_SANDBOX_PACKAGE_CACHE=$(SANDBOX_PACKAGE_CACHE) \
 		$(if $(SANDBOX_TEST_COVERPROFILE),ROCKETCLAW_SANDBOX_GOCOVERDIR=$(SANDBOX_TEST_DIR)/gocover) \
 		$(SANDBOX_TEST_DIR)/harness.test -test.run 'TestEmulatedShell' -test.v -test.count 1 -test.failfast -test.timeout 30m \
 		$(if $(SANDBOX_TEST_COVERPROFILE),-test.coverprofile=$(abspath $(SANDBOX_TEST_COVERPROFILE)))
@@ -156,6 +167,8 @@ check-coverage: coverage-profile
 # Test browsers whose test run was killed never exit, so they are cleared before and after the
 # run. Only orphans (parent PID 1) match, so other running test runs keep their browsers. [c] keeps the
 # pattern from matching this recipe's own shell, whose parent is PID 1 when make is, as in the Linux container.
+# The database container goes by the ID docker run prints: runs on a Mac share one Docker daemon, and a name made
+# from this shell's PID would repeat, since make is PID 1 in each run's container.
 coverage-profile:
 	@set -eu; \
 	name=; \
@@ -167,14 +180,13 @@ coverage-profile:
 	trap cleanup EXIT INT TERM; \
 	if [ -z "$${ROCKETCLAW_TEST_DATABASE_URL:-}" ]; then \
 		latest=$$(curl -fsSL https://www.postgresql.org/versions.json | jq -r '[.[] | select(.supported) | .major] | max_by(tonumber)'); \
-		name=rocketclaw-pg-$$$$; \
-		docker run -d --name "$$name" \
+		name=$$(docker run -d \
 			-e POSTGRES_HOST_AUTH_METHOD=trust \
 			-e POSTGRES_USER=postgres \
 			-e POSTGRES_PASSWORD=postgres \
 			-e POSTGRES_DB=rocketclaw_test \
 			-p 127.0.0.1::5432 \
-			postgres:$$latest >/dev/null; \
+			postgres:$$latest); \
 		port=$$(docker port "$$name" 5432/tcp); \
 		port=$${port##*:}; \
 		i=0; \
