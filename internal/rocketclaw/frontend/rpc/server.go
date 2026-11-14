@@ -31,6 +31,7 @@ import (
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
@@ -1016,7 +1017,7 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 // conversationKinds is each recorded conversation kind as Web names it.
 func conversationKind(kind backend.ConversationKind) ConversationKind {
 	switch kind {
-	case backend.KindWebChat:
+	case backend.KindWebChat, backend.KindAgentDraft:
 		return ConversationKind_WEB_CHAT
 	case backend.KindSlackThread:
 		return ConversationKind_SLACK_THREAD
@@ -1230,7 +1231,7 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 		Workspace: cfg.Workspace, Overlays: cfg.Overlays,
 		LoggingLevel: cfg.Logging.Level, AutoApproverModel: cfg.AutoApproverModel,
 		InstrumentationEnabled: cfg.Instrumentation.Enabled, McpExternal: cfg.MCPExternal.Enabled,
-		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)),
+		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)), Providers: cfg.ProviderNames(),
 	}
 
 	if login := metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-login-bin"); len(login) == 1 {
@@ -1245,6 +1246,21 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 	}
 
 	return &ListConfigResponse{Config: view}, nil
+}
+
+// testModel sends one small request to the model the editor chose and reports how long it took, or
+// why it failed: in the provider's own words when it answered.
+func (s *Server) testModel(ctx context.Context, request *TestModelRequest) *TestModelResponse {
+	elapsed, err := backend.TestModel(ctx, s.cfg.Clone(), request.Model)
+	if errAPI, ok := errors.AsType[*openai.Error](err); ok {
+		return &TestModelResponse{Error: cmp.Or(errAPI.Message, err.Error())}
+	}
+
+	if err != nil {
+		return &TestModelResponse{Error: err.Error()}
+	}
+
+	return &TestModelResponse{ElapsedMs: elapsed.Milliseconds()}
 }
 
 // listWorkflows lists the saved workflows for the web $workflow picker.
@@ -1623,7 +1639,8 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return nil, err
 	}
 
-	if err := s.promptable(ctx, request.Id); err != nil {
+	conversation, err := s.promptable(ctx, request.Id)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1646,6 +1663,12 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		}
 
 		return &PromptResponse{}, nil
+	}
+
+	// A message sent to a test chat from here would run without the draft and its record, so only the agent
+	// editor's Send adds one; $stop still ends its turn.
+	if conversation == backend.KindAgentDraft {
+		return nil, fmt.Errorf("web prompt: %w", status.Error(codes.FailedPrecondition, "A test chat takes messages only from its agent editor's Send."))
 	}
 
 	if len(words) > 0 && words[0] == "$agent" {
@@ -1866,6 +1889,10 @@ func (s *Server) queueItem(ctx context.Context, method string, request *QueueIte
 		return nil, fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "queue item ID is required"))
 	}
 
+	if err := s.queueKeptAsSent(ctx, request.Id); err != nil {
+		return nil, err
+	}
+
 	if method != "RemoveQueueItem" {
 		// Only a promoted item joins the running turn; a released or edited one runs as a later turn.
 		if err := s.turnFeedable(ctx, request.Id, method == "SteerQueueItem"); err != nil {
@@ -1905,11 +1932,30 @@ func (s *Server) reorderQueue(ctx context.Context, request *ReorderQueueRequest)
 		return nil, err
 	}
 
+	if err := s.queueKeptAsSent(ctx, request.Id); err != nil {
+		return nil, err
+	}
+
 	if err := s.backend.ReorderQueueItems(request.Id, request.ItemIds); err != nil {
 		return nil, fmt.Errorf("reorder web queue: %w", err)
 	}
 
 	return &QueueItemResponse{}, nil
+}
+
+// queueKeptAsSent refuses steering, removing, reordering, releasing and editing the waiting messages of id when
+// it is an agent draft's test chat: each runs as its record says it was sent, in the order sent.
+func (s *Server) queueKeptAsSent(ctx context.Context, id string) error {
+	kind, _, err := s.sessions.ConversationKind(ctx, id)
+	if err != nil {
+		return fmt.Errorf("resolve web conversation kind: %w", err)
+	}
+
+	if kind == backend.KindAgentDraft {
+		return fmt.Errorf("web queue: %w", status.Error(codes.FailedPrecondition, "A test chat's messages run as they were sent, in order: restart the chat to change them."))
+	}
+
+	return nil
 }
 
 // listPending adds the conversation's Background Jobs, whether MoveToBackground has work there,
@@ -2011,13 +2057,14 @@ func (s *Server) answerQuestion(ctx context.Context, request *AnswerQuestionRequ
 	return &AnswerQuestionResponse{}, nil
 }
 
-// promptable admits prompts only to visible RocketClaw conversations.
-func (s *Server) promptable(ctx context.Context, id string) error {
-	if kind, _, err := s.sessions.ConversationKind(ctx, id); err != nil || kind == backend.KindRemote {
-		return fmt.Errorf("web prompt: %w", cmp.Or(err, status.Error(codes.InvalidArgument, "remote OpenCode sessions are driven in their own frame")))
+// promptable admits prompts only to visible RocketClaw conversations, and returns the conversation's kind.
+func (s *Server) promptable(ctx context.Context, id string) (backend.ConversationKind, error) {
+	kind, _, err := s.sessions.ConversationKind(ctx, id)
+	if err != nil || kind == backend.KindRemote {
+		return kind, fmt.Errorf("web prompt: %w", cmp.Or(err, status.Error(codes.InvalidArgument, "remote OpenCode sessions are driven in their own frame")))
 	}
 
-	return s.visibleConversation(ctx, id)
+	return kind, s.visibleConversation(ctx, id)
 }
 
 // turnFeedable refuses a caller the config's permissions limit when session id's current agent is outside their
@@ -2062,13 +2109,18 @@ func (s *Server) visibleConversation(ctx context.Context, id string) error {
 		return fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "conversation ID is required"))
 	}
 
-	_, found, err := s.sessions.ConversationKind(ctx, id)
+	kind, found, err := s.sessions.ConversationKind(ctx, id)
 	if err != nil {
 		return fmt.Errorf("resolve web conversation visibility: %w", err)
 	}
 
 	if !found {
 		return fmt.Errorf("web conversation: %w", status.Error(codes.NotFound, "conversation is not recorded"))
+	}
+
+	// An agent draft's test chat runs the draft's real tools, which only the agent editor's people may use.
+	if kind == backend.KindAgentDraft && limit.Limited() {
+		return agentEditorRefusal()
 	}
 
 	parent, err := s.sessions.ShadowParent(ctx, id)
@@ -2118,8 +2170,14 @@ func (s *Server) readableConversation(ctx context.Context, id string) error {
 	return s.visibleConversation(ctx, id)
 }
 
+// join streams wake-ups for a conversation, or with a "draft:<id>" ID for an agent draft's changes, which
+// only the agent editor's people may follow.
 func (s *Server) join(request *JoinRequest, stream grpc.ServerStream) error {
-	if err := s.visibleConversation(stream.Context(), request.Id); err != nil {
+	if strings.HasPrefix(request.Id, "draft:") {
+		if _, err := s.editor(stream.Context()); err != nil {
+			return err
+		}
+	} else if err := s.visibleConversation(stream.Context(), request.Id); err != nil {
 		return err
 	}
 

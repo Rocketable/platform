@@ -20,7 +20,7 @@ Makefile: ;
 %: linux-container
 	$(linux_docker) run --rm --privileged --network host -v $(HOME):$(HOME) -w $(CURDIR) \
 		-v /var/run/docker.sock:/var/run/docker.sock -v rocketclaw-linux-home:/home/dev \
-		-v rocketclaw-linux-sandbox:/sandbox -e SANDBOX_TEST_DIR=/sandbox \
+		-v rocketclaw-linux-sandbox:/sandbox -e SANDBOX_TEST_DIR=/sandbox -e GOCACHE=$(abspath ../../.tmp)/gocache \
 		rocketclaw-linux make $(linux_overrides) $@
 
 # The VM is Ubuntu, whose AppArmor lets bubblewrap make user namespaces only with a profile saying so.
@@ -36,7 +36,7 @@ COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
 COVERAGE_REQUIRED ?= 91.8
 GOTESTRUN ?= .
-GO_SOURCE_CLOC_BUDGET ?= 42750
+GO_SOURCE_CLOC_BUDGET ?= 45750
 GO_SOURCE_CLOC_HAZARD_ZONE ?= 500
 
 run:

@@ -23,6 +23,9 @@ const (
 	AgentModeEasy AgentMode = "easy"
 )
 
+// Valid reports whether m is easy or advanced.
+func (m AgentMode) Valid() bool { return m == AgentModeEasy || m == AgentModeAdvanced }
+
 // AgentLoadConfig is the runtime configuration easy agents are checked and compiled against.
 type AgentLoadConfig struct {
 	// MCPToolGroups maps every configured MCP server to its tool groups (read, write) of tool-name patterns.
@@ -44,9 +47,8 @@ type AgentRoutine struct {
 // left out or set to auto turns on everything in it behind review, a written section only what it lists.
 // Only skill, task and the embedder's default-on tools skip review.
 func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
-	node := agent.FrontmatterNode
-	if err := checkKeys(node, "", "not an easy-mode key", "mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN",
-		"commands", "mcp", "rocketclaw", "tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema", "sticky", "decision"); err != nil {
+	node, keys := agent.FrontmatterNode, easyKeys()
+	if err := checkKeys(node, "", "not an easy-mode key", keys[""]...); err != nil {
 		return err
 	}
 
@@ -54,8 +56,8 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 		return errors.New("space: required non-empty string")
 	}
 
-	for _, nested := range [][]string{{"approver", "model", "prompt", "decision"}, {"schema", "output"}} {
-		if err := checkKeys(frontmatterField(node, nested[0]), nested[0]+".", "not an easy-mode key", nested[1:]...); err != nil {
+	for _, parent := range []string{"approver", "schema"} {
+		if err := checkKeys(frontmatterField(node, parent), parent+".", "not an easy-mode key", keys[parent]...); err != nil {
 			return err
 		}
 	}
@@ -347,6 +349,18 @@ func checkKeys(node *yaml.Node, prefix, problem string, keys ...string) error {
 	}
 
 	return nil
+}
+
+// easyKeys lists the keys an easy agent file may set under each parent key, "" for the top level. Advanced
+// agents share the approver.decision list.
+func easyKeys() map[string][]string {
+	return map[string][]string{
+		"": {"mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN", "commands", "mcp", "rocketclaw",
+			"tags", "skills", "allowedNetworkTargets", "routines", "delegatedFrom", "schema", "sticky", "decision"},
+		"approver":          {"model", "prompt", "decision"},
+		"approver.decision": {"model", "minConfidence", "prompt"},
+		"schema":            {"output"},
+	}
 }
 
 // easyList decodes an omitted section, or one set to auto, as nil, and a written section as its list.

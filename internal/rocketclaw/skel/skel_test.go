@@ -766,6 +766,47 @@ func TestReplaceRuntimeAssetsAfterValidationCommitsFreshOverlayAndRefreshesScrip
 	assert.Equal(t, "new script", string(data))
 }
 
+// Validating with a file checks the stage Reload would build, the file in place of the workspace's, and
+// changes neither the workspace nor the runtime directory.
+func TestValidateRuntimeAssetsWithStagesTheFile(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "bot.md"), []byte("old"), 0o644))
+
+	builtin, err := os.ReadFile(filepath.Join(agentsRoot, "main.md"))
+	require.NoError(t, err)
+
+	errValidate := errors.New("invalid staged assets")
+	staged := ""
+	err = ValidateRuntimeAssetsWith(workspace, nil, testLogger(), map[string][]byte{"agents/bot.md": []byte("new")}, func(stagedWorkDir string) error {
+		staged = stagedWorkDir
+
+		for file, want := range map[string]string{"bot.md": "new", "main.md": string(builtin)} {
+			data, err := os.ReadFile(filepath.Join(workspace, stagedWorkDir, agentsRoot, file))
+			require.NoError(t, err)
+			assert.Equal(t, want, string(data))
+		}
+
+		return errValidate
+	})
+	require.ErrorIs(t, err, errValidate)
+	require.NotEmpty(t, staged)
+	require.NoDirExists(t, filepath.Join(workspace, staged))
+	require.NoDirExists(t, filepath.Join(workspace, targetRoot))
+
+	data, err := os.ReadFile(filepath.Join(workspace, agentsRoot, "bot.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "old", string(data))
+
+	accept := func(string) error { return nil }
+	require.ErrorContains(t, ValidateRuntimeAssetsWith(filepath.Join(workspace, "missing"), nil, testLogger(), nil, accept), "create rocketclaw reload stage")
+	require.ErrorContains(t, ValidateRuntimeAssetsWith(workspace, nil, testLogger(), map[string][]byte{"nowhere/bot.md": nil}, accept), "write staged file nowhere/bot.md")
+
+	require.NoError(t, os.RemoveAll(filepath.Join(workspace, agentsRoot)))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot), nil, 0o644))
+	require.ErrorContains(t, ValidateRuntimeAssetsWith(workspace, nil, testLogger(), nil, accept), "not a directory")
+}
+
 func TestSyncFSRootMapping(t *testing.T) {
 	tests := []struct {
 		name string

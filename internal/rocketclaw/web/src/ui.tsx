@@ -29,7 +29,7 @@ import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timel
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { ThreadPRContent, ThreadPRWatch } from "./thread-pr-panel";
 import { reportTyping, TypingPill } from "./typing";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Attachment, AttachmentGroup, AttachmentMedia, AttachmentContent, AttachmentTitle, AttachmentDescription, AttachmentActions, AttachmentAction } from "@/components/ui/attachment";
@@ -42,6 +42,7 @@ import { Trace, TraceCollapsible, TraceCollapsibleContent, TraceCollapsibleTrigg
 import { cn } from "@/lib/utils";
 import type { Agent, AgentChoices, Attachment as AttachmentMeta, AttentionAction, BackgroundJob, CodeModeCall, ConfigView, ConversationKind, CronJob, QueueItem, Remote, Session, SavedTabs, SearchPage as SearchPageState, TabAttention, TopShelf, TranscriptEvent, VoiceSettings } from "@/types";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
+import { AgentEditorPage, editAgent } from "@/agent-editor";
 import type { MountOptions, Mounted } from "../../oc/host/api";
 import {
   invalidatePendingSaves,
@@ -438,6 +439,7 @@ function useRoute() {
     cron: pathname === "/cron",
     timeline: pathname.startsWith("/cron/") ? decodeSessionId(pathname.slice("/cron/".length)) : "",
     agents: pathname === "/agents",
+    editor: /^\/agents\/(new|drafts\/[^/]+)$/.test(pathname),
     skills: pathname === "/skills",
     // Skill names are lowercase letters, digits and hyphens (internal/rocketclaw/harness skills.go), so paths hold them as-is.
     skill: pathname.startsWith("/skills/") ? pathname.slice("/skills/".length) : "",
@@ -936,7 +938,7 @@ type Space = { id: string; name: string };
 // last names each space's last active tab; sharedOrder is this person's order of Shared tabs by path.
 type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string; last: Record<string, string>; sharedOrder: string[] };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
-const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard], "/closed": ["Recently closed", History] };
+const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/agents/new": ["Create New Agent", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard], "/closed": ["Recently closed", History] };
 
 // A Search page is /search or a location under it, each its own tab; it is titled with its name, else the query it shows.
 const isSearch = (path: string) => /^\/search(\/|$)/.test(path);
@@ -954,6 +956,7 @@ function pageLabel(page: string) {
 function pageTab(path: string): [string, typeof Search] | undefined {
   if (path.startsWith("/pages/")) return [pageLabel(path.split("/").slice(3).join("/")), FileText];
   if (path.startsWith("/cron/")) return [decodeSessionId(path.slice("/cron/".length)), Clock];
+  if (path.startsWith("/agents/drafts/")) return ["Agent draft", Bot];
   return pageTabs[path] ?? (path.startsWith("/skills/") ? [path.slice("/skills/".length), Sparkles] : undefined);
 }
 
@@ -1963,6 +1966,14 @@ function tabActivity(session: Session, unread: boolean) {
 const tabLabel = (tab: Pick<Tab, "path" | "search">, session: Session, SessionIcon: typeof Search): [string, typeof Search] =>
   isSearch(tab.path) ? [searchTitle(tab.search), Search] : pageTab(tab.path) ?? [sessionTitle(session), SessionIcon];
 
+// A tab's title, cleaned for display. An agent draft's tab is titled as its editor is: "Edit <agent>" for an existing
+// agent, else the new agent's name.
+function useTabTitle(path: string, label: string) {
+  const id = path.startsWith("/agents/drafts/") ? path.slice("/agents/drafts/".length) : "";
+  const draft = useQuery({ ...queries.agentDrafts(), enabled: !!id }).data?.drafts.find((item) => item.id === id);
+  return useCleanText((draft && (draft.existing ? `Edit ${draft.name}` : draft.name)) || label);
+}
+
 // A tab's park, with the time it ends or until the session's next turn ends, in words.
 function timerText(mark?: Omit<TabAttention, "path">) {
   const when = mark?.until && new Date(mark.until).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
@@ -1980,7 +1991,7 @@ function TabItem({ tab, description, detail, chosen, rule, active, stop, shared,
   const mark = id ? rowAttention(session) : attentionOf(sidebar, tab.path), unread = !!mark?.unreadAt && !mark.parked, aside = timerText(mark);
   const [activity, SessionIcon, working] = tabActivity(session, unread);
   const [label, Icon] = tabLabel(tab, session, SessionIcon);
-  const title = useCleanText(label);
+  const title = useTabTitle(tab.path, label);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => { if (active) ref.current!.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [active, title]);
   return <div data-tab={tab.path} data-running={working} data-asking={!!session.asking} data-unread={unread} draggable={!editing} className={cn("group flex shrink-0 items-center rounded-md", active ? "bg-sidebar-row-active" : "hover:bg-accent", { "bg-accent": chosen, "opacity-60": mark?.parked || offline })}
@@ -2026,7 +2037,7 @@ function TabRename({ session, tab, shared, placeholder, endEdit }: { session: Se
 function persistComposerDraft(draft: ComposerDraft) {
   if (!draft.hydrated || !draft.persistenceKey || draft.persistedEdit === draft.edit) return;
   draft.persistedEdit = draft.edit;
-  return draftContent(draft.persistenceKey, { text: draft.text, files: draft.files, agent: draft.agent }).then(
+  return draftContent(draft.persistenceKey, () => ({ text: draft.text, files: draft.files, agent: draft.agent })).then(
     () => { draft.persistenceError = ""; },
     () => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; },
   );
@@ -2065,7 +2076,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = ![route.cron, route.timeline, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.pages, route.shortcuts, route.closed, route.page, route.remote].some(Boolean);
+  const showChat = ![route.editor, route.cron, route.timeline, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.pages, route.shortcuts, route.closed, route.page, route.remote].some(Boolean);
   // The screen stays on while the Voice page is open or a call runs.
   const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
   useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
@@ -2091,7 +2102,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     draft.reverting = true;
     draft.persistenceError = "";
     onDraftChange();
-    return draftContent(JSON.stringify([scope, ""]), { text: "", files: [], agent: "" }).then(() => {
+    return draftContent(JSON.stringify([scope, ""]), () => ({ text: "", files: [], agent: "" })).then(() => {
       if (drafts.get("") === draft) { draft.text = ""; draft.files = []; draft.agent = ""; draft.edit++; }
       if (newChatOwner.current !== owner) return;
       drafts.delete("");
@@ -2178,6 +2189,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               {route.voice ? <VoicePage /> : null}
               <PageIndex show={route.pages} />
               <ShortcutsPage show={route.shortcuts} />
+              <AgentEditorPage show={route.editor} />
               <ClosedTabsPage show={route.closed} />
               <HostedPage key={route.page} page={route.page} />
               <SkillPage name={route.skill} />
@@ -2781,7 +2793,7 @@ function ClosedTabsPage({ show }: { show: boolean }) {
 function ClosedTabRow({ tab, space }: { tab: ClosedTab; space?: string }) {
   const { reopen } = useContext(TabActions), id = pathSession(tab.path);
   const [label, Icon] = tabLabel(tab, useContext(Sidebar).rows.find((row) => row.id === id) ?? { id }, MessageSquare);
-  const title = useCleanText(label);
+  const title = useTabTitle(tab.path, label);
   return <button type="button" className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" onClick={() => reopen(tab)}>
     <Icon aria-hidden="true" className="size-4 shrink-0" /><span className="min-w-0 flex-1 truncate">{title}</span>
     {space ? <span className="shrink-0 text-xs text-muted-foreground">{space}</span> : null}
@@ -3549,7 +3561,7 @@ function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
   return `${base}:${n}`;
 }
 
-function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true, canonical: true }, comparison = false) {
+export function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true, canonical: true }, comparison = false) {
   const turns: { user: Line[]; items: Line[]; lines: Line[] }[] = [];
   let current = { user: [] as Line[], items: [] as Line[], lines: [] as Line[] };
   const calls = new Map<string, Line & { toolParts: Line[] }>();
@@ -3601,7 +3613,7 @@ function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true
   return turns;
 }
 
-function comparisonRows(parents: Turn[], children: Turn[], binding: ShadowBinding) {
+export function comparisonRows(parents: Turn[], children: Turn[], binding: ShadowBinding) {
   const childTurns = new Map(children.map((turn) => [turn.lines[0]?.turnId, turn]));
   const correlations = new Map(binding.turns.map((turn) => [`turn:${turn.parentSourceConversationId}:${turn.parentTurnId}`, turn]));
   const rows = parents.map((parent) => {
@@ -3937,7 +3949,7 @@ function TranscriptLine({ line, conversationId, hasSandboxed, open }: { line: Li
 
 type Turn = ReturnType<typeof transcriptTurns>[number];
 
-function turnKey(turn: Turn) {
+export function turnKey(turn: Turn) {
   return turn.user[0]?.id ?? turn.items[0]?.id;
 }
 
@@ -4001,7 +4013,7 @@ const TranscriptTurn = memo(function TranscriptTurn({ turn, index, running, deta
 }, (previous, next) => !next.live && previous.running === next.running && previous.index === next.index && previous.detail === next.detail && previous.conversationId === next.conversationId && previous.hasSandboxed === next.hasSandboxed
   && previous.turn.lines.length === next.turn.lines.length && previous.turn.lines.every((line, index) => line === next.turn.lines[index]));
 
-function TurnContent({ turn, detail, conversationId, hasSandboxed, comparison = false }: { turn: Turn; detail: TimelineRows; conversationId: string; hasSandboxed: boolean; comparison?: boolean }) {
+export function TurnContent({ turn, detail, conversationId, hasSandboxed, comparison = false }: { turn: Turn; detail: TimelineRows; conversationId: string; hasSandboxed: boolean; comparison?: boolean }) {
   return <>
       {comparison ? null : turn.user.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
       <TranscriptLines rows={projectTimeline(turn.items, detail)} conversationId={conversationId} hasSandboxed={hasSandboxed} />
@@ -4038,7 +4050,7 @@ function TranscriptLines({ rows, conversationId, hasSandboxed }: { rows: Timelin
   });
 }
 
-function shadowHistory(binding: ShadowBinding | undefined, drafts: Map<string, ComposerDraft>) {
+export function shadowHistory(binding: ShadowBinding | undefined, drafts: Map<string, ComposerDraft>) {
   const id = binding?.childConversationId ?? "";
   return queryOptions<{ lines: Line[]; delegations?: Pick<HistoryView, "delegations" | "reviewRationales"> }>({ queryKey: ["shadow-history", id, binding?.turns], enabled: !!binding,
     placeholderData: (previous, query) => query?.queryKey[1] === id ? previous : undefined,
@@ -4066,7 +4078,7 @@ function useShadowHistory(binding?: ShadowBinding) {
   return useQuery(shadowHistory(binding, drafts.current));
 }
 
-function ShadowCell({ row, index, binding, detail, delegations }: { row: ReturnType<typeof comparisonRows>[number]; index: number; binding: ShadowBinding; detail: TimelineRows; delegations?: Pick<HistoryView, "delegations" | "reviewRationales"> }) {
+export function ShadowCell({ row, index, binding, detail, delegations }: { row: ReturnType<typeof comparisonRows>[number]; index: number; binding: ShadowBinding; detail: TimelineRows; delegations?: Pick<HistoryView, "delegations" | "reviewRationales"> }) {
   let status = "Not attached for this turn or inactive agent segment.";
   if (row.correlation) {
     status = row.correlation.running ? "Working…" : row.correlation.terminal === "complete"
@@ -4426,7 +4438,7 @@ function historyLines(messages: TranscriptEvent[]): Line[] {
   });
 }
 
-function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
+export function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
   const scope = useContext(DraftScope);
   const history = useQuery({ ...queries.history({ id }), enabled: false });
   const refreshHistory = useCallback(() => readHistoryDelta(draft.sessionId, draft, onDraftChange), [draft, onDraftChange]);
@@ -5085,7 +5097,7 @@ function SessionComposer({
   const question = useQuestion(id, draft, refreshHistory, setSendError);
   const { placeholder, sendLabel } = composerLabels(question.pending, busy, id);
   const goSession = (sessionId: string, resumed = false) => {
-    void draftContent(JSON.stringify([scope, ""]), { text: "", files: [], agent: "" }).catch(() => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; onDraftChange(); });
+    void draftContent(JSON.stringify([scope, ""]), () => ({ text: "", files: [], agent: "" })).catch(() => { draft.persistenceError = "Draft could not be saved locally. Keep this page open."; onDraftChange(); });
     draft.sessionId = sessionId;
     if (!resumed) {
       draft.persistenceKey = JSON.stringify([scope, sessionId]);
@@ -5959,21 +5971,30 @@ function VoiceToggle({ sessionId, agent, sending, call }: { sessionId: string; a
 
 function AgentsPage() {
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000 });
+  // One edit at a time, marked by the click itself, which React draws before the next click, so a double click makes
+  // one draft.
+  const [editing, setEditing] = useState(false);
+  const identity = useQuery(queries.identity()).data, editor = identity !== undefined && !identity.limited, edit = useMutation({ mutationFn: editAgent, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["agentDrafts"] }), onSettled: () => setEditing(false) });
   const [open, setOpen] = useState<string | null>(null);
   const rows = agents.data?.agents ?? [];
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
       <PageTitle>Agents</PageTitle>
+      {editor ? <Link href="/agents/new" className={buttonVariants({ size: "sm", className: "w-fit" })}><Plus />Create New Agent</Link> : null}
+      {edit.error ? <p role="alert" className="text-sm text-destructive">{edit.error.message}</p> : null}
       {agents.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
       {agents.error ? <p className="text-sm text-destructive">{agents.error.message}</p> : null}
       {rows.length === 0 && !agents.isLoading && !agents.error ? <p className="text-sm text-muted-foreground">No agents configured.</p> : null}
       {rows.map((agent) => (
         <section key={agent.name} className="border-b pb-4">
-          <button type="button" className="w-full text-left" onClick={() => setOpen(open === agent.name ? null : agent.name)}>
-            <h2 className="text-sm font-medium">{agent.name}</h2>
-            <p className="text-xs text-muted-foreground">{[agent.model, agent.reasoning, agent.verbosity, agent.origin].filter(Boolean).join(" · ")}</p>
-            {agent.description ? <p className="mt-1 text-sm leading-relaxed">{agent.description}</p> : null}
-          </button>
+          <div className="flex items-start gap-2">
+            <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setOpen(open === agent.name ? null : agent.name)}>
+              <h2 className="text-sm font-medium">{agent.name}</h2>
+              <p className="text-xs text-muted-foreground">{[agent.model, agent.reasoning, agent.verbosity, agent.origin].filter(Boolean).join(" · ")}</p>
+              {agent.description ? <p className="mt-1 text-sm leading-relaxed">{agent.description}</p> : null}
+            </button>
+            {editor ? <Button size="xs" variant="outline" aria-label={`Edit ${agent.name}`} disabled={editing} onClick={() => { setEditing(true); edit.mutate(agent.name); }}>Edit</Button> : null}
+          </div>
           {open === agent.name ? (
             <div className="mt-3 flex flex-col gap-3">
               {([["Shell", agent.customShell], ["Permissions", agent.permissions], ["Prompt", agent.prompt]] as const).map(([title, text]) => text ? (

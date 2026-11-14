@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -18,12 +20,16 @@ import (
 // maxIDBytes bounds an ID a request names; stored IDs are far shorter.
 const maxIDBytes = 1024
 
+// editorMethods are the agent editor's methods, closed to people limited to spaces: a draft can grant
+// itself any permission, and its test chats run real tools.
+const editorMethods = "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft ApplyAgentDraftOp SetAgentDraftPresence AgentSettings DraftPrompt RestartDraftChat DraftLayers SaveDraft StopWaiting ProposeDraftChanges DecideProposal"
+
 // Register publishes the implemented portion of rpc.Web. Other methods retain
 // gRPC's Unimplemented response; they are not successful empty handlers.
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
 
-	for _, method := range []string{"Protocol", "Identity", "Reload", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "Board", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "EditQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "VoiceSettings", "Tabs", "GetPage", "ListPages", "ReportTyping"} {
+	for _, method := range append([]string{"Protocol", "Identity", "Reload", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "Board", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "EditQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "VoiceSettings", "Tabs", "GetPage", "ListPages", "ReportTyping"}, strings.Fields(editorMethods)...) {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 
@@ -231,8 +237,81 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 	case "DeleteSessionEntries":
 		return s.DeleteSessionEntries(ctx, request.(*SessionEntriesRequest))
 	default:
+		return s.editorCall(ctx, method, request)
+	}
+}
+
+// editorCall answers the agent editor's methods, refusing people limited to spaces before any of them
+// runs, and any other method as pageCall.
+func (s *Server) editorCall(ctx context.Context, method string, request any) (any, error) {
+	if !slices.Contains(strings.Fields(editorMethods), method) {
 		return s.pageCall(ctx, request)
 	}
+
+	username, err := s.editor(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	switch method {
+	case "CreateAgentDraft":
+		return s.createAgentDraft(ctx, username, request.(*CreateAgentDraftRequest))
+	case "ListAgentDrafts":
+		return s.listAgentDrafts(ctx)
+	case "GetAgentDraft":
+		return s.getAgentDraft(ctx, username, request.(*GetAgentDraftRequest))
+	case "ApplyAgentDraftOp":
+		return s.applyAgentDraftOp(ctx, username, request.(*ApplyAgentDraftOpRequest))
+	case "SetAgentDraftPresence":
+		return s.setAgentDraftPresence(ctx, username, request.(*SetAgentDraftPresenceRequest))
+	case "AgentSettings":
+		return agentSettings(request.(*AgentSettingsRequest)), nil
+	case "DraftPrompt":
+		prompt := request.(*DraftPromptRequest)
+		return s.sendAgentDraft(ctx, &backend.AgentDraftSend{ID: prompt.Id, Username: username, Texts: []string{prompt.Text}})
+	case "RestartDraftChat":
+		restart := request.(*RestartDraftChatRequest)
+		return s.sendAgentDraft(ctx, &backend.AgentDraftSend{ID: restart.Id, Username: username, Restart: true, Replay: restart.ReplayEarlier, Texts: restart.Replay})
+	case "DraftLayers":
+		return s.draftLayers(ctx, request.(*DraftLayersRequest))
+	case "SaveDraft":
+		return s.saveDraft(ctx, username, request.(*SaveDraftRequest))
+	case "StopWaiting":
+		return s.stopWaiting(ctx, username, request.(*StopWaitingRequest))
+	case "ProposeDraftChanges":
+		return s.proposeDraftChanges(ctx, username, request.(*ProposeDraftChangesRequest))
+	case "DecideProposal":
+		decision := request.(*DecideProposalRequest)
+
+		proposal, err := s.sessions.DecideAgentDraftProposal(ctx, decision.Id, decision.ProposalId, username, decision.Accept)
+		if err != nil {
+			return nil, agentDraftError("DecideProposal", err)
+		}
+
+		return agentDraftProposalView(proposal), nil
+	case "TestModel":
+		return s.testModel(ctx, request.(*TestModelRequest)), nil
+	default:
+		return s.pageCall(ctx, request)
+	}
+}
+
+// editor returns the caller's username, refusing people limited to spaces.
+func (s *Server) editor(ctx context.Context) (string, error) {
+	username, limit, err := s.spaceLimit(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	if limit.Limited() {
+		return "", agentEditorRefusal()
+	}
+
+	return username, nil
+}
+
+func agentEditorRefusal() error {
+	return fmt.Errorf("web agent editor: %w", status.Error(codes.PermissionDenied, "people limited to spaces cannot use the agent editor"))
 }
 
 func (s *Server) identity(ctx context.Context) (*IdentityResponse, error) {

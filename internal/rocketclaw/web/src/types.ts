@@ -38,7 +38,53 @@ export type Agent = { name: string; model?: string; reasoning?: string; descript
 export type Skill = { name: string; description?: string; license?: string; compatibility?: string; content?: string; origin?: string };
 export type Workflow = { name: string; description?: string };
 export type PageEntry = { agent: string; space?: string; path: string };
-export type ConfigView = { workspace?: string; overlays?: string[]; slackChannels?: { channel?: string; agents?: string[] }[]; mcpServers?: string[]; loggingLevel?: string; autoApproverModel?: string; instrumentationEnabled?: boolean; mcpExternal?: boolean; tailscaleUser?: string };
+export type ConfigView = { workspace?: string; overlays?: string[]; slackChannels?: { channel?: string; agents?: string[] }[]; mcpServers?: string[]; loggingLevel?: string; autoApproverModel?: string; instrumentationEnabled?: boolean; mcpExternal?: boolean; tailscaleUser?: string; providers?: string[] };
+// An agent draft as the agent editor's RPCs answer it: revisions are int64 strings, and its first variant is the
+// agent itself. saveState is editing, saving, waiting (for a Git overlay's merge) or live; pending is its last save
+// to a Git overlay.
+export type AgentDraft = { id: string; revision: string; name: string; mode: string; variants: AgentDraftVariant[]; testChat: string; saveState: "editing" | "saving" | "waiting" | "live"; existing: boolean; externalMcp?: AgentDraftExternalMCP; pending?: AgentDraftPending };
+export type AgentDraftVariant = { name: string; settings: { key: string; value: string }[]; body: string };
+// A save pushed to a Git overlay: commit on branch, which is base for a push, or a branch of its own for a pull request
+// into base; number is the pull request gh opened, and link its page or, without gh, GitHub's page comparing the two.
+// ended is why the draft stopped waiting without going live: gh saw the pull request closed, Stop waiting, or an edit.
+export type AgentDraftPending = { destination: string; base: string; branch: string; commit: string; number?: number; link?: string; ended?: "closed" | "stopped" | "edited" };
+// Where saving a variant to destination puts it: every layer in precedence order, each later one winning, with its
+// file for the draft's name, absent where it has none; the later layer hiding the destination; the earlier one whose
+// agent the save takes over; whether startup copies the built-in agent over an overlay save; the file the save writes;
+// and for an overlay, the branch a push goes to, or why it cannot push there.
+export type DraftLayers = { layers: { layer: string; ref?: string; file?: string }[]; hiddenBy?: string; replaces?: string; recreated?: boolean; next: string; branch?: string; unpushable?: string };
+// A destination file that changed since the draft began: base, the file the draft expected, live, the file now, absent
+// where there is none; each setting either side changed, theirs when only the file did and both when each did
+// differently; and the instructions edit, on revision, that brings the file's changes into the draft's variant.
+export type AgentDraftReview = { revision: string; base?: string; live?: string; draft: string; settings?: { key: string; base?: string; live?: string; draft?: string; theirs?: boolean; both?: boolean }[]; splices?: AgentDraftSplice[] };
+// A save's outcome: the draft's save state, or, when refused, why nothing was written, with the settings that do not
+// load or the destination's changes to review.
+export type SaveDraftResponse = { saveState?: AgentDraft["saveState"]; refused?: string; problems?: AgentDraftProblem[]; review?: AgentDraftReview };
+// How the draft's test chat poses as an External MCP call: on, the caller's name and the metadata pairs.
+export type AgentDraftExternalMCP = { on?: boolean; caller?: string; metadata?: Record<string, string> };
+// A setting of a variant, or with no variant of the live agent's file, that keeps it from running, and why.
+export type AgentDraftProblem = { variant?: string; key?: string; sentence: string };
+// What a test message was sent with, by its user message's inputId: each column's version, by variant name, the
+// live file's, the columns that did not answer it, and its External MCP mode, pairs and caller.
+export type AgentDraftMessage = { inputId: string; labels?: Record<string, string>; live?: string; notRun?: AgentDraftProblem[]; externalMcp?: AgentDraftExternalMCP };
+// A refused send stored nothing: restart says a new test chat would take it. Otherwise problems are columns not run.
+export type DraftPromptResponse = { testChat: string; refused?: string; restart?: boolean; problems?: AgentDraftProblem[] };
+// A splice removes remove code points of the instructions at at, then inserts insert there.
+export type AgentDraftSplice = { at: number; remove?: number; insert?: string };
+// revision, at and author are the server's, set when the op committed; from is the revision a restore brings back.
+export type AgentDraftOp = { revision?: string; at?: string; author?: string; baseRevision: string; opId: string; kind: string; variant?: string; key?: string; value?: string; splices?: AgentDraftSplice[]; from?: string; fromFile?: string; externalMcp?: AgentDraftExternalMCP };
+// An op as an editor makes it, before the co-editing client gives it its id and base revision.
+export type AgentDraftOpInput = Omit<AgentDraftOp, "opId" | "baseRevision">;
+// The plain help for one agent file setting; key joins nested keys with dots, and control is text, switch, choice,
+// list, model or file.
+export type AgentSettingHelp = { key: string; group: string; label: string; explanation: string; defaultText: string; allowed: string; control: string; choices: string[]; required: boolean; common: boolean };
+export type AgentDraftPresence = { client: string; username?: string; variant: string; place: string };
+// The assistant's suggestion, made on baseRevision: its message, setting changes, where an empty valueYaml removes
+// the setting and the key mode changes the whole draft, and whole new instructions.
+export type AgentDraftProposal = { id: string; baseRevision: string; state: "open" | "accepted" | "rejected"; message: string; settings: { variant: string; key: string; valueYaml: string; reason: string }[]; bodies: { variant: string; body: string; reason: string }[] };
+// GetAgentDraft's answer: the draft now, the ops after the revision asked for, the editors seen lately, every
+// assistant suggestion, oldest first, and what each message to its test chat was sent with, in order.
+export type AgentDraftView = { draft: AgentDraft; ops: AgentDraftOp[]; presence: AgentDraftPresence[]; proposals: AgentDraftProposal[]; messages?: AgentDraftMessage[] };
 export type SlackNamesResponse = { names?: Record<string, string> };
 // The first Voice frame carries the answer SDP and its wire dialect; notices may follow; a call ends with at most one ended frame.
 export type VoiceRoute = "public" | "codex";

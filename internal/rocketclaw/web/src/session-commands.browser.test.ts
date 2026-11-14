@@ -289,11 +289,12 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
         });
       } finally { db.close(); }
     };
-    await page.waitForFunction(async (text: string) => {
+    // waitForFunction takes a returned promise as truthy, so the async read polls.
+    while (!await page.evaluate(async (text: string) => {
       const db = await new Promise<IDBDatabase>((resolve) => { const open = indexedDB.open("rocketclaw-drafts", 1); open.onsuccess = () => resolve(open.result); });
       const rows = await new Promise<{ text: string }[]>((resolve) => { const request = db.transaction("content").objectStore("content").getAll(); request.onsuccess = () => resolve(request.result); });
       db.close(); return rows.some((row) => row.text === text);
-    }, savedComposer);
+    }, savedComposer)) await Bun.sleep(10);
     const beforeReloadDrafts = await page.evaluate(readStoredDrafts);
     draftScopeRequests.clear();
     await page.reload();

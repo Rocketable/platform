@@ -347,7 +347,8 @@ test("a tab menu's Copy link copies the tab in view's whole address, and another
   await page.goto(url);
   await strip(page).getByRole("button", { name: "Tab actions", exact: true }).click();
   await page.getByRole("menuitem", { name: "Copy link", exact: true }).click();
-  const copied = (link: string) => page.waitForFunction(async (expected: string) => await navigator.clipboard.readText() === expected, link);
+  // waitForFunction takes a returned promise as truthy, so the async clipboard read polls.
+  const copied = async (link: string) => { while (await page.evaluate(() => navigator.clipboard.readText()) !== link) await Bun.sleep(10); };
   await copied(url);
   await menu(page, "Bravo", "Copy link");
   await copied(`${origin}${href("bravo")}`);

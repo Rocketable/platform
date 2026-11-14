@@ -70,12 +70,13 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
     await page.getByRole("button", { name: "Add files", exact: true }).click();
     await page.locator('input[type="file"]').setInputFiles({ name: "draft.txt", mimeType: "text/plain", buffer: Buffer.from("private bytes") });
     // Read the persisted bytes, not a timer; the next reload must restore File objects.
-    await page.waitForFunction(async () => {
+    // waitForFunction takes a returned promise as truthy, so async reads poll.
+    while (!await page.evaluate(async () => {
       const db = await new Promise<IDBDatabase>((resolve) => { const open = indexedDB.open("rocketclaw-drafts", 1); open.onsuccess = () => resolve(open.result); });
       const rows = await new Promise<{ text: string; files: { file: File }[] }[]>((resolve) => { const read = db.transaction("content").objectStore("content").getAll(); read.onsuccess = () => resolve(read.result); });
       db.close();
       return rows.some((row) => row.text === "Edited replacement" && row.files[0]?.file instanceof File);
-    });
+    })) await Bun.sleep(10);
     await page.reload();
     await page.waitForFunction(() => document.querySelector("textarea")?.value === "Edited replacement");
     await page.getByText("draft.txt", { exact: true }).waitFor();
@@ -145,12 +146,12 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`rever
       await input.fill(scratch);
       await page.getByRole("button", { name: "Add files", exact: true }).click();
       await page.locator('input[type="file"]').setInputFiles({ name: "scratch.txt", mimeType: "text/plain", buffer: Buffer.from("scratch bytes") });
-      await page.waitForFunction(async (text: string) => {
+      while (!await page.evaluate(async (text: string) => {
         const db = await new Promise<IDBDatabase>((resolve) => { const open = indexedDB.open("rocketclaw-drafts", 1); open.onsuccess = () => resolve(open.result); });
         const rows = await new Promise<{ text: string; files: { file: File }[] }[]>((resolve) => { const read = db.transaction("content").objectStore("content").getAll(); read.onsuccess = () => resolve(read.result); });
         db.close();
         return rows.some((row) => row.text === text && row.files[0]?.file.name === "scratch.txt");
-      }, scratch);
+      }, scratch)) await Bun.sleep(10);
       await page.evaluate((fail: boolean) => {
         const control = window as unknown as { releaseClear?: () => void; clearWrites: number };
         control.clearWrites = 0;

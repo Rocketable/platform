@@ -336,7 +336,7 @@ func TestDynamicWorkflowToolNotInRocketClawAutoAllowList(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	root := openWorkspaceRoot(t, workspace)
 
-	agents, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent)
+	agents, _, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent, nil)
 	require.NoError(t, err)
 
 	action, matched := agents.Items["main"].Permission.Evaluate("rocketclaw", dynamicWorkflowToolName)

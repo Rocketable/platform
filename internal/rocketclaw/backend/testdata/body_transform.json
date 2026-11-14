@@ -1,0 +1,125 @@
+{
+  "description": "Body transform vectors shared by the Go server and the Web client. Positions count Unicode code points. Each case starts from text with two concurrent edits a and b, lists of splices {at, remove, insert} applied in order. aFirst says whether a came first in server order. aPastB is a moved past b, bPastA is b moved past a; both are lists of splices that each remove or insert. Applying b then aPastB, or a then bPastA, gives result.",
+  "cases": [
+    {
+      "name": "inserts at the same spot keep server order",
+      "text": "0123456789",
+      "a": [{"at": 5, "insert": "A"}],
+      "b": [{"at": 5, "insert": "B"}],
+      "aFirst": false,
+      "aPastB": [{"at": 6, "insert": "A"}],
+      "bPastA": [{"at": 5, "insert": "B"}],
+      "result": "01234BA56789"
+    },
+    {
+      "name": "a delete splits around an insert committed inside it",
+      "text": "abcdefghijklmnopqrstuvwxyz",
+      "a": [{"at": 3, "remove": 17}],
+      "b": [{"at": 10, "insert": "XY"}],
+      "aFirst": false,
+      "aPastB": [{"at": 3, "remove": 7}, {"at": 5, "remove": 10}],
+      "bPastA": [{"at": 3, "insert": "XY"}],
+      "result": "abcXYuvwxyz"
+    },
+    {
+      "name": "text typed inside a committed delete survives where the passage was",
+      "text": "abcdefghijklmnopqrstuvwxyz",
+      "a": [{"at": 10, "insert": "XY"}],
+      "b": [{"at": 3, "remove": 17}],
+      "aFirst": false,
+      "aPastB": [{"at": 3, "insert": "XY"}],
+      "bPastA": [{"at": 3, "remove": 7}, {"at": 5, "remove": 10}],
+      "result": "abcXYuvwxyz"
+    },
+    {
+      "name": "overlapping deletes drop the overlap",
+      "text": "0123456789",
+      "a": [{"at": 2, "remove": 5}],
+      "b": [{"at": 4, "remove": 5}],
+      "aFirst": false,
+      "aPastB": [{"at": 2, "remove": 2}],
+      "bPastA": [{"at": 2, "remove": 2}],
+      "result": "019"
+    },
+    {
+      "name": "a delete inside another delete vanishes",
+      "text": "0123456789",
+      "a": [{"at": 1, "remove": 8}],
+      "b": [{"at": 3, "remove": 2}],
+      "aFirst": false,
+      "aPastB": [{"at": 1, "remove": 6}],
+      "bPastA": [],
+      "result": "09"
+    },
+    {
+      "name": "a file edit from XY to aX while a teammate types b before X",
+      "text": "XY",
+      "a": [{"at": 0, "insert": "a"}, {"at": 2, "remove": 1}],
+      "b": [{"at": 0, "insert": "b"}],
+      "aFirst": false,
+      "aPastB": [{"at": 1, "insert": "a"}, {"at": 3, "remove": 1}],
+      "bPastA": [{"at": 0, "insert": "b"}],
+      "result": "baX"
+    },
+    {
+      "name": "a file edit from XY to aX while a teammate deletes X",
+      "text": "XY",
+      "a": [{"at": 0, "insert": "a"}, {"at": 2, "remove": 1}],
+      "b": [{"at": 0, "remove": 1}],
+      "aFirst": false,
+      "aPastB": [{"at": 0, "insert": "a"}, {"at": 1, "remove": 1}],
+      "bPastA": [{"at": 1, "remove": 1}],
+      "result": "a"
+    },
+    {
+      "name": "a pending insert against a teammate's two-splice file edit",
+      "text": "XY",
+      "a": [{"at": 0, "insert": "b"}],
+      "b": [{"at": 0, "insert": "a"}, {"at": 2, "remove": 1}],
+      "aFirst": true,
+      "aPastB": [{"at": 0, "insert": "b"}],
+      "bPastA": [{"at": 1, "insert": "a"}, {"at": 3, "remove": 1}],
+      "result": "baX"
+    },
+    {
+      "name": "a replacing splice whose delete covers a teammate's delete",
+      "text": "0123",
+      "a": [{"at": 0, "remove": 3, "insert": "Z"}],
+      "b": [{"at": 1, "remove": 1}],
+      "aFirst": false,
+      "aPastB": [{"at": 0, "remove": 2}, {"at": 0, "insert": "Z"}],
+      "bPastA": [],
+      "result": "Z3"
+    },
+    {
+      "name": "repeated characters",
+      "text": "aaaa",
+      "a": [{"at": 2, "insert": "b"}],
+      "b": [{"at": 1, "remove": 2}],
+      "aFirst": false,
+      "aPastB": [{"at": 1, "insert": "b"}],
+      "bPastA": [{"at": 1, "remove": 1}, {"at": 2, "remove": 1}],
+      "result": "aba"
+    },
+    {
+      "name": "a replacing splice against an insert inside the replaced text",
+      "text": "0123",
+      "a": [{"at": 1, "remove": 2, "insert": "Z"}],
+      "b": [{"at": 2, "insert": "Q"}],
+      "aFirst": false,
+      "aPastB": [{"at": 1, "remove": 1}, {"at": 2, "remove": 1}, {"at": 2, "insert": "Z"}],
+      "bPastA": [{"at": 1, "insert": "Q"}],
+      "result": "0QZ3"
+    },
+    {
+      "name": "positions count code points, not UTF-16 units",
+      "text": "😀ab",
+      "a": [{"at": 2, "insert": "X"}],
+      "b": [{"at": 0, "remove": 1}],
+      "aFirst": false,
+      "aPastB": [{"at": 1, "insert": "X"}],
+      "bPastA": [{"at": 0, "remove": 1}],
+      "result": "aXb"
+    }
+  ]
+}

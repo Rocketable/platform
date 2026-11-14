@@ -219,6 +219,26 @@ func agentRecipients(agent *harness.Agent) (all bool, names []string, err error)
 	return false, names, nil
 }
 
+// checkedAgentTagGroups returns agent's tag groups once they and its recipients load, each error under the
+// setting at fault: the checks definitions get after loading.
+func checkedAgentTagGroups(agent *harness.Agent) ([][]string, error) {
+	tagsKey := "permission.rocketclaw." + setTagToolName
+	if agent.Mode == harness.AgentModeEasy {
+		tagsKey = "tags"
+	}
+
+	groups, err := agentTagGroups(agent)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", tagsKey, err)
+	}
+
+	if _, _, err := agentRecipients(agent); err != nil {
+		return nil, fmt.Errorf("permission.rocketclaw.%s: %w", recipientSetting, err)
+	}
+
+	return groups, nil
+}
+
 // checkRecipient refuses a write by agent sender into a session of agent target unless target's
 // rocketclaw_sessions_recipient, or an easy target's delegatedFrom, accepts sender.
 func checkRecipient(agents harness.Agents, target, sender string) error {
