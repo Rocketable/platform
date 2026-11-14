@@ -6,6 +6,7 @@ const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
 type Probe = { locks: number; mics: number; heard: number; audio?: HTMLMediaElement };
+type TransportProbe = { peer?: RTCPeerConnection; channel?: RTCDataChannel & { spoke?: boolean } };
 
 test("Voice page calls each person's sticky session of a sticky: user agent, keeps settings on the server, and the composer toggle ends its call on leaving the session", async () => {
   const { chromium: engine } = await import(playwright!);
@@ -94,6 +95,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
       if (voiceFails) return Response.json({ code: 9, message: "provider has no usable voice credentials" }, { status: 400 });
       const answer = await openai.evaluate(async (offer: string) => {
         const pc = new RTCPeerConnection(), counts = window as unknown as { closes?: number; messages?: number };
+        Object.assign(window, { peer: pc });
         pc.ondatachannel = ({ channel }) => {
           Object.assign(window, { channel }); // The test speaks on the newest call's channel, once the page says it opened.
           channel.onmessage = () => { counts.messages = (counts.messages ?? 0) + 1; };
@@ -138,6 +140,7 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
       const createDataChannel = RTCPeerConnection.prototype.createDataChannel;
       RTCPeerConnection.prototype.createDataChannel = function (...args) {
         const channel = createDataChannel.apply(this, args);
+        Object.assign(window, { peer: this, channel });
         channel.addEventListener("open", () => void (window as unknown as { channelOpened(): Promise<void> }).channelOpened());
         return channel;
       };
@@ -236,15 +239,27 @@ test("Voice page calls each person's sticky session of a sticky: user agent, kee
       await page.getByLabel("Transcript", { exact: true }).getByText("Voice: Hi!").waitFor();
     } catch (error) {
       console.error("Voice transcript wait failed", error, JSON.stringify({ calls, spoken, errors }));
+      const transport = async () => {
+        const { peer, channel } = window as unknown as TransportProbe;
+        const stats: object[] = [];
+        (await peer?.getStats())?.forEach((report) => {
+          if (["transport", "data-channel", "candidate-pair"].includes(report.type)) stats.push(report);
+        });
+        return {
+          connection: peer?.connectionState, signaling: peer?.signalingState,
+          ice: peer?.iceConnectionState, gathering: peer?.iceGatheringState,
+          sctp: peer?.sctp?.state, dtls: peer?.sctp?.transport.state,
+          channel: channel?.readyState, id: channel?.id, spoke: channel?.spoke,
+          bufferedAmount: channel?.bufferedAmount, stats,
+        };
+      };
       await Promise.all([
         status.allTextContents(),
         page.getByLabel("Transcript", { exact: true }).locator("p").allTextContents(),
-        openai.evaluate(() => {
-          const { channel } = window as unknown as { channel?: RTCDataChannel & { spoke?: boolean } };
-          return { channel: channel?.readyState, spoke: channel?.spoke, bufferedAmount: channel?.bufferedAmount };
-        }),
+        page.evaluate(transport),
+        openai.evaluate(transport),
       ]).then(
-        ([status, transcript, openai]) => console.error("Voice transcript snapshot", JSON.stringify({ status, transcript, openai })),
+        ([status, transcript, browser, openai]) => console.error("Voice transcript snapshot", JSON.stringify({ status, transcript, browser, openai })),
         (errSnapshot) => console.error("Voice transcript snapshot failed", errSnapshot),
       );
       throw error;
