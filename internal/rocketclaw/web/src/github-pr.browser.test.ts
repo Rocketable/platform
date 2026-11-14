@@ -350,6 +350,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
   let updatedAt = "2026-01-01T00:00:00Z";
   let prompts = 0;
   let second = false;
+  let discovery: Promise<void> | undefined;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
@@ -371,6 +372,7 @@ test("built App PR layouts preserve the composer draft and existing delegation p
         if (input.state) { tabs.state = input.state; tabs.revision = String(Number(tabs.revision) + 1); }
         return Response.json(tabs);
       case "/api/History": {
+        if (url.searchParams.has("pull-request-discovery")) await discovery;
         const text = input.id === session ? `[Synthetic change](${href})` : input.id === child ? "Existing delegation fixture" : "Other conversation fixture";
         const created: TranscriptEvent[] = input.id === session ? [{ ...message(input.id, "execute\n{}"), role: "tool", toolName: "execute", toolCallId: "pr-create", itemId: "pr-create", codeModeCalls: [href.replace(/\/files$/, ""), ...second ? [href.replace(/7\/files$/, "8")] : []].map((summary) => ({ name: "bash", arguments: JSON.stringify({ command: "gh pr create --title 'Sample change' --body 'Sample'" }), status: "ok", summary })) }] : [];
         return Response.json({ messages: [message(input.id, text), ...created], delegations: input.id === session ? [child] : [], lineage: input.id === child ? [{ id: session }, { id: child, kind: "SUBAGENT" }] : undefined, origin: "", revision: input.id, reset: true, replacedKeys: [], removedKeys: [], entryKeys: [input.id], running: false, terminal: "", backgroundJobs: [], pendingQuestions: [], start: "0", more: false });
@@ -463,11 +465,18 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     const patchBox = (await prs.getByRole("region", { name: "File patch", exact: true }).boundingBox())!;
     const treeBox = (await prs.getByRole("region", { name: "Changed files", exact: true }).boundingBox())!;
     expect(treeBox.x).toBeGreaterThanOrEqual(patchBox.x + patchBox.width - 1);
-    const rediscovery = page.waitForRequest((request: any) => request.url().includes("/api/History?pull-request-discovery"));
+    // A thread update looks for PRs again in the background without moving the PR already shown.
+    const title = prs.getByText(metadata.title, { exact: true });
+    const top = (await title.boundingBox())!.y;
+    const held = Promise.withResolvers<void>();
+    discovery = held.promise;
     updatedAt = "2026-01-02T00:00:00Z";
-    await rediscovery;
-    await prs.getByText("Finding pull requests…", { exact: true }).waitFor({ state: "hidden" });
-    await prs.getByText(metadata.title, { exact: true }).waitFor();
+    await prs.locator("button:disabled", { hasText: "Find again" }).waitFor();
+    expect(await prs.getByText("Finding pull requests…", { exact: true }).count()).toBe(0);
+    expect((await title.boundingBox())!.y).toBe(top);
+    held.resolve();
+    await prs.locator("button:enabled", { hasText: "Find again" }).waitFor();
+    await title.waitFor();
     expect(await prs.getByText("patch-marker <script>example</script>", { exact: true }).count()).toBe(1);
     await page.getByRole("tab", { name: "Other fixture", exact: true }).click({ button: "right" });
     await page.getByRole("menuitem", { name: "Pull requests", exact: true }).click();
