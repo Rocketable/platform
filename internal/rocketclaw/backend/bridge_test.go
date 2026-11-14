@@ -5018,13 +5018,40 @@ func TestFailedWakeReleasesItsNotes(t *testing.T) {
 	nt.waitIdle(t, manager, nt.conversationID)
 	assert.Equal(t, []string{"turn-0/call/a pending false"}, noteStates(t, nt.service))
 
+	bridge := nt.bridge(t, manager, nt.conversationID)
+	stage := "released note stays idle"
+
+	defer func() {
+		if !t.Failed() {
+			return
+		}
+
+		t.Logf("failed wake follow-up: stage=%s provider_requests=%d finals=%d handling=%t queued_requests=%d database=%+v", stage, len(nt.requests), len(nt.finals), bridge.handlingSnapshot(), len(bridge.requestCh), nt.service.db.Stats())
+		// Bound only the failure-state query, not the original provider or final waits.
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+
+		rows, err := queryStrings(ctx, nt.service.db, `SELECT format('turn id=%s input=%s phase=%s lane=%s note=%s claimed_by=%s wake=%s outbound=%s',
+id, input_id, phase, takes_lane, note, claimed_by, wake, outbound_json IS NOT NULL)
+FROM turns WHERE conversation_id = $1 ORDER BY id`, "failed wake follow-up state", nt.conversationID)
+		t.Logf("failed wake follow-up rows=%v query_error=%v", rows, err)
+	}()
+
 	manager.noteReady(nt.conversationID)
 	nt.waitIdle(t, manager, nt.conversationID)
 	assert.Empty(t, nt.requests, "a released note wakes nothing")
 
-	require.NoError(t, nt.bridge(t, manager, nt.conversationID).Submit(t.Context(), nt.slackPrompt("next")))
+	stage = "next turn initial provider request"
+
+	require.NoError(t, bridge.Submit(t.Context(), nt.slackPrompt("next")))
 	assert.NotContains(t, nt.request(t), "turn-0/call/a")
+
+	stage = "next turn note provider request"
+
 	assert.Equal(t, "[System]\n\n"+testExecuteNote("turn-0/call/a"), lastRequestMessage(t, nt.request(t)), "the next turn delivers the note")
+
+	stage = "next turn final and settlement"
+
 	readFinal(t, nt.finals)
 	nt.waitIdle(t, manager, nt.conversationID)
 	assert.Equal(t, []string{"turn-0/call/a consumed false"}, noteStates(t, nt.service))
