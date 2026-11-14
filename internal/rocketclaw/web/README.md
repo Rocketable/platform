@@ -70,7 +70,9 @@ application's control. No remote images or executable description content load.
 
 The conversation tab's **⋯ → Pull requests** menu item opens the existing right
 pane for a RocketClaw or OpenCode thread. So does the bottom bar's right-end
-button, which closes whichever right pane is open. On desktop the conversation
+button, which closes whichever right pane is open, and Cmd/Ctrl+Shift+B, which does
+what that button does. The key is RocketClaw's even while the button is disabled,
+so Chrome's bookmarks bar toggle never takes it. On desktop the conversation
 stays editable beside it; on narrow screens it uses a sheet. It replaces an open
 delegation or skill pane. Select a PR to read its description and changed-file
 patches.

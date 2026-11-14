@@ -837,14 +837,27 @@ function SidebarToggle({ open, toggle }: { open: boolean; toggle: () => void }) 
   </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>;
 }
 
-// Closes whichever right pane is open, or opens the thread's pull requests.
+// Closes whichever right pane is open, or opens the thread's pull requests; so does Cmd/Ctrl+Shift+B. The key is
+// RocketClaw's even while the button is disabled, so the browser's bookmarks bar never takes it.
 function PanelToggle() {
   const session = pathSession(usePathname());
   const search = new URLSearchParams(useSearch());
   const open = ["delegation", "skill", "pullRequests"].some((panel) => search.has(panel));
   const label = open ? "Hide right pane" : "Show pull requests";
   const Icon = open ? PanelRightClose : PanelRightOpen;
-  return <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)]" disabled={!open && !session} />} aria-label={label} aria-expanded={open} onClick={() => navigate(panelHref(open ? undefined : "1", "pullRequests"))}>
+  const toggle = () => navigate(panelHref(open ? undefined : "1", "pullRequests"));
+  const onKey = useEffectEvent((event: KeyboardEvent) => {
+    if (event.defaultPrevented || !(event.metaKey || event.ctrlKey) || event.altKey || !event.shiftKey || event.code !== "KeyB") return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat && (open || session)) toggle();
+  });
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => onKey(event);
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, []);
+  return <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)]" disabled={!open && !session} />} aria-label={label} aria-expanded={open} onClick={toggle}>
     <Icon className="size-[var(--navigation-icon)]" />
   </TooltipTrigger><TooltipContent side="top">{label}</TooltipContent></Tooltip>;
 }
@@ -2731,6 +2744,7 @@ const shortcuts = [
   { id: "attention-next", label: "Next session needing you", where: "Waiting tabs: sessions that ask a question, then the rest, longest waiting first", keys: ["mod", "Shift", "A"] },
   { id: "tab-park-done", label: "Park the tab until it is done", where: "A session's tab", keys: ["mod", "Shift", "S"] },
   { id: "tab-sidebar", label: "Show or hide the tab sidebar", where: "Tabs in the left sidebar, on a wide window", keys: ["mod", "B"] },
+  { id: "right-pane", label: "Show or hide the right pane", where: "Opens a session's pull requests, or closes the open pane", keys: ["mod", "Shift", "B"] },
   { id: "page-close", label: "Close the tab", where: "Pages other than sessions and Search pages", keys: ["Escape"] },
   { id: "message-steer", label: "Steer the running turn", where: "Message box, while a turn runs", keys: ["mod", "Enter"] },
   { id: "message-stash", label: "Stash the message", where: "Message box", keys: ["mod", "Alt", "Enter"] },

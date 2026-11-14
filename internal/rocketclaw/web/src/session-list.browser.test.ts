@@ -288,7 +288,7 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       const shortcutList = page.getByRole("list", { name: "Keyboard shortcuts" });
       const shortcutKeys: string[][] = await shortcutList.getByRole("listitem").evaluateAll((items: Element[]) => items.map((item) => [...item.querySelectorAll("kbd")].map((key) => key.textContent!)));
       expect(shortcutKeys).toEqual([
-        [modifier, "P"], [modifier, "Shift", "P"], [modifier, alternate, "N"], [modifier, "["], [modifier, "]"], [modifier, alternate, "T"], [modifier, "Shift", "A"], [modifier, "Shift", "S"], [modifier, "B"], ["Escape"], [modifier, "Enter"], [modifier, alternate, "Enter"]]);
+        [modifier, "P"], [modifier, "Shift", "P"], [modifier, alternate, "N"], [modifier, "["], [modifier, "]"], [modifier, alternate, "T"], [modifier, "Shift", "A"], [modifier, "Shift", "S"], [modifier, "B"], [modifier, "Shift", "B"], ["Escape"], [modifier, "Enter"], [modifier, alternate, "Enter"]]);
       // Chromium keeps new and closed tabs, windows and tab cycling for itself and never hands these keys to a page
       // (kReservedCommandIds, chrome/browser/ui/accelerator_table.cc). Headless test browsers do hand them over, so a test
       // pressing one passes while the real key does nothing; RocketClaw adds Alt instead, as in mod+Alt+N.
