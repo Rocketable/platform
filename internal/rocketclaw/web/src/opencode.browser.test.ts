@@ -319,6 +319,17 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
       expect(await view.locator('[data-pane-content="side"]').isVisible()).toBe(false);
     }
     expect(terminals.input).toEqual([]);
+    // mod+Shift+A (next tab needing you) and mod+Shift+S (park until done) are RocketClaw's: they never reach OpenCode's
+    // keys on the document.
+    expect(await view.locator("[data-component=composer] [contenteditable=true]").evaluate((node: HTMLElement) => ["A", "S"].flatMap((key) => ["ctrlKey", "metaKey"].map((modifier) => {
+      let reached = false;
+      const reach = () => { reached = true; };
+      document.addEventListener("keydown", reach, true);
+      const event = new KeyboardEvent("keydown", { key, code: `Key${key}`, shiftKey: true, [modifier]: true, bubbles: true, cancelable: true });
+      node.dispatchEvent(event);
+      document.removeEventListener("keydown", reach, true);
+      return [event.defaultPrevented, reached];
+    })))).toEqual(Array(4).fill([true, false]));
     for (const modifier of ["Control", "Meta"]) {
       for (const mode of ["sessions", "commands"] as const) {
         await view.locator('[data-component="terminal"]').click();

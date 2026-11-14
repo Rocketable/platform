@@ -1,12 +1,12 @@
 
-!function(){try{var e="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[n]="ab349159-d76a-5c11-9849-281dd5a82dec")}catch(e){}}();
-import{Q,ze,He,E,he}from"./chunk-tdb3y46s.js";function h(e,t,i,r=!1){let o=[0];if(i.decorations?.some((s)=>typeof s.start==="number"||typeof s.end==="number")===!0)for(let s=e.indexOf(`
+!function(){try{var e="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[n]="e3e16cff-689d-5217-8bc4-72ee3844542e")}catch(e){}}();
+import{Q,ze,He,E,he}from"./chunk-5c0m62jt.js";function h(e,t,i,r=!1){let o=[0];if(i.decorations?.some((s)=>typeof s.start==="number"||typeof s.end==="number")===!0)for(let s=e.indexOf(`
 `);s!==-1;s=e.indexOf(`
 `,s+1))o.push(s+1);let n={type:"element",tagName:"code",properties:{},children:[]},a=he(t.tokens,{decorations:i.decorations,mergeWhitespaces:i.mergeWhitespaces,lineOffsets:o,cacheHtmlStyles:r});for(let s=0;s<a.length;s++){if(s>0)n.children.push({type:"text",value:`
 `});n.children.push(a[s])}let l={type:"root",children:[{type:"element",tagName:"pre",properties:{class:"diffs",style:t.rootStyle===!1?void 0:t.rootStyle??[t.fg!=null?`color:${t.fg}`:"",t.bg!=null?`background-color:${t.bg}`:""].filter(Boolean).join(";"),tabIndex:0},children:[n]}]};return E(l)}var Ue=class{name;themeResolver;disposed=!1;constructor(e,t){this.name=e,this.themeResolver=t,ze(e)}codeToHtml(e,t){return h(e,this.codeToTokens(e,t),t,this.name==="highlights")}get isDisposed(){return this.disposed}dispose(){if(this.disposed)return;this.disposed=!0,this.releaseResources(),He()}assertNotDisposed(){if(this.disposed)throw new Q}};var $e=class{disposed=!1;stableOffset=0;unstable=[];pendingCarriageReturn="";enqueue(e){if(this.assertActive(),e=this.pendingCarriageReturn+e,this.pendingCarriageReturn=e.endsWith("\r")?"\r":"",this.pendingCarriageReturn!=="")e=e.slice(0,-1);let t=this.unstable.length,i=[],{unstable:r,tailLength:o}=this.tokenizeChunk(e,i);if(this.pendingCarriageReturn!=="")r.push({content:"\r",offset:this.stableOffset+o});return this.unstable=r,{recall:t,stable:i,unstable:r}}pushLineBreak(e,t,i){for(let r=0;r<i.length;r++)e.push({content:i[r],offset:this.stableOffset+t+r});this.stableOffset+=t+i.length}close(){let e=this.unstable;return this.dispose(),{stable:e}}clear(){this.assertActive(),this.stableOffset=0,this.unstable=[],this.pendingCarriageReturn="",this.resetSource()}dispose(){if(this.disposed)return;this.disposed=!0,this.unstable=[],this.releaseSource()}copyStateTo(e){e.stableOffset=this.stableOffset,e.unstable=this.unstable.slice(),e.pendingCarriageReturn=this.pendingCarriageReturn}assertActive(){if(this.disposed)throw Error("stream tokenizer is disposed")}};
 export{Ue,$e};
 
 
-//# sourceMappingURL=chunk-ntcqcdcb.js.map
+//# sourceMappingURL=chunk-bqpq1ah0.js.map
 
-//# debugId=ab349159-d76a-5c11-9849-281dd5a82dec
+//# debugId=e3e16cff-689d-5217-8bc4-72ee3844542e

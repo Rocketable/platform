@@ -566,7 +566,7 @@ active tab.
   Reopen closed tab**) reopens the newest, in a remote OpenCode session too, whose
   New terminal command has no default key for that reason. A reopened tab leaves the list, and so
   does a deleted session's tab. A preview tab is never saved, so it never lists.
-- **Next tab needing you.** Cmd/Ctrl+Alt+A, the inbox button in the bottom
+- **Next tab needing you.** Cmd/Ctrl+Shift+A, the inbox button in the bottom
   navigation, or **Sessions: Next needing you** opens the next bold tab, of any kind (see Unread below): first
   sessions asking a question, then the rest, each longest waiting first.
   Pressing it again moves on to the next one and wraps around. Only tabs you
@@ -575,7 +575,9 @@ active tab.
   answering, and a marked tab you no longer have do not. A Shared or Top Shelf
   row opens in its space without a tab of its own. The window title counts the
   same tabs, as "(2) …". The command shows, and the button is enabled, only
-  while another tab waits.
+  while another tab waits. The key is RocketClaw's even then, in a remote
+  OpenCode session too, whose auto-accept permissions command has no default
+  key for that reason; so is Cmd/Ctrl+Shift+S (see Park below).
 - **Remote OpenCode sessions.** A remote session's tab shows OpenCode's own
   session view, copied into RocketClaw at `internal/rocketclaw/oc/` and mounted in
   the page with no frame. It reaches its server through the Web's
@@ -626,7 +628,8 @@ active tab.
   dialog that starts at the next whole hour, today unless that is past
   midnight, and refuses a time already past; times are the browser's local
   time. Until it is done lasts until the session's next turn
-  ends, finished, failed, or stopped, also when nothing runs yet. A parked tab
+  ends, finished, failed, or stopped, also when nothing runs yet; Cmd/Ctrl+Shift+S
+  parks the session in view that way, and on any other tab does nothing. A parked tab
   leaves the strip for the **Parked** section
   at the bottom, which lists your parked tabs from every space, each with when
   its park ends. It folds like Shared, starts folded, and folded still shows

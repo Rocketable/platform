@@ -723,7 +723,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         : sessionProject()
           ? language.t("command.permissions.autoaccept.project")
           : language.t("command.permissions.autoaccept.enable"),
-      keybind: "mod+shift+a",
+      // rocketclaw: no default keybind; mod+Shift+A opens RocketClaw's next tab needing you (upstream packages/app/src/session/commands/use-session-commands.tsx)
       disabled: false,
       onSelect: toggleAutoAccept,
     }),
