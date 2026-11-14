@@ -9,16 +9,21 @@ test("real child-only changes refresh paired shadow turns through the parent str
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-    const errors: string[] = [], streams: string[] = [], reads: string[] = [];
+    const errors: string[] = [], streams: string[] = [], reads: string[] = [], allReads: string[] = [];
     let pendingReads = 0, prompts = 0, readsAtPrompt = 0;
     page.on("pageerror", (error: Error) => errors.push(error.message));
     page.on("requestfinished", (request: { url(): string }) => { if (new URL(request.url()).pathname === "/api/Prompt") { prompts++; readsAtPrompt = reads.length; } });
     page.on("request", (request: { url(): string; postDataJSON(): { id: string } }) => {
       const requestURL = new URL(request.url());
       if (requestURL.pathname === "/stream") streams.push(requestURL.searchParams.get("id")!);
-      if (requestURL.pathname === "/api/History") { reads.push(request.postDataJSON().id); pendingReads++; }
+      if (requestURL.pathname === "/api/History") allReads.push(request.postDataJSON().id);
+      // PR discovery reads the same endpoint independently of the live transcript.
+      if (requestURL.pathname === "/api/History" && !requestURL.searchParams.has("pull-request-discovery")) { reads.push(request.postDataJSON().id); pendingReads++; }
     });
-    for (const settled of ["requestfinished", "requestfailed"]) page.on(settled, (request: { url(): string }) => { if (new URL(request.url()).pathname === "/api/History") pendingReads--; });
+    for (const settled of ["requestfinished", "requestfailed"]) page.on(settled, (request: { url(): string }) => {
+      const requestURL = new URL(request.url());
+      if (requestURL.pathname === "/api/History" && !requestURL.searchParams.has("pull-request-discovery")) pendingReads--;
+    });
     await page.goto(`${url}/s/${btoa("parent")}`);
     const a = page.getByRole("tab", { name: "main/a", exact: true });
     const b = page.getByRole("tab", { name: "main/b", exact: true });
@@ -57,7 +62,7 @@ test("real child-only changes refresh paired shadow turns through the parent str
     const heldReads = reads.length;
     await page.waitForTimeout(300);
     expect(reads.slice(heldReads)).toStrictEqual([]);
-    expect(reads).not.toContain(bindingB.childConversationId);
+    expect(allReads).not.toContain(bindingB.childConversationId);
     expect((await fetch(`${url}/test/release/a`, { method: "POST" })).ok).toBe(true);
     await page.locator("[data-shadow-cell]").getByText("gpt-shadow-a answer 2", { exact: false }).first().waitFor();
     await page.waitForFunction(() => [...document.querySelectorAll('[data-shadow-cell] [role="status"]')].filter((node) => node.textContent === "Completed.").length === 2);
