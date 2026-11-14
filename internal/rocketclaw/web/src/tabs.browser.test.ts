@@ -747,7 +747,7 @@ test("a tab waiting on this person's answer stops shimmering and needs them, as 
   expect(await header.getByRole("button", { name: "Work", exact: true }).locator("span").evaluate((name: HTMLElement) => getComputedStyle(name).fontWeight)).toBe("500");
 }), 60_000);
 
-for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["Linux x86_64", "Ctrl", "Alt"]]) test(`Cmd/Ctrl+Alt+A, its command and its bottom bar button open the next waiting tab, sessions asking a question first, longest waiting first, and the title counts them on ${platform}`, () => withPage({}, async (page, origin, _prompts, saved) => {
+for (const [platform, modifier] of [["MacIntel", "⌘"], ["Linux x86_64", "Ctrl"]]) test(`Cmd/Ctrl+Shift+A, its command and its bottom bar button open the next waiting tab, sessions asking a question first, longest waiting first, and the title counts them on ${platform}`, () => withPage({}, async (page, origin, _prompts, saved) => {
   await page.addInitScript((value: string) => Object.defineProperty(navigator, "platform", { value }), platform);
   const key = modifier === "⌘" ? "Meta" : "Control";
   const at = (minute: number) => `2026-10-22T10:0${minute}:00Z`;
@@ -774,7 +774,7 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
   await strip(page).getByRole("tab", { name: "Asked old", exact: true }).waitFor();
   await page.waitForFunction(() => document.title === "(6) lab - RocketClaw");
   for (const path of [href("asked-old"), href("asked-new"), href("unread-old"), "/search/dash", href("shelved"), href("unread-new"), href("asked-old")]) {
-    await page.keyboard.press(`${key}+Alt+a`);
+    await page.keyboard.press(`${key}+Shift+a`);
     await page.waitForURL((url: URL) => url.pathname === path);
   }
   // A Shared or Top Shelf row it visits gains no tab of this person's.
@@ -782,12 +782,12 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
   expect(await names(page)).not.toContain("Shelved");
   await page.keyboard.press(`${key}+Shift+p`);
   const command = page.getByRole("dialog", { name: "Run command", exact: true }).getByRole("button", { name: "Sessions: Next needing you", exact: true });
-  expect(await command.locator("kbd").allTextContents()).toEqual([modifier, alternate, "A"]);
+  expect(await command.locator("kbd").allTextContents()).toEqual([modifier, "Shift", "A"]);
   await command.click();
   await page.waitForURL(origin + href("asked-new"));
   await page.getByRole("button", { name: "Next session needing you", exact: true }).click();
   await page.waitForURL(origin + href("unread-old"));
-  await page.keyboard.press(`${key}+Alt+a`);
+  await page.keyboard.press(`${key}+Shift+a`);
   await page.getByRole("textbox", { name: "Search sessions", exact: true }).waitFor();
   await until(() => saved.state.last.main === "/search/dash");
   saved.state.tabs.find((tab) => tab.path === "/search/dash")!.search!.searches[0].query = "changed elsewhere";
@@ -798,7 +798,7 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
     const observer = new MutationObserver(() => {
       if (input.value !== "changed elsewhere") return;
       observer.disconnect();
-      dispatchEvent(new KeyboardEvent("keydown", { key: "a", code: "KeyA", altKey: true, [modifier]: true, bubbles: true, cancelable: true }));
+      dispatchEvent(new KeyboardEvent("keydown", { key: "A", code: "KeyA", shiftKey: true, [modifier]: true, bubbles: true, cancelable: true }));
       resolve(location.pathname);
     });
     observer.observe(input, { attributes: true, attributeFilter: ["value"] });
@@ -2001,6 +2001,16 @@ test("Park until it is done is offered for a session, not a page, and parks the 
   await until(() => saved.sent.length === 1);
   expect(saved.sent[0]).toEqual({ paths: [href("alpha")], action: "PARK_UNTIL_DONE" });
   await parked.locator('[role="tab"][aria-label="Alpha"][aria-description$="Parked until it is done"]').waitFor();
+
+  // Cmd/Ctrl+Shift+S parks the session in view the same way, and on a page parks nothing.
+  await strip(page).getByRole("tab", { name: "Cron", exact: true }).click();
+  await page.waitForURL(`${origin}/cron`);
+  await page.keyboard.press("Control+Shift+s");
+  await openSaved(page, origin, href("bravo"), "Bravo", saved);
+  await page.keyboard.press("Control+Shift+s");
+  await until(() => saved.sent.length === 2);
+  expect(saved.sent[1]).toEqual({ paths: [href("bravo")], action: "PARK_UNTIL_DONE" });
+  await parked.locator('[role="tab"][aria-label="Bravo"][aria-description$="Parked until it is done"]').waitFor();
 }), 30_000);
 
 test("Auto-park is offered for a session's tab, not a page's, and turns on and off for that session; Config turns it on for every session", () => withPage({}, async (page, origin, _prompts, saved) => {
@@ -2040,9 +2050,10 @@ test("the palette offers the tab in view the same attention items, without Mute 
   // The tab commands whose label holds the query, sorted; looser matches the palette lists after them are left out.
   const filter = async (query: string) => {
     await page.getByPlaceholder("Type a command").fill(query);
-    return (await commands.getByRole("button").allInnerTexts()).filter((label: string) => label.startsWith("Tabs: ") && label.toLowerCase().includes(query.toLowerCase())).toSorted();
+    return (await commands.getByRole("button").allInnerTexts()).map((text: string) => text.split("\n")[0]).filter((label: string) => label.startsWith("Tabs: ") && label.toLowerCase().includes(query.toLowerCase())).toSorted();
   };
   expect(await filter("Tabs: Park")).toEqual(["Tabs: Park for 1 hour", "Tabs: Park for 4 hours", "Tabs: Park until I unpark", "Tabs: Park until a picked time…", "Tabs: Park until it is done", "Tabs: Park until next Monday at 9:00", "Tabs: Park until tomorrow at 9:00"]);
+  expect(await commands.getByRole("button", { name: "Tabs: Park until it is done", exact: true }).locator("kbd").allTextContents()).toEqual(["Ctrl", "Shift", "S"]);
   expect([await filter("Mute"), await filter("Snooze"), await filter("Tabs: Mark as")]).toEqual([[], [], ["Tabs: Mark as unread"]]);
   await page.keyboard.press("Escape");
   await commands.waitFor({ state: "hidden" });

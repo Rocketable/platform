@@ -1505,14 +1505,18 @@ function useNextAttention(path: string) {
   return next && (() => visit(next.server, next.path));
 }
 
-// Cmd/Ctrl+Alt+A, or this bottom bar button, opens the next tab waiting for this person.
+// Cmd/Ctrl+Shift+A, or this bottom bar button, opens the next tab waiting for this person, and Cmd/Ctrl+Shift+S parks
+// the tab in view until it is done, as its palette command does. Each key is RocketClaw's even while it has nothing to
+// do, so neither OpenCode nor the browser takes it.
 function AttentionButton() {
-  const next = useNextAttention(usePathname());
+  const path = usePathname(), next = useNextAttention(path), tabs = useContext(TabActions), sidebar = useContext(Sidebar);
   const onKey = useEffectEvent((event: KeyboardEvent) => {
-    if (event.defaultPrevented || !(event.metaKey || event.ctrlKey) || !event.altKey || event.shiftKey || event.code !== "KeyA" || !next) return;
+    if (event.defaultPrevented || !(event.metaKey || event.ctrlKey) || event.altKey || !event.shiftKey || (event.code !== "KeyA" && event.code !== "KeyS")) return;
     event.preventDefault();
     event.stopPropagation();
-    if (!event.repeat) next();
+    if (event.repeat) return;
+    if (event.code === "KeyA") next?.();
+    else tabs.commands(path, sidebar).find((item) => item.key === "park-done")?.run();
   });
   useEffect(() => {
     const key = (event: KeyboardEvent) => onKey(event);
@@ -2723,7 +2727,8 @@ const shortcuts = [
   { id: "tab-previous", label: "Previous tab", keys: ["mod", "["] },
   { id: "tab-next", label: "Next tab", keys: ["mod", "]"] },
   { id: "tab-reopen", label: "Reopen the last closed tab", keys: ["mod", "Alt", "T"] },
-  { id: "attention-next", label: "Next session needing you", where: "Waiting tabs: sessions that ask a question, then the rest, longest waiting first", keys: ["mod", "Alt", "A"] },
+  { id: "attention-next", label: "Next session needing you", where: "Waiting tabs: sessions that ask a question, then the rest, longest waiting first", keys: ["mod", "Shift", "A"] },
+  { id: "tab-park-done", label: "Park the tab until it is done", where: "A session's tab", keys: ["mod", "Shift", "S"] },
   { id: "tab-sidebar", label: "Show or hide the tab sidebar", where: "Tabs in the left sidebar, on a wide window", keys: ["mod", "B"] },
   { id: "page-close", label: "Close the tab", where: "Pages other than sessions and Search pages", keys: ["Escape"] },
   { id: "message-steer", label: "Steer the running turn", where: "Message box, while a turn runs", keys: ["mod", "Enter"] },

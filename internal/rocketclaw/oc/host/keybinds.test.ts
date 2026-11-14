@@ -12,7 +12,7 @@ const modifier = "(?:ctrl|control|mod|meta|cmd|command|alt|option|shift)"
 const combo = new RegExp(`^${modifier}\\+(?:${modifier}\\+)*[^+,\\s]+$`, "i")
 
 // RocketClaw and browser shortcuts win every clash (R10): mod+P, mod+Shift+P, mod+Shift+R, mod+B, Ctrl+B, mod+Alt+N, mod+Alt+T,
-// mod+Alt+A, mod+[ and mod+].
+// mod+Shift+A, mod+Shift+S, mod+[ and mod+].
 // mod is ⌘ on macOS and Ctrl elsewhere, so each is pressed with both; Ctrl+B is mod+B's Ctrl form.
 const rocketclaw = [{ metaKey: true }, { ctrlKey: true }].flatMap((mod) =>
   [
@@ -22,7 +22,8 @@ const rocketclaw = [{ metaKey: true }, { ctrlKey: true }].flatMap((mod) =>
     { key: "b", code: "KeyB" },
     { key: "n", code: "KeyN", altKey: true },
     { key: "t", code: "KeyT", altKey: true },
-    { key: "a", code: "KeyA", altKey: true },
+    { key: "A", code: "KeyA", shiftKey: true },
+    { key: "S", code: "KeyS", shiftKey: true },
     { key: "[", code: "BracketLeft" },
     { key: "]", code: "BracketRight" },
   ].map((key) => new KeyboardEvent("keydown", { ...key, ...mod })),
