@@ -146,6 +146,8 @@ type Bridge struct {
 	// timerWaiting records a schedule timer that found the bridge handling. The turn may have
 	// looked for later work before that timer fired, so the end of handling arms another.
 	timerWaiting bool
+	// goalHeld records that the paused gate refused a goal continuation, which resume submits again.
+	goalHeld bool
 	// notesOpen reports that the running turn takes Completion Notes at its next step, so a new
 	// Completion Note waits for it rather than waking the conversation. notesOffered are the
 	// notes it holds that it already took.
@@ -858,12 +860,23 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 		b.mu.Lock()
 	}
 
-	var marker string
+	var (
+		marker string
+		paused bool
+	)
 
-	errState := b.config.SessionService.db.QueryRowContext(ctx, `SELECT COALESCE(max(revert_message_id), '') FROM conversations WHERE conversation_id = $1`, b.config.ConversationID).Scan(&marker)
-	if b.historyMutation || marker != "" || errState != nil {
+	errState := b.config.SessionService.db.QueryRowContext(ctx, `SELECT COALESCE(max(revert_message_id), ''), COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, b.config.ConversationID).Scan(&marker, &paused)
+	// A paused chat still finishes the turn a restart interrupted. It keeps a person's request and a
+	// recurring schedule for resume, and refuses any other request.
+	paused = paused && request.turnID == ""
+	if b.historyMutation || marker != "" || paused || errState != nil {
 		err := errState
-		if err == nil {
+		switch {
+		case err != nil:
+		case paused && !request.inbound.Human && !request.scheduledMessageRecurring:
+			err = AgentPausedError{}
+			b.goalHeld = b.goalHeld || request.inbound.GoalAction == protocol.GoalActionContinue
+		default:
 			err = b.preserveRevertRequestLocked(ctx, request)
 		}
 		b.mu.Unlock()
@@ -929,7 +942,13 @@ func (b *Bridge) handle(ctx context.Context, request *bridgeRequest) {
 
 	admitted, errHandle := b.activateInbound(ctx, request)
 	if !admitted && errHandle == nil {
+		// Its input ran under the turn that claimed it, or keeps its row for later work.
+		if request.completion != nil {
+			close(request.completion.done)
+		}
+
 		b.pickLaterWorkLogged(ctx, b, &protocol.InboundMessage{})
+
 		return
 	}
 
@@ -981,6 +1000,7 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (b
 	b.mu.Lock()
 	if b.historyMutation {
 		err := b.preserveRevertRequestLocked(ctx, request)
+		request.completion = nil // Preservation answered the caller or holds it with the input.
 		b.mu.Unlock()
 
 		return false, err
@@ -1088,6 +1108,8 @@ UPDATE turns SET id = $3, phase = $4, reason = NULL WHERE conversation_id = $1 A
 	}
 
 	request.turnID = turnID
+	b.takeHeldCaller(request)
+
 	if stashAt := timeFromUnixNano(stashedAt); request.queueItemID != "" {
 		log := b.log
 		if !stashAt.IsZero() {
@@ -1098,6 +1120,30 @@ UPDATE turns SET id = $3, phase = $4, reason = NULL WHERE conversation_id = $1 A
 	}
 
 	return true, nil
+}
+
+// takeHeldCaller drops the request b holds for the queue row request's new turn claimed, which would wait
+// for a row that no longer waits: that turn answers its caller, or, when request has a caller of its own,
+// the held caller returns now.
+func (b *Bridge) takeHeldCaller(request *bridgeRequest) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	i := slices.IndexFunc(b.waiting, func(held bridgeRequest) bool { return held.queueItemID == request.queueItemID })
+	if i < 0 {
+		return
+	}
+
+	held := b.waiting[i].completion
+	b.waiting = slices.Delete(b.waiting, i, i+1)
+
+	switch {
+	case held == nil:
+	case request.completion == nil:
+		request.completion, b.activeCompletion = held, held
+	default:
+		close(held.done)
+	}
 }
 
 // claimWakeNotes claims, in tx, the Completion Notes a wake turn delivers and records their jobs
@@ -1136,14 +1182,17 @@ func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 		return nil
 	}
 
-	var marker string
+	var (
+		marker string
+		paused bool
+	)
 
-	err := b.config.SessionService.db.QueryRowContext(ctx, `SELECT COALESCE(max(revert_message_id), '') FROM conversations WHERE conversation_id = $1`, b.config.ConversationID).Scan(&marker)
+	err := b.config.SessionService.db.QueryRowContext(ctx, `SELECT COALESCE(max(revert_message_id), ''), COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, b.config.ConversationID).Scan(&marker, &paused)
 	if err != nil {
 		return fmt.Errorf("read later-work cutoff: %w", err)
 	}
 
-	if marker != "" {
+	if marker != "" || paused {
 		return nil
 	}
 
@@ -1524,7 +1573,14 @@ func (b *Bridge) openInputWindow(ctx context.Context, request *bridgeRequest) (b
 
 	b.mu.Lock()
 
-	b.inputOpen, b.activeTurnID = !hiddenRun(msg) && msg.Workflow.Name == "" && !b.historyMutation && !canonical.Closed && request.delivery == nil, request.turnID
+	// Read under b.mu, so a pause committed meanwhile either shows here or closes the input after.
+	var paused bool
+	if err := queryScalar(ctx, b.config.SessionService.db, "read input pause", `SELECT COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, &paused, b.config.ConversationID); err != nil {
+		b.mu.Unlock()
+		return false, inputPersistenceError{cause: err}
+	}
+
+	b.inputOpen, b.activeTurnID = !hiddenRun(msg) && msg.Workflow.Name == "" && !b.historyMutation && !paused && !canonical.Closed && request.delivery == nil, request.turnID
 	b.notesOffered = strings.Fields(msg.Metadata[backgroundNotesMetadataKey])
 
 	for _, steer := range recorded {

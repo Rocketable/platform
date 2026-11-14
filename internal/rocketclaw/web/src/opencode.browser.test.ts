@@ -773,6 +773,9 @@ test("a shelf row offers its server's attention items, one of an offline server 
     await page.locator('[data-slot="tooltip-content"]').filter({ hasText: "Cron · Server offline" }).waitFor();
     expect(await menu(offline)).toEqual(["Remove from Top Shelf"]);
     await page.keyboard.press("Control+Shift+p");
+    // Only a Web chat's agent pauses.
+    await page.getByRole("button", { name: "Sessions: Delete session" }).waitFor();
+    expect(await page.getByRole("button", { name: /^Sessions: (Pause|Resume) agent$/ }).count()).toBe(0);
     await page.getByPlaceholder("Type a command").fill("Delete session");
     await page.getByRole("button", { name: "Sessions: Delete session" }).click();
     await page.getByRole("dialog", { name: "Delete session", exact: true }).getByRole("button", { name: "Delete session", exact: true }).click();

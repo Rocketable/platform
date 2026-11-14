@@ -904,7 +904,7 @@ func TestLooperBuildParamsUsesConfiguredCompactThreshold(t *testing.T) {
 
 func TestLooperBuildParamsMarksPromptCachePiece(t *testing.T) {
 	history := []responses.ResponseInputItemUnionParam{
-		promptInputMessage(&PromptInput{Texts: []string{"preamble\n", "line 1\n", "line 2\n", "action\n"}}),
+		PromptInputMessage(&PromptInput{Texts: []string{"preamble\n", "line 1\n", "line 2\n", "action\n"}}),
 		{OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{CallID: openai.String("call-1"), Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String("read ok")}}},
 	}
 	stored := marshalJSON(t, history)
@@ -2517,7 +2517,7 @@ Use this skill for docs.
 				require.Len(t, starts, 1)
 				require.NotEmpty(t, starts[0].Record.TurnID)
 				require.Len(t, starts[0].Record.ReplayInput, 1)
-				require.JSONEq(t, marshalJSON(t, promptInputMessage(&call)), string(starts[0].Record.ReplayInput[0]))
+				require.JSONEq(t, marshalJSON(t, PromptInputMessage(&call)), string(starts[0].Record.ReplayInput[0]))
 				require.Len(t, sink.SaveTraceCalls(), 1)
 				require.Equal(t, starts[0].Record.TurnID, sink.SaveTraceCalls()[0].TurnID)
 				require.Equal(t, []PublicProgress{{ID: "input-error", Kind: PublicProgressText, State: PublicProgressFailed, Text: message, Agent: looper.agent.Name, Model: looper.DisplayModel}}, PublicProgressFromTrace(sink.SaveTraceCalls()[0].Trace))

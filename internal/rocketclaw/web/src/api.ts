@@ -111,7 +111,7 @@ export const mutations = {
   createSession: async (input: { name?: string; agent?: string; sourceConversationId?: string; opencodeServer?: string; directory?: string; spaceId?: string }) => rpc<{ id: string; resumed?: boolean }>("CreateSession", input),
   prompt: async (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }, name = server()) => (await rpc<{ privateText: string }>("Prompt", input, undefined, name)).privateText,
   runCron: async (input: { stem: string }) => (await rpc<{ id: string }>("RunCronJob", input)).id,
-  updateSession: (input: { id: string; pinned?: boolean; name?: string; tag?: string }) => rpc("UpdateSession", input),
+  updateSession: (input: { id: string; pinned?: boolean; name?: string; tag?: string; paused?: boolean }) => rpc("UpdateSession", input),
   removeQueueItem: (input: { id: string; itemId: string }) => rpc("RemoveQueueItem", input),
   steerQueueItem: (input: { id: string; itemId: string }) => rpc("SteerQueueItem", input),
   editQueueItem: (input: { id: string; itemId: string; text: string }) => rpc("EditQueueItem", input),

@@ -689,7 +689,12 @@ SELECT count(*) > 0 FROM recorded`, b.config.ConversationID, request.queueItemID
 		return nil
 	}
 
-	if slices.ContainsFunc(b.waiting, func(waiting bridgeRequest) bool { return waiting.queueItemID == request.queueItemID }) {
+	// A duplicate submission of a held input gives the held request its caller, answered when it runs.
+	if i := slices.IndexFunc(b.waiting, func(waiting bridgeRequest) bool { return waiting.queueItemID == request.queueItemID }); i >= 0 {
+		if b.waiting[i].completion == nil {
+			b.waiting[i].completion, request.completion = request.completion, nil
+		}
+
 		return nil
 	}
 
@@ -765,13 +770,21 @@ func (r *Runtime) mutateWebQueue(ctx context.Context, conversationID, id string,
 		return false, err
 	}
 
-	var marker string
-	if err := queryScalar(ctx, tx, "read queue mutation cutoff", `SELECT COALESCE(max(revert_message_id), '') FROM conversations WHERE conversation_id = $1`, &marker, conversationID); err != nil {
-		return false, err
+	var (
+		marker string
+		paused bool
+	)
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(max(revert_message_id), ''), COALESCE(bool_or(paused), FALSE) FROM conversations WHERE conversation_id = $1`, conversationID).Scan(&marker, &paused); err != nil {
+		return false, fmt.Errorf("read queue mutation cutoff: %w", err)
 	}
 
 	if marker != "" {
 		return false, errors.New("conversation history is reverted")
+	}
+
+	// A promoted item would run now, so while the agent is paused it keeps its place; a popped one only waits.
+	if paused && kind == protocol.InboundKindSteer {
+		return false, AgentPausedError{}
 	}
 
 	if kind == protocol.InboundKindEnqueue {
@@ -871,31 +884,9 @@ func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, request *bridgeReques
 		return false, err
 	}
 
-	var marker string
-	if err := queryScalar(ctx, tx, "read admission cutoff", `SELECT COALESCE(max(revert_message_id), '') FROM conversations WHERE conversation_id = $1`, &marker, inbound.ConversationID); err != nil {
+	committed, err := settleRevertDB(ctx, tx, inbound.ConversationID)
+	if err != nil {
 		return false, err
-	}
-
-	if marker != "" {
-		_, _, _, floor, err := revertStateDB(ctx, tx, inbound.ConversationID)
-		if err != nil {
-			return false, err
-		}
-
-		// A message from a cron run, External MCP, or Slack that arrived after the staged undo cancels it.
-		if !afterRevertFloor(marker, floor) {
-			if _, err := tx.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1 OR shadow_parent = $1`, inbound.ConversationID); err != nil {
-				return false, fmt.Errorf("cancel staged revert: %w", err)
-			}
-
-			if err := refreshPrincipals(ctx, tx, []string{inbound.ConversationID}); err != nil {
-				return false, err
-			}
-
-			marker = ""
-		} else if err := commitRevertDB(ctx, tx, inbound.ConversationID, marker); err != nil {
-			return false, err
-		}
 	}
 
 	if goal.Objective != "" {
@@ -919,19 +910,49 @@ func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, request *bridgeReques
 		return false, fmt.Errorf("commit Web admission: %w", err)
 	}
 
-	if marker != "" {
-		for i := range b.waiting {
-			waiting := &b.waiting[i]
-			if waiting.completion != nil {
-				waiting.completion.err = context.Canceled
-				close(waiting.completion.done)
-			}
-		}
-
-		b.waiting = nil
+	if committed {
+		b.dropRevertedWaitingLocked()
 	}
 
 	return true, nil
+}
+
+// settleRevertDB settles conversationID's staged undo, if any, in db under its history lock, for a person's new
+// Web message or their pausing or resuming of its agent, and reports whether the undo committed.
+func settleRevertDB(ctx context.Context, db stateStoreDB, conversationID string) (bool, error) {
+	var marker string
+	if err := queryScalar(ctx, db, "read admission cutoff", `SELECT COALESCE(max(revert_message_id), '') FROM conversations WHERE conversation_id = $1`, &marker, conversationID); err != nil || marker == "" {
+		return false, err
+	}
+
+	marker, _, _, floor, err := revertStateDB(ctx, db, conversationID)
+	if err != nil {
+		return false, err
+	}
+
+	// A message from a cron run, External MCP, or Slack that arrived after the staged undo cancels it.
+	if !afterRevertFloor(marker, floor) {
+		if _, err := db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = '' WHERE conversation_id = $1 OR shadow_parent = $1`, conversationID); err != nil {
+			return false, fmt.Errorf("cancel staged revert: %w", err)
+		}
+
+		return false, refreshPrincipals(ctx, db, []string{conversationID})
+	}
+
+	return true, commitRevertDB(ctx, db, conversationID, marker)
+}
+
+// dropRevertedWaitingLocked releases the callers of the requests b holds once an undo commits.
+func (b *Bridge) dropRevertedWaitingLocked() {
+	for i := range b.waiting {
+		waiting := &b.waiting[i]
+		if waiting.completion != nil {
+			waiting.completion.err = context.Canceled
+			close(waiting.completion.done)
+		}
+	}
+
+	b.waiting = nil
 }
 
 func reconcileWebDB(ctx context.Context, db stateStoreDB, inbound *protocol.InboundMessage) (bool, error) {

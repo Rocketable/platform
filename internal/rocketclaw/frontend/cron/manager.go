@@ -54,6 +54,7 @@ type Manager struct {
 type cronScheduleStore interface {
 	ResetCronSchedules() error
 	SyncCronSchedules([]backend.CronScheduleState) error
+	ScheduleAgents([]string)
 	DueCronSchedules(time.Time) ([]backend.CronScheduleState, error)
 	ClaimCronSchedule(backend.CronScheduleState, time.Time, time.Time) (bool, error)
 }
@@ -103,6 +104,8 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("sync cron schedules: %w", err)
 	}
 
+	m.store.ScheduleAgents(definitionAgents(definitions))
+
 	runCtx, cancel := context.WithCancel(ctx)
 
 	m.mu.Lock()
@@ -141,6 +144,8 @@ func (m *Manager) Refresh() error {
 	if err := m.store.SyncCronSchedules(m.scheduledStates(definitions, m.now())); err != nil {
 		return fmt.Errorf("sync cron schedules: %w", err)
 	}
+
+	m.store.ScheduleAgents(definitionAgents(definitions))
 
 	m.mu.Lock()
 	m.definitions = definitions
@@ -443,6 +448,16 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// definitionAgents names the agent of each of definitions.
+func definitionAgents(definitions []definition) []string {
+	agents := make([]string, len(definitions))
+	for i := range definitions {
+		agents[i] = definitions[i].agent
+	}
+
+	return agents
 }
 
 func (m *Manager) scheduledStates(definitions []definition, now time.Time) []backend.CronScheduleState {

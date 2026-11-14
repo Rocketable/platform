@@ -498,6 +498,36 @@ VALUES ($1, 0, CASE WHEN $3 THEN $2 ELSE '' END, now())`, username, session.Path
 	}
 }
 
+// A person's message in a paused, idle chat posts at once under their name and starts no turn. It marks the
+// chat's other readers, not its sender, who has the chat among her tabs too.
+func TestPausedMessageMarksOtherReaders(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	rt := pausedTestChat(t, service, "web:lunch")
+	path := sessionPath("web:lunch")
+
+	for _, person := range []string{alice, bob} {
+		saved, err := service.SaveTabState(ctx, person, &TabState{Tabs: []Tab{{Path: path, Space: "main"}}, Space: "main"}, 0)
+		require.NoError(t, err)
+		require.True(t, saved)
+	}
+
+	require.NoError(t, rt.PostPausedMessage(ctx, pausedWebMessage("web:lunch", "Alice", &protocol.InboundContent{Text: "lunch at noon?"})))
+
+	assert.Equal(t, []string{
+		"message:\"Bob\" paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you.",
+		"message:[Web principal=\"Alice\"]\n\nlunch at noon?",
+	}, observedEntryTexts(t, service, "web:lunch"))
+	assert.Equal(t, "new", attentionOf(t, service, bob, path))
+	assert.Equal(t, "none", attentionOf(t, service, alice, path), "the sender gets no mark, and her tab is not parked")
+
+	turns, err := queryStrings(ctx, service.db, `SELECT id FROM turns WHERE conversation_id = $1`, "chat turns", "web:lunch")
+	require.NoError(t, err)
+	assert.Empty(t, turns)
+}
+
 // Auto-park is a choice kept on the session's attention row: it leaves the row's park and timer alone, keeps the row
 // through an unpark, and skips a location that is no session. The choice for every session starts on.
 func TestAttentionAutoPark(t *testing.T) {

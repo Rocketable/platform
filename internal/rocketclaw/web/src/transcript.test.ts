@@ -660,6 +660,43 @@ for (const [prefix, delivery] of [["  $enqueue \t", "QUEUE"], ["  $stash \t", "S
   expect(queryClient.getQueryState(["queue", { id: "opaque" }]).isInvalidated).toBe(followUp !== "STEER");
 });
 
+// While the agent is paused, Send posts to the people here at once, also during a finishing reply: it steers rather
+// than queues and starts no busy state; $enqueue and $stash still queue.
+for (const [text, followUp] of [["lunch at noon?", "STEER"], ["$steer lunch", "STEER"], ["$enqueue later", "QUEUE"], ["$stash later", "STASH"]]) for (const busy of [false, true]) test(`paused ${JSON.stringify(text)} goes out as ${followUp}, busy=${busy}`, async () => {
+  const draft = { text, files: [], agent: "", edit: 0, submission: 0, sending: false, parked: [] as Line[] };
+  const shown = followUp === "STEER" ? [text.replace("$steer ", "")] : [];
+  let lines: Line[] = [];
+  const busyUpdates: boolean[] = [];
+  queryClient.setQueryData(["queue", { id: "opaque" }], []);
+  await sendComposer({ draft, onDraftChange: () => {}, files: [], text, busy, paused: (id: string) => id === "opaque", sessionId: "opaque", selected: "main", currentAgent: "main", prompt: { mutateAsync: async (request: object) => {
+    expect(request).toEqual({ id: "opaque", text, delivery: "STEER", messageId: expect.any(String) });
+    expect(lines.map((line) => line.text)).toEqual(shown);
+    expect(draft.parked).toEqual([]);
+    return "";
+  } }, scrollToEnd: () => true, setBusy: (value: boolean) => { busyUpdates.push(value); }, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); }, setLines: (update: (current: Line[]) => Line[]) => { lines = update(lines); }, refreshHistory: async () => {} });
+  expect(busyUpdates).toEqual([]);
+  expect(queryClient.getQueryState(["queue", { id: "opaque" }]).isInvalidated).toBe(followUp !== "STEER");
+});
+
+// A message typed in New session that resumes a paused sticky session follows that session's pause, not the new
+// session's: it posts to the people there at once, also during a reply, and starts no busy state.
+for (const busy of [false, true]) test(`new session message into a paused sticky session posts, busy=${busy}`, async () => {
+  const home = { text: "lunch at noon?", files: [], agent: "main", edit: 0, submission: 0, sending: false, busy: false, lines: [] as Line[], error: "" };
+  const target = { ...home, text: "", sessionId: "sticky", busy, lines: [] as Line[], parked: [] as Line[] };
+  const originalFetch = globalThis.fetch, originalWindow = globalThis.window;
+  globalThis.fetch = Object.assign(async () => Response.json({ messages: [], reset: true, revision: "now", entryKeys: [], running: busy }), { preconnect: originalFetch.preconnect });
+  globalThis.window = { alert: () => {} } as unknown as Window & typeof globalThis;
+  try {
+    await sendComposer({ draft: home, text: home.text, files: [], busy: false, paused: (id: string) => id === "sticky", sessionId: "", selected: "main", currentAgent: "", onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setBusy: () => {}, setSendError: () => {}, setLines: () => {}, refreshHistory: async () => {}, create: { mutateAsync: async () => ({ id: "sticky", resumed: true }) }, resumeSession: async () => target, goSession: () => {}, prompt: { mutateAsync: async (request: object) => {
+      expect(request).toEqual({ id: "sticky", text: "lunch at noon?", delivery: "STEER", messageId: expect.any(String) });
+      expect(target.lines.map((line) => line.text)).toEqual(["lunch at noon?"]);
+      expect(target.parked).toEqual([]);
+      return "";
+    } } });
+    expect(target).toMatchObject({ busy, error: "" });
+  } finally { globalThis.fetch = originalFetch; globalThis.window = originalWindow; }
+});
+
 for (const [text, delivery, sent] of [
   ["hello", undefined, ["$agent other", "hello"]],
   ["hello", "STASH", ["hello"]],

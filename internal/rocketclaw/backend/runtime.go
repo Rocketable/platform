@@ -82,6 +82,10 @@ func (r *Runtime) Reload(reason string) (string, error) {
 		return "", fmt.Errorf("refresh cron jobs: %w", err)
 	}
 
+	if err := r.resumeScheduledSessions(r.RunCtx); err != nil {
+		return "", err
+	}
+
 	r.prepareSandbox()
 
 	return "rocketclaw runtime assets reloaded", nil
@@ -162,4 +166,21 @@ func (r *Runtime) AttachSlack(slack slackLookup) {
 	r.threads.mu.Lock()
 	r.threads.slackLookups = slack
 	r.threads.mu.Unlock()
+}
+
+// resumeScheduledSessions resumes, for RocketClaw, the paused sticky: global sessions of the agents the loaded
+// cron jobs and routines run: those runs report there, so these agents no longer pause.
+func (r *Runtime) resumeScheduledSessions(ctx context.Context) error {
+	ids, err := queryStrings(ctx, r.Sessions.db, `SELECT conversation_id FROM conversations WHERE paused AND sticky = 'global' AND agent = ANY($1) ORDER BY 1`, "scheduled paused sessions", r.Sessions.scheduledAgents())
+	if err != nil {
+		return err
+	}
+
+	for _, id := range ids {
+		if err := r.SetAgentPaused(ctx, id, "RocketClaw", false); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

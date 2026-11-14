@@ -1009,6 +1009,7 @@ func TestSessionEntries(t *testing.T) {
 		SubscribeFunc:          rt.Subscribe,
 		CreateConversationFunc: rt.CreateConversation,
 		ContinueRunFunc:        rt.ContinueRun,
+		AgentPausedFunc:        notPaused,
 		RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
 			turns = append(turns, inbound)
 			if inbound.Kind == protocol.InboundKindCancel {
@@ -1314,6 +1315,18 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, "direct-message", inbound.Metadata["web_message_id"])
 	}
 
+	// The backend's failure to read or change a chat's agent pause reaches the caller, and the prompt runs nothing.
+	handed := len(turns)
+	core.AgentPausedFunc = func(context.Context, string) (bool, error) { return false, errors.New("pause unreadable") }
+	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: "prompted", Text: "hello"})
+	require.ErrorContains(t, err, "pause unreadable")
+	require.Len(t, turns, handed)
+
+	core.AgentPausedFunc = notPaused
+	core.SetAgentPausedFunc = func(context.Context, string, string, bool) error { return errors.New("pause unwritable") }
+	_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", &UpdateSessionRequest{Id: "prompted", Paused: new(false)})
+	require.ErrorContains(t, err, "pause unwritable")
+
 	const id = "slack-thread:C1:1.1"
 
 	// Cron runs, recorded as the cron runner records them, are private.
@@ -1402,6 +1415,7 @@ func TestSessionEntries(t *testing.T) {
 		{&UpdateSessionRequest{Id: "missing", Name: new("name")}, codes.NotFound},
 		{&UpdateSessionRequest{Id: "cron:private", Pinned: new(true)}, codes.PermissionDenied},
 		{&UpdateSessionRequest{Id: id, Name: new("bad\x00name")}, codes.InvalidArgument},
+		{&UpdateSessionRequest{Id: id, Paused: new(true)}, codes.InvalidArgument}, // Only a Web chat's agent pauses.
 	} {
 		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", tt.request)
 		require.Equal(t, tt.code, status.Code(err))
@@ -1739,7 +1753,7 @@ func TestSessionEntries(t *testing.T) {
 
 	_, err = seeded.db.ExecContext(ctx, `UPDATE conversations SET kind = 'external_mcp_run', listed = FALSE WHERE conversation_id = 'private-X'`)
 	require.NoError(t, err)
-	require.NoError(t, sessions.UpsertThread("empty-web", backend.ThreadState{Agent: "selected"}))
+	require.NoError(t, sessions.UpsertThread("empty-web", backend.ThreadState{Agent: "selected", CreatedBy: "alice"}))
 
 	listedSessions, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
@@ -1845,7 +1859,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 			}{
 				{"Prompt", &PromptRequest{Id: child, Text: "off-contract input"}},
 				{"DeleteSessionEntries", &SessionEntriesRequest{Id: child}},
-				{"UpdateSession", &UpdateSessionRequest{Id: child}},
+				{"UpdateSession", &UpdateSessionRequest{Id: child, Paused: new(true)}},
 				{"ForkSession", &ForkSessionRequest{Id: child}},
 				{"StageRevert", &StageRevertRequest{Id: child}},
 				{"MoveToBackground", &MoveToBackgroundRequest{ConversationId: child}},
@@ -2104,6 +2118,15 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', 0, 'sync_source_conversation_id', 'private-X'))::json WHERE conversation_id=$1`, id)
 	require.NoError(t, err)
 	httpServer := startHTTPTestServer(t, connection)
+
+	// Pausing sets the stored flag that listings report.
+	core.SetAgentPausedFunc = func(ctx context.Context, id, _ string, paused bool) error {
+		if _, err := db.ExecContext(ctx, `UPDATE conversations SET paused = $2 WHERE conversation_id = $1`, id, paused); err != nil {
+			return fmt.Errorf("set paused: %w", err)
+		}
+
+		return nil
+	}
 
 	runWebTest(t, "src/entry-transport.test.ts", "ROCKETCLAW_ENTRY_TEST_URL="+httpServer.URL, "ROCKETCLAW_ENTRY_TEST_ID="+id, "ROCKETCLAW_HISTORY_TEST_ID=empty-web", "ROCKETCLAW_VIEW_TEST_WORKSPACE="+cfg.Workspace)
 
@@ -4326,3 +4349,5 @@ func TestQuestionRPCs(t *testing.T) {
 
 // noSandboxError is a backend whose emulated shells can run.
 func noSandboxError() string { return "" }
+
+func notPaused(context.Context, string) (bool, error) { return false, nil }

@@ -241,7 +241,7 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 
 		return handler(service, stream)
 	}))
-	core := &mockBackend{SandboxErrorFunc: noSandboxError, RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
+	core := &mockBackend{SandboxErrorFunc: noSandboxError, AgentPausedFunc: notPaused, RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
 		if inbound.ConversationID != "slack-thread:C1:1.1" || inbound.Text != "send while listing" || inbound.Metadata[protocol.InboundPrincipalMetadataKey] != "alice" {
 			return fmt.Errorf("unexpected prompt during enumeration: %v", inbound)
 		}
@@ -364,13 +364,21 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 	sent, renamed := list(ctx, queued.Version)
 	require.Equal(t, []string{"chat-01"}, sent, "only the changed row")
 
+	_, err = openTestTurns(t, server.cfg.Clone().DatabaseURL).db.ExecContext(ctx, `UPDATE conversations SET paused = TRUE WHERE conversation_id = 'chat-01'`)
+	require.NoError(t, err)
+
+	sent, paused := list(ctx, renamed.Version)
+	require.Equal(t, []string{"chat-01"}, sent, "pausing a chat changes its row for every viewer")
+	require.True(t, rows["chat-01"].GetPaused())
+	require.False(t, rows["chat-00"].GetPaused())
+
 	sent, _ = list(ctx, full.Version)
 	require.ElementsMatch(t, []string{"chat-00", "chat-01"}, sent, "an older listing the server still holds works too")
 
 	_, err = server.sessions.DeleteSession(t.Context(), "chat-02")
 	require.NoError(t, err)
 
-	sent, deleted := list(ctx, renamed.Version)
+	sent, deleted := list(ctx, paused.Version)
 	require.Empty(t, sent)
 	require.Equal(t, []string{"chat-02"}, deleted.Removed, "a deleted session is named as removed")
 

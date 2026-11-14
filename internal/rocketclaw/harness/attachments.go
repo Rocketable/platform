@@ -132,7 +132,8 @@ func sniffAttachmentMIME(data []byte, fallback string) string {
 	return normalizeMIME(fallback)
 }
 
-func promptInputMessage(input *PromptInput) responses.ResponseInputItemUnionParam {
+// PromptInputMessage is input as a message of a turn's model input and replay.
+func PromptInputMessage(input *PromptInput) responses.ResponseInputItemUnionParam {
 	role := responses.EasyInputMessageRoleUser
 	if input.Role == PromptInputRoleDeveloper {
 		role = responses.EasyInputMessageRoleDeveloper

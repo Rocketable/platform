@@ -15,6 +15,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -590,6 +591,291 @@ func TestRevertPausesScheduledClaims(t *testing.T) {
 	require.False(t, claimed, "clearing the gate must not duplicate the original scheduled claim")
 }
 
+// A paused Web chat starts no new turn. The bridge refuses a goal's continuation without ending the goal
+// and keeps a person's request for resume. Pausing closes a running reply's input; pausing and resuming
+// write one line each. Resume re-submits the continuation, and resuming with nothing waiting starts nothing.
+func TestPauseGatesTurnAdmission(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+
+	bridge := &Bridge{config: Config{ConversationID: "main", SessionService: s}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
+	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, bridge.log, &bridgeFactoryMock{newBridgeFunc: func(*Config) directBridge { return bridge }})}
+
+	require.ErrorContains(t, rt.SetAgentPaused(ctx, "missing", "Bob", true), "not recorded")
+	require.ErrorContains(t, rt.PostPausedMessage(ctx, pausedWebMessage("missing", "Ann", &protocol.InboundContent{Text: "lunch?"})), "not recorded")
+	require.NoError(t, rt.SetAgentPaused(ctx, "main", "Ann", false), "resuming a live chat changes nothing")
+
+	// While an undo is being staged the chat's history is busy, so pausing and posting are refused.
+	bridge.historyMutation = true
+
+	require.ErrorContains(t, rt.SetAgentPaused(ctx, "main", "Ann", true), "history is busy")
+	require.ErrorContains(t, rt.PostPausedMessage(ctx, pausedWebMessage("main", "Ann", &protocol.InboundContent{Text: "lunch?"})), "history is busy")
+
+	bridge.historyMutation = false
+
+	require.NoError(t, rt.SetAgentPaused(ctx, "main", "Ann", true))
+	require.NoError(t, rt.SetAgentPaused(ctx, "main", "Ann", false))
+	assert.Empty(t, bridge.requestCh, "resuming with nothing waiting starts no turn")
+
+	require.NoError(t, s.BeginGoal("main", &GoalState{Objective: "ship it"}))
+	seedActiveTurn(t, s, "main", "turn-mid", nil)
+
+	bridge.inputOpen = true
+
+	for range 2 {
+		require.NoError(t, rt.SetAgentPaused(ctx, "main", "Bob", true))
+	}
+
+	assert.False(t, bridge.inputOpen, "pausing closes the running reply's input")
+
+	continuation := bridgeRequest{inbound: goalContinuation("main", &GoalState{}), completion: &turnCompletion{done: make(chan struct{})}}
+	bridge.handle(ctx, &continuation)
+	<-continuation.completion.done
+	_, refused := errors.AsType[AgentPausedError](continuation.completion.err)
+	assert.True(t, refused, "the gate closes a continuation's completion with the paused error")
+
+	goal, _, err := s.Goal("main")
+	require.NoError(t, err)
+	assert.Equal(t, GoalStatusActive, goal.Status)
+
+	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindEnqueue, "racing", true)
+	inbound.ConversationID, inbound.Metadata = "main", map[string]string{"web_message_id": "racing"}
+	human := bridgeRequest{inbound: inbound, completion: &turnCompletion{done: make(chan struct{})}}
+	bridge.handle(ctx, &human)
+	require.Len(t, bridge.waiting, 1, "a person's request waits for resume with its completion")
+	assert.Equal(t, []string{"racing"}, queueIDs(t, s, "main"))
+
+	endTestTurn(t, s, "main", "turn-mid", protocol.TerminalComplete)
+	require.NoError(t, rt.SetAgentPaused(ctx, "main", "Ann", false))
+
+	resumed := <-bridge.requestCh
+	assert.Equal(t, protocol.GoalActionContinue, resumed.inbound.GoalAction, "resume re-submits the goal's continuation")
+	assert.Empty(t, bridge.requestCh, "the goal goes before the waiting request")
+	assert.Equal(t, []string{
+		"message:\"Ann\" paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you.", "message:\"Ann\" resumed the agent.",
+		"message:\"Bob\" paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you.", "message:\"Ann\" resumed the agent.",
+	}, observedEntryTexts(t, s, "main"))
+
+	select {
+	case <-human.completion.done:
+		t.Fatal("the kept request was reported done")
+	default:
+	}
+}
+
+// Resume re-submits the goal continuation the paused gate refused, also while a person's queued item waits for
+// the loop, and only that one: a pause and resume while the loop holds the continuation submits no second one.
+func TestResumeSubmitsRefusedGoalContinuation(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	rt := pausedTestChat(t, s, "main")
+	bridge, err := rt.threads.recordedBridge(ctx, "main")
+	require.NoError(t, err)
+	require.NoError(t, s.BeginGoal("main", &GoalState{Objective: "ship it"}))
+
+	bridge.handle(ctx, &bridgeRequest{inbound: goalContinuation("main", &GoalState{})})
+
+	bridge.requestCh <- bridgeRequest{inbound: pausedWebMessage("main", "Carol", &protocol.InboundContent{Text: "later"}), queueItemID: "later"}
+
+	require.NoError(t, rt.SetAgentPaused(ctx, "main", "Ann", false))
+
+	var actions []protocol.GoalAction
+	for len(bridge.requestCh) > 0 {
+		actions = append(actions, (<-bridge.requestCh).inbound.GoalAction)
+	}
+
+	assert.Equal(t, []protocol.GoalAction{"", protocol.GoalActionContinue}, actions, "the refused continuation follows the queued item")
+
+	require.NoError(t, rt.SetAgentPaused(ctx, "main", "Ann", true))
+	require.NoError(t, rt.SetAgentPaused(ctx, "main", "Ann", false))
+	assert.Empty(t, bridge.requestCh, "a continuation the gate did not refuse is not submitted again")
+}
+
+// A paused chat holding a queue item's request without a caller gives it the caller of a second request for the
+// same item, as a duplicate submission of the item brings, so the item runs after resume with its caller.
+func TestPauseHandsCallerToHeldRequest(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	rt := pausedTestChat(t, s, "main")
+	bridge, err := rt.threads.recordedBridge(ctx, "main")
+	require.NoError(t, err)
+
+	caller := &turnCompletion{done: make(chan struct{})}
+	for _, completion := range []*turnCompletion{nil, caller} {
+		bridge.handle(ctx, &bridgeRequest{inbound: pausedWebMessage("main", "Ann", &protocol.InboundContent{Text: "lunch?"}), queueItemID: "lunch?", completion: completion})
+	}
+
+	require.NoError(t, rt.SetAgentPaused(ctx, "main", "Ann", false))
+	require.Len(t, bridge.requestCh, 1)
+	assert.Same(t, caller, (<-bridge.requestCh).completion, "resume runs the held item with its caller")
+}
+
+// A turn that claims a queue item a paused chat holds a request for, as a stale submission of the item that
+// reaches the loop after resume does, takes over that request's caller, or answers it when it has its own.
+func TestClaimReleasesHeldRequestCaller(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	rt := pausedTestChat(t, s, "main")
+	bridge, err := rt.threads.recordedBridge(ctx, "main")
+	require.NoError(t, err)
+
+	callers := map[string]*turnCompletion{"lunch?": {done: make(chan struct{})}, "dinner?": {done: make(chan struct{})}}
+	for _, text := range []string{"lunch?", "dinner?"} {
+		bridge.handle(ctx, &bridgeRequest{inbound: pausedWebMessage("main", "Ann", &protocol.InboundContent{Text: text}), queueItemID: text, completion: callers[text]})
+	}
+
+	stale := bridgeRequest{inbound: pausedWebMessage("main", "Ann", &protocol.InboundContent{Text: "lunch?"}), queueItemID: "lunch?"}
+	bridge.requestCh <- stale
+
+	require.NoError(t, rt.SetAgentPaused(ctx, "main", "Bob", false))
+
+	stale = <-bridge.requestCh
+	claimed, err := bridge.activateInbound(ctx, &stale)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	assert.Same(t, callers["lunch?"], stale.completion, "the claiming turn answers the held request's caller")
+
+	own := bridgeRequest{inbound: pausedWebMessage("main", "Ann", &protocol.InboundContent{Text: "dinner?"}), queueItemID: "dinner?", completion: &turnCompletion{done: make(chan struct{})}}
+	claimed, err = bridge.activateInbound(ctx, &own)
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	select {
+	case <-callers["dinner?"].done:
+		require.NoError(t, callers["dinner?"].err)
+	default:
+		t.Fatal("the held request's caller waits for a row another turn claimed")
+	}
+
+	assert.Empty(t, bridge.waiting, "no request stays held for a claimed row")
+}
+
+// A message posted into a paused chat while an undo is staged settles the undo first, as any Web message
+// does, so the message stays in the history the undo leaves.
+func TestPausedMessageSettlesStagedRevert(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	rt := pausedTestChat(t, s, "main")
+	id, err := s.AppendEntryID(ctx, "main", testSessionEntry("abandoned", "answer"))
+	require.NoError(t, err)
+	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
+	require.NoError(t, err)
+
+	require.NoError(t, rt.PostPausedMessage(ctx, pausedWebMessage("main", "Ann", &protocol.InboundContent{Text: "lunch at noon?"})))
+
+	marker, _, _, err := s.RevertState(ctx, "main")
+	require.NoError(t, err)
+	assert.Empty(t, marker, "the undo committed")
+	assert.Equal(t, []string{
+		"message:\"Bob\" paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you.",
+		"message:[Web principal=\"Ann\"]\n\nlunch at noon?",
+	}, observedEntryTexts(t, s, "main"))
+}
+
+// Resuming a paused chat while an undo is staged settles the undo first, as a person's Web message does,
+// so the line saying who resumed the agent stays in the history the undo leaves.
+func TestAgentPauseSettlesStagedRevert(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+	ctx := t.Context()
+	rt := pausedTestChat(t, s, "main")
+	id, err := s.AppendEntryID(ctx, "main", testSessionEntry("abandoned", "answer"))
+	require.NoError(t, err)
+	_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
+	require.NoError(t, err)
+
+	require.NoError(t, rt.SetAgentPaused(ctx, "main", "Ann", false))
+
+	marker, _, _, err := s.RevertState(ctx, "main")
+	require.NoError(t, err)
+	assert.Empty(t, marker, "the undo committed")
+	assert.Equal(t, []string{
+		"message:\"Bob\" paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you.",
+		"message:\"Ann\" resumed the agent.",
+	}, observedEntryTexts(t, s, "main"))
+}
+
+// A store failure while reading or resuming a paused chat's agent, settling its staged undo, posting into it,
+// promoting its queued item, or opening a reply's input is that call's error.
+func TestAgentPauseStorageFailures(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSessionService(t)
+
+	const reject = `CREATE FUNCTION reject_pause() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'pause store failed'; END $$; `
+
+	for _, tt := range []struct {
+		name, failure, restore, want string
+		calls                        []string
+		staged                       bool
+	}{
+		{"pause column", `ALTER TABLE conversations RENAME COLUMN paused TO unavailable_paused`, `ALTER TABLE conversations RENAME COLUMN unavailable_paused TO paused`,
+			`column "paused" does not exist`, []string{"read", "resume", "post", "promote", "open input"}, false},
+		{"revert state", `ALTER TABLE entries RENAME COLUMN audience TO unavailable_audience`, `ALTER TABLE entries RENAME COLUMN unavailable_audience TO audience`,
+			"audience", []string{"resume", "post"}, true},
+		{"pause write", reject + `CREATE TRIGGER reject_pause BEFORE UPDATE ON conversations FOR EACH ROW EXECUTE FUNCTION reject_pause()`, `DROP FUNCTION reject_pause() CASCADE`,
+			"pause store failed", []string{"resume"}, false},
+		{"line write", reject + `CREATE TRIGGER reject_pause BEFORE INSERT ON entries FOR EACH ROW EXECUTE FUNCTION reject_pause()`, `DROP FUNCTION reject_pause() CASCADE`,
+			"pause store failed", []string{"resume", "post"}, false},
+		{"commit", reject + `CREATE CONSTRAINT TRIGGER reject_pause AFTER INSERT ON entries DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_pause()`, `DROP FUNCTION reject_pause() CASCADE`,
+			"pause store failed", []string{"resume", "post"}, false},
+		{"goal", `ALTER TABLE conversations RENAME COLUMN goal_objective TO unavailable_goal_objective`, `ALTER TABLE conversations RENAME COLUMN unavailable_goal_objective TO goal_objective`,
+			"load resumed goal", []string{"resume"}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			_, err := s.db.ExecContext(ctx, `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
+			require.NoError(t, err)
+
+			rt := pausedTestChat(t, s, "main")
+			b, err := rt.threads.recordedBridge(ctx, "main")
+			require.NoError(t, err)
+
+			if tt.staged {
+				id, err := s.AppendEntryID(ctx, "main", testSessionEntry("abandoned", "answer"))
+				require.NoError(t, err)
+				_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
+				require.NoError(t, err)
+			}
+
+			_, err = s.db.ExecContext(ctx, tt.failure)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, err := s.db.Exec(tt.restore)
+				require.NoError(t, err)
+			})
+
+			message := pausedWebMessage("main", "Ann", &protocol.InboundContent{Text: "lunch at noon?"})
+			calls := map[string]func() error{
+				"read":    func() error { _, err := rt.AgentPaused(ctx, "main"); return err },
+				"resume":  func() error { return rt.SetAgentPaused(ctx, "main", "Ann", false) },
+				"post":    func() error { return rt.PostPausedMessage(ctx, message) },
+				"promote": func() error { _, err := rt.PromoteQueueItem(ctx, "main", "queued"); return err },
+				"open input": func() error {
+					_, err := b.openInputWindow(ctx, &bridgeRequest{inbound: message, turnID: "turn"})
+					return err
+				},
+			}
+
+			for _, call := range tt.calls {
+				require.ErrorContains(t, calls[call](), tt.want, call)
+			}
+		})
+	}
+}
+
 // OpenCode V2 packages/core/src/session/session.ts reconciles an accepted ID
 // before preparing or committing a new branch, including after completion.
 func TestRevertProviderPrefixAndCompletedRetry(t *testing.T) {
@@ -888,7 +1174,7 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 	// The drain cursor moved before replay was saved. Saved identity, not that
 	// cursor, now settles this input without creating another waiting row.
 	b.waiting = nil
-	b.steers, b.steersRead = []bridgeRequest{request}, 1
+	b.steers, b.steersRead = []bridgeRequest{{inbound: inbound, queueItemID: "waiting", completion: completion}}, 1
 	require.NoError(t, b.settleSteers(ctx, nil))
 	<-completion.done
 	require.NoError(t, completion.err)
