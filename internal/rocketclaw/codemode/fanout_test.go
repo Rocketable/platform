@@ -344,6 +344,7 @@ func TestGatherRootCancel(t *testing.T) {
 	defer cancel()
 
 	errCh := make(chan error, 1)
+	hangStarted := make(chan struct{})
 
 	go func() {
 		_, err := Run(ctx, `def main():
@@ -351,20 +352,27 @@ func TestGatherRootCancel(t *testing.T) {
 `, nil, allowAll, nilCall, inertToolCallObserver{}, []HostTool{{
 			Name: "hang",
 			CallValue: func(callCtx context.Context, _ map[string]any) (starlark.Value, error) {
+				close(hangStarted)
 				<-callCtx.Done()
+
 				return nil, callCtx.Err()
 			},
 		}})
 		errCh <- err
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-hangStarted:
+	case err := <-errCh:
+		t.Fatalf("Run returned before the host tool started: %v", err)
+	}
+
 	cancel()
 
 	select {
 	case err := <-errCh:
-		if err == nil {
-			t.Fatal("want cancel error")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error = %v, want context.Canceled", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after cancel")
