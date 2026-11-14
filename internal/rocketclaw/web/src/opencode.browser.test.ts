@@ -868,6 +868,8 @@ test("OpenCode's composer reports typing for the session the view shows, and the
 
     // OpenCode's terminal and its settings search are not its composer.
     await page.keyboard.press("Control+Backquote");
+    // The socket opens only after ghostty-web loads and makes the terminal's input; a click before that focuses nothing.
+    await until(() => terminals.open === 1);
     await view.locator('[data-component="terminal"]').click();
     await page.keyboard.press("x");
     await until(() => terminals.input.join("").endsWith("x"));
