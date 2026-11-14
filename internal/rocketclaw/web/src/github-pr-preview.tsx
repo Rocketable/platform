@@ -1,12 +1,14 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
-import { ArrowLeft, GitMerge, GitPullRequest } from "lucide-react";
+import { ArrowLeft, ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, RefreshCw } from "lucide-react";
 import { cn } from "cn";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { GitHubError, githubPR, loadPR, loadPRFiles, type GitHubPR, type PRFile, type PullRequest } from "./github-pr";
 import type { OpenCodePRSource } from "./opencode-pr";
 
@@ -46,7 +48,7 @@ function PreviewAction({ reference }: { reference: GitHubPR }) {
     {open && <Preview reference={reference} close={() => { setOpen(false); trigger.current?.focus(); }} />}</>;
 }
 
-function usePreview(reference: GitHubPR, source?: OpenCodePRSource) {
+function usePreview(reference: GitHubPR, source?: OpenCodePRSource, refresh = 0) {
   const [tab, setTab] = useState("summary");
   const [credential, setCredential] = useState("");
   const token = useRef("");
@@ -55,13 +57,14 @@ function usePreview(reference: GitHubPR, source?: OpenCodePRSource) {
   useEffect(() => {
     const request = new AbortController();
     controller.current = request;
-    void loadPR(reference, "", request.signal, source).then((pr) => {
+    // A refresh keeps the PR in place until its new copy arrives, and keeps it if reading fails.
+    void loadPR(reference, token.current, request.signal, source).then((pr) => {
       if (!request.signal.aborted) setResult({ pr, files: [], page: 0, ended: false, loading: false, error: "" });
     }).catch((error: unknown) => {
-      if (!request.signal.aborted) setResult({ files: [], page: 0, ended: false, loading: false, error: error instanceof GitHubError ? error.message : "Could not read GitHub's response." });
+      if (!request.signal.aborted) setResult((current) => ({ ...current, loading: false, error: error instanceof GitHubError ? error.message : "Could not read GitHub's response." }));
     });
     return () => controller.current!.abort();
-  }, [reference, source]);
+  }, [reference, source, refresh]);
 
   async function load(files: boolean, readToken = token.current) {
     controller.current!.abort();
@@ -100,6 +103,7 @@ function Preview({ reference, close }: { reference: GitHubPR; close: () => void 
       <SelectTrigger aria-label="Preview layout"><SelectValue /></SelectTrigger>
       <SelectContent render={<PrivatePreviewRoot />}><SelectGroup>{layouts.map((value) => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectGroup></SelectContent>
     </Select>
+    <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" disabled={state.result.loading} />} aria-label="Refresh" onClick={() => void state.load(false)}><RefreshCw /></TooltipTrigger><TooltipContent>Refresh</TooltipContent></Tooltip>
     <Button type="button" variant="outline" onClick={close}>Close preview</Button>
   </span>;
   const body = <PreviewBody reference={reference} state={state} close={close} />;
@@ -115,42 +119,42 @@ function Preview({ reference, close }: { reference: GitHubPR; close: () => void 
   </DialogContent></Dialog>;
 }
 
-export function GitHubPRContent({ reference, source, close }: { reference: GitHubPR; source?: OpenCodePRSource; close: () => void }) {
-  const state = usePreview(reference, source);
+export function GitHubPRContent({ reference, source, refresh, close }: { reference: GitHubPR; source?: OpenCodePRSource; refresh: number; close: () => void }) {
+  const state = usePreview(reference, source, refresh);
   return <PreviewBody reference={reference} state={state} close={close} source={source} />;
 }
 
 function PreviewBody({ reference, state, close, source }: { reference: GitHubPR; state: ReturnType<typeof usePreview>; close: () => void; source?: OpenCodePRSource }) {
-  const { result, load, cancel } = state;
+  const { result, cancel } = state;
   const { pr } = result;
   return <span className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-y-auto break-words">
     {result.loading && <span role="status">{pr ? "Loading files…" : "Loading pull request…"} <Button type="button" variant="outline" onClick={pr ? cancel : close}>Cancel</Button></span>}
     {result.error && <span role="alert">{result.error}</span>}
-    <span className="flex flex-wrap items-center gap-2">
-      <a href={`https://github.com/${reference.owner}/${reference.repo}/pull/${reference.number}`} target="_blank" rel="noopener noreferrer" className="underline" aria-label="Open on GitHub">Open on GitHub</a>
-      <Button type="button" variant="outline" disabled={result.loading} onClick={() => void load(false)}>Refresh</Button>
+    <span className="flex min-w-0 shrink-0 items-center gap-2 text-xs text-muted-foreground">
+      {pr && <PRStatus pr={pr} />}
+      <Tooltip><TooltipTrigger render={<a href={`https://github.com/${reference.owner}/${reference.repo}/pull/${reference.number}`} target="_blank" rel="noopener noreferrer" className="flex min-w-0 items-center gap-1 hover:underline"><span className="truncate">{reference.owner}/{reference.repo} #{reference.number}</span><ExternalLink className="size-3 shrink-0" /></a>} /><TooltipContent>Open on GitHub</TooltipContent></Tooltip>
     </span>
     {!source && !result.loading && (!pr || Boolean(result.error)) && <TokenEntry state={state} />}
-    {pr && <PreviewDetails reference={reference} pr={pr} state={state} />}
+    {pr && <PreviewDetails pr={pr} state={state} />}
     {source && <span className="shrink-0 text-xs text-muted-foreground">Read with this OpenCode server's GitHub login.</span>}
   </span>;
 }
 
 // Visual reference: t3code apps/web/src/components/pullRequest/PullRequestDetailLayout.tsx
 // at 1d61dd3: title, actor/time, base ← head and counts above a segmented tab bar.
-function PreviewDetails({ reference, pr, state }: { reference: GitHubPR; pr: PullRequest; state: ReturnType<typeof usePreview> }) {
+function PreviewDetails({ pr, state }: { pr: PullRequest; state: ReturnType<typeof usePreview> }) {
   const { result, load, tab, setTab } = state;
   return <Tabs render={<span />} value={tab} onValueChange={(value) => setTab(String(value))} className="min-w-0 shrink-0">
-    <PRHeader reference={reference} pr={pr} />
-    <span className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-y px-4 py-2">
+    <PRHeader pr={pr} />
+    <span className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-y py-2">
       <TabsList render={<span />} aria-label="Pull request tabs"><TabsTrigger value="summary">Summary</TabsTrigger><TabsTrigger value="code">Code</TabsTrigger></TabsList>
       <span className="text-xs text-muted-foreground">{result.files.length} of {pr.changed_files} files loaded</span>
     </span>
-    <TabsContent render={<span />} value="summary" className="block overflow-auto whitespace-pre-wrap"><span className="block px-4 py-3">{pr.body || "No description."}</span></TabsContent>
+    <TabsContent render={<span />} value="summary" className="block overflow-auto whitespace-pre-wrap"><span className="block py-3">{pr.body || "No description."}</span></TabsContent>
     <TabsContent render={<span />} value="code" keepMounted className="flex min-h-0 min-w-0 flex-1 flex-col data-[hidden]:hidden">
-      <Suspense fallback={<span role="status">Loading diff viewer…</span>}>{result.files.length > 0 ? <PRCode files={result.files} /> : <span className="p-4 text-muted-foreground">No files loaded.</span>}</Suspense>
+      <Suspense fallback={<span role="status">Loading diff viewer…</span>}>{result.files.length > 0 ? <PRCode files={result.files} /> : <span className="py-4 text-muted-foreground">No files loaded.</span>}</Suspense>
     </TabsContent>
-    <span className="flex shrink-0 flex-col gap-2 px-4 py-2 text-xs text-muted-foreground">
+    <span className="flex shrink-0 flex-col gap-2 py-2 text-xs text-muted-foreground">
       <span>Patches may be incomplete. Open GitHub for the full diff.</span>
       {result.files.length >= 3000 && <span>GitHub's 3,000-file limit reached; this preview may be incomplete.</span>}
       {result.ended && result.files.length < pr.changed_files && <span>GitHub returned fewer files than reported. This preview is incomplete.</span>}
@@ -159,14 +163,17 @@ function PreviewDetails({ reference, pr, state }: { reference: GitHubPR; pr: Pul
   </Tabs>;
 }
 
-function PRHeader({ reference, pr }: { reference: GitHubPR; pr: PullRequest }) {
-  const Icon = pr.merged ? GitMerge : GitPullRequest;
-  const status = pr.merged ? "Merged" : pr.state === "closed" ? "Closed" : pr.draft ? "Draft" : "Open";
-  return <span className="flex flex-col gap-3 px-4 pb-3">
-    <span className="flex items-center gap-2 text-xs text-muted-foreground"><Icon className="size-4" />{reference.owner}/{reference.repo} <span>#{reference.number}</span><span className="ml-auto">{status}</span></span>
-    <span className="text-lg font-semibold tracking-tight">{pr.title}</span>
-    {(pr.user || pr.updated_at) && <span className="flex flex-wrap gap-2 text-xs text-muted-foreground">{pr.user?.login}{pr.updated_at && <time dateTime={pr.updated_at}>Updated {new Date(pr.updated_at).toLocaleString()}</time>}</span>}
-    <span className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground"><span className="truncate font-mono">{pr.base.ref ?? pr.base.sha.slice(0, 7)}</span><ArrowLeft aria-label="receives changes from" className="size-3.5" /><span className="truncate font-mono">{pr.head.ref ?? pr.head.sha.slice(0, 7)}</span><span className="ml-auto tabular-nums">{pr.changed_files} {pr.changed_files === 1 ? "file" : "files"}{pr.additions !== undefined && ` · +${pr.additions} −${pr.deletions}`}</span></span>
+function PRStatus({ pr }: { pr: PullRequest }) {
+  const [Icon, status, variant] = pr.merged ? [GitMerge, "Merged", "secondary"] as const : pr.state === "closed" ? [GitPullRequestClosed, "Closed", "destructive"] as const : pr.draft ? [GitPullRequestDraft, "Draft", "outline"] as const : [GitPullRequest, "Open", "secondary"] as const;
+  return <Badge variant={variant}><Icon data-icon="inline-start" />{status}</Badge>;
+}
+
+function PRHeader({ pr }: { pr: PullRequest }) {
+  const base = pr.base.ref ?? pr.base.sha.slice(0, 7), head = pr.head.ref ?? pr.head.sha.slice(0, 7);
+  return <span className="flex flex-col gap-2 pb-3">
+    <span className="text-base leading-snug font-semibold tracking-tight">{pr.title}</span>
+    <span className="flex flex-wrap gap-2 text-xs text-muted-foreground">{pr.user?.login}{pr.updated_at && <time dateTime={pr.updated_at}>Updated {new Date(pr.updated_at).toLocaleString()}</time>}<span className="ml-auto tabular-nums">{pr.changed_files} {pr.changed_files === 1 ? "file" : "files"}{pr.additions !== undefined && ` · +${pr.additions} −${pr.deletions}`}</span></span>
+    <span className="flex min-w-0 items-center gap-2 font-mono text-xs text-muted-foreground"><span className="max-w-[40%] truncate" title={base}>{base}</span><ArrowLeft aria-label="receives changes from" className="size-3.5 shrink-0" /><span className="min-w-0 truncate" title={head}>{head}</span></span>
   </span>;
 }
 

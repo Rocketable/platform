@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { githubPR, type PullRequest } from "./github-pr";
 import { GitHubPRContent, PrivatePreviewRoot } from "./github-pr-preview";
 import { navigate, panelHref } from "./navigation";
@@ -48,10 +49,18 @@ export function ThreadPRWatch({ id, version }: { id: string; version?: string })
 export function ThreadPRContent({ id, version, selected, close }: { id: string; version?: string; selected?: string; close: () => void }) {
   const { created, checkout, remote, urls, url, reference, source, loading, finding, setSelected } = useThreadPRs(id, version, selected);
   const checkoutError = checkout.error || checkout.data && "error" in checkout.data;
+  const [refresh, setRefresh] = useState(0);
   return <div className="ph-no-capture flex min-h-0 flex-1 flex-col">
     <header className="flex shrink-0 items-center gap-2 border-b p-2 text-xs lg:pr-12">
-      <span className="min-w-0 flex-1 font-medium">Pull requests</span>
-      <Button type="button" variant="ghost" size="sm" disabled={loading} onClick={() => { void created.refetch(); if (remote) void checkout.refetch(); }}>Find again</Button>
+      <span className="font-medium">Pull requests</span>
+      {urls.length > 1 && <Select value={url} onValueChange={(value) => setSelected(value ?? "")}>
+        <SelectTrigger size="sm" aria-label="Thread pull request"><SelectValue>#{reference!.number}</SelectValue></SelectTrigger>
+        <SelectContent className="w-auto" render={<PrivatePreviewRoot />}><SelectGroup>{urls.map((value) => {
+          const ref = githubPR(value)!;
+          return <SelectItem key={value} value={value}>{ref.owner}/{ref.repo} #{ref.number}</SelectItem>;
+        })}</SelectGroup></SelectContent>
+      </Select>}
+      <Tooltip><TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" className="ml-auto" disabled={loading} />} aria-label="Refresh" onClick={() => { void created.refetch(); if (remote) void checkout.refetch(); setRefresh(refresh + 1); }}><RefreshCw /></TooltipTrigger><TooltipContent>Refresh</TooltipContent></Tooltip>
       <Button type="button" variant="ghost" size="icon-sm" aria-label="Close pull requests" onClick={close}><X /></Button>
     </header>
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3 text-sm">
@@ -60,17 +69,8 @@ export function ThreadPRContent({ id, version, selected, close }: { id: string; 
       {checkoutError && <p role="alert">Could not read the current checkout's pull request using this OpenCode server's gh login.</p>}
       {!finding && !created.error && !checkoutError && !urls.length && <p role="status">No pull requests found for this thread.</p>}
       {reference && <>
-        <span className="flex shrink-0 flex-wrap items-center gap-2 text-xs">
-        <Select value={url} onValueChange={(value) => setSelected(value ?? "")}>
-          <SelectTrigger aria-label="Thread pull request"><SelectValue>#{reference.number}</SelectValue></SelectTrigger>
-          <SelectContent className="w-auto" render={<PrivatePreviewRoot />}><SelectGroup>{urls.map((value) => {
-            const ref = githubPR(value)!;
-            return <SelectItem key={value} value={value}>{ref.owner}/{ref.repo} #{ref.number}</SelectItem>;
-          })}</SelectGroup></SelectContent>
-        </Select>
-        <span className="text-muted-foreground" title={remote ? "Checkout results describe the folder's current branch, which other threads may share." : undefined}>{created.data?.urls.includes(url!) ? "Created in this thread" : `Current checkout · ${checkout.data?.branch}`}</span>
-        </span>
-        {(!remote || source) && <GitHubPRContent key={JSON.stringify([url, source])} reference={reference} source={source} close={close} />}
+        {!created.data?.urls.includes(url!) && <span className="shrink-0 truncate text-xs text-muted-foreground" title="Checkout results describe the folder's current branch, which other threads may share.">{`Current checkout · ${checkout.data?.branch}`}</span>}
+        {(!remote || source) && <GitHubPRContent key={JSON.stringify([url, source])} reference={reference} source={source} refresh={refresh} close={close} />}
       </>}
     </div>
   </div>;
