@@ -922,6 +922,30 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 
 			var initial []json.RawMessage
 
+			defer func() {
+				if !t.Failed() {
+					return
+				}
+
+				t.Logf("stopped shadow parity: human=%t initial_requests=%d held=%d buffered_requests=%d finals=%d database=%+v", human, len(initial), len(held), len(requests), len(finals), store.db.Stats())
+
+				var stacks bytes.Buffer
+
+				errStacks := pprof.Lookup("goroutine").WriteTo(&stacks, 2)
+				t.Logf("stopped shadow parity goroutines: snapshot_error=%v\n%s", errStacks, stacks.Bytes())
+				// Bound diagnostic SQL only; keep the original waits and assertions.
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				defer cancel()
+
+				rows, err := queryStrings(ctx, store.db, `SELECT format('conversation=%s turn=%s phase=%s terminal=%s outbound=%s manifest=%s child_turn=%s inputs=%s input_closed=%s shadow_terminal=%s',
+c.conversation_id, t.id, t.phase, t.terminal, t.outbound_json IS NOT NULL,
+s.id, s.child_turn_id, jsonb_array_length(s.inputs), s.input_closed, s.terminal)
+FROM conversations c LEFT JOIN turns t ON t.conversation_id = c.conversation_id
+LEFT JOIN shadow_turns s ON s.child_conversation_id = c.conversation_id
+WHERE c.conversation_id IN ($1, $2) ORDER BY c.conversation_id, t.id, s.id`, "stopped shadow parity state", "parent", childID)
+				t.Logf("stopped shadow parity rows=%v query_error=%v", rows, err)
+			}()
+
 			for range 2 {
 				select {
 				case request := <-requests:
