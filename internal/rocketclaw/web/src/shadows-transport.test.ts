@@ -10,8 +10,9 @@ test("real child-only changes refresh paired shadow turns through the parent str
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const errors: string[] = [], streams: string[] = [], reads: string[] = [];
-    let pendingReads = 0;
+    let pendingReads = 0, prompts = 0, readsAtPrompt = 0;
     page.on("pageerror", (error: Error) => errors.push(error.message));
+    page.on("requestfinished", (request: { url(): string }) => { if (new URL(request.url()).pathname === "/api/Prompt") { prompts++; readsAtPrompt = reads.length; } });
     page.on("request", (request: { url(): string; postDataJSON(): { id: string } }) => {
       const requestURL = new URL(request.url());
       if (requestURL.pathname === "/stream") streams.push(requestURL.searchParams.get("id")!);
@@ -47,9 +48,11 @@ test("real child-only changes refresh paired shadow turns through the parent str
     expect((await page.locator("[data-shadow-cell]").allTextContents()).join("\n")).not.toContain("answer");
     // Inactive B has no browser reads. A held child does not create a polling
     // loop during this bounded observation window either. Send returns while the
-    // parent turn is still delivering; its close re-reads History once more, so
-    // observe from the closed turn after the page's reads settle.
+    // parent turn is still delivering; its close re-reads History once more, and
+    // so does the page when the second turn's Prompt call returns after that
+    // close. Observe from both re-reads after the page's reads settle.
     while ((await Array.fromAsync(listSessions(undefined, `${url}/api/ListSessions`))).some((batch) => batch.sessions?.some((session) => session.id === "parent" && session.running))) await page.waitForTimeout(10);
+    while (prompts < 2 || reads.length === readsAtPrompt) await page.waitForTimeout(10);
     for (let settled = -1; pendingReads || settled !== reads.length; await page.waitForTimeout(100)) settled = reads.length;
     const heldReads = reads.length;
     await page.waitForTimeout(300);
