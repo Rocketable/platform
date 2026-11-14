@@ -2427,7 +2427,7 @@ function paletteRows(
     .sort((a, b) => tier(a.label) - tier(b.label) || rank(a.key) - rank(b.key) || (level(a.key) >= 0 && level(b.key) >= 0 ? level(a.key) - level(b.key) : a.label.localeCompare(b.label)))
     .slice(0, latest ? 3 : undefined);
   // Typed text lists every space's Search pages next, matched by title or any of their queries; choosing one enters its
-  // space. An empty query lists none.
+  // space.
   const searches = pages.filter((tab) => needle && [searchTitle(tab.search), ...tab.search?.searches.map((item) => item.query) ?? []].some((text) => tier(text) < 3))
     .map((tab) => ({ key: `page-${tab.space} ${tab.path}`, label: `Search: ${searchTitle(tab.search)}`, detail: tabs.state.spaces.find((space) => space.id === tab.space)?.name, run: () => tabs.open(tab.path, "", tab.space) }));
   const search = (query: string) => {
@@ -2625,7 +2625,6 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   const outputs = ([["raw", "Raw", "Show messages with Slack formatting."], ["markdown", "Markdown", "Render messages as Markdown, including headings and tables."]] as const)
     .map(([key, label, description]) => ({ key: `output-${key}`, label: `Output: ${label}`, detail: (key === "markdown") === markdown ? `Current · ${description}` : description, run: () => setPreference(OUTPUT_KEY, key) }));
   const [query, setQuery] = useState("");
-  // Each browser tab keeps its own history, so the latest command run in this tab leads and Enter runs it again.
   const [recent, setRecent] = useState<string[]>(() => JSON.parse(sessionStorage.getItem("command-history") ?? "[]"));
   const [pick, setPick] = useState("");
   const [entered, setEntered] = useState(false);
