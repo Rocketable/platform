@@ -35,7 +35,7 @@ func TestRunRejectsInvalidAgentAtStartup(t *testing.T) {
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), nil, sandbox.None{})
+	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), nil, sandbox.None{})
 	require.ErrorContains(t, err, "validate rocketcode definitions")
 	require.ErrorContains(t, err, "model: required non-empty string")
 }
@@ -52,7 +52,7 @@ func TestRunRejectsInvalidWorkflowAtStartup(t *testing.T) {
 
 	dsn, errDSN := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, errDSN)
-	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler), nil, sandbox.None{})
+	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: testSlack()}, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), nil, sandbox.None{})
 	require.ErrorContains(t, err, "worker model must be a non-empty literal string or None")
 }
 
@@ -87,9 +87,9 @@ func TestWorkflowValidationKeepsLiveAssetsOnInvalidReload(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	cfg := &config.Config{Workspace: workspace}
-	err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), nil, slog.New(slog.DiscardHandler), config.NewLockedConfig(cfg), func(runtimeDir string) error {
+	err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), new(cfg.Behavior()), slog.New(slog.DiscardHandler), config.NewLockedConfig(cfg), func(runtimeDir string) error {
 		return validateWorkflowDefinitions(cfg, runtimeDir)
-	})
+	}, func() error { return nil })
 	require.ErrorContains(t, err, "validate workflow definitions")
 	data, err := root.ReadFile(".rocketclaw/workflows/live.star")
 	require.NoError(t, err)

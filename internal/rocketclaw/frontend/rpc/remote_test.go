@@ -62,7 +62,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 		require.NoError(t, err)
 
-		cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenAI: config.OpenAIConfig{APIKey: "remote-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
+		cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenAI: config.OpenAIConfig{APIKey: "remote-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}, Slack: liveSlack()}
 		root, err := os.OpenRoot(cfg.Workspace)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -82,7 +82,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 
 		running, ctxRunning := errgroup.WithContext(ctx)
 		running.Go(func() error {
-			return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, sandbox.None{})
+			return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly, sandbox.None{})
 		})
 		t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
@@ -159,7 +159,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 
 	remotes := map[string]config.RemoteRocketClawConfig{"work": {URL: named("work", remote)}, "gone": {URL: "https://gone." + suffix + ":1"}}
 	localRPC, _ := serve("Local reply")
-	web := versioned("local", NewHTTPHandler(localRPC, config.SentryConfig{}, config.PostHogConfig{}, nil, "", remotes))
+	web := versioned("local", NewHTTPHandler(localRPC, config.NewLockedConfig(&config.Config{RocketClaws: remotes}), ""))
 	local := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The remote recorded the remote location the page last viewed: the chat, or New session if it polled there.
 		if r.URL.Path == "/test/view-expired" {
@@ -195,7 +195,7 @@ WHERE username = 'alice' RETURNING viewed_at < now() - interval '10 seconds'`).S
 
 	// The remote trusts the local page's origin, which exists only now, and no other page.
 	mu.Lock()
-	tailnet = NewTailnetHandler(whois, []string{named("local", local)}, versioned("work", NewHTTPHandler(remoteRPC, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)))
+	tailnet = NewTailnetHandler(whois, []string{named("local", local)}, versioned("work", NewHTTPHandler(remoteRPC, new(config.LockedConfig), "")))
 	mu.Unlock()
 
 	runWebTest(t, "src/remote-transport.test.ts", "ROCKETCLAW_REMOTE_TEST_LOCAL="+named("local", local), "ROCKETCLAW_REMOTE_TEST_REMOTE="+named("work", remote), "ROCKETCLAW_REMOTE_TEST_WORKSPACE="+remoteConfig.Workspace, "ROCKETCLAW_REMOTE_TEST_SUFFIX="+suffix)

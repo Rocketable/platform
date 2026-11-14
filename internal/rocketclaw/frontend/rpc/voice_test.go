@@ -178,6 +178,8 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 		DatabaseURL: dsn, Workspace: t.TempDir(),
 		OpenAI:    config.OpenAIConfig{APIKey: voiceSecret, APIBaseURL: openai.URL + "/v1"},
 		Providers: map[string]config.OpenAIConfig{"nokey": {APIBaseURL: openai.URL + "/v1"}, "chat": {Auth: "chatgpt"}, "stale": {Auth: "chatgpt"}, "worker": {APIKey: "worker-key", APIBaseURL: openai.URL + "/worker"}},
+		// Slack agents must not be sticky, and this harness's main is.
+		Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"worker"}, AllowedUserIDs: []string{"U1"}}}},
 	}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
@@ -197,7 +199,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 
 	var running errgroup.Group
 	running.Go(func() error {
-		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, sandbox.None{})
+		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly, sandbox.None{})
 	})
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
@@ -219,7 +221,7 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
 	h.conn = connection
-	web := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "", nil))
+	web := httptest.NewServer(NewHTTPHandler(connection, config.NewLockedConfig(cfg), ""))
 	t.Cleanup(web.Close)
 	h.url = web.URL
 

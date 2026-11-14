@@ -219,9 +219,17 @@ agent (`sameSticky`), in `ListAgents` and to `$agent`; `ForkSession` refuses a s
 agent's session with `FailedPrecondition`.
 
 `ListConfig` exposes only the retained `ConfigView` fields: workspace, overlays,
-model aliases, channel agent choices, MCP server names, logging level,
+channel agent choices, MCP server names, logging level,
 auto-approver model, and enabled flags. It never serializes credentials, database
-URLs, environment values, MCP commands/headers, or browser/user mappings.
+URLs, environment values, or MCP commands/headers. It also returns `canEdit`, true when
+the caller's username is in `web.admins`, and only then the behavior settings as
+two-space-indented JSON in `behaviorJson`.
+`SaveBehaviorSettings(SaveBehaviorSettingsRequest) -> ListConfigResponse`
+(`POST /api/SaveBehaviorSettings`, `documentJson` required) replaces the whole
+document and answers as `ListConfig` does. A non-admin gets `PermissionDenied`.
+Malformed JSON and every rejected save get `InvalidArgument` with the reason. A
+rejected save changes nothing: the stored document, live settings, runtime assets,
+External MCP agents, and cron jobs all stay as they were.
 `ListSkills` uses the existing rooted runtime-definition loader and returns loaded
 skill text and metadata; origin is the loader's relative definition location.
 With `ListSkills.agent`, it returns only skills allowed for that loaded agent,

@@ -695,14 +695,14 @@ func TestChannelAgentChoicesResolvesLivePolicy(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	connector := newTestConnector(server.URL)
-	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#triage", Agents: []string{"main", "planner"}}}
+	connector.config.Store(&config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#triage", Agents: []string{"main", "planner"}}}}})
 	choices, err := connector.ChannelAgentChoices(t.Context(), "C1")
 	require.NoError(t, err)
 	require.Equal(t, []string{"main", "planner"}, choices)
 	choices[0] = "changed"
 
-	require.Equal(t, "main", connector.config.Channels[0].Agents[0], "callers cannot mutate configured policy")
-	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#other", Agents: []string{"main"}}}
+	require.Equal(t, "main", connector.config.Clone().Slack.Channels[0].Agents[0], "callers cannot mutate configured policy")
+	connector.config.Store(&config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#other", Agents: []string{"main"}}}}})
 	_, err = connector.ChannelAgentChoices(t.Context(), "C1")
 	require.ErrorContains(t, err, `resolve agent choices for Slack channel "C1"`)
 }
@@ -716,7 +716,7 @@ func TestChannelAgentChoicesColdWithoutNetwork(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	connector := newTestConnector(server.URL)
-	connector.config.Channels = []config.SlackChannelConfig{{Channel: "@", Agents: []string{"wildcard"}}}
+	connector.config.Store(&config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"wildcard"}}}}})
 	name, choices, err := connector.SidebarChannelAgentChoices(t.Context(), "C1")
 	require.NoError(t, err)
 	assert.Equal(t, "C1", name)
@@ -735,14 +735,14 @@ func TestChannelAgentChoicesUsesCurrentPolicy(t *testing.T) {
 		return "triage", true, nil
 	}}
 	for _, names := range [][]string{{"main", "planner"}, {"main"}} {
-		connector.config.Channels = []config.SlackChannelConfig{{Channel: "#triage", Agents: names}}
+		connector.config.Store(&config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#triage", Agents: names}}}})
 		name, choices, err := connector.SidebarChannelAgentChoices(t.Context(), "C1")
 		require.NoError(t, err)
 		require.Equal(t, "triage", name)
 		require.Equal(t, names, choices)
 	}
 
-	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#triage"}, {Channel: "@", Agents: []string{"fallback"}}}
+	connector.config.Store(&config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#triage"}, {Channel: "@", Agents: []string{"fallback"}}}}})
 	name, choices, err := connector.SidebarChannelAgentChoices(t.Context(), "C1")
 	require.NoError(t, err)
 	assert.Equal(t, "triage", name)
@@ -823,7 +823,7 @@ func TestChannelFactsRenameRace(t *testing.T) {
 	t.Cleanup(server.Close)
 	connector := newTestConnector(server.URL)
 	connector.teamID, connector.facts = "T1", store
-	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#old", Agents: []string{"live"}}}
+	connector.config.Store(&config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#old", Agents: []string{"live"}}}}})
 
 	require.NoError(t, store.RecordChannelFact(t.Context(), "T1", "C1", "cached", time.Unix(1, 0)))
 
@@ -912,7 +912,8 @@ func TestChannelFactsRefreshRetryRetentionAndConvergence(t *testing.T) {
 	t.Cleanup(server.Close)
 	connector := newTestConnector(server.URL)
 	connector.teamID, connector.facts = "T1", facts
-	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#old", Agents: []string{"keeper"}}}
+	connector.config.Store(&config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#old", Agents: []string{"keeper"}}}}})
+
 	ctx, cancel := context.WithCancel(t.Context())
 	connector.inboundStop = cancel
 	connector.factsGroup.Go(func() error { return connector.refreshChannelFacts(ctx) })
@@ -2428,7 +2429,7 @@ func TestHandleAppMentionEventIgnoresUnmappedChannel(t *testing.T) {
 
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
 	connector.botUserID = "U999"
-	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#triage", Agents: []string{"triage"}, AllowedUserIDs: []string{"U123"}}}
+	connector.config.Store(&config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#triage", Agents: []string{"triage"}, AllowedUserIDs: []string{"U123"}}}}})
 	connector.handleAppMentionEvent(context.Background(), newSlackAppMentionEvent(), slackNativeForward{})
 
 	assert.Empty(t, router.SubmitMentionCalls())
@@ -2450,7 +2451,6 @@ func TestHandleAppMentionEventRequiresConfiguredChannelAndAllowlist(t *testing.T
 			router := newMentionRouter(false)
 			connector := newTestConnectorWithOptions("http://127.0.0.1", tt.channels, router)
 			connector.botUserID = "U999"
-			connector.config.Channels = tt.channels
 
 			ev := newSlackAppMentionEvent()
 			ev.User = tt.user
@@ -2470,7 +2470,7 @@ func TestHandleAppMentionEventUsesPerChannelAllowlist(t *testing.T) {
 
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
 	connector.botUserID = "U777"
-	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#triage", Agents: []string{"triage"}, AllowedUserIDs: []string{"U999"}}}
+	connector.config.Store(&config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#triage", Agents: []string{"triage"}, AllowedUserIDs: []string{"U999"}}}}})
 
 	allowed := newSlackAppMentionEvent()
 	allowed.User = "U999"
@@ -2676,7 +2676,7 @@ func TestThreadedSocialMentionHandledOnceAndStripped(t *testing.T) {
 	router := newMentionRouter(true)
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
 	connector.botUserID = "U999"
-	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social"}, AllowedUserIDs: []string{"U123"}}}
+	connector.config.Store(&config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social"}, AllowedUserIDs: []string{"U123"}}}}})
 
 	mention := newSlackAppMentionEvent()
 	mention.TimeStamp = "171234.9999"
@@ -2719,16 +2719,21 @@ func TestStripSlackBotMention(t *testing.T) {
 }
 
 func TestConfiguredChannelAllowsUserOnlyOnMatchingChannel(t *testing.T) {
-	connector := newTestConnector("http://127.0.0.1")
-	connector.config.Channels = []config.SlackChannelConfig{
+	connector := newTestConnectorWithOptions("http://127.0.0.1", []config.SlackChannelConfig{
 		{Channel: "#override", Agents: []string{"override"}, AllowedUserIDs: []string{"U999"}},
 		{Channel: "#team", Agents: []string{"team"}, AllowedUserIDs: []string{"U123"}},
-	}
+	}, inertThreadRouter{})
 
 	assert.True(t, connector.socialModeAllowsUser("#override", "U999"))
 	assert.False(t, connector.socialModeAllowsUser("#override", "U123"))
 	assert.True(t, connector.socialModeAllowsUser("#team", "U123"))
 	assert.False(t, connector.socialModeAllowsUser("#unknown", "U123"))
+
+	require.NoError(t, connector.config.Do(func(cfg *config.Config) error {
+		cfg.Slack.Channels[0].AllowedUserIDs = append(cfg.Slack.Channels[0].AllowedUserIDs, "U123")
+		return nil
+	}))
+	assert.True(t, connector.socialModeAllowsUser("#override", "U123"))
 }
 
 func TestSlackPrincipal(t *testing.T) {
@@ -2815,7 +2820,7 @@ func newTestConnectorWithOptions(apiURL string, channels []config.SlackChannelCo
 
 	connector := new(Connector)
 	connector.log = logger
-	connector.config = testConfig.Slack
+	connector.config = config.NewLockedConfig(testConfig)
 	connector.threadRouter = router
 	connector.api = slack.New("xoxb-test", slack.OptionAPIURL(apiURL+"/"))
 	connector.socketEvents = make(chan socketmode.Event, 50)

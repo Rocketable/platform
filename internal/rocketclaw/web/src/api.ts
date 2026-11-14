@@ -120,5 +120,6 @@ export const mutations = {
   stopBackgroundJob: (input: { conversationId: string; jobId: string }) => rpc("StopBackgroundJob", input),
   answerQuestion: (input: { conversationId: string; askId: string; selected?: string[]; custom?: string }) => rpc("AnswerQuestion", input),
   voiceSettings: (input: { action: "UPDATE"; agent?: string; voice?: string; transcript?: boolean }) => rpc<VoiceSettings>("VoiceSettings", input),
+  saveBehaviorSettings: async (input: { documentJson: string }) => (await rpc<{ config: ConfigView }>("SaveBehaviorSettings", input)).config,
   tabs: (input: { state?: SavedTabs["state"]; revision?: number; createSpace?: string; renameSpace?: { id: string; name: string }; deleteSpace?: string; share?: SavedTabs["shared"][number]; unshare?: SavedTabs["shared"][number]; editShared?: SavedTabs["shared"][number] & { base?: SearchPage }; topShelf?: TopShelf; attention?: { paths: string[]; action: AttentionAction; until?: string }; autoPark?: boolean }, name = server()) => rpc<SavedTabs>("Tabs", input, undefined, name),
 };

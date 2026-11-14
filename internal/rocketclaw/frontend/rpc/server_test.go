@@ -238,7 +238,7 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 				request.Header.Set("Tailscale-User-Name", "Alice")
 
 				response := httptest.NewRecorder()
-				NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil).ServeHTTP(response, request)
+				NewHTTPHandler(connection, new(config.LockedConfig), "").ServeHTTP(response, request)
 
 				// Protocol negotiation answers any caller; every other method needs a Tailscale login.
 				code := tt.code
@@ -320,7 +320,7 @@ func TestTailnetIdentity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) { return tt.who, tt.err }}
 
-			next := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)
+			next := NewHTTPHandler(connection, new(config.LockedConfig), "")
 			if tt.identity == "" {
 				next = http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("refused caller reached the Web handler") })
 			}
@@ -381,7 +381,7 @@ func TestTailnetCrossSitePages(t *testing.T) {
 
 	var reached http.Header
 
-	web := NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)
+	web := NewHTTPHandler(connection, new(config.LockedConfig), "")
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = r.Header.Clone(); web.ServeHTTP(w, r) })
 
 	serve := func(trusted []string, method, path, remote, origin string, header http.Header) *httptest.ResponseRecorder {
@@ -530,6 +530,160 @@ func searchWaiters(server *Server) int {
 	}
 
 	return waiting
+}
+
+// Only admins save behavior settings and get their document, and a save answers with the refreshed config.
+func TestSaveBehaviorSettings(t *testing.T) {
+	cfg := &config.Config{AutoApproverModel: "gpt-a"}
+	cfg.Slack.Channels = []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U123"}}}
+	cfg.Web.Admins = []string{"alice"}
+	locked := config.NewLockedConfig(cfg)
+	core := &mockBackend{SaveBehaviorFunc: func(behavior *config.Behavior) error {
+		if len(behavior.Slack.Channels[0].Agents) == 0 {
+			return errors.New("slack.channels[].agents is required")
+		}
+
+		return locked.Do(func(cfg *config.Config) error { cfg.SetBehavior(behavior); return nil })
+	}}
+	server := New(core, nil, locked, &mockChannels{}, &mockCronJobs{})
+	// TestMain's tailscale names 192.0.2.1 alice and 192.0.2.2 bob.
+	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+	bob := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.2"))
+	document := func(change func(*config.Behavior)) string {
+		behavior := locked.Clone().Behavior()
+		change(&behavior)
+		data, err := json.Marshal(behavior)
+		require.NoError(t, err)
+
+		return string(data)
+	}
+
+	view, err := server.listConfig(alice)
+	require.NoError(t, err)
+	require.True(t, view.Config.CanEdit)
+
+	want, err := json.MarshalIndent(locked.Clone().Behavior(), "", "  ")
+	require.NoError(t, err)
+	require.Equal(t, string(want), view.Config.BehaviorJson)
+	require.Contains(t, view.Config.BehaviorJson, "U123")
+
+	view, err = server.listConfig(bob)
+	require.NoError(t, err)
+	require.False(t, view.Config.CanEdit)
+	require.Empty(t, view.Config.BehaviorJson)
+
+	for _, tt := range []struct {
+		name, document, message string
+		ctx                     context.Context
+		code                    codes.Code
+	}{
+		{"non-admin", document(func(*config.Behavior) {}), "only admins", bob, codes.PermissionDenied},
+		{"malformed", `{"slack":`, "unexpected end of JSON input", alice, codes.InvalidArgument},
+	} {
+		_, err := server.saveBehaviorSettings(tt.ctx, &SaveBehaviorSettingsRequest{DocumentJson: tt.document})
+		require.Equal(t, tt.code, status.Code(err), tt.name)
+		require.ErrorContains(t, err, tt.message, tt.name)
+	}
+
+	require.Empty(t, core.SaveBehaviorCalls())
+
+	_, err = server.saveBehaviorSettings(alice, &SaveBehaviorSettingsRequest{DocumentJson: document(func(b *config.Behavior) { b.Slack.Channels[0].Agents = nil })})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	require.ErrorContains(t, err, "slack.channels[].agents is required")
+
+	saved, err := server.saveBehaviorSettings(alice, &SaveBehaviorSettingsRequest{DocumentJson: document(func(b *config.Behavior) { b.AutoApproverModel = "gpt-b" })})
+	require.NoError(t, err)
+	require.Equal(t, "gpt-b", core.SaveBehaviorCalls()[1].Behavior.AutoApproverModel)
+	require.True(t, saved.Config.CanEdit)
+	require.Contains(t, saved.Config.BehaviorJson, `"auto_approver_model": "gpt-b"`)
+
+	listener, err := net.Listen("unix", testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+	server.Register(transport)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() { transport.Stop(); require.NoError(t, serving.Wait()) })
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	body, err := json.Marshal(struct {
+		DocumentJSON string `json:"documentJson"`
+	}{document(func(b *config.Behavior) { b.AutoApproverModel = "gpt-c" })})
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		address, body string
+		code          int
+	}{
+		{"192.0.2.2:1234", string(body), http.StatusForbidden},
+		{"192.0.2.1:1234", `{}`, http.StatusBadRequest},
+		{"192.0.2.1:1234", string(body), http.StatusOK},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/api/SaveBehaviorSettings", strings.NewReader(tt.body))
+		request.RemoteAddr = tt.address
+		response := httptest.NewRecorder()
+		NewHTTPHandler(connection, new(config.LockedConfig), "").ServeHTTP(response, request)
+		require.Equal(t, tt.code, response.Code, response.Body.String())
+	}
+
+	require.Equal(t, "gpt-c", locked.Clone().AutoApproverModel)
+}
+
+// Only a direct loopback caller, one no relay forwarded, inspects agents without a principal, and
+// only through InspectAgents.
+func TestInspectAgentsDirectLocal(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // Without tailscale, no caller here has a principal.
+
+	core := &mockBackend{InspectAgentsFunc: func(target protocol.InspectTarget, _ protocol.InspectKind) (string, int, error) {
+		return "rocketclaw lint " + string(target) + ": OK\n", 0, nil
+	}}
+	listener, err := net.Listen("unix", testSocketPath(t))
+	require.NoError(t, err)
+
+	transport := grpc.NewServer()
+	New(core, nil, config.NewLockedConfig(&config.Config{}), &mockChannels{}, &mockCronJobs{}).Register(transport)
+
+	var serving errgroup.Group
+	serving.Go(func() error { return transport.Serve(listener) })
+	t.Cleanup(func() { transport.Stop(); require.NoError(t, serving.Wait()) })
+
+	connection, err := grpc.NewClient("unix:"+listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+
+	for _, tt := range []struct {
+		method, address, header string
+		code                    int
+	}{
+		{"InspectAgents", "192.0.2.1:1234", "", http.StatusUnauthorized},
+		{"InspectAgents", "127.0.0.1:1234", "", http.StatusOK},
+		{"InspectAgents", "[::1]:1234", "", http.StatusOK},
+		{"InspectAgents", "127.0.0.1:1234", "X-Forwarded-For", http.StatusUnauthorized},
+		{"InspectAgents", "127.0.0.1:1234", "Forwarded", http.StatusUnauthorized},
+		{"InspectAgents", "127.0.0.1:1234", "Tailscale-User-Login", http.StatusUnauthorized},
+		{"Identity", "127.0.0.1:1234", "", http.StatusUnauthorized},
+	} {
+		body := map[string]string{"InspectAgents": `{"target":"next","kind":"lint"}`, "Identity": `{}`}[tt.method]
+		request := httptest.NewRequest(http.MethodPost, "/api/"+tt.method, strings.NewReader(body))
+		request.RemoteAddr = tt.address
+
+		if tt.header != "" {
+			request.Header.Set(tt.header, "192.0.2.1")
+		}
+
+		response := httptest.NewRecorder()
+		NewHTTPHandler(connection, new(config.LockedConfig), "").ServeHTTP(response, request)
+		require.Equal(t, tt.code, response.Code, "%+v: %s", tt, response.Body.String())
+	}
+
+	require.Len(t, core.InspectAgentsCalls(), 2)
+	require.Equal(t, protocol.InspectNext, core.InspectAgentsCalls()[0].InspectTarget)
+	require.Equal(t, protocol.InspectLint, core.InspectAgentsCalls()[0].InspectKind)
 }
 
 func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
@@ -1144,11 +1298,12 @@ func TestSessionEntries(t *testing.T) {
 
 		return protocol.CronRunResult{ConversationID: progress.SyncDestination}, nil
 	}}
-	cronjobs := cronfrontend.New(config.NewLockedConfig(cfg), cfg.RuntimeDirName(), sessions, cronRunner, slog.New(slog.DiscardHandler))
+	live := config.NewLockedConfig(cfg)
+	cronjobs := cronfrontend.New(live, cfg.RuntimeDirName(), sessions, cronRunner, slog.New(slog.DiscardHandler))
 	require.NoError(t, cronjobs.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, cronjobs.Stop(context.Background())) })
 
-	server := New(core, sessions, config.NewLockedConfig(cfg), channels, cronjobs)
+	server := New(core, sessions, live, channels, cronjobs)
 	socketPath := testSocketPath(t)
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)

@@ -38,6 +38,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func liveSlack() config.SlackConfig {
+	return config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}}
+}
+
 func TestPublicProgressRealBrowser(t *testing.T) {
 	finals := []string{"short", "empty", "stop", "calls"}
 	env := make([]string, 0, len(finals))
@@ -90,7 +94,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 			assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"resp","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"`+text+`","annotations":[]}]}]}}`)))
 		}))
 		t.Cleanup(provider.Close)
-		cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
+		cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}, Slack: liveSlack()}
 		root, err := os.OpenRoot(cfg.Workspace)
 
 		require.NoError(t, err)
@@ -120,7 +124,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 
 		var running errgroup.Group
 		running.Go(func() error {
-			return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, sandbox.None{})
+			return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly, sandbox.None{})
 		})
 
 		t.Cleanup(func() {
@@ -183,7 +187,7 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		require.NoError(t, err)
 
 		html = regexp.MustCompile(`<script type="module" src="[^"]+"></script>`).ReplaceAll(html, []byte(`<script type="module" src="/current.js"></script>`))
-		handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "", nil)
+		handler := NewHTTPHandler(connection, config.NewLockedConfig(cfg), "")
 		httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.URL.Path == "/current.js":
@@ -435,7 +439,7 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 func TestReloadRealBackendBrowser(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Slack: liveSlack()}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -452,7 +456,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 
 	var running errgroup.Group
 	running.Go(func() error {
-		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, sandbox.None{})
+		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly, sandbox.None{})
 	})
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
@@ -474,7 +478,7 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "", nil)
+	handler := NewHTTPHandler(connection, config.NewLockedConfig(cfg), "")
 	request := httptest.NewRequest(http.MethodPost, "/api/Reload", strings.NewReader(`{"reason":"updated assets"}`))
 	request.RemoteAddr = "192.0.2.99:1234"
 	response := httptest.NewRecorder()
@@ -522,7 +526,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 		assert.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.completed","response":{"id":"branch","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"reply","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"branch reply","annotations":[]}]}]}}`)))
 	}))
 	t.Cleanup(provider.Close)
-	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}}
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), OpenAI: config.OpenAIConfig{APIKey: "owned-test", APIBaseURL: strings.Replace(provider.URL, "http://", "ws://", 1)}, Slack: liveSlack()}
 	root, err := os.OpenRoot(cfg.Workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -538,7 +542,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 
 	var running errgroup.Group
 	running.Go(func() error {
-		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), assembly, sandbox.None{})
+		return backend.Run(ctx, cfg, "", slog.New(slog.DiscardHandler), new(slog.LevelVar), assembly, sandbox.None{})
 	})
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
@@ -577,7 +581,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	httpServer := httptest.NewServer(NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "", nil))
+	httpServer := httptest.NewServer(NewHTTPHandler(connection, config.NewLockedConfig(cfg), ""))
 	t.Cleanup(httpServer.Close)
 	runWebTest(t, "src/revert-transport.test.ts", "ROCKETCLAW_REVERT_TEST_URL="+httpServer.URL)
 

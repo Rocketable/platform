@@ -662,6 +662,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	require.ElementsMatch(t, []string{
 		"conversations", "turns", "entries", "steps", "schedules", "attachments", "pending_attachment_deletions", "slack_channel_facts",
 		"voice_settings", "hosted_pages", "web_spaces", "web_tab_states", "web_tab_groups", "web_tabs", "web_shared_tabs", "web_tab_attention", "web_top_shelves", "web_closed_tabs", "web_search_pages", "web_searches", "rocketclaw_locks", "pg_migrations", "shadow_turns", "shadow_steps",
+		"behavior_settings",
 	}, tables)
 }
 
@@ -2406,6 +2407,31 @@ func TestStickySessions(t *testing.T) {
 	agents.Items["mine"] = harness.Agent{Sticky: harness.AgentStickyGlobal}
 	id, resumed := open("mine-shared", "mine", "alice")
 	assert.Equal(t, []any{"mine-shared", false}, []any{id, resumed}, "a chat born for one person is not the shared chat after the agent turns global")
+}
+
+func TestBehaviorSettingsRoundTrip(t *testing.T) {
+	store := newTestSessionService(t)
+	ctx := t.Context()
+
+	_, found, err := store.behaviorSettings(ctx)
+	require.NoError(t, err)
+	require.False(t, found)
+
+	rate := 0.5
+	cfg := &config.Config{AutoApproverModel: "gpt-b", Overlays: []string{"https://example.com/overlay.git"}, ServerDisplayName: "Ops", Logging: config.LoggingConfig{Level: "warn"},
+		Slack:           config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}},
+		Instrumentation: config.InstrumentationConfig{HideInputs: true, HideOutputs: true},
+		Web:             config.WebConfig{Sentry: config.SentryConfig{Environment: "prod", TracesSampleRate: &rate}}}
+
+	for _, model := range []string{"gpt-a", "gpt-c"} {
+		cfg.AutoApproverModel = model
+		require.NoError(t, putBehaviorSettings(ctx, store.db, new(cfg.Behavior())))
+
+		stored, found, err := store.behaviorSettings(ctx)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, cfg.Behavior(), stored)
+	}
 }
 
 func TestWebSpaces(t *testing.T) {
