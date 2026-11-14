@@ -521,7 +521,7 @@ github.com/tailscale/wireguard-go/tsasm/arm/chacha20
 github.com/tailscale/wireguard-go/tsasm/arm/chacha20poly1305
 github.com/tailscale/wireguard-go/tsasm/arm/poly1305
 github.com/tailscale/wireguard-go/tun
-# github.com/tidwall/gjson v1.20.2
+# github.com/tidwall/gjson v1.20.3
 ## explicit; go 1.23
 github.com/tidwall/gjson
 # github.com/tidwall/match v1.2.0
@@ -844,7 +844,7 @@ google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# gvisor.dev/gvisor v0.0.0-20261113233527-bc0fefb7ddc2
+# gvisor.dev/gvisor v0.0.0-20261114011126-1d2425946df6
 ## explicit; go 1.27.3
 gvisor.dev/gvisor/pkg/atomicbitops
 gvisor.dev/gvisor/pkg/bits
