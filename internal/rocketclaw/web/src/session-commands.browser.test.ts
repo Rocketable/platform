@@ -111,7 +111,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
   } });
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
-    const page = await browser.newPage({ viewport: { width, height }, isMobile: width < 640, hasTouch: width < 640 });
+    const page = await (await browser.newContext({ viewport: { width, height }, isMobile: width < 640, hasTouch: width < 640 })).newPage();
     const errors: string[] = [];
     page.on("pageerror", (error: Error) => errors.push(error.message));
     // Draft hydration needs both scope requests before it can read IndexedDB.
@@ -262,11 +262,11 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     // MRU follows command IDs, not sessions or labels, without section dividers.
     await page.keyboard.press("Meta+Shift+p");
     expect(await commands.getByRole("button").first().textContent()).toBe("Command: Steer turn ($steer)");
-    const history = await page.evaluate(() => localStorage.getItem("command-history"));
+    const history = await page.evaluate(() => sessionStorage.getItem("command-history"));
     await commandSearch.fill("no-such-command");
     await commands.getByText("No matches", { exact: true }).waitFor();
     await page.keyboard.press("Escape");
-    expect(await page.evaluate(() => localStorage.getItem("command-history"))).toBe(history);
+    expect(await page.evaluate(() => sessionStorage.getItem("command-history"))).toBe(history);
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("$goal");
     await commandSearch.press("Enter");
@@ -317,7 +317,16 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     }
     await page.keyboard.press("Meta+Shift+p");
     expect(await commands.getByRole("button").first().textContent()).toBe("Command: Start goal ($goal)");
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("command-history")!).filter((key: string) => key === "goal"))).toEqual(["goal"]);
+    expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem("command-history")!).filter((key: string) => key === "goal"))).toEqual(["goal"]);
+    // Another tab of the same browser keeps its own history, so this tab's commands do not lead there.
+    const otherTab = await page.context().newPage();
+    await otherTab.goto(page.url());
+    await otherTab.locator("textarea").waitFor();
+    await otherTab.keyboard.press("Meta+Shift+p");
+    const otherCommands = otherTab.getByRole("dialog", { name: "Run command", exact: true }).getByRole("button");
+    await otherCommands.first().waitFor();
+    expect(await otherCommands.first().textContent()).not.toBe("Command: Start goal ($goal)");
+    await otherTab.close();
     await commands.evaluate((element: HTMLElement) => Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished)));
     await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/command-recency-${width}.png`), await page.screenshot());
     await commandSearch.press("ArrowDown");
@@ -552,7 +561,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("source")}`);
     await composer.waitFor();
     await page.keyboard.press("Meta+Shift+p");
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("command-history")!))).toEqual(expect.arrayContaining(["agent", "stop"]));
+    expect(await page.evaluate(() => JSON.parse(sessionStorage.getItem("command-history")!))).toEqual(expect.arrayContaining(["agent", "stop"]));
     expect(await commands.getByRole("button", { name: /^Sessions: (Choose agent|Stop turn|Open original conversation)/ }).count()).toBe(0);
     await page.keyboard.press("Escape");
     await page.goto(`http://127.0.0.1:${server.port}/`);

@@ -589,7 +589,7 @@ test("remote sessions list, tag, go offline, and start", async () => {
     await page.keyboard.press("Enter");
     await folders.first().waitFor();
     await page.keyboard.press("Escape");
-    await page.evaluate(() => localStorage.setItem("command-history", JSON.stringify(["folder-/srv/old"])));
+    await page.evaluate(() => sessionStorage.setItem("command-history", JSON.stringify(["folder-/srv/old"])));
     await page.keyboard.press("Control+Shift+p");
     await page.getByPlaceholder("Type a command").fill("new on box");
     await page.getByRole("button", { name: "Sessions: New on box" }).click();

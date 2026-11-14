@@ -2408,8 +2408,13 @@ function paletteRows(
     for (const char of text) if (char === letters[at]) at++;
     return letters.length >= 3 && at === letters.length ? 2 : 3;
   };
-  // Session search lists commands, which match at once, above the session rows; an empty query or a filter lists sessions only.
-  const commands = mode === "sessions" && (needle === "" || new RegExp(`(?:^|\\s)(?:${filterKeys}):\\S`).test(needle)) ? [] : [
+  // Better matches come first. Within a tier, recently run commands lead, except that while typing Timeline levels keep the Config slider's order.
+  const level = (key: string) => timelineLevels.findIndex(({ id }) => key === `timeline-${id}`);
+  const rank = (key: string) => needle && level(key) >= 0 ? Infinity : recent.indexOf(key) + 1 || Infinity;
+  // Session search lists commands, which match at once, above the session rows: with an empty query only the three run
+  // most recently, and none with a filter.
+  const latest = mode === "sessions" && needle === "";
+  const commands = mode === "sessions" && new RegExp(`(?:^|\\s)(?:${filterKeys}):\\S`).test(needle) ? [] : [
     ...actions,
     { key: "new", label: "Sessions: New", run: newChat },
     { key: "search", label: "Sessions: Search", run: () => tabs.open(freshSearch()) },
@@ -2418,14 +2423,11 @@ function paletteRows(
     { key: "cron-timeline", label: "Cron: Timeline", keep: true, run: () => openCron("timeline") },
     ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["closed", "Tabs: Recently closed"], ["shortcuts", "Help: Keyboard Shortcuts"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
-  ].filter((item) => tier(item.label) < 3).sort((a, b) => {
-    // Better matches come first. Within a tier, recently run commands lead, except Timeline levels, which always keep the Config slider's order.
-    const level = (key: string) => timelineLevels.findIndex(({ id }) => key === `timeline-${id}`);
-    const rank = (key: string) => level(key) >= 0 ? Infinity : recent.indexOf(key) + 1 || Infinity;
-    return tier(a.label) - tier(b.label) || rank(a.key) - rank(b.key) || (level(a.key) >= 0 && level(b.key) >= 0 ? level(a.key) - level(b.key) : a.label.localeCompare(b.label));
-  });
+  ].filter((item) => tier(item.label) < 3 && (!latest || rank(item.key) < Infinity))
+    .sort((a, b) => tier(a.label) - tier(b.label) || rank(a.key) - rank(b.key) || (level(a.key) >= 0 && level(b.key) >= 0 ? level(a.key) - level(b.key) : a.label.localeCompare(b.label)))
+    .slice(0, latest ? 3 : undefined);
   // Typed text lists every space's Search pages next, matched by title or any of their queries; choosing one enters its
-  // space. An empty query lists sessions only, so Enter still opens the first session.
+  // space. An empty query lists none.
   const searches = pages.filter((tab) => needle && [searchTitle(tab.search), ...tab.search?.searches.map((item) => item.query) ?? []].some((text) => tier(text) < 3))
     .map((tab) => ({ key: `page-${tab.space} ${tab.path}`, label: `Search: ${searchTitle(tab.search)}`, detail: tabs.state.spaces.find((space) => space.id === tab.space)?.name, run: () => tabs.open(tab.path, "", tab.space) }));
   const search = (query: string) => {
@@ -2623,7 +2625,8 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
   const outputs = ([["raw", "Raw", "Show messages with Slack formatting."], ["markdown", "Markdown", "Render messages as Markdown, including headings and tables."]] as const)
     .map(([key, label, description]) => ({ key: `output-${key}`, label: `Output: ${label}`, detail: (key === "markdown") === markdown ? `Current · ${description}` : description, run: () => setPreference(OUTPUT_KEY, key) }));
   const [query, setQuery] = useState("");
-  const [recent, setRecent] = useState<string[]>(() => JSON.parse(localStorage.getItem("command-history") ?? "[]"));
+  // Each browser tab keeps its own history, so the latest command run in this tab leads and Enter runs it again.
+  const [recent, setRecent] = useState<string[]>(() => JSON.parse(sessionStorage.getItem("command-history") ?? "[]"));
   const [pick, setPick] = useState("");
   const [entered, setEntered] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -2671,7 +2674,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, keyCommands, opencode 
     if (item.disabled) return;
     if ((mode === "sessions" || mode === "commands") && !item.session) {
       const next = [item.key, ...recent.filter((key) => key !== item.key)].slice(0, 50);
-      localStorage.setItem("command-history", JSON.stringify(next));
+      sessionStorage.setItem("command-history", JSON.stringify(next));
       setRecent(next);
       setPick("");
     }

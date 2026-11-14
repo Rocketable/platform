@@ -967,12 +967,20 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
       "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded.", "Voice"]);
     await page.keyboard.press("Escape");
     await commandPalette.waitFor({ state: "hidden" });
-    // The search button opens one palette: sessions only when empty, matching commands above sessions once typed.
-    await page.evaluate(() => localStorage.setItem("command-history", JSON.stringify(["tab-close-others"])));
+    // The search button opens one palette: empty, it lists this tab's three latest available commands above the sessions, and
+    // sessions only when the tab has run none; once typed, matching commands lead the sessions.
+    const commandRows = sessionPalette.locator("ul > li > button").filter({ hasNot: page.locator('[data-slot="session-title"]') });
+    await page.evaluate(() => sessionStorage.removeItem("command-history"));
     await navigationSearch.click();
     await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
-    expect(await sessionPalette.getByRole("button", { name: "Settings", exact: true }).count()).toBe(0);
-    const commandRows = sessionPalette.locator("ul > li > button").filter({ hasNot: page.locator('[data-slot="session-title"]') });
+    expect(await commandRows.count()).toBe(0);
+    await page.keyboard.press("Escape");
+    await sessionPalette.waitFor({ state: "hidden" });
+    await page.evaluate(() => sessionStorage.setItem("command-history", JSON.stringify(["tab-close-others", "folder-/srv/gone", "config", "shortcuts", "voice"])));
+    await navigationSearch.click();
+    await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
+    expect(await commandRows.allTextContents()).toEqual(["Tabs: Close others", "Settings", "Help: Keyboard Shortcuts"]);
+    expect(await sessionPalette.locator("ul > li > button").first().textContent()).toBe("Tabs: Close others");
     await search.fill("tabs: close");
     await sessionPalette.getByRole("button", { name: "Tabs: Close", exact: true }).waitFor();
     // An exact match leads; recent then alphabetical contiguous matches follow, ahead of the sessions, and the Search hand-off comes last.
@@ -2367,11 +2375,29 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await detailPage.keyboard.press("Control+Shift+p");
     const levels = detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: /^Timeline: / });
     expect(await levels.filter({ hasText: "Current · " }).allTextContents()).toEqual(["Timeline: EverythingCurrent · Show all activity separately and expanded."]);
-    // Running a level does not move it to the top with recent commands.
-    expect((await levels.allTextContents()).map((text: string) => text.match(/^Timeline: (Messages only|Quiet|Compact|Detailed|Everything)/)![1])).toEqual(["Messages only", "Quiet", "Compact", "Detailed", "Everything"]);
+    // Levels run from the palette lead an empty query, most recent first; typed text keeps the Config slider's order.
+    const levelNames = async () => (await levels.allTextContents()).map((text: string) => text.match(/^Timeline: (Messages only|Quiet|Compact|Detailed|Everything)/)![1]);
+    expect(await levelNames()).toEqual(["Everything", "Detailed", "Messages only", "Quiet", "Compact"]);
+    await detailPage.getByPlaceholder("Type a command", { exact: true }).fill("timeline");
+    await levels.filter({ hasText: "Messages only" }).waitFor();
+    expect(await levelNames()).toEqual(["Messages only", "Quiet", "Compact", "Detailed", "Everything"]);
     await levels.filter({ hasText: "Messages only" }).click();
     await detailPage.getByText("Build is green", { exact: true }).waitFor();
     expect(await detailPage.locator('#transcript-scroll [data-slot="trace-collapsible-trigger"]').count()).toBe(0);
+    // With an empty query the level run last leads, so Enter in either palette runs it again.
+    await detailPage.keyboard.press("Control+Shift+p");
+    expect(await detailPage.getByRole("dialog", { name: "Run command" }).getByRole("button").first().textContent()).toStartWith("Timeline: Messages only");
+    await detailPage.keyboard.press("Escape");
+    await detailPage.evaluate(() => sessionStorage.setItem("command-history", JSON.stringify(["timeline-quiet"])));
+    await detailPage.keyboard.press("Control+p");
+    const goTo = detailPage.getByRole("dialog", { name: "Go to session or command" });
+    expect(await goTo.getByRole("button").first().textContent()).toStartWith("Timeline: Quiet");
+    await goTo.getByPlaceholder("Search sessions and commands", { exact: true }).press("Enter");
+    await goTo.waitFor({ state: "hidden" });
+    await detailPage.keyboard.press("Control+Shift+p");
+    expect(await levels.filter({ hasText: "Current · " }).allTextContents()).toEqual(["Timeline: QuietCurrent · Group subagents and skills. Hide other activity."]);
+    await detailPage.keyboard.press("Escape");
+    await levels.first().waitFor({ state: "hidden" });
     // Chat messages render as Markdown by default; Output: Raw restores Slack formatting and persists across reloads.
     ctrl.history = [step("assistant", "| Name | Role |\n|---|---|\n| Alice | Developer |")].map((item, index) => ({ ...item, entryKey: "table", itemId: `table:${index}`, inputId: "", turnId: "", complete: true }));
     await detailPage.goto(`${origin}/s/${Buffer.from("markdown-output").toString("base64url")}`);
