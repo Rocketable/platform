@@ -85,6 +85,15 @@ linters:
         - NOTE
         - OPTIMIZE
         - GPT
+    revive:
+      enable-default-rules: true
+      rules:
+        - name: blank-imports
+          disabled: true
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
 
 run:
   timeout: 5m
