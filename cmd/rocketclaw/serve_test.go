@@ -9,12 +9,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -126,6 +129,9 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 
 	workspace := t.TempDir()
 	t.Chdir(workspace)
+	// Use a host workspace overlay: Slack auth must not build the seeded easy voice agent's sandbox.
+	require.NoError(t, os.Mkdir("agents", 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join("agents", "voice.md"), []byte("---\ndescription: Voice\nmodel: gpt-6.1-sol\n---\n"), 0o600))
 	configData := fmt.Sprintf(
 		`{"workspace":%q,"database_url":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
 		workspace, dsn,
@@ -134,6 +140,11 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 
 	err = runServe([]string{"--pprof=false"}, "127.0.0.1:0")
 	require.EqualError(t, err, "run rocketclaw: assemble frontends: start Slack connector: slack auth test failed: invalid_auth")
+	agents, _, err := backend.LoadRuntimeDefinitions(config.NewLockedConfig(&config.Config{Workspace: workspace}), ".rocketclaw")
+	require.NoError(t, err)
+	for name, agent := range agents.Items {
+		require.False(t, agent.CustomShell.Emulated, "Slack auth fixture must not start background sandbox preparation for agent %q", name)
+	}
 }
 
 func TestBuildIdentityUsesOnlyAvailableBinaryMetadata(t *testing.T) {
