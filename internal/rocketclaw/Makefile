@@ -143,10 +143,14 @@ check-cloc-budget:
 	if [ "$$lines_left" -le "$$hazard_zone" ]; then printf "The total lines of source code count is inside the hazard zone. \n\nThe limit is %d, reaching this limit is considered a loss and it will cause the whole system to halt unsafely.\n\nAmong the potential losses is the undue removal of features without human approval.\n\nYou have %d lines of source code left to use. \n\nThe usage of hazard budget is tolerated but not encouraged. \n\nThink hard, preserve system attributes and original feature set to avoid product regressions.\n" "$$limit" "$$lines_left"; exit 0; fi; \
 
 check-coverage: coverage-profile
-	@set -eu; \
-	current=$$(grep -v '\.pb\.go:' "$(COVERPROFILE)" | go tool cover -func=/dev/stdin | awk '/^total:/ { gsub("%", "", $$3); print $$3 }'); \
-	[ -n "$$current" ] || { printf "coverage budget failed: unable to read coverage total\n"; exit 1; }; \
-	awk -v current="$$current" -v required="$(COVERAGE_REQUIRED)" 'BEGIN { if (current + 0 < required + 0) { printf "coverage budget failed: current %.1f%% < required %.1f%%\n", current, required; exit 1 } printf "coverage budget ok: current %.1f%% >= required %.1f%%\n", current, required }'
+	@awk -v required="$(COVERAGE_REQUIRED)" ' \
+		NR > 1 && $$1 !~ /\.pb\.go:/ { statements[$$1] = $$2; hits[$$1] += $$3 } \
+		END { \
+			for (block in statements) { total += statements[block]; if (hits[block]) covered += statements[block] } \
+			current = 100 * covered / total; \
+			if (100 * covered < required * total) { printf "coverage budget failed: current %.6f%% (%d/%d statements) < required %g%%\n", current, covered, total, required; exit 1 } \
+			printf "coverage budget ok: current %.6f%% (%d/%d statements) >= required %g%%\n", current, covered, total, required \
+		}' "$(COVERPROFILE)"
 
 # CI shards the tests with GOTESTRUN and merges the profiles.
 # Test browsers whose test run was killed never exit, so they are cleared before and after the
