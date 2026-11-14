@@ -501,17 +501,6 @@ func TestSandboxedFileSystemGlobPathAllocations(t *testing.T) {
 	require.LessOrEqual(t, allocs, 512*perMatch+200)
 }
 
-func BenchmarkSandboxedFileSystemGlob(b *testing.B) {
-	sfs, want := globAllocationFixture(b)
-	b.ReportAllocs()
-
-	for b.Loop() {
-		if got := sfs.Glob(b.Context(), "*.txt", ""); got != want {
-			b.Fatal("glob output differs from the sorted file paths")
-		}
-	}
-}
-
 func TestRunRipgrepExitResults(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -762,18 +751,6 @@ func grepInventoryFixture(tb testing.TB) *sandboxedFileSystem {
 	tb.Setenv("PATH", root.Name())
 
 	return &sandboxedFileSystem{root: root}
-}
-
-func BenchmarkGrepInventory(b *testing.B) {
-	sfs := grepInventoryFixture(b)
-	b.ReportAllocs()
-
-	for b.Loop() {
-		files, errText := sfs.allowedRipgrepFiles(b.Context(), sfs.root.Name(), "")
-		if errText != "" || len(files) != 0 {
-			b.Fatalf("filtered inventory = %d files, %q; want no files or error", len(files), errText)
-		}
-	}
 }
 
 func TestGrepInventoryAllocations(t *testing.T) {

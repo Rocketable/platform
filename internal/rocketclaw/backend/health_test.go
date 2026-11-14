@@ -128,37 +128,3 @@ func TestHealthSamplePreservesHistogramBackingCounts(t *testing.T) {
 	current.scheduler.Counts[0]++
 	require.Equal(t, original, previous.scheduler.Counts[0])
 }
-
-func BenchmarkHealthSampleAndLog(b *testing.B) {
-	db := new(sql.DB)
-	samples := []metrics.Sample{
-		{Name: "/gc/heap/allocs:bytes"},
-		{Name: "/memory/classes/heap/objects:bytes"},
-		{Name: "/cpu/classes/gc/total:cpu-seconds"},
-		{Name: "/sched/goroutines:goroutines"},
-		{Name: "/sched/latencies:seconds"},
-	}
-	previous := sampleHealth(samples, db.Stats())
-	previous.at = previous.at.Add(-time.Minute)
-
-	var logs bytes.Buffer
-
-	logger := slog.New(slog.NewTextHandler(&logs, nil)).With("process_start", time.Now().UTC().Format(time.RFC3339Nano))
-	current := sampleHealth(samples, db.Stats())
-	current.scheduler.Counts[0]++
-	current.log(logger, &previous)
-
-	logBytes := logs.Len()
-
-	b.ReportAllocs()
-
-	for b.Loop() {
-		current = sampleHealth(samples, db.Stats())
-		current.scheduler.Counts[0]++
-
-		logs.Reset()
-		current.log(logger, &previous)
-	}
-
-	b.ReportMetric(float64(logBytes), "log-bytes/report")
-}

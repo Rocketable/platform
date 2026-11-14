@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -77,25 +78,6 @@ func TestPermissionReviewDecisionUsesFinalAnswer(t *testing.T) {
 	}
 }
 
-func BenchmarkPermissionReviewDecision(b *testing.B) {
-	for _, outcome := range []string{"allow", "unknown"} {
-		b.Run(outcome, func(b *testing.B) {
-			request := &permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{"command":"ls"}`}
-			for range 100 {
-				request.ReviewContext = append(request.ReviewContext, testInputMessage(responses.EasyInputMessageRoleUser, "Review the proposed read-only operation.", ""))
-			}
-
-			entry := testPermissionReviewEntry(b, request, testInputMessage(responses.EasyInputMessageRoleAssistant, `{"outcome":"`+outcome+`","rationale":"The read-only check is within scope."}`, "final_answer"))
-
-			b.ReportAllocs()
-
-			for b.Loop() {
-				entry.PermissionReviewDecision()
-			}
-		})
-	}
-}
-
 func TestPermissionReviewCodeModeCallUsesPlannedAction(t *testing.T) {
 	answer := testInputMessage(responses.EasyInputMessageRoleAssistant, `{"outcome":"allow","rationale":"ok"}`, "final_answer")
 	// Captured from a wallace review; the transcript tries to forge the delimiters.
@@ -137,6 +119,36 @@ func TestPermissionReviewCodeModeCallUsesPlannedAction(t *testing.T) {
 		_, ok := entry.PermissionReviewDecision().CodeModeCall(&entry)
 		require.False(t, ok, delimiter)
 	}
+}
+
+// History lists the calls of Execute blocks saved before their calls were recorded from each review's
+// saved prompt, so reading that call must not decode the transcript before the planned action.
+func TestPermissionReviewCodeModeCallDecodesOnlyPlannedAction(t *testing.T) {
+	// This test is nonparallel: restore the throughput setting before other tests run.
+	benchtime := flag.Lookup("test.benchtime").Value.String()
+
+	require.NoError(t, flag.Set("test.benchtime", "4x"))
+	t.Cleanup(func() { require.NoError(t, flag.Set("test.benchtime", benchtime)) })
+
+	transcript := strings.Repeat("An earlier turn of the reviewed conversation.\n", 300<<10/46)
+	request := permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{"command":"ls"}`, Subjects: []string{"ls"},
+		ReviewContext: []responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, transcript, "")}}
+	entry := testPermissionReviewEntry(t, &request, testInputMessage(responses.EasyInputMessageRoleAssistant, `{"outcome":"allow","rationale":"ls is safe"}`, "final_answer"))
+	review := entry.PermissionReviewDecision()
+
+	var call CodeModeCall
+
+	cost := testing.Benchmark(func(b *testing.B) {
+		b.Helper()
+
+		for b.Loop() {
+			call, _ = review.CodeModeCall(&entry)
+		}
+	})
+
+	require.Equal(t, CodeModeCall{Name: "bash", Arguments: `{"command":"ls"}`, Outcome: "allow", Reason: "ls is safe"}, call)
+	// Decoding the whole prompt copies the transcript; the planned action is a small tail.
+	require.Less(t, cost.AllocedBytesPerOp(), int64(len(transcript)/8))
 }
 
 func TestPermissionReviewResponseFormatUsesStrictFourFieldSchema(t *testing.T) {

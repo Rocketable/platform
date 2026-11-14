@@ -897,20 +897,6 @@ VALUES ('opencode:box:ops', '', '', 'remote', FALSE, 'remote', 'box', 'ops', 'ne
 	require.Equal(t, []string{ops, "ops-agent", string(KindWebChat)}, []string{top.SpaceID, top.Conversation.Agent, string(top.Kind)})
 }
 
-// BenchmarkSessionBoard sorts 1,000 chats into the default lanes of a new Dashboard.
-func BenchmarkSessionBoard(b *testing.B) {
-	service := sidebarWorkFixture(b)
-	require.NoError(b, os.MkdirAll(filepath.Join(service.definitions.Clone().Workspace, ".rocketclaw", "agents"), 0o755))
-
-	dashboards := [][]string{{"is:waiting", "is:running", "is:queued", "is:external"}}
-
-	for b.Loop() {
-		board, err := service.Board(b.Context(), "", "main", dashboards, noSlackLookups{})
-		require.NoError(b, err)
-		require.Equal(b, 50, board[0][0].Total)
-	}
-}
-
 func TestSearchSessionsTermOffsets(t *testing.T) {
 	t.Parallel()
 

@@ -30,27 +30,6 @@ schema:
     required: [answer]
 `
 
-func BenchmarkDecodeAgentFrontmatter(b *testing.B) {
-	data := []byte(benchmarkAgentFrontmatter)
-	for b.Loop() {
-		_, _, err := decodeAgentFrontmatter(data)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkLoadAgent(b *testing.B) {
-	fsys := fstest.MapFS{"review.md": testMapFile("---\n" + benchmarkAgentFrontmatter + "---\n" + strings.Repeat("Check the change and its tests.\n", 100))}
-
-	for b.Loop() {
-		_, err := loadAgent(fsys, "review.md", AgentLoadConfig{})
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
 func TestDecodeAgentFrontmatterAllocations(t *testing.T) {
 	data := []byte(benchmarkAgentFrontmatter)
 	allocs := testing.AllocsPerRun(100, func() {

@@ -63,34 +63,6 @@ func TestSidebarSessionTimestamps(t *testing.T) {
 	require.LessOrEqual(t, allocs, float64(2), "identical timestamps need only one formatted string and the response")
 }
 
-func BenchmarkSidebarSession(b *testing.B) {
-	at := time.Date(2024, time.January, 2, 3, 4, 5, 123456789, time.UTC)
-	chat := backend.SidebarChat{Session: backend.SidebarSession{StateSince: at, ArrivedAt: at, Summary: &protocol.SessionSummary{LastUpdated: at}}}
-
-	b.ReportAllocs()
-
-	for b.Loop() {
-		got := sidebarSession(&chat)
-		if got.StateSince != got.ArrivedAt || got.StateSince != got.UpdatedAt {
-			b.Fatal("identical timestamps differ")
-		}
-	}
-}
-
-func BenchmarkSidebarResponses(b *testing.B) {
-	server, ctx := sidebarChoicesFixture(b, 64)
-	b.ReportAllocs()
-
-	for b.Loop() {
-		require.NoError(b, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
-			_, err := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(message.(*ListSessionsResponse))
-			require.NoError(b, err)
-
-			return nil
-		}}))
-	}
-}
-
 func sidebarChoicesFixture(tb testing.TB, count int) (*Server, context.Context) {
 	tb.Helper()
 

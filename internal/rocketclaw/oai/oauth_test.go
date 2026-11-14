@@ -1236,42 +1236,6 @@ func TestStripInputIDsKeepsIDsWhenStoreTrue(t *testing.T) {
 	require.Equal(t, "item-1", items[0].(map[string]any)["id"])
 }
 
-func BenchmarkTransportHTTPAttempt(b *testing.B) {
-	req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", http.NoBody)
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	req.Header.Set("X-Stainless-Retry-Count", "0")
-
-	resp := &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}
-
-	var logs bytes.Buffer
-
-	transport := &transport{
-		sessionID: "session-id",
-		log:       slog.New(slog.NewTextHandler(&logs, nil)).With("process_start", "test-start", "conversation_id", "conversation", "turn_id", "turn", "provider", "chat", "model", "chat-model"),
-		base: roundTripFunc(func(*http.Request) (*http.Response, error) {
-			return resp, nil
-		}),
-	}
-
-	b.ReportAllocs()
-
-	for b.Loop() {
-		logs.Reset()
-
-		response, err := transport.roundTrip(req, "initial")
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		if err := response.Body.Close(); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
 func TestTransportAddsOAuthHeadersAndStripsBodyIDs(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)

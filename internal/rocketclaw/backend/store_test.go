@@ -394,28 +394,6 @@ func TestRemoveSessionEntryNUL(t *testing.T) {
 	}
 }
 
-func BenchmarkRemoveSessionEntryNUL(b *testing.B) {
-	for _, sample := range []struct {
-		name string
-		text string
-	}{
-		{"plain", "ordinary text"},
-		{"escaped", "quoted \"value\", path \\\\ and newline\n"},
-		{"nul", "text\x00 and literal \\u0000"},
-	} {
-		b.Run(sample.name, func(b *testing.B) {
-			data, err := json.Marshal(strings.Repeat(sample.text, 1024))
-			require.NoError(b, err)
-			b.SetBytes(int64(len(data)))
-			b.ReportAllocs()
-
-			for b.Loop() {
-				removeSessionEntryNUL(data)
-			}
-		})
-	}
-}
-
 func BenchmarkObserveEntries(b *testing.B) {
 	service, err := NewSessionService(b.TempDir())
 	require.NoError(b, err)
