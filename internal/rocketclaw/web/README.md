@@ -923,8 +923,10 @@ Explicitly choosing a saved Search-page match still enters that page's own space
 Each dialog opening clears text, pills, and result selection and focuses
 the input.
 Once text is typed, matching commands appear above the conversations; an empty
-query, or one with a filter such as `tag:customer` or `is:pinned`, lists
-conversations only. A bare key such as `cron:` is not a filter. Commands match
+query lists only the three commands run most recently in this browser tab above
+them, so Enter runs the latest again, and a query with a filter such as
+`tag:customer` or `is:pinned` lists conversations only. A bare key such as
+`cron:` is not a filter. Commands match
 case-insensitively: a label equal to the text comes first, then labels containing
 it, then, once three or more characters are typed, labels containing them in order
 with gaps. Within each group the command order below applies. Enter runs the
@@ -1075,10 +1077,10 @@ lists every shortcut from the same list: the palette keys, new session, tab
 stepping and reopening, the sidebar toggle, Escape on a page tab, and the message box's steer
 and stash keys.
 Timeline detail levels are also available, from `Timeline: Messages only` through
-`Timeline: Everything`.
-Like VS Code, selected commands appear first, newest first;
-unused commands follow alphabetically, without section dividers. History stays in
-this browser across reloads, stores command IDs rather than session IDs or draft
+`Timeline: Everything`; once text is typed they keep the Config slider's order.
+Like VS Code, selected commands appear first, newest first, so Enter on an empty
+query runs the latest again; unused commands follow alphabetically, without
+section dividers. History belongs to one browser tab and survives its reloads, stores command IDs rather than session IDs or draft
 text, and records only selections—not searches or dismissals. Search still filters
 the list, and unavailable session commands stay hidden even when recently used.
 Rows keep compact spacing and touch-sized targets on mobile.
