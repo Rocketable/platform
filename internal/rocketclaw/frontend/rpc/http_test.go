@@ -43,7 +43,8 @@ func TestHTTPEventFramingAllocationBudget(t *testing.T) {
 		output, err := build.CombinedOutput()
 		require.NoError(t, err, "%s", output)
 
-		cmd := exec.CommandContext(t.Context(), executable, "-test.run=^"+t.Name()+"$", "-test.cpu="+strconv.Itoa(runtime.GOMAXPROCS(0)))
+		// Keep a slow first connection from reducing the allocation sample to one iteration.
+		cmd := exec.CommandContext(t.Context(), executable, "-test.run=^"+t.Name()+"$", "-test.cpu="+strconv.Itoa(runtime.GOMAXPROCS(0)), "-test.benchtime=32x")
 
 		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_EVENT_FRAMING_ALLOCATIONS=1", "GOGC=100", "GOMEMLIMIT=off")
 		output, err = cmd.CombinedOutput()
