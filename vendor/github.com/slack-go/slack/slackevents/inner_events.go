@@ -120,25 +120,27 @@ func (e *AppContextEntity) UnmarshalJSON(data []byte) error {
 
 // MarshalJSON implements the json.Marshaler interface for AppContextEntity.
 func (e AppContextEntity) MarshalJSON() ([]byte, error) {
-	wire := appContextEntityJSON{
+	wire := struct {
+		Type         string `json:"type"`
+		Value        any    `json:"value,omitempty"`
+		TeamID       string `json:"team_id,omitempty"`
+		EnterpriseID string `json:"enterprise_id,omitempty"`
+	}{
 		Type:         e.Type,
 		TeamID:       e.TeamID,
 		EnterpriseID: e.EnterpriseID,
-		Value:        e.raw,
 	}
 
-	var err error
 	switch {
 	case e.Message != nil:
-		wire.Value, err = json.Marshal(e.Message)
+		wire.Value = e.Message
 	case e.Value != "":
-		wire.Value, err = json.Marshal(e.Value)
-	}
-	if err != nil {
-		return nil, err
+		wire.Value = e.Value
+	case len(e.raw) > 0:
+		wire.Value = e.raw
 	}
 
-	return json.Marshal(wire)
+	return json.Marshal(&wire)
 }
 
 // AppContextChangedEvent is an (inner) EventsAPI subscribable event, sent when the
@@ -1137,20 +1139,15 @@ type AppUninstalledTeamEvent struct {
 	EventTs    string `json:"event_ts"`
 }
 
+// CallRejectedEvent is sent when a user rejects a call shared in a direct message.
+//
+// Slack API docs: https://docs.slack.dev/reference/events/call_rejected
 type CallRejectedEvent struct {
-	Token    string `json:"token"`
-	TeamID   string `json:"team_id"`
-	APIAppID string `json:"api_app_id"`
-	Event    struct {
-		Type             string `json:"type"`
-		CallID           string `json:"call_id"`
-		UserID           string `json:"user_id"`
-		ChannelID        string `json:"channel_id"`
-		ExternalUniqueID string `json:"external_unique_id"`
-	} `json:"event"`
-	Type        string   `json:"type"`
-	EventID     string   `json:"event_id"`
-	AuthedUsers []string `json:"authed_users"`
+	Type             string `json:"type"`
+	CallID           string `json:"call_id"`
+	UserID           string `json:"user_id"`
+	ChannelID        string `json:"channel_id"`
+	ExternalUniqueID string `json:"external_unique_id"`
 }
 
 type ChannelSharedEvent struct {
