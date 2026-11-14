@@ -791,7 +791,7 @@ active tab.
   run ends, once nothing is left to wake it, and the Cron page of the cron's
   space is marked too; for
   a published page, an HTML file of it is stored, and the space's Pages list is
-  marked too. Agents, Skills, Settings, Shortcuts, Voice, and Recently closed
+  marked too. Agents, Skills, Settings, Shortcuts, Quick view, Voice, and Recently closed
   are marked only by you. A session's turn or question reaches you, with a
   notification, when you sent or steered that turn from the Web, when the
   session is in your own tabs in any space, or when it is on your Top Shelf and
@@ -1066,11 +1066,11 @@ failed search shows an error with Retry, and the next keystroke also retries.
 Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
 **Sessions: New**, **Sessions: Search**, **New dashboard**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
 **List Agents**, **List Skills**, **Settings**, **Tabs: Previous**, **Tabs: Next**,
-**Tabs: Recently closed**, and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
+**Tabs: Recently closed**, **Help: Keyboard Shortcuts**, and **Quick view**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
 works (the desktop sidebar, not the narrow-screen drawer), and **Tabs: Reopen closed tab** while a tab is closed. In both palettes a command bound to a
 key shows it on the right of its row, OpenCode style: **⌘ Option N** on Mac or
 **Ctrl Alt N** elsewhere for **Sessions: New**, **⌘ [** and **⌘ ]** for the tab
-commands, **⌘ Option T** for reopening, and **⌘ B** for the sidebar toggle. Unbound commands have no shortcut
+commands, **⌘ Option T** for reopening, **⌘ Shift D** for Quick view, and **⌘ B** for the sidebar toggle. Unbound commands have no shortcut
 hint. **Help: Keyboard Shortcuts** opens the read-only `/shortcuts` page, which
 lists every shortcut from the same list: the palette keys, new session, tab
 stepping and reopening, the sidebar toggle, Escape on a page tab, and the message box's steer
@@ -1459,6 +1459,33 @@ and the Go-driven browser tests in `internal/rocketclaw/frontend/rpc` all fail
 with `Cannot find package 'undefined'`.
 See [Frontend RPC Tests Need Setup in Every Fresh JJ Workspace](../../../docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md)
 for the setup.
+
+## Quick view
+
+Cmd/Ctrl+Shift+D, or **Quick view** in the command palette, opens the `/quick-view`
+page in a tab; Escape closes it like other pages. It shows every server's
+sessions as a board of tiles: each tile is a session, with a coloured dot for its
+state and the start of its title, in labelled rows. Chips at the top, or the keys
+1 to 0, switch between ten variations, and this browser remembers the last one.
+Each variation has its own rules for which sessions it shows, how it groups them
+into rows, which states its legend names, and what clicking a tile does; the rules
+are listed under the board:
+
+| Key | Variation | Shows | Rows | Click |
+|---|---|---|---|---|
+| 1 | Ranks | Unparked sessions touched in 24 hours | Ranks of 9, most urgent first | Opens the session |
+| 2 | Agents | The last 7 days, without cron runs | One per agent | Shows the last message, with Open |
+| 3 | Triage | Sessions asking, unread, or working | Needs you, Unread, Working | Adds its tab and stays on the page |
+| 4 | Timeline | Unparked, the last 7 days | Last hour, Today, Yesterday, This week | Opens a preview tab |
+| 5 | Spaces | Unparked, the last 7 days, every space | One per space | Opens it in its space |
+| 6 | Live now | Busy, or touched in 15 minutes | One per server | Opens it in a new window |
+| 7 | Origins | The last 24 hours | You, forks, Slack, each cron, External… | A cron run opens its cron's timeline |
+| 8 | Stuck | Running, queued, or asking | Minutes in that state, longest first | Selects; Open, Park until done, or Mark read the selection |
+| 9 | Sweep | Unread or asking | One per tag | Marks it read; double-click opens |
+| 0 | Parking lot | The last 7 days, parked ones too | In play, then each kind of parking | Parks it until done, or unparks it |
+
+Read, park and add-a-tab clicks act only on this server's sessions. The board's
+times are those of its opening.
 
 ## Attachment HTTP contract
 
