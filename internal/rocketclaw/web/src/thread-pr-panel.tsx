@@ -23,7 +23,9 @@ function useThreadPRs(id: string, version?: string, initial = "") {
   const { api, directory } = checkout.data ?? {};
   const source = useMemo(() => api === undefined ? undefined : { api, directory: directory! }, [api, directory]);
   const loading = created.isFetching || remote && checkout.isFetching;
-  return { created, checkout, remote, urls, url, reference, source, loading, setSelected };
+  // Only the first look shows a status; later looks keep the current result in place so the pane does not jump.
+  const finding = created.isPending || remote && checkout.isPending;
+  return { created, checkout, remote, urls, url, reference, source, loading, finding, setSelected };
 }
 
 // Reads every PR's head commit only through an OpenCode server's gh login; elsewhere a new PR is the only change seen.
@@ -44,7 +46,7 @@ export function ThreadPRWatch({ id, version }: { id: string; version?: string })
 }
 
 export function ThreadPRContent({ id, version, selected, close }: { id: string; version?: string; selected?: string; close: () => void }) {
-  const { created, checkout, remote, urls, url, reference, source, loading, setSelected } = useThreadPRs(id, version, selected);
+  const { created, checkout, remote, urls, url, reference, source, loading, finding, setSelected } = useThreadPRs(id, version, selected);
   const checkoutError = checkout.error || checkout.data && "error" in checkout.data;
   return <div className="ph-no-capture flex min-h-0 flex-1 flex-col">
     <header className="flex shrink-0 items-center gap-2 border-b p-2 text-xs lg:pr-12">
@@ -53,10 +55,10 @@ export function ThreadPRContent({ id, version, selected, close }: { id: string; 
       <Button type="button" variant="ghost" size="icon-sm" aria-label="Close pull requests" onClick={close}><X /></Button>
     </header>
     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3 text-sm">
-      {loading && <p role="status">Finding pull requests…</p>}
+      {finding && <p role="status">Finding pull requests…</p>}
       {created.error && <p role="alert">Could not read this thread's pull requests.</p>}
       {checkoutError && <p role="alert">Could not read the current checkout's pull request using this OpenCode server's gh login.</p>}
-      {!loading && !created.error && !checkoutError && !urls.length && <p role="status">No pull requests found for this thread.</p>}
+      {!finding && !created.error && !checkoutError && !urls.length && <p role="status">No pull requests found for this thread.</p>}
       {reference && <>
         <span className="flex shrink-0 flex-wrap items-center gap-2 text-xs">
         <Select value={url} onValueChange={(value) => setSelected(value ?? "")}>
