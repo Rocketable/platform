@@ -2923,6 +2923,39 @@ func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
 	require.Empty(t, items)
 }
 
+// A request whose queue row another turn already claimed, as a duplicate submission of the row between RunTurn's
+// admission and its enqueue does, still releases its caller: its input ran under that turn.
+func TestBridgeReleasesCallerOfClaimedQueueItem(t *testing.T) {
+	t.Parallel()
+
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	require.NoError(t, service.UpsertThread("main", ThreadState{Agent: "main"}))
+
+	message := func() *protocol.InboundMessage {
+		inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "hello", true)
+		inbound.ConversationID = "main"
+
+		return inbound
+	}
+	require.NoError(t, service.PutThreadQueueItem("hello", &protocol.ThreadQueueItem{ID: "hello", ConversationID: "main", Source: protocol.SourceWeb, Message: "hello", Inbound: message()}))
+
+	bridge := &Bridge{config: Config{ConversationID: "main", SessionService: service}, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+	claimed, err := bridge.activateInbound(ctx, &bridgeRequest{inbound: message(), queueItemID: "hello"})
+	require.NoError(t, err)
+	require.True(t, claimed, "the duplicate submission claims the row")
+
+	request := bridgeRequest{inbound: message(), queueItemID: "hello", completion: &turnCompletion{done: make(chan struct{})}}
+	bridge.handle(ctx, &request)
+
+	select {
+	case <-request.completion.done:
+		require.NoError(t, request.completion.err)
+	default:
+		t.Fatal("the caller of a request whose row another turn claimed was never released")
+	}
+}
+
 func TestBridgeDeletesScheduledMessageWhenTurnStarts(t *testing.T) {
 	t.Parallel()
 

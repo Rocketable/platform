@@ -888,7 +888,7 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 	// The drain cursor moved before replay was saved. Saved identity, not that
 	// cursor, now settles this input without creating another waiting row.
 	b.waiting = nil
-	b.steers, b.steersRead = []bridgeRequest{request}, 1
+	b.steers, b.steersRead = []bridgeRequest{{inbound: inbound, queueItemID: "waiting", completion: completion}}, 1
 	require.NoError(t, b.settleSteers(ctx, nil))
 	<-completion.done
 	require.NoError(t, completion.err)
