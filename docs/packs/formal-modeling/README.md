@@ -1,0 +1,1 @@
+Governs stateful designs: queues, workers, retries, leases, crash recovery and other behavior where concurrent actors interleave are drawn as a state diagram, modeled in PlusCal and checked with TLC before they are built.
