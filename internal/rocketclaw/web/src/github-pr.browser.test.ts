@@ -519,6 +519,12 @@ test("built App PR layouts preserve the composer draft and existing delegation p
     await prs.waitFor({ state: "detached" });
     await page.getByRole("button", { name: "Show pull requests", exact: true }).click();
     await prs.getByText("Created in this thread", { exact: true }).waitFor();
+    // Cmd/Ctrl+Shift+B does what the button does, also while the message box has focus.
+    await composer.focus();
+    await page.keyboard.press("ControlOrMeta+Shift+B");
+    await prs.waitFor({ state: "detached" });
+    await page.keyboard.press("ControlOrMeta+Shift+B");
+    await prs.getByText("Created in this thread", { exact: true }).waitFor();
     expect(prompts).toBe(0);
     expect(unexpected).toEqual([]);
     expect(errors).toEqual([]);
