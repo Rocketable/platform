@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -312,27 +311,4 @@ func TestModelResolverLogsProviderAndAPIModelWithoutCredentials(t *testing.T) {
 	assert.Contains(t, logs.String(), `"model":"api-model"`)
 	assert.NotContains(t, logs.String(), "secret-key")
 	assert.NotContains(t, logs.String(), fmt.Sprint(config.OpenAIConfig{APIKey: "secret-key", APIBaseURL: server.URL}))
-}
-
-func BenchmarkProviderAttemptEvent(b *testing.B) {
-	req, err := http.NewRequest(http.MethodPost, "http://localhost/responses", http.NoBody)
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	req.Header.Set("X-Stainless-Retry-Count", "0")
-	resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header)}
-
-	var logs bytes.Buffer
-
-	logger := slog.New(slog.NewTextHandler(&logs, nil)).With("process_start", "test-start", "conversation_id", "conversation", "turn_id", "turn")
-
-	b.ReportAllocs()
-
-	for b.Loop() {
-		logs.Reset()
-
-		attrs := append(providerLogAttrs(req, resp, resp.StatusCode, time.Millisecond, nil, "http_headers"), "provider", "work", "model", "api-model")
-		logger.Info("provider request completed", attrs...)
-	}
 }

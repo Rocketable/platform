@@ -23,16 +23,6 @@ func mapFile(data string) *fstest.MapFile {
 	return &fstest.MapFile{Data: []byte(data), Mode: 0, ModTime: time.Time{}, Sys: nil}
 }
 
-func BenchmarkLoadSkill(b *testing.B) {
-	fsys := fstest.MapFS{"example/SKILL.md": mapFile("---\nname: example\ndescription: Review a change\n---\n" + strings.Repeat("Check the change and its tests.\n", 100))}
-	for b.Loop() {
-		_, err := loadSkill(fsys, "example/SKILL.md")
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
 func TestLoadSkills(t *testing.T) {
 	t.Run("preserves body bytes after frontmatter", func(t *testing.T) {
 		for _, tc := range []struct {

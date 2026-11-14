@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -301,30 +300,6 @@ func TestDiagnosticsLiveCapturesAndCancellation(t *testing.T) {
 			files, err := os.ReadDir(workspace)
 			require.NoError(t, err)
 			require.Empty(t, files)
-		})
-	}
-}
-
-// This CPU-bound comparison measures live recording cost, not agent throughput.
-func BenchmarkDiagnosticsCaptureOverhead(b *testing.B) {
-	for _, mode := range []string{"off", "cpu", "trace"} {
-		b.Run(mode, func(b *testing.B) {
-			payload := make([]byte, 4096)
-
-			switch mode {
-			case "cpu":
-				require.NoError(b, pprof.StartCPUProfile(io.Discard))
-				b.Cleanup(pprof.StopCPUProfile)
-			case "trace":
-				require.NoError(b, trace.Start(io.Discard))
-				b.Cleanup(trace.Stop)
-			}
-
-			b.ReportAllocs()
-
-			for b.Loop() {
-				sha256.Sum256(payload)
-			}
 		})
 	}
 }

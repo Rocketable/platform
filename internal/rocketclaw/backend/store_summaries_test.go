@@ -702,16 +702,6 @@ func TestSidebarSessionsWorkFactsUseWaitingIndex(t *testing.T) {
 	require.Greater(t, scans(), before)
 }
 
-func BenchmarkSidebarSessionsWorkFacts(b *testing.B) {
-	service := sidebarWorkFixture(b)
-
-	for b.Loop() {
-		rows, err := service.sidebarRows(b.Context(), "", nil)
-		require.NoError(b, err)
-		require.Len(b, rows, 1000)
-	}
-}
-
 // sidebarWorkFixture holds 1,000 chats and 50,000 finished turns, whose steps went when they ended. 50
 // chats run a turn with a pending question among 10 steps, 100 hold a queued item, and 100 have a
 // hidden run with a queued item and a running turn.

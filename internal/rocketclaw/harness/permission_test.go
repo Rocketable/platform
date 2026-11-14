@@ -149,31 +149,6 @@ func TestPermissionWildcardMatchOpenCodeSemantics(t *testing.T) {
 	require.True(t, permissionWildcardMatch("note.txt", "other.txt", ruleSegment{Text: "note.txt", Literal: true}))
 }
 
-func BenchmarkPermissionWildcardMatch(b *testing.B) {
-	for name, tc := range map[string]struct {
-		input, pattern string
-		segments       []ruleSegment
-	}{
-		"pattern":        {"note.txt", "*", nil},
-		"authored":       {"note.txt", "*", []ruleSegment{{Text: "*"}}},
-		"literal":        {"note.txt", "*", []ruleSegment{{Text: "*", Literal: true}}},
-		"exact":          {"note.txt", "note.txt", nil},
-		"exact-mismatch": {"other.txt", "note.txt", nil},
-		"wildcard":       {"note.txt", "*.txt", nil},
-		"prefix":         {"note.txt", "note*", nil},
-		"middle":         {"note.txt", "note*.txt", nil},
-		"optional-space": {"note.txt", "note.txt *", nil},
-	} {
-		b.Run(name, func(b *testing.B) {
-			b.ReportAllocs()
-
-			for b.Loop() {
-				permissionWildcardMatch(tc.input, tc.pattern, tc.segments...)
-			}
-		})
-	}
-}
-
 func TestParsePermissionNode(t *testing.T) {
 	t.Run("normalizes scalar permission", func(t *testing.T) {
 		require.Equal(t, PermissionSet{Buckets: nil}, parsePermissionYAML(t, `allow`))
