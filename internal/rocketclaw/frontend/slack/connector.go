@@ -86,7 +86,7 @@ type Connector struct {
 	facts       channelFactsStore
 	factsWake   chan struct{}
 	refreshWake chan struct{}
-	factsGroup  errgroup.Group
+	inbound     errgroup.Group
 
 	nameMu       sync.Mutex
 	nameByID     map[string]string
@@ -275,16 +275,21 @@ func (c *Connector) Start(ctx context.Context) {
 
 	c.inboundStop = inboundStop
 
-	go c.eventLoop(inboundCtx)
-	go c.runSocketLoop(inboundCtx)
-
-	c.factsGroup.Go(func() error { return c.refreshChannelFacts(inboundCtx) })
+	c.inbound.Go(func() error {
+		c.eventLoop(inboundCtx)
+		return nil
+	})
+	c.inbound.Go(func() error {
+		c.runSocketLoop(inboundCtx)
+		return nil
+	})
+	c.inbound.Go(func() error { return c.refreshChannelFacts(inboundCtx) })
 }
 
 func (c *Connector) Stop(context.Context) error {
 	c.inboundStop()
 
-	_ = c.factsGroup.Wait()
+	_ = c.inbound.Wait()
 
 	return nil
 }
@@ -946,10 +951,15 @@ func (c *Connector) runSocketLoop(ctx context.Context) {
 			case <-ctx.Done():
 				cancel()
 
-				return
+				errRun = <-done
+
+				break clientLoop
 			case event, ok := <-client.Events:
 				if !ok {
 					cancel()
+
+					errRun = <-done
+
 					break clientLoop
 				}
 
@@ -964,7 +974,9 @@ func (c *Connector) runSocketLoop(ctx context.Context) {
 				case <-ctx.Done():
 					cancel()
 
-					return
+					errRun = <-done
+
+					break clientLoop
 				case errRun = <-done:
 					cancel()
 					break clientLoop
