@@ -38,16 +38,15 @@ as built; each other value removes the gate or turns one fix off, for the must-f
 stateDiagram-v2
     [*] --> LiveIdle
     LiveIdle --> LiveTurn: a request passes the gate and starts a turn
-    LiveTurn --> LiveIdle: turn ends (an active goal queues its next turn; later work is picked)
+    LiveTurn --> LiveIdle: turn ends (an active goal queues its next turn, and later work is picked)
     LiveIdle --> PausedIdle: pause
     LiveIdle --> PausedRace: pause after a request passed the gate, before its turn starts
     LiveTurn --> PausedFinishing: pause (the reply's input closes)
     PausedRace --> PausedFinishing: the turn starts anyway (forward-looking pause)
     PausedFinishing --> PausedIdle: reply ends, taking no steers
-    PausedIdle --> PausedIdle: request reaches the gate (a person's input or a recurring firing is held as a row with its caller; a goal continuation is refused and recorded; anything else is refused with AgentPausedError)
-    PausedIdle --> PausedIdle: plain message posted as chat; restart (held work stays in rows)
+    PausedIdle --> PausedIdle: request reaches the gate (a person's input or a recurring firing is held as a row with its caller, a goal continuation is refused and recorded, anything else is refused with AgentPausedError), plain message posted as chat, or restart (held work stays in rows)
     PausedFinishing --> PausedFinishing: restart (the interrupted turn resumes past the gate)
-    PausedIdle --> LiveIdle: resume (the recorded goal continuation is re-submitted; later work picked)
+    PausedIdle --> LiveIdle: resume (the recorded goal continuation is re-submitted, and later work is picked)
     PausedFinishing --> LiveTurn: resume
     LiveTurn --> LiveTurn: restart (the interrupted turn resumes)
 ```
