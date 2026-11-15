@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A run with a destination records it for the cron's agent and runs; the destination shows the run without a copy.
 func TestCronProducerRunsWithDestination(t *testing.T) {
 	progressCronjob := &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "job-agent", RanAt: "2000-01-02T03:04:05Z"}
 	for _, outcome := range []string{"normal", "run-error", "interrupted"} {
@@ -60,8 +59,6 @@ func TestCronProducerRunsWithDestination(t *testing.T) {
 	}
 }
 
-// A scheduled run without a destination only stores and waits; the backend's
-// delivery reports any reply in a Web chat.
 func TestScheduledCronOnlyRunsTurn(t *testing.T) {
 	var operations []string
 	errRun := errors.New("run failed")
@@ -85,7 +82,6 @@ func TestScheduledCronOnlyRunsTurn(t *testing.T) {
 	require.Equal(t, []string{"create:X", "run"}, operations)
 }
 
-// A destination that cannot be created stops the run before it starts.
 func TestCronRunStopsWhenDestinationFails(t *testing.T) {
 	errCreate := errors.New("create failed")
 	core := &BackendMock{CreateConversationFunc: func(context.Context, protocol.Conversation) error { return errCreate }}

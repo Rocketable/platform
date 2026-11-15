@@ -31,7 +31,6 @@ func runLint(args []string) error {
 		return err
 	}
 
-	// Startup's own cron check covers routines and cron files. It reads runtimeRoot as a workspace's runtime directory.
 	assets := *cfg
 	assets.Workspace = filepath.Dir(runtimeRoot)
 

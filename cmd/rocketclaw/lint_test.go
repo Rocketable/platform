@@ -53,7 +53,6 @@ bad
 	assert.Contains(t, output, "RC006 error agents/lint-bad.md")
 }
 
-// Lint loads easy agents as startup does, and checks their routines with the cron manager's own check.
 func TestRunLintEasyAgents(t *testing.T) {
 	easy := "---\nmode: easy\nspace: Ops\nworkingDirectory: data\n"
 	for _, tt := range []struct{ name, agent, err string }{

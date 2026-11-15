@@ -48,7 +48,6 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 				`{"workspace":%q,"database_url":"postgres://127.0.0.1:1/none?sslmode=disable","slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"mcp_external":{"enabled":true,"listen_addr":"127.0.0.1:0"},"openai":{"api_key":"sk-test"}}`,
 				workspace,
 			)
-			// This command test uses the host working directory, not a sandboxed filesystem.
 			require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))
 
 			reader, writer, err := os.Pipe()
@@ -129,7 +128,6 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 
 	workspace := t.TempDir()
 	t.Chdir(workspace)
-	// Use a host workspace overlay: Slack auth must not build the seeded easy voice agent's sandbox.
 	require.NoError(t, os.Mkdir("agents", 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join("agents", "voice.md"), []byte("---\ndescription: Voice\nmodel: gpt-6.1-sol\n---\n"), 0o600))
 	configData := fmt.Sprintf(

@@ -1,4 +1,3 @@
-// Command rocketclaw bridges Slack and external MCP inputs to the agent harness.
 package main
 
 //go:generate find ../../cmd/rocketclaw ../../internal/rocketclaw ( -name mocks_test.go -o -name *_mocks_test.go ) -delete
@@ -37,7 +36,6 @@ type exitCodeError int
 func (e exitCodeError) Error() string { return "" }
 func (e exitCodeError) ExitCode() int { return int(e) }
 func main() {
-	// Inside an emulated shell's sandbox this binary is the guest relay, not RocketClaw.
 	if code, ok := sandbox.Guest(os.Args); ok {
 		os.Exit(code)
 	}

@@ -266,8 +266,6 @@ func TestExternalMCPRepeatedIDKeepsLockedAgent(t *testing.T) {
 	assert.Equal(t, []string{stored.PrivateConversationID, stored.PrivateConversationID}, conversations)
 }
 
-// A call naming an agent MCP does not expose is refused and records nothing; a session whose
-// agent stops being exposed is refused too.
 func TestExternalMCPRefusesUnexposedAgents(t *testing.T) {
 	store := newMCPTestStore(t)
 	agents := &mcpAgentIndex{names: []string{"planner"}}

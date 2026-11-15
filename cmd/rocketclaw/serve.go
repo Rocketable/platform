@@ -103,7 +103,6 @@ func runServe(args []string, diagnosticsAddress string) error {
 
 			_ = listener.Close()
 			_ = serving.Wait()
-			// Serve has stopped adding connections; Closed follows handler exit.
 			connections.Wait()
 		}()
 
@@ -126,7 +125,6 @@ func runServe(args []string, diagnosticsAddress string) error {
 	return nil
 }
 
-// logBuildIdentity uses only metadata embedded in the running binary, not checkout history.
 func logBuildIdentity(logger *slog.Logger, build *debug.BuildInfo) {
 	attrs := []slog.Attr{slog.String("version", cmp.Or(build.Main.Version, "(unknown)"))}
 	if build.GoVersion != "" {
@@ -145,16 +143,12 @@ func logBuildIdentity(logger *slog.Logger, build *debug.BuildInfo) {
 	logger.LogAttrs(context.Background(), slog.LevelInfo, "starting rocketclaw", attrs...)
 }
 
-// shutdownSignals is canceled by the first SIGINT or SIGTERM, which starts the graceful shutdown. A second Ctrl-C
-// (SIGINT) then forces the exit. A repeated SIGTERM does not: systemd sends SIGTERM again to the processes left
-// once a unit's main process exits, which happens at once when `go run` starts RocketClaw.
 func shutdownSignals() (context.Context, context.CancelFunc) {
 	ctxSignal, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	ctx, cancel := context.WithCancelCause(context.Background())
 	context.AfterFunc(ctxSignal, func() {
 		signal.Notify(make(chan os.Signal, 1), syscall.SIGTERM)
 		stop()
-		// Restore interrupt handling before the caller starts shutting down.
 		cancel(context.Cause(ctxSignal))
 	})
 

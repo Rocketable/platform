@@ -62,7 +62,6 @@ func TestPostHogMirrorsCaptureEventsAndExceptions(t *testing.T) {
 
 	names := map[string]captured{}
 	for _, event := range events {
-		// The SDK sends an exception's distinct ID among its properties.
 		exceptionDistinctID, _ := event.Properties["distinct_id"].(string)
 		assert.Equal(t, "lab", cmp.Or(event.DistinctID, exceptionDistinctID))
 		names[event.Event] = event

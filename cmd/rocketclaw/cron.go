@@ -22,8 +22,6 @@ type cronRunner struct {
 	backend frontend.Backend
 }
 
-// Run stores the cron request and waits for it while alive. Without a destination
-// the backend's delivery reports a reply in a new Web chat.
 func (r *cronRunner) Run(ctx context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 	destination := progress.SyncDestination
 	if destination != "" {

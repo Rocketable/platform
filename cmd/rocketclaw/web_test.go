@@ -33,7 +33,6 @@ import (
 )
 
 func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
-	// No RPC calls are needed for SPA routes; use a real, unconnected client.
 	connection, err := grpc.NewClient("passthrough:///unused", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
@@ -46,7 +45,6 @@ func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, prefix+path, http.NoBody)
 			request.RemoteAddr = "127.0.0.1:12345"
 			handler.ServeHTTP(response, request)
-			// SPA success is not evidence of a profiling endpoint: inspect the content.
 			if strings.HasPrefix(prefix, "/s/") {
 				require.Equal(t, http.StatusOK, response.Code, prefix+path)
 				require.Contains(t, response.Body.String(), "/assets/main-", prefix+path)
@@ -62,7 +60,6 @@ func TestPublicWebDoesNotExposeDiagnostics(t *testing.T) {
 	}
 }
 
-// webSessions is a session store on its own test database, which the Web's Dashboard watch reads from its start.
 func webSessions(t *testing.T) *backend.SessionService {
 	t.Helper()
 
@@ -80,7 +77,7 @@ func TestWebRPCTailnetNode(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
-	t.Setenv("TS_CONTROL_URL", "http://127.0.0.1:1") // Tests never reach Tailscale's control plane.
+	t.Setenv("TS_CONTROL_URL", "http://127.0.0.1:1")
 
 	configDir, err := os.UserConfigDir()
 	require.NoError(t, err)
@@ -92,8 +89,6 @@ func TestWebRPCTailnetNode(t *testing.T) {
 	require.NoError(t, stop(t.Context()))
 	require.NoDirExists(t, filepath.Join(configDir, "rocketclaw"), "no node starts without web.tsnet")
 
-	// A logged-out node without a key never holds up startup or prints a login link:
-	// the server starts, logs one notice, and serves only its plain listener.
 	var logs bytes.Buffer
 
 	rt.Log = slog.New(slog.NewTextHandler(&logs, nil))
@@ -105,7 +100,6 @@ func TestWebRPCTailnetNode(t *testing.T) {
 	assert.Contains(t, logs.String(), "Tailscale authentication unavailable")
 	assert.NotContains(t, logs.String(), "login.tailscale.com")
 
-	// With a key the node logs itself in; it never does here, so stop must cancel the wait and close it.
 	logs.Reset()
 	cfg.Web.Tsnet.AuthKey = "tskey-auth-test"
 	rt.Cfg.Store(cfg)
@@ -120,7 +114,6 @@ func TestWebRPCTailnetNode(t *testing.T) {
 	require.FileExists(t, filepath.Join(configDir, "rocketclaw", "tsnet-rocketclaw-test", "tailscaled.state"))
 }
 
-// fakeTailscaleWhois puts a tailscale CLI first on PATH that names the loopback caller alice.
 func fakeTailscaleWhois(t *testing.T) {
 	t.Helper()
 
@@ -148,7 +141,6 @@ func TestWebRPC(t *testing.T) {
 	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, stop(t.Context())) }()
-	// Without a configured certificate the Web serves a self-signed one, which this client accepts.
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, ForceAttemptHTTP2: true}}
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://"+cfg.Web.ListenAddress+"/api/Identity", strings.NewReader("{}"))
 	require.NoError(t, err)
@@ -174,7 +166,6 @@ func TestWebRPC(t *testing.T) {
 	require.Contains(t, string(body), `"dsn":"https://public@o1.ingest.sentry.io/1"`)
 
 	require.NoError(t, stop(t.Context()))
-	// Immediate shutdown is valid even before Serve's goroutine is scheduled.
 	stop, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)
 }
@@ -199,7 +190,6 @@ func TestWebRPCProxiesAndSyncsOpenCode(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	// A port that was free a moment ago becomes the Web's.
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	address := probe.Addr().String()
@@ -225,7 +215,6 @@ func TestWebRPCProxiesAndSyncsOpenCode(t *testing.T) {
 	require.NoError(t, errors.Join(err, response.Body.Close()))
 	assert.Equal(t, "opencode web", string(body), "the Web proxies OpenCode with its password")
 
-	// The coding server reaches its MCP bridge on the Web listener with its own password.
 	for password, code := range map[string]int{"pw": http.StatusOK, "wrong": http.StatusUnauthorized} {
 		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://"+address+"/opencode/box/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"opencode","version":"test"}}}`))
 		require.NoError(t, err)
@@ -238,7 +227,6 @@ func TestWebRPCProxiesAndSyncsOpenCode(t *testing.T) {
 		assert.Equal(t, code, response.StatusCode, password)
 	}
 
-	// The sync's first poll runs when the Web starts.
 	require.Eventually(t, func() bool {
 		for chat, err := range sessions.SidebarChats(t.Context(), "", &mockWebChannels{}, nil) {
 			if err == nil && chat.Session.Conversation.ID == "opencode:box:ses_a" {
@@ -252,7 +240,6 @@ func TestWebRPCProxiesAndSyncsOpenCode(t *testing.T) {
 	require.NoError(t, stop(t.Context()))
 }
 
-// A configured certificate is the one the Web serves; one that cannot load stops the start.
 func TestWebRPCServesConfiguredCertificate(t *testing.T) {
 	dir := t.TempDir()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

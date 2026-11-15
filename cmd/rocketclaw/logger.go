@@ -11,7 +11,6 @@ import (
 	"github.com/posthog/posthog-go"
 )
 
-// newLogger logs to stderr at levelText and also hands every record to the mirrors, which pick their own levels.
 func newLogger(levelText string, mirrors ...slog.Handler) *slog.Logger {
 	levelText = strings.TrimSpace(strings.ToUpper(levelText))
 	if levelText == "WARNING" {
@@ -29,8 +28,6 @@ func newLogger(levelText string, mirrors ...slog.Handler) *slog.Logger {
 	return logger
 }
 
-// postHogMirrors send warnings and errors to PostHog Error Tracking, and every record at info or above
-// as an event named by its event attribute, or else by its message.
 func postHogMirrors(client posthog.EnqueueClient, distinctID string) []slog.Handler {
 	exceptions := posthog.NewSlogCaptureHandler(slog.DiscardHandler, client,
 		posthog.WithDistinctIDFn(func(context.Context, slog.Record) string { return distinctID }),
@@ -40,7 +37,6 @@ func postHogMirrors(client posthog.EnqueueClient, distinctID string) []slog.Hand
 	return []slog.Handler{exceptions, slog.NewJSONHandler(postHogEvents{client: client, distinctID: distinctID}, nil)}
 }
 
-// postHogEvents captures each JSON log record it is written as one PostHog event.
 type postHogEvents struct {
 	client     posthog.EnqueueClient
 	distinctID string

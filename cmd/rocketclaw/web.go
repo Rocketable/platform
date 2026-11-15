@@ -28,8 +28,6 @@ import (
 	"tailscale.com/ipn/ipnstate"
 )
 
-// serverName names this server in browser tabs: server_display_name, else its Tailscale
-// node name (the tsnet hostname, or this machine's node), else nothing.
 func serverName(cfg *config.Config) string {
 	if cfg.ServerDisplayName != "" {
 		return cfg.ServerDisplayName
@@ -63,9 +61,7 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		return nil, fmt.Errorf("start Web HTTP: %w", err)
 	}
 
-	// Only HTTP is network-accessible; principal metadata stays inside the process.
 	listener := bufconn.Listen(1 << 20)
-	// This fixed passthrough target and insecure credentials cannot fail setup; dialing happens on RPC calls.
 	connection, _ := grpc.NewClient("passthrough:///web", grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			return listener.DialContext(ctx)
@@ -100,7 +96,6 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 		return nil
 	})
 	serving.Go(func() error {
-		// HTTPS lets browsers carry every tab over one HTTP/2 connection instead of six HTTP/1.1 ones.
 		if err := httpServer.ServeTLS(httpListener, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("serve Web HTTP: %w", err)
 		}
@@ -140,7 +135,6 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 	}, nil
 }
 
-// webCertificate loads web's configured certificate, or makes a self-signed one for this start.
 func webCertificate(web config.WebConfig) (tls.Certificate, error) {
 	if web.TLSCertFile != "" {
 		certificate, err := tls.LoadX509KeyPair(web.TLSCertFile, web.TLSKeyFile)

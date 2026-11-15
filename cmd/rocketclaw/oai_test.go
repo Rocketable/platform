@@ -63,7 +63,6 @@ func TestRunOAILoginTreatsBareHelpAsProvider(t *testing.T) {
 	assert.Equal(t, "help-refresh", token.Refresh)
 }
 
-// Other login tests pass the provider before --headless.
 func TestRunOAILoginParsesHeadlessBeforeProvider(t *testing.T) {
 	workspace := prepareOAIConfig(t)
 	mockDeviceLogin(t, "work-refresh")
