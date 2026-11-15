@@ -335,8 +335,6 @@
   --chart-1: oklch(0.88 0.18 95);
 }
 
-/* Adapted from mikegleasonjr/vscode-theme-go; source and MIT notice in THEMES.md.
-   Upstream provides light themes only; dark mode uses the shared palette above. */
 :root[data-palette="go-playground"]:not(.dark) { --background: #ffffdd; }
 :root[data-palette="go-sources"]:not(.dark) { --background: #efefef; }
 :root[data-palette^="go-"]:not(.dark) {
@@ -391,8 +389,6 @@
   }
 }
 
-/* OpenCode packages/app/src/composer/editor/editor.tsx: raised card, 60px editor,
-   scrolling model controls, and a separate 44px-target touch toolbar. */
 [data-native-composer] [data-slot="input-group"] {
   border: 0;
   border-radius: 12px;
@@ -443,8 +439,6 @@
   }
 }
 
-/* Markdown output for chat messages. Tailwind's reset removes heading sizes, list markers, and
-   block spacing; single line breaks in paragraphs stay visible, as in Raw output. */
 @layer components {
   .markdown > * + * {
     @apply mt-2;
@@ -481,8 +475,6 @@
   }
 }
 
-/* The Voice page's orb. It ebbs and flows while a call is active and swells with the
-   voice model's speech; --level (0 to 1) is set every frame from that speech. */
 @layer components {
   .voice-orb {
     --level: 0;
@@ -500,7 +492,6 @@
     filter: saturate(0.55) brightness(0.8);
     transition: width 450ms ease, transform 90ms linear, box-shadow 90ms linear, filter 700ms ease;
   }
-  /* Beside the transcript, the orb sits small at the bottom with a tighter glow. */
   .voice-orb[data-size="small"] {
     width: 4.5rem;
     box-shadow:
@@ -521,7 +512,6 @@
     opacity: 0.35;
     animation: voice-orb-swirl 14s linear infinite;
   }
-  /* The light inside the orb: three color blobs that drift apart and together while it turns. */
   .voice-orb-core {
     position: absolute;
     inset: 0;
@@ -538,7 +528,6 @@
   .voice-orb[data-state="live"] .voice-orb-core {
     animation: voice-orb-churn 6s ease-in-out infinite alternate, voice-orb-swirl 16s linear infinite;
   }
-  /* The orb's hot heart: lit while active, beating, and flaring with the model's voice. */
   .voice-orb-core::after {
     content: "";
     position: absolute;
@@ -555,7 +544,6 @@
     opacity: 1;
     animation: voice-orb-heart 2.6s ease-in-out infinite;
   }
-  /* Two glowing orbit rings, tilted like a gyroscope and spinning opposite ways while active. */
   .voice-orb-rings {
     position: absolute;
     inset: -16%;
@@ -639,13 +627,6 @@
   }
 }
 
-/* Dashboards. A board ([data-board] = style id) holds lanes (section > h3 name + total, ol of cards). A card (li) is a
-   link holding the title (b), agent (span), work state (em), arrival clock time (time), and minutes in its state
-   ([data-age]); --age is minutes since its state began, --lane and --i its lane's and its own position, --lanes the
-   lane count. Cards come in the style's order, so no rule here reorders them.
-   Age cues are only for work that is not idle: --late turns on from 15 minutes in a state (amber), --later from 60
-   (red), and --cue is the colour they give. data-new marks a card that entered its lane with the last result; it moves
-   once, or under reduced motion is outlined instead. */
 @layer components {
   [data-board] {
     --amber: oklch(0.8 0.16 75);
@@ -728,8 +709,6 @@
     }
   }
 
-  /* Strip Bay: lanes are bays of narrow strips edged in their state's colour (doubled for External MCP work), newest
-     arrival on top, showing arrival clock time; a strip that needs a person sits offset, a late one gets a cue edge. */
   [data-board="strips"] {
     grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
     align-items: start;
@@ -768,8 +747,6 @@
     display: none;
   }
 
-  /* Dispatch Console: compact rows under lane bars, each with a status chip, the longest in its state first, counting
-     up from the state change; a new chip flashes once, then holds an outline, and a late chip is ringed. */
   [data-board="dispatch"] {
     gap: 0.5rem;
     font-size: var(--text-xs);
@@ -826,8 +803,6 @@
     display: none;
   }
 
-  /* Triage Census: a grid of lane, patient, agent, and age columns, the longest in its state first, each row banded by
-     its age threshold. */
   [data-board="triage"] {
     gap: 0;
     overflow-x: auto;
@@ -867,8 +842,6 @@
     display: none;
   }
 
-  /* Kanban: lanes side by side as columns, oldest arrival on top, showing relative age; a column's header is flagged
-     once it holds more than five cards. */
   [data-board="kanban"] {
     grid-auto-columns: minmax(14rem, 1fr);
     grid-auto-flow: column;
@@ -905,9 +878,6 @@
     display: none;
   }
 
-  /* Radar Scope: concentric rings by age with a sector per lane; a card is a blip whose distance from the centre grows
-     with its age in its state, starting clear of the centre where the sectors meet, the longest first, with its title and
-     age shown on hover and focus; a new contact blips once. */
   [data-board="radar"] {
     position: relative;
     display: block;
@@ -973,7 +943,6 @@
     top: -0.25rem;
   }
 
-  /* On a narrow screen the table puts each lane's name above its rows, with narrower columns. */
   @media (width < 40rem) {
     [data-board="triage"] section {
       grid-template-columns: minmax(0, 1fr);
@@ -1036,7 +1005,6 @@
   to { rotate: 1turn; }
 }
 
-/* A slow, liquid swell: size and outline drift so the orb never looks still. */
 @keyframes voice-orb-ebb {
   0%, 100% { scale: 1; border-radius: 50% 50% 50% 50% / 50% 50% 50% 50%; }
   25% { scale: 1.03; border-radius: 53% 47% 51% 49% / 48% 53% 47% 52%; }
