@@ -1150,6 +1150,10 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 
 			finals := make(chan *protocol.OutboundMessage, 8)
 			manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
+			// Publish this logger before recordedBridge wakes the manager's first worker.
+			logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelError}))
+			manager.log = logger
+
 			t.Cleanup(shutdown)
 
 			store.historyWorkers = manager
@@ -1167,11 +1171,19 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 				require.NoError(t, parent.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "original", true)))
 			}
 
-			for received := range 2 {
+			var started []string
+
+			for range 2 {
 				select {
-				case <-requests:
+				case model := <-requests:
+					started = append(started, model)
 				case <-time.After(3 * time.Second):
-					t.Logf("shadow mutation startup: received=%d buffered_requests=%d finals=%d cancellations=%d database=%+v", received, len(requests), len(finals), len(cancelled), store.db.Stats())
+					t.Logf("shadow mutation startup: received=%d models=%q want=[gpt-parent gpt-child] buffered_requests=%d finals=%d cancellations=%d database=%+v", len(started), started, len(requests), len(finals), len(cancelled), store.db.Stats())
+
+					for range len(finals) {
+						final := <-finals
+						t.Logf("shadow mutation startup final: conversation=%s terminal=%s text=%q", final.ConversationID, final.Terminal, final.Text)
+					}
 					// Capture blocked workers before diagnostic SQL and cleanup change their state.
 					var stacks bytes.Buffer
 
@@ -1192,6 +1204,8 @@ ORDER BY c.conversation_id, t.id, s.id LIMIT 20`, "shadow mutation startup state
 					t.Fatal("parent and child did not start")
 				}
 			}
+
+			require.ElementsMatch(t, []string{"gpt-parent", "gpt-child"}, started, "parent and child each start one request")
 
 			if mutation != "external MCP removal" {
 				readFinal(t, finals)
@@ -1228,6 +1242,7 @@ ORDER BY c.conversation_id, t.id, s.id LIMIT 20`, "shadow mutation startup state
 				shutdown()
 
 				manager, _ = newTestBridgeManager(t, cfg, store, finals)
+				manager.log = logger
 				store.historyWorkers = manager
 				require.NoError(t, manager.StartActiveTurns(t.Context()))
 				require.Empty(t, requests, "removed producers and children must not restart")
@@ -1263,6 +1278,7 @@ ORDER BY c.conversation_id, t.id, s.id LIMIT 20`, "shadow mutation startup state
 			shutdown()
 
 			manager, _ = newTestBridgeManager(t, cfg, store, finals)
+			manager.log = logger
 			store.historyWorkers = manager
 			require.NoError(t, manager.StartActiveTurns(t.Context()))
 
@@ -1287,14 +1303,18 @@ FROM turns WHERE conversation_id IN ($1, $2) ORDER BY id`, "shadow mutation rest
 			require.NoError(t, parent.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "next", true)))
 			readFinal(t, finals)
 
+			started = nil
+
 			for range 2 {
 				select {
-				case <-requests:
+				case model := <-requests:
+					started = append(started, model)
 				case <-time.After(3 * time.Second):
-					t.Fatal("retained binding did not receive future input")
+					t.Fatalf("retained binding did not receive future input: models=%q want=[gpt-parent gpt-child]", started)
 				}
 			}
 
+			require.ElementsMatch(t, []string{"gpt-parent", "gpt-child"}, started, "retained binding starts parent and child requests")
 			require.Eventually(t, func() bool {
 				active, err := store.HasActiveTurn(t.Context(), childID)
 				return err == nil && !active
