@@ -22,17 +22,17 @@ tags: [web, tabs, preview-tab, palette, saved-tabs, tab-state, window-local, use
 
 PR #934 (open as of 2026-11-03) removed VS Code-style preview tabs. Every opened location now gets an ordinary tab. One preview stays: arrowing through the Ctrl+P session list shows each session live in one italic tab. Enter keeps it as an ordinary tab. Escape, typing, or a command closes it. The person asked for it to be "isolated at browser level": the server, other windows, and other devices must never see it.
 
-The preview still lives in `TabState` as a `Tab` with `preview: true` (`internal/rocketclaw/web/src/ui.tsx:923`). Strip drawing, arranging, and the active tab all work on that list unchanged. The catch is that `TabState` is also what gets saved and merged. So the preview has to be stopped at every point where window state becomes saved state, or saved state becomes window state. Dropping it from the saved tab list was the first fix, and it was not enough. Review and testing found four more problems, one at a time.
+The preview still lives in `TabState` as a `Tab` with `preview: true` (`internal/rocketclaw/web/src/ui.tsx:963`). Strip drawing, arranging, and the active tab all work on that list unchanged. The catch is that `TabState` is also what gets saved and merged. So the preview has to be stopped at every point where window state becomes saved state, or saved state becomes window state. Dropping it from the saved tab list was the first fix, and it was not enough. Review and testing found four more problems, one at a time.
 
 ## Guidance
 
 Treat the preview as window-only at each of these five boundaries. All five are needed:
 
-1. **The saved tab list.** `savedState` drops tabs with `preview` (`ui.tsx:1030-1031`).
-2. **Values derived from tabs.** `savedState` picks which groups to keep from the tabs it saves, not from `state.tabs` (`ui.tsx:1032`). Otherwise a group whose only member is the preview is saved as an empty group.
-3. **`last` in `openTab`.** A preview open leaves `last` alone: `last = preview ? state.last : { ...state.last, [current]: path }` (`ui.tsx:986`). Before this, the preview tab itself was never saved, but the space's last tab was saved as the previewed session, which other windows and devices read.
-4. **Saves that change nothing.** `flush` skips a save whose saved form is identical to `queue.base` (`ui.tsx:1188`). Arrowing only changes the window's state. Without the skip, each arrow press sent an identical save. Each save rewrites the person's tabs on the server and bumps the revision, which makes every other window merge.
-5. **Putting the preview back after a merge.** The merge effect builds the new tabs from the saved form, so the preview is always missing from the result. The effect puts this window's preview back where it was, unless the merged tabs already have that location as an ordinary tab or the preview's space is gone (`ui.tsx:1173-1175`):
+1. **The saved tab list.** `savedState` drops tabs with `preview` (`ui.tsx:1078`).
+2. **Values derived from tabs.** `savedState` picks which groups to keep from the tabs it saves, not from `state.tabs` (`ui.tsx:1079`). It was added so a group whose only member was the preview would not be saved. Since every group now also holds a saved placeholder tab, that case is gone, but the filter still drops a deleted group, and any new value derived from tabs should come from the saved tabs too.
+3. **`last` in `openTab`.** A preview open leaves `last` alone: `last = preview ? state.last : { ...state.last, [current]: path }` (`ui.tsx:1026`). Before this, the preview tab itself was never saved, but the space's last tab was saved as the previewed session, which other windows and devices read.
+4. **Saves that change nothing.** `flush` skips a save whose saved form is identical to `queue.base` (`ui.tsx:1236`). Arrowing only changes the window's state. Without the skip, each arrow press sent an identical save. Each save rewrites the person's tabs on the server and bumps the revision, which makes every other window merge.
+5. **Putting the preview back after a merge.** The merge effect builds the new tabs from the saved form, so the preview is always missing from the result. The effect puts this window's preview back where it was, unless the merged tabs already have that location as an ordinary tab or the preview's space is gone (`ui.tsx:1221-1223`):
 
    ```ts
    const next = savedTabs(owner, { spaces: saved.data.spaces, state: mergeTabs(base!, savedState(state), saved.data.state) }), preview = state.tabs.find((tab) => tab.preview);
@@ -44,9 +44,9 @@ Treat the preview as window-only at each of these five boundaries. All five are 
 
 These related rules come from the same work:
 
-- **Any open that does not take the preview slot closes the preview** (`ui.tsx:984-985`). The first version closed it only on a non-preview open. Arrowing onto a session that was already open as an ordinary tab then left a stray italic tab behind.
-- **The preview open replaces the history entry.** `open(..., preview = true)` calls `navigate(path, true)` (`ui.tsx:1254`). The palette's `peek` uses it, so browsing the palette adds no history entries (`ui.tsx:2369-2374`).
-- **Moving a tab removes its `preview` flag** (`relocate`, `ui.tsx:1006`), and so do space deletion (`leave`) and moving tabs or groups to another space. If a space is deleted in another window while you arrow, the preview becomes an ordinary saved tab in the first space. This rare case was left as is on purpose: the window is showing that session anyway.
+- **Any open that does not take the preview slot closes the preview** (`ui.tsx:1024-1025`). The first version closed it only on a non-preview open. Arrowing onto a session that was already open as an ordinary tab then left a stray italic tab behind.
+- **The preview open replaces the history entry.** `open(..., preview = true)` calls `navigate(path + query, true)` (`ui.tsx:1315`). The palette's `peek` uses it, so browsing the palette adds no history entries (`ui.tsx:2751-2756`).
+- **Moving a tab removes its `preview` flag** (`relocate`, `ui.tsx:1046`), and so do space deletion (`leave`) and moving tabs or groups to another space. If a space is deleted in another window while you arrow, the preview becomes an ordinary saved tab in the first space. This rare case was left as is on purpose: the window is showing that session anyway.
 
 ## Why This Matters
 
@@ -60,7 +60,7 @@ Today's comments in `ui.tsx` no longer list the boundaries. A later cleanup pass
 
 Two notes on the identical-save skip:
 
-- **Tests that used an arrow press to trigger a save stop working.** "palette search handoffs stay in their opening space" held the personal save that an arrow press started. After the skip, no save came, and the test timed out at 30 s. It now collapses Shared to make the save (`tabs.browser.test.ts:1379-1383`). At 390px the Shared header sits in the closed drawer, so the test opens the drawer first. A test that needs a tab save has to make a change the saved form can see.
+- **Tests that used an arrow press to trigger a save stop working.** "palette search handoffs stay in their opening space" held the personal save that an arrow press started. After the skip, no save came, and the test timed out at 30 s. It now collapses Shared to make the save (`tabs.browser.test.ts:1375-1380`). At 390px the Shared header sits in the closed drawer, so the test opens the drawer first. A test that needs a tab save has to make a change the saved form can see.
 - **The skip compares `JSON.stringify` output.** When `queue.base` comes from this window's own save, it compares like with like. After a merge, `queue.base` is the server's reply until this window saves again. The Go server encodes that reply with protojson and `EmitDefaultValues` (`internal/rocketclaw/frontend/rpc/http.go:72`), which writes empty fields such as `"group": ""`. `savedState` leaves those fields out. Reading the code, the first preview after a merge can therefore still send one save. That save has identical content and carries no preview. No test covers this. The test server in `tabs.browser.test.ts` stores the client's own JSON, so its encoding always matches.
 
 ## When to Apply
@@ -72,7 +72,7 @@ Two notes on the identical-save skip:
 
 ## Examples
 
-The browser test "a palette preview stays in its window: never saved, and kept while other windows' changes arrive" (`tabs.browser.test.ts:275-295`) covers boundaries 1, 3, 4 and 5:
+The browser test "a palette preview stays in its window: never saved, and kept while other windows' changes arrive" (`tabs.browser.test.ts:300-320`) covers boundaries 1, 3, 4 and 5:
 
 - It checks that `saved.revision` stays the same after an arrow press.
 - It adds a tab to the fake server's state, then sends a window `focus` event.
@@ -86,6 +86,6 @@ When testing a reverted fix by hand, rebuild before each run. Browser tests serv
 
 ## Related
 
-- `docs/solutions/architecture-patterns/kept-tab-groups-hold-their-place-with-a-placeholder-tab.md`: the placeholder tab that is saved and must be skipped by readers, the opposite direction of this one. Its `savedState` line numbers and group-filter wording predate PR #934.
+- `docs/solutions/architecture-patterns/kept-tab-groups-hold-their-place-with-a-placeholder-tab.md`: the placeholder tab that is saved and must be skipped by readers, the opposite direction of this one.
 - `internal/rocketclaw/web/README.md`, Tabs: the user-facing description of the palette preview.
 - PR #934: removes saved preview tabs (migration `081_drop_web_tab_preview.sql`, `preview` reserved in `web.proto`) and adds the boundaries above.

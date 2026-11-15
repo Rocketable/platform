@@ -62,6 +62,6 @@ if page { w.Header().Set("Access-Control-Allow-Origin", origin); w.Header().Add(
 who, err := client.WhoIs(r.Context(), r.RemoteAddr)
 ```
 
-`TestTailnetCrossSitePages` checks the readable refusal and that unlisted pages from the same tailnet stay cross-site, and `TestRemoteRocketClawRealBrowser` (`src/remote-transport.test.ts`) drives the whole flow in Chromium.
+`TestTailnetCrossSitePages` checks the readable refusal and that unlisted pages from the same tailnet stay cross-site, and `TestRemoteRocketClawRealBrowser` (`internal/rocketclaw/frontend/rpc/remote_test.go`, running `internal/rocketclaw/web/src/remote-transport.test.ts`) drives the whole flow in Chromium.
 
 Related: `docs/solutions/best-practices/react-doctor-complexity-limit-shapes-web-components.md` and `docs/solutions/best-practices/web-browser-tests-run-the-last-bundle-that-built.md`.

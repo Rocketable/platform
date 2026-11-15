@@ -36,11 +36,11 @@ The first version went through the mounted OpenCode view. `internal/rocketclaw/o
 `openPalette()`, so a second method that ran OpenCode's `session.delete` command looked like the
 natural extension. It did not work where it was needed:
 
-- `internal/rocketclaw/oc/packages/app/src/session/timeline/message-timeline.tsx:309` registers
-  `session.rename` and `session.delete` only when `props.hideHeader` is false, and line 521 hides
+- `internal/rocketclaw/oc/packages/app/src/session/timeline/message-timeline.tsx:277` registers
+  `session.rename` and `session.delete` only when `props.hideHeader` is false, and line 577 hides
   the header, ••• menu included, under the same flag.
-- `internal/rocketclaw/oc/packages/app/src/session/screen.tsx:298` passes
-  `hideHeader={!isDesktop()}`, and `internal/rocketclaw/oc/packages/app/src/session/model.ts:29`
+- `internal/rocketclaw/oc/packages/app/src/session/screen.tsx:295` passes
+  `hideHeader={!isDesktop()}`, and `internal/rocketclaw/oc/packages/app/src/session/model.ts:28`
   makes `isDesktop` a `(min-width: 768px)` query. `internal/rocketclaw/oc/host/overrides.ts` points
   width queries at `internal/rocketclaw/oc/host/media.ts`, which reads the view's container width, so
   a phone, or a narrow pane on a desktop, has neither the menu nor the command.
@@ -54,19 +54,19 @@ change cannot be made from outside it. Here it could.
 
 Build the action in the Web, and call the OpenCode server's own API through the Web's proxy:
 
-- `internal/rocketclaw/frontend/rpc/relay.go:26` proxies GET, POST, PUT, PATCH and DELETE under
+- `internal/rocketclaw/frontend/rpc/relay.go:28` proxies GET, POST, PUT, PATCH and DELETE under
   `/oc/{server}/api/`, adding the server's password and refusing cross-site origins. The copied view
   uses the same route, so anything the view can do, the Web can do with a plain `fetch`.
 - Delete is `DELETE /oc/<server>/api/session/<remoteSessionId>`. The view's own delete calls the same
   endpoint, `sdk.api.session.remove({ sessionID })` in
-  `internal/rocketclaw/oc/packages/app/src/runtime/server/runtime.tsx:241`.
+  `internal/rocketclaw/oc/packages/app/src/runtime/server/runtime.tsx:236`.
 - Confirm with a RocketClaw dialog, close the tab, and invalidate the session list. RocketClaw's
   synced copy goes on its next poll, which deletes rows the server no longer lists within the synced
-  window (`internal/rocketclaw/backend/opencode.go:424`).
+  window (`internal/rocketclaw/backend/opencode.go:393`).
 
-In `internal/rocketclaw/web/src/ui.tsx` this is `DeleteSessionDialog` (line 2627), opened through
+In `internal/rocketclaw/web/src/ui.tsx` this is `DeleteSessionDialog` (line 3215), opened through
 the existing `SessionCommand` flow with mode `"delete"`. The palette adds it in `useSessionActions`
-(line 2587) and the sidebar tab menu in `menuItems` (line 1445, for one tab outside the Shared
+(line 3158) and the sidebar tab menu in `menuItems` (line 1782, for one tab outside the Shared
 group), both only for rows with a `server`, meaning remote OpenCode sessions:
 
 ```tsx
@@ -107,9 +107,6 @@ Prefer, the Web calling the API through the proxy, as `DeleteSessionDialog` does
 
 Testing it in `internal/rocketclaw/web/src/opencode.browser.test.ts`:
 
-- The fake server there answers any RPC it does not know, `ListConfig` included, with `{}` (line 82).
-  The New session page then shows `["","config"] data is undefined`. A screenshot or recording that
-  lands there shows that error, which the real server never causes.
 - Closing the last tab goes to `/`, which opens a New session tab, so the tab count does not drop.
   Check that the deleted session's own tab is gone and the URL moved off it instead.
 - Browser tests run the built `dist`; rebuild it after changing `ui.tsx`

@@ -41,8 +41,8 @@ reads remote rows through a second SQL branch that filled the column with a cons
 
 ## What Didn't Work
 
-- **Fixing only the write.** `ForkOpenCodeSession` (`internal/rocketclaw/backend/opencode.go:570`) records the
-  fork through `recordOpenCodeSession` (`opencode.go:588`), which did not store `forked_from` at all. Storing it
+- **Fixing only the write.** `ForkOpenCodeSession` (`internal/rocketclaw/backend/opencode.go:594`) records the
+  fork through `recordOpenCodeSession` (`opencode.go:612`), which did not store `forked_from` at all. Storing it
   there fixed the row but not the Web.
 - **Testing the row instead of the list.** `SELECT forked_from FROM conversations` proved the write and nothing a
   person sees. The gap surfaced only when a browser demo needed the mocked `ListSessions` to send `forkedFrom`
@@ -53,9 +53,9 @@ reads remote rows through a second SQL branch that filled the column with a cons
 ## Solution
 
 1. **Read the column in the remote branch.** `sidebarSessions` builds the list as `local UNION ALL remote`
-   (`internal/rocketclaw/backend/store.go:1295`, `store.go:1328`, `store.go:1337`). The `local` branch reads
-   `c.forked_from` (`store.go:1307`); the `remote` branch had a `''` in that position. It now reads it
-   (`store.go:1329`):
+   (`internal/rocketclaw/backend/store.go:1318`, `store.go:1404`, `store.go:1416`). The `local` branch reads
+   `c.forked_from` (`store.go:1369`); the `remote` branch had a `''` in that position. It now reads it
+   (`store.go:1405`):
 
    ```sql
    -- before
@@ -65,7 +65,7 @@ reads remote rows through a second SQL branch that filled the column with a cons
    ```
 
 2. **Store the source, even when a sync got there first.** `recordOpenCodeSession` inserts `forked_from` from
-   the source it is given, and its conflict clause sets it too (`opencode.go:597`), because the background
+   the source it is given, and its conflict clause sets it too (`opencode.go:621`), because the background
    OpenCode sync may list the new session before the fork call records it:
 
    ```sql
@@ -76,13 +76,13 @@ reads remote rows through a second SQL branch that filled the column with a cons
 
 3. **Open a remote source at `/oc/`.** **Open original conversation** navigated with `sessionPath`, which always
    builds `/s/`. It now uses `rowPath({ id: session.forkedFrom!, kind: session.kind })`
-   (`internal/rocketclaw/web/src/ui.tsx:2512`, `rowPath` at `ui.tsx:70`). A fork's source has the fork's kind.
+   (`internal/rocketclaw/web/src/ui.tsx:3170`, `rowPath` at `ui.tsx:72`). A fork's source has the fork's kind.
 
-4. **Show it on the tab.** `tabActivity` (`ui.tsx:1568`) picks the fork glyph in place of the chat icon when
-   `forkedFrom` is set (`ui.tsx:1569`) and adds "Forked session" to the tab's description.
+4. **Show it on the tab.** `tabActivity` (`ui.tsx:2103`) picks the fork glyph in place of the chat icon when
+   `forkedFrom` is set (`ui.tsx:2104`) and adds "Forked session" to the tab's description.
 
 The regression test now asserts through the RPC the sidebar uses, `listSessions`, and fails without step 1
-(`internal/rocketclaw/frontend/rpc/opencode_test.go:158`, `opencode_test.go:167`):
+(`internal/rocketclaw/frontend/rpc/opencode_test.go:167`, `opencode_test.go:176`):
 
 ```go
 assert.Equal(t, map[string]string{created.Id: "", forked.Id: created.Id}, forkedFrom, "the Web lists a fork with its source")

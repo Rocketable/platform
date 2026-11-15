@@ -26,7 +26,7 @@ tags:
 
 ## Context
 
-The built Web bundle in `internal/rocketclaw/internal/web/dist` is committed. Every Web build rewrites it: `build.ts` empties `dist` (`build.ts:7`), runs Tailwind over `app/globals.css` (`build.ts:27`) and names the stylesheet after a hash of its content (`build.ts:33`). `make lint` and `make test` both rebuild it (`internal/rocketclaw/Makefile:43`-`44` and `:58`; `internal/rocketclaw/web/Makefile:42`).
+The built Web bundle in `internal/rocketclaw/internal/web/dist` is committed. Every Web build rewrites it: `build.ts` empties `dist` (`build.ts:7`), runs Tailwind over `app/globals.css` (`build.ts:27`) and names the stylesheet after a hash of its content (`build.ts:33`). `make lint` and `make test` both rebuild it (`internal/rocketclaw/Makefile:54`–`55` and `:69`; `internal/rocketclaw/web/Makefile:43`).
 
 While re-checking each commit of the sticky-sessions PR (#999), this went wrong twice in one session:
 
@@ -39,7 +39,7 @@ The fix both times was to delete the dump and put the known-good `dist` back. Af
 
 **Tailwind reads every file under `internal/rocketclaw/web`, not just `src/`.** `internal/rocketclaw/web/app/globals.css` starts with a plain `@import "tailwindcss";` (`app/globals.css:1`) and has no `@source` lines. The build runs from `internal/rocketclaw/web`, so Tailwind's automatic source detection starts there. Asking Tailwind 4.3.5's own scanner (`@tailwindcss/oxide` `Scanner`) which files it reads in this tree lists 97: `src/` and `app/`, plus `README.md`, `Makefile`, `go.mod`, `proto/`, `build.ts`, `index.html` and the JSON configs (paths relative to `internal/rocketclaw/web`). In the tests below it also read a binary file named `core`, which has no extension.
 
-**Chromium crash dumps land in exactly that folder.** The Web browser tests run `bun test` from `internal/rocketclaw/web`. So do the Go real-browser tests, through `runWebTest`, which sets `web.Dir = "../../web"` (`internal/rocketclaw/frontend/rpc/server_test.go:4051`). Both dumps in this session were written there.
+**Chromium crash dumps land in exactly that folder.** The Web browser tests run `bun test` from `internal/rocketclaw/web`. So do the Go real-browser tests, through `runWebTest`, which sets `web.Dir = "../../web"` (`internal/rocketclaw/frontend/rpc/server_test.go:4074`). Both dumps in this session were written there.
 
 **Measured on Tailwind 4.3.5 (macOS binding, scratch copies only):**
 
