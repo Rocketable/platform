@@ -81,6 +81,22 @@ for (const final of ["short", "empty", "stop", "calls"]) test(`real Go HTTP App 
       if (final === "empty") expect(await transcript.locator('[data-slot="bubble-content"]').filter({ hasText: "Held public partial suffix" }).count()).toBe(0);
     }
     await reopened.close();
+  } catch (error) {
+    console.error(`Public progress (${final}) failed: ${error}`);
+    const states = [];
+    for (const context of browser.contexts()) for (const page of context.pages()) {
+      states.push(page.evaluate(() => ({
+        url: location.href,
+        readyState: document.readyState,
+        composer: Array.from(document.querySelectorAll("[data-composer-submit], textarea"), (element) => ({
+          label: element.getAttribute("aria-label"),
+          disabled: element.matches(":disabled"),
+          visible: element.checkVisibility({ visibilityProperty: true }),
+        })),
+      })).catch((error: unknown) => ({ error: String(error) })));
+    }
+    console.error(JSON.stringify(await Promise.all(states)));
+    throw error;
   } finally {
     await fetch(`${url}/test/release`, { method: "POST" });
     await browser.close();
