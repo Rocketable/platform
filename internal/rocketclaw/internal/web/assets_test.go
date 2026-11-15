@@ -52,7 +52,6 @@ func TestEmbeddedApplication(t *testing.T) {
 	}
 }
 
-// Vite names the asset directory and some chunks with a leading underscore, which only an all: embed keeps.
 func TestEmbeddedOCApplication(t *testing.T) {
 	handler := Handler(config.SentryConfig{}, config.PostHogConfig{}, "", nil)
 	files := os.DirFS("oc-dist")
@@ -71,7 +70,7 @@ func TestEmbeddedOCApplication(t *testing.T) {
 		require.NoError(t, err)
 
 		target := "/oc-ui/" + path
-		// Every built file is named for its content except the entry, which RocketClaw imports by name.
+
 		cache := "public, max-age=31536000, immutable"
 		if !strings.HasPrefix(path, "_assets/") || path == "_assets/index.js" {
 			cache = "no-cache"
@@ -109,7 +108,6 @@ func TestEmbeddedFileCaching(t *testing.T) {
 
 	path := "/" + strings.TrimPrefix(scripts[0], "dist/")
 
-	// A file named for its content never changes, so browsers keep it without asking again.
 	plain := serve(path, nil)
 	require.Equal(t, "public, max-age=31536000, immutable", plain.Header().Get("Cache-Control"))
 	require.Empty(t, plain.Header().Get("Content-Encoding"))
@@ -125,7 +123,6 @@ func TestEmbeddedFileCaching(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, data, unpacked)
 
-	// The page and files without a content hash are checked on each load, and an unchanged one is not sent again.
 	for _, path := range []string{"/", "/s/conversation", "/assets/inter-OFL.txt"} {
 		first := serve(path, nil)
 		require.Equal(t, "no-cache", first.Header().Get("Cache-Control"), path)
@@ -146,7 +143,6 @@ func TestServerNameTitle(t *testing.T) {
 
 func TestCompressedFileAllocations(t *testing.T) {
 	result := testing.Benchmark(BenchmarkServeCompressedFile)
-	// Allow pool misses (including race-mode discards), but not a fresh compressor per response.
 	require.Less(t, result.AllocedBytesPerOp(), int64(512<<10))
 }
 
