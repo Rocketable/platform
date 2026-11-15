@@ -1,4 +1,3 @@
-// Package workflow loads and validates saved RocketClaw workflows.
 package workflow
 
 import (
@@ -26,7 +25,6 @@ const validationStepLimit = 10_000
 
 var workflowNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
-// Definition is a compiled workflow definition.
 type Definition struct {
 	Name        string
 	Description string
@@ -34,7 +32,6 @@ type Definition struct {
 	program     *starlark.Program
 }
 
-// Descriptions returns sorted name/description pairs for loaded definitions.
 func Descriptions(definitions map[string]*Definition) []protocol.WorkflowDescription {
 	out := make([]protocol.WorkflowDescription, 0, len(definitions))
 	for _, name := range slices.Sorted(maps.Keys(definitions)) {
@@ -44,7 +41,6 @@ func Descriptions(definitions map[string]*Definition) []protocol.WorkflowDescrip
 	return out
 }
 
-// Load loads top-level workflow definitions from runtimeDir.
 func Load(root *os.Root, runtimeDir string) (definitions map[string]*Definition, err error) {
 	directory := path.Join(runtimeDir, "workflows")
 
@@ -124,7 +120,6 @@ func Load(root *os.Root, runtimeDir string) (definitions map[string]*Definition,
 	return definitions, nil
 }
 
-// Compile validates a workflow's source.
 func Compile(filename, name, source string) (*Definition, error) {
 	predeclared := starlark.StringDict{
 		"worker": starlark.NewBuiltin("worker", func(_ *starlark.Thread, _ *starlark.Builtin, _ starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
@@ -137,7 +132,6 @@ func Compile(filename, name, source string) (*Definition, error) {
 		})
 	}
 
-	// Top-level control flow, global reassignment, and recursion stay disabled.
 	options := &syntax.FileOptions{While: true, Set: true}
 
 	file, errParse := options.Parse(filename, []byte(source), 0)
@@ -456,7 +450,7 @@ func validateWorker(call *syntax.CallExpr) error {
 			return errors.New("worker arguments must be named literals")
 		}
 
-		name := named.X.(*syntax.Ident) // The parser requires an identifier before a keyword argument's '='.
+		name := named.X.(*syntax.Ident)
 
 		if _, exists := arguments[name.Name]; exists {
 			return fmt.Errorf("worker argument %s is duplicated", name.Name)
@@ -518,7 +512,6 @@ func validateWorkerTools(tools syntax.Expr) error {
 			return errors.New("worker tools must be a literal list of strings or None")
 		}
 
-		// Earlier tools already passed the string-literal check above.
 		if literal.Value == "task" || slices.ContainsFunc(list.List[:i], func(earlier syntax.Expr) bool { return earlier.(*syntax.Literal).Value == literal.Value }) {
 			return errors.New("worker tools must be unique and cannot include task")
 		}
@@ -666,7 +659,6 @@ func callbackHasFanout(callback syntax.Expr, functions map[string]*syntax.DefStm
 			return true
 		}
 
-		// A call without a name yields "", which is neither a fan-out nor a defined function.
 		identifier, _ := callName(call)
 		function := functions[identifier]
 		found = identifier == "parallel" || identifier == "pipeline" || function != nil && !visited[identifier] && callbackHasFanout(function.Name, functions, visited)
