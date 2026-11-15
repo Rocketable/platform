@@ -1,14 +1,11 @@
-// Package protocol defines shared RocketClaw event contracts.
 package protocol
 
 import "context"
 
-// OutboundPublisher completes connector delivery of one outbound message.
 type OutboundPublisher interface {
 	PublishOutbound(context.Context, *OutboundMessage) error
 }
 
-// Clone returns a shallow copy of p, or nil when p is nil.
 func Clone[T any](p *T) *T {
 	if p == nil {
 		return nil
@@ -17,7 +14,6 @@ func Clone[T any](p *T) *T {
 	return new(*p)
 }
 
-// CloneOutboundMessage returns a deep copy suitable for an independent connector delivery.
 func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 	return &OutboundMessage{
 		ConsumedID: message.ConsumedID, ConsumedText: message.ConsumedText, ConsumedRawText: message.ConsumedRawText, ConsumedSource: message.ConsumedSource, ConsumedHeader: message.ConsumedHeader,

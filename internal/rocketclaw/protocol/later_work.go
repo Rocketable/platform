@@ -8,17 +8,13 @@ import (
 	"time"
 )
 
-// LaterWorkKind is one row in mixed later-work order.
 type LaterWorkKind string
 
 const (
-	// LaterWorkQueued is an Enqueued Slack Message row.
-	LaterWorkQueued LaterWorkKind = "queued"
-	// LaterWorkScheduled is a scheduled-message peg.
+	LaterWorkQueued    LaterWorkKind = "queued"
 	LaterWorkScheduled LaterWorkKind = "scheduled"
 )
 
-// ScheduledMessageState records one pending delayed system prompt.
 type ScheduledMessageState struct {
 	ConversationID string        `json:"conversation_id,omitempty"`
 	Agent          string        `json:"agent,omitempty"`
@@ -26,11 +22,9 @@ type ScheduledMessageState struct {
 	DueAt          time.Time     `json:"due_at,omitzero"`
 	Recurring      bool          `json:"recurring,omitempty"`
 	Interval       time.Duration `json:"interval,omitempty"`
-	// Origin is the trusted origin header of the message's turn: ScheduledMessage and its creator's source.
-	Origin string `json:"origin,omitempty"`
+	Origin         string        `json:"origin,omitempty"`
 }
 
-// ThreadQueueItem is one persisted waiting message. A zero Kind means enqueue.
 type ThreadQueueItem struct {
 	Kind           InboundKind
 	ID             string
@@ -45,11 +39,9 @@ type ThreadQueueItem struct {
 	ParkAfter      string
 	SlackChannel   string
 	SlackTS        string
-	// Inbound, when set, is the full stored request; it replaces the fields above when the row runs.
-	Inbound *InboundMessage
+	Inbound        *InboundMessage
 }
 
-// LaterWorkRow is one mixed-list entry.
 type LaterWorkRow struct {
 	Kind        LaterWorkKind
 	Queue       ThreadQueueItem
@@ -57,8 +49,6 @@ type LaterWorkRow struct {
 	Scheduled   ScheduledMessageState
 }
 
-// MixedLaterWork builds later-work order: empty-park enqueue, then each scheduled peg
-// in due-time order with enqueue parked after that peg. Unknown park-after is empty.
 func MixedLaterWork(queue []ThreadQueueItem, scheduled map[string]ScheduledMessageState) []LaterWorkRow {
 	slots := map[string][]ThreadQueueItem{}
 

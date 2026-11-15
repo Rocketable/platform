@@ -5,13 +5,11 @@ import (
 	"strings"
 )
 
-// GoalRequest is one parsed text-connector goal start request.
 type GoalRequest struct {
 	Objective string
 	MaxTurns  int
 }
 
-// GoalCommandHelp is the bare `$goal` usage text (parameters and examples).
 const GoalCommandHelp = `$goal <objective>
 
 Parameters:
@@ -23,7 +21,6 @@ $goal maxTurns: 10 ship the release
 $goal maxTurns:10 ship the release
 $goal maxTurns: infinite ship the release`
 
-// ParseGoalRequest parses canonical $goal arguments.
 func ParseGoalRequest(text string) (goal GoalRequest, rejection string) {
 	text = strings.TrimSpace(text)
 	maxTurns := 5
