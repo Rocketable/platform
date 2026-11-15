@@ -35,7 +35,6 @@ import (
 
 func TestHTTPEventFramingAllocationBudget(t *testing.T) {
 	if os.Getenv("ROCKETCLAW_TEST_EVENT_FRAMING_ALLOCATIONS") != "1" {
-		// The race detector randomly drops gRPC's sync.Pool buffers; measure framing, not that churn.
 		executable := filepath.Join(t.TempDir(), "rpc.test")
 		build := exec.CommandContext(t.Context(), "go", "test", "-c", "-race=false", "-cover=false", "-o", executable, ".")
 
@@ -43,7 +42,6 @@ func TestHTTPEventFramingAllocationBudget(t *testing.T) {
 		output, err := build.CombinedOutput()
 		require.NoError(t, err, "%s", output)
 
-		// Keep a slow first connection from reducing the allocation sample to one iteration.
 		cmd := exec.CommandContext(t.Context(), executable, "-test.run=^"+t.Name()+"$", "-test.cpu="+strconv.Itoa(runtime.GOMAXPROCS(0)), "-test.benchtime=32x")
 
 		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_EVENT_FRAMING_ALLOCATIONS=1", "GOGC=100", "GOMEMLIMIT=off")
@@ -55,7 +53,6 @@ func TestHTTPEventFramingAllocationBudget(t *testing.T) {
 
 	result := testing.Benchmark(BenchmarkHTTPEventFraming)
 	require.Positive(t, result.N)
-	// Plain transport uses about 2 MiB; a fresh JSON buffer for every row exceeds 3 MiB.
 	require.Less(t, result.AllocedBytesPerOp(), int64(3<<20), "N=%d T=%s MemBytes=%d MemAllocs=%d GOMAXPROCS=%d", result.N, result.T, result.MemBytes, result.MemAllocs, runtime.GOMAXPROCS(0))
 }
 

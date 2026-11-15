@@ -189,8 +189,6 @@ func TestSpacePermissions(t *testing.T) {
 		require.Equal(t, tc.allowed, status.Code(tc.read(bob, "main-born")), tc.name)
 	}
 
-	// Typing keeps to the rules for viewing a chat, which close shadow sessions and private conversations, here a
-	// cron run, even to people with every space.
 	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "ops-shadow", Agent: "ops-agent", Space: "Ops"}))
 	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `UPDATE conversations SET shadow_parent = 'ops-born', parent_agent = 'ops-agent', shadow_agent = 'ops-agent/a' WHERE conversation_id = 'ops-shadow'`)
 	require.NoError(t, err)
@@ -240,8 +238,6 @@ func TestSpacePermissions(t *testing.T) {
 		require.Equal(t, tc.current, listed.CurrentAgent, tc.id)
 	}
 
-	// Alice's search waits in its Slack tag lookup while Bob's starts, so a flight shared across them
-	// would hand one of them the other's hits.
 	found := make([]*SearchMessagesResponse, 2)
 
 	var searches errgroup.Group
@@ -447,7 +443,7 @@ func TestSpacePermissionTurns(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		feed func(ctx context.Context) error
-		bob  *codes.Code // what Bob gets, checked when set
+		bob  *codes.Code
 	}{
 		{"EditQueueItem", func(ctx context.Context) error {
 			_, err := h.server.queueItem(ctx, "EditQueueItem", &QueueItemRequest{Id: "switched", ItemId: held, Text: "edited"})
@@ -490,7 +486,6 @@ func TestSpacePermissionTurns(t *testing.T) {
 		}
 	}
 
-	// Pausing follows prompting: alice pauses and resumes the chat, with history, whose agent is in her spaces.
 	_, err = h.rt.Sessions.AppendEntryID(t.Context(), "ops-chat", &harness.SessionEntry{Timestamp: time.Now().UTC()})
 	require.NoError(t, err)
 
@@ -611,8 +606,6 @@ func TestSpacePermissionTurns(t *testing.T) {
 	h.ended(t)
 }
 
-// Run now follows the cron's agent: a sticky: global agent's run replies in its sticky session, and a
-// sticky: user agent, which a cron cannot run, is refused.
 func TestRunCronJobFollowsStickyAgent(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)

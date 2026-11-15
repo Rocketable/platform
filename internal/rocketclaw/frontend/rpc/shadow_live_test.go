@@ -162,8 +162,7 @@ func TestShadowsRealBackendBrowser(t *testing.T) {
 	}))
 	t.Cleanup(httpServer.Close)
 	runWebTest(t, "src/shadows-transport.test.ts", "ROCKETCLAW_SHADOW_TEST_URL="+httpServer.URL)
-	// Compare the actual provider inputs, not browser History fixtures. Each model
-	// keeps its own first answer while consuming the same next human input.
+
 	byModel := make(map[string][]providerRequest)
 
 	for range 6 {

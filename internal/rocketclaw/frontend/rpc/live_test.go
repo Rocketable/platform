@@ -108,7 +108,6 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 				ready <- rt
 
 				if final == "calls" {
-					// This checkpoint is a display fixture, not work for startup recovery.
 					<-ctx.Done()
 					return nil, nil, ctx.Err()
 				}
@@ -140,8 +139,6 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 		checkpoint := &testCheckpoint{TurnID: "calls", ConversationKey: id, Agent: "main", DisplayModel: "root/model"}
 
 		if final == "calls" {
-			// Producer timing is covered by the harness's held-worker tests; these
-			// committed checkpoints exercise real signal/fetch/browser reconciliation.
 			for _, call := range []string{"A", "B", "C"} {
 				checkpoint.ReplayInput = append(checkpoint.ReplayInput, json.RawMessage(`{"type":"function_call","call_id":"`+call+`","name":"task","arguments":"{}"}`))
 				checkpoint.OutputTrace = append(checkpoint.OutputTrace, json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"`+call+`","parent_id":"calls/response","kind":"delegation","state":"working","agent":"child","model":"child/model"}}`))
@@ -360,7 +357,6 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 	require.Empty(t, deletedFailure.Terminal)
 
 	for _, revision := range []string{"invalid", view.Revision} {
-		// A token from another source filter must never suppress the initial read.
 		reset, err := server.history(ctx, &HistoryRequest{Id: "chat", SourceConversationId: "other", Revision: revision})
 		require.NoError(t, err)
 		require.True(t, reset.Reset_)
@@ -368,8 +364,6 @@ func TestHistoryReadsActiveReplay(t *testing.T) {
 	}
 }
 
-// OpenCode V2 packages/app/src/session/revert.ts restores the prompt without
-// sending and clears the entire cutoff on Redo. IDs remain opaque strings.
 func TestRevertRPCAndHistoryReset(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -560,7 +554,6 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 		json.RawMessage(`{"type":"compaction","content":"abandoned summary"}`),
 	}})
 	require.NoError(t, err)
-	// Run startup retention after seeding so an expired fixture cannot escape its first pass.
 	_, err = rt.Sessions.PruneStateBefore(ctx, time.Now().Add(-90*24*time.Hour), 0)
 	require.NoError(t, err)
 	listener, err := net.Listen("unix", testSocketPath(t))
@@ -590,7 +583,7 @@ func TestRevertRealBackendBrowser(t *testing.T) {
 	data, err := root.ReadFile("external-effect.txt")
 	require.NoError(t, err)
 	require.Equal(t, "already happened", string(data), "conversation commit does not undo tool effects")
-	// Reopen the actual store to prove the committed projection, not browser filtering.
+
 	reopened, err := backend.NewSessionServiceIn(ctx, cfg, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, err)
@@ -677,7 +670,6 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 	require.Equal(t, keys[5:], restarted.EntryKeys)
 	require.False(t, restarted.GetMore())
 
-	// Physical origin needs provenance, not unrelated output-trace decoding outside the page.
 	_, err = sessions.DeleteSession(ctx, "chat")
 	require.NoError(t, err)
 	db, err := sql.Open("pgx", dsn)
@@ -700,8 +692,6 @@ func TestHistoryFollowsNewestEntries(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-// An open chat follows a hidden run reporting to it: its new entry and its running turn arrive
-// in the view without a reset, and its changes wake the chat's stream.
 func TestHistoryFollowsHiddenRun(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -762,7 +752,6 @@ VALUES ('run-turn', 'external_mcp:main:run', '{"SyncDestination":"chat"}', '[{"t
 	require.Contains(t, running.EntryKeys, "turn:external_mcp:main:run:run-turn")
 }
 
-// A background task saved before 2026-10-22 names no subagent on its row; its row opens the one its call started.
 func TestHistoryLinksBackgroundTaskSubagent(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -867,7 +856,6 @@ func TestHistoryPublicProgress(t *testing.T) {
 		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"unknown","kind":"private","state":"working","text":"PRIVATE CHILD SENTINEL"}}`),
 	}}
 	require.NoError(t, seeded.UpsertActiveTurn(ctx, checkpoint))
-	// A was reviewed before it ran and B only during its run; both save under the call's review key.
 	reviews := []string{seeded.RecordReview(t, "public", "turn", "A"), seeded.RecordReview(t, "public", "turn", "B")}
 
 	for _, review := range reviews {
@@ -897,9 +885,7 @@ func TestHistoryPublicProgress(t *testing.T) {
 	require.Equal(t, map[string]string{reviews[0]: "The read-only check is within scope.", reviews[1]: "The read-only check is within scope."}, held.ReviewRationales)
 	require.Equal(t, []string{"working", "completed", "blocked"}, []string{held.Messages[2].State, held.Messages[3].State, held.Messages[5].State})
 	require.Equal(t, "canonical-child", held.Messages[2].Agent)
-	// A task row opens its recorded subagent, including the one a continue call continued.
 	require.Equal(t, []string{"public/A-0a1b2c3d", "", "", "public/old", "public/old"}, []string{held.Messages[2].Delegation, held.Messages[3].Delegation, held.Messages[4].Delegation, held.Messages[5].Delegation, held.Messages[6].Delegation})
-	// Each call's row names its review history; the delegations list only the reviewed calls'.
 	require.Equal(t, []string{reviews[0], reviews[1], "", "public/" + harness.ReviewKey("turn", "C"), ""}, []string{held.Messages[2].Review, held.Messages[3].Review, held.Messages[4].Review, held.Messages[5].Review, held.Messages[6].Review})
 	require.NotContains(t, held.Delegations, held.Messages[5].Review)
 	require.Equal(t, "child/model", held.Messages[2].Model)
@@ -918,7 +904,6 @@ func TestHistoryPublicProgress(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(encoded), "PRIVATE CHILD SENTINEL")
 
-	// Joining preserves the canonical rejected result, but it must never reach Web.
 	checkpoint.ReplayInput = append(checkpoint.ReplayInput,
 		json.RawMessage(`{"type":"function_call_output","call_id":"B","output":"B result"}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"C","output":"REVIEWER SENTINEL"}`))
@@ -933,7 +918,6 @@ func TestHistoryPublicProgress(t *testing.T) {
 
 	for _, final := range []string{"short", "different", ""} {
 		t.Run("final="+final, func(t *testing.T) {
-			// Identity, not equal text, determines overlap. Distinct items retain equal text.
 			checkpoint.ReplayInput = slices.Clone(checkpoint.ReplayInput[:6])
 			raw, err := json.Marshal(struct {
 				Type    string `json:"type"`
@@ -1095,7 +1079,6 @@ func TestHistoryPublicProgress(t *testing.T) {
 		})
 	}
 
-	// Compaction can remove replay, but only typed public trace is a display fallback.
 	checkpoint.TurnID = "compacted"
 	checkpoint.ReplayInput = []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","input_id":"parked-steer","content":"steer at retained boundary"}`),
@@ -1179,8 +1162,6 @@ type testPlannedAction struct {
 	Subjects     []string `json:"subjects"`
 }
 
-// testReviewEntry saves a review as the approver does: its prompt ends with the planned action
-// and its final answer holds the decision.
 func testReviewEntry(tb testing.TB, transcript string, action *testPlannedAction, rationale string) *harness.SessionEntry {
 	tb.Helper()
 
@@ -1244,17 +1225,16 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	}
 	script := &testPlannedAction{"execute", "rocketclaw", `{"code":"def main():\n    return bash(command=\"ls\")"}`, []string{"code_mode_approve"}}
 	big := `{"command":"echo ` + strings.Repeat("é", 2100) + `"}`
-	clipped := big[:4095] + "…[truncated]" // 4096 bytes would split an é.
+	clipped := big[:4095] + "…[truncated]"
 
-	// A new-format call's reviews are never parsed: its rows and reason come from its records.
 	review("new", testReviewEntry(t, "", script, "PARSED SCRIPT REASON"), testReviewEntry(t, "", &testPlannedAction{"bash", "bash", `{"command":"PARSED"}`, []string{"PARSED"}}, "checked"))
+
 	old := []*harness.SessionEntry{
 		testReviewEntry(t, "Earlier transcript.\n", script, "script ok"),
 		testReviewEntry(t, "", &testPlannedAction{"bash", "bash", `{"command":"ls -la"}`, []string{"ls -la"}}, "ls is safe"),
 		testReviewEntry(t, "", &testPlannedAction{"bash", "bash", big, []string{"echo"}}, "echo is safe"),
 		testReviewEntry(t, "", &testPlannedAction{"execute", "mcp", `{"query":"is:open"}`, []string{"github.search_issues"}}, "search is read-only"),
 	}
-	// Reviews saved before turns were named after their calls each have a turn of their own.
 	for i, entry := range old {
 		entry.TurnID = fmt.Sprintf("old-%d", i)
 	}
@@ -1271,7 +1251,6 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	}
 
 	review("capped", capped...)
-	// A top-level review saved over HTTP keeps no progress trace.
 	review("top", testReviewEntry(t, "", &testPlannedAction{"bash", "bash", `{"command":"ls"}`, []string{"ls"}}, "top is safe"))
 
 	replay := append(append([]json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"ask"}`)}, testCallItems("execute", "new", "old", "broken", "capped")...), testCallItems("bash", "top")...)
@@ -1302,7 +1281,6 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	require.Contains(t, string(encoded), `"summary":"one"`, "actual tool output reaches PR discovery; permission-review plans carry no summary")
 
 	for id, want := range map[string]*TranscriptEvent{
-		// Each reviewed call names the turn its review saved the approver's answer under.
 		"new": {ScriptReason: "script reason", ScriptOutcome: "allow", ReviewTurn: harness.ReviewTurn("turn/call/new"), CodeModeCalls: []*CodeModeCall{
 			{Name: "bash", Arguments: `{"command":"printf one"}`, Status: "ok", Summary: "one"},
 			{Name: "read", Arguments: `{"filePath":"a.txt"}`, Status: "ok", Summary: "(End of file - total 2 lines)"},
@@ -1325,13 +1303,11 @@ func TestHistoryCodeModeCalls(t *testing.T) {
 	require.Equal(t, "top is safe", view.ReviewRationales["chat/"+harness.ReviewKey("turn", "top")], "an HTTP review's reason reaches its top-level row")
 	require.Equal(t, "unparsable action", view.ReviewRationales["chat/"+harness.ReviewKey("turn", "broken")])
 
-	// A follow-up poll carries no Execute events, so it has no rows to fill from reviews.
 	poll, err := server.history(ctx, &HistoryRequest{Id: "chat", Revision: view.Revision})
 	require.NoError(t, err)
 	require.Empty(t, poll.Messages)
 	require.Equal(t, view.ReviewRationales, poll.ReviewRationales)
 
-	// A running turn shows its script's calls, each saved on its own row, before the Execute call reaches replay.
 	require.NoError(t, sessions.UpsertThread("live", backend.ThreadState{Agent: "main"}))
 	require.NoError(t, seeded.UpsertActiveTurn(ctx, &testCheckpoint{TurnID: "live-turn", ConversationKey: "live", Agent: "main", ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","content":"ask"}`),

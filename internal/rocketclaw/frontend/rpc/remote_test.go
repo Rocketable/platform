@@ -27,16 +27,11 @@ import (
 	"tailscale.com/tailcfg"
 )
 
-// A local page works a chat on a remote RocketClaw behind its tailnet handler, lists and searches it beside
-// local chats, is notified of its replies, and greys it while the remote is off; a declared remote that
-// never answers shows why. Both servers sit under one tailnet suffix, which the browser maps to this machine.
 func TestRemoteRocketClawRealBrowser(t *testing.T) {
 	t.Parallel()
 
 	const suffix = "tail1234.ts.net"
 
-	// serve starts a RocketClaw whose model always says reply, with agents beside its built-in ones, and returns its Web RPC
-	// and configuration.
 	serve := func(reply string, agents ...string) (*grpc.ClientConn, *config.Config) {
 		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -66,7 +61,6 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		root, err := os.OpenRoot(cfg.Workspace)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
-		// Startup builds the runtime agents from the workspace's agents directory.
 		require.NoError(t, root.MkdirAll("agents", 0o700))
 
 		for _, agent := range agents {
@@ -110,7 +104,6 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 		return connection, cfg
 	}
 
-	// The tailnet name a test server answers at.
 	named := func(name string, server *httptest.Server) string {
 		return "https://" + name + "." + suffix + ":" + server.URL[strings.LastIndex(server.URL, ":")+1:]
 	}
@@ -118,8 +111,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 	whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) {
 		return &apitype.WhoIsResponse{Node: &tailcfg.Node{}, UserProfile: &tailcfg.UserProfile{LoginName: "alice"}}, nil
 	}}
-	// The local page switches the remote off and on; while off, the remote drops every connection unanswered.
-	// It also moves a server to another protocol version.
+
 	var (
 		mu       sync.Mutex
 		down     bool
@@ -161,7 +153,6 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 	localRPC, _ := serve("Local reply")
 	web := versioned("local", NewHTTPHandler(localRPC, config.SentryConfig{}, config.PostHogConfig{}, nil, "", remotes))
 	local := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The remote recorded the remote location the page last viewed: the chat, or New session if it polled there.
 		if r.URL.Path == "/test/view-expired" {
 			var stale bool
 
@@ -193,7 +184,6 @@ WHERE username = 'alice' RETURNING viewed_at < now() - interval '10 seconds'`).S
 	}))
 	t.Cleanup(local.Close)
 
-	// The remote trusts the local page's origin, which exists only now, and no other page.
 	mu.Lock()
 	tailnet = NewTailnetHandler(whois, []string{named("local", local)}, versioned("work", NewHTTPHandler(remoteRPC, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil)))
 	mu.Unlock()

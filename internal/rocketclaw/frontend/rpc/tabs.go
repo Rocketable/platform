@@ -39,7 +39,6 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 		err = status.Error(codes.InvalidArgument, backend.ErrSpaceRejected.Error())
 	}
 
-	// A save answers with the state it saved; anything else, a refused save included, reads it.
 	var (
 		spaces   []backend.Space
 		shared   []backend.SharedTab
@@ -96,9 +95,6 @@ func (s *Server) tabs(ctx context.Context, request *TabsRequest) (*TabsResponse,
 	return response, nil
 }
 
-// changeTabs makes request's one change for username. It reports whether a save was made from the saved revision,
-// whether an edit of a Shared Search page was refused because the page changed since the edit's base, and the page a
-// Search tab taken out of Shared held.
 func (s *Server) changeTabs(ctx context.Context, username string, limit backend.SpaceLimit, request *TabsRequest) (saved, refused bool, unshared *backend.SearchPage, err error) {
 	shared := cmp.Or(request.Share, request.EditShared, request.Unshare)
 
@@ -118,7 +114,6 @@ func (s *Server) changeTabs(ctx context.Context, username string, limit backend.
 	case request.Share != nil && request.Share.Path == "/":
 		err = status.Error(codes.InvalidArgument, "New session cannot be shared")
 	case request.Share != nil:
-		// Every person's Web decodes a shared path to label its tab, so one it cannot decode is refused.
 		if path, errPath := url.PathUnescape(request.Share.Path); errPath != nil || !utf8.ValidString(path) {
 			err = status.Error(codes.InvalidArgument, "tab path is not a valid escaped path")
 		} else if id := backend.TabConversation(request.Share.Path); id != "" {
@@ -150,9 +145,6 @@ func (s *Server) changeTabs(ctx context.Context, username string, limit backend.
 	return saved, refused, unshared, nil
 }
 
-// changeAttention makes change to username's attention on its tab locations. New session and a group's placeholder
-// have none, and every session must be one the caller may open, before any location changes. It is apart from
-// changeTabs, whose branches would pass gocyclo's limit.
 func (s *Server) changeAttention(ctx context.Context, username string, change *AttentionChange) error {
 	action, ok := map[AttentionAction]backend.AttentionAction{
 		AttentionAction_MARK_READ: backend.AttentionRead, AttentionAction_MARK_UNREAD: backend.AttentionUnread, AttentionAction_PARK: backend.AttentionPark,
@@ -193,7 +185,6 @@ func (s *Server) changeAttention(ctx context.Context, username string, change *A
 	return nil
 }
 
-// sharedTabs is every space's Shared tabs as the Web reads them.
 func sharedTabs(shared []backend.SharedTab) []*SharedTab {
 	out := make([]*SharedTab, 0, len(shared))
 	for _, tab := range shared {
@@ -203,7 +194,6 @@ func sharedTabs(shared []backend.SharedTab) []*SharedTab {
 	return out
 }
 
-// tabState is the backend's saved state as the Web reads it.
 func tabState(state *backend.TabState) *TabState {
 	out := &TabState{Space: state.Space, Last: state.Last, SharedOrder: state.SharedOrder, Tabs: webTabs(state.Tabs)}
 	for _, group := range state.Groups {
@@ -221,7 +211,6 @@ func webTabs(saved []backend.Tab) (out []*Tab) {
 	return out
 }
 
-// savedTabState is state as the backend saves it.
 func savedTabState(state *TabState) *backend.TabState {
 	saved := &backend.TabState{Space: state.Space, Last: state.Last, SharedOrder: state.SharedOrder}
 	for _, tab := range state.Tabs {
@@ -235,7 +224,6 @@ func savedTabState(state *TabState) *backend.TabState {
 	return saved
 }
 
-// webTopShelf is the backend's saved Top Shelf as the Web reads it.
 func webTopShelf(shelf *backend.TopShelf) *TopShelf {
 	out := &TopShelf{Collapsed: shelf.Collapsed}
 	for _, tab := range shelf.Tabs {
@@ -245,7 +233,6 @@ func webTopShelf(shelf *backend.TopShelf) *TopShelf {
 	return out
 }
 
-// savedTopShelf is shelf as the backend saves it.
 func savedTopShelf(shelf *TopShelf) *backend.TopShelf {
 	saved := &backend.TopShelf{Collapsed: shelf.Collapsed}
 	for _, tab := range shelf.Tabs {
@@ -255,7 +242,6 @@ func savedTopShelf(shelf *TopShelf) *backend.TopShelf {
 	return saved
 }
 
-// webSearchPage is a Search page the backend saved as the Web reads it, nil for other tabs.
 func webSearchPage(saved *backend.SearchPage) *SearchPage {
 	if saved == nil {
 		return nil
@@ -269,7 +255,6 @@ func webSearchPage(saved *backend.SearchPage) *SearchPage {
 	return page
 }
 
-// savedSearchPage is page as the backend saves it, nil for other tabs.
 func savedSearchPage(page *SearchPage) *backend.SearchPage {
 	if page == nil {
 		return nil

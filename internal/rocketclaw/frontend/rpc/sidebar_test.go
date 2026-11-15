@@ -133,7 +133,6 @@ func TestSidebarSendFailures(t *testing.T) {
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
 
-	// This test-only limit rejects the first message, which carries the owner.
 	transport := grpc.NewServer(grpc.MaxSendMsgSize(1))
 	New(&mockBackend{SandboxErrorFunc: noSandboxError}, sessions, config.NewLockedConfig(cfg), &mockChannels{}, &mockCronJobs{}).Register(transport)
 
@@ -251,8 +250,6 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 	}
 }
 
-// An External MCP chat's row carries its binding and when its work arrived: its last update while
-// no turn of it or its run waits or runs.
 func TestListSessionsExternalArrival(t *testing.T) {
 	t.Parallel()
 
@@ -274,13 +271,11 @@ func TestListSessionsExternalArrival(t *testing.T) {
 	require.Equal(t, "1970-01-01T00:00:01Z", sessions[0].StateSince)
 }
 
-// A poll naming a listing the server still holds gets only the rows changed since and the sessions
-// removed since, so the browser keeps unchanged rows and drops removed ones.
 func TestListSessionsSendsChangesSince(t *testing.T) {
 	t.Parallel()
 
 	server, ctx := sidebarChoicesFixture(t, 3)
-	rows := make(map[string]*Session) // Each chat's last sent row.
+	rows := make(map[string]*Session)
 	list := func(ctx context.Context, since string) (sent []string, done *ListSessionsResponse) {
 		var messages []*ListSessionsResponse
 
@@ -364,8 +359,6 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 	require.Empty(t, bobs.Since)
 }
 
-// A refresh where nothing changed costs the same few bytes however many sessions and tab rows there are; a changed
-// tab row is sent once, and a session's attention rides its own row.
 func TestQuietSessionRefreshSize(t *testing.T) {
 	t.Parallel()
 
@@ -374,7 +367,6 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 		sessions = map[string]*Session{}
 
 		require.NoError(t, server.listSessions(request, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
-			// The Web receives listing messages as protojson without default values.
 			response := message.(*ListSessionsResponse)
 			body, err := protojson.Marshal(response)
 			require.NoError(t, err)
@@ -429,7 +421,6 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 	_, done, _ = list(&ListSessionsRequest{Since: done.Version})
 	require.Empty(t, tabs(done), "each change is sent once")
 
-	// A session's park, timer and a timer's note travel on its own row.
 	path := func(id string) string { return "/s/" + base64.RawURLEncoding.EncodeToString([]byte(id)) }
 	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-00")}, backend.AttentionPark, &soon))
 	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-01")}, backend.AttentionPark, new(time.Now().Add(-time.Second))))
@@ -444,7 +435,6 @@ func TestQuietSessionRefreshSize(t *testing.T) {
 	require.Equal(t, "Park ended", sessions["chat-01"].Note)
 	require.Empty(t, tabs(done))
 
-	// Auto-park travels on the row too: the person's choice for every session, then their choice for one over it.
 	require.NoError(t, server.sessions.SetAutoParkAll(ctx, "alice", true))
 	require.NoError(t, server.sessions.ChangeAttention(ctx, "alice", []string{path("chat-00")}, backend.AttentionNoAutoPark, nil))
 

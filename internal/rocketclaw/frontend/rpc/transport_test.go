@@ -12,9 +12,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// A request is refused before any lookup when a string holds a NUL character, which PostgreSQL text
-// cannot hold, or an ID has surrounding spaces or is too long to be one, so none is trimmed or
-// truncated into another conversation's.
 func TestValidRequest(t *testing.T) {
 	t.Parallel()
 
@@ -40,7 +37,6 @@ func TestValidRequest(t *testing.T) {
 	}
 }
 
-// A database error reaches the caller as Internal without its text; any other error is unchanged.
 func TestWithoutDatabaseText(t *testing.T) {
 	t.Parallel()
 

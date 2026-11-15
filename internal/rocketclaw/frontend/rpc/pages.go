@@ -11,7 +11,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// pageCall answers GetPage, ListPages, Tabs, Board and ReportTyping, and any other request as Protocol.
 func (s *Server) pageCall(ctx context.Context, request any) (any, error) {
 	switch request := request.(type) {
 	case *PageRequest:
@@ -54,7 +53,6 @@ func (s *Server) getPage(ctx context.Context, request *PageRequest) (*Page, erro
 		return nil, fmt.Errorf("read web page: %w", err)
 	}
 
-	// A page belongs to an agent definition or to the OpenCode session that stored it, placed in its space.
 	agent, ok := agents.Items[request.Agent]
 	if !found || !ok && page.Conversation == "" || !limit.AllowsSpaceName(cmp.Or(agent.Space, page.Space)) {
 		return nil, status.Errorf(codes.NotFound, "page %q not found", name)

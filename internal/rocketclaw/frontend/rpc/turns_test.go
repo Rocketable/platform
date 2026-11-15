@@ -15,8 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testCheckpoint is a running turn as the backend records it: an active-turn
-// row with live trace plus the turn record journaled under its turn ID.
 type testCheckpoint struct {
 	TurnID, ConversationKey, Agent, Model, DisplayModel string
 	ReasoningEffort                                     *string
@@ -27,7 +25,6 @@ type testCheckpoint struct {
 	ResponseID                                          string
 }
 
-// testTurns seeds active turns through SQL because their writers are bridge-internal.
 type testTurns struct{ db *sql.DB }
 
 func openTestTurns(tb testing.TB, dsn string) testTurns {
@@ -40,7 +37,6 @@ func openTestTurns(tb testing.TB, dsn string) testTurns {
 	return testTurns{db: db}
 }
 
-// RecordSlackThread records id as the Slack thread a mention creates, with the channel and thread its ID names.
 func (s testTurns) RecordSlackThread(t *testing.T, sessions *backend.SessionService, id string, thread backend.ThreadState) {
 	t.Helper()
 
@@ -50,8 +46,6 @@ func (s testTurns) RecordSlackThread(t *testing.T, sessions *backend.SessionServ
 	require.NoError(t, err)
 }
 
-// RecordReview records the permission review of call callID of turn turnID in parent as
-// Bridge.AppendChildEntry does, and returns its ID.
 func (s testTurns) RecordReview(tb testing.TB, parent, turnID, callID string) string {
 	tb.Helper()
 
@@ -63,8 +57,6 @@ VALUES ($1, '', '', $2, 'review', FALSE, 'nested', $3, $4)`, id, parent, turnID,
 	return id
 }
 
-// RecordLegacyDelegation records the history saved under call callID of parent, as migration 051
-// records one saved before delegations had their own key.
 func (s testTurns) RecordLegacyDelegation(tb testing.TB, parent, callID string) {
 	tb.Helper()
 
@@ -99,7 +91,6 @@ ON CONFLICT (id) DO UPDATE SET output_trace_json = excluded.output_trace_json, u
 		return fmt.Errorf("seed test turn: %w", err)
 	}
 
-	// The turn's step and its replay items, as the backend journals a running turn.
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM steps WHERE conversation_id = $1 AND starts_with(key, $2 || '/replay_input/')`, c.ConversationKey, c.TurnID); err != nil {
 		return fmt.Errorf("seed test turn: %w", err)
 	}
@@ -124,7 +115,6 @@ DELETE FROM steps s USING turn t WHERE s.conversation_id = t.conversation_id AND
 	return s.recordRunning(ctx)
 }
 
-// SetActiveTurnTerminal ends a turn as a delivered stop or failure does: the row stays for the transcript.
 func (s testTurns) SetActiveTurnTerminal(ctx context.Context, turnID string, terminal protocol.Terminal) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE turns SET terminal = $2, phase = 'done' WHERE id = $1`, turnID, terminal)
 	if err != nil {
@@ -159,8 +149,6 @@ func (s testTurns) RecoverableActiveTurns(ctx context.Context) ([]string, error)
 	return ids, nil
 }
 
-// recordRunning stores on each conversation whether a turn of it has not ended, as the backend's
-// turn writes do.
 func (s testTurns) recordRunning(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `WITH running AS (
     SELECT DISTINCT conversation_id FROM turns WHERE phase NOT IN ('waiting', 'done')

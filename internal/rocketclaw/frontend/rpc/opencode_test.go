@@ -153,8 +153,6 @@ func TestOpenCodeSessionsThroughTheWebRPC(t *testing.T) {
 	}, first), "%v", first)
 	assert.True(t, proto.Equal(&ListSessionsResponse{UpstreamSuccess: true, Version: done.GetVersion()}, done), "%v", done)
 
-	// OpenCode v2 packages/app/src/session/commands/fork-dialog.tsx forks before a user message.
-	// The new conversation must exist before the tab saves, not only after the next remote poll.
 	forked, err := server.forkSession(ctx, &ForkSessionRequest{Id: created.Id, Before: "msg_boundary"})
 	require.NoError(t, err)
 	assert.Equal(t, "msg_boundary", boundary)

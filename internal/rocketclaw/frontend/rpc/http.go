@@ -31,8 +31,6 @@ import (
 	"tailscale.com/client/tailscale/apitype"
 )
 
-// NewHTTPHandler bridges the browser API to the local Web service, and each remote OpenCode
-// server's API to the browsers the Web admits under /oc/{server}/api/. serverName prefixes the page title.
 func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, posthog config.PostHogConfig, servers map[string]config.OpenCodeConfig, serverName string, remotes map[string]config.RemoteRocketClawConfig) http.Handler {
 	mux := http.NewServeMux()
 	protection := http.NewCrossOriginProtection()
@@ -63,7 +61,6 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, pos
 				return
 			}
 
-			// Match the in-process server's send limit; history pages count entries, not bytes.
 			if err := connection.Invoke(r.Context(), "/rpc.Web/"+method, request, response, grpc.MaxCallRecvMsgSize(math.MaxInt32)); err != nil {
 				httpRPCError(w, err)
 				return
@@ -90,9 +87,7 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, pos
 			)
 
 			switch method {
-			default: // ListSessions
-				// Recording views, which clears marks, and waking timers take a same-origin poll, by the rule
-				// protection holds unsafe methods to; it lets every GET through.
+			default:
 				post := *r
 				post.Method = http.MethodPost
 
@@ -190,8 +185,6 @@ func NewHTTPHandler(connection *grpc.ClientConn, sentry config.SentryConfig, pos
 	}))
 }
 
-// servePage answers /pages-raw/ with the file, sandboxed into an opaque origin, and /pages/ with the Web app,
-// after redirecting a link that names a space other than the agent's.
 func servePage(connection *grpc.ClientConn, app http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		page := &Page{}
@@ -208,7 +201,6 @@ func servePage(connection *grpc.ClientConn, app http.Handler) http.HandlerFunc {
 			w.Header().Set("Cache-Control", "no-store")
 			_, _ = w.Write(page.Body)
 		case page.Space != "" && !strings.EqualFold(page.Space, r.PathValue("space")):
-			// Keep the request's escaped agent, path, and query; only the space segment moves.
 			http.Redirect(w, r, "/pages/"+url.PathEscape(page.Space)+"/"+strings.SplitN(r.URL.RequestURI(), "/", 4)[3], http.StatusPermanentRedirect)
 		default:
 			app.ServeHTTP(w, r)
@@ -216,18 +208,10 @@ func servePage(connection *grpc.ClientConn, app http.Handler) http.HandlerFunc {
 	}
 }
 
-// tailnetWhoIs is satisfied by *local.Client.
 type tailnetWhoIs interface {
 	WhoIs(ctx context.Context, remoteAddr string) (*apitype.WhoIsResponse, error)
 }
 
-// NewTailnetHandler signs each request in by its tailnet connection and refuses tagged or unknown callers,
-// except at coding servers' MCP endpoints, which check their callers' passwords themselves.
-// Only a page whose origin is in trusted, a RocketClaw page this server was told to trust, may call across
-// sites: it gets CORS answers, and its request reaches next as same-origin, so next's own origin checks
-// hold for it. Any other page stays cross-site, even one served from this tailnet, because the browser
-// signs in as the person on the device and a page could otherwise act as them.
-// next must serve NewHTTPHandler, which appends the IP principal to this identity.
 func NewTailnetHandler(client tailnetWhoIs, trusted []string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if bridge, _ := path.Match("/opencode/*/mcp", r.URL.Path); bridge {
@@ -235,7 +219,6 @@ func NewTailnetHandler(client tailnetWhoIs, trusted []string, next http.Handler)
 			return
 		}
 
-		// A tailnet page reads every answer, so a refusal reaches it as one rather than as an unreachable server.
 		origin := r.Header.Get("Origin")
 
 		page := origin != "" && slices.Contains(trusted, origin)
@@ -250,12 +233,10 @@ func NewTailnetHandler(client tailnetWhoIs, trusted []string, next http.Handler)
 			return
 		}
 
-		// Names may be non-ASCII, which only -bin metadata carries.
 		r = r.Clone(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-tailnet-login-bin", who.UserProfile.LoginName, "rocketclaw-tailnet-name-bin", who.UserProfile.DisplayName))
 
 		if page {
 			if r.Method == http.MethodOptions {
-				// The OpenCode view also sends PUT, PATCH and DELETE with its own headers.
 				w.Header().Set("Access-Control-Allow-Methods", r.Header.Get("Access-Control-Request-Method"))
 				w.Header().Set("Access-Control-Allow-Headers", r.Header.Get("Access-Control-Request-Headers"))
 				w.Header().Set("Access-Control-Max-Age", "7200")
@@ -272,7 +253,6 @@ func NewTailnetHandler(client tailnetWhoIs, trusted []string, next http.Handler)
 	})
 }
 
-// httpJSON writes a JSON body, gzip-compressed when the client accepts it.
 func httpJSON(w http.ResponseWriter, r *http.Request, body []byte, writers *sync.Pool) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Add("Vary", "Accept-Encoding")
@@ -350,8 +330,6 @@ func httpDownload(w http.ResponseWriter, r *http.Request, stream grpc.ClientStre
 	}
 }
 
-// httpEvents writes a stream as server-sent events. The session list, which the Web reloads every few seconds, goes
-// gzip-compressed and flushed per event to browsers that accept it.
 func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream, response proto.Message, err error, writers *sync.Pool) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-store")
@@ -387,7 +365,6 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 
 	var body []byte
 
-	// A listing sends thousands of rows, so it leaves out default values, which the Web reads as such.
 	encoding := protojson.MarshalOptions{EmitDefaultValues: r.URL.Path != "/api/ListSessions"}
 
 	for {
@@ -423,7 +400,6 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 			return
 		}
 
-		// A listing ends after its inventory; long-lived streams must not retain a large frame while idle.
 		if r.URL.Path != "/api/ListSessions" {
 			body = nil
 		}
@@ -432,7 +408,6 @@ func httpEvents(w http.ResponseWriter, r *http.Request, stream grpc.ClientStream
 	}
 }
 
-// httpInput decodes a JSON request body of at most 4 MiB.
 func httpInput(w http.ResponseWriter, r *http.Request, request proto.Message, method string) error {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
 	if err != nil {

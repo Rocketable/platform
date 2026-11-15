@@ -105,7 +105,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 			replay = append(replay, json.RawMessage(fmt.Sprintf(`{"type":"message","role":"user","content":%q}`, text)))
 		}
 	}
-	// Bridge-internal consumption writers persist these same provider inputs and turn correlation.
+
 	_, err = sessions.AppendEntryID(t.Context(), "parent", &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "parent-turn", ReplayInput: replay})
 	require.NoError(t, err)
 	require.NoError(t, seeded.UpsertActiveTurn(t.Context(), &testCheckpoint{TurnID: "child-turn", ConversationKey: child, ReplayInput: replay}))

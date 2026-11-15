@@ -47,7 +47,6 @@ func TestPages(t *testing.T) {
 		require.NoError(t, root.WriteFile(agents+name+".md", []byte("---\nmodel: example-model\n"+frontmatter+"---\nHelp."), 0o600))
 	}
 
-	// Two OpenCode sessions own pages: ses_a in Billing, ses_b without a space.
 	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `WITH space AS (INSERT INTO web_spaces (name) VALUES ('Billing') RETURNING id)
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session, space_id)
 SELECT 'opencode:box:ses_' || n, '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), 'ses_' || n, CASE WHEN n = 'a' THEN space.id END
@@ -152,7 +151,6 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 	require.NoError(t, err)
 	require.True(t, proto.Equal(&Page{Space: "Billing", ContentType: "application/json", Body: []byte("[1]")}, data), "unexpected session page data: %v", data)
 
-	// A session's HTML pages list under its space; one with no space lists nowhere.
 	listed, err := invoke[ListPagesResponse](ctx, connection, "ListPages", &ListPagesRequest{})
 	require.NoError(t, err)
 	require.True(t, proto.Equal(&ListPagesResponse{Pages: []*PageEntry{
@@ -179,7 +177,6 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 	require.Equal(t, http.StatusForbidden, response.Code)
 }
 
-// AE4: a page's script cannot use the API as the viewer, opened directly or inside its tab.
 func TestPagesRealBrowser(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -204,7 +201,6 @@ func TestPagesRealBrowser(t *testing.T) {
 	t.Cleanup(func() { cancel(); require.NoError(t, running.Wait()) })
 
 	rt := <-ready
-	// The probe acts as the viewer with a POST that needs no response, then reads a GET.
 	probe := `<script>(async () => {
 		await fetch("/api/Identity", { method: "POST", mode: "no-cors", body: "{}" });
 		window.result = await fetch("/api/ListSessions").then((response) => response.text(), (error) => error.name);
@@ -225,7 +221,6 @@ func TestPagesRealBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	// Pages have an opaque origin, so their requests carry Origin: null; their POSTs' answers are recorded.
 	handler := NewHTTPHandler(connection, cfg.Web.Sentry, cfg.PostHog, cfg.OpenCode, "", nil)
 
 	var (

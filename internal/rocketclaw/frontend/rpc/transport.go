@@ -15,11 +15,8 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
-// maxIDBytes bounds an ID a request names; stored IDs are far shorter.
 const maxIDBytes = 1024
 
-// Register publishes the implemented portion of rpc.Web. Other methods retain
-// gRPC's Unimplemented response; they are not successful empty handlers.
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
 
@@ -103,9 +100,6 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	registrar.RegisterService(&desc, s)
 }
 
-// validRequest refuses a request holding a string no stored value may: one with a NUL character,
-// which PostgreSQL text cannot hold, or an ID, a field named id or ending in _id or _ids, with
-// surrounding spaces or over maxIDBytes, so a lookup never trims or truncates it into another.
 func validRequest(message protoreflect.Message) error {
 	var err error
 
@@ -157,9 +151,6 @@ func validValue(field protoreflect.FieldDescriptor, value protoreflect.Value) er
 	return nil
 }
 
-// withoutDatabaseText keeps a database error's own text, which can name tables and values, out of
-// the response of method: the caller gets Internal with what the server was doing, and the log the
-// whole error.
 func withoutDatabaseText(method string, err error) error {
 	if errPg, ok := errors.AsType[*pgconn.PgError](err); ok {
 		slog.Error("web call failed in the database", "method", method, "error", err)
@@ -267,9 +258,6 @@ func (s *Server) reload(ctx context.Context, request *ReloadRequest) (*ReloadRes
 	return &ReloadResponse{Message: message}, nil
 }
 
-// historyRPC answers the History RPC: the transcript page plus the conversation's Background
-// Jobs and pending Web questions, which internal history reads (search, attachments, session
-// commands) do not need.
 func (s *Server) historyRPC(ctx context.Context, request *HistoryRequest) (*HistoryResponse, error) {
 	response, err := s.history(ctx, request)
 	if err != nil {

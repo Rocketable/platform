@@ -84,8 +84,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 		return out
 	}
 
-	// /search is the ops space's last tab, though closed. A Search page keeps its name, board style, and searches with
-	// their notify marks.
 	saved := &TabState{
 		Tabs: []*Tab{{Path: "/", Space: "main"}, {Path: "/s/YQ", Group: "g", Space: "main"}, {Path: "/s/Yg", Space: "ops"},
 			{Path: "/search/a", Space: "ops", Search: &SearchPage{Name: "Triage", Board: "kanban", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}, {Id: "2", Name: "Mine", Query: "principal:alice", Notify: true}}, Active: "2"}}},
@@ -108,16 +106,12 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.True(t, proto.Equal(&TabState{}, response.State), "bob has his own state")
 	assert.Equal(t, int64(0), response.Revision)
 
-	// A save made from an older revision is refused and answered with the newer saved state.
 	response, err = call("127.0.0.1", &TabsRequest{State: &TabState{Space: "main"}, Revision: 0})
 	require.NoError(t, err)
 	assert.True(t, response.Stale)
 	assert.True(t, proto.Equal(saved, response.State))
 	assert.Equal(t, int64(1), response.Revision)
 
-	// Alice has b's open tab and c, which has no tab, unread. A save closes b's tab and keeps both marks, writes a's
-	// tab saved in the old URI spelling under its canonical path, and drops tabs of sessions that do not exist, even
-	// ones whose path decodes to bytes that are not UTF-8.
 	_, err = db.ExecContext(t.Context(), `INSERT INTO web_tab_attention (username, path, conversation_id, unread_at) VALUES ('alice', '/s/Yg', 'b', now()), ('alice', '/s/Yw', 'c', now())`)
 	require.NoError(t, err)
 
@@ -142,7 +136,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&TabState{Tabs: []*Tab{{Path: "/s/YQ", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/s/YQ"}}, response.State))
 
-	// Deleting a session deletes its tabs and attention.
 	_, err = db.ExecContext(t.Context(), `DELETE FROM conversations WHERE conversation_id = 'b'`)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs())
@@ -151,7 +144,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	require.NoError(t, err)
 	assert.False(t, response.Stale)
 
-	// Alice shares her open tab, then Bob a page: everyone sees both, oldest first, and Bob's own tabs stay his.
 	response, err = call("127.0.0.1", &TabsRequest{Share: &SharedTab{Space: "main", Path: "/s/YQ"}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"main /s/YQ"}, shared(response))
@@ -160,13 +152,11 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.True(t, proto.Equal(&TabState{Space: "main"}, response.State))
 	assert.Equal(t, []string{"main /s/YQ", "main /search"}, shared(response))
 
-	// New session, a session nobody may open, one that does not exist, and a path no Web can decode cannot be shared.
 	for path, code := range map[string]codes.Code{"/": codes.InvalidArgument, "/s/cHJpdmF0ZS1Y": codes.PermissionDenied, "/s/bm9uZQ": codes.NotFound, "/pages/x/%": codes.InvalidArgument, "/pages/x/%FF": codes.InvalidArgument} {
 		_, err = call("192.0.2.2", &TabsRequest{Share: &SharedTab{Space: "main", Path: path}})
 		assert.Equal(t, code, status.Code(err), path)
 	}
 
-	// Bob takes Alice's tab out for everyone; it stays among her own tabs.
 	_, err = call("192.0.2.2", &TabsRequest{Unshare: &SharedTab{Space: "main", Path: "/s/YQ"}})
 	require.NoError(t, err)
 	response, err = call("127.0.0.1", &TabsRequest{})
@@ -197,7 +187,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	_, err = call("127.0.0.1", &TabsRequest{DeleteSpace: response.Spaces[0].Id})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "the last space stays")
 
-	// Bob moves a newer Shared tab above an older one for himself alone.
 	space := response.Spaces[0].Id
 	_, err = call("127.0.0.1", &TabsRequest{Share: &SharedTab{Space: space, Path: "/cron"}})
 	require.NoError(t, err)
@@ -211,7 +200,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	require.NoError(t, err)
 	assert.Empty(t, response.State.SharedOrder, "a person's Shared order is their own")
 
-	// A Shared Search page carries its one page to everyone, and an edit replaces the page for everyone.
 	triage := &SearchPage{Name: "Triage", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}}, Active: "1"}
 	_, err = call("127.0.0.1", &TabsRequest{Share: &SharedTab{Space: space, Path: "/search/a", Search: triage}})
 	require.NoError(t, err)
@@ -220,8 +208,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.True(t, proto.Equal(&SharedTab{Space: space, Path: "/search/a", Search: triage}, response.Shared[2]))
 	assert.Nil(t, response.Shared[0].Search, "other Shared tabs have no page")
 
-	// An edit made from the page as saved replaces it, its board style and notify marks included; one made from a page
-	// that has since changed is refused as stale.
 	edited := &SearchPage{Name: "Triage", Board: "kanban", Searches: []*SavedSearch{{Id: "1", Query: "is:unread", Notify: true}, {Id: "2", Query: "tag:bug"}}, Active: "1"}
 	response, err = call("192.0.2.2", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: edited, Search: edited}})
 	require.NoError(t, err)
@@ -234,7 +220,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.Equal(t, []string{space + " /search", space + " /cron", space + " /search/a"}, shared(response), "an edit keeps its place")
 	assert.True(t, proto.Equal(edited, response.Shared[2].Search))
 
-	// Taking it out of Shared answers with the page it held, and a later edit does not share it again.
 	response, err = call("127.0.0.1", &TabsRequest{Unshare: &SharedTab{Space: space, Path: "/search/a"}})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(edited, response.Unshared))
@@ -243,8 +228,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.True(t, response.Stale)
 	assert.Equal(t, []string{space + " /search", space + " /cron"}, shared(response), "an edit after unsharing does not share again")
 
-	// Alice parks a, under its legacy spelling, and the Cron tab until a time, and Bob parks c: each
-	// person's attention is their own, and a session's is kept under its canonical path.
 	later := time.Now().Add(time.Hour).UTC().Format("2006-01-02T15:04:05.000Z07:00")
 	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/a", "/cron"}, Action: AttentionAction_PARK, Until: later}})
 	require.NoError(t, err)
@@ -252,8 +235,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/cron t t", "/s/YQ 0", "/s/YQ t t", "/s/Yw f f"}, aliceTabs())
 
-	// New session, a kept group's placeholder, a session nobody may open, one that does not exist, and a malformed
-	// time are refused, and refuse the locations changed with them.
 	for path, code := range map[string]codes.Code{"/": codes.InvalidArgument, "group:g": codes.InvalidArgument, "/s/cHJpdmF0ZS1Y": codes.PermissionDenied, "/s/bm9uZQ": codes.NotFound} {
 		_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/Yw", path}, Action: AttentionAction_MARK_UNREAD}})
 		assert.Equal(t, code, status.Code(err), path)
@@ -263,12 +244,10 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 	assert.Equal(t, []string{"/cron t t", "/s/YQ 0", "/s/YQ t t", "/s/Yw f f"}, aliceTabs())
 
-	// Unparking both leaves a read row with no timer, which goes.
 	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_UNPARK}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs())
 
-	// Parking until it is done takes the session and skips the Cron tab; unparking it lets the row go again.
 	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_PARK_UNTIL_DONE}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/YQ 0", "/s/YQ t t", "/s/Yw f f"}, aliceTabs())
@@ -277,8 +256,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs())
 
-	// A prompt Alice sent parks until it is done only a session she auto-parks: by her choice for it, which keeps its
-	// row through an unpark, else by her choice for every session, which starts on and every reply of hers carries.
 	sent := func(paths ...string) {
 		t.Helper()
 
@@ -323,7 +300,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	response, err = call("127.0.0.1", &TabsRequest{})
 	require.NoError(t, err)
 
-	// A Top Shelf is the caller's own: each save replaces it whole, and every reply carries it.
 	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "nothing shelved yet: %v", response.TopShelf)
 
 	shelf := &TopShelf{Tabs: []*ShelfTab{{Server: "work", Space: "main", Path: "/s/eA"}, {Path: "/s/YQ", Space: "main"}, {Path: "/s/Yw", Space: "main"},
@@ -351,8 +327,6 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "an emptied shelf stays empty: %v", response.TopShelf)
 }
 
-// A prompt the agent acts on parks the sender's tab until it is done when they auto-park the session, as everyone
-// does until they turn it off, before its turn starts, and the turn's end makes the park due; a stash parks nothing.
 func TestPromptAutoParks(t *testing.T) {
 	h := startVoiceHarness(t)
 	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))

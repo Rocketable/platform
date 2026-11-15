@@ -24,7 +24,6 @@ func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, servers map
 		proxies[name] = http.StripPrefix("/oc/"+name, openCodeProxy(server))
 	}
 
-	// Registered per method, as "GET /" leaves no room for a method-less pattern.
 	for method := range strings.FieldsSeq("GET POST PUT PATCH DELETE") {
 		mux.HandleFunc(method+" /oc/{server}/api/{path...}", func(w http.ResponseWriter, r *http.Request) {
 			proxy, ok := proxies[r.PathValue("server")]
@@ -44,27 +43,18 @@ func handleOpenCode(mux *http.ServeMux, connection *grpc.ClientConn, servers map
 				return
 			}
 
-			// A prompt parks the sender's tab until it is done when they auto-park the session, before it can start. A park
-			// that fails, as one for a session no sync has recorded yet does, leaves the prompt to go through.
 			if parts := strings.Split(r.PathValue("path"), "/"); r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "session" && parts[2] == "prompt" {
 				tab := "/oc/" + base64.RawURLEncoding.EncodeToString([]byte("opencode:"+r.PathValue("server")+":"+parts[1]))
 				_ = connection.Invoke(r.Context(), "/rpc.Web/Tabs", &TabsRequest{Attention: &AttentionChange{Paths: []string{tab}, Action: AttentionAction_SENT}}, &TabsResponse{})
 			}
 
-			// The proxy stamps prompts with the person Identity admitted.
 			proxy.ServeHTTP(w, r.WithContext(metadata.AppendToOutgoingContext(r.Context(), "rocketclaw-username", identity.Username)))
 		})
 	}
 }
 
-// openCodeProxy serves one remote OpenCode server's API under /oc/{server}/ on the Web's own
-// origin, with the server's password. It refuses any request, WebSocket upgrades included,
-// whose Origin is another site, and sends the upstream its own origin so OpenCode's PTY check
-// still holds. Cookies cross in neither direction, the browser is never asked to sign in, and a
-// response opened directly runs sandboxed rather than as RocketClaw. Prompts carry the sender
-// as metadata.rocketclaw_username. Callers add admission and the admitted username.
 func openCodeProxy(server config.OpenCodeConfig) http.Handler {
-	upstream, _ := url.Parse(server.URL) // Config validation already parsed it.
+	upstream, _ := url.Parse(server.URL)
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(upstream)
@@ -79,8 +69,6 @@ func openCodeProxy(server config.OpenCodeConfig) http.Handler {
 				return
 			}
 
-			// OpenCode stores a prompt's metadata on its user message; the sender rides there.
-			// A failed read forwards what arrived, which OpenCode rejects as malformed.
 			raw, _ := io.ReadAll(r.Out.Body)
 
 			var body, stamped map[string]json.RawMessage
@@ -102,14 +90,12 @@ func openCodeProxy(server config.OpenCodeConfig) http.Handler {
 		ModifyResponse: func(response *http.Response) error {
 			response.Header.Del("Set-Cookie")
 			response.Header.Del("WWW-Authenticate")
-			// RocketClaw answers cross-site pages itself; OpenCode's answer would duplicate it.
 			response.Header.Del("Access-Control-Allow-Origin")
 			response.Header.Set("Content-Security-Policy", "sandbox")
 			response.Header.Set("X-Content-Type-Options", "nosniff")
 
 			return nil
 		},
-		// A browser that left takes no reply, and its cancellation is not a failure worth logging.
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if r.Context().Err() == nil {
 				log.Printf("http: proxy error: %v", err)

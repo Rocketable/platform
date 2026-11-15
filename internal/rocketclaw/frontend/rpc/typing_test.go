@@ -77,7 +77,6 @@ func TestTyping(t *testing.T) {
 
 		return event
 	}
-	// watch returns a watch on conversation id once it listens, and ends it.
 	watch := func(ctx context.Context, id string) (grpc.ClientStream, context.CancelFunc) {
 		ctx, cancel := context.WithCancel(ctx)
 		stream := open(ctx, id)
@@ -89,7 +88,6 @@ func TestTyping(t *testing.T) {
 		_, err := invoke[ReportTypingResponse](ctx, connection, "ReportTyping", &ReportTypingRequest{Id: id, Typing: typing, Tab: tab, Seq: seq})
 		return err
 	}
-	// report sends from one tab per person, numbering its reports.
 	reports := map[context.Context]uint32{}
 	report := func(ctx context.Context, id string, typing bool) error {
 		reports[ctx]++
@@ -106,7 +104,6 @@ func TestTyping(t *testing.T) {
 
 		return watching
 	}
-	// numbered names the conversations whose report numbers the server keeps.
 	numbered := func() []string {
 		server.typingMu.Lock()
 		defer server.typingMu.Unlock()
@@ -120,16 +117,13 @@ func TestTyping(t *testing.T) {
 	require.NoError(t, report(ana, "x", true))
 	require.True(t, proto.Equal(&TypingEvent{Principal: "Ana", Typing: true}, next(beaX)))
 
-	// A report on y, then one on x: Bea's next event is the one on x.
 	require.NoError(t, report(ana, "y", true))
 	require.NoError(t, report(ana, "x", false))
 	require.True(t, proto.Equal(&TypingEvent{Principal: "Ana"}, next(beaX)))
 
-	// Ana's watch of x skipped both her reports there: its next event is Bea's.
 	require.NoError(t, report(bea, "x", true))
 	require.True(t, proto.Equal(&TypingEvent{Principal: "Bea", Typing: true}, next(anaX)))
 
-	// A watcher that takes nothing more leaves the report, and the other watchers, unblocked.
 	stuck := make(chan *TypingEvent)
 
 	server.typingMu.Lock()
@@ -143,8 +137,6 @@ func TestTyping(t *testing.T) {
 	delete(server.typingWatchers["x"], stuck)
 	server.typingMu.Unlock()
 
-	// A report that arrives after a later one from its tab is dropped: Bea's next event after Ana's stop is her
-	// next stop, not the typing report that came late. Another tab of hers numbers its reports on its own.
 	require.NoError(t, send(ana, "x", false, "late", 2))
 	require.True(t, proto.Equal(&TypingEvent{Principal: "Ana"}, next(beaX)))
 	require.NoError(t, send(ana, "x", true, "late", 1))
@@ -153,11 +145,9 @@ func TestTyping(t *testing.T) {
 	require.NoError(t, send(ana, "x", true, "other", 1))
 	require.True(t, proto.Equal(&TypingEvent{Principal: "Ana", Typing: true}, next(beaX)))
 
-	// Someone whose display name is blank is named by their login, as on their prompts.
 	require.NoError(t, report(as("dan@example.com", " "), "x", true))
 	require.True(t, proto.Equal(&TypingEvent{Principal: "dan@example.com", Typing: true}, next(beaX)))
 
-	// A conversation nobody watches keeps no numbers, so its reports go nowhere.
 	require.NoError(t, report(ana, "y", false))
 	require.Equal(t, []string{"x"}, numbered())
 
@@ -166,7 +156,6 @@ func TestTyping(t *testing.T) {
 		return maps.EqualFunc(map[string][]string{"x": {"ana@example.com"}}, hub(), slices.Equal)
 	}, 10*time.Second, time.Millisecond, "a watch that ends leaves the hub")
 
-	// An OpenCode session needs no stored row, but stays closed to people limited to spaces.
 	beaRemote, endBeaRemote := watch(bea, "opencode:s:ses_1")
 
 	require.NoError(t, report(ana, "opencode:s:ses_1", true))

@@ -42,15 +42,13 @@ import (
 
 const voiceSecret = "sk-voice-secret"
 
-// voiceHarness is a real backend behind the Web HTTP bridge, with one fake OpenAI
-// server for both the agent's Responses calls and GPT-Live.
 type voiceHarness struct {
 	rt       *backend.Runtime
 	server   *Server
 	url      string
-	conn     *grpc.ClientConn // the in-process gRPC connection, for callers other than alice
-	requests chan string      // Responses request bodies
-	replies  chan string      // Responses replies, one per request
+	conn     *grpc.ClientConn
+	requests chan string
+	replies  chan string
 	creates  chan voiceCreate
 	peers    chan *voicePeer
 	hangups  chan string
@@ -61,12 +59,11 @@ type voiceCreate struct {
 	body   string
 }
 
-// voicePeer is the fake OpenAI end of one sideband.
 type voicePeer struct {
 	id     string
-	create string      // the call's create request body
-	sent   chan string // client messages; closed when the socket ends
-	read   []string    // messages the test has taken from sent
+	create string
+	sent   chan string
+	read   []string
 
 	mu   sync.Mutex
 	conn *websocket.Conn
@@ -233,8 +230,6 @@ func startVoiceHarness(t *testing.T) *voiceHarness {
 	return h
 }
 
-// call starts alice's Voice call on conversation id and returns its SSE reader past the answer, a cancel
-// that aborts the request, and the call's sideband.
 func (h *voiceHarness) call(t *testing.T, id, sdp string) (*bufio.Reader, context.CancelFunc, *voicePeer) {
 	t.Helper()
 
@@ -255,7 +250,6 @@ func (h *voiceHarness) call(t *testing.T, id, sdp string) (*bufio.Reader, contex
 	reader := bufio.NewReader(response.Body)
 	assert.JSONEq(t, `{"answer":{"sdp":"answer-`+sdp+`","route":"public"}}`, strings.TrimPrefix(frame(t, reader), "data: "))
 
-	// Upgrade can reach the client before the fixture publishes its peer.
 	create, peer := <-h.creates, <-h.peers
 	assert.Equal(t, "Bearer "+voiceSecret, create.header.Get("Authorization"))
 	assert.Equal(t, "live_"+sdp, peer.id)
@@ -265,7 +259,6 @@ func (h *voiceHarness) call(t *testing.T, id, sdp string) (*bufio.Reader, contex
 	return reader, cancel, peer
 }
 
-// frame reads one SSE frame.
 func frame(t *testing.T, reader *bufio.Reader) string {
 	t.Helper()
 
@@ -293,7 +286,6 @@ func (p *voicePeer) send(t *testing.T, events ...string) {
 	}
 }
 
-// expect returns the next spoken append that contains text.
 func (p *voicePeer) expect(t *testing.T, text string) string {
 	t.Helper()
 
@@ -316,7 +308,6 @@ func (p *voicePeer) expect(t *testing.T, text string) string {
 	}
 }
 
-// all waits for the socket to close and returns every client message.
 func (p *voicePeer) all(t *testing.T) []string {
 	t.Helper()
 
@@ -343,7 +334,6 @@ func voiceModelCode(id, code string) string {
 	return voiceModel(id, `{"id":"fc_`+id+`","type":"function_call","status":"completed","call_id":"call_`+id+`","name":"execute","arguments":`+string(quoted)+`}`)
 }
 
-// handOff speaks text on the public sideband, hands it off as delegation id, then answers aloud.
 func handOff(t *testing.T, peer *voicePeer, id, text string) {
 	t.Helper()
 
@@ -356,7 +346,6 @@ func handOff(t *testing.T, peer *voicePeer, id, text string) {
 	)
 }
 
-// spoken is the public append that speaks text under hand-off id.
 func spoken(id, text string) string {
 	return string((&publicVoice{}).appends(id, text)[0])
 }
@@ -370,7 +359,6 @@ func (h *voiceHarness) messages(t *testing.T) []*TranscriptEvent {
 	return view.Messages
 }
 
-// ended waits until no call is live.
 func (h *voiceHarness) ended(t *testing.T) {
 	t.Helper()
 
@@ -382,7 +370,6 @@ func (h *voiceHarness) ended(t *testing.T) {
 	}, 10*time.Second, 10*time.Millisecond)
 }
 
-// prompt steers text into main as the Web composer does; it returns when its turn ends.
 func (h *voiceHarness) prompt(group *errgroup.Group, text string) {
 	group.Go(func() error {
 		response, err := http.Post(h.url+"/api/Prompt", "application/json", strings.NewReader(`{"id":"main","text":"`+text+`","delivery":"STEER"}`))
@@ -396,10 +383,6 @@ func (h *voiceHarness) prompt(group *errgroup.Group, text string) {
 	})
 }
 
-// Only a chat a person started pauses. A paused Web chat posts a person's plain message and $steer under their
-// name at once, starting no turn and parking nothing. Queued and stashed input waits for resume; a $goal, a $workflow, a promoted item and a Voice Hand-off,
-// which need the agent now, are refused, the hand-off keeping what was said for the next one. $agent and $stop
-// work as ever.
 func TestPausedChat(t *testing.T) {
 	h := startVoiceHarness(t)
 
@@ -446,7 +429,6 @@ func TestPausedChat(t *testing.T) {
 		}, 10*time.Second, 10*time.Millisecond)
 	}
 
-	// A cron report chat never pauses; a chat a person started does.
 	require.NoError(t, h.rt.CreateConversation(t.Context(), protocol.Conversation{ID: "report", Agent: id, CreatedBy: "cron"}))
 
 	for _, chat := range []string{id, "report"} {
@@ -565,7 +547,6 @@ func TestPausedChat(t *testing.T) {
 	assert.Empty(t, h.requests, "the stopped reply in the paused chat is followed by nothing")
 }
 
-// The subtests share one backend and run in order on conversation main.
 func TestVoice(t *testing.T) {
 	h := startVoiceHarness(t)
 	if !t.Run("voice transport is independent of the agent provider", func(t *testing.T) {
@@ -593,8 +574,6 @@ func TestVoice(t *testing.T) {
 		catalog, err := h.server.listAgents(ctx, "")
 		require.NoError(t, err)
 
-		// Codex's RealtimeVoicesList::builtin().v3 in codex-rs/protocol/src/protocol.rs
-		// at c9b4267c370a755da12ec1c8648c2451163212b7, with Cove kept first as the default.
 		voices := []string{"cove", "juniper", "maple", "spruce", "ember", "vale", "breeze", "arbor", "sol",
 			"aube", "bubbie", "haetsal", "hanul", "himari", "leher", "miko", "neer", "porto", "rindo", "rio", "rivage", "selva", "sonna", "tinta", "viola"}
 		for _, agent := range catalog.Agents {
@@ -603,9 +582,8 @@ func TestVoice(t *testing.T) {
 	}) {
 		return
 	}
-	// The subtests share conversation main: after one fails, the rest would wait on it forever.
+
 	if !t.Run("rejections", func(t *testing.T) {
-		// The stale login's token refresh is refused before it leaves the host.
 		base, refusing := http.DefaultClient.Transport, &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if addr == "auth.openai.com:443" {
 				return nil, errors.New("refresh refused")
@@ -633,7 +611,6 @@ func TestVoice(t *testing.T) {
 			{"ChatGPT refresh failure", http.MethodPost, `{"conversationId":"main","sdp":"offer-x"}`, "", http.StatusBadRequest, `refresh ChatGPT OAuth token for provider \"openai\"; run ` + "`rocketclaw oai login`"},
 			{"voice not offered", http.MethodPost, `{"conversationId":"main","sdp":"offer-x","voice":"cove"}`, "", http.StatusBadRequest, `provider \"openai\" offers no voice \"cove\"`},
 			{"upstream rejection", http.MethodPost, `{"conversationId":"main","sdp":"offer-reject"}`, "", http.StatusBadRequest, "openai voice request failed with HTTP 401"},
-			// OpenAI created and bills the call, but its sideband is refused: the call is hung up.
 			{"sideband refused", http.MethodPost, `{"conversationId":"main","sdp":"offer-unattached"}`, "", http.StatusBadRequest, "openai voice request failed with HTTP 503"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -711,7 +688,6 @@ func TestVoice(t *testing.T) {
 		assert.Equal(t, "event: complete\ndata: {}", frame(t, reader))
 		assert.Empty(t, peer.all(t), "an expired session gets no close")
 
-		// A dropped public sideband ends the call as lost, without a reconnect, and hangs up (KTD4).
 		reader, _, peer = h.call(t, "main", "offer-lost")
 		peer.mu.Lock()
 		require.NoError(t, peer.conn.Close())
@@ -721,7 +697,6 @@ func TestVoice(t *testing.T) {
 		assert.Empty(t, peer.all(t))
 		assert.Empty(t, h.peers)
 
-		// A newer call replaces the older one while its hand-off turn runs (R20); the turn finishes (R17).
 		first, _, older := h.call(t, "main", "offer-3")
 		handOff(t, older, "c1", "please run the tests")
 		assert.Contains(t, <-h.requests, "please run the tests")
@@ -754,7 +729,6 @@ func TestVoice(t *testing.T) {
 
 		assert.Contains(t, <-h.requests, "CANARY_TOOL_RESULT")
 
-		// A second hand-off steers into the running turn; a re-delivered one is skipped.
 		handOff(t, peer, "d2", "$workflow deploy")
 		peer.send(t, `{"type":"session.delegation.created","delegation":{"id":"d1"}}`)
 		require.Eventually(t, func() bool {
@@ -768,9 +742,8 @@ func TestVoice(t *testing.T) {
 
 		h.replies <- voiceModelText("r3", lint)
 
-		peer.expect(t, "Lint passed") // Spoken as written, under the first hand-off.
+		peer.expect(t, "Lint passed")
 
-		// A typed turn sends nothing (R11).
 		var typed errgroup.Group
 
 		h.prompt(&typed, "typed hello")
@@ -780,7 +753,6 @@ func TestVoice(t *testing.T) {
 
 		require.NoError(t, typed.Wait())
 
-		// Typing into a hand-off's turn supersedes it: the reply is not spoken (KTD5).
 		handOff(t, peer, "d3", "check the build")
 		assert.Contains(t, <-h.requests, "check the build")
 		h.prompt(&typed, "typed steer")
@@ -805,7 +777,6 @@ func TestVoice(t *testing.T) {
 		peer.expect(t, "Last.")
 		cancel()
 
-		// Nothing reaches OpenAI while the agent works: no progress, no tool results (R10, R19).
 		assert.Equal(t, []string{spoken("d1", lint), spoken("d4", "Last."), voiceCloseMessage}, peer.all(t))
 
 		var users []*TranscriptEvent
@@ -851,12 +822,10 @@ func TestVoice(t *testing.T) {
 			return err == nil && len(pending) == 1
 		}, 10*time.Second, 10*time.Millisecond)
 
-		// A question pending before the call gets one session-wide notice (R12).
 		_, cancel, peer := h.call(t, "main", "offer-q")
 		notice := spoken("", "I need your input. Please respond in the app.\n\nShip?\nOptions: Yes")
 		assert.Equal(t, notice, peer.expect(t, "Ship?"))
 
-		// Spoken words never answer it: the next hand-off is a normal message.
 		handOff(t, peer, "a1", "yes please")
 		require.Eventually(t, func() bool {
 			items, err := h.rt.QueueItems("main")
@@ -892,8 +861,6 @@ func TestVoice(t *testing.T) {
 
 		first := <-snapshots
 
-		// While the loop takes no snapshot, as while its sideband is down, more turns
-		// finish than one latest-10 read holds.
 		for i := range 11 {
 			var typed errgroup.Group
 
@@ -987,7 +954,6 @@ func TestVoice(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
 		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "room.md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: global\npermission: {}\n---\nReply plainly.\n"), 0o600))
 
-		// The fixture's main chat is alice's, but it was born off, so it is not her sticky session.
 		mine, bobs := create(alice, "main"), create(bob, "main")
 		assert.Equal(t, []any{false, false}, []any{mine.Id == "main", mine.Resumed}, "a chat born off is never a sticky session")
 		assert.False(t, bobs.Resumed, "another person's session is not theirs")
@@ -1027,8 +993,6 @@ func TestVoice(t *testing.T) {
 		_, err = h.server.forkSession(bob, &ForkSessionRequest{Id: bobs.Id})
 		assert.Equal(t, codes.FailedPrecondition, status.Code(err), "a sticky agent's session cannot be forked")
 
-		// A session switches only to agents of the kind it was born as, never to one whose sticky session its
-		// person already has, even after its own agent stops being sticky.
 		aide := filepath.Join(cfg.RuntimeDirName(), "agents", "aide.md")
 		require.NoError(t, root.WriteFile(aide, []byte("---\nmodel: gpt-6.1-sol\nsticky: user\npermission: {}\n---\nReply plainly.\n"), 0o600))
 		create(alice, "aide")
@@ -1068,7 +1032,6 @@ func TestVoice(t *testing.T) {
 				name := "race-" + sticky
 				require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", name+".md"), []byte("---\nmodel: gpt-6.1-sol\nsticky: "+sticky+"\n---\nHelp."), 0o600))
 
-				// Block inserts but not lookups, so every request reaches the same first-creation race.
 				blocker, err := db.BeginTx(t.Context(), nil)
 				require.NoError(t, err)
 				t.Cleanup(func() { _ = blocker.Rollback() })
@@ -1130,7 +1093,6 @@ func TestVoice(t *testing.T) {
 		assert.JSONEq(t, `{"ended":{"reason":"replaced"}}`, strings.TrimPrefix(frame(t, phone), "data: "), "a person's new call on another conversation ends their older one")
 		hangUpPhone()
 
-		// bob starts his own call on the same conversation; alice's call stays live.
 		ctx, hangUpBob := context.WithCancel(t.Context())
 		t.Cleanup(hangUpBob)
 
@@ -1150,7 +1112,6 @@ func TestVoice(t *testing.T) {
 		h.server.voiceMu.Unlock()
 		assert.Equal(t, 2, live, "two people's calls on one conversation run side by side")
 
-		// Each person hears only replies to their own hand-offs; another person's never mutes them.
 		var heard bytes.Buffer
 
 		reading := make(chan struct{})

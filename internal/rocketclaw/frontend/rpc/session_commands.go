@@ -120,7 +120,6 @@ func (s *Server) stageRevert(ctx context.Context, request *StageRevertRequest) (
 	}
 
 	response := &StageRevertResponse{RevertMessageId: marker}
-	// Undo at the beginning changes neither history nor the owning composer.
 	if text == "" && request.MessageId == "" {
 		return response, nil
 	}
@@ -169,7 +168,6 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 	return found.(*SearchMessagesResponse), nil
 }
 
-// messageSearch finds needle in every visible chat, or, for a non-empty owner, in the chats owner's sidebar lists.
 type messageSearch struct {
 	owner, needle string
 }
@@ -208,7 +206,6 @@ func (s *Server) searchSessions(ctx context.Context, request *SearchSessionsRequ
 		return nil, err
 	}
 
-	// Leading whitespace moves term offsets, so only trailing whitespace is dropped.
 	query := strings.TrimRightFunc(request.Query, unicode.IsSpace)
 
 	scope := backend.SearchFields
@@ -318,9 +315,6 @@ type searchWork interface {
 	search(context.Context, *Server) (any, error)
 }
 
-// sharedSearch runs search once for the callers waiting on key and stops it only
-// when all of them stop waiting. A key names its caller wherever the result
-// differs by person.
 func (s *Server) sharedSearch(ctx context.Context, key string, work searchWork) (any, error) {
 	s.searchMu.Lock()
 	scanCtx := ctx

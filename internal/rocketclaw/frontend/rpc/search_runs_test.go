@@ -21,20 +21,15 @@ import (
 
 const searchTab = "/search/page"
 
-// blockedScan is a session search waiting in its room lookup, after its reads, until the test closes finish.
 type blockedScan struct {
 	ctx    context.Context
 	finish chan struct{}
 }
 
-// searchRunTest is a server whose session searches each wait in their room lookup until the test finishes them, and
-// Alice, who has the Search tab searchTab.
 type searchRunTest struct {
-	server   *Server
-	sessions *backend.SessionService
-	scans    chan blockedScan
-	// alice is Alice's request context, and gone hers already cancelled: a request that starts or joins a run and
-	// leaves at once.
+	server      *Server
+	sessions    *backend.SessionService
+	scans       chan blockedScan
 	alice, gone context.Context
 }
 
@@ -79,12 +74,10 @@ func newSearchRunTest(t *testing.T) *searchRunTest {
 	return &searchRunTest{server: server, sessions: sessions, scans: scans, alice: alice, gone: gone}
 }
 
-// searchRunRequest asks for the search id of searchTab with query, which the person entered or not.
 func searchRunRequest(id, query string, entered bool) *SearchSessionsRequest {
 	return &SearchSessionsRequest{Query: query, Tab: searchTab, SearchId: id, Entered: entered}
 }
 
-// scan is the next search to start, which fails the test when none starts.
 func (rt *searchRunTest) scan(t *testing.T) blockedScan {
 	t.Helper()
 
@@ -98,7 +91,6 @@ func (rt *searchRunTest) scan(t *testing.T) blockedScan {
 	}
 }
 
-// leave sends request from a request that leaves at once.
 func (rt *searchRunTest) leave(t *testing.T, request *SearchSessionsRequest) {
 	t.Helper()
 
@@ -106,7 +98,6 @@ func (rt *searchRunTest) leave(t *testing.T, request *SearchSessionsRequest) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-// answer sends request in the background and returns its answer once it comes.
 func (rt *searchRunTest) answer(request *SearchSessionsRequest) chan error {
 	done := make(chan error, 1)
 
@@ -122,7 +113,6 @@ func (rt *searchRunTest) answer(request *SearchSessionsRequest) chan error {
 	return done
 }
 
-// marks lists Alice's marks on tabs that are not sessions, whether each is quiet, and its note, then reads them.
 func (rt *searchRunTest) marks(t *testing.T) []string {
 	t.Helper()
 
@@ -141,8 +131,6 @@ func (rt *searchRunTest) marks(t *testing.T) []string {
 	return marks
 }
 
-// A search entered and left runs on, marks its tab when it finishes, and its answer is handed to the next request
-// without searching again, once.
 func TestSearchRunOutlivesItsRequest(t *testing.T) {
 	rt := newSearchRunTest(t)
 
@@ -172,8 +160,6 @@ func TestSearchRunOutlivesItsRequest(t *testing.T) {
 	require.NoError(t, <-again)
 	assert.Empty(t, rt.marks(t), "a search the person did not enter marks nothing")
 
-	// The page opening runs its query; entering that query twice while it runs joins the run, which marks once.
-	// Entering it after its answer was handed out runs it again, and marks again.
 	rt.leave(t, searchRunRequest("s", "a b", false))
 	scan = rt.scan(t)
 	rt.leave(t, searchRunRequest("s", "a b", true))
@@ -195,7 +181,6 @@ func TestSearchRunOutlivesItsRequest(t *testing.T) {
 	require.NoError(t, <-entered)
 	assert.Equal(t, []string{searchTab + " quiet=false: Search finished"}, rt.marks(t))
 
-	// Alice views the tab as the search finishes.
 	rt.leave(t, searchRunRequest("s", "a b", true))
 	scan = rt.scan(t)
 	_, err := rt.sessions.PollAttention(rt.alice, "alice@example.com", searchTab, false)
@@ -204,7 +189,6 @@ func TestSearchRunOutlivesItsRequest(t *testing.T) {
 	require.NoError(t, <-rt.answer(searchRunRequest("s", "a b", false)))
 	assert.Empty(t, rt.marks(t), "the person viewing the tab is not marked")
 
-	// Alice closes the tab before the search finishes.
 	_, err = rt.sessions.PollAttention(rt.alice, "alice@example.com", "/cron", false)
 	require.NoError(t, err)
 	rt.leave(t, searchRunRequest("s", "a b", true))
@@ -217,8 +201,6 @@ func TestSearchRunOutlivesItsRequest(t *testing.T) {
 	assert.Empty(t, rt.marks(t), "a closed tab is not marked")
 }
 
-// A run replaced by another query or evicted by a ninth search is cancelled, and marks nothing even when its scan
-// completes.
 func TestSearchRunReplacedOrEvictedMarksNothing(t *testing.T) {
 	rt := newSearchRunTest(t)
 
@@ -237,8 +219,6 @@ func TestSearchRunReplacedOrEvictedMarksNothing(t *testing.T) {
 	require.NoError(t, <-rt.answer(searchRunRequest("s", "c d", false)))
 	assert.Equal(t, []string{searchTab + " quiet=false: Search finished"}, rt.marks(t))
 
-	// New sessions in the person's list start the same query over: the run it replaces marks nothing, and the new
-	// one keeps the person's entry and marks once.
 	fresh := searchRunRequest("s", "c d", false)
 	fresh.Fresh = true
 
@@ -251,7 +231,6 @@ func TestSearchRunReplacedOrEvictedMarksNothing(t *testing.T) {
 	require.NoError(t, <-rt.answer(searchRunRequest("s", "c d", false)))
 	assert.Equal(t, []string{searchTab + " quiet=false: Search finished"}, rt.marks(t))
 
-	// A fresh start of a finished run searches again without marking again.
 	rt.leave(t, searchRunRequest("s", "c d", true))
 	close(rt.scan(t).finish)
 	refreshed := rt.answer(fresh)
@@ -282,7 +261,6 @@ func TestSearchRunReplacedOrEvictedMarksNothing(t *testing.T) {
 	close(ninth.finish)
 }
 
-// Stopping the server cancels its running searches, which mark nothing, waits for them, and starts no more.
 func TestStopSearchesCancelsAndWaits(t *testing.T) {
 	rt := newSearchRunTest(t)
 
