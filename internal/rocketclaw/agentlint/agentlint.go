@@ -1,4 +1,3 @@
-// Package agentlint checks effective RocketClaw agent systems for unsafe permission and delegation combinations.
 package agentlint
 
 import (
@@ -22,7 +21,6 @@ const (
 	rc008, rc010, rc011        = "RC008", "RC010", "RC011"
 )
 
-// Finding is one lint result line.
 type Finding struct {
 	Code     string
 	Severity string
@@ -31,7 +29,6 @@ type Finding struct {
 	keys     []string
 }
 
-// Result is the complete lint result for one runtime tree.
 type Result struct {
 	Findings []Finding
 }
@@ -49,7 +46,6 @@ type capability struct {
 	pattern string
 }
 
-// Lint checks the effective agent system rooted at runtimeRoot.
 func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 	skillsRoot := filepath.Join(runtimeRoot, "skills")
 	if _, err := os.Stat(skillsRoot); err == nil {
@@ -128,7 +124,6 @@ func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 	return Result{Findings: findings}, nil
 }
 
-// AgentGraphDOT returns a deterministic Graphviz/DOT task delegation graph for the effective agents under runtimeRoot.
 func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
 	infos, _, err := loadRuntimeAgentInfos(runtimeRoot, cfg)
 	if err != nil {
@@ -199,7 +194,6 @@ func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*
 				findings = append(findings, Finding{Code: rc006, Severity: "error", Path: filePath, Message: "plural permissions frontmatter is ignored; use permission", keys: []string{"permissions"}})
 			}
 
-			// Sudo replaces permission, which may keep only its session tag groups and recipient setting.
 			if value := frontmatter.Content[i+1]; key.Value == "permission" && agent.Permission.Sudo {
 				kept := value.Kind == yaml.MappingNode && len(value.Content) == 2 && value.Content[0].Value == "rocketclaw" && value.Content[1].Kind == yaml.MappingNode && len(value.Content[1].Content) > 0
 				for j := 0; kept && j < len(value.Content[1].Content); j += 2 {
@@ -272,13 +266,9 @@ func parseNoLint(comment string) (string, bool) {
 	return code, afterCode != ""
 }
 
-// lintCustomShellEdits reports edit grants, and easy agents' working directories, that could rewrite a
-// sandboxed agent's wrapper or agent file.
 func lintCustomShellEdits(infos map[string]*agentInfo, workspace string, writes []capability) []Finding {
 	findings := []Finding{}
 
-	// An easy agent writes its workingDirectory, relative to RocketClaw's working directory. Turn variables are
-	// unset here, so the folder is the widest one the turns may name.
 	for name, info := range infos {
 		folder, err := filepath.Abs(os.ExpandEnv(info.agent.WorkingDirectory))
 		if rel, errRel := filepath.Rel(workspace, folder); info.agent.Mode == harness.AgentModeEasy && err == nil && errRel == nil && filepath.IsLocal(rel) {
@@ -333,7 +323,6 @@ func taskEdges(infos map[string]*agentInfo) map[string][]string {
 	for _, from := range names {
 		info := infos[from]
 		for _, to := range names {
-			// task never runs an easy agent, and an easy agent's task runs the agent itself on another model.
 			if action, _ := info.agent.Permission.Evaluate("task", to); action == harness.PermissionAllow && info.agent.Mode != harness.AgentModeEasy && infos[to].agent.Mode != harness.AgentModeEasy {
 				edges[from] = append(edges[from], to)
 			}
