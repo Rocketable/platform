@@ -397,9 +397,11 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
       await view.locator("[data-component=composer] [contenteditable=true]").click();
       await page.keyboard.press("Control+Backquote");
       releaseList.resolve();
-      await view.locator('[data-pane-content="bottom"] [data-component="terminal"]').waitFor();
-      await until(() => terminals.open === 1).catch(async (error: unknown) => {
-        console.error("Terminal reopen socket wait failed", { close, expectedOpenSockets: 1, observedOpenSockets: terminals.open, requests: fake.requests, errors });
+      try {
+        await view.locator('[data-pane-content="bottom"] [data-component="terminal"]').waitFor();
+        await until(() => terminals.open === 1);
+      } catch (error: unknown) {
+        console.error("Terminal reopen wait failed", { close, expectedPane: "bottom", expectedOpenSockets: 1, observedOpenSockets: terminals.open, serverTerminals: fake.terminals, requests: fake.requests, errors, error });
         try {
           const dom = await view.locator('[data-component="terminal"], [data-pane-tab^="terminal:"]').evaluateAll((nodes: Element[]) => nodes.map((node) => ({
             component: node.getAttribute("data-component"),
@@ -409,12 +411,12 @@ test("a remote session mounts OpenCode's view in the page, with RocketClaw's key
             visible: node.checkVisibility(),
             text: node.textContent,
           })));
-          console.error("Terminal reopen DOM after socket wait", dom);
+          console.error("Terminal reopen DOM after failed wait", dom);
         } catch (snapshotError: unknown) {
           console.error("Terminal reopen DOM snapshot failed", snapshotError);
         }
         throw error;
-      });
+      }
     }
 
     // Moving the terminal uses OpenCode's real drag state; the host must keep that choice after remounting.
