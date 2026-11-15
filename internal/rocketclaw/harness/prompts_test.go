@@ -122,8 +122,6 @@ func TestExpandAgentPrompt(t *testing.T) {
 	})
 }
 
-// An easy agent's SKILL.md lines run in host bash from the workspace, with its secrets, before the model's
-// arguments go in, so argument text never runs (A2).
 func TestEasySkillExpandsInHostBash(t *testing.T) {
 	loaded := LoadSkills(fstest.MapFS{"easy-skill/SKILL.md": mapFile("---\nname: easy-skill\ndescription: Expands in host bash\n---\n\nRun: !`pwd`\nKey: !`printf %s \"$SECRET_KEY\"`\n")}, "/virtual/skills").Skills
 	factory := testSkillFactory(t, loaded, nil)

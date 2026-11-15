@@ -4,7 +4,6 @@ import (
 	"slices"
 )
 
-// ReplayAttribution overrides a recovered half-open replay range, including unknown values.
 type ReplayAttribution struct {
 	Start           int     `json:"start"`
 	End             int     `json:"end"`
@@ -13,7 +12,6 @@ type ReplayAttribution struct {
 	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
-// RemapReplayAttribution moves overrides to projected replay boundaries in place.
 func RemapReplayAttribution(ranges []ReplayAttribution, boundaries []int) {
 	for i := range ranges {
 		ranges[i].Start = boundaries[ranges[i].Start]
@@ -21,7 +19,6 @@ func RemapReplayAttribution(ranges []ReplayAttribution, boundaries []int) {
 	}
 }
 
-// AttributionAt returns the execution that produced a replay item.
 func (e *SessionEntry) AttributionAt(index int) ReplayAttribution {
 	for _, attribution := range e.ReplayAttribution {
 		if index >= attribution.Start && index < attribution.End {

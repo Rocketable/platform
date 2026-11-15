@@ -209,7 +209,6 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 	require.Contains(t, diagnostics.String(), "prompt/note.txt")
 }
 
-// writeCustomShell writes a wrapper that reports its argument count and first argument.
 func writeCustomShell(t *testing.T, root *os.Root) string {
 	t.Helper()
 
@@ -266,7 +265,6 @@ func TestNewBindsBashToEachAgentCustomShell(t *testing.T) {
 				require.Equal(t, strings.Contains(run(t, bash), "custom:"), strings.Contains(bash.Definition.Description.Value, shell), "the bash description names the program only when one is used")
 			}
 
-			// Permission reviews bind tools through the same assembleTools.
 			_, reviewerHosts := factory.assembleTools(&other)
 			require.Equal(t, tc.otherWant, run(t, reviewerHosts["bash"]), "a permission reviewer uses its own shell")
 
@@ -470,7 +468,7 @@ func TestExecuteSpillStorageIsPrivate(t *testing.T) {
 				if _, err := root.Stat(strings.ToUpper(spillRel)); err == nil {
 					paths = append(paths, strings.ToUpper(spillRel)+"/turn/"+filepath.Base(stored))
 				}
-				// Host stat is needed to detect aliases of the workspace prefix itself.
+
 				if info, err := os.Stat(strings.ToUpper(root.Name())); err == nil {
 					original, err := root.Stat(".")
 					require.NoError(t, err)
@@ -519,7 +517,6 @@ func TestExecuteSpillStorageIsPrivate(t *testing.T) {
 						require.NoError(t, err)
 
 						if filepath.IsAbs(path) && !strings.HasPrefix(path, root.Name()+"/") {
-							// Root aliases may be rejected by an earlier path boundary.
 							require.Regexp(t, "execute output storage is private|path escapes root|bash command denied: external path access is blocked", result.Output, "%s(%s)", input.name, raw)
 						} else {
 							require.Contains(t, result.Output, deniedSpillAccess, "%s(%s)", input.name, raw)
@@ -688,7 +685,6 @@ func TestNewDoesNotTrustExternalSkillDirectoryWithLinkedMarker(t *testing.T) {
 	}, nil)
 	external := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(external, "external"), 0o755))
-	// A host hard link is required to prove that matching SKILL.md files do not establish directory identity.
 	require.NoError(t, os.Link(filepath.Join(dir, "skills", "external", "SKILL.md"), filepath.Join(external, "external", "SKILL.md")))
 	skills := LoadSkills(os.DirFS(external), filepath.Join(dir, "skills")).Skills
 	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {external: allow}`)}
@@ -705,7 +701,6 @@ func TestNewDoesNotAllowReadingFilesFromExternalSkills(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	// This fixture must live outside the sandbox root to exercise rejection.
 	external := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(external, "external"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(external, "external", "SKILL.md"), []byte("---\nname: external\ndescription: External\n---\n"), 0o644))
@@ -733,7 +728,6 @@ func TestNewDoesNotAllowReadingFilesThroughSymlinkedSkillRoot(t *testing.T) {
 		require.NoError(t, root.Symlink("skill-source", "skills-link"))
 	})
 
-	// os.DirFS intentionally follows the host symlink so construction can reject its root.
 	skills := LoadSkills(os.DirFS(filepath.Join(dir, "skills-link")), filepath.Join(dir, "skills-link")).Skills
 	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {linked: allow}`)}
 	client := openai.NewClient()

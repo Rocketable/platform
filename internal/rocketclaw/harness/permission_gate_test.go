@@ -69,8 +69,6 @@ func TestCheckNestedPermissionDeny(t *testing.T) {
 	require.Contains(t, err.Error(), "denied")
 }
 
-// A review during a call joins the call's review history: unique to its turn when a provider
-// reuses the call ID, and the same when the turn resumes.
 func TestCheckNestedPermissionAutoWithReviewerAllow(t *testing.T) {
 	t.Parallel()
 

@@ -35,7 +35,6 @@ type bashParams struct {
 	Description        string `json:"description"`
 }
 
-// BashResult is the result of running a workspace bash command.
 type BashResult struct {
 	Output    string
 	ErrorCode string
@@ -158,8 +157,6 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 	cmd := exec.CommandContext(commandCtx, shell, args...)
 	cmd.Dir, cmd.Env = hostDir, env
 
-	// The command writes to a pipe this call owns, so a child that leaves the
-	// process group and keeps the output open cannot hold the call past its timeout.
 	outputReader, outputWriter, err := os.Pipe()
 	if err != nil {
 		return bashFailure(fmt.Errorf("create output pipe: %w", err).Error())
@@ -239,7 +236,6 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, customShell *CustomSh
 	}
 }
 
-// workdirRoot opens workdir, a directory in the workspace outside the spill directory.
 func (sss *sandboxedShellSystem) workdirRoot(workdir string) (*os.Root, error) {
 	name, err := normalizeRootName(sss.root, workdir)
 	if err != nil {

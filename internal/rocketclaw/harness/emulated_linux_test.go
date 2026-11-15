@@ -23,24 +23,11 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox/wire"
 )
 
-// Acceptance tests of the emulated shell on real Linux (docs/specs/2026-11-01-linux-native-just-bash-spec.md
-// §13), through the bash tool as agents use it. They need:
-//
-//	ROCKETCLAW_SANDBOX_DIR      where to build the guest image and keep per-command state, on a local filesystem
-//	ROCKETCLAW_SANDBOX_REQUIRE  1 to fail instead of skip without it (CI)
-//
-// mmdebstrap and bubblewrap, and a test process in its own delegated cgroup (make -C internal/rocketclaw
-// sandbox-test). The first run builds the image, which takes minutes; later runs find it.
-
-// TestMain makes this test binary act as RocketClaw does inside a sandbox: the guest relay, plus a forger
-// that plays a hostile guest program talking to the broker directly.
 func TestMain(m *testing.M) {
 	if filepath.Base(os.Args[0]) == "rocketclaw-forge" {
 		os.Exit(forge(os.Args[1:]))
 	}
 
-	// A coverage build writes the guest's counters at exit: into the folder newEmulated marks in a coverage
-	// run, otherwise into the guest's /tmp, unread (without GOCOVERDIR it would warn instead).
 	coverDir := "/tmp"
 	if _, err := os.Stat(".gocover"); err == nil {
 		coverDir, _ = filepath.Abs(".gocover")
@@ -55,8 +42,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// emulatedRuntime prepares the sandbox, as the backend does once per process: the unpacked rootfs is kept,
-// and the test process moves into its cgroup.
 func emulatedRuntime(t *testing.T) *sandbox.Runtime {
 	t.Helper()
 
@@ -69,14 +54,11 @@ func emulatedRuntime(t *testing.T) *sandbox.Runtime {
 		t.Skip("WARNING: skipping an emulated shell acceptance test: no ROCKETCLAW_SANDBOX_DIR (CI fails here)")
 	}
 
-	// An image from an older pin, as an upgrade leaves behind, goes.
 	stale := filepath.Join(dir, "rootfs-0000000000000000")
 	require.NoError(t, os.MkdirAll(filepath.Join(stale, "usr"), 0o755))
 
 	rt := sandbox.Bubblewrap{}.Prepare(t.Context(), dir, slog.New(slog.NewTextHandler(t.Output(), nil)))
 
-	// A host tries a failed image build again and again until Ubuntu's archive answers, which here would wait out
-	// the test's timeout without a word: the first failed try fails the test, with apt's output logged above.
 	for rt.Err() == sandbox.ErrPreparing {
 		time.Sleep(time.Second)
 	}
@@ -87,7 +69,6 @@ func emulatedRuntime(t *testing.T) *sandbox.Runtime {
 	return rt
 }
 
-// emulated is one agent's emulated shell in a fresh folder, as setEasyShell sets it up for a turn.
 type emulated struct {
 	sss   *sandboxedShellSystem
 	shell CustomShell
@@ -108,8 +89,6 @@ func newEmulated(t *testing.T, commands, secrets map[string]string, targets []st
 	folder, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 
-	// A coverage run keeps the guest relay's counters: the folder is the one place both sides can write and
-	// read, so the host reaches it directly, like the agent's folder it stands for.
 	if dst := os.Getenv("ROCKETCLAW_SANDBOX_GOCOVERDIR"); dst != "" {
 		guest := filepath.Join(folder, ".gocover")
 		require.NoError(t, os.Mkdir(guest, 0o755))
@@ -135,7 +114,6 @@ func (e *emulated) bash(t *testing.T, command string) BashResult {
 	return e.sss.Bash(t.Context(), &e.shell, bashParams{Command: command, Workdir: e.shell.Dir})
 }
 
-// ok runs command and checks it succeeded with output want.
 func (e *emulated) ok(t *testing.T, command, want string) {
 	t.Helper()
 
@@ -144,7 +122,6 @@ func (e *emulated) ok(t *testing.T, command, want string) {
 	require.Equal(t, want, got.Output, command)
 }
 
-// A: real Bash, fresh state per command, files persisting in the agent's folder.
 func TestEmulatedShellSession(t *testing.T) {
 	e := newEmulated(t, nil, nil, nil)
 
@@ -174,12 +151,10 @@ declare -A m=([k]=v); echo "${m[k]}"`, "two: line 2\n3 2 1\nok SUB\nv\n")
 
 	e.ok(t, `printf '\x00\x01\xfe\xff' > bin; od -An -tx1 bin`, " 00 01 fe ff\n")
 
-	// /tmp is the command's own: it works and never persists.
 	e.ok(t, "echo t > /tmp/t && cat /tmp/t", "t\n")
 	e.ok(t, "cat /tmp/t 2>&1 || true", "cat: /tmp/t: No such file or directory\n")
 }
 
-// A07, G08: the guest sees the turn's variables and nothing of RocketClaw's environment.
 func TestEmulatedShellEnvironment(t *testing.T) {
 	t.Setenv("ROCKETCLAW_HOST_ONLY", "host-process-secret")
 
@@ -189,13 +164,11 @@ func TestEmulatedShellEnvironment(t *testing.T) {
 	require.True(t, got.Success, got.Output)
 	require.Contains(t, got.Output, "ROCKETCLAW_CONVERSATION_ID=web:c1")
 
-	// The folder shows at its host path by design (R30); nothing else of the host does.
 	for _, leak := range []string{"host-process-secret", "agent-secret", "HOME=" + os.Getenv("HOME") + "\n", e.sss.root.Name(), os.Getenv("ROCKETCLAW_SANDBOX_DIR")} {
 		require.NotContains(t, got.Output, leak)
 	}
 }
 
-// B: an agent's commands run on the host, in pipes, redirections and substitutions, byte-exact.
 func TestEmulatedShellHostCommands(t *testing.T) {
 	e := newEmulated(t, map[string]string{
 		"upper":    "tr a-z A-Z",
@@ -211,7 +184,6 @@ func TestEmulatedShellHostCommands(t *testing.T) {
 
 	e.ok(t, "echo hello | upper", "HELLO\n")
 
-	// The sandbox refuses a script over 8 MiB and a command name it could not link, before running anything.
 	got := e.bash(t, strings.Repeat(":", 8<<20+1))
 	require.False(t, got.Success)
 	require.Contains(t, got.Output, "command of 8388609 bytes exceeds 8388608")
@@ -220,11 +192,9 @@ func TestEmulatedShellHostCommands(t *testing.T) {
 	require.False(t, got.Success)
 	require.Contains(t, got.Output, `"rocketclaw-x": names are`)
 
-	// A host command's input is bounded, and one killed by a signal ends as Bash reports it.
 	e.ok(t, "head -c 17000000 /dev/zero | copy > /dev/null 2>&1; echo $?", "126\n")
 	e.ok(t, "killed; echo $?", "137\n")
 
-	// B02: output streams back before stdin ends.
 	e.ok(t, `coproc S { stream; }; echo abc >&"${S[1]}"; read -r l <&"${S[0]}"; echo "got $l"`, "got ABC\n")
 
 	e.ok(t, `code17 || echo "failed $?"`, "failed 17\n")
@@ -238,26 +208,19 @@ func TestEmulatedShellHostCommands(t *testing.T) {
 	require.NoError(t, err)
 	e.ok(t, "hostname; cat /proc/sys/kernel/hostname", string(host)+"rocketclaw\n")
 
-	// B08: a command named like a builtin wins for a bare name, in nested shells too; builtin and command
-	// reach Bash's.
 	builtin := newEmulated(t, map[string]string{"echo": "printf 'host:%s\n'"}, nil, nil)
 	builtin.ok(t, "echo hi; builtin echo native; command echo native2; /extensions/echo abs; bash -c 'echo nested'", "host:hi\nnative\nnative2\nhost:abs\nhost:nested\n")
 	e.ok(t, "my-cmd", "dashed")
 
-	// B09, F05: two host commands in a pipeline, far past pipe capacity, byte-exact.
 	e.ok(t, "head -c 4000000 /dev/urandom > r; copy < r | copy | cmp - r && echo same", "same\n")
 
-	// B06, B07: unknown names and forged requests reach no host command.
 	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/evil && /tmp/evil; echo $?", "evil: command not found\n127\n")
 	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge unknown", "exit 127: arbitrary: command not found\n")
 	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge otherexec upper", "exit 126: rocketclaw: host command request for another command\n")
-	// F02: a 2 GiB length is refused from the header, before the broker reads or allocates it.
 	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge huge; echo done", "exit 126: rocketclaw: malformed host command request\ndone\n")
 	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge hangup copy; echo done", "done\n")
 }
 
-// G: a command's secrets come from the agent, never the guest, whatever the script does; another agent's
-// commands never see them; nothing of them reaches the guest but what the command prints.
 func TestEmulatedShellSecrets(t *testing.T) {
 	secrets := map[string]string{
 		"DEPLOY_TOKEN": "host-secret", "DEPLOY_URL": "https://prod.example.test", "AWS_SECRET_ACCESS_KEY": "host-aws", "HTTPS_PROXY": "http://host-proxy",
@@ -279,24 +242,19 @@ func TestEmulatedShellSecrets(t *testing.T) {
 	e.ok(t, `bash -c 'export DEPLOY_TOKEN=x; deploy --release v5'; x=$(DEPLOY_TOKEN=y deploy --release v6); echo "$x"`, want("v5")+want("v6"))
 	e.ok(t, "PATH=/evil:$PATH BASH_ENV=/tmp/x DEPLOY_TOKEN=z deploy --release v7", want("v7"))
 
-	// G10: the host command's PATH, credentials and proxy are the host's, whatever the guest sets.
 	e.ok(t, "PATH=/evil AWS_SECRET_ACCESS_KEY=evil HTTPS_PROXY=http://evil /extensions/probe", "host-aws http://host-proxy "+os.Getenv("PATH")+"\n")
 
-	// G05: a forged request's guest environment changes nothing; an invented host environment field is refused.
 	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge guestenv deploy", "host-secret https://prod.example.test \nexit 0\n")
 	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge hostenv deploy", "exit 126: rocketclaw: malformed host command request\n")
 
-	// G08: no frame a quiet command sends back carries a secret.
 	got := e.bash(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge raw quiet | od -c")
 	require.True(t, got.Success, got.Output)
 	require.NotContains(t, strings.ReplaceAll(got.Output, " ", ""), "host-secret")
 
-	// G07: another agent's commands have their own secrets only.
 	other := newEmulated(t, map[string]string{"deploy": `bash -c 'echo "[${DEPLOY_TOKEN-unset}]"'`}, map[string]string{"OTHER": "o"}, nil)
 	other.ok(t, "deploy", "[unset]\n")
 }
 
-// forge plays a hostile guest program: it talks to the broker without the relay and prints what it learns.
 func forge(args []string) int {
 	execID, _ := os.ReadFile("/run/rocketclaw/exec-id")
 

@@ -159,7 +159,6 @@ schema: {output: {type: object, properties: {answer: {type: string}}}}`)
 	})
 }
 
-// An easy agent with no sections has every feature on behind review; only the R18 exceptions skip it.
 func TestEasyAgentPermissions(t *testing.T) {
 	agent, errs := loadEasyTestAgent(t, easyRequired)
 	require.Empty(t, errs)

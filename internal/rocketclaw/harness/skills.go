@@ -23,7 +23,6 @@ var (
 	skillNamePattern        = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 )
 
-// Skill contains a single preloaded skill definition.
 type Skill struct {
 	Name          string
 	Description   string
@@ -34,7 +33,6 @@ type Skill struct {
 	Content       string
 }
 
-// Skills contains all discovered skills keyed by name.
 type Skills struct {
 	Root  string
 	Items map[string]Skill
@@ -43,7 +41,6 @@ type Skills struct {
 	fsys fs.FS
 }
 
-// SkillLoadResult contains loaded skills and any non-fatal load errors.
 type SkillLoadResult struct {
 	Skills Skills
 	Errors []error
@@ -63,7 +60,6 @@ type skillReadDir struct {
 	folded  bool
 }
 
-// LoadSkills scans fsys for SKILL.md files and preloads valid skills.
 func LoadSkills(fsys fs.FS, root string) SkillLoadResult {
 	result := SkillLoadResult{
 		Skills: Skills{Root: root, Items: map[string]Skill{}, Dirs: nil, fsys: fsys},
@@ -115,7 +111,6 @@ func LoadSkills(fsys fs.FS, root string) SkillLoadResult {
 	return result
 }
 
-// Find returns all matching skills ranked by relevance.
 func (s Skills) Find(query string) string {
 	if len(s.Items) == 0 {
 		return "No skills are currently available."
@@ -165,8 +160,6 @@ func (s Skills) Find(query string) string {
 	return formatSkills("## Matching skills", ordered)
 }
 
-// Available returns skills allowed for agent, sorted by name. Skills requiring
-// permission review are not available for direct invocation or discovery.
 func (s Skills) Available(agent *Agent) []Skill {
 	list := make([]Skill, 0, len(s.Items))
 	for _, skill := range s.Items {
@@ -194,7 +187,6 @@ func skillAllowedForAgent(skill *Skill, agent *Agent) bool {
 	return decision.Action == permissionAllow
 }
 
-// FindAvailable returns visible skills matching query as user-facing text.
 func (s Skills) FindAvailable(query string, agent *Agent) string {
 	items := map[string]Skill{}
 	for _, skill := range s.Available(agent) {
@@ -204,7 +196,6 @@ func (s Skills) FindAvailable(query string, agent *Agent) string {
 	return (Skills{Root: s.Root, Items: items, Dirs: s.Dirs, fsys: s.fsys}).Find(query)
 }
 
-// withReadPermissions stamps skillRead on every agent whose skill grants it, derived from each agent's own skill bucket.
 func (s Skills) withReadPermissions(root *os.Root, agents Agents) Agents {
 	hasAllowedSkill := false
 

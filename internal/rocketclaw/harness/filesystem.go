@@ -20,10 +20,9 @@ import (
 )
 
 type sandboxedFileSystem struct {
-	mu       sync.Mutex
-	root     *os.Root
-	spillRel string
-	// hostPaths makes apply_patch name files by host path, as an easy agent's file view does.
+	mu        sync.Mutex
+	root      *os.Root
+	spillRel  string
 	hostPaths bool
 }
 
@@ -746,8 +745,6 @@ func (sfs *sandboxedFileSystem) Grep(ctx context.Context, pattern, searchPath, i
 	return formatGrepOutput(matches, partial)
 }
 
-// grepMatches returns the lines matching pattern under searchPath, and whether some paths were skipped,
-// or the error text to show.
 func (sfs *sandboxedFileSystem) grepMatches(ctx context.Context, pattern, searchPath, include string) (matches []grepMatch, partial bool, errText string) {
 	sfs.mu.Lock()
 	defer sfs.mu.Unlock()
@@ -795,7 +792,6 @@ func (sfs *sandboxedFileSystem) previewApplyPatch(patchText string) (preview app
 	return previewApplyPatchLocked(sfs, patchText)
 }
 
-// globMatches returns the files matching pattern under path, or the error text to show.
 func (sfs *sandboxedFileSystem) globMatches(ctx context.Context, pattern, path string) (results []globMatch, errText string) {
 	sfs.mu.Lock()
 	defer sfs.mu.Unlock()

@@ -169,7 +169,6 @@ func TestNewWithModelResolverResolvesRootAgent(t *testing.T) {
 		require.Equal(t, PermissionDeny, action)
 	}
 
-	// Each construction resolves the active agent's model exactly once.
 	require.Len(t, resolved, 4)
 }
 

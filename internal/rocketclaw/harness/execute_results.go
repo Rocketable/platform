@@ -36,7 +36,6 @@ func isExecuteSpillPath(root *os.Root, spillRel, path string) bool {
 	for ancestor := filepath.Clean(path); ancestor != "." && ancestor != "/"; ancestor = filepath.Dir(ancestor) {
 		info, errStat := root.Stat(ancestor)
 		if filepath.IsAbs(ancestor) {
-			// Host stat checks identity only, including case aliases of the root.
 			info, errStat = os.Stat(ancestor)
 		}
 
@@ -73,8 +72,6 @@ func executeSpillFooter(id, expires string) string {
 		"This result expires " + expires + ".\n"
 }
 
-// retainExecuteResult files a detached script's oversized output in dir, which outlives turns,
-// and sweeps results there older than retainedResultTTL.
 func retainExecuteResult(root *os.Root, dir, out string) (string, error) {
 	head, oversized := clipExecuteHead(out)
 	if !oversized {
@@ -95,7 +92,6 @@ func retainExecuteResult(root *os.Root, dir, out string) (string, error) {
 	return strings.TrimRight(head, "\n") + executeSpillFooter(id, "in 7 days"), nil
 }
 
-// sweepRetainedDir removes the results in dir older than retainedResultTTL.
 func sweepRetainedDir(root *os.Root, dir string) {
 	entries, _ := fs.ReadDir(root.FS(), dir)
 	for _, entry := range entries {
@@ -105,16 +101,13 @@ func sweepRetainedDir(root *os.Root, dir string) {
 	}
 }
 
-// SweepRetainedResults sweeps every retained result directory in dir, such as the
-// RetainedResultDir of each conversation, and removes those it empties. Nothing may retain
-// a result in dir meanwhile, as an emptied directory goes away under it.
 func SweepRetainedResults(root *os.Root, dir string) {
 	entries, _ := fs.ReadDir(root.FS(), dir)
 	for _, entry := range entries {
 		if entry.IsDir() {
 			retained := filepath.Join(dir, entry.Name())
 			sweepRetainedDir(root, retained)
-			_ = root.Remove(retained) // Fails, keeping the directory, unless it is empty.
+			_ = root.Remove(retained)
 		}
 	}
 }
@@ -195,8 +188,6 @@ type loadExecuteResultParams struct {
 	LineNumbers bool   `json:"line_numbers"`
 }
 
-// loadExecuteResult reads only registered current-turn files and this conversation's retained
-// results under retainedRel, never caller paths.
 func (l *looper) loadExecuteResult(ctx context.Context, retainedRel string, params loadExecuteResultParams) (result ToolResult, err error) {
 	if params.StartLine < 0 || params.Limit < 0 {
 		return ToolResult{}, errors.New("start_line and limit must not be negative")
@@ -319,14 +310,9 @@ func (l *looper) loadExecuteResult(ctx context.Context, retainedRel string, para
 	return TextToolResult(page.String() + fmt.Sprintf("\n[next_start_line=%d]\n", lineNumber)), nil
 }
 
-// openExecuteResult opens each registered path component without following links.
-// O_NOFOLLOW on a full path would still follow replaced parent directories.
-// openStoredExecuteResult opens a live turn spill, or else a retained Background Job result
-// in retainedRel, which expires after retainedResultTTL. The caller holds spillMu.
 func (l *looper) openStoredExecuteResult(retainedRel, resultID string) (_ *os.File, err error) {
 	path, live := l.spillResults[resultID]
 	if !live {
-		// A retained ID is a UUID, so a valid one names a file directly in retainedRel.
 		id, errParse := uuid.Parse(resultID)
 		if errParse != nil {
 			return nil, errUnknownExecuteResult

@@ -36,7 +36,6 @@ func TestDecodeAgentFrontmatterAllocations(t *testing.T) {
 		_, _, err := decodeAgentFrontmatter(data)
 		require.NoError(t, err)
 	})
-	// Leave headroom for decoder changes, but not a second YAML parser pass.
 	require.Less(t, allocs, float64(300))
 }
 
@@ -215,7 +214,6 @@ ignored
 		}
 	})
 
-	// An advanced agent's approver block holds only its decision model as another agent's reviewer.
 	t.Run("loads a reviewer's approver decision", func(t *testing.T) {
 		for _, tt := range []struct {
 			frontmatter, wantErr string
@@ -390,7 +388,6 @@ Prompt
 			permission := result.Agents.Items["main"].Permission
 			require.Equal(t, sudo, permission.Sudo, value)
 
-			// Sudo replaces the permission block and allows skills and delegation.
 			want := []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}
 			if sudo {
 				want = []PermissionBucket{{Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}
@@ -491,7 +488,6 @@ Strictly follow the rules.
 		require.Empty(t, result.Agents.Items)
 		require.Len(t, result.Errors, 1)
 		require.Equal(t, "review.md: missing YAML frontmatter", result.Errors[0].Error())
-		// Allow the file read and loader overhead, but not another full-file copy.
 		require.Less(t, cost.AllocedBytesPerOp(), int64(len(content)*3/2))
 	})
 

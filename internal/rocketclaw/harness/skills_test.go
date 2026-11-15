@@ -107,7 +107,6 @@ Use for docs.
 		require.Equal(t, []string{"bad-skill"}, result.Skills.Dirs)
 		require.Len(t, result.Errors, 1)
 		require.Equal(t, `bad-skill/SKILL.md: missing YAML frontmatter`, result.Errors[0].Error())
-		// Allow the file read and loader overhead, but not another full-file copy.
 		require.Less(t, cost.AllocedBytesPerOp(), int64(len(content)*3/2))
 	})
 
@@ -330,7 +329,6 @@ func TestPermissionPrompt(t *testing.T) {
 	})
 }
 
-// An emulated shell's agent is told its folder, the only one its writes persist in.
 func TestSystemPromptWorkingDirectory(t *testing.T) {
 	agent := Agent{CustomShell: CustomShell{Emulated: true, Dir: "/srv/agent"}}
 	require.Equal(t, "base prompt\n\n## Working Directory\n\nYour working directory is `/srv/agent`. Shell commands start there and relative paths resolve from it. "+
@@ -646,7 +644,6 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 	loaded := LoadSkills(os.DirFS(dir), dir).Skills
 	require.Contains(t, loaded.Items["dynamic-skill"].Content, "!`cat '$1'; printf ran > EFFECT`")
 	t.Run("converter instructions survive real skill loading", func(t *testing.T) {
-		// The bundled source is outside the runtime fixture; all runtime writes use root.
 		data, err := os.ReadFile("../skel/.rocketclaw/skills/main-convert-agent-to-easy/SKILL.md")
 		require.NoError(t, err)
 		require.NoError(t, root.Mkdir("main-convert-agent-to-easy", 0o755))
@@ -715,7 +712,6 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 				factory := testSkillFactory(t, loaded, tc.agent)
 				factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
 				factory.promptExpansion = env
-				// A factory scoped to a sandboxed parent carries the parent's shell.
 				factory.promptExpansion.customShell = CustomShell{Path: shell}
 
 				model, _ := factory.assembleTools(tc.agent)

@@ -19,7 +19,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// todayExecuteParameters and todayTaskParameters are the definitions without background mode.
 const (
 	todayExecuteParameters = `{"additionalProperties":false,"properties":{"code":{"description":"Starlark source defining def main() that returns a string (or JSON-encodable value). Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in \"...\". Inside that string, bash(command=...) takes r'''...''' only, not Starlark \"...\" or '...'. r\"...\" is raw but single-line; a real newline needs r'''...'''. Example execute argument: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun. Concurrency: gather([lambda: …], concurrency=16) — one list of zero-arg lambdas, not varargs.","type":"string"},"description":{"description":"A short 3-5 word label for the script, displayed to the user.","type":"string"}},"required":["code","description"],"type":"object"}`
 	todayTaskParameters    = `{"additionalProperties":false,"properties":{"command":{"type":"string"},"description":{"type":"string"},"prompt":{"type":"string"},"subagent_type":{"type":"string"}},"required":["command","description","prompt","subagent_type"],"type":"object"}`
@@ -135,8 +134,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 	for _, tc := range []struct {
 		name, tool, args string
 		job              BackgroundJob
-		// run starts the work in the background; false is a resumed call whose job already left the turn.
-		run bool
+		run              bool
 	}{
 		{
 			name: "started in background", tool: executeToolName, run: true,
@@ -180,7 +178,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 					}
 
 					if !job.Detached {
-						synctest.Wait() // The attached call blocks in its first probe before it moves.
+						synctest.Wait()
 					}
 
 					return BackgroundResult{Moved: true}, nil
@@ -198,7 +196,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 
 				outputs, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-1", tc.tool, tc.args)}), turnReview, nil, output)
 				require.NoError(t, err)
-				synctest.Wait() // A started script blocks in its first probe.
+				synctest.Wait()
 
 				text := fmt.Sprintf(backgroundExecuteResult, tc.job.ID)
 				if tc.tool == "task" {
@@ -208,12 +206,11 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 				require.Equal(t, text, outputs[0].Param.Output.OfString.Value)
 				require.Len(t, jobs.RunCalls(), 1)
 				require.Equal(t, tc.job, *jobs.RunCalls()[0].Job)
-				// A task's row names its subagent even when the call moves before the subagent reports.
+
 				traced := PublicProgressFromTrace(loop.observations.trace)[0]
 				require.Equal(t, PublicProgressBackground, traced.State)
 				require.Equal(t, tc.job.SubagentKey, traced.SubagentKey)
 
-				// The turn moves on and closes; the job keeps its own review context and output sink.
 				loop.observations.close()
 				close(output)
 
@@ -236,7 +233,6 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 					return
 				}
 
-				// The probe running at closure keeps its status; the script's later probe is not recorded.
 				require.Equal(t, []CodeModeCall{{Type: codeModeCallTraceType, ParentCallID: "call-1", Key: "turn/call/call-1/host/0", Name: "probe", Arguments: "{}", Status: codeModeCallRunning}}, loop.observations.calls)
 
 				require.Equal(t, "probedprobed", finished)
@@ -303,7 +299,6 @@ func TestBackgroundForegroundCallKeepsTurnCancellation(t *testing.T) {
 				synctest.Wait()
 				close(release)
 
-				// Either cause stops the resumable script itself; only an interrupt reaches its host call.
 				require.ErrorIs(t, dispatch.Wait(), tc.cause)
 				require.Len(t, jobs.RunCalls(), 1)
 				require.Equal(t, PublicProgressStopped, PublicProgressFromTrace(loop.observations.trace)[0].State)
@@ -315,7 +310,6 @@ func TestBackgroundForegroundCallKeepsTurnCancellation(t *testing.T) {
 				if tc.cause == errTurnInterrupted {
 					require.ErrorIs(t, seen, errTurnInterrupted)
 
-					// A cancelled call does not keep showing as running.
 					record.Status, record.Summary = codeModeCallError, "probe: "+errTurnInterrupted.Error()
 				}
 
@@ -325,9 +319,6 @@ func TestBackgroundForegroundCallKeepsTurnCancellation(t *testing.T) {
 	}
 }
 
-// A task call writes its prompt into its subagent's session and answers with the turn that runs it. A
-// continue naming another type switches the subagent to it, as OpenCode packages/core/src/tool/plugin/subagent.ts
-// does.
 func TestTaskWritesSubagentSession(t *testing.T) {
 	mock := mockResponses()
 	jobs := enabledBackgroundJobs()
@@ -373,7 +364,6 @@ func TestTaskContinueRejections(t *testing.T) {
 	}
 }
 
-// A steer that joins the subagent's running turn returns at once, without a job or a wait.
 func TestTaskContinueSteerJoinsRunningTurn(t *testing.T) {
 	jobs, sessions := enabledBackgroundJobs(), answeringSessions(map[string][]SessionEntry{}, true)
 
@@ -384,7 +374,6 @@ func TestTaskContinueSteerJoinsRunningTurn(t *testing.T) {
 	require.Empty(t, sessions.AwaitSubagentCalls())
 }
 
-// A continue needs the task permission for the type it names, as starting a subagent of that type does.
 func TestTaskContinueNeedsTaskPermission(t *testing.T) {
 	jobs := enabledBackgroundJobs()
 	loop := backgroundTestLooper(t, `{rocketclaw: {allow_background: allow}, task: {reviewer: allow}}`, jobs, nil)
@@ -396,10 +385,6 @@ func TestTaskContinueNeedsTaskPermission(t *testing.T) {
 	require.Empty(t, jobs.RunCalls())
 }
 
-// A steer naming another type switches the running session to it from the turn's next step, as OpenCode
-// packages/core/src/session/context.ts selects the session's agent at every step: the step already running
-// keeps its type's permissions, and later steps and a resumed turn run as the new type. A steer naming the
-// running type changes nothing.
 func TestSteerSwitchesRunningSessionType(t *testing.T) {
 	t.Parallel()
 
@@ -470,7 +455,6 @@ func TestSteerSwitchesRunningSessionType(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "reviewed", got)
 
-			// The crashed process sent the switched step too, which failed.
 			requests := append(newParams(crashed), newParams(mock)...)
 			probes := func(params *responses.ResponseNewParams) bool {
 				return slices.ContainsFunc(params.Tools, func(tool responses.ToolUnionParam) bool {
@@ -496,7 +480,6 @@ func TestSteerSwitchesRunningSessionType(t *testing.T) {
 	}
 }
 
-// The parent's row names the type a steer switched the subagent to.
 func TestSteerSwitchedSubagentRowNamesFinalType(t *testing.T) {
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child"), "reviewer": testAgent("reviewer")}})
 	factory.childSessions = &mockChildSessions{
@@ -515,9 +498,6 @@ func TestSteerSwitchedSubagentRowNamesFinalType(t *testing.T) {
 	require.Equal(t, []string{"reviewer", "openai/gpt-6.1-sol"}, []string{row.Agent, row.Model})
 }
 
-// A steer switching a turn to a type on another provider converts the turn's items, and the saved history,
-// as loadSession converts saved turns. The items the new provider adds name its model, so a steer switching
-// back converts them in turn.
 func TestSteerSwitchConvertsTurnForProvider(t *testing.T) {
 	child, worker := testAgent("child"), testAgent("worker")
 	child.Permission, worker.Permission, worker.Model = parsePermissionYAML(t, "{probe: allow}"), parsePermissionYAML(t, "{probe: allow}"), "work/model-b"
@@ -592,9 +572,6 @@ func TestSteerSwitchConvertsTurnForProvider(t *testing.T) {
 	require.Equal(t, []string{"child", "openai/gpt-5.4"}, []string{entry.Agent, entry.Model})
 }
 
-// answeringSessions is a ChildSessions that keeps child entries per key in saved, like the store, and
-// whose subagent sessions answer each write's prompt as the type the write named; with steered every
-// write joins a running turn instead.
 func answeringSessions(saved map[string][]SessionEntry, steered bool) *mockChildSessions {
 	var (
 		mu     sync.Mutex
@@ -627,8 +604,6 @@ func answeringSessions(saved map[string][]SessionEntry, steered bool) *mockChild
 	}
 }
 
-// continueTestTask calls the task tool of a main agent allowed to continue its subagents, in a
-// turn of its own, and returns the call's output and public progress.
 func continueTestTask(t *testing.T, mock *mockResponsesAPI, jobs BackgroundJobs, sessions ChildSessions, child *Agent) func(callID, subagentType, prompt, continueID string) (string, []PublicProgress, error) {
 	t.Helper()
 
@@ -648,7 +623,6 @@ func continueTestTask(t *testing.T, mock *mockResponsesAPI, jobs BackgroundJobs,
 	}
 }
 
-// backgroundTestLooper builds a main agent whose execute script can call an auto-reviewed probe host tool.
 func backgroundTestLooper(t *testing.T, permissions string, jobs BackgroundJobs, probe func(context.Context) (ToolResult, error)) *looper {
 	t.Helper()
 

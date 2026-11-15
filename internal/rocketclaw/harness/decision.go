@@ -22,25 +22,19 @@ import (
 	otelsemconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 )
 
-// DecisionQuestionType names a decision question's kind.
 type DecisionQuestionType string
 
-// The decision question kinds every provider answers.
 const (
 	DecisionPredicate DecisionQuestionType = "predicate"
 	DecisionChoice    DecisionQuestionType = "choice"
 	DecisionScore     DecisionQuestionType = "score"
 )
 
-// DecisionOption is one of a question's options: a choice, a score level, or a predicate's "true" or
-// "false". Description, which may be empty, says when it applies.
 type DecisionOption struct {
 	Value       string
 	Description string
 }
 
-// DecisionQuestion is one typed question: a yes/no predicate, a choice among Options, or a score
-// over Options ordered from lowest to highest.
 type DecisionQuestion struct {
 	Name         string
 	Type         DecisionQuestionType
@@ -48,8 +42,6 @@ type DecisionQuestion struct {
 	Options      []DecisionOption
 }
 
-// DecisionRequest asks Questions about Input, a string or a JSON object, and Images, under the trusted
-// Instructions, which may be empty.
 type DecisionRequest struct {
 	Model        string
 	Instructions string
@@ -58,22 +50,16 @@ type DecisionRequest struct {
 	Questions    []DecisionQuestion
 }
 
-// DecisionImage is an image judged with a request's input: its MIME type and base64 data.
 type DecisionImage struct {
 	MIME   string
 	Base64 string
 }
 
-// DecisionUsage is the token count a provider bills for one decision request.
 type DecisionUsage struct {
 	InputTokens  int64
 	OutputTokens int64
 }
 
-// DecisionAnswer is a provider's answer to the question named Name. A predicate sets Probability
-// (that it is true); a choice sets Choice; a score sets Score, its expected level index, and Choice,
-// its most probable level. Confidence runs from 0 to 1; a predicate's is its distance from 0.5,
-// doubled. Probabilities are keyed by option. Refused means the model declined the question.
 type DecisionAnswer struct {
 	Name          string
 	Type          DecisionQuestionType
@@ -85,17 +71,13 @@ type DecisionAnswer struct {
 	Probabilities map[string]float64
 }
 
-// Decider answers decision questions on one provider, in question order, and reports the tokens billed.
 type Decider interface {
 	Decide(ctx context.Context, request *DecisionRequest) ([]DecisionAnswer, DecisionUsage, error)
 }
 
-// decide asks ref, a provider/model, through its provider's decider within decisionTimeout, and records
-// the call as a generation span with its token usage.
 func decide(ctx context.Context, observability ObservabilityConfig, deciders map[string]Decider, ref string, request *DecisionRequest) ([]DecisionAnswer, DecisionUsage, error) {
 	provider, model, _ := strings.Cut(ref, "/")
 
-	// A config reload can drop a provider an agent loaded earlier still names.
 	decider, ok := deciders[provider]
 	if !ok {
 		return nil, DecisionUsage{}, fmt.Errorf("decision provider %q is not configured", provider)
@@ -126,7 +108,6 @@ func decide(ctx context.Context, observability ObservabilityConfig, deciders map
 	return answers, usage, nil
 }
 
-// decisionToolSummary opens the decision tool's description, which Code Mode's catalog shows alone.
 const decisionToolSummary = "Ask a decision model typed questions about state and get answers with probabilities."
 
 func decisionToolDescription(models []string) string {
@@ -146,7 +127,6 @@ func decisionToolDescription(models []string) string {
 	}, "\n")
 }
 
-// decisionToolResult is what a Code Mode script gets back from the decision tool.
 type decisionToolResult struct {
 	Model        string                        `json:"model"`
 	Answers      map[string]decisionToolAnswer `json:"answers"`
@@ -169,14 +149,12 @@ type decisionToolAnswer struct {
 	Probability   *float64           `json:"probability,omitempty"`
 }
 
-// decisionToolQuestion is one question a Code Mode script asks.
 type decisionToolQuestion struct {
 	Type         string          `json:"type"`
 	Instructions string          `json:"instructions"`
 	Criteria     json.RawMessage `json:"criteria"`
 }
 
-// decisionQuestions turns a script's questions into decision questions, sorted by name.
 func decisionQuestions(questions map[string]decisionToolQuestion) ([]DecisionQuestion, error) {
 	out := make([]DecisionQuestion, 0, len(questions))
 
@@ -226,8 +204,6 @@ func decisionQuestions(questions map[string]decisionToolQuestion) ([]DecisionQue
 	return out, nil
 }
 
-// decisionToolAnswers maps answers back to the script's question names, or reports the first question
-// left unanswered.
 func decisionToolAnswers(questions []DecisionQuestion, answers []DecisionAnswer) (map[string]decisionToolAnswer, error) {
 	byName := make(map[string]DecisionAnswer, len(answers))
 	for _, answer := range answers {
@@ -255,8 +231,6 @@ func decisionToolAnswers(questions []DecisionQuestion, answers []DecisionAnswer)
 	return out, nil
 }
 
-// decisionImages reads paths, workspace image files, through the agent's own read tool and its
-// permission rules.
 func decisionImages(ctx context.Context, paths []string) ([]DecisionImage, error) {
 	if len(paths) == 0 {
 		return nil, nil
@@ -274,7 +248,7 @@ func decisionImages(ctx context.Context, paths []string) ([]DecisionImage, error
 	for _, path := range paths {
 		raw, _ := json.Marshal(struct {
 			FilePath string `json:"filePath"`
-		}{path}) // A struct of one string field always encodes.
+		}{path})
 
 		if err := CheckNestedToolCall(ctx, "read", &read, raw); err != nil {
 			return nil, fmt.Errorf("image %q: %w", path, err)
@@ -296,8 +270,6 @@ func decisionImages(ctx context.Context, paths []string) ([]DecisionImage, error
 	return images, nil
 }
 
-// decisionTool asks a decision model typed questions from Code Mode. Its permission subject is the
-// provider/model it calls.
 func decisionTool(deciders map[string]Decider, observability ObservabilityConfig) looperTool {
 	type params struct {
 		Model     string                          `json:"model"`
@@ -351,13 +323,11 @@ func decisionTool(deciders map[string]Decider, observability ObservabilityConfig
 
 			answers, usage, err := decide(ctx, observability, deciders, input.Model, &DecisionRequest{Input: input.State, Images: images, Questions: questions})
 			if err == nil {
-				// A request whose answers fail below was still billed.
 				result.Usage = &decisionToolUsage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}
 
 				result.Answers, err = decisionToolAnswers(questions, answers)
 			}
 
-			// Starlark cannot catch errors, so a failed answer is a result the script can check.
 			if err != nil {
 				result.Answers, result.StopReason, result.ErrorMessage = map[string]decisionToolAnswer{}, "error", err.Error()
 			}
@@ -373,12 +343,10 @@ func predicateAnswer(name string, probability float64) DecisionAnswer {
 	return DecisionAnswer{Name: name, Type: DecisionPredicate, Probability: probability, Confidence: math.Abs(2*probability - 1)}
 }
 
-// OpenAIDecider answers through OpenAI's Decisions API.
 type OpenAIDecider struct {
 	Client *openai.Client
 }
 
-// Decide implements Decider.
 func (d OpenAIDecider) Decide(ctx context.Context, request *DecisionRequest) ([]DecisionAnswer, DecisionUsage, error) {
 	input := []openai.DecisionNewParamsInputArrayItemUnion{}
 
@@ -400,7 +368,6 @@ func (d OpenAIDecider) Decide(ctx context.Context, request *DecisionRequest) ([]
 	user := openai.DecisionInputMessageParamOfUser(text)
 
 	if len(request.Images) > 0 {
-		// The endpoint takes at most this many images.
 		if len(request.Images) > 128 {
 			return nil, DecisionUsage{}, fmt.Errorf("openai decision: at most 128 images, got %d", len(request.Images))
 		}
@@ -420,7 +387,6 @@ func (d OpenAIDecider) Decide(ctx context.Context, request *DecisionRequest) ([]
 
 		switch question.Type {
 		case DecisionPredicate:
-			// Predicates have no criteria, so what true and false mean follows the instructions.
 			lines := []string{instructions}
 
 			for _, option := range question.Options {
@@ -493,12 +459,9 @@ func (d OpenAIDecider) Decide(ctx context.Context, request *DecisionRequest) ([]
 	return answers, DecisionUsage{InputTokens: decision.Usage.InputTokens, OutputTokens: decision.Usage.OutputTokens}, nil
 }
 
-// typeSafeCriteria returns what System One reads a question's options from: a predicate's meanings of
-// true and false, when given, a choice's options by name with their descriptions, or a score's levels.
 func typeSafeCriteria(question *DecisionQuestion) any {
 	switch question.Type {
 	case DecisionChoice:
-		// A choice without a description is read by its name alone.
 		criteria := make(map[string]*string, len(question.Options))
 		for _, option := range question.Options {
 			criteria[option.Value] = nil
@@ -532,28 +495,22 @@ func typeSafeCriteria(question *DecisionQuestion) any {
 	return nil
 }
 
-// TypeSafeDecider answers through the System One API at BaseURL, which includes the API version, such as
-// https://api.typesafe.ai/v1; another service speaking the same protocol works too.
 type TypeSafeDecider struct {
 	HTTPClient *http.Client
 	APIKey     string
 	BaseURL    string
 }
 
-// Decide implements Decider.
 func (d TypeSafeDecider) Decide(ctx context.Context, request *DecisionRequest) ([]DecisionAnswer, DecisionUsage, error) {
 	type typeSafeQuestion struct {
 		Type         string `json:"type"`
 		Instructions any    `json:"instructions"`
-		// Criteria describe a predicate's true and false, a choice's options or a score's levels.
-		Criteria any `json:"criteria,omitempty"`
+		Criteria     any    `json:"criteria,omitempty"`
 	}
 
 	questions := make(map[string]typeSafeQuestion, len(request.Questions))
 	for _, question := range request.Questions {
 		body := typeSafeQuestion{Type: string(question.Type), Instructions: question.Instructions}
-		// System One has no request-level instructions, and state is the content being judged, so trusted
-		// rules travel with each question.
 		if request.Instructions != "" {
 			body.Instructions = struct {
 				Rules    string `json:"rules"`
@@ -575,7 +532,6 @@ func (d TypeSafeDecider) Decide(ctx context.Context, request *DecisionRequest) (
 		DataBase64 string `json:"data_base64"`
 	}
 
-	// Each image is an asset, named before the state by a reference that cannot occur in text by accident.
 	state, assets := request.Input, map[string]typeSafeAsset{}
 	if len(request.Images) > 0 {
 		references := make([]any, 0, len(request.Images)+1)
@@ -612,7 +568,6 @@ func (d TypeSafeDecider) Decide(ctx context.Context, request *DecisionRequest) (
 
 	httpRequest.Header.Set("Authorization", "Bearer "+d.APIKey)
 	httpRequest.Header.Set("Content-Type", "application/json")
-	// Review transcripts often exceed the default context.
 	httpRequest.Header.Set("Typesafe-Danger-Zone-Long-Context", "true")
 
 	if len(assets) > 0 {
@@ -666,7 +621,6 @@ func (d TypeSafeDecider) Decide(ctx context.Context, request *DecisionRequest) (
 		case ok && raw.Type == "score":
 			answer := DecisionAnswer{Name: question.Name, Type: DecisionScore, Score: raw.Score, Confidence: raw.Confidence, Probabilities: map[string]float64{}}
 			for key, probability := range raw.Probabilities {
-				// Score probabilities are keyed by level index.
 				level, err := strconv.Atoi(key)
 				if err != nil || level < 0 || level >= len(question.Options) {
 					return nil, usage, fmt.Errorf("typesafe decision: answer %q has unknown score level %q", question.Name, key)

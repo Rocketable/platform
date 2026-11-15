@@ -11,8 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Command parity: OpenCode packages/core/src/config/plugin/command.ts and
-// https://opencode.ai/docs/commands/#arguments (V2 command convention).
 func TestRenderSkillArguments(t *testing.T) {
 	for _, tt := range []struct {
 		name, template, arguments, want string

@@ -17,9 +17,6 @@ func embeddedGuardianAgent() Agent {
 	}
 }
 
-// Copied from codex-rs/core/src/guardian/policy_template.md,
-// codex-rs/core/src/guardian/policy.md, and
-// codex-rs/core/src/guardian/prompt.rs guardian_output_contract_prompt.
 const embeddedGuardianPrompt = guardianPolicyPrompt + guardianInvestigationPrompt + guardianOutcomePolicyPrompt + guardianAnswerPrompt
 
 const guardianPolicyPrompt = `You are judging one planned coding-agent action.

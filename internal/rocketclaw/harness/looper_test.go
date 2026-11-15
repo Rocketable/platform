@@ -199,12 +199,10 @@ func compactParams(mock *mockResponsesAPI) []responses.ResponseCompactParams {
 	return out
 }
 
-// recordingJournal keeps journaled steps and Code Mode records in memory so tests can resume from them.
 func recordingJournal() *mockJournal {
 	var mu sync.Mutex
 
 	steps, lists := map[string]json.RawMessage{}, map[string][]json.RawMessage{}
-	// keys holds Code Mode record keys in the order first saved.
 	keys, records := []string{}, map[string]json.RawMessage{}
 
 	return &mockJournal{
@@ -272,7 +270,6 @@ func recordingJournal() *mockJournal {
 	}
 }
 
-// turnSaves decodes every root turn step the journal saved, in order, with the lists it had then.
 func turnSaves(t *testing.T, journal *mockJournal) []turnStep {
 	t.Helper()
 
@@ -299,7 +296,6 @@ func turnSaves(t *testing.T, journal *mockJournal) []turnStep {
 	return saves
 }
 
-// turnSaveBytes returns how many bytes each root turn save wrote through the journal, in order.
 func turnSaveBytes(journal *mockJournal) []int {
 	var written []int
 
@@ -2591,8 +2587,6 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	}}, make(chan os.Signal, 1))
 	calls, errRead := factory.promptExpansion.root.ReadFile("calls")
 	require.NoError(t, errRead)
-	// The batch has already been accepted and drained. A preparation failure must
-	// reach the caller's turn-failure delivery, rather than acknowledge lost work.
 	require.ErrorContains(t, err, `skill "missing-skill" not found`)
 	require.Empty(t, steers)
 	require.Equal(t, "first\n", string(calls), "failure must not execute later skill shells")
@@ -2862,7 +2856,6 @@ func TestLooperOmitsInterruptedTurnsFromSession(t *testing.T) {
 	require.Len(t, journaled[len(journaled)-1].Record.ReplayInput, 1, "an interrupted turn adds no restart text")
 }
 
-// runJournaledTurn runs one prompt with a stable turn ID against journal, returning the error and responses.
 func runJournaledTurn(ctx context.Context, looper *looper, journal *mockJournal, text string) ([]ChatResponse, error) {
 	looper.Journal = journal
 	output := make(chan ChatResponse, 20)
@@ -2920,7 +2913,6 @@ func TestLooperResumedTurnOfAnotherProviderIsConverted(t *testing.T) {
 	require.Contains(t, sent, "thought it over")
 }
 
-// A resumed turn's embedder re-offers every steer it accepted; only those not yet in the turn are injected.
 func TestLooperResumedTurnInjectsEachSteerOnce(t *testing.T) {
 	journal := recordingJournal()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -2965,8 +2957,6 @@ func TestLooperResumedTurnInjectsEachSteerOnce(t *testing.T) {
 	require.Equal(t, 1, strings.Count(sent, "drained but not journaled"))
 }
 
-// A turn cut after a drain but before its checkpoint drains the journaled response again under
-// the same ID on resume, so an embedder that records steps by response ID counts it once.
 func TestLooperResumedTurnDrainsUnderSameResponseID(t *testing.T) {
 	journal := recordingJournal()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -3025,8 +3015,7 @@ func TestLooperResumedCompactedTurnKeepsInputIdentities(t *testing.T) {
 				if strings.Contains(marshalJSON(t, params.Input.OfInputItemList), "already consumed") {
 					return nil, contextLengthExceededError()
 				}
-				// The real overflow path has replaced the checkpoint's prefix,
-				// including S1. Crash after that save, before the provider retry.
+
 				cancel()
 
 				return nil, context.Canceled
@@ -3201,8 +3190,6 @@ func TestLooperResumesFromRecordedCallResults(t *testing.T) {
 	}
 }
 
-// A turn cut off after 3 finished calls and mid-way through a 4th resumes without running the
-// finished calls again, reports the 4th interrupted, and keeps its accepted steer and applied inputs.
 func TestLooperResumesTurnCutOffMidCall(t *testing.T) {
 	journal := recordingJournal()
 
@@ -3303,7 +3290,6 @@ func TestLooperResumesTurnCutOffMidCall(t *testing.T) {
 	require.Equal(t, map[string]PublicProgressState{"call-1": PublicProgressCompleted, "call-2": PublicProgressCompleted, "call-3": PublicProgressCompleted, "call-4": PublicProgressStopped}, states)
 }
 
-// A long turn's saves stay cheap: its 200th step writes about as many bytes as its 1st.
 func TestLooperTurnSavesWriteOnlyTheirNewItems(t *testing.T) {
 	t.Parallel()
 
@@ -3324,7 +3310,6 @@ func TestLooperTurnSavesWriteOnlyTheirNewItems(t *testing.T) {
 	_, err := runJournaledTurn(t.Context(), loop, journal, "work")
 	require.NoError(t, err)
 
-	// The turn opens with one save, then each step saves its response and then its tool output.
 	written := turnSaveBytes(journal)
 	require.Len(t, written, 2*steps+2)
 
@@ -3333,7 +3318,6 @@ func TestLooperTurnSavesWriteOnlyTheirNewItems(t *testing.T) {
 		require.Less(t, written[last], written[first]*11/10, "save %d writes %d bytes, save %d writes %d", last, written[last], first, written[first])
 	}
 
-	// Each save changes the step itself, so a reader of the step alone sees the turn change.
 	for i, step := range turnSaves(t, journal) {
 		require.Equal(t, i+1, step.Revision)
 	}
@@ -3364,7 +3348,6 @@ func TestLooperResumedTurnKeepsCodeModeCalls(t *testing.T) {
 	_, err := runJournaledTurn(ctx, cut, journal, "question")
 	require.ErrorContains(t, err, "request response")
 
-	// The cut-off run had saved a script call record on its own.
 	record := CodeModeCall{Type: codeModeCallTraceType, ParentCallID: "exec", Key: "turn-1/call/exec/host/0", Name: "bash", Arguments: `{"command":"ls"}`, Status: codeModeCallOK, Summary: "go.mod"}
 	raw, err := json.Marshal(&record)
 	require.NoError(t, err)
@@ -4125,7 +4108,6 @@ func compactedResponse(id, encryptedContent string) *responses.CompactedResponse
 	return &compacted
 }
 
-// testResponse carries provider JSON like a decoded API response, so journaled turns can resume from it.
 func testResponse(id string, output []responses.ResponseOutputItemUnion) *responses.Response {
 	response := responses.Response{ID: id, Output: output}
 

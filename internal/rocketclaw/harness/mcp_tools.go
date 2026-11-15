@@ -25,11 +25,9 @@ const (
 	searchBuiltinName         = "search"
 	mcpPermissionBucket       = "mcp"
 	codeModeApproveSubject    = "code_mode_approve"
-	// AllowBackgroundSubject is the rocketclaw permission subject that allows Background Jobs.
-	AllowBackgroundSubject = "allow_background"
-	// executeNestedToolPrefix marks nested code-mode tool diagnostics for thinking UI.
-	executeNestedToolPrefix = executeToolName + " → "
-	codeModeRawStringRule   = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in "...". Inside that string, bash(command=...) takes r'''...''' only, not Starlark "..." or '...'. r"..." is raw but single-line; a real newline needs r'''...'''. Example execute argument: {"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
+	AllowBackgroundSubject    = "allow_background"
+	executeNestedToolPrefix   = executeToolName + " → "
+	codeModeRawStringRule     = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in "...". Inside that string, bash(command=...) takes r'''...''' only, not Starlark "..." or '...'. r"..." is raw but single-line; a real newline needs r'''...'''. Example execute argument: {"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
 )
 
 func ruleMatchesMCPServer(pattern, server string) bool {
@@ -72,8 +70,6 @@ func visibleMCPServers(permissions PermissionSet, servers []string) []string {
 	return visible
 }
 
-// executeDescription is short invariant guidance. Catalog lives in the system prompt;
-// full discovery is in-script search (OpenCode-style).
 func executeDescription() string {
 	defN := codemode.DefaultConcurrency
 	maxN := codemode.MaxConcurrency
@@ -92,8 +88,6 @@ func executeDescription() string {
 	}, "\n")
 }
 
-// codeModeSystemPrompt is appended to the system prompt when execute is available
-// (same channel as permissionPrompt).
 func codeModeSystemPrompt(hosts map[string]looperTool, servers []string) string {
 	defN := codemode.DefaultConcurrency
 	maxN := codemode.MaxConcurrency
@@ -304,7 +298,6 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 	if len(visibleServers) > 0 {
 		session := registry.Open()
 		defer func() {
-			// Close failures must not discard a successful script result.
 			if cerr := session.Close(); cerr != nil && err != nil {
 				err = errors.Join(err, cerr)
 			}
@@ -335,7 +328,6 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 				return nil
 			}
 
-			// A refused MCP call never reaches recordHostCall. CheckNestedPermission already encoded its args.
 			raw, _ := json.Marshal(args)
 			tc, _ := toolCallContextFrom(ctx)
 			record := codeModeCallRecord(ctx, subject, raw)
@@ -362,15 +354,12 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 
 	var errSave error
 
-	// Settling keeps a still-attached script's job from leaving its turn (backgroundWork.Detach),
-	// so a result stored for the turn reaches it.
 	if tc.sink != nil {
 		tc.sink.mu.Lock()
 		tc.sink.settled = true
 		tc.sink.mu.Unlock()
 	}
 
-	// A script that left its turn outlives the turn's spill, so its output is retained instead.
 	if backgroundDetached(ctx) {
 		out, errSave = retainExecuteResult(tc.looper.promptExpansion.root, retainedRel, out)
 	} else {
@@ -384,12 +373,8 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 	return TextToolResult(out), nil
 }
 
-// defaultSearchLimit matches OpenCode packages/codemode/src/tool-runtime.ts.
 const defaultSearchLimit = 10
 
-// codeModeSearchTool mirrors OpenCode search: query, namespace, offset, limit →
-// {items:[{path,description,signature}], remaining, next}.
-// Upstream: packages/codemode/src/tool-runtime.ts (makeSearchTool).
 func codeModeSearchTool(index []codeModeSearchEntry) codemode.HostTool {
 	return codemode.HostTool{
 		Name: searchBuiltinName,
@@ -413,8 +398,7 @@ type codeModeSearchItem struct {
 	Path        string `json:"path"`
 	Description string `json:"description"`
 	Signature   string `json:"signature"`
-	// Callable is the Starlark builtin name (host name or server_tool).
-	Callable string `json:"callable"`
+	Callable    string `json:"callable"`
 }
 
 type codeModeSearchResult struct {
@@ -460,7 +444,6 @@ func codeModeSearch(index []codeModeSearchEntry, args map[string]any) string {
 		}
 	}
 
-	// OpenCode: exact path match short-circuits ranking.
 	pathQuery := strings.TrimPrefix(query, "tools.")
 
 	var ranked []codeModeSearchEntry
@@ -626,8 +609,6 @@ func schemaSearchText(schema map[string]any) string {
 	return strings.Join(parts, "\n")
 }
 
-// openCodeSearchScore mirrors packages/codemode/src/tool-runtime.ts scoring weights.
-// path/description are lowercased here; searchText is already lowercased in the index.
 func openCodeSearchScore(terms [][]string, path, description, searchText string) int {
 	if len(terms) == 0 {
 		return 1
@@ -660,13 +641,12 @@ func openCodeSearchScore(terms [][]string, path, description, searchText string)
 	return score
 }
 
-// searchTokenize mirrors OpenCode tokenize + termForms.
 func searchTokenize(query string) [][]string {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil
 	}
-	// Split camelCase then non-alnum.
+
 	var b strings.Builder
 
 	for i, r := range query {
@@ -722,7 +702,6 @@ func argInt(args map[string]any, key string, fallback int) int {
 	}
 }
 
-// codeModeHostToolsFromContext binds host tools from looper.CodeModeHosts.
 func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool, hosts map[string]looperTool) {
 	tc, _ := toolCallContextFrom(ctx)
 
@@ -750,7 +729,6 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 					return nil, errCall
 				}
 
-				// Scripts read the decision tool's answers as a dict; Starlark has no JSON decoding.
 				if toolName == "decision" {
 					return starlark.Call(&starlark.Thread{Name: toolName}, starjson.Module.Members["decode"], starlark.Tuple{starlark.String(result.Output)}, nil)
 				}
@@ -800,13 +778,10 @@ func (c toolHostCall) run(ctx context.Context, raw json.RawMessage) (ToolResult,
 	return c.tool.Call(ctx, raw, c.output, toolCallMetadata{})
 }
 
-// recordHostCall returns a Code Mode call's recorded result, or runs and journals it. A recording
-// for a different tool or arguments runs live; a started, unfinished non-resumable call is interrupted.
-// A non-resumable call runs through shutdown, so its result is recorded before the turn stops.
 func recordHostCall(ctx context.Context, name string, args map[string]any, resumable bool, call hostCall) (ToolResult, error) {
 	tc, _ := toolCallContextFrom(ctx)
 
-	raw, _ := json.Marshal(args) // Code Mode arguments were decoded from JSON.
+	raw, _ := json.Marshal(args)
 
 	sum := sha256.Sum256(raw)
 	key := ToolCallKey(ctx)
@@ -851,7 +826,6 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 
 	result, errRun := call.run(runCtx, raw)
 	if errRun != nil && runCtx.Err() != nil {
-		// A cancelled call is not journaled, so a resumed turn runs it again and replaces this record.
 		return result, errors.Join(errRun, tc.observations.recordCodeModeCall(ctx, record.finish(result, errRun), false))
 	}
 
@@ -869,16 +843,13 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 
 type executeToolDiagnostics struct{}
 
-// ObserveToolCall reports a nested code-mode tool call into thinking traces.
-// Uses emitChatResponse (blocking send) so nested steps are not dropped when the output
-// buffer is full — unlike emitDiagnosticChatResponse, which drops under backpressure.
 func (executeToolDiagnostics) ObserveToolCall(ctx context.Context, path []string, nestedName string, args map[string]any) {
 	tc, _ := toolCallContextFrom(ctx)
 	if !tc.looper.Diagnostics || tc.output == nil {
 		return
 	}
 
-	raw, _ := json.Marshal(args) // Code Mode arguments were decoded from JSON.
+	raw, _ := json.Marshal(args)
 
 	namePath := append(slices.Clone(path), nestedName)
 	nestedName = strings.Join(namePath, " → ")
@@ -926,7 +897,6 @@ func codeModeHostRequiredFields(name string, params map[string]any) []string {
 	case "webfetch":
 		return []string{"url"}
 	case "read":
-		// filePath or filename accepted by Call; neither forced here.
 		return nil
 	case "decision":
 		return []string{"model", "state", "questions"}

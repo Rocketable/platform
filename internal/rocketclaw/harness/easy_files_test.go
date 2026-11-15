@@ -10,8 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// An easy agent's file tools see what its shell sees: its folder read-write, and its upload and skill
-// folders read-only, all by host path. An advanced agent's keep the workspace.
 func TestEasyFileView(t *testing.T) {
 	t.Parallel()
 
@@ -36,7 +34,7 @@ func TestEasyFileView(t *testing.T) {
 	}
 	for i, file := range files {
 		require.NoError(t, base.WriteFile(file.name, []byte(file.content), 0o644))
-		// Later files are newer, so glob and grep list them first.
+
 		at := time.Unix(int64(1_700_000_000+i), 0)
 		require.NoError(t, base.Chtimes(file.name, at, at))
 	}

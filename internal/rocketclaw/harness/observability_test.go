@@ -107,7 +107,6 @@ func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
 	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.InputValue, `{"filePath":"secret.txt"}`))
 	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.OutputValue, "file contents"))
 
-	// PostHog reads only OpenTelemetry GenAI attributes as LLM analytics.
 	require.Subset(t, spans[3].Attributes(), []attribute.KeyValue{otelsemconv.GenAIOperationNameInvokeAgent, otelsemconv.GenAIAgentName("main")})
 	require.Subset(t, spans[2].Attributes(), []attribute.KeyValue{
 		otelsemconv.GenAIOperationNameChat, otelsemconv.GenAIRequestModel("gpt-6-luna"), otelsemconv.GenAIProviderNameKey.String("openai"), otelsemconv.GenAIResponseID("resp-final"),

@@ -12,8 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A workdir is found in the agent's folders whether it is given by name or by the real path of a linked one,
-// and comes back as the name the sandbox mounts.
 func TestGuestWorkdir(t *testing.T) {
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
@@ -44,8 +42,6 @@ func TestGuestWorkdir(t *testing.T) {
 	}
 }
 
-// curl takes -s -S -f -L -o, alone or combined, fetches through the client it is given, and writes -o only
-// inside the folder; anything else fails rather than change the request.
 func TestEmulatedCurl(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -123,8 +119,6 @@ func TestEmulatedCurl(t *testing.T) {
 	require.Contains(t, errOut, "returned error: 404", "-S shows it again")
 }
 
-// An agent's command runs its line in host bash with the guest's arguments, the host environment and the
-// agent's secrets, in the guest's directory when it is really inside the folder.
 func TestEmulatedHostCommand(t *testing.T) {
 	folder, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)

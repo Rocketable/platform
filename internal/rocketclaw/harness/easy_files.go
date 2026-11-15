@@ -8,16 +8,11 @@ import (
 	"sync"
 )
 
-// easyFiles is an easy agent's file view, the one its shell has (R30): the shell's folder read-write and its
-// read-only folders. Each call works in a sandbox on the folder it names, opened for the call. Paths are
-// host paths; a relative one starts from the shell's folder.
 type easyFiles struct {
-	mu    sync.Mutex // Held for each call, as one sandbox's is.
+	mu    sync.Mutex
 	shell CustomShell
 }
 
-// EasyRoot opens the folder of an easy agent's shell that holds name, a host path or one relative to the
-// shell's folder, and returns name relative to it.
 func EasyRoot(shell *CustomShell, name string) (root *os.Root, rel string, err error) {
 	if !filepath.IsAbs(name) {
 		name = filepath.Join(shell.Dir, name)
@@ -98,8 +93,6 @@ func (v *easyFiles) Grep(ctx context.Context, pattern, searchPath, include strin
 	return formatGrepOutput(matches, partial)
 }
 
-// open returns the sandbox of the folder holding name and name's host path, which the sandbox's tools
-// take and show.
 func (v *easyFiles) open(name string) (*sandboxedFileSystem, string, error) {
 	root, rel, err := EasyRoot(&v.shell, name)
 	if err != nil {
@@ -131,10 +124,8 @@ func (v *easyFiles) previewApplyPatch(patchText string) (preview applyPatchPrevi
 	return sfs.previewApplyPatch(patchText)
 }
 
-// patchFolder opens the sandbox of the shell's folder for patchText, unless it names a file in a read-only
-// folder.
 func (v *easyFiles) patchFolder(patchText string) (sfs *sandboxedFileSystem, errText string) {
-	hunks, _ := parsePatch(patchText) // The sandbox reports a patch it cannot parse.
+	hunks, _ := parsePatch(patchText)
 	for _, hunk := range hunks {
 		for _, name := range []string{hunk.path, hunk.movePath} {
 			if root, rel, err := EasyRoot(&v.shell, name); err == nil {
@@ -155,8 +146,6 @@ func (v *easyFiles) patchFolder(patchText string) (sfs *sandboxedFileSystem, err
 	return sfs, ""
 }
 
-// search runs find in the sandbox of the folder holding path, or of every folder when path is empty, with
-// the host path to search there, and returns the first error text find returns.
 func (v *easyFiles) search(path string, find func(sfs *sandboxedFileSystem, path string) string) string {
 	v.mu.Lock()
 	defer v.mu.Unlock()

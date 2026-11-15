@@ -60,7 +60,6 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 		env := append(os.Environ(), e.env...)
 		env = append(env, "TMPDIR="+e.shellTemp.tmpDir)
 
-		// An emulated shell runs in its folder; like host bash here, only stdout counts, and no limit but the sandbox's.
 		if e.customShell.Emulated {
 			res, err := runEmulated(context.WithoutCancel(ctx), e.sandbox, &e.customShell, "exec 2>/dev/null\n"+command, e.customShell.Dir, e.env, env, emulatedExpansionTimeout)
 			if err != nil {
@@ -77,7 +76,6 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 		var stdout bytes.Buffer
 
 		cmd.Stdout = &stdout
-		// Keep captured stdout even when the command fails.
 		_ = cmd.Run()
 
 		return stdout.String()
@@ -93,8 +91,6 @@ func expandAgentPrompt(ctx context.Context, agent *Agent, enabled bool, env *pro
 	agent.Prompt = agentEnv.expandShellCommands(ctx, agent.Prompt)
 }
 
-// forAgent returns e for agent's prompt and skills: expanding through agent's shell or, for an easy agent,
-// in host bash outside its emulator, with its secrets (R33).
 func (e *promptExpansionEnvironment) forAgent(agent *Agent) promptExpansionEnvironment {
 	scoped := *e
 	scoped.customShell = agent.CustomShell
@@ -111,11 +107,8 @@ func (e *promptExpansionEnvironment) forAgent(agent *Agent) promptExpansionEnvir
 	return scoped
 }
 
-// DefaultShellCommand uses Bash to match the permission parser's grammar.
 type DefaultShellCommand struct{}
 
-// Command selects Bash and its arguments for command.
-// Privileged mode disables startup files and inherited functions and shell options.
 func (DefaultShellCommand) Command(command string) (path string, args []string) {
 	return "/bin/bash", []string{"--noprofile", "--norc", "-p", "-c", command}
 }

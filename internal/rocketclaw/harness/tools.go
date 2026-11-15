@@ -45,12 +45,12 @@ type toolFactory struct {
 	agents                     Agents
 	skills                     Skills
 	baseTools                  map[string]looperTool
-	shellSystem                *sandboxedShellSystem // Shared by every agent's bash tool in this runtime.
+	shellSystem                *sandboxedShellSystem
 	childContext               []SessionEntry
 	originHeader               string
 	shellTemp                  shellTempConfig
 	spillRel                   string
-	retainedRel                string // This conversation's retained background results.
+	retainedRel                string
 	autoApprovePermissions     bool
 	observability              ObservabilityConfig
 	childSessions              ChildSessions
@@ -98,8 +98,6 @@ func newSandboxedTools(root *os.Root, spillRel string, shellTemp shellTempConfig
 	return makeSandboxedTools(sfs, sss), sss
 }
 
-// CodeModeOnlyHostTool reports whether name is a sandbox host tool available
-// only inside execute (not as a top-level model tool).
 func CodeModeOnlyHostTool(name string) bool {
 	switch name {
 	case "read", "apply_patch", "glob", "grep", "webfetch", "bash":
@@ -109,7 +107,6 @@ func CodeModeOnlyHostTool(name string) bool {
 	}
 }
 
-// assembleTools builds model-facing tools and the internal code-mode host registry.
 func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]looperTool) {
 	tools := make(map[string]looperTool, len(f.baseTools)+4)
 	maps.Copy(tools, f.baseTools)
@@ -143,7 +140,6 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 		delete(tools, "task")
 	}
 
-	// A subagent that names its tools has only those; execute, which runs them, comes below.
 	if agent.Tools != nil {
 		maps.DeleteFunc(tools, func(name string, _ looperTool) bool { return !slices.Contains(agent.Tools, name) })
 	}
@@ -158,14 +154,12 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 			continue
 		}
 
-		// Sandbox host tools and embedder custom tools run only inside execute.
 		if tool.codeModeOnly || CodeModeOnlyHostTool(name) {
 			codeHosts[name] = tool
 			delete(tools, name)
 		}
 	}
 
-	// The decision tool names the models this agent's rules let it call, so it need not guess.
 	if tool, ok := codeHosts["decision"]; ok {
 		var models []string
 
@@ -187,7 +181,6 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 		codeHosts["decision"] = tool
 	}
 
-	// Code-mode tools gate inclusion themselves; nested calls enforce real permissions.
 	maps.Copy(tools, scoped.mcpToolsFor(agent, codeHosts))
 
 	if len(scoped.availableSkillSubjects()) == 0 {
@@ -197,17 +190,12 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 	return tools, codeHosts
 }
 
-// newLooper builds the looper that runs agent, whose permissions and prompt are final, on its model
-// with f's tools and settings, and with systemPrompt ahead of the skills and Code Mode guidance.
-// It journals nothing, drains no input, and answers in agent's output format.
 func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, error) {
 	client, origin, err := resolveModel(f.resolver, agent.Model)
 	if err != nil {
 		return nil, err
 	}
 
-	// A subagent that names its tools keeps only the MCP tools it names, under the rules it had for them:
-	// execute lists MCP tools by permission.
 	if agent.Tools != nil {
 		restricted := *agent
 		rules := []PermissionRule{{Pattern: "*", Action: PermissionDeny}}
@@ -275,7 +263,6 @@ func toolVisible(agent *Agent, name string, tool *looperTool) bool {
 	return agent.Permission.hasRuleForPermission(permission, permissionAllow, permissionAuto)
 }
 
-// fileSystem is what the file tools work on: the workspace sandbox, or an easy agent's file view.
 type fileSystem interface {
 	ReadResult(filename string, offset int) ToolResult
 	readPermissionSubject(name string) string
@@ -637,10 +624,6 @@ var (
 	skillPlaceholderPattern = regexp.MustCompile(`\$(ARGUMENTS|[1-9]\d*)`)
 )
 
-// renderSkillArguments follows OpenCode's V2 command convention:
-// packages/core/src/config/plugin/command.ts (command templates) and
-// https://opencode.ai/docs/commands/#arguments. Replace only original template
-// tokens so argument data is never interpreted as another placeholder.
 func renderSkillArguments(output, arguments string, appendUnused bool) string {
 	positions := skillArgumentPattern.FindAllString(arguments, -1)
 	for i, argument := range positions {
@@ -659,7 +642,6 @@ func renderSkillArguments(output, arguments string, appendUnused bool) string {
 
 		index, err := strconv.Atoi(token[1:])
 		if err != nil {
-			// An overflowing position is necessarily missing.
 			index = len(positions) + 1
 		}
 
@@ -718,9 +700,6 @@ func (f *toolFactory) skillDescription() string {
 }
 
 func functionTool(name, description string, properties map[string]any) *responses.FunctionToolParam {
-	// OpenAI strict function schemas require every property key to appear in
-	// required. Tools still apply defaults after JSON decoding when callers pass
-	// zero values.
 	required := slices.Sorted(maps.Keys(properties))
 
 	parameters := map[string]any{

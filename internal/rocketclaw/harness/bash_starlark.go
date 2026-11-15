@@ -7,7 +7,6 @@ import (
 	"go.starlark.net/starlark"
 )
 
-// bashStarlarkResult is the Starlark value returned by the bash host tool.
 type bashStarlarkResult struct {
 	output    string
 	errorCode string
@@ -21,7 +20,6 @@ func (b *bashStarlarkResult) Hash() (uint32, error) {
 	return 0, errors.New("unhashable type: bash_result")
 }
 
-// MarshalJSON preserves the output when the result is nested in a list or dict.
 func (b *bashStarlarkResult) MarshalJSON() ([]byte, error) {
 	output, _ := json.Marshal(b.output)
 

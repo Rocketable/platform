@@ -10,9 +10,6 @@ import (
 	"strings"
 )
 
-// curl is the emulated shell's HTTP client: a GET through webfetch's client, so the agent's network rules
-// apply to it and to every redirect (R34). It takes -s -S -f -L -o and their long forms, short ones combined
-// (-fsSL); anything else fails rather than changing the request. -o writes only inside the agent's folder.
 func curl(ctx context.Context, client *http.Client, folder string, args []string, cwd string, stdout, stderr io.Writer) int {
 	c, msg := parseCurlArgs(args)
 	if msg != "" {
@@ -54,7 +51,6 @@ func curl(ctx context.Context, client *http.Client, folder string, args []string
 		w = f
 	}
 
-	// The body is written on the host, outside the sandbox's file limit, so it gets its own (spec §10.1).
 	if _, err := io.Copy(w, io.LimitReader(resp.Body, maxCurlBytes)); err != nil {
 		return failed(23, err)
 	}
@@ -66,7 +62,6 @@ func curl(ctx context.Context, client *http.Client, folder string, args []string
 	return 0
 }
 
-// maxCurlBytes caps one curl response body.
 const maxCurlBytes = 10 << 20
 
 type curlArgs struct {
@@ -74,13 +69,11 @@ type curlArgs struct {
 	fail, silent, showError bool
 }
 
-// parseCurlArgs reads curl's arguments; a non-empty message is a usage error.
 func parseCurlArgs(args []string) (c curlArgs, usage string) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 
 		if a == "--" && i+1 < len(args) {
-			// Everything after -- is the URL, even when it starts with a dash.
 			if c.target != "" || i+2 < len(args) {
 				return c, "one URL only"
 			}
@@ -97,7 +90,7 @@ func parseCurlArgs(args []string) (c curlArgs, usage string) {
 			c.showError = true
 		case "-f", "--fail":
 			c.fail = true
-		case "-L", "--location": // webfetch's client follows redirects, checking each one
+		case "-L", "--location":
 		case "-o", "--output":
 			i++
 			if i == len(args) {
@@ -106,7 +99,6 @@ func parseCurlArgs(args []string) (c curlArgs, usage string) {
 
 			c.output = args[i]
 		default:
-			// A short cluster such as -fsSL; an o in it takes the rest of the cluster or the next argument.
 			flags, file, hasFile := strings.Cut(strings.TrimPrefix(a, "-"), "o")
 
 			switch {
@@ -148,8 +140,6 @@ func parseCurlArgs(args []string) (c curlArgs, usage string) {
 	return c, ""
 }
 
-// createInFolder creates name, a guest path relative to cwd, through an os.Root on folder: no path or link
-// takes it out of the agent's folder.
 func createInFolder(folder, cwd, name string) (*os.File, error) {
 	if !filepath.IsAbs(name) {
 		name = filepath.Join(cwd, name)
