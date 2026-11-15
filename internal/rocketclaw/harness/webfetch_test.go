@@ -164,7 +164,7 @@ func TestWebFetchBodyLimit(t *testing.T) {
 			body := strings.Repeat("x", size)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "text/plain")
-				w.(http.Flusher).Flush() // Exercise the body limit without Content-Length.
+				w.(http.Flusher).Flush()
 				_, _ = w.Write([]byte(body))
 			}))
 			t.Cleanup(server.Close)
@@ -181,8 +181,6 @@ func TestWebFetchBodyLimit(t *testing.T) {
 	}
 }
 
-// An easy agent's webfetch refuses exactly what its emulated shell's curl refuses, by the table both tests
-// share; an advanced agent's is unchanged.
 func TestEasyWebFetchNetworkTargets(t *testing.T) {
 	unlisted := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("unlisted")) }))
 	t.Cleanup(unlisted.Close)
@@ -233,7 +231,6 @@ func TestEasyWebFetchNetworkTargets(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, TextToolResult("unlisted"), got, "an advanced agent fetches as before")
 
-	// Only the test stands a public address in for its server's loopback one.
 	client := easyWebFetchClient(nil)
 	client.Transport.(*http.Transport).DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
 		if err := publicAddressOnly(network, "93.184.215.14:80", nil); err != nil {

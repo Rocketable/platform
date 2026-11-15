@@ -196,8 +196,7 @@ func TestExecuteAvailableWithHostToolsOnly(t *testing.T) {
 	agent := &Agent{Permission: permissions}
 	model, hosts := factory.assembleTools(agent)
 	require.Contains(t, model, executeToolName)
-	require.Len(t, model, 2) // Execute and loader; no skill/task/websearch without grants.
-	// websearch may appear if base has it and hasActionableRule - websearch needs grant
+	require.Len(t, model, 2)
 	assert.NotContains(t, model, "read")
 	assert.Contains(t, hosts, "read")
 	assert.NotContains(t, hosts, "bash")
@@ -264,7 +263,6 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 	agent := &Agent{Permission: permissions}
 	model, hosts := factory.assembleTools(agent)
 
-	// Platform tools run only inside execute; the model sees execute and its result loader.
 	assert.ElementsMatch(t, []string{executeToolName, loadExecuteResultToolName}, slices.Collect(maps.Keys(model)))
 	assert.ElementsMatch(t, []string{"ask_user_question", "rocketclaw_reload"}, slices.Collect(maps.Keys(hosts)))
 
@@ -288,7 +286,6 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 
 	assert.True(t, sawNested, "expected nested ask_user_question diagnostic")
 
-	// A call made inside the script is saved on its own as a record with a one-line summary, not in the trace.
 	assert.Equal(t, []CodeModeCall{{Type: codeModeCallTraceType, ParentCallID: "exec-1", Key: "/call/exec-1/host/0", Name: "ask_user_question", Arguments: `{"question":"ship it?"}`, Status: codeModeCallOK, Summary: "answer:ship it?"}}, observations.calls)
 	assert.Empty(t, observations.trace)
 }
@@ -532,7 +529,6 @@ func TestExecuteNestedToolDiagnosticNotDroppedWhenOutputFull(t *testing.T) {
 	agent := &Agent{Permission: permissions}
 	model, hosts := factory.assembleTools(agent)
 
-	// Unbuffered channel: non-blocking emit would drop; nested emit must block until read.
 	output := make(chan ChatResponse)
 	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: output, callID: ""})
@@ -901,7 +897,7 @@ func TestCodeModeSearchOpenCodeShape(t *testing.T) {
 	out = codeModeSearch(index, map[string]any{"query": "", "limit": 1, "offset": 0})
 	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
 	require.Len(t, parsed.Items, 1)
-	assert.Equal(t, 6, parsed.Remaining) // 4 concurrency + bash, read, demo.echo → 7 total
+	assert.Equal(t, 6, parsed.Remaining)
 	require.NotNil(t, parsed.Next)
 	assert.Equal(t, 1, parsed.Next.Offset)
 
@@ -1008,7 +1004,6 @@ func TestExecuteReplaysRecordedHostCalls(t *testing.T) {
 	journal.SaveTraceFunc = func(ctx context.Context, _ string, _ []json.RawMessage) error {
 		return ctx.Err()
 	}
-	// Each run resumes the same turn, whose trace a restart restores.
 	observations := &turnObservations{journal: journal, turnID: "turn-1"}
 	execute := func(code string) (string, error) {
 		t.Helper()
@@ -1144,7 +1139,7 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 		switch args.Text {
 		case "fail":
 			return ToolResult{}, errors.New("first line\nboom")
-		case "peek": // The call reports its own record while it runs.
+		case "peek":
 			loop.observations.mu.Lock()
 			defer loop.observations.mu.Unlock()
 
@@ -1170,7 +1165,6 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 
 	loop.agent = Agent{Name: "main", Permission: parsePermissionYAML(t, rules+"}")}
 	loop.Tools, loop.CodeModeHosts = (&toolFactory{mcpRegistry: reg, baseTools: base}).assembleTools(&loop.agent)
-	// The gate refuses an MCP tool the script could list, as after a permission change.
 	loop.Permissions = parsePermissionYAML(t, rules+", 'demo.danger': deny}")
 	loop.AutoApprovePermissions = true
 	loop.observations = &turnObservations{journal: InertJournal{}, turnID: "turn"}

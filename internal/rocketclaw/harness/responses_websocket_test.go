@@ -208,7 +208,6 @@ func TestChatGPTResponsesShowReasoningSummariesWhileStreaming(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	// The ChatGPT client sends through http.DefaultTransport, which must trust the test server.
 	defaultTransport := http.DefaultTransport
 	http.DefaultTransport = server.Client().Transport
 
@@ -351,9 +350,9 @@ func TestWebsocketStorageFailureDoesNotRetryOrReuseUnreadEvents(t *testing.T) {
 	api := responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
 	loop := testLooper(api)
 	sink := recordingJournal()
-	errPersist := contextLengthExceededError() // A wrapped provider-looking cause must still be fatal local storage.
+	errPersist := contextLengthExceededError()
 	sink.SaveTraceFunc = func(context.Context, string, []json.RawMessage) error {
-		<-sent // Ensure the terminal event is already unread on the socket.
+		<-sent
 		return errPersist
 	}
 	loop.Journal = sink
@@ -393,7 +392,7 @@ func TestWebsocketObservationTerminalAndReceiveBoundaries(t *testing.T) {
 			watchdog, stop := context.WithTimeout(t.Context(), 3*time.Second)
 			defer stop()
 
-			ctx, cancel := context.WithCancel(t.Context()) // No deadline: cancellation must wake the socket read.
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			var mu sync.Mutex
@@ -432,7 +431,7 @@ func TestWebsocketObservationTerminalAndReceiveBoundaries(t *testing.T) {
 				}
 
 				if boundary == "cancel" || boundary == "storage_cancel" {
-					_, _, _ = conn.ReadMessage() // Client cancellation must close this connection.
+					_, _, _ = conn.ReadMessage()
 					return
 				}
 
@@ -601,8 +600,6 @@ func TestNewResponsesAPIUsesWebsocketWhenURLIsWebsocket(t *testing.T) {
 }
 
 func TestNewResponsesAPIUsesClientHTTPClientWhenURLIsHTTPS(t *testing.T) {
-	// openai-go sends authenticated HTTP through a dedicated loopback transport
-	// and ignores custom clients. HTTPS is what still uses the configured client.
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer real-token" {
 			t.Errorf("Authorization = %q; want Bearer real-token", got)

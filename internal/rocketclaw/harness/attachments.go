@@ -15,65 +15,43 @@ import (
 
 const maxAttachmentBytes = 5 * 1024 * 1024
 
-// PromptInputRole identifies the instruction hierarchy role for a prompt input.
 type PromptInputRole string
 
 const (
-	// PromptInputRoleUser identifies ordinary user prompt input.
-	PromptInputRoleUser PromptInputRole = "user"
-	// PromptInputRoleDeveloper identifies developer instruction prompt input.
+	PromptInputRoleUser      PromptInputRole = "user"
 	PromptInputRoleDeveloper PromptInputRole = "developer"
 )
 
-// PromptInput is one prompt plus optional model-visible attachments.
 type PromptInput struct {
-	// ID identifies this input in local durable replay, not provider requests.
-	ID string
-	// TurnID, when set, is the turn's stable identity and journal key across restarts.
-	TurnID string
-	// Role defaults to PromptInputRoleUser when empty.
-	Role PromptInputRole
-	// Texts are the prompt's text pieces. The prompt text is their concatenation;
-	// each piece carries its own separators. More than one piece is sent as
-	// separate text parts, which a provider's prompt cache marker can target.
-	Texts []string
-	// ExpandShellCommands enables !`command` expansion for this trusted input,
-	// even when input expansion is disabled for the runtime as a whole.
+	ID                  string
+	TurnID              string
+	Role                PromptInputRole
+	Texts               []string
 	ExpandShellCommands bool `json:",omitempty"`
-	// Header is the exact generated prefix of the first piece, saved only in local replay.
-	Header      string
-	Attachments []Attachment
-	DirectSkill *PromptInputDirectSkill
-	// Agent, on a steer drained into a running subagent turn, is the agent type that turn runs as from
-	// its next step on.
-	Agent string
-	// Responses receives user-visible response items for this prompt. The runtime
-	// closes it after the prompt's turn reaches a terminal state.
-	Responses chan<- ChatResponse `json:"-"`
+	Header              string
+	Attachments         []Attachment
+	DirectSkill         *PromptInputDirectSkill
+	Agent               string
+	Responses           chan<- ChatResponse `json:"-"`
 }
 
-// PromptInputDirectSkill requests a skill load before the model turn starts.
 type PromptInputDirectSkill struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments,omitempty"`
 }
 
-// Attachment is a model-visible file attachment encoded as a URL, usually a data URL.
 type Attachment struct {
 	MIME     string `json:"mime"`
 	Filename string `json:"filename,omitempty"`
 	URL      string `json:"url"`
 }
 
-// ToolResult is the output of a tool call, including optional model-visible attachments.
 type ToolResult struct {
 	Output      string
 	Attachments []Attachment
-	// Data is an optional structured payload for code-mode bindings (e.g. BashResult).
-	Data any
+	Data        any
 }
 
-// TextToolResult returns a text-only tool result.
 func TextToolResult(output string) ToolResult {
 	return ToolResult{Output: output}
 }
@@ -132,7 +110,6 @@ func sniffAttachmentMIME(data []byte, fallback string) string {
 	return normalizeMIME(fallback)
 }
 
-// PromptInputMessage is input as a message of a turn's model input and replay.
 func PromptInputMessage(input *PromptInput) responses.ResponseInputItemUnionParam {
 	role := responses.EasyInputMessageRoleUser
 	if input.Role == PromptInputRoleDeveloper {

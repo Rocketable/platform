@@ -287,13 +287,13 @@ func TestLoadExecuteResultMembershipAndCancellation(t *testing.T) {
 
 		_, err = loop.loadExecuteResult(ctx, "", loadExecuteResultParams{ResultID: id, StartLine: 2})
 		require.ErrorIs(t, err, context.Canceled)
-		loop.restoreTurnExecuteResults("new-turn") // Deliberately retain old bytes to test membership, not deletion.
+		loop.restoreTurnExecuteResults("new-turn")
 
 		_, err = root.Stat(path)
 		require.NoError(t, err)
 		_, err = loop.loadExecuteResult(t.Context(), "", loadExecuteResultParams{ResultID: id})
 		require.Error(t, err)
-		loop.deleteTurnExecuteResults() // A canceled loader must release the lifetime lock.
+		loop.deleteTurnExecuteResults()
 		require.NoError(t, root.RemoveAll(defaultSpillRel+"/turn"))
 	}
 }

@@ -37,13 +37,8 @@ const providerRetryBackoffMaxDelay = time.Minute
 
 var errTurnInterrupted = errors.New("turn interrupted")
 
-// ErrShutdown is the cancellation cause that stops a turn after its running calls finish and
-// are journaled. Resumable calls, including task and execute, stop through their own steps
-// instead, and resume when the turn runs again.
 var ErrShutdown = errors.New("shutdown")
 
-// callContext returns the context one call runs in. A resumable call stops with ctx; any other
-// call ignores ErrShutdown, so it finishes and is journaled, but stops on any other cancellation.
 func callContext(ctx context.Context, resumable bool) (context.Context, context.CancelFunc) {
 	if resumable {
 		return ctx, func() {}
@@ -67,31 +62,20 @@ func callContext(ctx context.Context, resumable bool) (context.Context, context.
 	}
 }
 
-// TurnPhase is whether the live turn is still in the tool loop.
 type TurnPhase int
 
 const (
-	// TurnPhaseUnclassified means no provider response has classified the turn yet.
 	TurnPhaseUnclassified TurnPhase = iota
-	// TurnPhaseToolLoop means the last provider response requested tools.
 	TurnPhaseToolLoop
-	// TurnPhaseFinalAnswer means the last provider response had no tools.
 	TurnPhaseFinalAnswer
 )
 
-// SteerDrain collects waiting steers and Completion Notes after a tool batch, or when a no-tool answer would otherwise end the turn.
-// Each drain follows one provider response, named by responseID; a turn resumed
-// after a restart drains its journaled response again under the same ID.
-// Applied identities include replayed and compacted inputs. A final drain may
-// wait for new input; errors must prevent accepting the pending final answer.
 type SteerDrain interface {
 	Drain(ctx context.Context, responseID string, phase TurnPhase, applied []string) ([]PromptInput, error)
 }
 
-// InertSteerDrain never supplies additional input.
 type InertSteerDrain struct{}
 
-// Drain does not wait or supply input.
 func (InertSteerDrain) Drain(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
 	return nil, nil
 }
@@ -113,8 +97,6 @@ func (c responseServiceClient) New(ctx context.Context, params *responses.Respon
 		resp, err := c.doer.middleware(req, next, observer)
 		if _, ok := errors.AsType[progressPersistenceError](err); ok {
 			errLocal = err
-			// SDK v3.69.0 internal/requestconfig/requestconfig.go: shouldRetry
-			// honors this header before returning the original transport error.
 			resp = &http.Response{Header: http.Header{"X-Should-Retry": []string{"false"}}, Body: http.NoBody, Request: req}
 		}
 
@@ -123,7 +105,7 @@ func (c responseServiceClient) New(ctx context.Context, params *responses.Respon
 
 	resp, err := c.service.New(ctx, *params, append(slices.Clone(opts), option.WithMiddleware(middleware))...)
 	if errLocal != nil {
-		err = errLocal // SDK context cancellation must not erase a fatal local write error.
+		err = errLocal
 	}
 
 	if err != nil {
@@ -146,7 +128,6 @@ func (c responseServiceClient) Compact(ctx context.Context, params *responses.Re
 	return resp, nil
 }
 
-// looperTool describes one callable tool available to the runtime.
 type looperTool struct {
 	Definition         responses.FunctionToolParam
 	Hosted             responses.ToolUnionParam
@@ -155,11 +136,8 @@ type looperTool struct {
 	Permission         string
 	Subjects           func(json.RawMessage) ([]string, error)
 	VisibilitySubjects []string
-	// codeModeOnly tools are available only inside execute (not model-facing).
-	codeModeOnly bool
-	// resumable calls pause through their own steps at shutdown and run again on resume; other
-	// calls finish at shutdown, and are reported interrupted only when cut off by a crash.
-	resumable bool
+	codeModeOnly       bool
+	resumable          bool
 }
 
 type toolCallMetadata struct {
@@ -170,23 +148,20 @@ type toolCallMetadata struct {
 	progress      *PublicProgress
 }
 
-// looper runs conversational turns against the configured model and tools.
 type looper struct {
-	agent              Agent
-	ProviderOrigin     ProviderOrigin
-	Client             responsesAPI
-	SystemPrompt       string
-	DisplayModel       string
-	ReasoningEffort    shared.ReasoningEffort
-	Verbosity          string
-	CompactThreshold   int64
-	CompactionSteering string
-	ParallelToolCalls  int
-	ResponseFormat     responses.ResponseFormatTextConfigUnionParam
-	Permissions        PermissionSet
-	Tools              map[string]looperTool
-	// CodeModeHosts are tools available only inside execute (not model-facing):
-	// sandbox host tools plus embedder custom tools (e.g. rocketclaw_*).
+	agent                  Agent
+	ProviderOrigin         ProviderOrigin
+	Client                 responsesAPI
+	SystemPrompt           string
+	DisplayModel           string
+	ReasoningEffort        shared.ReasoningEffort
+	Verbosity              string
+	CompactThreshold       int64
+	CompactionSteering     string
+	ParallelToolCalls      int
+	ResponseFormat         responses.ResponseFormatTextConfigUnionParam
+	Permissions            PermissionSet
+	Tools                  map[string]looperTool
 	CodeModeHosts          map[string]looperTool
 	Diagnostics            bool
 	AutoApprovePermissions bool
@@ -194,7 +169,7 @@ type looper struct {
 	InPermissionReview     bool
 	Observability          ObservabilityConfig
 	Journal                Journal
-	observations           *turnObservations // Root-owned lifetime; workers receive the turn-local pointer.
+	observations           *turnObservations
 	SteerDrain             SteerDrain
 	expandInputPrompts     bool
 	promptExpansion        promptExpansionEnvironment
@@ -244,10 +219,8 @@ type permissionReviewRequest struct {
 	Reviewer         string                                  `json:"reviewer"`
 	ReviewerEmbedded bool                                    `json:"reviewer_embedded"`
 	ReviewContext    []responses.ResponseInputItemUnionParam `json:"-"`
-	// Review is the review's child-session key under the reviewing session, which the reviewed call starts.
-	Review ChildKey `json:"-"`
-	// Turn is the review's turn in that history, from the key of the call it checks (see ReviewTurn).
-	Turn string `json:"-"`
+	Review           ChildKey                                `json:"-"`
+	Turn             string                                  `json:"-"`
 }
 
 type permissionReviewRiskLevel string
@@ -282,10 +255,8 @@ type permissionReviewDecision struct {
 	Rationale         string                            `json:"rationale"`
 }
 
-// Runtime is the concrete harness loop runtime returned by NewWithModelResolver.
 type Runtime = looper
 
-// Looper processes prompt input streams with a configured runtime.
 type Looper interface {
 	Loop(ctx context.Context, input <-chan PromptInput, sessionIn iter.Seq2[SessionEntry, error], sessionOut sessionWriter, interrupts <-chan os.Signal) error
 }
@@ -308,7 +279,6 @@ type doomLoopTrap struct {
 	recent []toolCallSignature
 }
 
-// ChatResponse is one user-visible response item emitted by the runtime.
 type ChatResponse struct {
 	Kind     string
 	Text     string
@@ -317,7 +287,6 @@ type ChatResponse struct {
 	Provider *ProviderDiagnostic
 }
 
-// ToolDiagnostic describes a tool runtime diagnostic emitted when diagnostics are enabled.
 type ToolDiagnostic struct {
 	Phase     string          `json:"phase"`
 	Name      string          `json:"name"`
@@ -327,7 +296,6 @@ type ToolDiagnostic struct {
 	Action    json.RawMessage `json:"action,omitempty"`
 }
 
-// SubagentDiagnostic describes a subagent runtime diagnostic emitted when diagnostics are enabled.
 type SubagentDiagnostic struct {
 	Name     string              `json:"name"`
 	Label    string              `json:"label"`
@@ -339,7 +307,6 @@ type SubagentDiagnostic struct {
 	Provider *ProviderDiagnostic `json:"provider,omitempty"`
 }
 
-// ProviderDiagnostic describes provider request diagnostics emitted when diagnostics are enabled.
 type ProviderDiagnostic struct {
 	Provider       string            `json:"provider"`
 	Model          string            `json:"model"`
@@ -356,14 +323,10 @@ type ProviderDiagnostic struct {
 }
 
 const (
-	// ChatResponseAssistantMessage identifies final assistant message output.
-	ChatResponseAssistantMessage = "assistant_message"
-	// ChatResponseAssistantCommentary identifies assistant progress/commentary output.
+	ChatResponseAssistantMessage    = "assistant_message"
 	ChatResponseAssistantCommentary = "assistant_commentary"
-	// ChatResponseAssistantTool identifies structured tool and subagent diagnostics.
-	ChatResponseAssistantTool = "assistant_tool"
-	// ChatResponseReasoningSummary identifies reasoning summary output.
-	ChatResponseReasoningSummary = "reasoning_summary"
+	ChatResponseAssistantTool       = "assistant_tool"
+	ChatResponseReasoningSummary    = "reasoning_summary"
 )
 
 const (
@@ -476,7 +439,6 @@ func (e *responseFailureError) Error() string {
 	return fmt.Sprintf("response failed with status %q", e.status)
 }
 
-// SessionEntry is one denormalized persisted session record.
 type SessionEntry struct {
 	Version           int                 `json:"version"`
 	Type              string              `json:"type"`
@@ -492,7 +454,6 @@ type SessionEntry struct {
 	OutputTrace       []json.RawMessage   `json:"output_trace,omitempty"`
 }
 
-// TokenUsage records replay-neutral provider token counts for a completed turn.
 type TokenUsage struct {
 	PromptTokens              int64 `json:"prompt_tokens,omitempty"`
 	CompletionTokens          int64 `json:"completion_tokens,omitempty"`
@@ -580,7 +541,6 @@ func presentOpenAIField(field openairespjson.Field) bool {
 	return field.Raw() != openairespjson.Omitted && field.Valid()
 }
 
-// Loop processes input lines until input closes or a runtime error occurs.
 func (l *looper) Loop(
 	ctx context.Context,
 	input <-chan PromptInput,
@@ -677,7 +637,6 @@ func (l *looper) Loop(
 
 		trace := slices.Clone(observations.trace)
 		for i := range observations.calls {
-			// Records contain only strings; JSON encoding cannot fail.
 			raw, _ := json.Marshal(&observations.calls[i])
 			trace = append(trace, raw)
 		}
@@ -809,7 +768,6 @@ func (l *looper) runTurn(
 	doomLoop := doomLoopTrap{recent: nil}
 
 	for {
-		// Each step, a resumed turn's first too, runs as the type the last steer naming one switched the turn to.
 		if l, err = l.asRecordAgent(turnCtx, &record, &baseHistory, &baseAttribution, &turnItems); err != nil {
 			return emptyRecord, nil, false, err
 		}
@@ -831,7 +789,6 @@ func (l *looper) runTurn(
 			var errResponse error
 
 			resp, errResponse = l.newProviderResponse(turnCtx, &params, observer, output, func(recovered []responses.ResponseInputItemUnionParam, retained int) error {
-				// Retained items come from provider input, which omits local metadata.
 				recovered = slices.Clone(recovered)
 				copy(recovered[len(recovered)-retained:], history[len(history)-retained:])
 				recovered = pruneHistoryBeforeLatestCompaction(recovered)
@@ -877,7 +834,6 @@ func (l *looper) runTurn(
 			}
 		}
 
-		// Stream reasoning/commentary live; defer final assistant messages to turn end.
 		rendered = appendLiveTurnResponses(output, rendered, responseChatResponses(resp.Output))
 		reviewContext := pruneHistoryBeforeLatestCompaction(append(append([]responses.ResponseInputItemUnionParam{}, baseHistory...), turnItems...))
 
@@ -921,7 +877,6 @@ func (l *looper) runTurn(
 	}
 }
 
-// openTurn resumes the journaled turn for input's TurnID, or starts a new one from the prompt.
 func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnStep, turnItems []responses.ResponseInputItemUnionParam, pending *responses.Response, errInput, err error) {
 	resumed := false
 	if input.TurnID != "" {
@@ -960,7 +915,6 @@ func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnSte
 		return step, turnItems, nil, errInput, nil
 	}
 
-	// A resumed turn's lists and Code Mode records were saved on their own, not in its step.
 	for list, items := range map[TurnList]*[]json.RawMessage{TurnReplayInput: &step.Record.ReplayInput, TurnOutputTrace: &step.Record.OutputTrace, TurnTrace: &step.Trace} {
 		if *items, err = l.Journal.Items(context.WithoutCancel(ctx), input.TurnID, list); err != nil {
 			return step, nil, nil, nil, fmt.Errorf("load journaled %s: %w", list, err)
@@ -983,8 +937,7 @@ func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnSte
 	if turnItems, err = ReplayInputToParams(step.Record.ReplayInput); err != nil {
 		return step, nil, nil, nil, err
 	}
-	// Older checkpoints still have identities in replay; retain those on the next
-	// save so later compaction cannot erase their deduplication evidence.
+
 	for i := range turnItems {
 		item := &turnItems[i]
 		if item.OfMessage != nil {
@@ -1004,8 +957,6 @@ func (l *looper) openTurn(ctx context.Context, input *PromptInput) (step turnSte
 	return step, turnItems, pending, nil, nil
 }
 
-// saveTurn journals the turn's step, with the provider response whose calls are not yet appended,
-// and of its record's items and trace only those that changed since its last save.
 func (l *looper) saveTurn(ctx context.Context, record *SessionEntry, resp *responses.Response, applied []string) error {
 	o := l.observations
 	step := turnStep{Record: *record, AppliedInputIDs: applied, Revision: o.saved.Revision + 1}
@@ -1033,7 +984,6 @@ func (l *looper) saveTurn(ctx context.Context, record *SessionEntry, resp *respo
 			list.From++
 		}
 
-		// Each item is encoded as it was within its encoded step, so it reads back as it always has.
 		changed := make([]json.RawMessage, 0, len(list.Items)-list.From)
 		for _, item := range list.Items[list.From:] {
 			encoded, err := json.Marshal(item)
@@ -1073,8 +1023,6 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 	return false, false, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
 }
 
-// appendSteers skips a drained input whose ID is already in the turn, since a
-// resumed turn's embedder re-offers every steer it accepted.
 func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, phase TurnPhase, applied *[]string) (bool, error) {
 	inputs, err := l.SteerDrain.Drain(ctx, record.ResponseID, phase, slices.Clone(*applied))
 	if err != nil {
@@ -1089,7 +1037,6 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 			continue
 		}
 
-		// A steer naming another agent type switches the turn to it from its next step; the steps so far keep theirs.
 		if input.Agent != "" && input.Agent != record.Agent {
 			record.ReplayAttribution = append(record.ReplayAttribution, ReplayAttribution{End: len(record.ReplayInput), Agent: record.Agent, Model: record.Model, ReasoningEffort: record.ReasoningEffort})
 			record.Agent = input.Agent
@@ -1279,7 +1226,6 @@ func (l *looper) newProviderResponse(
 		recordSpanError(span, err)
 
 		if resp != nil {
-			// Marshaling string maps cannot fail.
 			output, _ := json.Marshal([]map[string]string{{"role": "assistant", "content": l.Observability.TraceConfig.MaskOutputValue(resp.OutputText())}})
 			span.span.SetAttributes(attribute.String("rocketcode.response_id", resp.ID), otelsemconv.GenAIResponseID(resp.ID), otelsemconv.GenAIOutputMessagesKey.String(string(output)))
 
@@ -1740,8 +1686,6 @@ func emitDiagnosticChatResponse(output chan<- ChatResponse, item ChatResponse) {
 	}
 }
 
-// appendLiveTurnResponses streams non-final responses immediately and keeps final
-// assistant messages for Loop to emit after the turn completes.
 func appendLiveTurnResponses(output chan<- ChatResponse, rendered, items []ChatResponse) []ChatResponse {
 	for _, item := range items {
 		if item.Kind == ChatResponseAssistantMessage {
@@ -1793,8 +1737,6 @@ func responseChatResponses(items []responses.ResponseOutputItemUnion) []ChatResp
 func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) responses.ResponseNewParams {
 	history = projectReplayForOpenAI(history)
 	if position := l.ProviderOrigin.PromptCacheMarkersRelativePosition; position != nil {
-		// projectReplayForOpenAI already copied each message; the content list is
-		// still shared with stored history, so mark a clone of it.
 		for i := range slices.Backward(history) {
 			message := history[i].OfMessage
 			if message == nil {
@@ -2104,9 +2046,6 @@ func (l *looper) dispatchToolCalls(
 	return outputs, nil
 }
 
-// reviewToolCall runs the approver on a model's tool call. An Execute call's decision is its
-// whole-script review, recorded under the call. A failed save is sticky, so the call's next
-// progress write reports it.
 func (l *looper) reviewToolCall(ctx context.Context, name, callID string, request *permissionReviewRequest, reviewContext []responses.ResponseInputItemUnionParam, output chan<- ChatResponse) permissionReviewDecision {
 	request.ReviewContext = slices.Clone(reviewContext)
 	request.Review = ChildKey{Path: "/" + ReviewKey(l.observations.turnID, callID), Turn: l.observations.turnID, Call: callID}
@@ -2120,9 +2059,6 @@ func (l *looper) reviewToolCall(ctx context.Context, name, callID string, reques
 	return decision
 }
 
-// replayCall restores a journaled call: a recorded output is reused, and a started, unfinished
-// non-resumable call is reported interrupted. Otherwise it records the started marker and marks the
-// call working; false means the caller runs it. Any error is reported as replayed.
 func (l *looper) replayCall(ctx context.Context, outputs []dispatchedToolOutput, index int, callID string, resumable bool, progress *PublicProgress) (bool, error) {
 	key := ToolCallKey(ctx)
 
@@ -2260,7 +2196,6 @@ func (d *doomLoopTrap) trapped(name string, args json.RawMessage) bool {
 
 func (l *looper) permissionDecision(toolName string, tool *looperTool, args json.RawMessage) (toolPermissionDecision, error) {
 	if toolName == loadExecuteResultToolName {
-		// The tool resolves turn spills and retained Background Job results itself.
 		var params loadExecuteResultParams
 
 		return toolPermissionDecision{}, decodeToolParams(args, &params)
@@ -2369,7 +2304,6 @@ func formatPermissionDenied(decision *permissionDecision) string {
 	return fmt.Sprintf("tool call denied: permission %q has no matching allow rule for subject %q. Choose a different action.", decision.Permission, decision.Subject)
 }
 
-// loadSession decodes saved history for a looper of provider.
 func loadSession(entries iter.Seq2[SessionEntry, error], provider string) ([]responses.ResponseInputItemUnionParam, []SessionEntry, error) {
 	turns := []SessionEntry{}
 	history := []responses.ResponseInputItemUnionParam{}
@@ -2470,7 +2404,6 @@ func responseItemText(item *responses.ResponseOutputItemUnion) string {
 	return text.String()
 }
 
-// reasoningReplayInput keeps every summary part; one without parts keeps a blank part, as the field is required.
 func reasoningReplayInput(id string, summary []responses.ResponseReasoningItemSummary, encryptedContent string) responses.ResponseInputItemUnionParam {
 	parts := make([]responses.ResponseReasoningItemSummaryParam, max(len(summary), 1))
 	for i := range summary {
@@ -2495,10 +2428,9 @@ func compactionReplayInput(id, encryptedContent, content string) responses.Respo
 	return responses.ResponseInputItemUnionParam{OfCompaction: &compaction}
 }
 
-// CompactionCheckpointText returns portable text for compaction replay that cannot be rehydrated natively.
 func CompactionCheckpointText(compaction *responses.ResponseCompactionItemParam) string {
-	raw, _ := json.Marshal(compaction) // A decoded SDK param cannot fail serialization.
-	texts, _ := compactionText(raw)    // Unreadable text leaves only the encrypted data.
+	raw, _ := json.Marshal(compaction)
+	texts, _ := compactionText(raw)
 
 	if content := strings.TrimSpace(strings.Join(texts, "\n")); content != "" {
 		return "<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n" + content + "\n</context_checkpoint>"
@@ -2522,7 +2454,7 @@ func webSearchOutputActionJSON(action *responses.ResponseOutputItemUnionAction) 
 		value["pattern"] = action.Pattern
 	}
 
-	data, _ := json.Marshal(value) // The map contains only strings and string slices.
+	data, _ := json.Marshal(value)
 
 	return string(data)
 }

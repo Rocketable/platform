@@ -1,4 +1,3 @@
-// Package harness provides the reusable agent runtime.
 package harness
 
 import (
@@ -20,37 +19,20 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// shellCommander selects the executable and arguments for a Bash command.
 type shellCommander interface {
 	Command(command string) (path string, args []string)
 }
 
-// CustomShell is what runs an agent's shell commands instead of host bash, from the agent's shell
-// frontmatter: a program, or the emulated shell (internal/rocketclaw/sandbox).
 type CustomShell struct {
-	// Path is a program that runs as <Path> <command>.
-	Path string
-	// Emulated means real Bash in the sandbox (shell: emulated, and every easy agent). The embedder sets Dir
-	// for each turn; until it does, the agent's shell commands do not run.
-	Emulated bool
-	// Dir is the emulated shell's writable folder, shown at its host path. A bash call runs there, or in its
-	// workdir taken from there, and skips the workspace path check: the sandbox does the confining.
-	Dir string
-	// ReadOnly are folders, none inside another, the emulated shell shows read-only at their host paths besides
-	// Dir. An easy agent's file tools see Dir and these, as its shell does.
-	ReadOnly []string
-	// Commands are the emulated shell's host commands: a name and the command line host bash runs, with the
-	// guest's arguments appended.
-	Commands map[string]string
-	// NetworkTargets limit the emulated shell's curl as they limit webfetch; nil means public addresses only.
+	Path           string
+	Emulated       bool
+	Dir            string
+	ReadOnly       []string
+	Commands       map[string]string
 	NetworkTargets []string
-	// Secrets are environment variables only host programs get: the emulated shell's host commands, and an
-	// easy agent's prompt and skill expansion in host bash.
-	Secrets map[string]string
+	Secrets        map[string]string
 }
 
-// withCustomShell runs command with an agent's customShell, or through shell when the agent declares none.
-// The emulated shell does not run a program: it returns an empty path so a caller that forgot it fails.
 func withCustomShell(shell shellCommander, customShell *CustomShell, command string) (path string, args []string) {
 	switch {
 	case customShell.Emulated:
@@ -62,15 +44,11 @@ func withCustomShell(shell shellCommander, customShell *CustomShell, command str
 	return shell.Command(command)
 }
 
-// Config contains runtime settings supplied by the embedding application.
 type Config struct {
-	Model             shared.ResponsesModel
-	AutoApproverModel shared.ResponsesModel
-	// AutoApproverDecisionModel, a provider/model in Deciders, settles confident embedded-guardian reviews
-	// first; AutoApproverMinConfidence is the confidence each of its answers needs, 0.9 when zero.
-	AutoApproverDecisionModel string
-	AutoApproverMinConfidence float64
-	// Deciders answers decision questions by provider name; a missing provider is not configured.
+	Model                      shared.ResponsesModel
+	AutoApproverModel          shared.ResponsesModel
+	AutoApproverDecisionModel  string
+	AutoApproverMinConfidence  float64
 	Deciders                   map[string]Decider
 	ReasoningEffort            shared.ReasoningEffort
 	Diagnostics                bool
@@ -79,110 +57,71 @@ type Config struct {
 	CompactThreshold           int64
 	CompactionSteering         string
 	ParallelToolCalls          int
-	// ShellTempDir is the workspace-relative or absolute directory used as TMPDIR
-	// for bash and prompt !`…` commands. Required; must exist inside the workspace.
-	ShellTempDir string
-	// SpillDir is the workspace-relative or absolute directory for oversized
-	// execute output. Empty uses <workspace>/.rocketcode/spill.
-	SpillDir string
-	// RetainedResultDir is the directory, relative to SpillDir, that keeps oversized output of
-	// background execute scripts readable for 7 days. Required; give each conversation its own.
-	RetainedResultDir      string
-	AutoApprovePermissions bool
-	Observability          ObservabilityConfig
-	ChildSessions          ChildSessions
-	Journal                Journal
-	BackgroundJobs         BackgroundJobs
-	CustomTools            []Tool
-	ShellEnv               map[string]string
-	// ChildContext supplies host messages to permission reviewers.
-	ChildContext []SessionEntry
-	// OriginHeader is the embedder's trusted statement of who started the turn, which permission
-	// reviewers read ahead of the untrusted transcript.
-	OriginHeader string
-	// ShellCommand builds the executable used for bash tool (and prompt !`…`)
-	// commands. Required; pass DefaultShellCommand{} to match permission validation.
-	// Custom implementations must preserve the validated Bash syntax and semantics.
-	// An agent's shell frontmatter overrides it for that agent.
-	ShellCommand shellCommander
-	// Sandbox runs emulated shells. The zero value refuses them.
-	Sandbox      sandbox.Runtime
-	MCPServers   map[string]mcpclient.ServerConfig
-	MCPWorkspace string
+	ShellTempDir               string
+	SpillDir                   string
+	RetainedResultDir          string
+	AutoApprovePermissions     bool
+	Observability              ObservabilityConfig
+	ChildSessions              ChildSessions
+	Journal                    Journal
+	BackgroundJobs             BackgroundJobs
+	CustomTools                []Tool
+	ShellEnv                   map[string]string
+	ChildContext               []SessionEntry
+	OriginHeader               string
+	ShellCommand               shellCommander
+	Sandbox                    sandbox.Runtime
+	MCPServers                 map[string]mcpclient.ServerConfig
+	MCPWorkspace               string
 }
 
-// ChildSessions stores finished permission review turns, and runs Task subagents as
-// sessions of the embedder, on the turn runner its other sessions use.
 type ChildSessions interface {
 	AppendChildEntry(ctx context.Context, key ChildKey, entry *SessionEntry) error
-	// WriteSubagent delivers write to its subagent session, which it starts when new, and reports
-	// whether write joined the session's running turn. A replayed write delivers nothing again.
 	WriteSubagent(ctx context.Context, write *SubagentWrite) (steered bool, err error)
-	// AwaitSubagent waits for the turn of the subagent session at key that runs the write of the task
-	// call callKey, and returns its answer and the agent type and model it ended as.
 	AwaitSubagent(ctx context.Context, key, callKey string) (string, ReplayAttribution, error)
 }
 
-// ChildKey names a child session by Path, its key under the embedder's session, which an empty Path
-// names. A new child starts under the child at key Parent, by call Call of turn Turn there.
 type ChildKey struct {
 	Path, Parent, Turn, Call string
 }
 
-// under places k, a key relative to the child at key parent, under the embedder's session.
 func (k ChildKey) under(parent string) ChildKey {
 	k.Path, k.Parent = parent+k.Path, parent
 
 	return k
 }
 
-// SubagentWrite is a task call's prompt to a subagent session.
 type SubagentWrite struct {
-	// Key is the session's child key.
-	Key ChildKey
-	// CallKey is the task call's tool call key, which identifies the write.
-	CallKey string
-	// Agent is the subagent type that runs Prompt, and Delegator the agent that wrote it.
+	Key                      ChildKey
+	CallKey                  string
 	Agent, Delegator, Prompt string
-	// Mode is a continue's mode; empty for a new subagent.
-	Mode ContinueMode
-	// Model, an entry of Agent.Subagents as written, and Tools (Agent.Tools) are what an easy agent's
-	// subagent session, which runs that agent, runs with; an agent type's leaves them empty.
-	Model string
-	Tools []string
+	Mode                     ContinueMode
+	Model                    string
+	Tools                    []string
 }
 
-// InertChildSessions discards child session entries and runs no subagents.
 type InertChildSessions struct{}
 
-// AppendChildEntry discards one child session entry.
 func (InertChildSessions) AppendChildEntry(context.Context, ChildKey, *SessionEntry) error {
 	return nil
 }
 
-// WriteSubagent refuses to run a subagent.
 func (InertChildSessions) WriteSubagent(context.Context, *SubagentWrite) (bool, error) {
 	return false, errSubagentsUnavailable
 }
 
-// AwaitSubagent refuses to run a subagent.
 func (InertChildSessions) AwaitSubagent(context.Context, string, string) (string, ReplayAttribution, error) {
 	return "", ReplayAttribution{}, errSubagentsUnavailable
 }
 
-// ObservabilityConfig controls OpenInference-compatible tracing for the harness.
 type ObservabilityConfig struct {
 	Enabled     bool
 	Tracer      trace.Tracer
 	TraceConfig instrumentation.TraceConfig
 }
 
-// PromptShellCommandExpansion controls which prompt sources expand !`command` snippets.
 type PromptShellCommandExpansion struct {
-	// PrimaryPrompts covers the agent prompt of every session, a Task subagent's included, since a
-	// subagent runs as a session of the embedder (ChildSessions).
-	PrimaryPrompts bool
-	// SubagentPrompts covers the prompts of permission review agents.
+	PrimaryPrompts  bool
 	SubagentPrompts bool
 	SkillPrompts    bool
 	InputPrompts    bool
@@ -240,7 +179,6 @@ func (c shellTempConfig) ensureTempDir(root *os.Root) error {
 	return nil
 }
 
-// effectivePermissions grants read/glob on this session shell temp tree when bash is allowed.
 func (c *shellTempConfig) effectivePermissions(permissions PermissionSet) PermissionSet {
 	if c.tmpRelDir == "" || c.tmpRelDir == "." || !permissions.hasRuleForPermission("bash", permissionAllow) {
 		return permissions
@@ -260,8 +198,6 @@ func (c *shellTempConfig) effectivePermissions(permissions PermissionSet) Permis
 	return PermissionSet{Buckets: buckets, Sudo: permissions.Sudo, Easy: permissions.Easy, skillRead: permissions.skillRead}
 }
 
-// interpolateAllAgentPermissions resolves ${ROCKETCLAW_*} patterns in every agent's permission rules against env
-// (InterpolatePermissions).
 func interpolateAllAgentPermissions(agents map[string]Agent, env []string) map[string]Agent {
 	prepared := make(map[string]Agent, len(agents))
 
@@ -274,7 +210,6 @@ func interpolateAllAgentPermissions(agents map[string]Agent, env []string) map[s
 	return prepared
 }
 
-// NewWithModelResolver loads the supplied model resolver and returns a configured looper.
 func NewWithModelResolver(
 	resolver ModelResolver,
 	configInput *Config,
@@ -317,7 +252,6 @@ func NewWithModelResolver(
 		return nil, err
 	}
 
-	// Inside the spill dir, the file-tool block keeps retained output private.
 	if !filepath.IsLocal(config.RetainedResultDir) {
 		return nil, fmt.Errorf("retained result dir %q must be a relative path inside the spill dir", config.RetainedResultDir)
 	}
@@ -439,7 +373,6 @@ func NewWithModelResolver(
 	return looper, nil
 }
 
-// RestrictTools limits the runtime to the exact supplied tool allowlist.
 func (r *Runtime) RestrictTools(names []string) error {
 	if names == nil {
 		return nil

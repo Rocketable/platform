@@ -181,7 +181,6 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 					require.NoError(t, running.Wait())
 				})
 
-				// Keep job-control diagnostics separate and cancel only after the child exists.
 				var pid, shellPID int
 
 				require.EventuallyWithT(t, func(check *assert.CollectT) {

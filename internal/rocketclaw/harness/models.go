@@ -11,17 +11,13 @@ import (
 
 const defaultOpenAIModel shared.ResponsesModel = "gpt-6-luna"
 
-// ProviderOrigin identifies the provider and API model selected by a resolver.
 type ProviderOrigin struct {
-	Provider         string
-	Model            string
-	CompactThreshold int64
-	// PromptCacheMarkersRelativePosition, when set, is the negative index of the text
-	// piece in the last request message that carries an Anthropic cache_control marker.
+	Provider                           string
+	Model                              string
+	CompactThreshold                   int64
 	PromptCacheMarkersRelativePosition *int
 }
 
-// ModelResolver selects an SDK client and API model for a model selector.
 type ModelResolver interface {
 	Resolve(model string) (*openai.Client, ProviderOrigin, error)
 }

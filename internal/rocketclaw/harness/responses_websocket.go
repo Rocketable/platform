@@ -19,8 +19,6 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
-// responseObservations buffers only public text and reasoning summaries, never provider replay or arguments.
-// One provider request owns it across SDK, looper, and compaction retries.
 type responseObservations struct {
 	owner      *turnObservations
 	agent      string
@@ -106,7 +104,7 @@ func (o *responseObservations) ObserveResponse(ctx context.Context, event *respo
 	}
 
 	if event.Type == "response.completed" {
-		o.text = nil // The next successful request must retain completed display fallback.
+		o.text = nil
 	}
 
 	return nil
@@ -119,13 +117,10 @@ type responsesWebsocketDoer struct {
 
 func (d *responsesWebsocketDoer) middleware(req *http.Request, next option.MiddlewareNext, observer oai.ResponseObserver) (*http.Response, error) {
 	if req.URL.Scheme != "ws" && req.URL.Scheme != "wss" {
-		// A ChatGPT client streams its responses to the observer this carries.
 		return next(req.WithContext(oai.WithResponseObserver(req.Context(), observer)))
 	}
 
 	if strings.Contains(req.URL.Path, "/compact") {
-		// openai-go origin checks reject scheme rewrites against a ws base URL, so
-		// compact must leave the middleware chain and dial HTTP itself.
 		return d.doCompactHTTP(req)
 	}
 
@@ -174,7 +169,6 @@ func (d *responsesWebsocketDoer) doCreate(req *http.Request, observer oai.Respon
 	delete(payload, "stream")
 	delete(payload, "background")
 
-	// Decoded JSON values and the type string are always JSON-encodable.
 	create, _ := json.Marshal(payload)
 
 	if err := observer.BeginResponse(req.Context()); err != nil {
@@ -270,7 +264,6 @@ func (d *responsesWebsocketDoer) readCreate(req *http.Request, observer oai.Resp
 			if len(body) == 0 {
 				body = message
 			} else {
-				// Unmarshaling the event already validated the raw error JSON.
 				body, _ = json.Marshal(map[string]json.RawMessage{"error": body})
 			}
 

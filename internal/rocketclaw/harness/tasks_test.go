@@ -258,7 +258,6 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 		require.Contains(t, tools, "execute")
 		require.NotContains(t, tools, "read")
 		require.NotContains(t, tools, "bash")
-		// edit allow makes read permission actionable (inheritance).
 		require.Contains(t, hosts, "read")
 	})
 
@@ -490,8 +489,6 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 	require.Equal(t, []string{review.Path + " guardian", review.Path + " guardian"}, got, "a review inside a running call joins its call's review history")
 }
 
-// A reused call ID gets its own permission review, a resumed turn's review keeps its own, and
-// neither shares the history of the reviewed task's subagent. A denied call's review is saved too.
 func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
 	call := responseWithFunctionCalls("root", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call_0", "task", `{"description":"Review","prompt":"look","subagent_type":"child","command":""}`)})
 	allowed := []*responses.Response{call, responseWithMessage("review", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`), responseWithMessage("root-final", "done")}
@@ -532,7 +529,6 @@ func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
 	require.Len(t, saved, 2, "the reviews of both turns")
 }
 
-// Like OpenCode's per-subagent session ID, a reused call ID starts a new subagent; a resumed call keeps its own.
 func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"child": testAgent("child")}})
 	sessions := answeringSessions(map[string][]SessionEntry{}, false)
@@ -561,8 +557,6 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 		require.Equal(t, keys[i], call.Write.Key.Path)
 	}
 
-	// Under a child history, the row names the new subagent under that history, and the subagent
-	// starts under it.
 	factory.childKey = ChildKey{Path: "/parent"}
 	parent := testLooper(mockResponses())
 	parent.observations.turnID = "turn-3"
@@ -574,9 +568,6 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 	require.Equal(t, ChildKey{Path: "/parent" + taskKey("turn-3", "call_0"), Parent: "/parent", Turn: "turn-3", Call: "call_0"}, sessions.WriteSubagentCalls()[3].Write.Key)
 }
 
-// R7, KTD9: an easy agent's task picks a model from its subagents and the tools, from its own, its subagent
-// has; a new call and a continue check both against what the agent has now, so a continue naming a model
-// a reload removed changes nothing. The subagent runs the agent itself.
 func TestEasyTaskDelegatesByModel(t *testing.T) {
 	agent, errs := loadEasyTestAgent(t, easyRequired+"\nsubagents: [gpt-6-luna, gpt-6.1-sol#high]")
 	require.Empty(t, errs)
@@ -636,7 +627,6 @@ func TestEasyTaskDelegatesByModel(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, SubagentWrite{Key: ChildKey{Path: writes[0].Write.Key.Path, Turn: "turn-call-5", Call: "call-5"}, CallKey: "turn-call-5/call/call-5", Agent: "main", Delegator: "main", Prompt: "look", Mode: ContinueEnqueue, Model: "gpt-6.1-sol#high", Tools: []string{"bash"}}, *sessions.WriteSubagentCalls()[2].Write)
 
-	// The subagent runs with the tools it was given, also inside execute, and passes them on when it names none.
 	subagent := agent
 	subagent.Tools = []string{"bash", "s.list_reports"}
 	loop, err := factory.newLooper(&subagent, "")
@@ -659,7 +649,6 @@ func TestEasyTaskDelegatesByModel(t *testing.T) {
 	require.Subset(t, slices.Collect(maps.Keys(loop.CodeModeHosts)), []string{"bash", "read"}, "without a list the subagent has every tool")
 }
 
-// R7, R8: an easy agent has task only with subagents and depth left.
 func TestEasyTaskNeedsSubagentsAndDepth(t *testing.T) {
 	for _, tc := range []struct {
 		sections  string
@@ -669,7 +658,7 @@ func TestEasyTaskNeedsSubagentsAndDepth(t *testing.T) {
 		{"", 1, true},
 		{"subagents: []", 1, false},
 		{"subagents: [gpt-6-luna]\nmaxRecursion: 0", 0, false},
-		{"", 0, false}, // A subagent one level below an agent whose maxRecursion is omitted.
+		{"", 0, false},
 	} {
 		agent, errs := loadEasyTestAgent(t, easyRequired+"\n"+tc.sections)
 		require.Empty(t, errs)
@@ -681,7 +670,6 @@ func TestEasyTaskNeedsSubagentsAndDepth(t *testing.T) {
 	}
 }
 
-// A4: task never runs an easy agent, which an advanced agent reaches through its sessions instead.
 func TestAdvancedTaskRefusesEasyAgent(t *testing.T) {
 	easy, errs := loadEasyTestAgent(t, easyRequired)
 	require.Empty(t, errs)
@@ -698,7 +686,6 @@ func TestAdvancedTaskRefusesEasyAgent(t *testing.T) {
 	require.EqualError(t, err, "agent type main is an easy agent, which task cannot run; write to its sessions with rocketclaw_sessions instead")
 }
 
-// A sticky agent is top-level: task runs it only for itself, never for another agent.
 func TestTaskRunsStickyAgentOnlyForItself(t *testing.T) {
 	room := testAgent("room")
 	room.Sticky = AgentStickyGlobal
@@ -721,13 +708,11 @@ func TestTaskRunsStickyAgentOnlyForItself(t *testing.T) {
 	require.Equal(t, "room", write.Agent)
 }
 
-// taskKey is the subagent key of a new root task call keyed turnID + "/call/" + callID.
 func taskKey(turnID, callID string) string {
 	sum := sha256.Sum256([]byte(turnID + "/call/" + callID))
 	return "/" + callID + "-" + hex.EncodeToString(sum[:4])
 }
 
-// reviewKey is the permission review key segment of a root call keyed turnID + "/call/" + callID.
 func reviewKey(turnID, callID string) string {
 	sum := sha256.Sum256([]byte(turnID + "/call/" + callID))
 	return callID + "-review-" + hex.EncodeToString(sum[:4])

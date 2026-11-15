@@ -13,36 +13,25 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// AgentMode selects an agent file's format.
 type AgentMode string
 
 const (
-	// AgentModeAdvanced is the permission-rule format, used when mode is omitted.
 	AgentModeAdvanced AgentMode = "advanced"
-	// AgentModeEasy is the section format, compiled into explicit permission rules.
-	AgentModeEasy AgentMode = "easy"
+	AgentModeEasy     AgentMode = "easy"
 )
 
-// AgentLoadConfig is the runtime configuration easy agents are checked and compiled against.
 type AgentLoadConfig struct {
-	// MCPToolGroups maps every configured MCP server to its tool groups (read, write) of tool-name patterns.
-	MCPToolGroups map[string]map[string][]string
-	// Providers names every configured model provider, openai included.
+	MCPToolGroups     map[string]map[string][]string
 	Providers         []string
 	DecisionProviders []string
-	// Skills is the skills root; easy skills entries name folders in it.
-	Skills fs.FS
+	Skills            fs.FS
 }
 
-// AgentRoutine is one easy-agent routine: a schedule and the instruction it sends, empty for a bare entry.
 type AgentRoutine struct {
 	Schedule    string
 	Instruction string
 }
 
-// compileEasyAgent fills agent's easy-only fields and compiles its sections into explicit rules: a section
-// left out or set to auto turns on everything in it behind review, a written section only what it lists.
-// Only skill, task and the embedder's default-on tools skip review.
 func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 	node := agent.FrontmatterNode
 	if err := checkKeys(node, "", "not an easy-mode key", "mode", "model", "space", "workingDirectory", "subagents", "maxRecursion", "approver", "secretsARN",
@@ -155,8 +144,6 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 	return err
 }
 
-// compileEasyPermissions builds agent's permission set from its mcp, rocketclaw and skills sections and
-// its subagents. Tag groups compile in the embedder, which owns the tag tools.
 func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) (PermissionSet, error) {
 	node := agent.FrontmatterNode
 	permission := PermissionSet{Easy: true}
@@ -267,10 +254,7 @@ func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) (PermissionSet, e
 	return permission, nil
 }
 
-// compileEasyDecision checks the decision models agent's decision section lists and lets the decision
-// tool call them.
 func compileEasyDecision(agent *Agent, cfg AgentLoadConfig, permission *PermissionSet) error {
-	// Unlike other sections, decision models are opt-in, so auto would grant nothing.
 	field := frontmatterField(agent.FrontmatterNode, "decision")
 	if field != nil && field.Kind != yaml.SequenceNode {
 		return errors.New("decision: must be a list of provider/model names")
@@ -292,9 +276,6 @@ func compileEasyDecision(agent *Agent, cfg AgentLoadConfig, permission *Permissi
 	return nil
 }
 
-// parseEmulatedShell reads the emulated shell's settings, which easy agents and shell: emulated agents share:
-// the required workingDirectory, the host commands, and the network targets. The embedder sets the shell up
-// per turn; until it does, shell commands do not run.
 func parseEmulatedShell(node *yaml.Node, agent *Agent) error {
 	if field := frontmatterField(node, "workingDirectory"); field != nil && field.Decode(&agent.WorkingDirectory) != nil {
 		return errors.New("workingDirectory: must be a string")
@@ -324,8 +305,6 @@ func parseEmulatedShell(node *yaml.Node, agent *Agent) error {
 	return nil
 }
 
-// easyNetworkTargets decodes allowedNetworkTargets node and refuses, when the file loads, what webfetch's
-// rules cannot express: they match hosts, origins and URL prefixes only.
 func easyNetworkTargets(node *yaml.Node) ([]string, error) {
 	targets, err := easyList(node, "allowedNetworkTargets")
 	for _, target := range targets {
@@ -337,8 +316,6 @@ func easyNetworkTargets(node *yaml.Node) ([]string, error) {
 	return targets, err
 }
 
-// checkKeys reports the first key of mapping node, named under prefix, that keys does not list, as that
-// problem. An absent node, nil, has no keys.
 func checkKeys(node *yaml.Node, prefix, problem string, keys ...string) error {
 	for i := 0; node != nil && i < len(node.Content); i += 2 {
 		if !slices.Contains(keys, node.Content[i].Value) {
@@ -349,7 +326,6 @@ func checkKeys(node *yaml.Node, prefix, problem string, keys ...string) error {
 	return nil
 }
 
-// easyList decodes an omitted section, or one set to auto, as nil, and a written section as its list.
 func easyList(node *yaml.Node, key string) ([]string, error) {
 	if node == nil || node.Kind == yaml.ScalarNode && node.Value == "auto" {
 		return nil, nil

@@ -17,8 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// C: the guest's only network is curl, which follows webfetch's rules (R34, the shared table); no other
-// program reaches any address, while the agent's host commands use the host's network.
 func TestEmulatedShellNetwork(t *testing.T) {
 	unlisted := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("unlisted")) }))
 	t.Cleanup(unlisted.Close)
@@ -56,7 +54,6 @@ func TestEmulatedShellNetwork(t *testing.T) {
 				require.NoError(t, json.Unmarshal(row.Targets, &targets))
 			}
 
-			// The table checks the rule, as webfetch's test does; example.com hosts need not resolve here.
 			got := newEmulated(t, nil, nil, targets).bash(t, "curl -sS "+row.URL)
 			require.Equal(t, !row.Allow, strings.Contains(got.Output, "not in allowedNetworkTargets"), got.Output)
 
@@ -77,7 +74,6 @@ func TestEmulatedShellNetwork(t *testing.T) {
 	got = e.bash(t, "curl -X POST -d x "+listed.URL+"/")
 	require.Equal(t, "2", got.ErrorCode, "methods other than GET fail rather than change the request: %s", got.Output)
 
-	// C10: no other program reaches the network, even an address curl may fetch.
 	_, port, _ := strings.Cut(listedHost, ":")
 	for _, dial := range []string{
 		`python3 -c 'import socket; socket.create_connection(("1.1.1.1", 443), 1)'`,
@@ -92,16 +88,12 @@ func TestEmulatedShellNetwork(t *testing.T) {
 		require.False(t, got.Success, "%s reached the network: %s", dial, got.Output)
 	}
 
-	// A downloaded ELF, here this test binary, cannot dial out either.
 	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge dial 1.1.1.1:443 | cut -c1-5", "dial:\n")
 
-	// C12: the agent's host command uses the host's network, to an address the guest's curl may not fetch.
 	e.ok(t, "hostfetch", "unlisted")
 	require.Contains(t, e.bash(t, "curl -sS "+unlisted.URL+"/").Output, "not in allowedNetworkTargets")
 }
 
-// D: the guest sees its folders and the pinned rootfs, read-only but for its folder; no host file, socket or
-// other agent's folder; and host-side writes for it stay inside its folder.
 func TestEmulatedShellFilesystem(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "host-marker")
 	require.NoError(t, os.WriteFile(marker, []byte("host"), 0o644))
@@ -122,7 +114,6 @@ func TestEmulatedShellFilesystem(t *testing.T) {
 		require.False(t, got.Success, "D01, D04, D07: %s is visible: %s", path, got.Output)
 	}
 
-	// The host user's dotfiles never show, though the image may have its own at that path (root's, say).
 	bashrc := filepath.Join(os.Getenv("HOME"), ".bashrc")
 	if host, err := os.ReadFile(bashrc); err == nil {
 		require.NotEqual(t, string(host), e.bash(t, "cat "+bashrc).Output, "D01: the host's %s is visible", bashrc)
@@ -132,7 +123,6 @@ func TestEmulatedShellFilesystem(t *testing.T) {
 	require.False(t, e.bash(t, "echo x > "+filepath.Join(uploads, "new")).Success, "uploads are read-only")
 	require.False(t, e.bash(t, "touch /usr/bin/evil || touch /evil || touch /etc/evil").Success, "D02: the rootfs is read-only")
 
-	// D03: links the guest plants cannot move host-side work out of its folder.
 	require.False(t, e.bash(t, "ln -s "+filepath.Dir(marker)+" out && cd out").Success, "a link out of the folder leads nowhere in the guest")
 
 	for _, target := range []string{"out/host-marker", "../escape", marker, "/etc/passwd"} {
@@ -147,8 +137,6 @@ func TestEmulatedShellFilesystem(t *testing.T) {
 	require.Equal(t, "host", string(data))
 	require.NoFileExists(t, filepath.Join(filepath.Dir(e.shell.Dir), "escape"))
 
-	// D05: one file cannot exceed the file limit, nor /tmp its size. Written data the disk has not taken yet
-	// counts as the command's memory, so on a slow disk the memory limit can stop the write first.
 	got := e.bash(t, "head -c 300M /dev/zero > big")
 	require.False(t, got.Success, got.Output)
 	require.Regexp(t, `File size limit exceeded|memory \(256 MiB\) or process \(64\) limit reached`, got.Output)
@@ -160,12 +148,10 @@ func TestEmulatedShellFilesystem(t *testing.T) {
 	got = e.bash(t, "head -c 300M /dev/zero > /tmp/big")
 	require.False(t, got.Success, got.Output)
 
-	// The guest runs as an unprivileged user with no capabilities, no new privileges, and seccomp on.
 	e.ok(t, "id -u; grep -E '^(CapEff|NoNewPrivs|Seccomp):' /proc/self/status", "1000\nCapEff:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n")
 	require.False(t, e.bash(t, "unshare -U true").Success, "no nested user namespaces")
 }
 
-// E: limits stop runaway commands and nothing survives a command.
 func TestEmulatedShellLimits(t *testing.T) {
 	e := newEmulated(t, map[string]string{"slow": "sleep 30", "late": "sleep 2; echo > late", "bigout": "head -c 20000000 /dev/zero"}, nil, nil)
 
@@ -193,7 +179,6 @@ func TestEmulatedShellLimits(t *testing.T) {
 	time.Sleep(3 * time.Second)
 	require.NoFileExists(t, filepath.Join(e.shell.Dir, "late"), "E05: background jobs die with the command")
 
-	// E06: cancelling stops the guest and the host command.
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 
@@ -202,12 +187,8 @@ func TestEmulatedShellLimits(t *testing.T) {
 	require.False(t, got.Success)
 	require.Less(t, time.Since(start), 10*time.Second)
 
-	// Interrupting a host command in the guest cancels it on the host, and it ends as the signal says. The
-	// relay itself is signalled: a bare name would start it from a function, in a subshell $! names.
 	e.ok(t, "/extensions/late & sleep 1; kill -TERM $!; wait $!; echo $?; sleep 2; test -e late || echo cancelled", "143\ncancelled\n")
 
-	// E09: agents run concurrently, independently. Each is set up first: preparing is the backend's once-per-
-	// process step, not something commands race on.
 	agents := make([]*emulated, 6)
 	for i := range agents {
 		agents[i] = newEmulated(t, nil, nil, nil)
@@ -228,8 +209,6 @@ func TestEmulatedShellLimits(t *testing.T) {
 
 	wg.Wait()
 
-	// E10: host commands per shell command are bounded. It counts rather than races, and under -race each of
-	// its 129 relays starts slowly, so the -race run leaves it to the other.
 	if raceEnabled {
 		return
 	}

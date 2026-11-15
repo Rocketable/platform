@@ -50,7 +50,7 @@ func TestTurnBoundToolRefusesDetachedWork(t *testing.T) {
 							finished, errWork = w.RunBackground(context.WithoutCancel(ctx))
 							return nil
 						})
-						synctest.Wait() // An attached script blocks in its first ask before it moves.
+						synctest.Wait()
 
 						return BackgroundResult{Moved: true}, nil
 					}
@@ -82,7 +82,6 @@ func TestTurnBoundToolRefusesDetachedWork(t *testing.T) {
 
 				require.Equal(t, tc.want, got)
 
-				// A background subagent calls the same tool top-level, inside its job's context.
 				detached := context.WithValue(t.Context(), backgroundSinkKey{}, &backgroundSink{detached: true})
 				result, err := ask.Call(detached, json.RawMessage(`{}`), nil, toolCallMetadata{})
 				require.NoError(t, err)
@@ -114,7 +113,6 @@ func TestBackgroundExecuteRetainsLargeResult(t *testing.T) {
 		return BackgroundResult{Moved: true}, nil
 	}
 
-	// turn builds a conversation's runtime for one turn, as RocketClaw does.
 	turn := func(conversation, turnID string) (*Runtime, context.Context) {
 		config := testWorkspaceConfig(t, root.Name())
 		config.BackgroundJobs = jobs
@@ -200,8 +198,6 @@ func TestBackgroundExecuteRetainsLargeResult(t *testing.T) {
 	_, err = load(later, ctx, kept)
 	require.NoError(t, err)
 
-	// A move landing after an attached script stored its result for the turn finds the job settled,
-	// so the call keeps that turn-scoped result instead of leaving the turn.
 	jobs.RunFunc = func(ctx context.Context, _ *BackgroundJob, w BackgroundWork) (BackgroundResult, error) {
 		output, errRun := w.RunBackground(ctx)
 		require.NoError(t, errRun)

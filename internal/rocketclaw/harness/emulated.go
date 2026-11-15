@@ -18,11 +18,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 )
 
-// emulatedExpansionTimeout bounds a prompt's !`…` line in an emulated shell, as the bash tool's default does.
 const emulatedExpansionTimeout = defaultShellTimeout * time.Millisecond
 
-// runEmulated runs command in shell's sandbox from cwd, which must lie in its folders, with the turn's
-// variables turnEnv. The agent's commands run on the host with hostEnv and its secrets.
 func runEmulated(ctx context.Context, rt *sandbox.Runtime, shell *CustomShell, command, cwd string, turnEnv, hostEnv []string, timeout time.Duration) (sandbox.Result, error) {
 	if shell.Dir == "" {
 		return sandbox.Result{}, errors.New("emulated shell: the agent's folder is not set up for this turn")
@@ -33,7 +30,6 @@ func runEmulated(ctx context.Context, rt *sandbox.Runtime, shell *CustomShell, c
 		return sandbox.Result{}, fmt.Errorf("emulated shell: workdir %s is outside this agent's folders", cwd)
 	}
 
-	// Besides the turn's variables the guest has only these; nothing comes from RocketClaw's own environment.
 	env := append(slices.Clone(turnEnv), "PATH=/extensions:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOME=/tmp", "TMPDIR=/tmp", "LANG=C.UTF-8", "TZ=UTC")
 	host := &emulatedHost{shell: shell, env: slices.Clone(hostEnv), client: easyWebFetchClient(shell.NetworkTargets)}
@@ -53,9 +49,6 @@ func runEmulated(ctx context.Context, rt *sandbox.Runtime, shell *CustomShell, c
 	return res, nil
 }
 
-// guestWorkdir finds cwd in folders, which the sandbox mounts where they are named. A cwd given by its real
-// path, as the OS reports one under a linked folder, is turned back into that name: the check compares real
-// paths, the guest uses names (docs/solutions/security-issues/easy-agent-folder-checks-must-compare-real-paths.md).
 func guestWorkdir(folders []string, cwd string) (string, bool) {
 	realCwd, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
@@ -72,7 +65,6 @@ func guestWorkdir(folders []string, cwd string) (string, bool) {
 	return cwd, false
 }
 
-// emulatedBashResult reports an emulated shell's run as the bash tool reports host bash.
 func emulatedBashResult(res sandbox.Result, err error) BashResult {
 	if err != nil {
 		return bashFailure(err.Error())
@@ -90,11 +82,9 @@ func emulatedBashResult(res sandbox.Result, err error) BashResult {
 	return BashResult{Output: cmp.Or(string(res.Output), "(no output)"), ErrorCode: code, Success: code == ""}
 }
 
-// emulatedHost runs, on the host, the commands an emulated shell asks for. The guest controls args, cwd and
-// stdin only: the command lines, the environment and the network rules are the agent's.
 type emulatedHost struct {
 	shell  *CustomShell
-	env    []string // RocketClaw's environment, the turn's variables and the agent's secrets
+	env    []string
 	client *http.Client
 }
 
@@ -103,7 +93,6 @@ func (h *emulatedHost) Command(ctx context.Context, name string, args []string, 
 		return curl(ctx, h.client, h.shell.Dir, args, cwd, stdout, stderr)
 	}
 
-	// An agent's command runs its command line with the guest's arguments appended, in host bash.
 	cmd := exec.CommandContext(ctx, "/bin/bash", append([]string{"--noprofile", "--norc", "-c", h.shell.Commands[name] + ` "$@"`, name}, args...)...)
 	cmd.Dir, cmd.Env = h.dir(cwd), h.env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
@@ -128,11 +117,7 @@ func (h *emulatedHost) Command(ctx context.Context, name string, args []string, 
 	return 0
 }
 
-// dir is where a host command runs: the guest's directory, which is a host path, when it is really inside the
-// agent's folder; the folder otherwise.
 func (h *emulatedHost) dir(cwd string) string {
-	// shortcut: a guest could swap a checked directory for a link before the command starts; it only moves
-	// where a trusted host command runs. Upgrade with a directory descriptor if needed.
 	if realCwd, err := filepath.EvalSymlinks(cwd); err == nil && pathWithinRoot(h.shell.Dir, realCwd) {
 		return realCwd
 	}

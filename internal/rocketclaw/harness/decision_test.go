@@ -39,7 +39,6 @@ type recordedDecisionRequest struct {
 	Body   string
 }
 
-// decisionServer answers every request with response and records each request.
 func decisionServer(t *testing.T, status int, response string) (*httptest.Server, *[]recordedDecisionRequest) {
 	t.Helper()
 
@@ -76,7 +75,6 @@ func TestOpenAIDeciderAsksAndNormalizes(t *testing.T) {
 		{Name: "extra", Refused: true},
 	}, roundConfidence(answers))
 
-	// A JSON state goes as its text, followed by the images; a predicate's meanings follow its instructions.
 	require.Len(t, *requests, 1)
 	require.Equal(t, "/v1/decisions", (*requests)[0].Path)
 	require.JSONEq(t, `{
@@ -157,7 +155,6 @@ func TestTypeSafeDeciderSendsImagesAsAssets(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte((*requests)[0].Body), &body))
 
-	// The state lists each image's reference, then the input.
 	var first, second string
 
 	require.Len(t, body.State, 3)
@@ -202,7 +199,6 @@ func TestDecisionToolIsOptInAndCodeModeOnly(t *testing.T) {
 		})
 	}
 
-	// Sudo turns on every tool, but only a configured decision provider adds this one.
 	for _, deciders := range []map[string]Decider{nil, {"openai": &mockDecider{}}} {
 		dir := t.TempDir()
 		root, err := os.OpenRoot(dir)
@@ -249,12 +245,10 @@ func TestDecisionToolAnswersByQuestionName(t *testing.T) {
 			"tone":{"type":"choice","choice":"calm","probabilities":{"calm":0.8,"angry":0.2},"confidence":0.7},
 			"urgency":{"type":"score","score":0.9,"confidence":0.6}}}`},
 		{name: "provider error", err: errors.New("provider down"), want: `{"model":"openai/gpt-6-luna","answers":{},"stop_reason":"error","error_message":"decide with openai/gpt-6-luna: provider down"}`},
-		// The request was still billed.
 		{name: "refusal", answers: answers[:2], want: `{"model":"openai/gpt-6-luna","answers":{},"usage":{"input_tokens":2000,"output_tokens":0},"stop_reason":"error","error_message":"the model did not answer \"urgency\""}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			decider := &mockDecider{DecideFunc: func(ctx context.Context, _ *DecisionRequest) ([]DecisionAnswer, DecisionUsage, error) {
-				// A hung provider cannot hold the script.
 				deadline, ok := ctx.Deadline()
 				require.True(t, ok)
 				require.InDelta(t, decisionTimeout.Seconds(), time.Until(deadline).Seconds(), 5)
@@ -293,7 +287,6 @@ func TestDecisionToolAnswersByQuestionName(t *testing.T) {
 	}
 }
 
-// Every decision call is a generation span carrying its tokens.
 func TestDecideRecordsAGenerationSpan(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
@@ -320,7 +313,6 @@ func TestDecideRecordsAGenerationSpan(t *testing.T) {
 	}
 }
 
-// Code Mode scripts read the answers as a dict, with images read through the agent's read tool.
 func TestExecuteDecisionReturnsADict(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
@@ -361,7 +353,6 @@ func TestExecuteDecisionReturnsADict(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "calm stop 12", result.Output)
 
-	// Images are files, so they need the agent's read permission.
 	var noRead PermissionSet
 	require.NoError(t, noRead.Allow("decision", "openai/*"))
 
@@ -369,7 +360,6 @@ func TestExecuteDecisionReturnsADict(t *testing.T) {
 	require.ErrorContains(t, err, "images: reading files needs read permission")
 }
 
-// roundConfidence rounds each confidence to two places, since a predicate's is computed in floating point.
 func roundConfidence(answers []DecisionAnswer) []DecisionAnswer {
 	for i := range answers {
 		answers[i].Confidence = float64(int(answers[i].Confidence*100+0.5)) / 100

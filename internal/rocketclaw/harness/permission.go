@@ -18,51 +18,36 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// PermissionAction determines whether a matched operation is allowed or denied.
 type PermissionAction string
 
 const (
-	// PermissionAllow allows a matching operation.
 	PermissionAllow PermissionAction = "allow"
-	// PermissionDeny denies a matching operation.
-	PermissionDeny PermissionAction = "deny"
-	// PermissionAuto requires automatic reviewer approval for a matching operation.
-	PermissionAuto PermissionAction = "auto"
+	PermissionDeny  PermissionAction = "deny"
+	PermissionAuto  PermissionAction = "auto"
 
 	permissionAllow = PermissionAllow
 	permissionDeny  = PermissionDeny
 	permissionAuto  = PermissionAuto
 )
 
-// PermissionRule matches a subject pattern to a permission action.
 type PermissionRule struct {
 	Pattern  string
 	Action   PermissionAction
 	Reviewer string
 
-	// Segments split the authored pattern at every ${ROCKETCLAW_*} reference.
-	// Literal segments come from the environment and match as plain text;
-	// authored segments keep wildcard semantics. Nil means no interpolation.
 	segments []ruleSegment
 }
 
-// ruleSegment is one piece of a permission pattern: authored text with wildcard
-// semantics, or a literal environment value matched as plain text.
 type ruleSegment struct {
 	Text    string
 	Literal bool
 }
 
-// PermissionBucket groups permission rules under a named permission category.
 type PermissionBucket struct {
 	Name  string
 	Rules []PermissionRule
 }
 
-// PermissionSet contains all permission buckets configured for an agent.
-// Sudo makes every subject no rule matches require automatic approval.
-// Easy marks an easy agent's compiled rules: features that need an allow
-// also count automatic approval as on, as under Sudo.
 type PermissionSet struct {
 	Buckets   []PermissionBucket
 	Sudo      bool
@@ -90,9 +75,6 @@ var permissionEnvPattern = regexp.MustCompile(`\$\{(ROCKETCLAW_[A-Za-z0-9_]+)\}`
 
 var errRocketClawExactNames = errors.New("name each rocketclaw tool; wildcards and the scalar form are not supported")
 
-// InterpolatePermissions resolves ${ROCKETCLAW_*} references in agent's permission rules against env,
-// a list of KEY=VALUE entries: a rule whose variable is absent or empty is dropped, except that a deny
-// rule matches as if the variable were *.
 func InterpolatePermissions(agent *Agent, env []string) {
 	values := make(map[string]string)
 
@@ -121,9 +103,6 @@ func InterpolatePermissions(agent *Agent, env []string) {
 				rule.segments = segments
 			}
 
-			// Rules whose variable is absent or empty are dropped from the set:
-			// a scoped rule without its variable grants nothing that turn. A deny
-			// rule instead matches as if the variable were *, so it still denies.
 			if len(rule.segments) == 0 {
 				kept = append(kept, rule)
 				continue
@@ -337,17 +316,14 @@ func expandPermissionPattern(permission, pattern string) string {
 	return pattern
 }
 
-// Allow appends an allow rule for permission and pattern.
 func (ps *PermissionSet) Allow(permission, pattern string) error {
 	return ps.Set(permission, pattern, PermissionAllow)
 }
 
-// Deny appends a deny rule for permission and pattern.
 func (ps *PermissionSet) Deny(permission, pattern string) error {
 	return ps.Set(permission, pattern, PermissionDeny)
 }
 
-// Set appends a permission rule for permission and pattern.
 func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction) error {
 	if _, _, err := parsePermissionAction(string(action)); err != nil {
 		return err
@@ -372,18 +348,11 @@ func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction
 	return nil
 }
 
-// Evaluate returns the effective permission action for permission and subject.
-// The matched result reports whether a configured rule explicitly matched.
-// When matched is false, action defaults to PermissionDeny, or PermissionAuto under Sudo,
-// except that rocketclaw.load_agents_md and, without Sudo, rocketclaw.code_mode_approve
-// default to PermissionAllow. Only exact rules match rocketclaw subjects.
 func (ps PermissionSet) Evaluate(permission, subject string) (action PermissionAction, matched bool) {
 	decision := ps.evaluate(permission, subject)
 	return decision.Action, decision.Matched
 }
 
-// Enabled reports whether a feature that needs an exact allow is on for subject:
-// it evaluates to allow, or to automatic approval under Sudo or for an easy agent.
 func (ps PermissionSet) Enabled(permission, subject string) bool {
 	action := ps.evaluate(permission, subject).Action
 	return action == permissionAllow || (ps.Sudo || ps.Easy) && action == permissionAuto
@@ -456,7 +425,6 @@ func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, s
 
 			switch {
 			case permission == "rocketclaw":
-				// Only an exact rule names a rocketclaw tool or setting.
 				matches = rule.Pattern == subject
 			case permission == "bash" && len(scripts) > 0:
 				matches = bashComponentPatternMatch(input, pattern, segments...) ||
@@ -528,7 +496,6 @@ func permissionWildcardMatch(input, pattern string, segments ...ruleSegment) boo
 	}
 
 	if len(segments) == 0 {
-		// Invalid UTF-8 must retain regexp's replacement-rune matching.
 		if !strings.ContainsRune(pattern, '?') && utf8.ValidString(pattern) && utf8.ValidString(input) {
 			before, after, star := strings.Cut(pattern, "*")
 			if !star {
@@ -562,7 +529,6 @@ func permissionWildcardMatch(input, pattern string, segments ...ruleSegment) boo
 	}
 
 	escaped := expression.String()
-	// Folded paths can compose Unicode across interpolation boundaries.
 	if pattern != joinRuleSegments(segments) {
 		escaped = norm.NFC.String(escaped)
 	}
@@ -586,15 +552,12 @@ func canonicalToolArguments(raw json.RawMessage) string {
 		return string(raw)
 	}
 
-	buf, _ := json.Marshal(value) // Values decoded into any are JSON-encodable.
+	buf, _ := json.Marshal(value)
 
 	return string(buf)
 }
 
-// BashPermissionSubjects returns independently authorized shell operations.
-// Unparseable syntax and unresolved executable names deny the entire script.
 func BashPermissionSubjects(command string) []string {
-	// The parser normalizes CR and NUL bytes; the executed argument must not differ.
 	if strings.ContainsAny(command, "\r\x00") {
 		return nil
 	}
@@ -625,7 +588,6 @@ func bashPermissionNodes(file *syntax.File, rule bool) []string {
 			*syntax.Assign, *syntax.ArrayExpr, *syntax.ArrayElem, *syntax.CStyleLoop,
 			*syntax.CaseItem, *syntax.BinaryArithm, *syntax.UnaryArithm, *syntax.ParenArithm,
 			*syntax.BinaryTest, *syntax.UnaryTest, *syntax.ParenTest, *syntax.IfClause:
-			// These are data or children of an independently checked operation.
 		case *syntax.Stmt:
 			if node.Coprocess || node.Disown {
 				return nil
@@ -639,7 +601,6 @@ func bashPermissionNodes(file *syntax.File, rule bool) []string {
 				subjects = append(subjects, "&")
 			}
 
-			// elif/else belong to the outer if; only that clause owns a statement.
 			if clause, ok := node.Cmd.(*syntax.IfClause); ok {
 				printed = append(printed, clause)
 			}
@@ -657,7 +618,6 @@ func bashPermissionNodes(file *syntax.File, rule bool) []string {
 			}
 
 			if len(node.Args) > 0 {
-				// Argument expansion is an explicit grant; an unknown executable is not.
 				if !rule && !bashStaticExecutable(node.Args[0]) {
 					return nil
 				}
@@ -689,7 +649,6 @@ func bashPermissionNodes(file *syntax.File, rule bool) []string {
 		}
 
 		for _, word := range expandedWords {
-			// Permission wildcards match argument text; they are not shell expansions.
 			if !rule && bashWordExpansion(word) {
 				printed = append(printed, word)
 			}
@@ -715,7 +674,6 @@ func bashComponentPatternMatch(subject, pattern string, segments ...ruleSegment)
 
 	file, err := syntax.NewParser().Parse(strings.NewReader(pattern), "")
 	if err != nil {
-		// Component patterns such as "for *" need not be complete scripts.
 		return true
 	}
 
@@ -793,8 +751,7 @@ func bashScriptPatternMatch(command, pattern string, segments ...ruleSegment) bo
 
 		shapes[i] = shape.String()
 	}
-	// Matching the raw text alone lets '*' consume separators or substitutions.
-	// Require the same operation tree and match each operation independently.
+
 	if shapes[0] != shapes[1] || len(subjects[0]) == 0 {
 		return false
 	}
@@ -814,7 +771,7 @@ func bashExecutablePatternMatch(subject, pattern string) bool {
 	for i, text := range []string{pattern, subject} {
 		file, err := syntax.NewParser().Parse(strings.NewReader(text), "")
 		if err != nil || len(file.Stmts) != 1 {
-			return true // Non-command components keep their text-matching rules.
+			return true
 		}
 
 		call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
@@ -822,7 +779,6 @@ func bashExecutablePatternMatch(subject, pattern string) bool {
 			return true
 		}
 
-		// A nil config makes expand share its package-level config across goroutines.
 		fields, err := expand.Fields(&expand.Config{}, call.Args[0])
 		if err != nil || len(fields) != 1 {
 			return false
@@ -834,8 +790,6 @@ func bashExecutablePatternMatch(subject, pattern string) bool {
 		}
 	}
 
-	// Path-shaped wildcards must not swallow parent-directory components.
-	// Explicit executable names and unrestricted command grants retain their meaning.
 	return !slices.Contains(strings.Split(executables[1], "/"), "..")
 }
 
@@ -870,7 +824,7 @@ func bashWordExpansion(word *syntax.Word) bool {
 	}
 
 	assignment := false
-	bracket := 0 // 0: outside, 1: opening, 2: negated opening, 3: has a member.
+	bracket := 0
 
 	for partIndex, part := range word.Parts {
 		lit, ok := part.(*syntax.Lit)

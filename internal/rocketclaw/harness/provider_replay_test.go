@@ -271,7 +271,6 @@ func TestReplayForProviderValidatesRequiredKnownFields(t *testing.T) {
 	assert.Contains(t, string(replay[0]), `"arguments":""`)
 }
 
-// replayForWork converts replay a default-provider model recorded for provider work.
 func replayForWork(raw ...json.RawMessage) ([]json.RawMessage, error) {
 	entry := SessionEntry{ReplayInput: raw}
 	err := entry.forProvider("work")

@@ -13,15 +13,13 @@ import (
 
 type toolCallContextKey struct{}
 
-// toolCallContext snapshots the turn state a call needs, because a Background Job keeps
-// running after the looper moves on to later tool batches and turns.
 type toolCallContext struct {
 	looper       *looper
 	observations *turnObservations
 	reviewInput  []responses.ResponseInputItemUnionParam
 	output       chan<- ChatResponse
 	callID       string
-	sink         *backgroundSink // The call's own Background Job, if it runs as one.
+	sink         *backgroundSink
 }
 
 func toolCallContextFrom(ctx context.Context) (toolCallContext, bool) {
@@ -31,13 +29,10 @@ func toolCallContextFrom(ctx context.Context) (toolCallContext, bool) {
 	return tc, ok && tc.looper != nil
 }
 
-// CallKey is the journal key of a model's tool call callID in turn turnID.
 func CallKey(turnID, callID string) string {
 	return turnID + "/call/" + callID
 }
 
-// ToolCallKey returns the current tool call's journal key, stable across restarts; empty outside a call.
-// Inside a Code Mode script each host call has its own key under the script's call.
 func ToolCallKey(ctx context.Context) string {
 	tc, ok := toolCallContextFrom(ctx)
 	if !ok {
@@ -52,8 +47,6 @@ func ToolCallKey(ctx context.Context) string {
 	return key
 }
 
-// ToolCallAgent returns the active caller's definition inside a tool call.
-// Its maps and slices are read-only and must not be mutated by consumers.
 func ToolCallAgent(ctx context.Context) (Agent, bool) {
 	tc, ok := toolCallContextFrom(ctx)
 	if !ok {
@@ -63,8 +56,6 @@ func ToolCallAgent(ctx context.Context) (Agent, bool) {
 	return tc.looper.agent, true
 }
 
-// CheckNestedToolCall runs the same allow/deny/auto(+reviewer) gate as a top-level tool call,
-// including multi-subject tools (e.g. apply_patch). Must run inside a looper tool Call context.
 func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool, args json.RawMessage) error {
 	tc, ok := toolCallContextFrom(ctx)
 	if !ok {
@@ -94,7 +85,6 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 
 	reviewDecision := tc.looper.PermissionReviewer.reviewPermission(ctx, decision.review, tc.output)
 
-	// The call's record takes the decision when it finishes; see recordCodeModeCall.
 	tc.observations.mu.Lock()
 	if tc.observations.reviews == nil {
 		tc.observations.reviews = map[string]permissionReviewDecision{}
@@ -110,14 +100,12 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 	return nil
 }
 
-// permissionDeniedError is a nested call refused by a permission rule or the approver.
 type permissionDeniedError string
 
 func (e permissionDeniedError) Error() string {
 	return string(e)
 }
 
-// CheckNestedPermission is a single-subject helper used by MCP builtins.
 func CheckNestedPermission(ctx context.Context, toolName, permission, subject string, args map[string]any) error {
 	raw, err := json.Marshal(args)
 	if err != nil {

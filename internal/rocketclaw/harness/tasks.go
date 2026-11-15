@@ -17,15 +17,13 @@ import (
 )
 
 type taskParams struct {
-	Description  string `json:"description"`
-	Prompt       string `json:"prompt"`
-	SubagentType string `json:"subagent_type"`
-	Command      string `json:"command"`
-	// Model and Tools replace SubagentType for an easy agent (subagentWrite).
-	Model string   `json:"model"`
-	Tools []string `json:"tools"`
-	// Continue names a saved subagent; backgroundTool checks it is a direct child.
-	Continue taskContinue `json:"continue"`
+	Description  string       `json:"description"`
+	Prompt       string       `json:"prompt"`
+	SubagentType string       `json:"subagent_type"`
+	Command      string       `json:"command"`
+	Model        string       `json:"model"`
+	Tools        []string     `json:"tools"`
+	Continue     taskContinue `json:"continue"`
 }
 
 func (f *toolFactory) taskTool() looperTool {
@@ -180,8 +178,6 @@ func (f *toolFactory) availableSubagentsDescription() string {
 	return strings.Join(lines, "\n")
 }
 
-// childSystemPrompt puts the instructions a permission review agent may load ahead of its prompt; a session's
-// agent has its prompt first instead (sessionSystemPrompt).
 func (f *toolFactory) childSystemPrompt(agent *Agent) string {
 	rootInstructions := ""
 	if agent.Permission.evaluate("rocketclaw", "load_agents_md").Action == permissionAllow {
@@ -191,8 +187,6 @@ func (f *toolFactory) childSystemPrompt(agent *Agent) string {
 	return strings.TrimSpace(strings.TrimSpace(rootInstructions+"\n\n"+f.workspaceInstructions) + "\n\n" + agent.Prompt)
 }
 
-// sessionSystemPrompt expands the prompt of agent, which runs a session, and follows it with the
-// instructions agent may load and the workspace.
 func (f *toolFactory) sessionSystemPrompt(ctx context.Context, agent *Agent) string {
 	expandAgentPrompt(ctx, agent, f.expandPromptShellCommands.PrimaryPrompts, &f.promptExpansion)
 
@@ -204,8 +198,6 @@ func (f *toolFactory) sessionSystemPrompt(ctx context.Context, agent *Agent) str
 	return strings.TrimSpace(agent.Prompt + "\n\n" + strings.TrimSpace(rootInstructions+"\n\n"+f.workspaceInstructions))
 }
 
-// runTask delegates params to a subagent session: a new one, which it writes the prompt to, or the
-// continued one backgroundTool already wrote it to. It answers once that session's turn ends.
 func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata toolCallMetadata) (string, error) {
 	if f.recursionRemaining != nil && *f.recursionRemaining == 0 {
 		return "", errors.New("maxRecursion limit reached: task delegation is unavailable")
@@ -217,12 +209,11 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 	}
 
 	progress := *metadata.progress
-	// The model stays absent until the turn ends; neither aliases nor parent attribution leak.
 	progress.Kind, progress.Agent, progress.Model = PublicProgressDelegation, write.Agent, ""
-	// The row names the subagent by its key under the history that holds the call.
+
 	key := ChildKey{Path: "/" + delegationName(metadata.callID, ToolCallKey(ctx)), Turn: metadata.observations.turnID, Call: metadata.callID}
 	if id := params.Continue.SessionID; id != "" {
-		key.Path = strings.TrimPrefix(id, f.childKey.Path) // backgroundTool checked that it names a child of this session.
+		key.Path = strings.TrimPrefix(id, f.childKey.Path)
 	}
 
 	progress.SubagentKey = key.Path
@@ -245,7 +236,6 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 		return "", fmt.Errorf("await subagent: %w", err)
 	}
 
-	// The row names the type the turn ended as, which a steer may have switched it to.
 	progress.Agent, progress.Model = final.Agent, final.Model
 	if err := metadata.observations.observe(ctx, &progress); err != nil {
 		return "", err
@@ -254,15 +244,10 @@ func (f *toolFactory) runTask(ctx context.Context, params *taskParams, metadata 
 	return TaskResult(last), nil
 }
 
-// delegable reports whether delegator may run agent as its subagent: a sticky agent is top-level, so only it
-// delegates to itself, and no child session ever runs a sticky agent of another kind than its parent's.
 func delegable(agent, delegator *Agent) bool {
 	return agent.Sticky == AgentStickyOff || agent.Name == delegator.Name
 }
 
-// subagentWrite is the write, but its key, that delegates params: to the agent type they name, never an easy
-// agent (A4), or, for an easy agent, to that agent on the model they pick from its subagents, with the tools
-// they name from its own, or all of its own when they name none (R7).
 func (f *toolFactory) subagentWrite(ctx context.Context, params *taskParams) (SubagentWrite, error) {
 	if f.agent.Mode != AgentModeEasy {
 		agent, ok := f.agents.Items[params.SubagentType]
@@ -304,44 +289,29 @@ func (f *toolFactory) subagentWrite(ctx context.Context, params *taskParams) (Su
 	return SubagentWrite{Agent: f.agent.Name, Delegator: f.agent.Name, Prompt: params.Prompt, Model: params.Model, Tools: tools}, nil
 }
 
-// TaskResult is the task call result of answer, a subagent session's answer.
 func TaskResult(answer string) string {
 	return strings.Join([]string{"<task_result>", answer, "</task_result>"}, "\n")
 }
 
-// delegationName is the child-session key segment of a Delegation History a call starts: the
-// subagent of a new task call, or a call's permission review. Like OpenCode's per-subagent session
-// ID, it stays unique when a provider reuses a call ID in a later turn: it adds to name a hash of
-// the call's tool call key, which a resumed turn keeps.
 func delegationName(name, callKey string) string {
 	sum := sha256.Sum256([]byte(callKey))
 	return name + "-" + hex.EncodeToString(sum[:4])
 }
 
-// ReviewKey is the child-session key segment of every automatic permission review of call callID
-// in turn turnID, before the call runs or during it, such as of a Code Mode script's tool calls.
 func ReviewKey(turnID, callID string) string {
 	return delegationName(callID+"-review", CallKey(turnID, callID))
 }
 
-// ReviewTurn is the turn under which the automatic permission review of the call keyed callKey (see
-// ToolCallKey) saves its answer in the review's Delegation History. It has no slash, so the review's
-// retained results never nest under another turn's.
 func ReviewTurn(callKey string) string {
 	return delegationName("review", callKey)
 }
 
-// asRecordAgent returns l, or, once a steer switched the turn record to another agent type, a looper
-// that runs as that type for the turn's remaining steps, as OpenCode packages/core/src/session/context.ts
-// selects the session's agent at every step. l stays as it was for the jobs its calls left running. When
-// the type runs on another provider than l, the turn's items and the history before them, which l's input
-// holds, are converted for it as loadSession and openTurn convert saved turns.
 func (l *looper) asRecordAgent(ctx context.Context, record *SessionEntry, history *[]responses.ResponseInputItemUnionParam, attribution *[]ReplayAttribution, turnItems *[]responses.ResponseInputItemUnionParam) (*looper, error) {
-	if record.Agent == l.agent.Name || record.Agent == "" { // A turn journaled before records named their agent keeps l.
+	if record.Agent == l.agent.Name || record.Agent == "" {
 		return l, nil
 	}
 
-	f := l.PermissionReviewer.(*toolFactory) // newLooper installs its factory as the reviewer.
+	f := l.PermissionReviewer.(*toolFactory)
 
 	agent, ok := f.agents.Items[record.Agent]
 	if !ok {
@@ -357,7 +327,6 @@ func (l *looper) asRecordAgent(ctx context.Context, record *SessionEntry, histor
 
 	next.Journal, next.observations, next.SteerDrain, next.expandInputPrompts = l.Journal, l.observations, l.SteerDrain, l.expandInputPrompts
 	next.restoreTurnExecuteResults(record.TurnID)
-	// The items the new type adds name its model, so a switch back converts them in turn.
 	record.Model, record.ReasoningEffort = next.DisplayModel, new(string(next.ReasoningEffort))
 
 	provider := providerForModel(next.DisplayModel)
@@ -397,8 +366,6 @@ func (f *toolFactory) childSession(yield func(SessionEntry, error) bool) {
 	}
 }
 
-// runPrompt runs texts as the only turn of l, journaled under turnID, emits permission-review
-// diagnostics to parentOutput, and returns the turn's last assistant message.
 func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, sessionIn iter.Seq2[SessionEntry, error], sessionOut sessionWriter, parentOutput chan<- ChatResponse) (last string, err error) {
 	output := make(chan ChatResponse)
 
@@ -432,12 +399,11 @@ func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, s
 	})
 
 	err = l.Loop(ctx, input, sessionIn, sessionOut, make(chan os.Signal, 1))
-	_ = group.Wait() // The collector cannot fail.
+	_ = group.Wait()
 
 	return last, err
 }
 
-// childSessionWriter saves a hidden run under its factory's childKey.
 type childSessionWriter struct {
 	factory *toolFactory
 }

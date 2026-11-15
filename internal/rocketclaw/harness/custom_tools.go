@@ -13,7 +13,6 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
-// Tool is a custom function tool supplied by an embedding application.
 type Tool struct {
 	Name               string
 	Description        string
@@ -22,10 +21,8 @@ type Tool struct {
 	VisibilitySubjects []string
 	Subjects           func(json.RawMessage) ([]string, error)
 	Call               func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error)
-	// Resumable calls interrupted by a restart run again instead of being reported interrupted.
-	Resumable bool
-	// TurnBound calls refuse to run in background work, which has left the turn they act on.
-	TurnBound bool
+	Resumable          bool
+	TurnBound          bool
 }
 
 var customToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -101,7 +98,6 @@ func customLooperTool(tool *Tool) (looperTool, error) {
 	}
 
 	call := func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-		// A result, not an error, so a background script keeps running past the refusal.
 		if tool.TurnBound && backgroundDetached(ctx) {
 			return TextToolResult(fmt.Sprintf(TurnBoundRefused, tool.Name)), nil
 		}

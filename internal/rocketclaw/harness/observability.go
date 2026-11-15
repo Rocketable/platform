@@ -28,7 +28,7 @@ func (o ObservabilityConfig) startSpan(ctx context.Context, name, kind string, a
 
 	ctx, span := o.Tracer.Start(ctx, name)
 	instrumentation.ApplyContextAttributes(ctx, span)
-	// PostHog reads a span as LLM analytics only by its OpenTelemetry GenAI operation.
+
 	operation := map[string]attribute.KeyValue{
 		semconv.SpanKindAgent: otelsemconv.GenAIOperationNameInvokeAgent,
 		semconv.SpanKindLLM:   otelsemconv.GenAIOperationNameChat,

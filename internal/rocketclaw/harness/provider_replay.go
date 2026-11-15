@@ -21,9 +21,6 @@ func providerForModel(model string) string {
 	return "openai"
 }
 
-// forProvider replaces each replay item another provider's model produced with
-// the portable input any provider accepts, and moves the attribution ranges to
-// the replaced items.
 func (e *SessionEntry) forProvider(provider string) error {
 	replay := make([]json.RawMessage, 0, len(e.ReplayInput))
 
@@ -139,8 +136,6 @@ func (e *SessionEntry) forProvider(provider string) error {
 	return nil
 }
 
-// compactionText returns a compaction item's readable text: its content, or its
-// summary when the content has none.
 func compactionText(raw json.RawMessage) ([]string, error) {
 	var item struct{ Content, Summary json.RawMessage }
 	if err := json.Unmarshal(raw, &item); err != nil {

@@ -102,7 +102,6 @@ func TestTurnObservationsPersistAfterChildCancellation(t *testing.T) {
 	require.Len(t, owner.trace, 2, "tool completion and answer remain stored")
 	require.Equal(t, PublicProgressCompleted, PublicProgressFromTrace(owner.trace)[0].State)
 
-	// The script call record is saved on its own, never with a trace save.
 	saved := journal.SaveCodeModeCallCalls()
 	require.Len(t, saved, 1)
 	require.Equal(t, "turn-1/call/execute-1/host/0", saved[0].Key)

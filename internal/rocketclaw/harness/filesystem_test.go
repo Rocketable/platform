@@ -461,7 +461,6 @@ func globAllocationFixture(tb testing.TB) (sfs *sandboxedFileSystem, output stri
 
 	rg, err := exec.LookPath("rg")
 	require.NoError(tb, err)
-	// Keep executable lookup costs independent of the caller's PATH length.
 	tb.Setenv("PATH", filepath.Dir(rg))
 	root, err := os.OpenRoot(tb.TempDir())
 	require.NoError(tb, err)
@@ -497,7 +496,6 @@ func TestSandboxedFileSystemGlobPathAllocations(t *testing.T) {
 			t.Fatal("glob output differs from the sorted file paths")
 		}
 	})
-	// Allow command and result bookkeeping, but not a second path allocation per match.
 	require.LessOrEqual(t, allocs, 512*perMatch+200)
 }
 
@@ -754,7 +752,6 @@ func grepInventoryFixture(tb testing.TB) *sandboxedFileSystem {
 }
 
 func TestGrepInventoryAllocations(t *testing.T) {
-	// This test is nonparallel: restore the throughput setting before other tests run.
 	benchtime := flag.Lookup("test.benchtime").Value.String()
 
 	require.NoError(t, flag.Set("test.benchtime", "4096x"))
@@ -803,7 +800,6 @@ func TestGrepInventoryAllocations(t *testing.T) {
 		}
 	})
 	require.Positive(t, cost.N)
-	// Calibrate command buffering and path costs, leaving room for bookkeeping but not another inventory.
 	require.Less(t, cost.AllocedBytesPerOp()-listing.AllocedBytesPerOp()-65536*perFile.AllocedBytesPerOp(), int64(512<<10), "inventory=%d B/op listing=%d B/op denied_path=%d B/op", cost.AllocedBytesPerOp(), listing.AllocedBytesPerOp(), perFile.AllocedBytesPerOp())
 }
 
@@ -831,7 +827,6 @@ func BenchmarkPatchUpdatePreview(b *testing.B) {
 
 func TestPatchUpdatePreviewAllocation(t *testing.T) {
 	cost := testing.Benchmark(BenchmarkPatchUpdatePreview)
-	// One source buffer, its text, and the edited text fit below four file copies.
 	require.Less(t, cost.AllocedBytesPerOp(), int64(4<<20))
 }
 
@@ -983,8 +978,6 @@ func TestApplyPatchFailures(t *testing.T) {
 func TestApplyPatchParity(t *testing.T) {
 	t.Parallel()
 
-	// OpenCode packages/opencode/src/patch/index.ts appends insertion-only
-	// hunks and tolerates a final blank context line absent from the file.
 	for _, tc := range []struct {
 		name, before, chunk, want string
 	}{
@@ -1039,8 +1032,6 @@ func TestApplyPatchParity(t *testing.T) {
 			"unicode.txt":                 []byte("He said “hello”\nsome—dash\nend\n"),
 			"example.cs":                  []byte("\ufeffusing System;\n\nclass Test {}\n"),
 		}
-		// One oracle process checks every independent edit and the complete resulting tree.
-		// OpenCode packages/opencode/src/patch/index.ts tries exact matches before whitespace fallbacks.
 		patch := strings.Join([]string{
 			"*** Begin Patch",
 			"*** Add File: nested/new.txt\n+created\n*** Delete File: delete.txt\n*** Update File: modify.txt\n@@\n-line2\n+changed",

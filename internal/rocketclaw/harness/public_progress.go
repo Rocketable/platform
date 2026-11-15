@@ -14,10 +14,8 @@ import (
 	"unicode/utf8"
 )
 
-// PublicProgressKind identifies display-only root activity, never replay input.
 type PublicProgressKind string
 
-// Public progress kinds distinguish text, reasoning summaries, tools, and delegated activity.
 const (
 	PublicProgressText       PublicProgressKind = "text"
 	PublicProgressThinking   PublicProgressKind = "thinking"
@@ -25,35 +23,27 @@ const (
 	PublicProgressDelegation PublicProgressKind = "delegation"
 )
 
-// PublicProgressState is a fixed public lifecycle label, not diagnostic text.
 type PublicProgressState string
 
-// Public progress states describe execution and review outcomes.
 const (
-	PublicProgressWorking   PublicProgressState = "working"
-	PublicProgressReview    PublicProgressState = "review"
-	PublicProgressCompleted PublicProgressState = "completed"
-	PublicProgressBlocked   PublicProgressState = "blocked"
-	PublicProgressFailed    PublicProgressState = "failed"
-	PublicProgressStopped   PublicProgressState = "stopped"
-	// PublicProgressBackground means the call returned while its work runs as a Background Job.
+	PublicProgressWorking    PublicProgressState = "working"
+	PublicProgressReview     PublicProgressState = "review"
+	PublicProgressCompleted  PublicProgressState = "completed"
+	PublicProgressBlocked    PublicProgressState = "blocked"
+	PublicProgressFailed     PublicProgressState = "failed"
+	PublicProgressStopped    PublicProgressState = "stopped"
 	PublicProgressBackground PublicProgressState = "background"
 )
 
-// PublicProgress contains only explicitly public text and producer identity.
-// ID is a response/item or call identity, qualified by ParentID when present.
-// Slice order preserves the producer's original item/call order.
 type PublicProgress struct {
-	ID       string              `json:"id"`
-	ParentID string              `json:"parent_id,omitempty"`
-	Kind     PublicProgressKind  `json:"kind"`
-	State    PublicProgressState `json:"state"`
-	Text     string              `json:"text,omitempty"`
-	Agent    string              `json:"agent,omitempty"`
-	Model    string              `json:"model,omitempty"`
-	// SubagentKey is the key of the subagent a task call runs or continues under the history that
-	// holds the call, as OpenCode keeps a task part's child session ID in its metadata.
-	SubagentKey string `json:"subagent_key,omitempty"`
+	ID          string              `json:"id"`
+	ParentID    string              `json:"parent_id,omitempty"`
+	Kind        PublicProgressKind  `json:"kind"`
+	State       PublicProgressState `json:"state"`
+	Text        string              `json:"text,omitempty"`
+	Agent       string              `json:"agent,omitempty"`
+	Model       string              `json:"model,omitempty"`
+	SubagentKey string              `json:"subagent_key,omitempty"`
 }
 
 type publicProgressTrace struct {
@@ -61,8 +51,6 @@ type publicProgressTrace struct {
 	Progress PublicProgress `json:"progress"`
 }
 
-// PublicProgressFromTrace decodes only recognized public records. Legacy,
-// malformed, and unknown future records remain stored but are never projected.
 func PublicProgressFromTrace(traces []json.RawMessage) []PublicProgress {
 	var progress []PublicProgress
 
@@ -83,10 +71,8 @@ func PublicProgressFromTrace(traces []json.RawMessage) []PublicProgress {
 	return progress
 }
 
-// codeModeCallStatus is the state of one call an Execute script made.
 type codeModeCallStatus string
 
-// A call fails with codeModeCallError, as does a bash command that exits non-zero.
 const (
 	codeModeCallRunning codeModeCallStatus = "running"
 	codeModeCallOK      codeModeCallStatus = "ok"
@@ -95,19 +81,12 @@ const (
 )
 
 const (
-	// codeModeCallTraceType records one call an Execute script made, and codeModeReviewTraceType
-	// the approver's whole-script decision. Neither is a model item, so replay never reads them.
-	codeModeCallTraceType   = "rocketcode_code_mode_call"
-	codeModeReviewTraceType = "rocketcode_code_mode_review"
-	// MaxCodeModeCalls bounds an Execute call's records, which History loads with the turn.
+	codeModeCallTraceType    = "rocketcode_code_mode_call"
+	codeModeReviewTraceType  = "rocketcode_code_mode_review"
 	MaxCodeModeCalls         = 200
 	maxCodeModeCallArguments = 4 << 10
 )
 
-// CodeModeCall is a call an Execute script made, as saved on its own while its turn runs, then
-// in the turn trace, and shown in history. It keeps no output beyond Summary. Key is the call's
-// ToolCallKey; Outcome and Reason are set only when the approver ran. A review record, with no
-// Name, holds the approver's decision on the whole script under its Execute call's key.
 type CodeModeCall struct {
 	Type         string                  `json:"type"`
 	ParentCallID string                  `json:"parent_call_id"`
@@ -120,7 +99,6 @@ type CodeModeCall struct {
 	Reason       string                  `json:"reason,omitempty"`
 }
 
-// CodeModeCallsFromTrace decodes a turn trace's Code Mode records in trace order.
 func CodeModeCallsFromTrace(traces []json.RawMessage) []CodeModeCall {
 	var calls []CodeModeCall
 
@@ -134,8 +112,6 @@ func CodeModeCallsFromTrace(traces []json.RawMessage) []CodeModeCall {
 	return calls
 }
 
-// String renders the record on one line for an agent reading a session: the call, its status and
-// output summary, and the approver's decision when it ran. A whole-script review has only the decision.
 func (r *CodeModeCall) String() string {
 	text := "[" + r.ParentCallID + "]"
 	if r.Name != "" {
@@ -152,14 +128,12 @@ func (r *CodeModeCall) String() string {
 	return text
 }
 
-// codeModeCallRecord starts the record of the Code Mode call running under ctx.
 func codeModeCallRecord(ctx context.Context, name string, raw json.RawMessage) CodeModeCall {
 	tc, _ := toolCallContextFrom(ctx)
 
 	return CodeModeCall{Type: codeModeCallTraceType, ParentCallID: tc.callID, Key: ToolCallKey(ctx), Name: name, Arguments: clipCodeModeArguments(string(raw)), Status: codeModeCallRunning}
 }
 
-// clipCodeModeArguments bounds a Code Mode call's arguments as shown in history.
 func clipCodeModeArguments(arguments string) string {
 	if len(arguments) > maxCodeModeCallArguments {
 		arguments = strings.ToValidUTF8(arguments[:maxCodeModeCallArguments], "") + "…[truncated]"
@@ -168,8 +142,6 @@ func clipCodeModeArguments(arguments string) string {
 	return arguments
 }
 
-// finish sets the call's final status and summary. The summary is the last non-empty line of what the
-// script received, or of the error, or the size of binary output; never the output itself.
 func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
 	text := attachmentOutputMessage(result)
 
@@ -192,8 +164,8 @@ func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
 	}
 
 	text = strings.TrimRightFunc(text, unicode.IsSpace)
+
 	line := text[strings.LastIndexByte(text, '\n')+1:]
-	// read's output closes with a tag; the line before it tells how much was read.
 	if line == "</content>" {
 		text = strings.TrimRightFunc(strings.TrimSuffix(text, line), unicode.IsSpace)
 		line = text[strings.LastIndexByte(text, '\n')+1:]
@@ -207,23 +179,17 @@ func (r *CodeModeCall) finish(result ToolResult, errCall error) *CodeModeCall {
 	return r
 }
 
-// turnObservations owns trace merging and all persistence through final closure.
-// Workers submit immutable snapshots; replay stays on the root goroutine.
 type turnObservations struct {
 	journal Journal
 
-	mu     sync.Mutex
-	turnID string
-	trace  []json.RawMessage
-	closed bool
-	err    error
-	// reviews holds approver decisions by ToolCallKey until their Code Mode call's record finishes.
+	mu      sync.Mutex
+	turnID  string
+	trace   []json.RawMessage
+	closed  bool
+	err     error
 	reviews map[string]permissionReviewDecision
-	// calls holds the turn's Code Mode records in the order they were first saved. The trace never
-	// carries them while the turn runs, so its saves do not rewrite them.
-	calls []CodeModeCall
-	// saved is the turn's step as last journaled (looper.saveTurn); only the root goroutine uses it.
-	saved turnStep
+	calls   []CodeModeCall
+	saved   turnStep
 }
 
 func (o *turnObservations) observe(ctx context.Context, progress *PublicProgress) error {
@@ -233,7 +199,6 @@ func (o *turnObservations) observe(ctx context.Context, progress *PublicProgress
 	return o.observeLocked(ctx, progress)
 }
 
-// finishCall retains canonical child attribution.
 func (o *turnObservations) finishCall(ctx context.Context, progress *PublicProgress, state PublicProgressState) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -248,7 +213,6 @@ func (o *turnObservations) finishCall(ctx context.Context, progress *PublicProgr
 		}
 	}
 
-	// A task call can move before its subagent reports, so the row names the subagent itself.
 	snapshot.SubagentKey = cmp.Or(snapshot.SubagentKey, progress.SubagentKey)
 
 	snapshot.State = state
@@ -258,13 +222,13 @@ func (o *turnObservations) finishCall(ctx context.Context, progress *PublicProgr
 
 func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicProgress) error {
 	if o.closed {
-		return nil // A worker finishing after terminal closure cannot revive the turn.
+		return nil
 	}
 
 	if o.err != nil {
 		return o.err
 	}
-	// Public records contain only strings and structs; JSON encoding cannot fail.
+
 	snapshot := *progress
 	raw, _ := json.Marshal(publicProgressTrace{Type: "rocketcode_public_progress", Progress: snapshot})
 	trace := slices.Clone(o.trace)
@@ -276,7 +240,6 @@ func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicPr
 	if index < 0 {
 		trace = append(trace, raw)
 	} else {
-		// A call whose work became a Background Job stays "background" for the rest of its turn.
 		if existing := PublicProgressFromTrace([]json.RawMessage{trace[index]})[0]; existing == snapshot || existing.State == PublicProgressBackground {
 			return nil
 		}
@@ -287,8 +250,6 @@ func (o *turnObservations) observeLocked(ctx context.Context, progress *PublicPr
 	return o.saveTraceLocked(ctx, trace)
 }
 
-// replaceResponse atomically replaces one attempt's public text and reasoning summaries,
-// retaining other observations and the response's original position. Empty progress removes it.
 func (o *turnObservations) replaceResponse(ctx context.Context, parentID string, progress []PublicProgress) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -327,9 +288,6 @@ func (o *turnObservations) replaceResponse(ctx context.Context, parentID string,
 	return o.saveTraceLocked(ctx, trace)
 }
 
-// recordCodeModeCall saves a record on its own, as a new one or over the one with its key. A replay
-// from the journal leaves a finished record unchanged, so a resumed script keeps what its first run
-// recorded. A finished call takes the approver decision noted under its key.
 func (o *turnObservations) recordCodeModeCall(ctx context.Context, record *CodeModeCall, replay bool) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -370,9 +328,7 @@ func (o *turnObservations) recordCodeModeCall(ctx context.Context, record *CodeM
 		return nil
 	}
 
-	// Records contain only strings; JSON encoding cannot fail.
 	raw, _ := json.Marshal(record)
-	// Like trace saves, record saves must outlive cancellation of the work they record.
 	if err := o.journal.SaveCodeModeCall(context.WithoutCancel(ctx), o.turnID, record.Key, raw); err != nil {
 		o.err = progressPersistenceError{err: err}
 		return o.err
@@ -388,7 +344,6 @@ func (o *turnObservations) recordCodeModeCall(ctx context.Context, record *CodeM
 }
 
 func (o *turnObservations) saveTraceLocked(ctx context.Context, trace []json.RawMessage) error {
-	// Like step saves, trace saves must outlive cancellation of the work they record.
 	if err := o.journal.SaveTrace(context.WithoutCancel(ctx), o.turnID, trace); err != nil {
 		o.err = progressPersistenceError{err: err}
 		return o.err
@@ -405,7 +360,6 @@ func (o *turnObservations) close() {
 	o.mu.Unlock()
 }
 
-// progressPersistenceError must bypass provider retry and tool-result conversion.
 type progressPersistenceError struct {
 	err error
 }

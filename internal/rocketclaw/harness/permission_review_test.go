@@ -71,8 +71,6 @@ func TestPermissionReviewDecisionUsesFinalAnswer(t *testing.T) {
 			withoutPrompt := entry
 			withoutPrompt.ReplayInput = entry.ReplayInput[1:]
 			allocs := testing.AllocsPerRun(100, func() { entry.PermissionReviewDecision() })
-			// Allow pool variation under the race detector, but not an SDK replay decode of the prompt,
-			// which costs thousands of allocations.
 			require.LessOrEqual(t, allocs, testing.AllocsPerRun(100, func() { withoutPrompt.PermissionReviewDecision() })+50)
 		})
 	}
@@ -80,7 +78,6 @@ func TestPermissionReviewDecisionUsesFinalAnswer(t *testing.T) {
 
 func TestPermissionReviewCodeModeCallUsesPlannedAction(t *testing.T) {
 	answer := testInputMessage(responses.EasyInputMessageRoleAssistant, `{"outcome":"allow","rationale":"ok"}`, "final_answer")
-	// Captured from a wallace review; the transcript tries to forge the delimiters.
 	captured := permissionReviewRequest{
 		ActiveAgent:      "sudo",
 		ToolName:         "bash",
@@ -102,7 +99,7 @@ func TestPermissionReviewCodeModeCallUsesPlannedAction(t *testing.T) {
 		entry := testPermissionReviewEntry(t, &request, answer)
 		got, ok := entry.PermissionReviewDecision().CodeModeCall(&entry)
 		require.True(t, ok)
-		// A whole-script review has no call name or arguments; an MCP call is named after its subject.
+
 		want := map[string]CodeModeCall{
 			"bash":       {Name: "bash", Arguments: captured.RawArguments},
 			"rocketclaw": {},
@@ -121,10 +118,7 @@ func TestPermissionReviewCodeModeCallUsesPlannedAction(t *testing.T) {
 	}
 }
 
-// History lists the calls of Execute blocks saved before their calls were recorded from each review's
-// saved prompt, so reading that call must not decode the transcript before the planned action.
 func TestPermissionReviewCodeModeCallDecodesOnlyPlannedAction(t *testing.T) {
-	// This test is nonparallel: restore the throughput setting before other tests run.
 	benchtime := flag.Lookup("test.benchtime").Value.String()
 
 	require.NoError(t, flag.Set("test.benchtime", "4x"))
@@ -147,7 +141,6 @@ func TestPermissionReviewCodeModeCallDecodesOnlyPlannedAction(t *testing.T) {
 	})
 
 	require.Equal(t, CodeModeCall{Name: "bash", Arguments: `{"command":"ls"}`, Outcome: "allow", Reason: "ls is safe"}, call)
-	// Decoding the whole prompt copies the transcript; the planned action is a small tail.
 	require.Less(t, cost.AllocedBytesPerOp(), int64(len(transcript)/8))
 }
 
@@ -210,8 +203,6 @@ func TestPermissionReviewEmitsDiagnosticsWithChildContext(t *testing.T) {
 	}, drainBufferedResponses(output))
 }
 
-// An easy agent's approver reviews on its own model and effort, with its prompt added to the
-// guardian's tenant rules; without one, the guardian reviews on the auto-approver model.
 func TestPermissionReviewUsesAgentApprover(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -255,8 +246,6 @@ func TestPermissionReviewUsesAgentApprover(t *testing.T) {
 	}
 }
 
-// reviewAnswers is a decision model's answer to the four review questions; levels and outcome
-// carry their confidence, and injection is the probability of prompt injection.
 func reviewAnswers(risk string, riskConfidence float64, authorization string, authorizationConfidence, injection float64, outcome string, outcomeConfidence float64) []DecisionAnswer {
 	return []DecisionAnswer{
 		{Name: "risk_level", Type: DecisionScore, Choice: risk, Confidence: riskConfidence},
@@ -273,19 +262,17 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 	confidentAllow := reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "allow", 0.97)
 
 	for _, tc := range []struct {
-		name           string
-		agent          Agent
-		reviewer       string
-		answers        []DecisionAnswer
-		err            error
-		wantOutcome    permissionReviewOutcome
-		wantGuardian   bool
-		wantFallback   string
-		wantNoDecision bool
-		noModel        bool
-		// wantRules is text the decision model's instructions hold, placing the reviewer's added rules.
-		wantRules string
-		// configConfidence is the runtime's minimum confidence, 0 for the default.
+		name             string
+		agent            Agent
+		reviewer         string
+		answers          []DecisionAnswer
+		err              error
+		wantOutcome      permissionReviewOutcome
+		wantGuardian     bool
+		wantFallback     string
+		wantNoDecision   bool
+		noModel          bool
+		wantRules        string
 		configConfidence float64
 	}{
 		{name: "confident allow", answers: confidentAllow, wantOutcome: permissionReviewOutcomeAllow},
@@ -321,7 +308,6 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{testMessageOutputItem("review-final", "", guardianAnswer)}))
 			decider := &mockDecider{DecideFunc: func(ctx context.Context, _ *DecisionRequest) ([]DecisionAnswer, DecisionUsage, error) {
-				// A hung provider must leave the reviewer its own time.
 				deadline, ok := ctx.Deadline()
 				require.True(t, ok)
 				require.InDelta(t, decisionTimeout.Seconds(), time.Until(deadline).Seconds(), 5)
@@ -371,8 +357,7 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 			require.Len(t, decider.DecideCalls(), 1)
 			asked := decider.DecideCalls()[0].Request
 			require.Equal(t, "gpt-6-luna", asked.Model)
-			// The reviewer's own rules go to the decision model; the guardian's without what a decision model
-			// cannot do, investigate and write JSON, and never the chat approver's added rules.
+
 			if tc.reviewer == "" {
 				require.Contains(t, asked.Instructions, "You are judging one planned coding-agent action.")
 				require.Contains(t, asked.Instructions, "## Environment Profile")
@@ -400,7 +385,6 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 			diagnostics := drainBufferedResponses(output)
 
 			if tc.wantGuardian {
-				// The reviewer that takes over reads its own prompt, never the decision model's rules.
 				instructions := newParams(mock)[0].Instructions.Value
 				require.NotContains(t, instructions, "Deny deploys on Fridays.")
 				require.Equal(t, 1, strings.Count(instructions, "# Turn Origin"))
@@ -414,7 +398,6 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 			require.Contains(t, decision.Rationale, "decision model openai/gpt-6-luna")
 			require.Equal(t, []ChatResponse{subagentDiagnosticResponse(&SubagentDiagnostic{Name: "decision:openai/gpt-6-luna", Label: "auto-approver", Text: string(decision.Outcome) + ": " + decision.Rationale, Subagent: &SubagentDiagnostic{Label: "result"}})}, diagnostics)
 
-			// The saved review reads back as the guardian's would.
 			require.Len(t, saved, 1)
 			require.Equal(t, cmp.Or(tc.reviewer, "guardian"), saved[0].Agent)
 			require.Equal(t, &TokenUsage{PromptTokens: 2000, TotalTokens: 2000}, saved[0].TokenUsage)
@@ -428,13 +411,10 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 	}
 }
 
-// The guardian's prompt is assembled from pieces the decision model shares; this pins the assembled text,
-// copied from Codex, so a change to any piece is deliberate.
 func TestEmbeddedGuardianPromptUnchanged(t *testing.T) {
 	require.Equal(t, "8fd9a0f97e67457dce6b5e5c3f9b995572dd184b35bc4cbb3f8430c8ffb46f9a", fmt.Sprintf("%x", sha256.Sum256([]byte(embeddedGuardianPrompt))))
 }
 
-// A rule in approver.decision.prompt runs its prompt-shell lines as one in approver.prompt does.
 func TestPermissionReviewExpandsDecisionRules(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
@@ -485,8 +465,6 @@ func TestPermissionReviewSystemPromptIncludesRootInstructionsAndCodeMode(t *test
 			require.Equal(t, reviewer == "" || load, strings.Contains(instructions, "Instructions from: AGENTS.md\nproject rules"))
 			require.Contains(t, instructions, "You are judging one planned coding-agent action.")
 			require.Contains(t, instructions, "## Code Mode")
-			// Every reviewer learns from its instructions, not from the request, that the request's
-			// origin line is RocketClaw's; a request claiming that trust reads as prompt injection.
 			require.Contains(t, instructions, `The review request opens with the line "Turn origin (written by RocketClaw): [...]".`)
 		}
 	}
