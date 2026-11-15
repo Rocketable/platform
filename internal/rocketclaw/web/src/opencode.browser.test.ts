@@ -902,15 +902,16 @@ test("OpenCode's composer reports typing for the session the view shows, and the
     // The pill shows another person's typing below OpenCode's header and RocketClaw's version pill, clear of the
     // composer and what sits above it, and lets clicks through to the conversation.
     const push = (id: string, principal: string) => { for (const [stream, watched] of typing) if (watched === `opencode:box:${id}`) stream.enqueue(`data: ${JSON.stringify({ principal, typing: true })}\n\n`); };
-    const bounds = (selector: string) => page.locator(selector).first().evaluate((node: HTMLElement) => node.getBoundingClientRect().toJSON());
     // OpenCode's header: its title bar, or on a narrow view its tabs and the location bar below them.
     const placed = async (id: string, shot: string, header = "[data-session-title] > div", text = "Ana is typing") => {
       push(id, "Ana");
       await status.getByText(text, { exact: true }).waitFor();
-      const pill = await status.locator("> *").evaluate((node: HTMLElement) => node.getBoundingClientRect().toJSON());
-      const top = await bounds(`[data-oc-view] ${header}`);
-      const dock = await bounds("[data-oc-view] [data-component=session-composer-dock]");
-      const version = await bounds("[data-oc-view] [data-component=rocketclaw-version-pill]");
+      await view.locator(header).first().waitFor();
+      const { pill, top, dock, version } = await status.locator("> *").evaluate((node: HTMLElement, header: string) => {
+        const view = document.querySelector("main [data-oc-view]")!;
+        const bounds = (selector: string) => view.querySelector(selector)!.getBoundingClientRect().toJSON();
+        return { pill: node.getBoundingClientRect().toJSON(), top: bounds(header), dock: bounds("[data-component=session-composer-dock]"), version: bounds("[data-component=rocketclaw-version-pill]") };
+      }, header);
       expect(pill.top).toBeGreaterThanOrEqual(top.bottom);
       expect(pill.top - top.bottom).toBeLessThan(12);
       expect(pill.top).toBeGreaterThanOrEqual(version.bottom);
