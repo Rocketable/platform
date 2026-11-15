@@ -14,11 +14,9 @@ import (
 )
 
 const (
-	// DefaultConcurrency is the per-call width when concurrency= is omitted.
 	DefaultConcurrency = 16
-	// MaxConcurrency is the per-call ceiling and the execute-wide in-flight branch cap.
-	MaxConcurrency  = 64
-	childStepBudget = 100_000
+	MaxConcurrency     = 64
+	childStepBudget    = 100_000
 
 	localCtx   = "ctx"
 	localPath  = "path"
@@ -29,15 +27,12 @@ const (
 
 type callKeyContext struct{}
 
-// CallKey returns the replay-stable key of the host or MCP call running in ctx: the
-// call's position within its thread, prefixed by the fan-out branches that led to it.
 func CallKey(ctx context.Context) string {
 	key, _ := ctx.Value(callKeyContext{}).(string)
 
 	return key
 }
 
-// nextKey numbers the thread's next step, so a replayed script finds its recorded calls.
 func nextKey(thread *starlark.Thread) string {
 	steps, _ := thread.Local(localSteps).(int)
 	thread.SetLocal(localSteps, steps+1)
@@ -173,9 +168,6 @@ func threadPath(thread *starlark.Thread) []string {
 	return slices.Clone(path)
 }
 
-// releaseParentSlot frees the caller's global token for the duration of a nested
-// fan-out so children can acquire without deadlocking at MaxConcurrency.
-// Restore uses a non-canceled context so cancel mid-nest does not leak the permit.
 func releaseParentSlot(parent *starlark.Thread) func() {
 	slots, ok := parent.Local(localSlots).(*semaphore.Weighted)
 	if !ok {
@@ -185,7 +177,6 @@ func releaseParentSlot(parent *starlark.Thread) func() {
 	slots.Release(1)
 
 	return func() {
-		// Restore admission even if the parent branch ctx was canceled mid-nest.
 		_ = slots.Acquire(context.Background(), 1)
 	}
 }

@@ -1,4 +1,3 @@
-// Package codemode runs Starlark scripts that call outbound MCP tools.
 package codemode
 
 import (
@@ -17,39 +16,29 @@ import (
 
 const stepBudget = 1_000_000
 
-// ToolDesc is one MCP tool available inside a script / definitions listing.
 type ToolDesc struct {
 	Server, Name, Description string
 	InputSchema               map[string]any
 }
 
-// CallFunc invokes MCP CallTool. server and name are raw MCP names.
 type CallFunc func(ctx context.Context, server, name string, args map[string]any) (string, error)
 
-// DecideFunc is per-call permission like bash. subject is "server.tool" (raw MCP tool name).
-// Return nil to allow; error to deny/fail the Starlark builtin.
 type DecideFunc func(ctx context.Context, subject string, args map[string]any) error
 
-// ToolCallObserver observes a tool call and its Code Mode concurrency path.
 type ToolCallObserver interface {
 	ObserveToolCall(ctx context.Context, path []string, name string, args map[string]any)
 }
 
-// HostTool is a non-MCP builtin (e.g. read, glob). CallValue includes permission enforcement.
 type HostTool struct {
 	Name        string
 	InputSchema map[string]any
-	// CallValue is required and returns the tool's Starlark value.
-	CallValue func(ctx context.Context, args map[string]any) (starlark.Value, error)
+	CallValue   func(ctx context.Context, args map[string]any) (starlark.Value, error)
 }
 
-// StarlarkName returns sanitizedserver_sanitizedtool for a tool.
-// Server names may contain '-' and '.' (MCP name charset); Starlark needs [A-Za-z0-9_].
 func StarlarkName(server, mcpToolName string) string {
 	return SanitizeTool(server) + "_" + SanitizeTool(mcpToolName)
 }
 
-// SanitizeTool maps non [A-Za-z0-9_] to _; prefixes _ if needed for valid ident start.
 func SanitizeTool(mcpToolName string) string {
 	var b strings.Builder
 	b.Grow(len(mcpToolName))
@@ -71,7 +60,6 @@ func SanitizeTool(mcpToolName string) string {
 	return s
 }
 
-// BuildCatalog maps starlark name -> ToolDesc; fails on starlark name collision.
 func BuildCatalog(tools []ToolDesc) (map[string]ToolDesc, error) {
 	out := make(map[string]ToolDesc, len(tools))
 	for _, tool := range tools {
@@ -86,10 +74,6 @@ func BuildCatalog(tools []ToolDesc) (map[string]ToolDesc, error) {
 	return out, nil
 }
 
-// Run executes Starlark source requiring def main() returning a value.
-// mcp tools use decide+call; host tools use HostTool.CallValue (caller enforces permissions).
-// observe receives each validated tool call before permission and execution.
-// Returns string result (string as-is; other values JSON; None is error).
 func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc, call CallFunc, observe ToolCallObserver, host []HostTool) (string, error) {
 	catalog, errCatalog := BuildCatalog(tools)
 	if errCatalog != nil {
