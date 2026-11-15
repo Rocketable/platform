@@ -8,12 +8,8 @@ import (
 	"google.golang.org/grpc"
 )
 
-// typingEventsBuffered is how many reports a watch holds while it sends earlier ones. A report beyond them is
-// dropped, as the typist's next one comes within seconds.
 const typingEventsBuffered = 16
 
-// typingVisible admits a typing call on conversation id by the rules for viewing it. An OpenCode session, which
-// may have no stored row, is closed to people limited to spaces; any other conversation must be visible.
 func (s *Server) typingVisible(ctx context.Context, id string) error {
 	if !strings.HasPrefix(id, "opencode:") {
 		return s.visibleConversation(ctx, id)
@@ -31,9 +27,6 @@ func (s *Server) typingVisible(ctx context.Context, id string) error {
 	return nil
 }
 
-// reportTyping passes the caller's display name and typing state to every other person watching the
-// conversation, never waiting for a watch that is behind. A browser tab's reports travel independently, so one may
-// arrive after a later one; it is dropped. Reports leave nothing behind on a conversation nobody watches.
 func (s *Server) reportTyping(ctx context.Context, request *ReportTypingRequest) (*ReportTypingResponse, error) {
 	if err := s.typingVisible(ctx, request.Id); err != nil {
 		return nil, err
@@ -70,8 +63,6 @@ func (s *Server) reportTyping(ctx context.Context, request *ReportTypingRequest)
 	return &ReportTypingResponse{}, nil
 }
 
-// watchTyping streams other people's typing reports on the conversation until the stream ends, after an empty
-// event once the watch listens.
 func (s *Server) watchTyping(request *WatchTypingRequest, stream grpc.ServerStream) error {
 	ctx := stream.Context()
 	if err := s.typingVisible(ctx, request.Id); err != nil {

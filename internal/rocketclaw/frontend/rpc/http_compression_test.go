@@ -14,7 +14,6 @@ import (
 
 func TestHTTPJSONCompressionAllocations(t *testing.T) {
 	result := testing.Benchmark(BenchmarkHTTPJSONCompression)
-	// Allow pool misses, including race-mode discards, but not a compressor per response.
 	require.Less(t, result.AllocedBytesPerOp(), int64(512<<10))
 }
 

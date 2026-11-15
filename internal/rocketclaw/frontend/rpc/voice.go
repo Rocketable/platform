@@ -25,49 +25,43 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// voiceEndError ends a call; its value is the ended frame's reason.
 type voiceEndError string
 
 func (e voiceEndError) Error() string {
 	return "voice call ended: " + string(e)
 }
 
-// voiceCall is one live call. Only its call loop writes to or replaces conn, or touches the fields after it.
-// The loop also writes notices to the browser's stream, which the handler writes only before and after the loop.
 type voiceCall struct {
 	server                              *Server
 	dialect                             voiceDialect
 	header                              http.Header
-	id                                  string // the OpenAI session or call
+	id                                  string
 	conn                                *websocket.Conn
 	stream                              grpc.ServerStream
 	conversationID, principal, username string
 
-	said                  []voiceEvent    // the lines, by speaker, said since the previous hand-off
-	final                 map[string]bool // speakers whose latest line has its final transcript
-	seen, asked, reported map[string]bool // this call's hand-offs; questions noticed; turns spoken
-	latest                string          // the newest hand-off
-	unsent                [][]byte        // appends from the first failed write on, for the next sideband
-	inputs                map[string]bool // the conversation's input ids; nil until the first snapshot
+	said                  []voiceEvent
+	final                 map[string]bool
+	seen, asked, reported map[string]bool
+	latest                string
+	unsent                [][]byte
+	inputs                map[string]bool
 }
 
-// voiceTurn is one transcript turn reduced to the text a call may send.
 type voiceTurn struct {
 	key    string
-	inputs []string // the input id of each user message, in order
+	inputs []string
 	reply  string
 }
 
 type voiceSnapshot struct {
 	turns     []voiceTurn
 	questions []protocol.AskUserQuestionRequest
-	voice     map[string]bool // inputs any voice call handed off; another person's never supersede this call
+	voice     map[string]bool
 }
 
-// voiceLongReply is what the voice model hears instead of a reply too long to speak.
 const voiceLongReply = "That answer is too long to read aloud. It is shown on the screen."
 
-// voiceSettings reads or changes the caller's voice settings and returns them.
 func (s *Server) voiceSettings(ctx context.Context, request *VoiceSettingsRequest) (*VoiceSettingsResponse, error) {
 	username, _, err := s.principal(ctx)
 	if err != nil {
@@ -103,7 +97,6 @@ func (s *Server) voiceSettings(ctx context.Context, request *VoiceSettingsReques
 	return &VoiceSettingsResponse{Agent: settings.Agent, Voice: settings.Voice, Transcript: settings.Transcript}, nil
 }
 
-// voice runs one call for exactly as long as the request lives.
 func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 	ctx, id := stream.Context(), request.ConversationId
 
@@ -137,7 +130,6 @@ func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 
 	credentials := voiceCredentials{bearer: provider.APIKey}
 	if provider.Auth == "chatgpt" {
-		// A missing login leaves no bearer; a failed refresh names its login command.
 		token, err := oai.FreshTokenIn(ctx, cfg.Workspace, cfg.RuntimeDirName(), name, oai.Token{})
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("refresh voice credentials", "conversation", id, "provider", name, "error", err)
@@ -198,7 +190,6 @@ func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 	var conn *websocket.Conn
 	if err == nil {
 		if conn, err = voiceDial(callCtx, dialect.sideband(callID), header); err != nil {
-			// The call was created and billed; end it even though this request is over.
 			hangup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 			_ = dialect.hangup(hangup, header, callID)
 
@@ -239,9 +230,6 @@ func (s *Server) voice(request *VoiceRequest, stream grpc.ServerStream) error {
 	return nil
 }
 
-// listen starts the current socket's reader in the call's group. It decodes messages until
-// the socket fails or closes, then closes events, its only end signal; done stops it early.
-// As Codex, a normal close of a sideband that reconnects is OpenAI ending the call, not a drop.
 func (c *voiceCall) listen(calls *errgroup.Group, done <-chan struct{}) <-chan voiceEvent {
 	conn, events := c.conn, make(chan voiceEvent)
 
@@ -282,10 +270,6 @@ func (c *voiceCall) listen(calls *errgroup.Group, done <-chan struct{}) <-chan v
 	return events
 }
 
-// loop owns the socket's writes and all call state until the call ends, then closes the call.
-// A lost sideband ends a public call; a Codex call reconnects as Codex sideband.rs does:
-// it hears every event its old reader read, waits 200 ms doubling to 5 s, reset after 30 s
-// connected, then dials up to 5 times as connect_sideband, and sends what failed first.
 func (c *voiceCall) loop(ctx context.Context, calls *errgroup.Group, snapshots <-chan voiceSnapshot) error {
 	c.final, c.seen, c.asked, c.reported = map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	done := make(chan struct{})
@@ -294,14 +278,14 @@ func (c *voiceCall) loop(ctx context.Context, calls *errgroup.Group, snapshots <
 	var (
 		reason       voiceEndError
 		closed       bool
-		redial       <-chan time.Time // set, with events nil, while the sideband is down
+		redial       <-chan time.Time
 		drops, tries int
 	)
 
 	for reason == "" {
 		live := snapshots
 		if redial != nil {
-			live = nil // The forwarder waits; its next snapshot is whole.
+			live = nil
 		}
 
 		select {
@@ -355,7 +339,7 @@ func (c *voiceCall) loop(ctx context.Context, calls *errgroup.Group, snapshots <
 				c.flush()
 
 				_ = c.stream.SendMsg(&VoiceEvent{Event: &VoiceEvent_Reconnecting{Reconnecting: false}})
-			case ctx.Err() != nil: // The spent timer leaves only the call's end ready.
+			case ctx.Err() != nil:
 			case upstream != nil && (upstream.status == http.StatusNotFound || upstream.status == http.StatusGone):
 				reason = "closed"
 			case tries == 5:
@@ -372,20 +356,15 @@ func (c *voiceCall) loop(ctx context.Context, calls *errgroup.Group, snapshots <
 	return reason
 }
 
-// hear records what was said and admits each hand-off.
 func (c *voiceCall) hear(ctx context.Context, event voiceEvent) error {
 	switch event.kind {
 	case voiceEventInput, voiceEventOutput, voiceEventTurnDone:
-		// Lines grow as in Codex update_active_transcript: speech extends the route's line for
-		// its speaker, which a final transcript then replaces if it extends it, and the next
-		// speech starts a new line.
 		role, done := cmp.Or(event.role, map[voiceEventKind]string{voiceEventInput: "user", voiceEventOutput: "assistant"}[event.kind]), event.kind == voiceEventTurnDone
 		i := c.dialect.line(c.said, role)
 
 		switch {
 		case event.text == "":
 		case i < 0 || c.said[i].role != role || c.final[role]:
-			// Hand-offs use only the newest few kilobytes, so a long call without one stays bounded.
 			c.said = append(c.said, voiceEvent{role: role, text: event.text})
 			c.said = c.said[max(0, len(c.said)-2000):]
 		case !done:
@@ -399,26 +378,19 @@ func (c *voiceCall) hear(ctx context.Context, event voiceEvent) error {
 		}
 	case voiceEventHandOff:
 		if c.seen[event.id] {
-			return nil // A re-delivered hand-off would carry rebuilt text that admission refuses as different.
+			return nil
 		}
 
 		return c.handOff(ctx, event)
 	case voiceEventError:
 		slog.Warn("voice sideband rejected an event", "conversation", c.conversationID)
-	case voiceEventIgnored, voiceEventClosed: // The loop ends the call on a close.
+	case voiceEventIgnored, voiceEventClosed:
 	}
 
 	return nil
 }
 
-// handOff steers a hand-off into the conversation exactly as Codex wraps it
-// (codex-rs core/src/context/realtime_delegation.rs): the request in <input>, and the
-// lines said since the previous hand-off in <transcript_delta>. Public hand-offs carry
-// no text, so their lines are the request too. A hand-off with nothing to send is ignored.
-// It is admitted in arrival order without waiting for its turn; a stopping bridge
-// ends the call, and any other refusal sends the browser a notice.
 func (c *voiceCall) handOff(ctx context.Context, event voiceEvent) error {
-	// As Codex's append_handoff_input, the request joins the lines unless the person already said it.
 	if request := strings.TrimSpace(event.text); request != "" && !slices.ContainsFunc(c.said, func(line voiceEvent) bool {
 		return line.role == "user" && strings.TrimSpace(line.text) == request
 	}) {
@@ -444,8 +416,6 @@ func (c *voiceCall) handOff(ctx context.Context, event voiceEvent) error {
 
 	message += "</realtime_delegation>"
 
-	// During the call someone may pause the session's agent, or it may leave the caller's agents; the lines said wait
-	// for a later hand-off.
 	paused, err := c.server.backend.AgentPaused(c.stream.Context(), c.conversationID)
 	if err == nil && paused {
 		err = backend.AgentPausedError{}
@@ -469,7 +439,6 @@ func (c *voiceCall) handOff(ctx context.Context, event voiceEvent) error {
 	inbound.Metadata["web_message_id"] = event.id
 
 	item := &protocol.ThreadQueueItem{ID: event.id, Source: protocol.SourceWeb, Kind: protocol.InboundKindSteer, Principal: c.principal, Message: message, Inbound: inbound}
-	// Ending the call never cancels an admission, so no stored row misses its enqueue.
 	if err := c.server.backend.StashQueueItem(context.WithoutCancel(ctx), c.conversationID, item); err != nil {
 		slog.Error("admit voice hand-off", "conversation", c.conversationID, "error", err)
 
@@ -483,11 +452,6 @@ func (c *voiceCall) handOff(ctx context.Context, event voiceEvent) error {
 	return nil
 }
 
-// update notices each new question once, under the newest hand-off, and speaks the
-// final reply of each finished turn this call handed off, once. Typing supersedes voice,
-// as Codex invalidate_realtime_voice_input: a typed input silences every earlier hand-off,
-// and only a later hand-off makes its turn speak again. An input typed during the call
-// also tells the browser to mute the voice model at once, as Codex suppresses its speaker.
 func (c *voiceCall) update(snapshot voiceSnapshot) {
 	for _, question := range snapshot.questions {
 		if c.asked[question.ID] {
@@ -509,13 +473,12 @@ func (c *voiceCall) update(snapshot voiceSnapshot) {
 		c.send(c.latest, text)
 	}
 
-	// The first snapshot holds what was typed before the call; only later inputs are typed during it.
 	during, typed := c.inputs != nil, false
 	if !during {
 		c.inputs = map[string]bool{}
 	}
 
-	live := map[string]bool{} // this call's hand-offs that no typed input has followed
+	live := map[string]bool{}
 
 	for _, turn := range snapshot.turns {
 		for _, id := range turn.inputs {
@@ -541,13 +504,11 @@ func (c *voiceCall) update(snapshot voiceSnapshot) {
 		mine := slices.IndexFunc(turn.inputs, func(id string) bool { return c.seen[id] })
 
 		c.reported[turn.key] = true
-		if len(turn.reply) <= 3960 { // Codex speaks at most 990 tokens of 4 bytes.
+		if len(turn.reply) <= 3960 {
 			c.send(turn.inputs[mine], turn.reply)
 			continue
 		}
 
-		// As Codex shows a reply too long to speak on screen, the browser shows it as written,
-		// and the voice model says where it is.
 		_ = c.stream.SendMsg(&VoiceEvent{Event: &VoiceEvent_Reply{Reply: turn.reply}})
 		c.send(turn.inputs[mine], voiceLongReply)
 	}
@@ -558,8 +519,6 @@ func (c *voiceCall) send(id, text string) {
 	c.flush()
 }
 
-// flush writes the unsent appends in order. A failed write keeps that append and the rest,
-// and closes the socket, so later writes fail at once and the reader ends.
 func (c *voiceCall) flush() {
 	for len(c.unsent) > 0 {
 		if err := c.conn.WriteMessage(websocket.TextMessage, c.unsent[0]); err != nil {
@@ -571,9 +530,6 @@ func (c *voiceCall) flush() {
 	}
 }
 
-// end asks OpenAI to close the session over a live sideband (events is nil once it is
-// down), waits up to 3 s for it, hangs up a public session that did not confirm, and
-// closes the socket, which ends the reader.
 func (c *voiceCall) end(ctx context.Context, events <-chan voiceEvent, closed bool) {
 	if !closed && events != nil {
 		_ = c.conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
@@ -595,7 +551,6 @@ func (c *voiceCall) end(ctx context.Context, events <-chan voiceEvent, closed bo
 		}
 	}
 
-	// A sideband that reconnects sends nothing after session.close, as Codex; others hang up.
 	if !closed && !c.dialect.reconnects() {
 		hangup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		if err := c.dialect.hangup(hangup, c.header, c.id); err != nil {
@@ -608,9 +563,6 @@ func (c *voiceCall) end(ctx context.Context, events <-chan voiceEvent, closed bo
 	_ = c.conn.Close()
 }
 
-// forward sends the loop a snapshot of the conversation after each change. The first read
-// takes the latest 10 entries and later reads keep its start, so every turn this call hands
-// off stays in view however many turns finish between two reads, as Codex hears each turn end.
 func (c *voiceCall) forward(ctx context.Context, snapshots chan<- voiceSnapshot) error {
 	root, err := os.OpenRoot(c.server.cfg.Clone().Workspace)
 	if err != nil {
@@ -646,8 +598,6 @@ func (c *voiceCall) forward(ctx context.Context, snapshots chan<- voiceSnapshot)
 	return nil
 }
 
-// snapshot reads the entries from entry from on, or the latest limit entries, and returns
-// where the read started.
 func (c *voiceCall) snapshot(ctx context.Context, root *os.Root, from int64, limit int) (voiceSnapshot, int64, error) {
 	snapshot := voiceSnapshot{voice: map[string]bool{}}
 
@@ -671,10 +621,10 @@ func (c *voiceCall) snapshot(ctx context.Context, root *os.Root, from int64, lim
 
 		for _, message := range messages {
 			switch {
-			case message.Role == "user" && message.Principal != "": // System notes carry no principal and never supersede voice.
+			case message.Role == "user" && message.Principal != "":
 				turn.inputs = append(turn.inputs, message.InputId)
 				snapshot.voice[message.InputId] = strings.Contains(message.Header, " media=Voice")
-			case message.Role == "assistant" && message.Complete && !entry.Active: // A running turn's inputs still count.
+			case message.Role == "assistant" && message.Complete && !entry.Active:
 				turn.reply = message.Text
 			}
 		}
@@ -690,9 +640,6 @@ func (c *voiceCall) snapshot(ctx context.Context, root *os.Root, from int64, lim
 	return snapshot, view.Inventory.From, nil
 }
 
-// voiceTail returns the longest suffix of text within limit bytes that starts on a rune boundary.
-// voiceDelegationField escapes text for a realtime_delegation and bounds it to 4 KB as
-// Codex does, keeping its start, or its end when tail is set, beside a "…".
 func voiceDelegationField(text string, tail bool) string {
 	const limit, marker = 4 * 1024, "…"
 

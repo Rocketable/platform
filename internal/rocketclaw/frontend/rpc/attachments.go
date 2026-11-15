@@ -92,7 +92,7 @@ func (s *Server) downloadAttachment(stream grpc.ServerStream) error {
 	if err := validRequest(request.ProtoReflect()); err != nil {
 		return err
 	}
-	// Replay scanning keeps authorization tied to surviving history; index references if histories outgrow this.
+
 	history, err := s.history(stream.Context(), &HistoryRequest{Id: request.ConversationId})
 	if err != nil {
 		return err
@@ -113,8 +113,7 @@ func (s *Server) downloadAttachment(stream grpc.ServerStream) error {
 			history.Messages = append(history.Messages, &TranscriptEvent{Attachments: item.Attachments})
 		}
 	}
-	// The staged request is the owning local composer's restore source, not a
-	// readable hidden suffix. Only its uploads gain this existing download path.
+
 	attachment, err := s.sessions.RevertAttachmentMetadata(stream.Context(), request.ConversationId, request.Id)
 	if err == nil {
 		history.Messages = append(history.Messages, &TranscriptEvent{Attachments: []*Attachment{attachmentMetadata(request.ConversationId, &attachment)}})

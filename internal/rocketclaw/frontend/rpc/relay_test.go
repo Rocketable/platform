@@ -28,7 +28,6 @@ import (
 	"tailscale.com/tailcfg"
 )
 
-// proxyUpstream records what reached the fake OpenCode server.
 type proxyUpstream struct {
 	hits                            int
 	auth, origin, cookie, uri, body string
@@ -45,14 +44,14 @@ func (u *proxyUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Set-Cookie", "opencode_session=secret")
-	w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin")) // OpenCode answers its own CORS.
+	w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
 
 	switch r.URL.Path {
 	case "/api/event":
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: hello\n\n"))
 		w.(http.Flusher).Flush()
-		<-r.Context().Done() // The stream stays open, as OpenCode's does.
+		<-r.Context().Done()
 	case "/api/denied":
 		w.Header().Set("WWW-Authenticate", `Basic realm="opencode"`)
 		w.WriteHeader(http.StatusUnauthorized)
@@ -68,8 +67,6 @@ func (u *proxyUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// startProxyTestRPC serves a Web that admits 192.0.2.10 and 127.0.0.1 and relays box to upstream, with its sessions
-// and their database.
 func startProxyTestRPC(t *testing.T, upstream string) (http.Handler, *backend.SessionService, *sql.DB) {
 	t.Helper()
 
@@ -167,7 +164,6 @@ func TestOpenCodeProxy(t *testing.T) {
 	assert.Equal(t, http.StatusOK, serve(http.MethodGet, "/oc/box/api/session", "192.0.2.10:5000", http.Header{"Origin": {"http://rocketclaw.example"}}).Code)
 	assert.Equal(t, upstream.URL, fake.origin, "OpenCode sees its own origin")
 
-	// Prompts carry the admitted sender; everything else reaches OpenCode byte-for-byte.
 	for _, test := range []struct{ method, path, body, want string }{
 		{http.MethodPost, "/api/session/s1/prompt", `{"parts":[],"metadata":{"displayText":"hi","agent":"build"}}`, `{"parts":[],"metadata":{"displayText":"hi","agent":"build","rocketclaw_username":"alice"}}`},
 		{http.MethodPost, "/api/session/s1/prompt", `{"parts":[]}`, `{"parts":[],"metadata":{"rocketclaw_username":"alice"}}`},
@@ -192,8 +188,6 @@ func TestOpenCodeProxy(t *testing.T) {
 		}
 	}
 
-	// A prompt to a session its sender auto-parks, as everyone does until they turn it off, parks their tab until it is
-	// done before OpenCode gets it. The prompts above went through though no sync had recorded s1, so none could park.
 	_, err := db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, remote_session, title, name, directory, last_updated, synced_at)
 VALUES ('opencode:box:s2', '', '', 'remote', FALSE, 'remote', 'box', 's2', '', '', '/srv', now(), now())`)
 	require.NoError(t, err)
@@ -220,7 +214,6 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 	web := httptest.NewServer(proxy)
 	t.Cleanup(web.Close)
 
-	// The tailnet listener admits like the Web there: a Tailscale user, whatever the IP.
 	tagged := false
 	whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) {
 		node := &tailcfg.Node{}
@@ -256,7 +249,6 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 	require.Equal(t, http.StatusOK, sent.StatusCode)
 	assert.JSONEq(t, `{"parts":[],"metadata":{"rocketclaw_username":"zoe@example.com"}}`, fake.body, "a tailnet prompt carries the tailnet login")
 
-	// A browser on the tailnet sends its HTTPS origin, which is the proxy's own.
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, tailnet.URL+"/oc/box/api/session", http.NoBody)
 	require.NoError(t, err)
 	request.Header.Set("Origin", tailnet.URL)
@@ -268,7 +260,6 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, response.StatusCode, "a same-origin request over TLS")
 
-	// A RocketClaw page this server trusts reaches OpenCode, with only RocketClaw's CORS answer.
 	request, err = http.NewRequestWithContext(t.Context(), http.MethodDelete, tailnet.URL+"/oc/box/api/session/ses_a", http.NoBody)
 	require.NoError(t, err)
 	request.Header.Set("Origin", "https://local.tail1234.ts.net")
@@ -292,7 +283,6 @@ func TestOpenCodeProxyStreamsAndUpgrades(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, response.StatusCode, "a tagged node is refused")
 
-	// A same-origin WebSocket upgrade reaches the terminal with OpenCode's own origin, both ways.
 	connection, err := net.Dial("tcp", web.Listener.Addr().String())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = connection.Close() })

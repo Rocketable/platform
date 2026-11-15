@@ -38,7 +38,6 @@ func TestVoiceDialectURLs(t *testing.T) {
 
 	assert.Equal(t, &codexVoice{createURL: "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas", sidebandURL: "wss://api.openai.com/v1/live/%s"}, newCodexVoice())
 
-	// The API key never travels in plain text to a non-local host.
 	for _, base := range []string{"http://example.com/v1", "ws://example.com", "http://localhost.example.com", "http://127.0.0.1.nip.io:8080", "http://127.0.0.1@example.com", "http://[::ffff:8.8.8.8]"} {
 		_, err := newPublicVoice(&config.OpenAIConfig{Auth: "api_key", APIBaseURL: base})
 		require.ErrorIs(t, err, errVoicePlainHTTP, base)
@@ -92,13 +91,11 @@ func TestVoiceWireRoundTrip(t *testing.T) {
 			spoke: `{"type":"session.commentary.append","delegation_id":"d1","content":"Done."}`,
 		},
 		{
-			auth:   "chatgpt",
-			voice:  "miko",
-			creds:  voiceCredentials{bearer: "token", accountID: "acct"},
-			header: http.Header{"Authorization": {"Bearer token"}, "Chatgpt-Account-Id": {"acct"}, "Openai-Alpha": {"quicksilver=v2"}, "Originator": {"codex_cli_rs"}},
-			create: "/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
-			// Codex c9b4267c: core/src/realtime_conversation.rs keeps the model alias;
-			// codex-api/src/endpoint/realtime_call.rs uses this ChatGPT JSON handshake.
+			auth:     "chatgpt",
+			voice:    "miko",
+			creds:    voiceCredentials{bearer: "token", accountID: "acct"},
+			header:   http.Header{"Authorization": {"Bearer token"}, "Chatgpt-Account-Id": {"acct"}, "Openai-Alpha": {"quicksilver=v2"}, "Originator": {"codex_cli_rs"}},
+			create:   "/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
 			body:     `{"sdp":"offer","session":{"model":"gpt-live-1-codex",` + session + `,"audio":{"output":{"voice":"miko"}},"initial_items":` + seed + `}}`,
 			location: "/v1/realtime/calls/rtc_abc",
 			reply:    "answer",
@@ -231,10 +228,8 @@ func TestVoiceAppends(t *testing.T) {
 		auth, id, text string
 		want           []string
 	}{
-		// Text is sent whole, in chunks that end on rune boundaries.
 		{"chatgpt", "d1", strings.Repeat("€", 700), []string{euro(166), euro(166), euro(166), euro(166), euro(36)}},
 		{"api_key", "d1", "Run this:\n```go\nfmt.Println(1)\n```\n| a | b |", []string{`{"type":"session.commentary.append","delegation_id":"d1","content":"Run this:\n` + "```go\\nfmt.Println(1)\\n```\\n| a | b |" + `"}`}},
-		// Before any hand-off, text goes to the whole session.
 		{"chatgpt", "", "Ship?", []string{`{"type":"session.context.append","channel":"speakable","content":[{"type":"input_text","text":"Ship?"}]}`}},
 		{"api_key", "", "Ship?", []string{`{"type":"session.commentary.append","delegation_id":null,"content":"Ship?"}`}},
 	} {
@@ -283,7 +278,6 @@ func TestVoiceSeed(t *testing.T) {
 	assert.Equal(t, []voiceContent{{Type: "output_text", Text: "Here:\n```go\nfmt.Println(1)\n```"}}, coded[0].Content, "the seed is sent as written (R14)")
 }
 
-// testVoiceDialects are both routes aimed at a test server, by provider auth.
 func testVoiceDialects(t *testing.T, serverURL string) map[string]voiceDialect {
 	t.Helper()
 
@@ -300,7 +294,7 @@ func testVoiceDialects(t *testing.T, serverURL string) map[string]voiceDialect {
 func TestVoiceWireFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name, auth, location, body string
-		status                     int // 0: the server is down
+		status                     int
 		create, dial, hangup       string
 	}{
 		{"public rejected", "api_key", "", "upstream-secret", http.StatusUnauthorized, "HTTP 401", "HTTP 401", "HTTP 401"},
@@ -308,7 +302,6 @@ func TestVoiceWireFailures(t *testing.T) {
 		{"no call id", "chatgpt", "/v1/realtime/calls/not-a-call", "", http.StatusCreated, errVoiceCallID.Error(), "HTTP 201", "HTTP 201"},
 		{"garbled answer", "api_key", "", "not json", http.StatusCreated, "decode voice answer", "HTTP 201", ""},
 		{"down", "api_key", "", "", 0, "send voice request", "attach voice sideband", "send voice request"},
-		// The websocket dial reports a redirect instead of following it.
 		{"redirect loop", "api_key", "/v1/live/sessions", "", http.StatusTemporaryRedirect, "stopped after 10 redirects", "HTTP 307", "stopped after 10 redirects"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -357,7 +350,7 @@ func TestVoiceRedirects(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		hops []string // Each hop redirects to the next with a 307; the last answers.
+		hops []string
 		kept bool
 	}{
 		{"same origin", []string{"https://api.test/v1/live/sessions", "https://api.test/v1/moved"}, true},
@@ -387,7 +380,6 @@ func TestVoiceRedirects(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())
 
-			// A cross-origin 307 still resends the body, as Codex's client does.
 			want := []hop{{tc.hops[0], "Bearer token", "token", "acct", "seed"}}
 			for _, next := range tc.hops[1:] {
 				if tc.kept {

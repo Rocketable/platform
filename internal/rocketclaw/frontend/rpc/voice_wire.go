@@ -17,9 +17,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// voiceInstructions is the fixed GPT-Live session prompt; %s is the agent name. The server
-// sends replies as written; like Codex's realtime backend_prompt.md, the prompt has the
-// voice model give the gist rather than read code or tables aloud.
 const voiceInstructions = `You are the voice of %s, a RocketClaw agent. You cannot do any work yourself.
 Hand off every task, request or question the person gives you to the agent. Hand off only what the person actually said, in their words.
 Never invent results, progress or facts. Say only what the agent's replies tell you, as brief spoken summaries. Never read code, tables or long identifiers aloud.
@@ -33,7 +30,6 @@ var (
 	errVoicePlainHTTP = errors.New("voice sends the API key over plain HTTP only to localhost or a loopback IP")
 )
 
-// voiceRoute names a GPT-Live wire dialect; its value is sent to the browser.
 type voiceRoute string
 
 const (
@@ -53,15 +49,13 @@ const (
 	voiceEventError
 )
 
-// voiceEvent is one decoded sideband server message.
 type voiceEvent struct {
 	kind voiceEventKind
-	id   string // hand-off delegation id; Codex transcript items may carry their item id
-	role string // the speaker of a turn done, or of a said line
-	text string // the transcript, hand-off request (Codex only) or closed reason
+	id   string
+	role string
+	text string
 }
 
-// voiceCredentials authenticate one call; accountID is set for ChatGPT logins.
 type voiceCredentials struct {
 	bearer, accountID string
 }
@@ -77,8 +71,6 @@ type voiceItem struct {
 	Content []voiceContent `json:"content"`
 }
 
-// voiceUpstreamError reports a rejected OpenAI voice request by status only,
-// because upstream bodies may echo credentials.
 type voiceUpstreamError struct {
 	status int
 }
@@ -87,36 +79,19 @@ func (e *voiceUpstreamError) Error() string {
 	return "openai voice request failed with HTTP " + strconv.Itoa(e.status)
 }
 
-// voiceDialect is one GPT-Live wire route: the public API for api_key providers
-// (publicVoice) or Codex's internal route for chatgpt providers (codexVoice).
 type voiceDialect interface {
-	// route names the route to the browser, which reads captions by it.
 	route() voiceRoute
-	// voices lists the voices the route offers, its default first.
 	voices() []string
-	// header builds one call's request headers, reused for create, sideband and hangup.
 	header(credentials voiceCredentials) http.Header
-	// create starts a call for agent with voice, seeded from history, and returns the
-	// answer SDP and call id.
 	create(ctx context.Context, header http.Header, sdp, agent, voice string, history []*TranscriptEvent) (answer, id string, err error)
-	// sideband is the URL that attaches a sideband to call id.
 	sideband(id string) string
-	// hangup ends a session without the call's own sideband.
 	hangup(ctx context.Context, header http.Header, id string) error
-	// kind names a sideband server message by its type; the call ignores the rest.
 	kind(eventType string) voiceEventKind
-	// appends encodes text, as written, to be spoken for hand-off id, in chunks. An empty
-	// id addresses the whole session: notices before any hand-off.
 	appends(id, text string) [][]byte
-	// line is the index in said of the line a speaker's new speech extends, if any.
 	line(said []voiceEvent, role string) int
-	// reconnects reports a Codex sideband: as in Codex, a drop reconnects, a normal close
-	// is OpenAI ending the call, and nothing follows session.close. Any other route ends
-	// on a drop and hangs up a session that did not confirm its close.
 	reconnects() bool
 }
 
-// voiceSession is a call's session settings; each route sets the seed field it has.
 type voiceSession struct {
 	Model        string `json:"model"`
 	Instructions string `json:"instructions"`
@@ -139,9 +114,6 @@ func newVoiceSession(model, agent, voice string) voiceSession {
 	return session
 }
 
-// voiceDial attaches a sideband. gorilla reads the upgrade reply under a deadline only, so
-// cancelling ctx closes the connection: Stop ends a dial at once, as Codex's stop beats
-// a connecting sideband (codex-rs core/src/realtime_conversation/sideband.rs).
 func voiceDial(ctx context.Context, target string, header http.Header) (*websocket.Conn, error) {
 	dialer, release := *websocket.DefaultDialer, func() bool { return true }
 
@@ -178,7 +150,6 @@ func voiceDial(ctx context.Context, target string, header http.Header) (*websock
 	return conn, nil
 }
 
-// voiceDecode decodes one sideband server message of the dialect's route.
 func voiceDecode(data []byte, dialect voiceDialect) (voiceEvent, error) {
 	var wire struct {
 		Type   string `json:"type"`
@@ -257,15 +228,13 @@ func voicePost(ctx context.Context, target string, header http.Header, body []by
 	return resp, nil
 }
 
-// voiceSeed keeps the newest complete user and assistant messages as written, each cut
-// to 600 bytes, within 40 messages and 12,000 bytes, oldest first.
 func voiceSeed(history []*TranscriptEvent) []voiceItem {
 	var items []voiceItem
 
 	total := 0
 
 	for _, entry := range slices.Backward(history) {
-		if entry.Role != "user" && (entry.Role != "assistant" || !entry.Complete) { // Saved user rows are never marked complete.
+		if entry.Role != "user" && (entry.Role != "assistant" || !entry.Complete) {
 			continue
 		}
 
@@ -292,7 +261,6 @@ func voiceSeed(history []*TranscriptEvent) []voiceItem {
 	return items
 }
 
-// voiceChunks splits text into its longest prefixes within limit bytes, on rune boundaries.
 func voiceChunks(text string, limit int) []string {
 	var chunks []string
 
@@ -304,7 +272,6 @@ func voiceChunks(text string, limit int) []string {
 	return chunks
 }
 
-// voiceCut returns the longest prefix of text within limit bytes that ends on a rune boundary.
 func voiceCut(text string, limit int) string {
 	n := min(limit, len(text))
 	for n < len(text) && !utf8.RuneStart(text[n]) {

@@ -157,7 +157,6 @@ func TestSpacePermissionsRealBrowser(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	// The screenshots are for people, so they go to the workspace rather than a test folder.
 	out, err := filepath.Abs("../../../../.tmp/permissions-demo")
 	require.NoError(t, err)
 	require.NoError(t, os.RemoveAll(out))

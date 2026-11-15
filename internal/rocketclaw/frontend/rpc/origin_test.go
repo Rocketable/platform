@@ -22,7 +22,6 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// The bulk origin facts and History's per-conversation facts must decide the same origins.
 func TestChatOriginFactsMatchHistory(t *testing.T) {
 	t.Parallel()
 
@@ -65,7 +64,6 @@ func TestChatOriginFactsMatchHistory(t *testing.T) {
 		require.NoError(t, sessions.UpsertThread(id, thread))
 	}
 
-	// The Slack threads a mention and a cron report create, and the Web chats continuing cron runs.
 	_, err = db.ExecContext(ctx, `UPDATE conversations SET kind = 'slack_thread', slack_channel = split_part(conversation_id, ':', 2), slack_thread = split_part(conversation_id, ':', 3)
 WHERE conversation_id IN ($1, $2)`, cronSlack, plainSlack)
 	require.NoError(t, err)
@@ -73,7 +71,6 @@ WHERE conversation_id IN ($1, $2)`, cronSlack, plainSlack)
 	require.NoError(t, err)
 	require.NoError(t, sessions.RegisterExternalMCPConversation("ext-1", "main", &backend.ExternalMCPSessionState{Agent: "producer", PrivateConversationID: "external_mcp:private", ManagedConversationID: destination, OriginPairs: map[string]string{"Ticket": "T-1", "b": "two"}}))
 
-	// entry appends a turn; a source attributes it by entry ID, as copies made before 049 do, or by name.
 	entry := func(id, source string, byEntryID bool) {
 		entryID, err := sessions.AppendEntryID(ctx, id, &harness.SessionEntry{Type: "turn"})
 		require.NoError(t, err)
@@ -104,7 +101,6 @@ UPDATE entries e SET entry_json = (e.entry_json::jsonb || `+provenance+`)::json 
 		entry(step.id, step.source, step.byEntryID)
 	}
 
-	// A reply that started before cron history synced in sorts its checkpoint ahead of every saved entry.
 	_, err = db.ExecContext(ctx, `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id)
 VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, cronSlack)
 	require.NoError(t, err)
@@ -151,8 +147,7 @@ VALUES ('early-reply', $1, '{}', '[]', 1, 1, 0)`, cronSlack)
 			require.Equal(t, origin, history.Origin, "%s with limit %d", id, limit)
 		}
 	}
-	// Isolate physical origin from projection even for a copied origin; how far undo
-	// reaches is asserted separately by the Revert floor tests.
+
 	for _, id := range []string{"web-cron-synced", "web-later-cron"} {
 		_, err = db.ExecContext(ctx, `WITH first_entry AS (SELECT MIN(id) AS id FROM entries WHERE conversation_id = $1)
 UPDATE conversations c SET revert_message_id = f.id::text || ':0' FROM first_entry f WHERE c.conversation_id = $1`, id)

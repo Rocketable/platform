@@ -10,11 +10,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// searchRunsKept bounds the searches kept per person, running or finished.
 const searchRunsKept = 8
 
-// searchRun is the search of one Search page's tab and search id, running on the server for one person: what it
-// scans, whether the person entered it, and its scan's cancel. Once done is closed, found and err hold its answer.
 type searchRun struct {
 	tab, id string
 	work    sessionSearch
@@ -25,17 +22,12 @@ type searchRun struct {
 	err     error
 }
 
-// searchEndError is why a search running on the server was cancelled.
 type searchEndError string
 
 func (e searchEndError) Error() string {
 	return "search ended: " + string(e)
 }
 
-// runSearch answers a Search page's search from its run on the server, which goes on past the request. The same query
-// for the person's tab and search joins its run, or takes its finished answer, which is then dropped; another query,
-// or the same one asked fresh because new sessions arrived, replaces the run. A run marks the tab for the person when it finishes, if they entered its query and it is still
-// that search's run.
 func (s *Server) runSearch(ctx context.Context, request *SearchSessionsRequest, work sessionSearch) (*SearchSessionsResponse, error) {
 	s.runsMu.Lock()
 	if s.runsStopped {
@@ -59,7 +51,6 @@ func (s *Server) runSearch(ctx context.Context, request *SearchSessionsRequest, 
 			if runs[i].work == work {
 				cause = "refreshed"
 
-				// A run still going that the person entered hands that on, so its tab is still marked once.
 				select {
 				case <-runs[i].done:
 				default:
@@ -83,7 +74,6 @@ func (s *Server) runSearch(ctx context.Context, request *SearchSessionsRequest, 
 		s.runGroup.Go(func() error {
 			found, err := work.search(scanCtx, s)
 
-			// Holding runsMu across the mark keeps a run replaced, evicted or stopped meanwhile from marking.
 			s.runsMu.Lock()
 			defer s.runsMu.Unlock()
 			defer close(run.done)
@@ -93,7 +83,6 @@ func (s *Server) runSearch(ctx context.Context, request *SearchSessionsRequest, 
 				return nil
 			}
 
-			// A mark that fails is lost, as a missed notification is; it does not fail the server's stop.
 			if err := s.sessions.MarkSearchFinished(scanCtx, work.username, run.tab); err != nil {
 				slog.Error("mark finished search", "tab", run.tab, "error", err)
 			}
@@ -126,8 +115,6 @@ func (s *Server) runSearch(ctx context.Context, request *SearchSessionsRequest, 
 	return run.found.(*SearchSessionsResponse), nil
 }
 
-// StopSearches cancels the searches running on the server, none of which marks, and waits for them. No search runs
-// after.
 func (s *Server) StopSearches() {
 	s.runsMu.Lock()
 	s.runsStopped = true

@@ -149,7 +149,6 @@ func TestTailscaleBrowserIdentity(t *testing.T) {
 		{"unavailable", "", "", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			// Exercise the real command boundary with a controlled executable.
 			script := "#!/bin/sh\n[ \"$*\" = 'whois --json 100.64.0.1' ] || exit 1\nprintf '%s' '" + tt.output + "'\n"
 			if tt.name == "unavailable" {
 				script = "#!/bin/sh\nexit 1\n"
@@ -179,10 +178,8 @@ func TestTailscaleBrowserIdentity(t *testing.T) {
 	}
 }
 
-// No request header chooses the user: a loopback request that looks proxied by
-// `tailscale serve` signs in through Tailscale's answer for 127.0.0.1 or not at all.
 func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
-	forwarded := netip.MustParseAddr("192.0.2.2") // Tailscale names this address bob.
+	forwarded := netip.MustParseAddr("192.0.2.2")
 
 	for _, tt := range []struct {
 		name   string
@@ -240,7 +237,6 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 				response := httptest.NewRecorder()
 				NewHTTPHandler(connection, config.SentryConfig{}, config.PostHogConfig{}, nil, "", nil).ServeHTTP(response, request)
 
-				// Protocol negotiation answers any caller; every other method needs a Tailscale login.
 				code := tt.code
 				if method == "Protocol" {
 					code = http.StatusOK
@@ -252,7 +248,6 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 					require.JSONEq(t, `{"username":"alice","principal":"alice","sandboxError":""}`, response.Body.String())
 				}
 
-				// A Board card is the session as ListSessions lists it.
 				if method == "Board" && code == http.StatusOK {
 					var board BoardResponse
 					require.NoError(t, protojson.Unmarshal(response.Body.Bytes(), &board))
@@ -269,8 +264,6 @@ func TestBrowserIdentityIgnoresHeaders(t *testing.T) {
 	}
 }
 
-// Coding servers are often tagged nodes: their MCP endpoint, which checks its own password, skips the
-// tailnet sign-in, and every other path still refuses them.
 func TestTailnetHandlerPassesOpenCodeMCP(t *testing.T) {
 	whois := &mockTailnetWhoIs{WhoIsFunc: func(context.Context, string) (*apitype.WhoIsResponse, error) {
 		return &apitype.WhoIsResponse{Node: &tailcfg.Node{Tags: []string{"tag:server"}}, UserProfile: &tailcfg.UserProfile{LoginName: "tagged-devices"}}, nil
@@ -284,7 +277,6 @@ func TestTailnetHandlerPassesOpenCodeMCP(t *testing.T) {
 	}
 }
 
-// A tsnet caller is signed in by its connection; the tailscale CLI is never consulted.
 func TestTailnetIdentity(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
@@ -353,8 +345,6 @@ func TestTailnetIdentity(t *testing.T) {
 	}
 }
 
-// A RocketClaw page this server trusts drives it as the person on the connection; every other page stays
-// cross-site, even one served from this tailnet, which could otherwise act as whoever opens it.
 func TestTailnetCrossSitePages(t *testing.T) {
 	listener, err := net.Listen("unix", testSocketPath(t))
 	require.NoError(t, err)
@@ -409,7 +399,6 @@ func TestTailnetCrossSitePages(t *testing.T) {
 		require.Equal(t, "same-origin", reached.Get("Sec-Fetch-Site"))
 	}
 
-	// A tailnet page reads a refusal as one, not as an unreachable server.
 	refused := serve(trusted, http.MethodPost, "/api/Identity", "100.64.0.3:41641", page, http.Header{})
 	require.Equal(t, http.StatusUnauthorized, refused.Code)
 	require.Equal(t, page, refused.Header().Get("Access-Control-Allow-Origin"))
@@ -426,8 +415,6 @@ func TestTailnetCrossSitePages(t *testing.T) {
 		require.Equal(t, preflight.Get("Access-Control-Request-Headers"), response.Header().Get("Access-Control-Allow-Headers"), path)
 	}
 
-	// Another page on this tailnet, a page at a Tailscale IP here, and a trusted page's look-alikes are not trusted,
-	// and nothing is trusted when nothing is listed.
 	for _, tt := range []struct {
 		trusted []string
 		origin  string
@@ -519,7 +506,6 @@ func TestTailscaleIdentityCache(t *testing.T) {
 	})
 }
 
-// searchWaiters counts the callers waiting on server's shared searches.
 func searchWaiters(server *Server) int {
 	server.searchMu.Lock()
 	defer server.searchMu.Unlock()
@@ -587,7 +573,7 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 		third <- err
 	}()
 
-	<-started // A different query must start its own scan.
+	<-started
 	cancelThird()
 	require.ErrorIs(t, <-third, context.Canceled)
 	cancelSecond()
@@ -602,7 +588,7 @@ func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
 		retry <- err
 	}()
 
-	newScanCtx := <-started // Abandoning the first scan cannot trap the next search.
+	newScanCtx := <-started
 	empty, err := server.searchMessages(retryCtx, &SearchMessagesRequest{Query: " \t "})
 	require.NoError(t, err)
 	require.Empty(t, empty.Matches)
@@ -728,7 +714,7 @@ func TestSearchSessionsSharedFlightCancellation(t *testing.T) {
 
 	third := search(thirdCtx, "tag:a x")
 
-	<-started // Filter values are case-sensitive, so tag:a runs its own search.
+	<-started
 	cancelThird()
 	require.ErrorIs(t, (<-third).err, context.Canceled)
 	cancelFirst()
@@ -755,8 +741,6 @@ func TestSearchSessionsSharedFlightCancellation(t *testing.T) {
 	require.Empty(t, started, "identical searches run once")
 }
 
-// Alice's search waits in its room lookup while Bob's starts, so a flight shared across callers
-// would hand Bob her results.
 func TestSearchSessionsUnreadPerCaller(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -770,7 +754,6 @@ func TestSearchSessionsUnreadPerCaller(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// The Slack thread's channel holds both searches at its room lookup until release.
 	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `UPDATE conversations SET slack_channel = 'C1' WHERE conversation_id = 'slack-thread:C1:1.1'`)
 	require.NoError(t, err)
 	_, err = openTestTurns(t, dsn).db.ExecContext(t.Context(), `INSERT INTO web_tab_attention (username, path, conversation_id, unread_at) VALUES ('alice', '/s/a', 'web-session:alice', now()), ('bob', '/s/b', 'web-session:bob', now())`)
@@ -873,7 +856,6 @@ WHERE c.conversation_id = v.id`)
 		MentionIds: []string{"U7"},
 	}, response), "%v", response)
 
-	// Filters wins over messages: every tag:A chat passes, whatever the free text, and no message is read.
 	response, err = server.searchSessions(ctx, &SearchSessionsRequest{Query: "tag:A Billing", Messages: true, Filters: true})
 	require.NoError(t, err)
 
@@ -919,7 +901,6 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 		json.RawMessage(`{"type":"rocketcode_public_progress","progress":{"id":"kept/0","parent_id":"stopped/response","kind":"text","state":"working","text":"progress only text","agent":"main","model":"root/model"}}`),
 	}}))
 	require.NoError(t, seeded.SetActiveTurnTerminal(ctx, "stopped", protocol.TerminalStopped))
-	// The stopped turn's search text, as the backend writes it when the turn ends.
 	_, err = seeded.db.ExecContext(ctx, `UPDATE turns SET search_text = '0 0 ["user","","stopped request","stopped request"]' || E'\n' || '1 0 ["assistant","","stopped answer","stopped answer"]' WHERE id = 'stopped'`)
 	require.NoError(t, err)
 
@@ -929,7 +910,6 @@ func TestSearchMessagesFindsHistoryMessages(t *testing.T) {
 		json.RawMessage(`{"type":"message","role":"user","content":"running request"}`),
 	}}))
 
-	// Running-turn and progress-log-only text shows in History but is not indexed (R6, R7).
 	unindexed := []string{"progress only text", "running request"}
 
 	var shown []string
@@ -1241,7 +1221,6 @@ func TestSessionEntries(t *testing.T) {
 
 		_, err = invoke[PromptResponse](browser, connection, "Prompt", &PromptRequest{Id: "unrecorded", Text: "hello"})
 		require.Equal(t, codes.NotFound, status.Code(err), "an unrecorded conversation is not found before anything runs")
-		// This test's backend records the prompt it is handed, then refuses to run it.
 		_, err = invoke[PromptResponse](browser, connection, "Prompt", &PromptRequest{Id: created.Id, Text: "hello"})
 		require.ErrorContains(t, err, "is not recorded")
 
@@ -1269,7 +1248,6 @@ func TestSessionEntries(t *testing.T) {
 	require.NotEmpty(t, empty.GetVersion())
 	require.True(t, proto.Equal(&ListSessionsResponse{Owner: "alice", UpstreamSuccess: true, Version: empty.GetVersion()}, empty))
 
-	// Invalid protobuf bytes must fail decoding, even for an otherwise empty request.
 	malformedIdentity := &IdentityRequest{}
 	malformedIdentity.ProtoReflect().SetUnknown([]byte{0xff})
 	_, err = invoke[IdentityResponse](ctx, connection, "Identity", malformedIdentity)
@@ -1287,7 +1265,6 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, codes.Internal, status.Code(err))
 	require.ErrorContains(t, err, "received no request message")
 
-	// This test's backend records each prompt it is handed, then refuses to run it.
 	require.NoError(t, sessions.UpsertThread("prompted", backend.ThreadState{Agent: "main"}))
 
 	for _, tt := range []struct {
@@ -1315,7 +1292,6 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, "direct-message", inbound.Metadata["web_message_id"])
 	}
 
-	// The backend's failure to read or change a chat's agent pause reaches the caller, and the prompt runs nothing.
 	handed := len(turns)
 	core.AgentPausedFunc = func(context.Context, string) (bool, error) { return false, errors.New("pause unreadable") }
 	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: "prompted", Text: "hello"})
@@ -1329,7 +1305,6 @@ func TestSessionEntries(t *testing.T) {
 
 	const id = "slack-thread:C1:1.1"
 
-	// Cron runs, recorded as the cron runner records them, are private.
 	for _, run := range []string{"cron:private", "one-off-cron:private"} {
 		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: run, Agent: "producer", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/private.md", At: time.Unix(1, 0), OneOff: run == "one-off-cron:private"}}))
 	}
@@ -1415,7 +1390,7 @@ func TestSessionEntries(t *testing.T) {
 		{&UpdateSessionRequest{Id: "missing", Name: new("name")}, codes.NotFound},
 		{&UpdateSessionRequest{Id: "cron:private", Pinned: new(true)}, codes.PermissionDenied},
 		{&UpdateSessionRequest{Id: id, Name: new("bad\x00name")}, codes.InvalidArgument},
-		{&UpdateSessionRequest{Id: id, Paused: new(true)}, codes.InvalidArgument}, // Only a Web chat's agent pauses.
+		{&UpdateSessionRequest{Id: id, Paused: new(true)}, codes.InvalidArgument},
 	} {
 		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", tt.request)
 		require.Equal(t, tt.code, status.Code(err))
@@ -1742,7 +1717,6 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, protocol.InboundKindCancel, turns[len(turns)-1].Kind)
 	require.Equal(t, id, turns[len(turns)-1].ConversationID)
 
-	// Discovery starts from recorded conversations, never orphaned entry rows.
 	at := time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC)
 	for hidden, run := range map[string]*protocol.CronRun{"cron:cron/daily.md:20000102T030405.000000006Z:a": {Path: "cron/daily.md", At: at}, "one-off-cron:cron/daily.md:20000102T030405.000000006Z:b": {Path: "cron/daily.md", At: at, OneOff: true}} {
 		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: hidden, Agent: "producer", Run: run}))
@@ -1759,7 +1733,6 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, listedSessions.Sessions, "empty and deleted histories are hidden")
 
-	// Missing summaries do not expose empty conversation records either.
 	db, err := sql.Open("pgx", dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
@@ -1925,7 +1898,6 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 		json.RawMessage(`{"type":"function_call_output","call_id":"script","output":"tagged"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":""}`),
 	}, OutputTrace: []json.RawMessage{
-		// A tool call made inside the execute script, as stored before such calls were dropped.
 		json.RawMessage(`{"type":"function_call","call_id":"script/host/1","parent_call_id":"script","name":"rocketclaw_set_tag","arguments":"{\"tag\":\"customer\"}"}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"script/host/1","parent_call_id":"script","output":"{\"tags\":[\"customer\"]}"}`),
 	}}
@@ -2019,7 +1991,6 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 	}
 
-	// The actual HTTP proxy and TypeScript gRPC client exercise the same storage.
 	emptySkills, err := invoke[ListSkillsResponse](ctx, connection, "ListSkills", &ListSkillsRequest{})
 	require.NoError(t, err)
 	require.Empty(t, emptySkills.Skills)
@@ -2119,7 +2090,6 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	require.NoError(t, err)
 	httpServer := startHTTPTestServer(t, connection)
 
-	// Pausing sets the stored flag that listings report.
 	core.SetAgentPausedFunc = func(ctx context.Context, id, _ string, paused bool) error {
 		if _, err := db.ExecContext(ctx, `UPDATE conversations SET paused = $2 WHERE conversation_id = $1`, id, paused); err != nil {
 			return fmt.Errorf("set paused: %w", err)
@@ -2179,7 +2149,7 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	remaining, err = sessions.ObserveEntries(ctx, id)
 	require.NoError(t, err)
 	require.Len(t, remaining, 1, "the wipe keeps the copied producer answer")
-	// The rest of this test starts from an empty thread.
+
 	_, err = db.ExecContext(ctx, `WITH gone AS (DELETE FROM entries WHERE conversation_id = $1)
 UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALSE, first_source = NULL WHERE conversation_id = $1`, id)
 	require.NoError(t, err)
@@ -2219,7 +2189,6 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.True(t, found)
 	require.Equal(t, backend.ThreadState{Agent: "planner", CreatedBy: "alice"}, createdThread)
 
-	// A session is born in its agent's space, created when missing, else in the space the person is in, if it still exists.
 	spaces, err := sessions.Spaces(ctx)
 	require.NoError(t, err)
 
@@ -2259,7 +2228,6 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	_, err = invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "main/alternative"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	// A session whose agent has a space offers only that space's agents, in the picker and to $agent.
 	scoped, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: created.Id})
 	require.NoError(t, err)
 	require.Len(t, scoped.Agents, 1)
@@ -2289,7 +2257,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		code      codes.Code
 	}{
 		{id, "planner", codes.InvalidArgument},
-		{created.Id, "selected", codes.InvalidArgument}, // planner's Billing space offers only Billing agents
+		{created.Id, "selected", codes.InvalidArgument},
 		{created.Id, "main/alternative", codes.InvalidArgument},
 		{"empty-web", "missing", codes.InvalidArgument},
 		{"private-X", "main", codes.PermissionDenied},
@@ -2353,7 +2321,6 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.Equal(t, "planner", choices.Agents[0].Name)
 	require.Len(t, channels.ChannelAgentChoicesCalls(), channelCalls)
 
-	// When the space leaves none of the channel's agents, the picker offers the channel's agents.
 	sidebarPolicy := channels.SidebarChannelAgentChoicesFunc
 	channels.SidebarChannelAgentChoicesFunc = func(context.Context, string) (string, []string, error) { return "triage", []string{"main"}, nil }
 	choices, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
@@ -2424,7 +2391,6 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.Empty(t, emptyJobs.Jobs)
 	require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "cron"), 0o700))
 
-	// alpha inherits planner's space; zeta names its own.
 	for name, space := range map[string]string{"zeta": "\nspace: Ops", "alpha": ""} {
 		require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "cron", name+".md"), []byte("---\nschedule: 24h\nagent: planner"+space+"\n---\nCron body\n"), 0o600))
 	}
@@ -2442,14 +2408,12 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 
 	require.Equal(t, []string{"Billing", "Ops"}, []string{jobs.Jobs[0].GetSpace(), jobs.Jobs[1].GetSpace()}, "alpha inherits planner's space; zeta names its own")
 
-	// Agents hold routines and the spaces cron files fall back to, so agent definition failures fail the listing.
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md"), []byte("---\nmodel: [\n---\nHelp."), 0o600))
 
 	_, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.ErrorContains(t, err, "list web cron jobs: load agents: broken.md")
 	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md")))
 
-	// Seed the exact persisted relation written by Sync, without changing Sync.
 	sources := []string{"cron:cron/report:daily.md:20260905T010000.000000001Z:first", "one-off-cron:cron/report_daily.md:20260905T020000.000000002Z:second"}
 	runs := []*protocol.CronRun{{Path: "cron/report:daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, {Path: "cron/report_daily.md", At: time.Date(2026, 9, 5, 2, 0, 0, 2, time.UTC), OneOff: true}}
 
@@ -2502,7 +2466,7 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	preview, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: "absent"})
 	require.NoError(t, err)
 	require.Empty(t, preview.Messages)
-	// A preview must not decode replay content belonging to another run.
+
 	_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', '[{"type":"reasoning","summary":42}]')::json WHERE id = $1`, observed[3].ID)
 	require.NoError(t, err)
 	preview, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[0]})
@@ -2515,8 +2479,6 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 UPDATE entries e SET entry_json = jsonb_set(e.entry_json::jsonb, '{replay_input}', o.replay)::json FROM original o WHERE e.id = $2`, observed[2].ID, observed[3].ID)
 	require.NoError(t, err)
 
-	// Both transcript and delegation inventory ignore physically superseded
-	// checkpoints, even when their unreadable detail survives in the journal.
 	corrupt := "cron:corrupt-delegations"
 	require.NoError(t, sessions.UpsertThread(corrupt, backend.ThreadState{Agent: "main"}))
 	_, err = sessions.AppendEntryID(ctx, corrupt, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "corrupt-turn", Timestamp: time.Now()})
@@ -2533,12 +2495,11 @@ UPDATE entries e SET entry_json = jsonb_set(e.entry_json::jsonb, '{replay_input}
 		require.NoError(t, err)
 	}
 
-	// Each run reports to id; the copies above link no run to a chat.
 	_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $1 WHERE conversation_id = ANY($2)`, id, sources)
 	require.NoError(t, err)
 	jobs, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
-	require.Len(t, jobs.Jobs, 4) // Two definitions and two runs, not four copied entries.
+	require.Len(t, jobs.Jobs, 4)
 
 	for i, stem := range []string{"report_daily", "report:daily"} {
 		run := jobs.Jobs[i+2]
@@ -2578,7 +2539,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.NoError(t, err)
 	})
 
-	// A destination's revert cutoff hides the deliveries from it on; that run has no chat.
 	_, err = db.ExecContext(ctx, `UPDATE conversations SET revert_message_id = $1 WHERE conversation_id = $2`, fmt.Sprintf("%d:0", runEntries[1]), id)
 	require.NoError(t, err)
 	reverted, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
@@ -2673,7 +2633,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		path := filepath.Join(cfg.RuntimeDirName(), "cron", "silent.md")
 
-		// The cron names Ops, so chats continuing its runs are born there, not in planner's Billing.
 		require.NoError(t, root.WriteFile(path, []byte("---\nschedule: 24h\nagent: planner\nspace: Ops\n---\nSilent\n"), 0o600))
 		defer func() { require.NoError(t, root.Remove(path)) }()
 
@@ -2722,8 +2681,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.Equal(t, trace.Messages, history.Messages)
 		require.True(t, history.Reset_)
 		require.NotEmpty(t, history.Revision)
-		// The backend tests exercise delivery binding and atomic effect consumption.
-		// Model their resulting facts here; reopening Web must leave them untouched.
+
 		_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $2 WHERE conversation_id = $1`, undelivered, id)
 		require.NoError(t, err)
 
@@ -2749,7 +2707,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		opsID := spaces[slices.IndexFunc(spaces, func(space backend.Space) bool { return space.Name == "Ops" })].ID
 
-		// Narrowing to an agent's space is covered above; here a cron chat switches freely among its allowed agents.
 		planner := filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md")
 
 		require.NoError(t, root.WriteFile(planner, []byte("---\nmodel: gpt-6.1-sol\n---\nHelp."), 0o600))
@@ -2858,7 +2815,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	}
 
 	require.NotEqual(t, opened[0], opened[1])
-	// Call recording precedes the final RunFunc read; synchronize before replacing it.
 	require.Eventually(t, func() bool { return len(cronRan) == 2 }, time.Second, 10*time.Millisecond)
 	<-cronRan
 	<-cronRan
@@ -2874,7 +2830,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	require.NoError(t, err)
 	require.NotEmpty(t, failed.Id)
 
-	// A Run cron session is born in the cron's space, else its agent's: alpha inherits planner's Billing.
 	_, err = sessions.AppendEntryID(ctx, failed.Id, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now()})
 	require.NoError(t, err)
 	runRows, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
@@ -2893,7 +2848,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 	}
 
-	// A missing projection leaves its row without preview or time; summaries are always complete.
 	_, err = db.ExecContext(ctx, `UPDATE conversations SET preview = NULL, last_updated = NULL WHERE conversation_id = $1`, id)
 	require.NoError(t, err)
 	incomplete, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
@@ -2919,7 +2873,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	_, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
 	require.ErrorContains(t, err, "stored channel facts unavailable")
 
-	// Web rows arrive before the Slack facts failure; no success terminal follows.
 	stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/ListSessions")
 	require.NoError(t, err)
 	require.NoError(t, stream.SendMsg(&ListSessionsRequest{}))
@@ -2952,7 +2905,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 	channels.SidebarChannelAgentChoicesFunc = sidebarChoices
 
-	// Definition failures must fail both independent choices and enumeration.
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md"), []byte("---\nmodel: [\n---\nHelp."), 0o600))
 
 	_, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
@@ -2981,8 +2933,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		_, err = transaction.ExecContext(t.Context(), `LOCK TABLE conversations IN ACCESS EXCLUSIVE MODE`)
 		require.NoError(t, err)
 
-		// Shadow visibility also reads managed ownership, so the locked lookup
-		// fails before selecting an agent rather than returning incomplete choices.
 		selectedServer := &Server{backend: server.backend, sessions: lockedSessions, cfg: server.cfg, channels: server.channels, cronjobs: server.cronjobs}
 		incoming := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
 		selected, err := selectedServer.listAgents(incoming, id)
@@ -3245,7 +3195,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 					require.Equal(t, queue, remaining)
 				}
 			})
-			// Failed ingestion must preserve the original and its existing references.
+
 			history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation})
 			require.NoError(t, err)
 			require.True(t, proto.Equal(inputHistory, history))
@@ -3291,7 +3241,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: "another", Text: exact, AttachmentIds: []string{file.Id}})
 		require.Equal(t, codes.NotFound, status.Code(err))
 
-		// A real gRPC download stays below default message limits and preserves every byte.
 		download, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/DownloadAttachment")
 		require.NoError(t, err)
 		require.NoError(t, download.SendMsg(&Attachment{ConversationId: conversation, Id: file.Id}))
@@ -3314,7 +3263,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		require.Equal(t, data, received)
 
-		// Historical capture is rooted at cfg.Workspace and never refreshed from mutable paths.
 		require.NoError(t, root.MkdirAll("artifacts/memes", 0o700))
 		require.NoError(t, root.WriteFile("artifacts/memes/old.png", []byte("old image bytes"), 0o600))
 		outside, err := os.OpenRoot(t.TempDir())
@@ -3346,7 +3294,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		stored, err := reopened.LoadAttachment(ctx, conversation, recovered.Id, false)
 		require.NoError(t, err)
 		require.Equal(t, []byte("old image bytes"), stored.Data)
-		// A file attached from inside an execute script shows on its turn's final reply.
 		nestedFile := protocol.OutboundAttachment{ID: "nested-generated", Name: "nested.png", MIMEType: "image/png", Data: []byte("nested image")}
 		require.NoError(t, sessions.SaveAttachment(ctx, conversation, "attaching-turn", &nestedFile, false))
 		_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: "attaching-turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
@@ -3363,7 +3310,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.Len(t, reply.Attachments, 1)
 		require.Equal(t, nestedFile.ID, reply.Attachments[0].Id)
 		require.Empty(t, history.Messages[len(history.Messages)-2].Attachments, "the script's own row carries no files")
-		// A delivered copy authorizes only the original producer's referenced object.
+
 		producerFile := protocol.OutboundAttachment{ID: "private-generated", Name: "generated.png", MIMEType: "image/png", Data: []byte("private original")}
 		require.NoError(t, sessions.SaveAttachment(ctx, "private-X", "", &producerFile, false))
 		sourceID, err := sessions.AppendEntryID(ctx, "private-X", &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
@@ -3410,7 +3357,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		filtered, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation, SourceConversationId: "private-X"})
 		require.NoError(t, err)
 		require.Empty(t, filtered.Messages)
-		// Unreferenced immutable objects cannot be downloaded by knowing their ID.
 		require.NoError(t, sessions.SaveAttachment(ctx, conversation, "", &protocol.OutboundAttachment{ID: "orphan", Name: "orphan", Data: []byte("private")}, false))
 
 		for _, test := range []struct {
@@ -3437,7 +3383,7 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 				if test.code == codes.PermissionDenied || test.code == codes.Unauthenticated {
 					upload, err := connection.NewStream(callCtx, &grpc.StreamDesc{ClientStreams: true}, "/rpc.Web/UploadAttachment")
 					require.NoError(t, err)
-					// Authentication can reject the stream before SendMsg; RecvMsg carries the status.
+
 					if err := upload.SendMsg(&Attachment{ConversationId: test.conversation, Name: "denied.txt", Data: []byte("denied")}); err != nil {
 						require.ErrorIs(t, err, io.EOF)
 					}
@@ -3448,7 +3394,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			})
 		}
 
-		// A wipe keeps messages copied from a run, so remove the copy before wiping the rest.
 		_, err = db.ExecContext(ctx, `DELETE FROM entries WHERE conversation_id = $1 AND entry_json::jsonb ? 'sync_source_entry_id'`, conversation)
 		require.NoError(t, err)
 		_, err = sessions.DeleteSession(ctx, conversation)
@@ -3460,7 +3405,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.Equal(t, codes.NotFound, status.Code(stream.RecvMsg(&Attachment{})))
 	})
 
-	// An easy agent's chat keeps its uploads where reload keeps them and its file view shows them, by host path.
 	t.Run("easy chat uploads", func(t *testing.T) {
 		const conversation = "web:easy-attachments"
 
@@ -3646,7 +3590,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 				require.Error(t, connection.Invoke(ctx, "/rpc.Web/"+call.method, call.request, call.response), "corrupt history must not produce partial success: %s, %s", call.method, replay)
 			}
 
-			// Search reads the text indexed when the entry was saved.
 			matches, err = invoke[SearchMessagesResponse](ctx, connection, "SearchMessages", &SearchMessagesRequest{Query: "next handoff step"})
 			require.NoError(t, err)
 			require.Len(t, matches.Matches, 1)
@@ -3792,7 +3735,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 		require.Empty(t, started, "both authorized callers should share one scan")
 	})
 
-	// A database outage cannot turn selected choices or enumeration into empty success.
 	require.NoError(t, sessions.Stop())
 
 	_, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
@@ -3825,10 +3767,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 	require.Len(t, catalog.Agents, 3, "the unselected catalog is independent of the database")
 }
 
-// KTD4: continuing a cron run in Web opens web:<run>, which shows the run's messages under their
-// own IDs and then its own, as its agent sees them, without copying a row. A run that reports
-// nowhere is adopted; one bound to its Slack report stays shown there too. Continuing again
-// returns the same chat.
 func TestContinueCronRun(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -3967,7 +3905,6 @@ func TestContinueCronRun(t *testing.T) {
 	})
 }
 
-// An easy agent's routine is its own Cron job, named "<agent> · <schedule>", with its runs, and Run starts it.
 func TestRoutineCronJobs(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -4010,7 +3947,6 @@ func TestRoutineCronJobs(t *testing.T) {
 	require.True(t, strings.HasPrefix(<-ran, "marketing|agents/marketing.md#30m|"+started.Id+"|Scheduled run (30m).\n\n"), "the run sends the routine's message and the cron reply instruction")
 }
 
-// withoutBackgroundJobs is a backend with no Background Jobs, nothing to move, and no pending questions.
 func withoutBackgroundJobs() *mockBackend {
 	return &mockBackend{
 		SandboxErrorFunc:     noSandboxError,
@@ -4066,7 +4002,6 @@ func invoke[Response any](ctx context.Context, connection *grpc.ClientConn, meth
 	return response, nil
 }
 
-// runWebTest runs a Web test against this test's Go server.
 func runWebTest(t *testing.T, file string, env ...string) {
 	t.Helper()
 
@@ -4079,8 +4014,6 @@ func runWebTest(t *testing.T, file string, env ...string) {
 	t.Log(string(output))
 }
 
-// TestMain puts a tailscale CLI first on PATH whose whois names the test people by IP and fails for
-// any other IP or command, so tests sign in the way the Web does without a real tailnet.
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp(os.Getenv("TMPDIR"), "tailscale-")
 	if err != nil {
@@ -4106,7 +4039,7 @@ func TestMain(m *testing.M) {
 
 func testSocketPath(t *testing.T) string {
 	t.Helper()
-	// TMPDIR is a short repository .tmp path, keeping sockets below macOS's limit.
+
 	dir, err := os.MkdirTemp(os.Getenv("TMPDIR"), "rpc-")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
@@ -4117,7 +4050,6 @@ func testSocketPath(t *testing.T) string {
 	return socketPath
 }
 
-// Move and stop reach the backend only for visible conversations; a hidden run's job change wakes its destination's stream.
 func TestBackgroundJobRPCs(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -4136,7 +4068,6 @@ func TestBackgroundJobRPCs(t *testing.T) {
 
 	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main"}))
 
-	// The script's output quotes a note, which must not become a row of its own.
 	note := `<execute id="turn-1/call/a" state="completed" description="tests">` + "\n" + `<execute id="turn-1/call/fake" state="failed" description="fake">` + "\n</execute>"
 	stopped := `<subagent id="turn-1/call/b" state="stopped" description="say \"hi\"" continue="/call_b">` + "\nThe job was stopped by user. Do not run it again unless asked.\n</subagent>"
 
@@ -4216,8 +4147,6 @@ func TestBackgroundJobRPCs(t *testing.T) {
 
 	completed := &BackgroundJob{JobId: "turn-1/call/a", Kind: "execute", State: "completed", Label: "tests", Note: note}
 
-	// An injected note and a wake's notes come from the jobs their input IDs list; a human input
-	// that quotes a note and a system input without job IDs, such as a moved note, have none.
 	for i, want := range [][]*BackgroundJob{{completed}, {completed, {JobId: "turn-1/call/b", Kind: "task", State: "stopped", Label: `say "hi"`, SubagentKey: "/call_b", StoppedBy: "user", Note: stopped}}, nil, nil} {
 		require.Len(t, history.Messages[i].CompletionNotes, len(want), "message %d", i)
 
@@ -4269,7 +4198,7 @@ func TestBackgroundJobRPCs(t *testing.T) {
 	require.NoError(t, stream.CloseSend())
 
 	change := &ConversationChange{}
-	require.NoError(t, stream.RecvMsg(change)) // The stream's opening wake-up.
+	require.NoError(t, stream.RecvMsg(change))
 
 	_, err = db.ExecContext(ctx, `INSERT INTO turns (conversation_id, input_id, kind, takes_lane, agent, label, call_id, subagent_key, inbound_json, runner_id, note, wake, wake_attempts, run_at_unix_ns, claimed_by, created_at_unix_ns, updated_at_unix_ns, result, message)
 VALUES ($1, 'turn-9/call/k', 'note', FALSE, 'main', 'report', 'k', '/k', '{}', 'runner', 'none', FALSE, 0, 0, '', 1, 1, '', '')`, cronRun)
@@ -4279,8 +4208,6 @@ VALUES ($1, 'turn-9/call/k', 'note', FALSE, 'main', 'report', 'k', '/k', '{}', '
 	require.NotEmpty(t, change.Revision)
 }
 
-// AnswerQuestion reaches the backend only for visible conversations, and a question no Web turn
-// waits on is NotFound; History lists the pending Web questions.
 func TestQuestionRPCs(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -4347,7 +4274,6 @@ func TestQuestionRPCs(t *testing.T) {
 	require.Len(t, core.AnswerQuestionCalls(), 2, "an unrecorded conversation never reaches the backend")
 }
 
-// noSandboxError is a backend whose emulated shells can run.
 func noSandboxError() string { return "" }
 
 func notPaused(context.Context, string) (bool, error) { return false, nil }

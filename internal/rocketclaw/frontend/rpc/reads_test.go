@@ -107,7 +107,6 @@ UNION ALL SELECT format('tab %s unread=%s', path, unread_at IS NOT NULL) FROM we
 		return out
 	}
 
-	// Alice set her mark on x herself and has her Cron tab marked, and the listing says so.
 	const at = "2026-10-22T10:00:00.5Z"
 
 	mark()
@@ -123,7 +122,6 @@ UNION ALL SELECT format('tab %s unread=%s', path, unread_at IS NOT NULL) FROM we
 
 	httpServer := startHTTPTestServer(t, connection)
 
-	// A same-origin poll records the view and ends Alice's due park of her Agents tab; a cross-site one does neither.
 	viewed, woken := []string{"alice viewing=/s/eA", "tab /agents unread=t", "tab /cron unread=t", "tab /s/eA unread=f"}, "tab /agents unread=t"
 	for _, tc := range []struct {
 		header, value, query string

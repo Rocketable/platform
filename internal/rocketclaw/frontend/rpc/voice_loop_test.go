@@ -21,8 +21,6 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// pipeListener hands net.Pipe ends to an http.Server, so a gorilla Upgrader can
-// serve the fake sideband inside a synctest bubble.
 type pipeListener chan net.Conn
 
 func (l pipeListener) Accept() (net.Conn, error) {
@@ -43,10 +41,6 @@ func (l pipeListener) Addr() net.Addr {
 	return &net.UnixAddr{Name: "pipe", Net: "unix"}
 }
 
-// startVoiceLoop runs a call's loop over a fake sideband on net.Pipe. Every dial, the first
-// included, reaches the fake OpenAI, which answers with the next status in refusals (0 never
-// answers) or else upgrades and hands its end to peers. It also returns the first peer, the call's cancel,
-// and a wait that returns the call's end reason.
 func startVoiceLoop(t *testing.T, auth string, engine *mockBackend, stream *mockServerStream, snapshots <-chan voiceSnapshot, refusals <-chan int) (
 	first *websocket.Conn, peers <-chan *websocket.Conn, cancel context.CancelCauseFunc, wait func() voiceEndError,
 ) {
@@ -57,7 +51,7 @@ func startVoiceLoop(t *testing.T, auth string, engine *mockBackend, stream *mock
 		select {
 		case code := <-refusals:
 			if code == 0 {
-				<-r.Context().Done() // A stalled handshake, until the dialer hangs up.
+				<-r.Context().Done()
 				return
 			}
 
@@ -112,18 +106,18 @@ func startVoiceLoop(t *testing.T, auth string, engine *mockBackend, stream *mock
 func TestVoiceLoopEnds(t *testing.T) {
 	for _, tc := range []struct {
 		name, auth string
-		closed     string // the reason of OpenAI's session.closed
-		drop       bool   // the sideband drops right after session.closed
-		normal     bool   // OpenAI closes the sideband normally, with no session.closed
-		cause      error  // how the call is stopped otherwise
-		quiet      bool   // the peer never confirms session.close
+		closed     string
+		drop       bool
+		normal     bool
+		cause      error
+		quiet      bool
 		reason     voiceEndError
 	}{
 		{name: "expired", auth: "api_key", closed: "expired", reason: "expired"},
 		{name: "safety", auth: "api_key", closed: "content", reason: "safety"},
 		{name: "closed", auth: "chatgpt", closed: "client_request", reason: "closed"},
 		{name: "closed then dropped", auth: "chatgpt", closed: "client_request", drop: true, reason: "closed"},
-		{name: "normal close", auth: "chatgpt", normal: true, reason: "closed"}, // As Codex: no reconnect.
+		{name: "normal close", auth: "chatgpt", normal: true, reason: "closed"},
 		{name: "stopped", auth: "api_key", cause: context.Canceled, reason: "stopped"},
 		{name: "stopped quiet peer", auth: "chatgpt", cause: context.Canceled, quiet: true, reason: "stopped"},
 		{name: "replaced", auth: "api_key", cause: voiceEndError("replaced"), reason: "replaced"},
@@ -131,12 +125,11 @@ func TestVoiceLoopEnds(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				peer, peers, cancel, wait := startVoiceLoop(t, tc.auth, &mockBackend{SandboxErrorFunc: noSandboxError}, &mockServerStream{}, nil, nil)
-				// Malformed, ignored and rejected-append events are skipped without ending the call.
 				for _, event := range []string{`{`, `{"type":"session.output_audio.delta","delta":"AAAA"}`, `{"type":"error","error":{"message":"unknown delegation"}}`} {
 					require.NoError(t, peer.WriteMessage(websocket.TextMessage, []byte(event)))
 				}
 
-				time.Sleep(time.Hour) // No timer ends a silent call (R16).
+				time.Sleep(time.Hour)
 				synctest.Wait()
 
 				switch {
@@ -183,7 +176,6 @@ func TestVoiceLoopEnds(t *testing.T) {
 	}
 }
 
-// voiceDelegation is a hand-off as Codex wraps it (codex-rs core/src/context/realtime_delegation.rs).
 func voiceDelegation(input, delta string) string {
 	return "<realtime_delegation>\n  <input>" + input + "</input>\n  <transcript_delta>" + delta + "</transcript_delta>\n</realtime_delegation>"
 }
@@ -194,24 +186,23 @@ func TestVoiceLoopHandOffs(t *testing.T) {
 	for _, tc := range []struct {
 		name, auth string
 		events     []string
-		want       [][2]string // admitted hand-off id and request, in arrival order
+		want       [][2]string
 	}{
 		{"public", "api_key", []string{
 			`{"type":"session.input_transcript.delta","delta":"run the"}`,
 			`{"type":"session.delegation.created","delegation":{"id":"d1"}}`,
-			`{"type":"session.delegation.created","delegation":{"id":"d1"}}`, // Re-delivered with nothing said since: no request.
-			// The voice model's filler comes before the person's last words, which go to the next hand-off.
+			`{"type":"session.delegation.created","delegation":{"id":"d1"}}`,
 			`{"type":"session.output_transcript.delta","delta":"On it."}`,
 			`{"type":"session.input_transcript.delta","delta":"tests"}`,
 			`{"type":"session.delegation.created","delegation":{"id":"d2"}}`,
-			`{"type":"session.delegation.created","delegation":{"id":"d3"}}`, // Nothing was said since d2.
+			`{"type":"session.delegation.created","delegation":{"id":"d3"}}`,
 			`{"type":"session.input_transcript.delta","delta":"` + long + `"}`,
 			`{"type":"session.delegation.created","delegation":{"id":"d4"}}`,
 			`{"type":"session.input_transcript.delta","delta":"thanks"}`,
 		}, [][2]string{
 			{"d1", voiceDelegation("user: run the", "user: run the")},
 			{"d2", voiceDelegation("assistant: On it.\nuser: tests", "assistant: On it.\nuser: tests")},
-			{"d4", voiceDelegation("user: "+strings.Repeat("x", 4087)+"…", end)}, // Bounded to 4 KB, keeping the request's start and the transcript's end.
+			{"d4", voiceDelegation("user: "+strings.Repeat("x", 4087)+"…", end)},
 		}},
 		{"codex", "chatgpt", []string{
 			`{"type":"turn.done","turn":{"role":"assistant","transcript":"Run the tests?"}}`,
@@ -222,7 +213,6 @@ func TestVoiceLoopHandOffs(t *testing.T) {
 			`{"type":"delegation.created","item":{"id":"d2","content":[{"type":"input_text","text":"lint & tests"}]}}`,
 			`{"type":"turn.done","turn":{"role":"user","transcript":"` + long + `"}}`,
 			`{"type":"delegation.created","item":{"id":"d3","content":[{"type":"input_text","text":"` + long + `"}]}}`,
-			// Speech still in progress counts, and a final transcript replaces its speaker's line.
 			`{"type":"output_transcript.added","item":{"text":"Tests "}}`,
 			`{"type":"output_transcript.added","item":{"text":"or lint?"}}`,
 			`{"type":"input_transcript.added","item":{"text":"both"}}`,
@@ -230,8 +220,8 @@ func TestVoiceLoopHandOffs(t *testing.T) {
 			`{"type":"delegation.created","item":{"id":"d4","content":[{"type":"input_text","text":"both"}]}}`,
 			`{"type":"turn.done","turn":{"role":"user","transcript":"thanks"}}`,
 		}, [][2]string{
-			{"d1", voiceDelegation("sure", "assistant: Run the tests?\nuser: sure")}, // Already said, so it is not added again.
-			{"d2", voiceDelegation("lint &amp; tests", "user: lint &amp; tests")},    // The request joins the transcript, escaped.
+			{"d1", voiceDelegation("sure", "assistant: Run the tests?\nuser: sure")},
+			{"d2", voiceDelegation("lint &amp; tests", "user: lint &amp; tests")},
 			{"d3", voiceDelegation(start, end)},
 			{"d4", voiceDelegation("both", "assistant: Tests or lint?\nuser: both")},
 		}},
@@ -308,14 +298,12 @@ func TestVoiceLoopReplies(t *testing.T) {
 		turns := []voiceTurn{
 			{key: "before", inputs: []string{"typed"}, reply: "Earlier reply."},
 			{key: "t1", inputs: []string{"d1", "typed"}, reply: "Superseded."},
-			{key: "t2", inputs: []string{"typed", "d2"}, reply: strings.Repeat("a", 3960)}, // A later hand-off speaks again.
-			{key: "t3", inputs: []string{"d3"}, reply: "Done."},                            // Finished before the first snapshot.
+			{key: "t2", inputs: []string{"typed", "d2"}, reply: strings.Repeat("a", 3960)},
+			{key: "t3", inputs: []string{"d3"}, reply: "Done."},
 			{key: "t4", inputs: []string{"d4"}, reply: strings.Repeat("b", 3961)},
-			{key: "t5", inputs: []string{"d5", "d6"}, reply: "Both."}, // Two hand-offs folded into one turn.
+			{key: "t5", inputs: []string{"d5", "d6"}, reply: "Both."},
 		}
 
-		// Questions are noticed under the newest hand-off; replies are spoken whole, at most
-		// 3,960 bytes. A longer one goes to the browser, and the voice model says where.
 		expect(voiceSnapshot{turns: turns, questions: []protocol.AskUserQuestionRequest{ship}},
 			slices.Concat(
 				dialect.appends("d7", "I need your input. Please respond in the app.\n\nShip?\nOptions: Yes, No"),
@@ -327,8 +315,6 @@ func TestVoiceLoopReplies(t *testing.T) {
 		require.Len(t, stream.SendMsgCalls(), 1, "what was typed before the call mutes nothing")
 		assert.Equal(t, strings.Repeat("b", 3961), stream.SendMsgCalls()[0].M.(*VoiceEvent).GetReply())
 
-		// Typing silences every earlier hand-off, even one whose turn already finished, and
-		// mutes the browser once; a typed turn sends nothing; nothing is sent twice.
 		later := []voiceTurn{{key: "t6", inputs: []string{"d7"}, reply: "Stale."}, {key: "t7", inputs: []string{"typed-during"}, reply: "Typed reply."}}
 		expect(voiceSnapshot{turns: slices.Concat(turns, later), questions: []protocol.AskUserQuestionRequest{ship, deploy}},
 			dialect.appends("d7", "I need your input. Please respond in the app.\n\nDeploy?\nTo production.")...)
@@ -336,7 +322,6 @@ func TestVoiceLoopReplies(t *testing.T) {
 		require.Len(t, stream.SendMsgCalls(), 2)
 		assert.True(t, stream.SendMsgCalls()[1].M.(*VoiceEvent).GetTyped())
 
-		// A hand-off after a question is a normal message.
 		handOff("d8")
 		assert.Len(t, engine.StashQueueItemCalls(), 8)
 		assert.Equal(t, voiceDelegation("user: go", "user: go"), engine.StashQueueItemCalls()[7].ThreadQueueItem.Message)
@@ -362,7 +347,6 @@ func TestVoiceLoopAdmission(t *testing.T) {
 		notices  []string
 		reason   voiceEndError
 	}{
-		// Each refusal gets a notice and the call goes on to admit the next hand-off.
 		{"refused", errors.New("message ID was already accepted with different content"), []string{"d1", "d2"}, []string{refused, refused}, "stopped"},
 		{"bridge stopped", fmt.Errorf("enqueue Web prompt: %w", protocol.ErrBridgeStopped), []string{"d1"}, []string{}, "error"},
 	} {
@@ -420,7 +404,6 @@ func TestVoiceLoopResendsAfterDrop(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, string(chunks[0]), string(data))
 
-		// A hand-off read while the second chunk's write is stuck, then the sideband drops.
 		require.NoError(t, peer.WriteMessage(websocket.TextMessage, []byte(`{"type":"delegation.created","item":{"id":"d2","content":[{"type":"input_text","text":"lint"}]}}`)))
 		synctest.Wait()
 		require.NoError(t, peer.Close())
@@ -437,7 +420,7 @@ func TestVoiceLoopResendsAfterDrop(t *testing.T) {
 			assert.Equal(t, string(want), string(data))
 		}
 
-		snapshots <- reply // A repeated snapshot sends nothing twice.
+		snapshots <- reply
 
 		cancel(nil)
 
@@ -460,15 +443,15 @@ func TestVoiceLoopResendsAfterDrop(t *testing.T) {
 func TestVoiceLoopReconnect(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		refusals  []int // the redial answers before an upgrade
-		stop      bool  // Stop during the backoff sleep
-		stall     bool  // Stop during a redial whose handshake never answers
-		code      int   // the close code OpenAI drops the sideband with; 0 drops it without one
+		refusals  []int
+		stop      bool
+		stall     bool
+		code      int
 		reconnect bool
 		reason    voiceEndError
 	}{
 		{name: "not found", refusals: []int{http.StatusNotFound}, reason: "closed"},
-		{name: "going away", refusals: []int{http.StatusNotFound}, code: websocket.CloseGoingAway, reason: "closed"}, // As Codex, only a normal close is no drop.
+		{name: "going away", refusals: []int{http.StatusNotFound}, code: websocket.CloseGoingAway, reason: "closed"},
 		{name: "gone", refusals: []int{http.StatusGone}, reason: "closed"},
 		{name: "refused five times", refusals: slices.Repeat([]int{http.StatusInternalServerError}, 5), reason: "lost"},
 		{name: "refused once", refusals: []int{http.StatusInternalServerError}, reconnect: true, reason: "stopped"},
@@ -496,7 +479,7 @@ func TestVoiceLoopReconnect(t *testing.T) {
 				}
 
 				if tc.stall {
-					time.Sleep(time.Second) // The redial waits on its handshake, which times out only after 45 s.
+					time.Sleep(time.Second)
 					cancel(nil)
 				}
 
@@ -505,7 +488,7 @@ func TestVoiceLoopReconnect(t *testing.T) {
 				if tc.reconnect {
 					peer = <-peers
 
-					synctest.Wait() // The dial finishes its handshake.
+					synctest.Wait()
 
 					cancel(nil)
 
@@ -521,7 +504,6 @@ func TestVoiceLoopReconnect(t *testing.T) {
 					assert.Zero(t, time.Since(stopped), "Stop ends a stalled dial at once")
 				}
 
-				// The browser hears of the drop, and of the reconnect when it comes.
 				reconnecting := make([]bool, 0, len(stream.SendMsgCalls()))
 				for _, call := range stream.SendMsgCalls() {
 					reconnecting = append(reconnecting, call.M.(*VoiceEvent).GetReconnecting())
@@ -554,14 +536,14 @@ func TestVoiceLoopBackoff(t *testing.T) {
 			peer = <-peers
 
 			assert.Equal(t, want, time.Since(dropped))
-			synctest.Wait() // The dial finishes its handshake.
+			synctest.Wait()
 		}
 
 		for _, want := range []time.Duration{200, 400, 800, 1600, 3200, 5000, 5000} {
 			drop(want * time.Millisecond)
 		}
 
-		time.Sleep(30 * time.Second) // A stable connection resets the backoff.
+		time.Sleep(30 * time.Second)
 		drop(200 * time.Millisecond)
 
 		cancel(nil)
