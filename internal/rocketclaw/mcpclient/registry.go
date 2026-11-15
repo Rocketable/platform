@@ -1,4 +1,3 @@
-// Package mcpclient connects to outbound MCP servers for code mode.
 package mcpclient
 
 import (
@@ -27,7 +26,6 @@ const httpClientTimeout = 60 * time.Second
 
 var errSessionClosed = errors.New("mcp session closed")
 
-// ServerConfig describes one outbound MCP server transport.
 type ServerConfig struct {
 	Command string
 	Args    []string
@@ -37,13 +35,11 @@ type ServerConfig struct {
 	Headers map[string]string
 }
 
-// Registry holds configured MCP server specs for a workspace.
 type Registry struct {
 	workspace string
 	servers   map[string]ServerConfig
 }
 
-// New builds a registry. servers is copied; later mutation is ignored.
 func New(workspace string, servers map[string]ServerConfig) Registry {
 	cloned := make(map[string]ServerConfig, len(servers))
 	for name, cfg := range servers {
@@ -56,17 +52,14 @@ func New(workspace string, servers map[string]ServerConfig) Registry {
 	return Registry{workspace: workspace, servers: cloned}
 }
 
-// Names returns configured server names in sorted order.
 func (r Registry) Names() []string {
 	return slices.Sorted(maps.Keys(r.servers))
 }
 
-// Open starts a session that connects servers lazily and closes them on Close.
 func (r Registry) Open() *Session {
 	return &Session{reg: r, conns: make(map[string]*mcp.ClientSession)}
 }
 
-// ToolInfo is one tool from a server's catalog.
 type ToolInfo struct {
 	Server      string
 	Name        string
@@ -74,14 +67,12 @@ type ToolInfo struct {
 	InputSchema map[string]any
 }
 
-// Session is one execute tool-call lifetime.
 type Session struct {
 	reg   Registry
 	mu    sync.Mutex
 	conns map[string]*mcp.ClientSession
 }
 
-// ListTools returns the full tool catalog for server.
 func (s *Session) ListTools(ctx context.Context, server string) ([]ToolInfo, error) {
 	cs, err := s.connect(ctx, server)
 	if err != nil {
@@ -107,7 +98,6 @@ func (s *Session) ListTools(ctx context.Context, server string) ([]ToolInfo, err
 	return out, nil
 }
 
-// CallTool invokes tool on server and flattens the result to a string.
 func (s *Session) CallTool(ctx context.Context, server, tool string, args map[string]any) (string, error) {
 	cs, err := s.connect(ctx, server)
 	if err != nil {
@@ -122,7 +112,6 @@ func (s *Session) CallTool(ctx context.Context, server, tool string, args map[st
 	return flattenCallToolResult(result)
 }
 
-// Close ends all connections opened by this session. It is idempotent.
 func (s *Session) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -205,8 +194,6 @@ func (s *Session) connect(ctx context.Context, name string) (*mcp.ClientSession,
 	return cs, nil
 }
 
-// childEnv builds a minimal process environment plus configured overrides.
-// It does not pass the full parent environ (avoids leaking host secrets to MCP children).
 func childEnv(overrides map[string]string) []string {
 	allow := []string{"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TMP", "TEMP", "USER", "LOGNAME", "SHELL"}
 	parent := map[string]string{}
