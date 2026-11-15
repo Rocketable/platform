@@ -24,31 +24,25 @@ const (
 	localSteps   = "workflow steps"
 )
 
-// Worker describes an isolated workflow agent.
 type Worker struct {
 	Name, Instructions, Model string
 	Tools                     []string
 }
 
-// RunRequest identifies one foreground workflow invocation.
 type RunRequest struct {
 	RunID, Args string
 }
 
-// AgentRequest describes one isolated agent call. Key is the call's
-// replay-stable journal key under the run ID.
 type AgentRequest struct {
 	Worker      Worker
 	Prompt, Key string
 	Schema      map[string]any
 }
 
-// AgentRunner runs one isolated agent call.
 type AgentRunner interface {
 	Run(context.Context, *AgentRequest) (json.RawMessage, error)
 }
 
-// Result is the rendered workflow result.
 type Result struct {
 	Text   string
 	Phases []protocol.PhaseUpdate
@@ -75,7 +69,6 @@ type engine struct {
 	remaining         uint64
 }
 
-// Run executes a compiled workflow in the foreground.
 func Run(ctx context.Context, definition *Definition, request RunRequest, agent AgentRunner) (result Result, err error) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -84,7 +77,6 @@ func Run(ctx context.Context, definition *Definition, request RunRequest, agent 
 	defer func() {
 		e.finishPhase("run", err)
 
-		// Fan-out callbacks have joined before Run returns, so finalization owns phase state.
 		for _, name := range definition.Phases {
 			state := e.phases[name]
 			if state.Status == protocol.PhasePending {
@@ -200,7 +192,6 @@ func (e *engine) thread(ctx context.Context, name, key, phase string, fanout boo
 	}
 }
 
-// nextKey numbers the thread's next agent call or fan-out, so a replayed run finds its recorded workers.
 func nextKey(thread *starlark.Thread) string {
 	steps, _ := thread.Local(localSteps).(int)
 	thread.SetLocal(localSteps, steps+1)
@@ -520,7 +511,6 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 			return nil, errResult
 		}
 
-		// The initial count installed this phase, and phases are never removed.
 		_ = e.phaseCount(phase, 0, 1)
 
 		if schema == starlark.None {
