@@ -25,12 +25,10 @@ var (
 	envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
-// SecretFetcher returns a Secrets Manager SecretString.
 type SecretFetcher interface {
 	SecretString(ctx context.Context, arn string) (string, error)
 }
 
-// SecretFetchError names the ARN and key of a failed fetch. It never includes the secret body.
 type SecretFetchError struct {
 	ARN string
 	Key string
@@ -47,13 +45,10 @@ func (e *SecretFetchError) Error() string {
 
 func (e *SecretFetchError) Unwrap() error { return e.err }
 
-// AWSFetcher loads SecretString with the default AWS credential chain. It keeps one client per region, the
-// chain's config loaded for that region, so fetches reuse its connections and cached credentials.
 type AWSFetcher struct {
-	clients sync.Map // Region to *secretsmanager.Client.
+	clients sync.Map
 }
 
-// SecretString fetches the current SecretString for arn.
 func (f *AWSFetcher) SecretString(ctx context.Context, arn string) (string, error) {
 	region, err := secretsManagerRegion(arn)
 	if err != nil {
@@ -112,8 +107,6 @@ func secretField(ctx context.Context, fetcher SecretFetcher, arn, key string) (s
 	return text, nil
 }
 
-// SecretEnv fetches every secret in arns as environment variables: each holds a JSON object whose keys are
-// variable names and whose values are strings, and a key may appear in one secret only.
 func SecretEnv(ctx context.Context, fetcher SecretFetcher, arns []string) (map[string]string, error) {
 	env := map[string]string{}
 

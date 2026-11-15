@@ -622,7 +622,6 @@ func TestValidateRocketClaws(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			// A trusted page's origin follows the same rule as a remote's URL; only the "work" cases vary the URL.
 			cfg = validConfig()
 			cfg.TrustedRocketClaws = []string{tt.url}
 

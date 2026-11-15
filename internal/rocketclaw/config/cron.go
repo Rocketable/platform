@@ -15,8 +15,6 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// LoadOneOffCronjob reads a current runtime definition without running it.
-// The cron frontend adds its output-decision instruction to Prompt.
 func LoadOneOffCronjob(workspace, runtimeDir, target string) (protocol.OneOffCronjob, error) {
 	target = strings.TrimSpace(target)
 	if strings.Contains(target, "/") || strings.Contains(target, `\`) {
@@ -58,7 +56,6 @@ func LoadOneOffCronjob(workspace, runtimeDir, target string) (protocol.OneOffCro
 	return job, err
 }
 
-// ParseCronDefinition validates a cron asset and returns its prompt and schedules.
 func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronjob, []CronSchedule, error) {
 	frontmatterBytes, body, err := splitCronFrontmatter(data)
 	if err != nil {
@@ -162,7 +159,6 @@ func splitCronFrontmatter(data []byte) (frontmatter []byte, body string, err err
 	return nil, "", errors.New("yaml frontmatter closing delimiter is required")
 }
 
-// CronSchedule is a timestamp, duration, or cron cadence from a runtime asset.
 type CronSchedule struct {
 	Raw      string
 	DueAt    time.Time
@@ -170,7 +166,6 @@ type CronSchedule struct {
 	parsed   cron.Schedule
 }
 
-// ParseCronSchedule parses one cron-file schedule: a 5-field cron, a Go duration, an @shortcut, or an RFC 3339 time.
 func ParseCronSchedule(raw string) (CronSchedule, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -201,7 +196,6 @@ func ParseCronSchedule(raw string) (CronSchedule, error) {
 	return CronSchedule{Raw: raw, parsed: parsed}, nil
 }
 
-// Next returns the next occurrence of a recurring schedule after now.
 func (s CronSchedule) Next(now time.Time) time.Time {
 	if s.duration > 0 {
 		return now.Add(s.duration)

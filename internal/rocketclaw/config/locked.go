@@ -8,20 +8,16 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// LockedConfig owns configuration and serializes work that depends on its runtime assets.
-// A LockedConfig must not be copied after first use.
 type LockedConfig struct {
 	mu sync.Mutex
 
 	cfg Config
 }
 
-// NewLockedConfig stores an independent copy of cfg.
 func NewLockedConfig(cfg *Config) *LockedConfig {
 	return &LockedConfig{cfg: clone(cfg)}
 }
 
-// Store replaces the configuration with an independent copy.
 func (c *LockedConfig) Store(cfg *Config) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -29,7 +25,6 @@ func (c *LockedConfig) Store(cfg *Config) {
 	c.cfg = clone(cfg)
 }
 
-// Clone returns an independent configuration snapshot.
 func (c *LockedConfig) Clone() *Config {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -39,8 +34,6 @@ func (c *LockedConfig) Clone() *Config {
 	return &cfg
 }
 
-// Do holds the lock throughout work. work must not retain cfg or its mutable fields,
-// or call Store, Clone, or Do on c.
 func (c *LockedConfig) Do(work func(cfg *Config) error) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -99,8 +99,6 @@ func TestAWSFetcherReadsSecretString(t *testing.T) {
 	}
 }
 
-// One fetcher reuses its connection and credentials across fetches, as an easy agent's turns fetch each time,
-// and a fetch stops with its turn's context.
 func TestAWSFetcherReusesConnectionAndStopsWithContext(t *testing.T) {
 	var (
 		mu      sync.Mutex
@@ -113,7 +111,6 @@ func TestAWSFetcherReusesConnectionAndStopsWithContext(t *testing.T) {
 	})
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// An early response lets the SDK close the request body while HTTP is still writing it.
 		assert.NoError(t, (<-requestWritten).Err)
 
 		mu.Lock()
@@ -158,7 +155,6 @@ func TestSecretFieldRejectsNonObjectAndNonString(t *testing.T) {
 	require.ErrorIs(t, err, errSecretKeyNotString)
 }
 
-// Each key of each secret is one variable. A bad secret fails with its ARN and key, never its value.
 func TestSecretEnv(t *testing.T) {
 	env, err := SecretEnv(t.Context(), &recordingSecrets{body: `{"TOKEN":"alpha","_b2":"beta"}`}, []string{testSecretARN})
 	require.NoError(t, err)
