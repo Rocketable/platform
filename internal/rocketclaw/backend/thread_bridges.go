@@ -190,7 +190,7 @@ LEFT JOIN conversations m ON m.conversation_id = a.conversation_id WHERE a.phase
 }
 
 func (m *threadBridgeManager) StartPendingScheduledMessages(ctx context.Context) error {
-	scheduledMessages, err := m.store.ScheduledMessages()
+	scheduledMessages, err := m.store.ScheduledMessagesForConversation("")
 	if err != nil {
 		return fmt.Errorf("load pending scheduled message bridges: %w", err)
 	}

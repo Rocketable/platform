@@ -571,7 +571,7 @@ func TestOverdueScheduledTurnRunsOnceAfterRestart(t *testing.T) {
 	assert.Equal(t, conversationID, readFinal(t, finals).ConversationID)
 	require.Contains(t, <-requests, "due while down")
 	require.Eventually(t, func() bool {
-		messages, err := service.ScheduledMessages()
+		messages, err := service.ScheduledMessagesForConversation("")
 		require.NoError(t, err)
 
 		return len(messages) == 0 && len(runningTestTurns(t, service)) == 0
@@ -1257,7 +1257,7 @@ FROM conversations WHERE conversation_id IN ('cron:pending', 'web:cron:pending')
 			assert.Contains(t, <-calls, "original job")
 			require.Eventually(t, func() bool { return len(runningTestTurns(t, store)) == 0 }, 5*time.Second, 10*time.Millisecond)
 
-			pending, err := store.ScheduledMessages()
+			pending, err := store.ScheduledMessagesForConversation("")
 			require.NoError(t, err)
 			require.Empty(t, pending, "the completed one-shot has no executable row")
 

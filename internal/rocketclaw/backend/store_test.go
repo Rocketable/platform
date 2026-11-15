@@ -478,7 +478,7 @@ func TestSessionServiceScheduledMessages(t *testing.T) {
 		}
 
 		require.NoError(t, store.PutScheduledMessage("schedule-1", &message))
-		messages, err := store.ScheduledMessages()
+		messages, err := store.ScheduledMessagesForConversation("")
 		require.NoError(t, err)
 		assert.Equal(t, map[string]protocol.ScheduledMessageState{"schedule-1": message}, messages)
 

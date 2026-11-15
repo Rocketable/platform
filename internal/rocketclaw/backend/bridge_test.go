@@ -2333,7 +2333,7 @@ func TestBridgeScheduleMessageSubmitsAfterDelay(t *testing.T) {
 			t.Fatal("scheduled message was not submitted")
 		}
 
-		messages, err := bridge.config.SessionService.ScheduledMessages()
+		messages, err := bridge.config.SessionService.ScheduledMessagesForConversation("")
 		require.NoError(t, err)
 		require.Len(t, messages, 1)
 	})
@@ -2955,7 +2955,7 @@ func TestBridgeDeletesScheduledMessageWhenTurnStarts(t *testing.T) {
 		t.Fatal("scheduled message response was not completed")
 	}
 
-	messages, err := service.ScheduledMessages()
+	messages, err := service.ScheduledMessagesForConversation("")
 	require.NoError(t, err)
 	require.Empty(t, messages)
 }
@@ -2996,7 +2996,7 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 		}
 
 		require.Eventually(t, func() bool {
-			messages, err := service.ScheduledMessages()
+			messages, err := service.ScheduledMessagesForConversation("")
 			require.NoError(t, err)
 
 			_, ok := messages["schedule-1"]
@@ -3065,7 +3065,7 @@ func TestBridgeResetScheduledMessagesDeletesPersistedAndCancelsArmed(t *testing.
 		default:
 		}
 
-		messages, err := store.ScheduledMessages()
+		messages, err := store.ScheduledMessagesForConversation("")
 		require.NoError(t, err)
 		require.Len(t, messages, 1)
 		assert.Equal(t, "other", messages["other"].ConversationID)
@@ -3100,7 +3100,7 @@ func TestBridgeRecurringScheduledMessageAdvancesAndRearms(t *testing.T) {
 			t.Fatal("recurring scheduled message was not submitted")
 		}
 
-		messages, err := service.ScheduledMessages()
+		messages, err := service.ScheduledMessagesForConversation("")
 		require.NoError(t, err)
 
 		advanced := messages["repeat"]
