@@ -82,7 +82,6 @@ func loginDeviceIn(ctx context.Context, workspace, runtimeDir, provider string, 
 }
 
 func loginBrowserIn(ctx context.Context, workspace, runtimeDir, provider string, out io.Writer) (string, error) {
-	// Each login listens on its own port so test runs cannot collide on the registered one.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", fmt.Errorf("listen for OAuth callback: %w", err)

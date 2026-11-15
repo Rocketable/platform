@@ -1,4 +1,3 @@
-// Package oai provides ChatGPT OAuth-backed OpenAI clients for rocketclaw.
 package oai
 
 import (
@@ -37,7 +36,6 @@ const (
 	refreshSkew                                 = 120 * time.Second
 )
 
-// Token is the persisted ChatGPT OAuth credential used for Codex requests.
 type Token struct {
 	Refresh   string `json:"refresh"`
 	Access    string `json:"access"`
@@ -70,7 +68,6 @@ type claims struct {
 	} `json:"https://api.openai.com/auth"`
 }
 
-// AuthFilePathIn returns the workspace-local token file path in runtimeDir.
 func AuthFilePathIn(workspace, runtimeDir string) (string, error) {
 	if strings.TrimSpace(workspace) == "" {
 		wd, err := os.Getwd()
@@ -89,7 +86,6 @@ func AuthFilePathIn(workspace, runtimeDir string) (string, error) {
 	return filepath.Join(workspace, runtimeDir, "auth.json"), nil
 }
 
-// LoadTokenIn reads the provider's persisted ChatGPT OAuth token from runtimeDir.
 func LoadTokenIn(workspace, runtimeDir, provider string) (Token, error) {
 	path, err := AuthFilePathIn(workspace, runtimeDir)
 	if err != nil {
@@ -109,7 +105,6 @@ func LoadTokenIn(workspace, runtimeDir, provider string) (Token, error) {
 	return token, nil
 }
 
-// HasTokenIn reports whether the provider has a persisted ChatGPT OAuth token.
 func HasTokenIn(workspace, runtimeDir, provider string) (bool, error) {
 	_, err := LoadTokenIn(workspace, runtimeDir, provider)
 	if errors.Is(err, os.ErrNotExist) {
@@ -119,7 +114,6 @@ func HasTokenIn(workspace, runtimeDir, provider string) (bool, error) {
 	return err == nil, err
 }
 
-// SaveTokenIn writes the provider's ChatGPT OAuth token.
 func SaveTokenIn(workspace, runtimeDir, provider string, token Token) error {
 	committed, err := updateAuthFileIn(workspace, runtimeDir, true, func(file *authFile) (bool, error) {
 		file.Providers[provider] = token
@@ -132,7 +126,6 @@ func SaveTokenIn(workspace, runtimeDir, provider string, token Token) error {
 	return err
 }
 
-// RemoveTokenIn removes only the provider's persisted ChatGPT OAuth token.
 func RemoveTokenIn(workspace, runtimeDir, provider string) error {
 	_, err := updateAuthFileIn(workspace, runtimeDir, true, func(file *authFile) (bool, error) {
 		_, changed := file.Providers[provider]
@@ -271,8 +264,6 @@ func (localDirectorySyncer) syncDirectory(path string) error {
 	return nil
 }
 
-// AcquireBrowserToken completes the local browser OAuth flow without persisting the token.
-// The OAuth client's registered redirect URI fixes the callback port.
 func AcquireBrowserToken(ctx context.Context, out io.Writer) (Token, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:1455")
 	if err != nil {
@@ -282,7 +273,6 @@ func AcquireBrowserToken(ctx context.Context, out io.Writer) (Token, error) {
 	return acquireBrowserToken(ctx, out, listener)
 }
 
-// acquireBrowserToken serves the OAuth callback on listener and closes it before returning.
 func acquireBrowserToken(ctx context.Context, out io.Writer, listener net.Listener) (Token, error) {
 	defer func() { _ = listener.Close() }()
 
@@ -364,7 +354,6 @@ func acquireBrowserToken(ctx context.Context, out io.Writer, listener net.Listen
 	return tokenFromResponse(response), nil
 }
 
-// AcquireDeviceToken completes the headless device OAuth flow without persisting the token.
 func AcquireDeviceToken(ctx context.Context, out io.Writer) (Token, error) {
 	body, _ := json.Marshal(map[string]string{"client_id": clientID})
 
@@ -420,7 +409,6 @@ func AcquireDeviceToken(ctx context.Context, out io.Writer) (Token, error) {
 	}
 }
 
-// NewChatGPTClientIn creates an OpenAI client that sends Responses API requests to ChatGPT Codex using runtimeDir auth.
 func NewChatGPTClientIn(workspace, runtimeDir, provider string, logger *slog.Logger, opts ...option.RequestOption) (*openai.Client, error) {
 	if _, err := LoadTokenIn(workspace, runtimeDir, provider); err != nil {
 		return nil, err
@@ -439,8 +427,6 @@ func NewChatGPTClientIn(workspace, runtimeDir, provider string, logger *slog.Log
 	return &client, nil
 }
 
-// ResponseObserver sees a response while it streams: BeginResponse before each
-// streamed attempt, then ObserveResponse for the attempt's observed events, in order.
 type ResponseObserver interface {
 	BeginResponse(context.Context) error
 	ObserveResponse(context.Context, *responses.ResponseStreamEventUnion) error
@@ -448,20 +434,16 @@ type ResponseObserver interface {
 
 type responseObserverKey struct{}
 
-// WithResponseObserver returns ctx carrying observer, which sees the responses of requests made with it.
 func WithResponseObserver(ctx context.Context, observer ResponseObserver) context.Context {
 	return context.WithValue(ctx, responseObserverKey{}, observer)
 }
 
-// InertResponseObserver ignores response streaming notifications.
 type InertResponseObserver struct{}
 
-// BeginResponse does nothing.
 func (InertResponseObserver) BeginResponse(context.Context) error {
 	return nil
 }
 
-// ObserveResponse does nothing.
 func (InertResponseObserver) ObserveResponse(context.Context, *responses.ResponseStreamEventUnion) error {
 	return nil
 }
@@ -591,7 +573,6 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// roundTrip measures a physical HTTP attempt, before stream conversion or compaction.
 func (t *transport) roundTrip(req *http.Request, reason string) (*http.Response, error) {
 	startedAt := time.Now()
 	resp, err := t.base.RoundTrip(req)
@@ -635,7 +616,6 @@ func setCodexHeaders(req *http.Request, token Token, sessionID string) {
 	}
 }
 
-// MissingTokenError reports that no ChatGPT OAuth token is stored for Provider.
 type MissingTokenError struct {
 	Provider string
 }
@@ -644,18 +624,10 @@ func (e *MissingTokenError) Error() string {
 	return fmt.Sprintf("OpenAI OAuth token for provider %q is missing refresh token", e.Provider)
 }
 
-// Unwrap reports a missing token as os.ErrNotExist.
 func (e *MissingTokenError) Unwrap() error {
 	return os.ErrNotExist
 }
 
-// FreshTokenIn returns the provider's ChatGPT OAuth token from runtimeDir,
-// refreshing and persisting it under the auth file lock when needed.
-// With a zero rejected token, the stored token is reused while it expires
-// more than 120 s out. With the token a server just rejected, the stored token
-// is reused only if another writer already replaced it for the same account.
-// It returns a *MissingTokenError when the auth file has no token for the
-// provider; a missing auth file also matches os.ErrNotExist.
 func FreshTokenIn(ctx context.Context, workspace, runtimeDir, provider string, rejected Token) (Token, error) {
 	var selected Token
 
@@ -703,7 +675,6 @@ func FreshTokenIn(ctx context.Context, workspace, runtimeDir, provider string, r
 	return selected, nil
 }
 
-// cleanCodexRequest returns the first decoded compaction threshold; nil denotes absence, not zero.
 func cleanCodexRequest(req *http.Request) (*float64, error) {
 	if req.Method != http.MethodPost || req.Body == nil {
 		return nil, nil
@@ -794,14 +765,12 @@ func cleanCodexRequest(req *http.Request) (*float64, error) {
 	return threshold, nil
 }
 
-// setRequestBody replaces req's body with data, which GetBody replays.
 func setRequestBody(req *http.Request, data []byte) {
 	req.Body = io.NopCloser(bytes.NewReader(data))
 	req.ContentLength = int64(len(data))
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
 }
 
-// requestFields decodes the JSON object that cleanCodexRequest buffered behind req's byte-backed GetBody.
 func requestFields(req *http.Request) map[string]json.RawMessage {
 	requestBody, _ := req.GetBody()
 	data, _ := io.ReadAll(requestBody)
@@ -843,7 +812,7 @@ func cleanCodexInputItem(raw json.RawMessage, stripIDs bool) (json.RawMessage, b
 	}
 
 	var object map[string]json.RawMessage
-	// The type decode above already established a valid JSON object or null.
+
 	_ = json.Unmarshal(raw, &object)
 
 	if _, ok := object["id"]; !ok {
@@ -934,7 +903,6 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 		return nil, false, nil
 	}
 
-	// A compaction threshold comes only from cleanCodexRequest's buffered JSON.
 	retryBody := requestFields(req)
 
 	retryItem := compactItem
@@ -972,12 +940,9 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (it
 	}
 
 	var input []json.RawMessage
-	// RocketCode always sends input as an item list.
+
 	_ = json.Unmarshal(compactSource["input"], &input)
 
-	// ChatGPT Codex no longer serves /responses/compact. Like Codex since
-	// openai/codex#44255, request compaction as a streamed response whose input
-	// ends with a compaction trigger. Streaming preparation always supplies instructions.
 	compactInput, _ := json.Marshal(append(input, json.RawMessage(`{"type":"compaction_trigger"}`)))
 	compactRequest := map[string]json.RawMessage{
 		"input":        compactInput,
@@ -1003,9 +968,7 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (it
 		return nil, false, nil
 	}
 
-	// A compaction is not the observed response.
 	streamed, err := codexStreamingResponse(WithResponseObserver(ctx, InertResponseObserver{}), compactResp)
-	// A failed compaction stream is the provider declining, like a non-200 status.
 	if _, failed := errors.AsType[*codexStreamError](err); failed {
 		return nil, false, nil
 	}
@@ -1014,7 +977,6 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (it
 		return nil, false, fmt.Errorf("read Codex compact response: %w", err)
 	}
 
-	// codexStreamingResponse buffers its JSON body in memory.
 	data, _ = io.ReadAll(streamed.Body)
 	_ = streamed.Body.Close()
 
@@ -1027,7 +989,7 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (it
 
 	for _, item := range compactBody.Output {
 		var itemType string
-		// Types are valid JSON; non-string values leave "", rejected by the discriminator.
+
 		_ = json.Unmarshal(item["type"], &itemType)
 
 		if itemType != "compaction" && itemType != "compaction_summary" {
@@ -1061,7 +1023,6 @@ func codexInputHasUnansweredFunctionCall(data json.RawMessage) bool {
 		case "function_call":
 			pending[item.CallID]++
 		case "function_call_output":
-			// Only calls still awaiting an output keep an entry.
 			pending[item.CallID]--
 			if pending[item.CallID] <= 0 {
 				delete(pending, item.CallID)
@@ -1072,9 +1033,6 @@ func codexInputHasUnansweredFunctionCall(data json.RawMessage) bool {
 	return len(pending) > 0
 }
 
-// codexStreamingResponse adapts a Codex event stream to a JSON response, showing ctx's observer
-// (WithResponseObserver) each event as it arrives. The completed event it shows carries the
-// stream's output items.
 func codexStreamingResponse(ctx context.Context, resp *http.Response) (*http.Response, error) {
 	body := resp.Body
 	defer func() { _ = body.Close() }()
@@ -1105,7 +1063,6 @@ func codexStreamingResponse(ctx context.Context, resp *http.Response) (*http.Res
 
 	var errResponse error
 
-	// A completed event holds the whole response, so lines have no length limit.
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(nil, math.MaxInt)
 
