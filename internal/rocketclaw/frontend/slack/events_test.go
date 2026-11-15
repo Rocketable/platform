@@ -32,7 +32,6 @@ func TestStartEventsRoutesAndAcknowledgesSubscription(t *testing.T) {
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), router)
 	messages := []*protocol.OutboundMessage{
 		{ConversationID: "web:private", Text: "not for Slack", Complete: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "CWRONG", MessageTS: "9.9"}},
-		// A Web turn's reply in a mention thread carries the mention footer.
 		{ConversationID: "slack-thread:C123:111.0", TurnID: "turn-web", Agent: "main", Text: "first answer", Complete: true, Terminal: protocol.TerminalComplete},
 		{ConversationID: "slack-thread:C456:222.0", Agent: "main", Text: "second answer", Complete: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "CWRONG", ThreadTS: "9.0", MessageTS: "222.1"}},
 	}

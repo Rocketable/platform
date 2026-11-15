@@ -11,7 +11,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// StartEvents subscribes before starting live output consumption.
 func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <-chan struct{} {
 	events := backend.Subscribe(ctx)
 
