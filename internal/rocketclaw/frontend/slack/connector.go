@@ -282,9 +282,7 @@ func (c *Connector) Start(ctx context.Context) {
 func (c *Connector) Stop(context.Context) error {
 	c.inboundStop()
 
-	if err := c.factsGroup.Wait(); err != nil {
-		return fmt.Errorf("stop Slack channel facts: %w", err)
-	}
+	_ = c.factsGroup.Wait()
 
 	return nil
 }
