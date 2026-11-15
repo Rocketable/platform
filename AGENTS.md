@@ -38,6 +38,7 @@ On start, you must always read:
 - Never use `git`. Use `jj` for repository inspection and history, and always use `jj diff --git` for diffs.
 - Use `go doc` and `gopls` (use `go run golang.org/x/tools/gopls@latest --help`) often to find issues and opportunities to improve Go code.
 - Always react to GPT comments (`// GPT:`) by doing what the human partner asked and then deleting the comment when you accomplish the stated goal.
+- No source code comments, in any language, tests included. The only exceptions are comments a tool reads to change behavior: build and compiler directives (`//go:build`, `//go:generate`, `//go:embed`, cgo, `#!`), linter suppressions, the `// Code generated ... DO NOT EDIT.` header, and PlusCal that translates to TLA+. Explain things through clearer names and structure, or in the PR description.
 - Do not disable linters with `//nolint`, config changes, or command flags without explicit human approval. If a linter finding seems wrong, first fix the code or ask for approval with the exact suppression and rationale.
 - For TypeScript and React code, react-doctor (run by `make lint` in `internal/rocketclaw/web`) wins over this file's rules on inlining one-use helpers and simplifying: keep a helper, hook, or component split that react-doctor needs, even with one caller. See `docs/solutions/best-practices/react-doctor-complexity-limit-shapes-web-components.md`.
 - Prefer the same abstraction in tests that production code uses.
@@ -173,13 +174,11 @@ JOIN shadow_parents p USING (conversation_id);
 
 - When asked to "match OpenCode", first determine whether parity is required for user-visible behavior/output, API shape/signature, or underlying implementation.
 - Default to matching behavior and output first unless the user explicitly asks for API or implementation parity too.
-- Cite the exact upstream OpenCode reference files in comments and tests when implementing parity-sensitive behavior.
 - For tool-like methods such as `Read`, `Glob`, and `Grep`, prefer tests that assert exact user-visible output when practical.
 - Cover empty results, ordering, truncation notices, invalid input behavior, and returned path format.
 - Assertions should verify the contract, not just that output is non-empty.
 - When testing `sandboxedFileSystem`, create and mutate test files through `*os.Root` methods such as `root.WriteFile`, `root.Mkdir`, `root.OpenFile`, and related APIs.
 - Do not use host-level helpers like `os.WriteFile(dir + "/file.txt", ...)` in sandbox tests, because that bypasses the sandbox contract and can hide integration mistakes.
-- If a test intentionally uses host filesystem APIs, add a short comment explaining why bypassing the sandbox is necessary.
 - If code shells out to external tools like `rg`, validate the requested path through `*os.Root` first.
 - Run external commands inside the resolved sandbox directory. Do not let host-level commands bypass the sandbox contract.
 - Tests for sandboxed command behavior should still create fixtures through `*os.Root`.
@@ -270,5 +269,4 @@ Deletion over addition. Boring over clever. Fewest files possible.
 Shortest working diff wins, but only once you understand the problem. The smallest change in the wrong place isn't lazy, it's a second bug.
 Question complex requests: "Do you actually need X, or does Y cover it?"
 Pick the edge-case-correct option when two stdlib approaches are the same size, lazy means less code, not the flimsier algorithm.
-Mark deliberate simplifications that cut a real corner with a known ceiling (global lock, O(n²) scan, naive heuristic) with a ponytail: comment naming the ceiling and upgrade path.
 Not lazy about: understanding the problem (read it fully and trace the real flow before picking a rung, a small diff you don't understand is just laziness dressed up as efficiency), input validation at trust boundaries, error handling that prevents data loss, security, accessibility, the calibration real hardware needs (the platform is never the spec ideal, a clock drifts, a sensor reads off), anything explicitly requested. Lazy code without its check is unfinished: non-trivial logic leaves ONE runnable check behind, the smallest thing that fails if the logic breaks (an assert-based demo/self-check or one small test file; no frameworks, no fixtures). Trivial one-liners need no test.
