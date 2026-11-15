@@ -45,16 +45,13 @@ func withCustomShell(shell shellCommander, customShell *CustomShell, command str
 }
 
 type Config struct {
-	Model                      shared.ResponsesModel
 	AutoApproverModel          shared.ResponsesModel
 	AutoApproverDecisionModel  string
 	AutoApproverMinConfidence  float64
 	Deciders                   map[string]Decider
-	ReasoningEffort            shared.ReasoningEffort
 	Diagnostics                bool
 	ExperimentalStrongerSkills bool
 	ExpandPromptShellCommands  PromptShellCommandExpansion
-	CompactThreshold           int64
 	ParallelToolCalls          int
 	ShellTempDir               string
 	SpillDir                   string
@@ -226,7 +223,7 @@ func NewWithModelResolver(
 		return nil, errors.New("config is required")
 	}
 
-	config := normalizeConfig(configInput)
+	config := *configInput
 
 	if root == nil {
 		return nil, errors.New("root is required")
@@ -304,7 +301,7 @@ func NewWithModelResolver(
 
 	workspaceInstructions := fmt.Sprintf("<current-workspace>\nWorkspace root: %s\n</current-workspace>", promptExpansion.hostDir)
 
-	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
+	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, "high"))
 	agentForTools := &activeAgent
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
 
@@ -326,12 +323,11 @@ func NewWithModelResolver(
 		resolver:                   resolver,
 		rootInstructions:           strings.TrimSpace(rootInstructions),
 		workspaceInstructions:      workspaceInstructions,
-		autoApproverModel:          cmp.Or(config.AutoApproverModel, config.Model),
+		autoApproverModel:          cmp.Or(config.AutoApproverModel, defaultOpenAIModel),
 		autoApproverDecisionModel:  config.AutoApproverDecisionModel,
 		autoApproverMinConfidence:  config.AutoApproverMinConfidence,
 		deciders:                   config.Deciders,
 		reasoningEffort:            reasoningEffort,
-		compactThreshold:           config.CompactThreshold,
 		parallelToolCalls:          config.ParallelToolCalls,
 		diagnostics:                config.Diagnostics,
 		experimentalStrongerSkills: config.ExperimentalStrongerSkills,
@@ -456,24 +452,6 @@ func loadRootInstructions(root *os.Root) (string, error) {
 	}
 
 	return "Instructions from: AGENTS.md\n" + string(data), nil
-}
-
-func normalizeConfig(configInput *Config) Config {
-	config := *configInput
-
-	if config.Model == "" {
-		config.Model = defaultOpenAIModel
-	}
-
-	if config.ReasoningEffort == "" {
-		config.ReasoningEffort = shared.ReasoningEffort("high")
-	}
-
-	if config.CompactThreshold == 0 {
-		config.CompactThreshold = defaultCompactThreshold
-	}
-
-	return config
 }
 
 func printRuntimeDiagnostics(w io.Writer, activeAgent *Agent, tools map[string]looperTool, skills Skills, systemPrompt string) error {
