@@ -1,4 +1,3 @@
-// Package cronfrontend schedules cron producers and their conversation Sync.
 package cronfrontend
 
 import (
@@ -23,12 +22,10 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// Runner executes a producer through terminal delivery.
 type Runner interface {
 	Run(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error)
 }
 
-// Manager loads and runs workspace cron definitions.
 type Manager struct {
 	cfg                   *config.LockedConfig
 	workspace, runtimeDir string
@@ -38,17 +35,14 @@ type Manager struct {
 	now                   func() time.Time
 	tickerInterval        time.Duration
 
-	// refreshed wakes the ticker loop to arm the one-offs a Refresh added; one pending wake covers any number.
 	refreshed chan struct{}
 
-	mu     sync.Mutex
-	stop   context.CancelFunc
-	closed bool
-	// definitions are the ones Start or the latest Refresh loaded, the only ones the scheduler runs.
+	mu          sync.Mutex
+	stop        context.CancelFunc
+	closed      bool
 	definitions []definition
-	// armed holds the schedule IDs of the one-offs whose timers started, so each starts once.
-	armed map[string]bool
-	wg    sync.WaitGroup
+	armed       map[string]bool
+	wg          sync.WaitGroup
 }
 
 type cronScheduleStore interface {
@@ -64,7 +58,6 @@ type definition struct {
 	schedules                        []config.CronSchedule
 }
 
-// Job is the read-only presentation of a loaded definition and its next triggers.
 type Job struct {
 	RelativePath, Agent, Body, Space string
 	Schedules                        []string
@@ -76,19 +69,16 @@ const (
 	oneOffCronTracePrefix = "one-off-cron:"
 )
 
-// New constructs a cronjob manager using runtimeDir for effective runtime cron definitions and agents' routines.
 func New(cfg *config.LockedConfig, runtimeDir string, store cronScheduleStore, run Runner, logger *slog.Logger) *Manager {
 	return &Manager{cfg: cfg, workspace: cfg.Clone().Workspace, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, runtimeDir: runtimeDir, refreshed: make(chan struct{}, 1), armed: map[string]bool{}}
 }
 
-// ValidateRuntimeDefinitions loads cron definitions and routines from runtimeDir without mutating scheduler state.
 func ValidateRuntimeDefinitions(cfg *config.LockedConfig, runtimeDir string) error {
 	_, err := loadDefinitionsIn(cfg, runtimeDir)
 
 	return err
 }
 
-// Start loads cron definitions and starts scheduling them.
 func (m *Manager) Start(ctx context.Context) error {
 	definitions, err := loadDefinitionsIn(m.cfg, m.runtimeDir)
 	if err != nil {
@@ -133,8 +123,6 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Refresh loads the cron definitions anew; a reload calls it once it has validated and installed them. It
-// syncs the schedules table before the scheduler uses them, and a load or sync error leaves both unchanged.
 func (m *Manager) Refresh() error {
 	definitions, err := loadDefinitionsIn(m.cfg, m.runtimeDir)
 	if err != nil {
@@ -159,7 +147,6 @@ func (m *Manager) Refresh() error {
 	return nil
 }
 
-// Stop shuts the cron manager down.
 func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	m.closed = true
@@ -183,7 +170,6 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 }
 
-// LoadOneOffCronjob resolves and loads one live cronjob, a cron file or a routine, for a run from Web.
 func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, error) {
 	if strings.Contains(target, " · ") {
 		definitions, err := loadDefinitionsIn(m.cfg, m.runtimeDir)
@@ -209,8 +195,6 @@ func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, erro
 	return job, nil
 }
 
-// Jobs returns loaded definitions and their next triggers in the next day.
-// It neither refreshes scheduler state nor claims any work.
 func (m *Manager) Jobs() ([]Job, error) {
 	definitions, err := loadDefinitionsIn(m.cfg, m.runtimeDir)
 	if err != nil {
@@ -247,7 +231,6 @@ func (m *Manager) Jobs() ([]Job, error) {
 	return jobs, nil
 }
 
-// RunOneOffCronjob waits for a loaded producer and its required Sync.
 func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
 	raw := new(backend.RawRunProgress)
 
@@ -286,7 +269,6 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCron
 	return result, nil
 }
 
-// armOneOffs starts the timer of each one-off in definitions not armed before. m.mu must be held.
 func (m *Manager) armOneOffs(ctx context.Context, definitions []definition, now time.Time) {
 	for _, definition := range definitions {
 		if len(definition.schedules) != 1 || definition.schedules[0].DueAt.IsZero() {
@@ -320,7 +302,6 @@ func (m *Manager) runOneOffTimer(ctx context.Context, id string, interval time.D
 	m.mu.Lock()
 	closed, definitions := m.closed, m.definitions
 
-	// Only a one-off still defined runs: a refresh that edited its time or removed it leaves this timer stale.
 	i := slices.IndexFunc(definitions, func(d definition) bool {
 		return len(d.schedules) == 1 && scheduleID(d.relativePath, 0, d.schedules[0].Raw) == id
 	})
@@ -450,7 +431,6 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 	return nil
 }
 
-// definitionAgents names the agent of each of definitions.
 func definitionAgents(definitions []definition) []string {
 	agents := make([]string, len(definitions))
 	for i := range definitions {
@@ -526,8 +506,6 @@ func (m *Manager) preparePrompt(body string) string {
 	return strings.TrimSuffix(body, "\n") + "\n\n" + cronReplyInstruction
 }
 
-// loadDefinitionsIn loads every cron definition: one per top-level agent routine, at
-// agents/<agent>.md#<schedule>, then the cron files, which may not target easy agents.
 func loadDefinitionsIn(cfg *config.LockedConfig, runtimeDir string) ([]definition, error) {
 	agents, _, err := backend.LoadRuntimeDefinitions(cfg, runtimeDir)
 	if err != nil {
@@ -544,7 +522,6 @@ func loadDefinitionsIn(cfg *config.LockedConfig, runtimeDir string) ([]definitio
 				return nil, fmt.Errorf("agents/%s: routines: schedule %q: %w", agent.Location, routine.Schedule, err)
 			}
 
-			// A routine cannot mark itself done, so a timestamp would fire again once its run record expires.
 			if !schedule.DueAt.IsZero() {
 				return nil, fmt.Errorf("agents/%s: routines: schedule %q: a routine repeats; for a single future run use rocketclaw_schedule_message", agent.Location, schedule.Raw)
 			}
