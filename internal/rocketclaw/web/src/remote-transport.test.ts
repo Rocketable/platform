@@ -41,9 +41,7 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   expect(chat).toStartWith("/r/work/s/");
   const id = Buffer.from(chat.slice("/r/work/s/".length), "base64url").toString();
   // The chat's tab is saved on the remote, where the local page reads it for notifications.
-  for (let saved = false; !saved; await Bun.sleep(100)) {
-    saved = await page.evaluate(async (url: string) => (await (await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).state.tabs.some((tab: { path: string }) => tab.path.startsWith("/s/")), remote);
-  }
+  while (!await page.evaluate(async (url: string) => (await (await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).state.tabs.some((tab: { path: string }) => tab.path.startsWith("/s/")), remote)) await Bun.sleep(100);
 
   // On the local server, the palette lists the remote chat under its server's name, and a filter finds it there.
   observed.stage = "remote palette";
@@ -113,9 +111,7 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await shelf.getByText("work · Main").waitFor();
   await chatTab.getByRole("button", { name: /^Close / }).click();
   await chatTab.waitFor({ state: "detached" });
-  for (let saved = true; saved; await Bun.sleep(100)) {
-    saved = await page.evaluate(async (url: string) => (await (await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).state.tabs.some((tab: { path: string }) => tab.path.startsWith("/s/")), remote);
-  }
+  while (await page.evaluate(async (url: string) => (await (await fetch(`${url}/api/Tabs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).state.tabs.some((tab: { path: string }) => tab.path.startsWith("/s/")), remote)) await Bun.sleep(100);
   // From a local page, its attention items change the person's attention on the remote, which lists it parked, dimmed in
   // place, until Unpark.
   await page.goto(`${local}/`);
@@ -146,12 +142,10 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await page.getByRole("button", { name: "Space: Main" }).click();
   await page.getByRole("menuitemradio", { name: "Side" }).click();
   await page.getByRole("button", { name: "Space: Side" }).waitFor();
-  for (let entered = false; !entered; await Bun.sleep(100)) {
-    entered = await page.evaluate(async () => {
-      const view = await (await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
-      return view.spaces.some((space: { id: string; name: string }) => space.name === "Side" && space.id === view.state.space);
-    });
-  }
+  while (!await page.evaluate(async () => {
+    const view = await (await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json();
+    return view.spaces.some((space: { id: string; name: string }) => space.name === "Side" && space.id === view.state.space);
+  })) await Bun.sleep(100);
   await page.goto(`${local}/search/shelved?q=Shelved`);
   const searchTab = strip.locator('[data-tab="/search/shelved"]');
   await searchTab.getByRole("button", { name: "Tab actions" }).click();
@@ -164,9 +158,7 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   expect(await query.inputValue()).toBe("Shelved");
   await query.fill("Shelved edit");
   await page.clock.fastForward(500);
-  for (let saved = false; !saved; await Bun.sleep(100)) {
-    saved = await page.evaluate(async () => JSON.stringify((await (await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).topShelf).includes("Shelved edit"));
-  }
+  while (!await page.evaluate(async () => JSON.stringify((await (await fetch("/api/Tabs", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()).topShelf).includes("Shelved edit"))) await Bun.sleep(100);
   await page.reload();
   await page.getByRole("textbox", { name: "Search sessions" }).waitFor();
   expect(await page.getByRole("textbox", { name: "Search sessions" }).inputValue()).toBe("Shelved edit");
@@ -185,13 +177,14 @@ test("a local page works, lists, searches and follows a chat on a remote RocketC
   await page.getByRole("group", { name: "work" }).getByRole("menuitem", { name: "Billing" }).click();
   await page.getByRole("button", { name: "Space: work / Billing" }).waitFor();
   expect(new URL(page.url()).pathname).toStartWith("/r/work/");
+  const online = page.waitForRequest((request: { url(): string; frame(): { url(): string } }) => request.url() === `${remote}/api/Protocol` && request.frame().url() === `${local}/r/work/config`);
   await page.goto(`${local}/r/work/config`);
   await page.getByText(process.env.ROCKETCLAW_REMOTE_TEST_WORKSPACE!, { exact: true }).waitFor();
   // Config can render before Protocol answers; establish online before taking the remote offline.
   observed.stage = "online remote config protocol";
-  const online = page.waitForResponse((response: { url(): string; ok(): boolean }) => response.url() === `${remote}/api/Protocol` && response.ok());
-  await page.clock.fastForward(2_000);
-  await (await online).finished();
+  const protocol = await (await online).response();
+  expect(protocol?.ok()).toBe(true);
+  await protocol!.finished();
 
   // With the remote off, its page says so and a local space is still a choice away.
   observed.stage = "offline remote config page";
