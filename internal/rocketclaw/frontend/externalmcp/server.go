@@ -1,4 +1,3 @@
-// Package externalmcp hosts MCP servers for rocketclaw integrations.
 package externalmcp
 
 import (
@@ -19,7 +18,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// SessionPromptToolName and ExternalMCPPath define the public external MCP surface.
 const (
 	SessionPromptToolName = "session_prompt"
 	ExternalMCPPath       = "/mcp"
@@ -33,14 +31,12 @@ type sessionPromptInput struct {
 	Attachments            []SessionAttachment `json:"attachments,omitempty" jsonschema:"optional attachments to send with this turn"`
 }
 
-// SessionAttachment carries an attachment across the public session_prompt boundary.
 type SessionAttachment struct {
 	Name       string `json:"name,omitempty" jsonschema:"display filename for the attachment"`
 	MIMEType   string `json:"mime_type,omitempty" jsonschema:"attachment MIME type, for example image/png"`
 	DataBase64 string `json:"data_base64" jsonschema:"base64-encoded attachment bytes"`
 }
 
-// SessionResult is the app-level result for an external MCP session tool call.
 type SessionResult struct {
 	ExternalConversationID string              `json:"external_conversation_id" jsonschema:"external conversation ID for this MCP conversation"`
 	Agent                  string              `json:"agent" jsonschema:"agent used for this MCP conversation turn"`
@@ -50,14 +46,12 @@ type SessionResult struct {
 
 type usernameContextKey struct{}
 
-// Server is an HTTP MCP server.
 type Server struct {
 	url       string
 	closeOnce sync.Once
 	closeFn   func(context.Context) error
 }
 
-// StartSessionPromptServer starts the persistent external MCP HTTP server.
 func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAddr string, users map[string]string, sessionPromptHandler func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error)) (*Server, error) {
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "rocketclaw-external-mcp", Version: "1.0.0"}, nil)
 	mcp.AddTool(mcpServer, &mcp.Tool{Name: SessionPromptToolName, Description: "Queue blocking input for a selectable rocketclaw session and return the final plain-text reply.", InputSchema: map[string]any{"type": "object", "required": []string{"external_conversation_id", "input", "agent"}, "properties": map[string]any{"external_conversation_id": map[string]any{"type": "string", "pattern": "\\S", "description": "external MCP conversation ID; an unknown ID starts a new conversation"}, "input": map[string]any{"type": "string", "description": "plain-text input to send to the selected rocketclaw session"}, "agent": map[string]any{"type": "string", "pattern": "\\S", "description": "agent requested for this external MCP conversation; the first agent remains fixed"}, "slack_channel": map[string]any{"description": "ignored; accepted so older callers keep working"}, "metadata": map[string]any{"type": "object", "description": "metadata for external MCP conversations", "additionalProperties": map[string]any{"type": "string"}}, "attachments": map[string]any{"type": "array", "description": "optional attachments for this turn", "items": map[string]any{"type": "object", "required": []string{"data_base64"}, "properties": map[string]any{"name": map[string]any{"type": "string", "description": "display filename for the attachment"}, "mime_type": map[string]any{"type": "string", "description": "attachment MIME type, for example image/png"}, "data_base64": map[string]any{"type": "string", "description": "base64-encoded attachment bytes"}}, "additionalProperties": false}}}, "additionalProperties": false}}, func(callCtx context.Context, _ *mcp.CallToolRequest, input sessionPromptInput) (*mcp.CallToolResult, SessionResult, error) {
@@ -124,10 +118,8 @@ func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAd
 	return server, nil
 }
 
-// URL returns the server base URL.
 func (s *Server) URL() string { return s.url }
 
-// Close stops the HTTP server and waits for it to exit.
 func (s *Server) Close(ctx context.Context) error {
 	var err error
 
