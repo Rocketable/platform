@@ -19,7 +19,6 @@ const (
 	bob   = "bob@example.com"
 )
 
-// webMessage is a message person sent from Web.
 func webMessage(kind protocol.InboundKind, text, person string) *protocol.InboundMessage {
 	msg := protocol.NewInboundMessage(protocol.SourceWeb, kind, text, true)
 	msg.Metadata = map[string]string{protocol.InboundPrincipalEmailMetadataKey: person}
@@ -27,7 +26,6 @@ func webMessage(kind protocol.InboundKind, text, person string) *protocol.Inboun
 	return msg
 }
 
-// unreadBy lists the people who have conversationID unread.
 func unreadBy(t *testing.T, s *SessionService, conversationID string) []string {
 	t.Helper()
 
@@ -37,7 +35,6 @@ func unreadBy(t *testing.T, s *SessionService, conversationID string) []string {
 	return people
 }
 
-// attentionOn lists each person's attention on conversationID's tab, by person: read, quiet or loud, and parked.
 func attentionOn(t *testing.T, s *SessionService, conversationID string) []string {
 	t.Helper()
 
@@ -48,12 +45,10 @@ func attentionOn(t *testing.T, s *SessionService, conversationID string) []strin
 	return rows
 }
 
-// sessionPath is the tab path of local session conversationID.
 func sessionPath(conversationID string) string {
 	return "/s/" + base64.RawURLEncoding.EncodeToString([]byte(conversationID))
 }
 
-// viewedAgo records that person viewed conversationID's tab ago.
 func viewedAgo(t *testing.T, s *SessionService, person, conversationID string, ago time.Duration) {
 	t.Helper()
 
@@ -63,14 +58,12 @@ func viewedAgo(t *testing.T, s *SessionService, person, conversationID string, a
 	require.NoError(t, err)
 }
 
-// R1–R5, AE1–AE3, AE5: a turn's end marks each Web person who sent its input or an applied steer.
 func TestTurnEndMarksWebSenders(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
 	ctx := t.Context()
 
-	// Goal continuations and Slack messages carry the person's email too.
 	goal := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
 	goal.GoalAction, goal.Metadata = protocol.GoalActionContinue, map[string]string{protocol.InboundPrincipalEmailMetadataKey: alice}
 	slack := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "ask", true)
@@ -89,8 +82,8 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 		steers   []journaledSteer
 		applied  []string
 		terminal protocol.Terminal
-		viewed   time.Duration // how long ago Alice last viewed the session; zero is never
-		away     bool          // Alice viewed another session since, which ends her view of this one
+		viewed   time.Duration
+		away     bool
 		want     []string
 	}{
 		"finished":                    {inbound: webMessage(protocol.InboundKindPrompt, "ask", alice), want: []string{alice}},
@@ -130,8 +123,6 @@ func TestTurnEndMarksWebSenders(t *testing.T) {
 		})
 	}
 
-	// A late finish of an ended turn marks no one again, even once Alice has looked away.
-	// The mark lands on the row of the tab Alice saved, under the path the Web spells.
 	require.NoError(t, service.UpsertThread("web:late", ThreadState{Agent: "main"}))
 	require.NoError(t, startTurnDB(ctx, service.db, "turn:late", "web:late", webMessage(protocol.InboundKindPrompt, "ask", alice)))
 
@@ -151,8 +142,6 @@ UNION ALL SELECT path FROM web_tab_attention WHERE conversation_id = 'web:late'`
 	finish("web:late", "turn:late", protocol.TerminalComplete)
 	assert.Empty(t, unreadBy(t, service, "web:late"), "the late finish writes no second mark")
 
-	// A turn of a session in a space's Shared group marks every Web person, whoever sent it, as their own tab would,
-	// except one viewing it.
 	require.NoError(t, service.UpsertThread("web:shared", ThreadState{Agent: "main"}))
 	require.NoError(t, service.ShareTab(ctx, "main", sessionPath("web:shared"), nil))
 	require.NoError(t, startTurnDB(ctx, service.db, "turn:shared", "web:shared", slack))
@@ -163,8 +152,6 @@ UNION ALL SELECT path FROM web_tab_attention WHERE conversation_id = 'web:late'`
 	assert.Equal(t, []string{alice + " loud"}, attentionOn(t, service, "web:shared"))
 }
 
-// A turn's end reaches, whoever sent it, the people with its session in their own tabs, on a Top Shelf this server
-// keeps, or in a space's Shared group, which is a tab of every Web person's.
 func TestTurnEndReachesKeepersAndSharedViewers(t *testing.T) {
 	t.Parallel()
 
@@ -173,9 +160,9 @@ func TestTurnEndReachesKeepersAndSharedViewers(t *testing.T) {
 
 	const (
 		session = "web:kept"
-		carol   = "carol@example.com" // keeps the session on her Top Shelf
-		dave    = "dave@example.com"  // keeps its path on another server's Top Shelf
-		erin    = "erin@example.com"  // keeps only a kept group's placeholder tab
+		carol   = "carol@example.com"
+		dave    = "dave@example.com"
+		erin    = "erin@example.com"
 	)
 
 	require.NoError(t, service.UpsertThread(session, ThreadState{Agent: "main"}))
@@ -207,28 +194,22 @@ func TestTurnEndReachesKeepersAndSharedViewers(t *testing.T) {
 	cron := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "report", false)
 	assert.Equal(t, []string{alice + " loud", carol + " loud"}, turnEnds("turn:cron", cron), "a cron turn reaches the keepers, not Bob, Dave or Erin")
 
-	// In Shared, Bob's own turn marks him once, and every other Web person, all with a notification.
 	require.NoError(t, service.ShareTab(ctx, "main", sessionPath(session), nil))
 	_, err := service.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
 	require.NoError(t, err)
 	assert.Equal(t, []string{alice + " loud", bob + " loud", carol + " loud", dave + " loud", erin + " loud"},
 		turnEnds("turn:bob", webMessage(protocol.InboundKindPrompt, "ask", bob)))
 
-	// A turn Alice sends into her parked session ends with a mark that raises no notification, and the tab stays parked.
 	_, err = service.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
 	require.NoError(t, err)
 	require.NoError(t, service.ChangeAttention(ctx, alice, []string{sessionPath(session)}, AttentionPark, nil))
 	assert.Equal(t, []string{alice + " quiet parked", bob + " loud", carol + " loud", dave + " loud", erin + " loud"},
 		turnEnds("turn:alice", webMessage(protocol.InboundKindPrompt, "ask", alice)))
 
-	// Unparked, the tab is bold with that mark, which still raises no notification in any window.
 	require.NoError(t, service.ChangeAttention(ctx, alice, []string{sessionPath(session)}, AttentionUnpark, nil))
 	assert.Equal(t, []string{alice + " quiet", bob + " loud", carol + " loud", dave + " loud", erin + " loud"}, attentionOn(t, service, session))
 }
 
-// A person's own marks are theirs alone and keep a turn's mark as it was. Viewed as held, a session keeps their own
-// mark and lets a turn ending in view mark nothing; a turn ending unseen makes it a turn's mark, which a held view
-// clears; and marking the session again makes it their own.
 func TestMarkUnread(t *testing.T) {
 	t.Parallel()
 
@@ -279,7 +260,6 @@ func TestMarkUnread(t *testing.T) {
 		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
 	}
 
-	// Bob is a Web person too, so a mark that reached every person would show him.
 	viewedAgo(t, service, bob, "web:turn", 0)
 	require.NoError(t, service.ShareTab(ctx, "main", sessionPath("web:shared"), nil))
 	turnEnds("web:turn", "turn:turn")
@@ -307,7 +287,6 @@ func TestMarkUnread(t *testing.T) {
 	assert.Equal(t, []string{alice + " quiet=t"}, marks("web:held"), "marking a read tab that has a row makes the mark alice's own")
 }
 
-// A view locks the person's tab state before their attention rows, as a tab save locks it before its tab rows.
 func TestTabViewLocksStateBeforeAttention(t *testing.T) {
 	t.Parallel()
 
@@ -343,7 +322,6 @@ func TestTabViewLocksStateBeforeAttention(t *testing.T) {
 		return blocked
 	}, 5*time.Second, time.Millisecond, "view waits for the state lock")
 
-	// The waiting view must not hold an attention lock the state holder still needs.
 	var locked string
 	require.NoError(t, tx.QueryRowContext(ctx, `SELECT path FROM web_tab_attention WHERE username = $1 AND path = $2 FOR UPDATE NOWAIT`, alice, path).Scan(&locked))
 	require.Equal(t, path, locked)
@@ -352,7 +330,6 @@ func TestTabViewLocksStateBeforeAttention(t *testing.T) {
 	require.Empty(t, unreadBy(t, service, conversationID))
 }
 
-// R4: a message Alice queued behind Bob's turn marks her when it runs as its own turn.
 func TestQueuedWebMessageMarksItsSender(t *testing.T) {
 	t.Parallel()
 

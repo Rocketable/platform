@@ -380,7 +380,6 @@ VALUES ($1, 'parent', $2, $3, '{}', '[{"id":"input","text":"prepared"}]')`, chil
 	require.Len(t, entries, 2)
 }
 
-// Removed calls' delegations go, also by call-ID-plus-hash key; running and queued Background Jobs keep theirs, like $stop.
 func TestRevertKeepsKeptAndRunningSubagents(t *testing.T) {
 	t.Parallel()
 
@@ -465,7 +464,6 @@ func TestRevertEligibility(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
 	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, log, &bridgeFactoryMock{newBridgeFunc: func(c *Config) directBridge { return &Bridge{config: *c, log: log} }})}
 
-	// Each chat Web lists, and each shadow, whoever started it; never a hidden run or a delegation.
 	for id, want := range map[string]bool{"slack-thread:C1:1.1": true, "web:cron:job:1": true, "external": true, "copied": true, "valid": true, "cron:job:1": false, "child/call": false, "private": false, "missing": false} {
 		_, allowed, _, err := s.RevertState(ctx, id)
 		require.NoError(t, err)
@@ -484,8 +482,6 @@ func TestRevertEligibility(t *testing.T) {
 	}
 }
 
-// Undo reaches a person's Web messages only after the newest message of a cron run or External MCP
-// call, or one sent from Slack; a Slack thread's unlabeled messages count as sent from Slack.
 func TestRevertFloor(t *testing.T) {
 	t.Parallel()
 
@@ -496,9 +492,8 @@ func TestRevertFloor(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name string
-		kind ConversationKind
-		// steps are "run:", "slack:", "old:" (no label), or a person's Web message, named after the colon.
+		name            string
+		kind            ConversationKind
 		steps           []string
 		undoable, ahead []string
 	}{
@@ -545,7 +540,6 @@ func TestRevertFloor(t *testing.T) {
 		}
 	}
 
-	// A Slack message that arrives after an undo was staged cancels it when the next Web message comes.
 	const thread = "Slack-thread"
 
 	_, prompt, err := stageRevertDB(ctx, s.db, thread, "")
@@ -600,9 +594,6 @@ func TestRevertPausesScheduledClaims(t *testing.T) {
 	require.False(t, claimed, "clearing the gate must not duplicate the original scheduled claim")
 }
 
-// A paused Web chat starts no new turn. The bridge refuses a goal's continuation without ending the goal
-// and keeps a person's request for resume. Pausing closes a running reply's input; pausing and resuming
-// write one line each. Resume re-submits the continuation, and resuming with nothing waiting starts nothing.
 func TestPauseGatesTurnAdmission(t *testing.T) {
 	t.Parallel()
 
@@ -617,7 +608,6 @@ func TestPauseGatesTurnAdmission(t *testing.T) {
 	require.ErrorContains(t, rt.PostPausedMessage(ctx, pausedWebMessage("missing", "Ann", &protocol.InboundContent{Text: "lunch?"})), "not recorded")
 	require.NoError(t, rt.SetAgentPaused(ctx, "main", "Ann", false), "resuming a live chat changes nothing")
 
-	// While an undo is being staged the chat's history is busy, so pausing and posting are refused.
 	bridge.historyMutation = true
 
 	require.ErrorContains(t, rt.SetAgentPaused(ctx, "main", "Ann", true), "history is busy")
@@ -675,8 +665,6 @@ func TestPauseGatesTurnAdmission(t *testing.T) {
 	}
 }
 
-// Resume re-submits the goal continuation the paused gate refused, also while a person's queued item waits for
-// the loop, and only that one: a pause and resume while the loop holds the continuation submits no second one.
 func TestResumeSubmitsRefusedGoalContinuation(t *testing.T) {
 	t.Parallel()
 
@@ -705,8 +693,6 @@ func TestResumeSubmitsRefusedGoalContinuation(t *testing.T) {
 	assert.Empty(t, bridge.requestCh, "a continuation the gate did not refuse is not submitted again")
 }
 
-// A paused chat holding a queue item's request without a caller gives it the caller of a second request for the
-// same item, as a duplicate submission of the item brings, so the item runs after resume with its caller.
 func TestPauseHandsCallerToHeldRequest(t *testing.T) {
 	t.Parallel()
 
@@ -726,8 +712,6 @@ func TestPauseHandsCallerToHeldRequest(t *testing.T) {
 	assert.Same(t, caller, (<-bridge.requestCh).completion, "resume runs the held item with its caller")
 }
 
-// A turn that claims a queue item a paused chat holds a request for, as a stale submission of the item that
-// reaches the loop after resume does, takes over that request's caller, or answers it when it has its own.
 func TestClaimReleasesHeldRequestCaller(t *testing.T) {
 	t.Parallel()
 
@@ -768,8 +752,6 @@ func TestClaimReleasesHeldRequestCaller(t *testing.T) {
 	assert.Empty(t, bridge.waiting, "no request stays held for a claimed row")
 }
 
-// A message posted into a paused chat while an undo is staged settles the undo first, as any Web message
-// does, so the message stays in the history the undo leaves.
 func TestPausedMessageSettlesStagedRevert(t *testing.T) {
 	t.Parallel()
 
@@ -792,8 +774,6 @@ func TestPausedMessageSettlesStagedRevert(t *testing.T) {
 	}, observedEntryTexts(t, s, "main"))
 }
 
-// Resuming a paused chat while an undo is staged settles the undo first, as a person's Web message does,
-// so the line saying who resumed the agent stays in the history the undo leaves.
 func TestAgentPauseSettlesStagedRevert(t *testing.T) {
 	t.Parallel()
 
@@ -816,8 +796,6 @@ func TestAgentPauseSettlesStagedRevert(t *testing.T) {
 	}, observedEntryTexts(t, s, "main"))
 }
 
-// A store failure while reading or resuming a paused chat's agent, settling its staged undo, posting into it,
-// promoting its queued item, or opening a reply's input is that call's error.
 func TestAgentPauseStorageFailures(t *testing.T) {
 	t.Parallel()
 
@@ -885,8 +863,6 @@ func TestAgentPauseStorageFailures(t *testing.T) {
 	}
 }
 
-// OpenCode V2 packages/core/src/session/session.ts reconciles an accepted ID
-// before preparing or committing a new branch, including after completion.
 func TestRevertProviderPrefixAndCompletedRetry(t *testing.T) {
 	t.Parallel()
 
@@ -1180,8 +1156,6 @@ func TestRevertBusyAdmissionAndRecordedDrain(t *testing.T) {
 	require.NoError(t, err)
 
 	id := entries[0].ID
-	// The drain cursor moved before replay was saved. Saved identity, not that
-	// cursor, now settles this input without creating another waiting row.
 	b.waiting = nil
 	b.steers, b.steersRead = []bridgeRequest{{inbound: inbound, queueItemID: "waiting", completion: completion}}, 1
 	require.NoError(t, b.settleSteers(ctx, nil))
@@ -1214,7 +1188,6 @@ func TestRevertLatestUnsavedTurn(t *testing.T) {
 	_, err := s.AppendEntryID(ctx, "main", testSessionEntry("kept", "answer"))
 	require.NoError(t, err)
 
-	// A stop after provider output saves no entry, so History has no message IDs for these turns.
 	for _, turnID := range []string{"older", "latest"} {
 		require.NoError(t, upsertTestTurn(ctx, s, &testCheckpoint{TurnID: turnID, ConversationKey: "main", ResponseID: "resp-" + turnID, ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"user","input_id":"` + turnID + `-input","content":"redo ` + turnID + `"}`),
@@ -1264,7 +1237,6 @@ func TestRevertMarkerGatesDoNotReadReplay(t *testing.T) {
 	s := newTestSessionService(t)
 	ctx := t.Context()
 	require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
-	// Deliberately unreadable replay makes any full-state predecessor scan fail.
 	_, err := s.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', '{"type":"turn","replay_input":{}}', '')`)
 	require.NoError(t, err)
 
@@ -1392,7 +1364,6 @@ func TestRevertBranchCancelsPreservedOwners(t *testing.T) {
 	manager.bridges["main"] = b
 	rt := &Runtime{Sessions: s, threads: manager}
 
-	// A system input is not a person's to preserve.
 	for _, id := range []string{"withdraw", "system", "discard"} {
 		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: id}, id != "system")
 		inbound.ConversationID, inbound.Metadata["web_message_id"] = "main", id
@@ -1494,7 +1465,6 @@ func TestRevertStashKeepsVoiceInbound(t *testing.T) {
 	runTestBridge(t, restarted)
 	require.NoError(t, restarted.PickLaterWork(t.Context()))
 
-	// Request bodies are JSON, so the prompt's quotes and newlines arrive escaped.
 	header := `[Web media=Voice principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n`
 	require.Contains(t, <-requests, header+"$workflow deploy", "the stored voice item keeps its header across the restart")
 	require.Equal(t, "answer", readFinal(t, finals).Text)
@@ -1535,7 +1505,6 @@ func TestRevertAdmissionRollbackAtEveryWrite(t *testing.T) {
 		{"later Slack message principals", laterAsSlack + `CREATE TRIGGER reject_branch BEFORE UPDATE ON conversations FOR EACH ROW WHEN (OLD.revert_message_id = NEW.revert_message_id) EXECUTE FUNCTION reject_branch()`, "refresh message principals"},
 	} {
 		t.Run(failure.name, func(t *testing.T) {
-			// Cases run serially in this parent's schema; retain migrations, not prior case state.
 			_, err := s.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
 			ctx := t.Context()

@@ -64,7 +64,6 @@ func TestRunTurnSpanPreservesMaskingAndFailure(t *testing.T) {
 			ended := 0
 
 			for _, span := range recorder.Ended() {
-				// PostHog names a trace's person by the user.id on its spans.
 				require.Contains(t, span.Attributes(), attribute.String(semconv.UserID, "alice@example.com"), span.Name())
 
 				if span.Name() != "rocketclaw.turn" {

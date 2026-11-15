@@ -13,8 +13,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 )
 
-// Every path that loads agents gives a shell: emulated agent the emulated shell, set up per turn, with its
-// workingDirectory and commands; one without a workingDirectory does not load.
 func TestLoadedEmulatedAgent(t *testing.T) {
 	t.Parallel()
 
@@ -36,7 +34,6 @@ func TestLoadedEmulatedAgent(t *testing.T) {
 	require.ErrorContains(t, err, "bad.md: workingDirectory: required non-empty string")
 }
 
-// A sandbox that cannot run does not fail startup or reload; the Web shows why, once an agent needs it.
 func TestSandboxErrorReachesWeb(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "plain", "---\ndescription: Plain\nmodel: gpt-6.1-sol\n---\nPrompt\n")
@@ -46,7 +43,6 @@ func TestSandboxErrorReachesWeb(t *testing.T) {
 	rt.prepareSandbox()
 	require.Empty(t, rt.SandboxError(), "no emulated agent, no sandbox")
 
-	// Without bubblewrap on PATH, preparation fails fast, before building any image.
 	t.Setenv("PATH", t.TempDir())
 
 	writeAgent(t, workspace, "boxed", "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: data\n---\nPrompt\n")
@@ -55,12 +51,10 @@ func TestSandboxErrorReachesWeb(t *testing.T) {
 	require.Error(t, err, "preparation ends with a reason, which the Web then shows")
 	require.Equal(t, "Emulated shell unavailable: "+err.Error(), rt.SandboxError())
 
-	// Agents that cannot be read leave the sandbox's need unknown; the Web says why.
 	writeAgent(t, workspace, "broken", "---\nmode: [\n---\nPrompt\n")
 	rt.prepareSandbox()
 	require.Contains(t, rt.SandboxError(), "Emulated shell unavailable: RocketClaw couldn't read its agents to tell whether one needs the sandbox: broken.md: parse YAML frontmatter")
 
-	// While the image builds, the Web says so rather than that the shell is unavailable.
 	rt.Sessions.shells.errSandbox = sandbox.ErrPreparing
 	require.Equal(t, "Emulated shell getting ready: the first start builds the sandbox's Ubuntu image, which takes a minute or two; commands wait for it", rt.SandboxError())
 }

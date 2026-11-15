@@ -38,8 +38,6 @@ func TestForkConversation(t *testing.T) {
 	id, err := sessions.AppendEntryID(t.Context(), "source", &entry)
 	require.NoError(t, err)
 
-	// A copied wake turn shows its Completion Notes from copied finished jobs; running work stays with the source.
-	// The fork can load the source's retained output.
 	finished, other, running := testBackgroundJob("source", "turn-1/call/a"), testReply("source", "turn-1/call/c", "web:ops"), testBackgroundJob("source", "turn-1/call/b")
 	other.jobID, other.input = "turn-1/call/c", "https://rc.example/s/ops"
 
@@ -71,8 +69,7 @@ func TestForkConversation(t *testing.T) {
 		_, err = sessions.AppendEntryID(t.Context(), delegation, testSessionEntry(delegation, "child"))
 		require.NoError(t, err)
 	}
-	// OpenCode V2: packages/app/src/session/commands/fork-dialog.tsx passes
-	// before: message.id and restores that user message to the composer.
+
 	for _, tt := range []struct {
 		name, before, prompt string
 		items                int
@@ -124,7 +121,6 @@ func TestForkConversation(t *testing.T) {
 				require.True(t, modified.Equal(info.ModTime()), "the copy expires with its source")
 			}
 
-			// A fork's subagents continue from the copied histories.
 			for delegation, parent := range map[string]string{"/call-1": "", "/call-1/call-2": "/call-1"} {
 				copied, err := sessions.ObserveEntries(t.Context(), tt.name+delegation)
 				require.NoError(t, err)
@@ -197,8 +193,6 @@ func TestForkConversation(t *testing.T) {
 	require.Len(t, kept[0].Entry.ReplayInput, 2, "a wipe keeps the copied Slack message and its answer, as undo does")
 }
 
-// A fork of a paused chat starts live. When its copied history leaves the agent paused, it ends with a line
-// saying the person forking resumed the agent; a fork taken before the pause, or after the resume, gets none.
 func TestForkPausedChatStartsLive(t *testing.T) {
 	t.Parallel()
 
@@ -264,7 +258,6 @@ func TestForkConversationRollsBackFailedCopies(t *testing.T) {
 		{"read only files", "", "copy fork attachment"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			// Retain migrations, not copied rows or orphan files from a failed fork.
 			_, err := sessions.db.ExecContext(t.Context(), `TRUNCATE attachments, entries, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
 			sessions.attachments = filesystemAttachments{path: t.TempDir()}

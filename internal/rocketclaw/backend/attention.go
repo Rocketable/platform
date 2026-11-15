@@ -15,10 +15,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// Attention is one person's attention on one tab location: when something new started waiting for them, zero once
-// read, and whether that mark raises no notification; whether they parked the tab, and when the park ends, zero for
-// none; whether the park lasts until the session's next turn ends, which has no time; and the notification text of a
-// mark the server wrote.
 type Attention struct {
 	Path          string
 	UnreadAt      time.Time
@@ -28,33 +24,19 @@ type Attention struct {
 	Note          string
 }
 
-// AttentionAction is what a person does to the attention of their tabs.
 type AttentionAction string
 
-// The attention actions.
 const (
 	AttentionRead          AttentionAction = "read"
 	AttentionUnread        AttentionAction = "unread"
 	AttentionPark          AttentionAction = "park"
 	AttentionParkUntilDone AttentionAction = "park_done"
 	AttentionUnpark        AttentionAction = "unpark"
-	// AttentionAutoPark and AttentionNoAutoPark set whether a prompt the person sends a session parks its tab until it
-	// is done, over their choice for every session.
-	AttentionAutoPark   AttentionAction = "auto_park"
-	AttentionNoAutoPark AttentionAction = "no_auto_park"
-	// AttentionSent parks until it is done the tab of each session the person sent a prompt and auto-parks.
-	AttentionSent AttentionAction = "sent"
+	AttentionAutoPark      AttentionAction = "auto_park"
+	AttentionNoAutoPark    AttentionAction = "no_auto_park"
+	AttentionSent          AttentionAction = "sent"
 )
 
-// markTabsSQL continues a WITH holding readers (username, path, conversation_id, waking, note), the people something
-// new on a tab location reaches, a session's under its canonical path, into marked: their marks, written once per
-// person and location, a question first, in key order. A mark raises a notification unless the tab is parked, when it
-// is quiet. A question also makes a park due at once, so the person's own timer wake ends it, and brings the tab back
-// if they closed it; so does anything new on a tab parked until it is done, whose until is 'infinity'. Nobody is marked
-// for the location they viewed in the last 10 seconds, or 4 for a question, though a question, or anything new on a
-// tab parked until it is done, still makes its park due. Whatever depends on the stored row is decided on the locked
-// row, in the conflict clause, which tells a question by its mark's time: one microsecond after now(), or none while
-// in view.
 const markTabsSQL = `, strongest AS (
     SELECT DISTINCT ON (username, path) username, path, conversation_id, waking, note FROM readers
     ORDER BY username, path, waking DESC
@@ -76,11 +58,6 @@ const markTabsSQL = `, strongest AS (
     RETURNING a.path
 )`
 
-// sessionReadersSQL continues a WITH holding events (conversation_id, kind, waking, username), something new in a
-// session and, when username is not empty, a person it is for, into readers for markTabsSQL: that person, the people
-// with the session in their own tabs, those with it on a Top Shelf, every Web person, who sees it in some space's
-// Shared group, as a tab of their own, and those who parked it until it is done, also after closing its tab. A shelf
-// row of another server and a kept group's placeholder tab name no session.
 const sessionReadersSQL = `, people AS (
     SELECT username, conversation_id, kind, waking FROM events WHERE username <> ''
     UNION SELECT t.username, e.conversation_id, e.kind, e.waking FROM events e JOIN web_tabs t USING (conversation_id)
@@ -92,9 +69,6 @@ const sessionReadersSQL = `, people AS (
     SELECT c.username, ` + tabPathSQL + ` AS path, c.conversation_id, c.waking, '' AS note FROM people c
 )`
 
-// turnEventsSQL continues a WITH holding turn (id, conversation_id, kind, inbound_json, waking), a session's turn
-// something new happened in, into events for sessionReadersSQL: the turn, and each Web person who sent its input or a
-// steer its own step lists as applied, which it does from the moment it applies one.
 const turnEventsSQL = `, inbounds AS (
     SELECT inbound_json AS inbound FROM turn
     UNION ALL SELECT steer->'inbound' FROM turn t JOIN steps r ON r.conversation_id = t.conversation_id AND r.key = t.id
@@ -106,11 +80,6 @@ const turnEventsSQL = `, inbounds AS (
     WHERE i.inbound->>'Source' = '` + string(protocol.SourceWeb) + `' AND i.inbound->>'Human' = 'true'
 )`
 
-// markLocation marks, in tx and with note, the readers of something new in a cron or page of the space named space,
-// empty for every space: the people with the overview page, such as /cron, in that space, or in any space for none,
-// and those with a tab under it whose rest after "<page>/", as stored, match accepts: in their own tabs, on a Top Shelf
-// this server keeps, or Shared, which every Web person has. A person with a Space Limit is reached only when it admits
-// space, and for a Shared tab that tab's space too.
 func (s *SessionService) markLocation(ctx context.Context, tx *sql.Tx, page, space, note string, match func(rest string) bool) error {
 	type tab struct {
 		username, path, space string
@@ -136,7 +105,6 @@ SELECT t.username, t.path, COALESCE(w.name, ''), t.own FROM tabs t LEFT JOIN web
 
 	for _, t := range tabs {
 		rest, under := strings.CutPrefix(t.path, page+"/")
-		// Only names are compared: a limit admits a space's ID exactly when it admits its name.
 		limit := SpaceLimit{names: cfg.PermittedSpaces(t.username)}
 
 		if (under && match(rest) || t.path == page && (space == "" || strings.EqualFold(t.space, space))) && limit.AllowsSpaceName(space) && (t.own || limit.AllowsSpaceName(t.space)) {
@@ -155,8 +123,6 @@ SELECT t.username, t.path, COALESCE(w.name, ''), t.own FROM tabs t LEFT JOIN web
 	return err
 }
 
-// MarkSearchFinished gives username one mark with the note "Search finished" on the Search tab at path, when they
-// still have it: among their own tabs, on their Top Shelf of this server, or Shared in a space they can see.
 func (s *SessionService) MarkSearchFinished(ctx context.Context, username, path string) error {
 	type tab struct {
 		space string
@@ -189,14 +155,11 @@ SELECT space, own FROM tabs`, "search tabs", func(row rowScanner) (tab, error) {
 	return err
 }
 
-// decodeSessionID reads the id in a tab path as the Web's decodeSessionId does: URI-escaped or not, then base64url
-// of one byte per character when atob accepts it, else that text itself.
 func decodeSessionID(value string) string {
 	if decoded, err := url.PathUnescape(value); err == nil && utf8.ValidString(decoded) {
 		value = decoded
 	}
 
-	// atob drops ASCII whitespace, then up to two "=" ending a length divisible by 4, and leaves the extra bits.
 	data := strings.Map(func(r rune) rune {
 		if strings.ContainsRune("\t\n\f\r ", r) {
 			return -1
@@ -221,13 +184,6 @@ func decodeSessionID(value string) string {
 	return string(text)
 }
 
-// ChangeAttention does action to username's attention on the tab locations paths, a session's under its canonical
-// path; one naming a session that does not exist is skipped. Mark as unread marks a read, unparked tab quietly; Park
-// sets a park until until, nil for until unparked, which makes a mark quiet; Park until done parks a session's tab
-// until its next turn ends, its until 'infinity', which no clock reaches, and skips any other location; Unpark leaves
-// the mark. Auto-park and its opposite set the person's choice for a session, and Sent parks until done the sessions
-// they auto-park, by that choice, else by their choice for every session; each skips any other location. A row left
-// read, unparked and with no choice is deleted.
 func (s *SessionService) ChangeAttention(ctx context.Context, username string, paths []string, action AttentionAction, until *time.Time) error {
 	sent := action == AttentionSent
 	if sent {
@@ -241,8 +197,6 @@ func (s *SessionService) ChangeAttention(ctx context.Context, username string, p
 
 	defer func() { _ = tx.Rollback() }()
 
-	// Every writer for one person locks their tab state before any attention row, and writers for many people lock
-	// none; every writer takes a person's attention rows in path order, so they cannot deadlock.
 	if _, err := execState(ctx, tx, "lock tab state", `INSERT INTO web_tab_states (username, revision) VALUES ($1, 0)
 ON CONFLICT (username) DO UPDATE SET revision = web_tab_states.revision`, username); err != nil {
 		return err
@@ -292,15 +246,7 @@ WHERE username = $1 AND path = ANY($2) AND unread_at IS NULL AND NOT parked AND 
 	return nil
 }
 
-// PollAttention records that username views the tab at path now, none when path is empty, which clears their mark
-// on it unless hold is set and the mark is quiet: they marked it unread while viewing it. It then wakes their timers
-// that came due, unparking the tab and marking it with a notification, except on the tab they viewed in the last 4
-// seconds, where a park ends without a mark. A park that ends says so,
-// unless news came as or after it was due, such as a question or the turn end a park until done waited for, which
-// then speaks for itself. A closed tab whose timer came due goes back where it was. It returns username's tab-state
-// revision.
 func (s *SessionService) PollAttention(ctx context.Context, username, path string, hold bool) (int64, error) {
-	// A poll that views nothing and has no timer due, as most are, takes no lock.
 	if path == "" {
 		var revision, due int64
 
@@ -328,7 +274,6 @@ SELECT s.revision, d.n FROM web_tab_states s CROSS JOIN due d WHERE s.username =
 
 	defer func() { _ = tx.Rollback() }()
 
-	// The view locks the person's state before their attention rows, as every writer for one person does.
 	if path != "" {
 		if err := tx.QueryRowContext(ctx, `WITH viewed AS (
     SELECT $2::text AS path, $3::text AS conversation_id
@@ -340,7 +285,6 @@ RETURNING viewing`, username, path, TabConversation(path)).Scan(&path); err != n
 			return 0, fmt.Errorf("record tab view: %w", err)
 		}
 
-		// The viewed row and the due ones are locked together in key order, as the marking statement takes them.
 		if _, err := tx.ExecContext(ctx, `SELECT path FROM web_tab_attention WHERE username = $1 AND (path = $2 OR until <= now()) ORDER BY path FOR UPDATE`,
 			username, path); err != nil {
 			return 0, fmt.Errorf("lock viewed attention: %w", err)
@@ -360,7 +304,6 @@ WHERE username = $1 AND path = $2 AND unread_at IS NOT NULL AND NOT ($3 AND quie
 	err = tx.QueryRowContext(ctx, `SELECT revision, CASE WHEN viewed_at >= now() - interval '4 seconds' THEN viewing ELSE '' END
 FROM web_tab_states WHERE username = $1 FOR UPDATE`, username).Scan(&revision, &viewing)
 	if errors.Is(err, sql.ErrNoRows) {
-		// Only a person's own action sets a timer, and it saves their state first.
 		return 0, nil
 	}
 
@@ -368,7 +311,6 @@ FROM web_tab_states WHERE username = $1 FOR UPDATE`, username).Scan(&revision, &
 		return 0, fmt.Errorf("lock tab state: %w", err)
 	}
 
-	// Due rows are locked in key order first, as the marking statement takes them.
 	woken, err := queryStrings(ctx, tx, `WITH due AS (
     SELECT path FROM web_tab_attention WHERE username = $1 AND until <= now() ORDER BY path FOR UPDATE
 )
@@ -381,8 +323,6 @@ RETURNING a.path`, "wake tab timers", username, viewing)
 		return 0, err
 	}
 
-	// A woken location that is among the person's closed tabs and not their open ones comes back in its space, in its
-	// group if that still exists, and at its position, ahead of the tab there now, with a copy of its Search page.
 	if len(woken) > 0 {
 		err = tx.QueryRowContext(ctx, `WITH due AS (
     SELECT w.path, w.conversation_id, w.space, COALESCE(g.id, '') AS group_id, w.position, w.search_page AS source,
@@ -425,8 +365,6 @@ RETURNING s.revision`, username, woken).Scan(&revision)
 	return revision, nil
 }
 
-// AutoParkAll reports whether username auto-parks every session they chose nothing for, as they do until they turn
-// it off.
 func (s *SessionService) AutoParkAll(ctx context.Context, username string) (bool, error) {
 	on := true
 
@@ -438,7 +376,6 @@ func (s *SessionService) AutoParkAll(ctx context.Context, username string) (bool
 	return on, nil
 }
 
-// SetAutoParkAll sets whether username auto-parks every session they chose nothing for.
 func (s *SessionService) SetAutoParkAll(ctx context.Context, username string, on bool) error {
 	_, err := execState(ctx, s.db, "save auto-park", `INSERT INTO web_tab_states (username, revision, auto_park) VALUES ($1, 0, $2)
 ON CONFLICT (username) DO UPDATE SET auto_park = excluded.auto_park`, username, on)
@@ -446,8 +383,6 @@ ON CONFLICT (username) DO UPDATE SET auto_park = excluded.auto_park`, username, 
 	return err
 }
 
-// TabAttention lists username's attention on tab locations that are not sessions, by path. A session's travels with
-// its listing row.
 func (s *SessionService) TabAttention(ctx context.Context, username string) ([]Attention, error) {
 	return queryRows(ctx, s.db, `SELECT path, unread_at, quiet, parked, until, note FROM web_tab_attention
 WHERE username = $1 AND conversation_id IS NULL ORDER BY path`, "tab attention", func(row rowScanner) (Attention, error) {

@@ -67,8 +67,6 @@ func configureInstrumentation(ctx context.Context, cfg config.InstrumentationCon
 	}
 
 	if posthog.ProjectToken != "" {
-		// PostHog's AI endpoint keeps only gen_ai spans, for LLM analytics; its traces endpoint keeps every span.
-		// It rejects exports over 4 MB, and spans carry whole tool outputs, so its batches stay small.
 		for _, path := range []string{"/i/v0/ai/otel", "/i/v1/traces"} {
 			if err := export(posthog.Host+path, map[string]string{"Authorization": "Bearer " + posthog.ProjectToken}, 32); err != nil {
 				return nil, err

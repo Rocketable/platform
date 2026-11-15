@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// healthSample owns its histogram counts: metrics.Read reuses the samples' storage.
 type healthSample struct {
 	at             time.Time
 	allocatedBytes uint64
@@ -35,7 +34,6 @@ func sampleHealth(samples []metrics.Sample, pool sql.DBStats) healthSample {
 	}
 }
 
-// reportHealth runs until canceled; Run joins it before closing the sampled pool.
 func reportHealth(ctx context.Context, db *sql.DB, logger *slog.Logger, samples []metrics.Sample, previous *healthSample) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -58,14 +56,12 @@ func (s *healthSample) log(logger *slog.Logger, previous *healthSample) {
 		slog.Float64("sample_interval_seconds", interval),
 		slog.Uint64("go_heap_objects_bytes", s.heapBytes),
 		slog.Float64("go_alloc_bytes_per_second", float64(s.allocatedBytes-previous.allocatedBytes)/interval),
-		// The runtime estimates GC CPU consumption, not wall-clock pauses or OS CPU time.
 		slog.Float64("go_gc_cpu_seconds_interval", s.gcCPUSeconds-previous.gcCPUSeconds),
 		slog.Uint64("go_goroutines", s.goroutines),
 		slog.Int("db_pool_in_use", s.pool.InUse),
 		slog.Int("db_pool_idle", s.pool.Idle),
 		slog.Int("db_pool_open", s.pool.OpenConnections),
 		slog.Int64("db_pool_wait_count_interval", s.pool.WaitCount-previous.pool.WaitCount),
-		// These waits are for pool connections, not SQL query execution.
 		slog.Float64("db_pool_wait_duration_ms_interval", (s.pool.WaitDuration-previous.pool.WaitDuration).Seconds()*1000),
 	}
 
@@ -76,7 +72,6 @@ func (s *healthSample) log(logger *slog.Logger, previous *healthSample) {
 
 	attrs = append(attrs, slog.Uint64("go_scheduler_observations_interval", total))
 	if total > 0 {
-		// Use the nearest-rank p99's bucket upper bound, not a fabricated exact latency.
 		rank := total - total/100
 
 		var cumulative uint64

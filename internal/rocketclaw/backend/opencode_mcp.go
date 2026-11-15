@@ -18,13 +18,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 )
 
-// openCodeMCPInstructions tell OpenCode agents the bridge's rules, which no tool description states.
 const openCodeMCPInstructions = `These tools act on your RocketClaw session: its tags and the Hosted Pages it publishes. A subagent acts for the session that started it, and subagents share that session's page paths, so they can overwrite each other's files. Pages are deleted when your session, or its space, goes away. Publishing pages needs a RocketClaw space, which only sessions created or forked from the RocketClaw Web have; without one you can still tag your session and read, list, or delete existing pages.`
 
-// OpenCodeMCP serves, at /opencode/{name}/mcp, the MCP tools coding server name offers its OpenCode
-// sessions: each call acts on the RocketClaw session of the OpenCode session its _meta names, so an
-// agent tags its own session and publishes Hosted Pages that go with it. Callers authenticate as
-// that coding server, with its configured password.
 func (r *Runtime) OpenCodeMCP() http.Handler {
 	servers := r.Cfg.Clone().OpenCode
 	mcpServers := make(map[string]*mcp.Server, len(servers))
@@ -48,7 +43,6 @@ func (r *Runtime) OpenCodeMCP() http.Handler {
 		mcpServers[name] = mcpServer
 	}
 
-	// A 10 MiB page arrives base64-encoded inside JSON-RPC, over go-sdk's 4 MiB default.
 	handler := mcp.NewStreamableHTTPHandler(func(request *http.Request) *mcp.Server { return mcpServers[request.PathValue("name")] }, &mcp.StreamableHTTPOptions{Stateless: true, PropagateRequestCancellation: true, MaxRequestBodyBytes: 16 << 20})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -66,8 +60,6 @@ func (r *Runtime) OpenCodeMCP() http.Handler {
 	})
 }
 
-// callOpenCodeTool runs tool for the RocketClaw session of the calling OpenCode session, or of its
-// nearest ancestor RocketClaw lists, as a subagent acts for its parent.
 func (r *Runtime) callOpenCodeTool(ctx context.Context, name string, server config.OpenCodeConfig, tool string, request *mcp.CallToolRequest) (string, error) {
 	id, _ := request.Params.Meta["ai.opencode/sessionID"].(string)
 	if id == "" {
@@ -122,7 +114,7 @@ func (r *Runtime) openCodeTools(conversation, space string) []harness.Tool {
 	reply := func(tags []string, err error) (harness.ToolResult, error) {
 		data, _ := json.Marshal(struct {
 			Tags []string `json:"tags"`
-		}{tags}) // Encoding a string slice cannot fail.
+		}{tags})
 
 		return harness.TextToolResult(string(data)), err
 	}

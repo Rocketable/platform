@@ -175,7 +175,7 @@ func TestWorkflowAgentRunnerUsesRootCustomShell(t *testing.T) {
 		arguments, _ := json.Marshal(struct {
 			Code        string `json:"code"`
 			Description string `json:"description"`
-		}{"def main():\n    return bash(command=r'''printf plain''')\n", "probe"}) // Encoding strings cannot fail.
+		}{"def main():\n    return bash(command=r'''printf plain''')\n", "probe"})
 
 		_, err = fmt.Fprintf(w, `{"id":"response_call","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_bash","name":"execute","arguments":%q}]}`, arguments)
 		assert.NoError(t, err)
@@ -462,7 +462,6 @@ func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 	require.Equal(t, []string{"gpt-6.1-sol", "review-model", "review-model", "gpt-6.1-sol"}, models)
 }
 
-// A configured decision model settles confident reviews before any guardian request.
 func TestWorkflowAgentRunnerAsksDecisionModelFirst(t *testing.T) {
 	t.Parallel()
 
@@ -510,14 +509,12 @@ func TestWorkflowAgentRunnerAsksDecisionModelFirst(t *testing.T) {
 	require.Equal(t, []string{"responses gpt-6.1-sol", "decisions gpt-6-luna", "decisions gpt-6-luna", "responses gpt-6.1-sol"}, requests)
 }
 
-// KTD10: an easy agent's workers run only on its own model or its subagents', see its files only, and are
-// reviewed by its approver.
 func TestWorkflowAgentRunnerKeepsEasyLimits(t *testing.T) {
 	t.Parallel()
 
 	workspace, folder := t.TempDir(), t.TempDir()
 	writeMainAgentSkills(t, workspace, "---\nmode: easy\nmodel: gpt-6.1-sol#high\nsubagents: [gpt-6-luna]\napprover: {model: gpt-approver, prompt: Tenant rule SENTINEL.}\nspace: Ops\nworkingDirectory: "+folder+"\n---\nPrompt\n")
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "secret.txt"), []byte("SECRET"), 0o600)) // Outside the agent's folder, which only the host sees.
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "secret.txt"), []byte("SECRET"), 0o600))
 
 	var (
 		mu               sync.Mutex
@@ -562,18 +559,15 @@ func TestWorkflowAgentRunnerKeepsEasyLimits(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 
-	// runNestedWorkflow gives the workers its turn's shell, here the folder alone.
 	agent := run.agents.Items["main"]
 	agent.CustomShell.Dir = folder
 	run.agents.Items["main"] = agent
 
-	// A worker model is exactly the agent's model or a subagents entry, as written: never another effort.
 	for _, model := range []string{"gpt-7", "gpt-6-luna#max", "gpt-6.1-sol#low", "gpt-6.1-sol"} {
 		_, err = run.Run(t.Context(), &workflow.AgentRequest{Prompt: "read", Worker: workflow.Worker{Name: "worker", Instructions: "work", Model: model}})
 		require.EqualError(t, err, `worker model "`+model+`" is neither this agent's model nor one of its subagent models: gpt-6-luna`)
 	}
 
-	// The agent's own model may be named as its file writes it.
 	for _, model := range []string{"gpt-6-luna", "gpt-6.1-sol#high"} {
 		result, err := run.Run(t.Context(), &workflow.AgentRequest{Prompt: "read", Worker: workflow.Worker{Name: "worker", Instructions: "work", Model: model}})
 		require.NoError(t, err, model)
@@ -671,7 +665,6 @@ func TestWorkflowExplicitSkillWithoutAvailableSubjects(t *testing.T) {
 	assert.NotContains(t, fmt.Sprint(request["tools"]), `name:find_skills`)
 }
 
-// A recorded worker result is reused only for the same request under the same key.
 func TestWorkflowAgentRunnerReplaysOnlyMatchingRecordedWorker(t *testing.T) {
 	t.Parallel()
 
@@ -752,7 +745,6 @@ func TestWorkflowAgentRunnerMissingPermissionEnvironment(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, run.Close()) })
 	_, err = run.Run(t.Context(), &workflow.AgentRequest{Prompt: "work"})
 
-	// The scoped edit rule is dropped for the turn, so the run completes without it.
 	require.NoError(t, err)
 }
 
@@ -847,7 +839,6 @@ func TestWorkflowAgentRunnerConcurrentDirectoriesAndCancellation(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, dirs)
 
-	// A runtime-directory replacement must fail before a provider request starts.
 	require.NoError(t, root.RemoveAll(".rocketclaw/.rocketcode"))
 	require.NoError(t, root.WriteFile(".rocketclaw/.rocketcode", []byte("not a directory"), 0o600))
 	_, err = run.Run(t.Context(), &workflow.AgentRequest{Prompt: "blocked"})

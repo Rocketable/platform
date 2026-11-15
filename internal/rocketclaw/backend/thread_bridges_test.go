@@ -130,8 +130,6 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 	}, created)
 }
 
-// A thread whose record cannot be persisted keeps no bridge: the new bridge is
-// stopped and forgotten, so a retry starts a fresh one.
 func TestThreadBridgeManagerDropsBridgeWhenThreadIsNotPersisted(t *testing.T) {
 	t.Parallel()
 
@@ -212,8 +210,6 @@ func TestThreadBridgeManagerMentionThreadRecognizesReportThreads(t *testing.T) {
 	}
 }
 
-// A mention is accepted once per conversation: a redelivery while it waits, mid-turn, after a
-// restart, or after its turn finished starts nothing, and a mention never steers the running turn.
 func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	t.Parallel()
 
@@ -282,7 +278,6 @@ func TestThreadBridgeManagerSubmitMentionQueuesEachMentionOnce(t *testing.T) {
 	assert.Equal(t, "slack:D123:222.333", queue[0].ID)
 }
 
-// A mention committed while its bridge is stopped stays accepted and waits for the next start.
 func TestThreadBridgeManagerSubmitMentionKeepsMentionForStoppedBridge(t *testing.T) {
 	t.Parallel()
 
@@ -328,7 +323,6 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	assert.Equal(t, &protocol.SlackReplyTarget{}, submittedMessages(bridge)[0].SlackReply)
 }
 
-// A resumed turn continues its goal itself when it finishes; a startup kick would double it.
 func TestThreadBridgeManagerSkipsActiveGoalContinuationForResumedTurn(t *testing.T) {
 	t.Parallel()
 
@@ -446,7 +440,6 @@ func TestThreadBridgeManagerStashListAndDeleteQueue(t *testing.T) {
 
 	target := protocol.SlackThreadConversationID("C123", "111.222")
 	other := protocol.SlackThreadConversationID("C123", "333.444")
-	// Hidden histories satisfy the conversation key without a managed thread to wake.
 	recordPrivateHistories(t, store, map[string]ConversationKind{target: KindSlackThread, other: KindSlackThread})
 
 	require.NoError(t, manager.stashQueueItem(t.Context(), target, &protocol.ThreadQueueItem{ID: "q1", Message: "first", Principal: "U1", StashAt: time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC), SlackChannel: "C123", SlackTS: "1"}))
@@ -477,7 +470,6 @@ func TestThreadBridgeManagerStashListAndDeleteQueue(t *testing.T) {
 }
 
 func TestSessionsWriteCreatesWebSession(t *testing.T) {
-	// The fake CLI stands in for the host tailscale binary that RocketClaw shells out to.
 	bin := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "tailscale"), []byte("#!/bin/sh\n[ \"$*\" = \"ip -4\" ] && echo 100.95.197.99\n"), 0o755))
 	t.Setenv("PATH", bin)
@@ -493,8 +485,6 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 		bridge  *Bridge
 	)
 
-	// No manager runs the bridges' loops: a request handed to a loop never activates, as when the
-	// process stops before the new session's first turn starts.
 	runtime := config.NewLockedConfig(&config.Config{Workspace: workspace, Web: config.WebConfig{ListenAddress: "127.0.0.1:8080"}})
 	factory := &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 		created = *cfg
@@ -529,7 +519,6 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 	require.Len(t, bridge.requestCh, 1)
 	assert.Equal(t, "web:caller/", (<-bridge.requestCh).queueItemID)
 
-	// After a restart the queued first prompt still runs as the session's first turn.
 	restarted := newThreadBridgeManager(runtime, store, slog.New(slog.DiscardHandler), factory)
 	require.NoError(t, restarted.StartQueuedConversations(t.Context()))
 	require.Len(t, bridge.requestCh, 1)
@@ -607,7 +596,6 @@ func TestSessionsWriteCreatesWebSession(t *testing.T) {
 }
 
 func TestThreadBridgeManagerWebURLUsesTsnetOrigin(t *testing.T) {
-	// No tailscale binary on PATH: the tsnet link must not ask for the IP.
 	t.Setenv("PATH", t.TempDir())
 
 	cfg := &config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rocketclaw", Origin: "https://rocketclaw.example.ts.net"}}}
@@ -688,8 +676,6 @@ func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 	assert.Empty(t, bridges[2].RunCalls())
 }
 
-// runTestManager runs manager's bridge loops the way app.go does and returns the
-// shutdown that cancels them and waits for every loop; test cleanup also runs it.
 func runTestManager(t *testing.T, manager *threadBridgeManager) func() {
 	t.Helper()
 
@@ -768,8 +754,6 @@ func shortTempDir(t *testing.T) string {
 	return t.TempDir()
 }
 
-// R18: promoting an agent-written queue item keeps it non-human, whether it joins the open
-// turn as a steer or runs as the next turn.
 func TestPromotedAgentQueueItemStaysNonHuman(t *testing.T) {
 	store := newTestSessionService(t)
 
@@ -806,7 +790,6 @@ func TestPromotedAgentQueueItemStaysNonHuman(t *testing.T) {
 	}
 }
 
-// agentWrite is a write as rocketclaw_sessions_write builds it for agent planner of session web:sender.
 func agentWrite(text string) *protocol.InboundMessage {
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, text, false)
 	inbound.Metadata = map[string]string{protocol.InboundSenderSessionMetadataKey: "web:sender", protocol.InboundSenderAgentMetadataKey: "planner"}
@@ -814,7 +797,6 @@ func agentWrite(text string) *protocol.InboundMessage {
 	return inbound
 }
 
-// runningTestBridge is a recorded conversation's bridge whose turn runs with its input open.
 func runningTestBridge(t *testing.T, store *SessionService, manager *threadBridgeManager, conversationID string) *Bridge {
 	t.Helper()
 	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
@@ -843,8 +825,6 @@ func queueIDs(t *testing.T, store *SessionService, conversationID string) []stri
 	return ids
 }
 
-// AE1, AE3: an agent's write is a Thread Queue row first; a steer joins only an open turn, every
-// write shows in Web with its sender, and a replay adds nothing.
 func TestWriteSessionDeliversByMode(t *testing.T) {
 	store := newTestSessionService(t)
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
@@ -908,7 +888,7 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 					require.NoError(t, err)
 					assert.Equal(t, runs, activated, "the write runs once")
 				}
-			case sessionCreated, sessionStopped: // writeSession never creates; TestWriteSessionStopRunsFirst covers stops.
+			case sessionCreated, sessionStopped:
 			}
 		})
 	}
@@ -969,8 +949,6 @@ func TestWriteSessionDeliversByMode(t *testing.T) {
 	})
 }
 
-// AE5: a stop write stops the turn and goal, then runs before every earlier queued item, including one
-// whose request the loop already holds; the loop's other requests keep their place.
 func TestWriteSessionStopRunsFirst(t *testing.T) {
 	store := newTestSessionService(t)
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
@@ -1023,8 +1001,6 @@ func TestWriteSessionStopRunsFirst(t *testing.T) {
 	assert.Equal(t, "idle-stop", (<-idle.requestCh).queueItemID)
 }
 
-// A person removing an agent's write in Web, whether the loop holds it, it is an unread steer, or it is only
-// queued, settles its reply as removed and wakes its caller.
 func TestDeleteQueueItemSettlesReply(t *testing.T) {
 	store := newTestSessionService(t)
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}
@@ -1054,7 +1030,7 @@ func TestDeleteQueueItemSettlesReply(t *testing.T) {
 	held := write("turn-1/call/held", sessionWriteEnqueue)
 	queued := write("turn-1/call/queued", sessionWriteEnqueue)
 
-	bridge.waiting = append(bridge.waiting, <-bridge.requestCh) // As a stop write's admission takes it from the loop.
+	bridge.waiting = append(bridge.waiting, <-bridge.requestCh)
 
 	want := make([]string, 0, 3)
 
@@ -1072,9 +1048,6 @@ func TestDeleteQueueItemSettlesReply(t *testing.T) {
 	assert.ElementsMatch(t, want, replyQueueItems(t, store))
 }
 
-// A request a stopped parent left held in its subagent's queue does not run, even from the loop that already
-// holds it, until an agent or a person queues the next write there; then it runs just before that write. A
-// person's stash stays held.
 func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 	for _, writer := range []string{"agent", "person"} {
 		t.Run(writer, func(t *testing.T) {
@@ -1091,7 +1064,7 @@ func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			_, err := store.db.ExecContext(t.Context(), `UPDATE turns SET reason = 'held', delivery = 'held' WHERE input_id = 'held' AND phase = 'waiting'`) // As a stopped parent's wait does.
+			_, err := store.db.ExecContext(t.Context(), `UPDATE turns SET reason = 'held', delivery = 'held' WHERE input_id = 'held' AND phase = 'waiting'`)
 			require.NoError(t, err)
 
 			request := <-bridge.requestCh
@@ -1119,8 +1092,6 @@ func TestWriteSessionReleasesHeldRequest(t *testing.T) {
 	}
 }
 
-// A person's Web message or $goal releases the request a stopped parent held in a subagent session, and
-// the loop runs it before that write, even behind requests it already lined up, and before the goal.
 func TestWebWriteRunsReleasedRequestFirst(t *testing.T) {
 	for _, write := range []string{"message", "goal"} {
 		t.Run(write, func(t *testing.T) {
@@ -1136,7 +1107,7 @@ func TestWebWriteRunsReleasedRequestFirst(t *testing.T) {
 			_, _, err := manager.writeSession(t.Context(), target, "held", sessionWriteEnqueue, agentWrite("parent work"), nil)
 			require.NoError(t, err)
 			require.Equal(t, "held", (<-bridge.requestCh).queueItemID)
-			_, err = store.db.ExecContext(t.Context(), `UPDATE turns SET reason = 'held', delivery = 'held' WHERE input_id = 'held' AND phase = 'waiting'`) // As a stopped parent's wait does.
+			_, err = store.db.ExecContext(t.Context(), `UPDATE turns SET reason = 'held', delivery = 'held' WHERE input_id = 'held' AND phase = 'waiting'`)
 			require.NoError(t, err)
 
 			bridge.requestCh <- bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "lined up", true)}
@@ -1178,7 +1149,6 @@ func TestWebWriteRunsReleasedRequestFirst(t *testing.T) {
 	}
 }
 
-// Agents writing to and stopping each other never wait on one another's turns.
 func TestWriteSessionMutualWritesDoNotBlock(t *testing.T) {
 	store := newTestSessionService(t)
 	manager := &threadBridgeManager{log: slog.New(slog.DiscardHandler), store: store, bridges: map[string]directBridge{}}

@@ -46,7 +46,7 @@ func (s filesystemAttachments) Put(_ context.Context, id string, data []byte) er
 	if err = errors.Join(err, file.Sync(), file.Close()); err != nil {
 		return fmt.Errorf("write pending attachment: %w", err)
 	}
-	// Link publishes the complete file atomically and never replaces an original.
+
 	if err := root.Link(temporary, id); err != nil {
 		return fmt.Errorf("publish attachment: %w", err)
 	}
@@ -97,7 +97,7 @@ func (s s3Attachments) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("head deleted S3 attachment: %w", err)
 	}
-	// Delete the actual version, not a marker that leaves the original bytes behind.
+
 	if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: &s.bucket, Key: &id, VersionId: object.VersionId}); err != nil {
 		return fmt.Errorf("delete S3 attachment: %w", err)
 	}

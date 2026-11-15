@@ -29,12 +29,9 @@ const (
 	openCodeSyncInterval = 5 * time.Second
 	openCodePruneLimit   = 1_000_000
 	openCodePruneEvery   = 24 * time.Hour
-	// openCodeShellsEvery bounds how long running shells can drift, as over a connection that died
-	// without closing, by reconnecting and listing them again.
-	openCodeShellsEvery = 15 * time.Minute
+	openCodeShellsEvery  = 15 * time.Minute
 )
 
-// openCodeSession is the part of an OpenCode v2 Session.Info the Web lists.
 type openCodeSession struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -44,7 +41,6 @@ type openCodeSession struct {
 	Location struct {
 		Directory string `json:"directory"`
 	} `json:"location"`
-	// Agent and Model are the session's selected agent and model, absent until it has them.
 	Agent string `json:"agent"`
 	Model struct {
 		ID         string `json:"id"`
@@ -52,7 +48,6 @@ type openCodeSession struct {
 	} `json:"model"`
 }
 
-// model is the session's selected model as "<provider>/<model>", empty without one.
 func (o *openCodeSession) model() string {
 	if o.Model.ID == "" {
 		return ""
@@ -61,7 +56,6 @@ func (o *openCodeSession) model() string {
 	return o.Model.ProviderID + "/" + o.Model.ID
 }
 
-// openCodeError is an OpenCode server answering a request with a failure status.
 type openCodeError struct {
 	Server string
 	Path   string
@@ -72,20 +66,13 @@ func (e *openCodeError) Error() string {
 	return fmt.Sprintf("opencode %s %s: status %d", e.Server, e.Path, e.Status)
 }
 
-// openCodeShells is one server's running shell commands: the session that started each, by
-// shell ID. Its event stream keeps it current; each sync reads it.
 type openCodeShells struct {
 	mu      sync.Mutex
 	running map[string]string
 }
 
-// follow keeps shells current from one connection to name's event stream, until the stream
-// ends or ctx does. On connecting, it lists the shells of every location the server has loaded,
-// where every shell runs, and reads no events meanwhile, so the events that arrived during the
-// list apply after it. Listing only loaded locations never makes the server load one. A location
-// whose list fails, such as one deleted from disk, adds no shells.
 func (shells *openCodeShells) follow(ctx context.Context, name string, server config.OpenCodeConfig) {
-	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(server.URL, "/")+"/api/event", http.NoBody) // Config validation already parsed the URL.
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(server.URL, "/")+"/api/event", http.NoBody)
 	request.SetBasicAuth("opencode", server.Password)
 
 	response, err := http.DefaultClient.Do(request)
@@ -99,7 +86,7 @@ func (shells *openCodeShells) follow(ctx context.Context, name string, server co
 	}
 
 	lines := bufio.NewScanner(response.Body)
-	lines.Buffer(nil, 64<<20) // An event carries whole tool inputs and outputs.
+	lines.Buffer(nil, 64<<20)
 
 	for lines.Scan() {
 		var event struct {
@@ -116,7 +103,6 @@ func (shells *openCodeShells) follow(ctx context.Context, name string, server co
 			} `json:"data"`
 		}
 
-		// Other events' data may not fit this shape; they are skipped either way.
 		data, ok := bytes.CutPrefix(lines.Bytes(), []byte("data: "))
 		if !ok || json.Unmarshal(data, &event) != nil {
 			continue
@@ -167,11 +153,6 @@ func (shells *openCodeShells) follow(ctx context.Context, name string, server co
 	}
 }
 
-// SyncOpenCode keeps each configured server's newest root sessions in the store every
-// interval until ctx ends. A failed poll writes nothing, so that server's rows age into offline.
-// At start and then daily, it also drops stored sessions the server no longer has. Each server's
-// event stream keeps its running shells, reconnecting an interval after it drops and every
-// openCodeShellsEvery; shells that start or end while it is down show at the next connection.
 func (s *SessionService) SyncOpenCode(ctx context.Context, servers map[string]config.OpenCodeConfig) {
 	var following errgroup.Group
 	defer func() { _ = following.Wait() }()
@@ -205,7 +186,6 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, servers map[string]co
 
 	for {
 		for name, server := range servers {
-			// An unreachable server would fail the whole sync; the next round tries again.
 			if s.pushOpenCodeNames(ctx, name, server) == nil {
 				_ = s.syncOpenCode(ctx, name, server, shells[name])
 			}
@@ -224,7 +204,6 @@ func (s *SessionService) SyncOpenCode(ctx context.Context, servers map[string]co
 }
 
 func (s *SessionService) syncOpenCode(ctx context.Context, name string, server config.OpenCodeConfig, shells *openCodeShells) error {
-	// The state store stamps synced_at, so its clock, not this process's, marks the start.
 	var started time.Time
 	if err := queryScalar(ctx, s.db, "read state store clock", `SELECT now()`, &started); err != nil {
 		return err
@@ -244,7 +223,6 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		return err
 	}
 
-	// through is a session's newest handled idle marker, in OpenCode milliseconds, 0 before its first.
 	type storedSession struct {
 		ran, asking bool
 		updated     time.Time
@@ -269,8 +247,6 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		return err
 	}
 
-	// Work outside a root's own turn can wake it: a running child session, as a background
-	// subagent's is, or a running shell command of the root or a child, as a background command is.
 	roots, owners := map[string]bool{}, map[string]bool{}
 	for _, session := range sessions.Data {
 		roots[session.ID] = true
@@ -288,7 +264,6 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 	}
 	shells.mu.Unlock()
 
-	// A walk that fails or leaves the listed roots marks a session no row reads.
 	background, asking := map[string]bool{}, map[string]bool{}
 
 	for id := range owners {
@@ -316,12 +291,6 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		_, busy := active.Data[session.ID]
 		last := stored[id]
 
-		// An idle session the last sync saw running, or whose time.updated moved because a prompt
-		// was accepted, may have ended turns since its cursor. Each idle marker ends a turn covering
-		// every prompt since the previous one, so the stamped prompts after the cursor and no later
-		// than the newest marker name the turns' senders. A marker after the cursor reaches the
-		// session's readers also with no prompt, as when a background job's result started the turn.
-		// A failed read leaves the cursor in place, and the cursor never moves back.
 		var cursor *int64
 
 		if !busy && (last.ran || session.Time.Updated > last.updated.UnixMilli()) {
@@ -344,7 +313,6 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 			}
 		}
 
-		// A session that starts asking waits on the people whose stamped prompts since its cursor it runs.
 		if asking[session.ID] && !last.asking {
 			senders, _ := openCodeSenders(ctx, name, server, session.ID, last.through, math.MaxInt64)
 			for _, sender := range senders {
@@ -352,9 +320,6 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 			}
 		}
 
-		// A session the last sync saw running and this one sees idle finished a turn. Its reply is
-		// written with its idle state, so a reader never sees the turn end without it. A failed
-		// read clears the reply rather than holding back the whole list.
 		var reply *string
 
 		if last.ran && !busy {
@@ -390,14 +355,6 @@ func (s *SessionService) syncOpenCode(ctx context.Context, name string, server c
 		askings = append(askings, asking[session.ID])
 	}
 
-	// A fetch below the limit is the whole root set, so every missing row was deleted; a full
-	// fetch proves deletions only inside its window. Rows stamped after the poll started were
-	// created or renamed meanwhile and stay. Earlier polls must not undo a rename's title/name.
-	// Kept rows are stamped too: offline means unreachable only.
-	// A turn's end reaches the session's readers, and so does its start of asking, read against the
-	// asking stored before this statement, which also brings back the parked tabs of those it notifies.
-	// Session.Info.title is also the shared name, including when cleared (OpenCode v2
-	// https://opencode.ai/v2/openapi.json#/paths/~1api~1session/get).
 	_, err := execState(ctx, s.db, "sync opencode sessions", `WITH incoming AS (
     SELECT * FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::boolean[], $10::text[], $11::boolean[], $12::text[], $13::text[], $15::text[], $16::bigint[], $19::boolean[]) AS t(conversation_id, title, directory, updated_at, running, reply, background, agent, model, remote_session, read_through, asking)
 ), upserted AS (
@@ -425,8 +382,6 @@ WHERE server = $1 AND conversation_id <> ALL($2) AND NOT (synced_at < $9 AND ($7
 	return err
 }
 
-// openCodeSenders lists the RocketClaw people stamped on the prompts of session's newest 50 created after since and no
-// later than until, "" for one sent from elsewhere.
 func openCodeSenders(ctx context.Context, name string, server config.OpenCodeConfig, session string, since, until int64) ([]string, error) {
 	var prompts struct {
 		Data []struct {
@@ -454,7 +409,6 @@ func openCodeSenders(ctx context.Context, name string, server config.OpenCodeCon
 	return senders, nil
 }
 
-// openCodeRoot walks id's parents up to one of roots, stopping early at a parent it cannot read.
 func openCodeRoot(ctx context.Context, name string, server config.OpenCodeConfig, roots map[string]bool, id string) string {
 	for id != "" && !roots[id] {
 		var parent struct {
@@ -473,9 +427,6 @@ func openCodeRoot(ctx context.Context, name string, server config.OpenCodeConfig
 	return id
 }
 
-// openCodeWaiting lists the sessions of name waiting on a person: those with a pending form, such as
-// a question, or a pending permission request. Only loaded locations are listed, which never makes
-// the server load one; a list that fails marks nothing.
 func openCodeWaiting(ctx context.Context, name string, server config.OpenCodeConfig) map[string]bool {
 	waiting := map[string]bool{}
 
@@ -505,8 +456,6 @@ func openCodeWaiting(ctx context.Context, name string, server config.OpenCodeCon
 	return waiting
 }
 
-// pushOpenCodeNames moves names stored before names synced with OpenCode, which differ from their
-// titles, to the server, once the server accepts each; a session it refuses keeps its name.
 func (s *SessionService) pushOpenCodeNames(ctx context.Context, name string, server config.OpenCodeConfig) error {
 	named := map[string]string{}
 
@@ -541,10 +490,7 @@ func (s *SessionService) pushOpenCodeNames(ctx context.Context, name string, ser
 	return nil
 }
 
-// pruneOpenCode drops name's stored sessions missing from its full root list. It never adds
-// sessions, so old ones nobody opened stay out of the list.
 func (s *SessionService) pruneOpenCode(ctx context.Context, name string, server config.OpenCodeConfig) error {
-	// The state store stamps synced_at, so its clock, not this process's, marks the start.
 	var started time.Time
 	if err := queryScalar(ctx, s.db, "read state store clock", `SELECT now()`, &started); err != nil {
 		return err
@@ -562,14 +508,11 @@ func (s *SessionService) pruneOpenCode(ctx context.Context, name string, server 
 		ids = append(ids, "opencode:"+name+":"+session.ID)
 	}
 
-	// A list that fills the limit may be cut short, so it deletes nothing.
 	_, err := execState(ctx, s.db, "prune opencode sessions", `DELETE FROM conversations WHERE server = $1 AND conversation_id <> ALL($2) AND synced_at < $3 AND $4`, name, ids, started, len(ids) < openCodePruneLimit)
 
 	return err
 }
 
-// CreateOpenCodeSession creates a root session in directory on server name, lists it at once in
-// the Web space spaceID names, if any, and returns its conversation ID.
 func (s *SessionService) CreateOpenCodeSession(ctx context.Context, name string, server config.OpenCodeConfig, directory, spaceID string) (string, error) {
 	var created struct {
 		Data openCodeSession `json:"data"`
@@ -589,8 +532,6 @@ func (s *SessionService) CreateOpenCodeSession(ctx context.Context, name string,
 	return s.recordOpenCodeSession(ctx, name, &created.Data, spaceID, "")
 }
 
-// ForkOpenCodeSession forks before a remote message and records the result before its tab saves.
-// OpenCode v2 packages/server/src/handlers/session.ts returns the same Session.Info as creation.
 func (s *SessionService) ForkOpenCodeSession(ctx context.Context, name string, server config.OpenCodeConfig, source, before string) (string, error) {
 	var forked struct {
 		Data openCodeSession `json:"data"`
@@ -606,9 +547,6 @@ func (s *SessionService) ForkOpenCodeSession(ctx context.Context, name string, s
 	return s.recordOpenCodeSession(ctx, name, &forked.Data, "", "opencode:"+name+":"+source)
 }
 
-// recordOpenCodeSession lists session in its Birth Space: the existing space spaceID names, or the
-// source conversation's, which a fork also records as its origin. A sync may have listed it first,
-// so a space fills a missing one.
 func (s *SessionService) recordOpenCodeSession(ctx context.Context, name string, session *openCodeSession, spaceID, source string) (string, error) {
 	id := "opencode:" + name + ":" + session.ID
 
@@ -627,13 +565,12 @@ type openCodeTitle struct {
 	Title string `json:"title"`
 }
 
-// AgentTags lists, per agent with tag groups, the tags people may set on its sessions.
 func AgentTags(agents harness.Agents) map[string][]string {
 	tags := make(map[string][]string, len(agents.Items))
 
 	for name := range agents.Items {
 		agent := agents.Items[name]
-		if groups, _ := agentTagGroups(&agent); len(groups) > 0 { // LoadRuntimeDefinitions already rejected invalid groups.
+		if groups, _ := agentTagGroups(&agent); len(groups) > 0 {
 			tags[name] = slices.Sorted(slices.Values(slices.Concat(groups...)))
 		}
 	}
@@ -641,8 +578,6 @@ func AgentTags(agents harness.Agents) map[string][]string {
 	return tags
 }
 
-// ToggleManualTag toggles a tag a person chose. A remote OpenCode session takes any tag; a
-// RocketClaw session takes only a tag its agent allows, which clears the rest of its group.
 func (s *SessionService) ToggleManualTag(ctx context.Context, agents harness.Agents, id, tag string) error {
 	kind, _, err := s.ConversationKind(ctx, id)
 	if err != nil {
@@ -660,7 +595,7 @@ func (s *SessionService) ToggleManualTag(ctx context.Context, agents harness.Age
 		}
 
 		agent := agents.Items[thread.Agent]
-		groups, _ := agentTagGroups(&agent) // LoadRuntimeDefinitions already rejected invalid groups.
+		groups, _ := agentTagGroups(&agent)
 
 		i := slices.IndexFunc(groups, func(candidate []string) bool { return slices.Contains(candidate, tag) })
 		if i < 0 {
@@ -675,7 +610,6 @@ func (s *SessionService) ToggleManualTag(ctx context.Context, agents harness.Age
 	return err
 }
 
-// ConversationKind returns what conversation id is, and whether it is recorded at all.
 func (s *SessionService) ConversationKind(ctx context.Context, id string) (kind ConversationKind, found bool, err error) {
 	err = s.db.QueryRowContext(ctx, `SELECT kind FROM conversations WHERE conversation_id = $1`, id).Scan(&kind)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -689,10 +623,8 @@ func (s *SessionService) ConversationKind(ctx context.Context, id string) (kind 
 	return kind, true, nil
 }
 
-// ErrTagNotAllowed reports a manual tag a RocketClaw session's agent does not allow.
 var ErrTagNotAllowed = errors.New("the session's agent does not allow this tag")
 
-// ErrRemoteSession refuses to delete a remote OpenCode session's history, which its server keeps.
 var ErrRemoteSession = errors.New("a remote OpenCode session's history stays on its server")
 
 func openCodeCall(ctx context.Context, name string, server config.OpenCodeConfig, method, path string, body, out any) error {
@@ -702,11 +634,11 @@ func openCodeCall(ctx context.Context, name string, server config.OpenCodeConfig
 	var payload io.Reader = http.NoBody
 
 	if body != nil {
-		data, _ := json.Marshal(body) // Encoding a request struct cannot fail.
+		data, _ := json.Marshal(body)
 		payload = bytes.NewReader(data)
 	}
 
-	request, _ := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(server.URL, "/")+path, payload) // Config validation already parsed the URL.
+	request, _ := http.NewRequestWithContext(ctx, method, strings.TrimSuffix(server.URL, "/")+path, payload)
 
 	request.SetBasicAuth("opencode", server.Password)
 	request.Header.Set("Content-Type", "application/json")
@@ -721,7 +653,6 @@ func openCodeCall(ctx context.Context, name string, server config.OpenCodeConfig
 		return &openCodeError{Server: name, Path: path, Status: response.StatusCode}
 	}
 
-	// OpenCode v2 session.update returns 204: https://opencode.ai/v2/openapi.json
 	if out == nil {
 		return nil
 	}
@@ -735,8 +666,6 @@ func openCodeCall(ctx context.Context, name string, server config.OpenCodeConfig
 
 const openCodeAPIToolName = "opencode_api"
 
-// openCodeAPITool calls a configured OpenCode server's API as `opencode api` does. The opencode
-// permission, keyed by server name, decides which servers an agent may call and how.
 func openCodeAPITool(servers map[string]config.OpenCodeConfig) harness.Tool {
 	names := slices.Sorted(maps.Keys(servers))
 	text := map[string]any{"type": "string"}
@@ -778,7 +707,6 @@ func openCodeAPITool(servers map[string]config.OpenCodeConfig) harness.Tool {
 
 			method, path, ok := strings.Cut(strings.TrimSpace(input.Operation), " ")
 			if !ok {
-				// Path items hold operations by method; OpenAPI also allows fields such as summary there.
 				var spec struct {
 					Paths map[string]map[string]any `json:"paths"`
 				}
@@ -799,7 +727,6 @@ func openCodeAPITool(servers map[string]config.OpenCodeConfig) harness.Tool {
 				}
 			}
 
-			// A path not starting with / would join the server's host and send its password elsewhere.
 			if !strings.HasPrefix(path, "/") {
 				return harness.ToolResult{}, fmt.Errorf("path %q must start with /", path)
 			}
@@ -833,7 +760,6 @@ func openCodeAPITool(servers map[string]config.OpenCodeConfig) harness.Tool {
 			}
 			defer func() { _ = response.Body.Close() }()
 
-			// An event stream never ends, so reading it would hold the call forever.
 			if strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
 				return harness.ToolResult{}, fmt.Errorf("opencode %s %s is an event stream, which %s cannot read", input.Server, path, openCodeAPIToolName)
 			}

@@ -17,22 +17,17 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 )
 
-// CreateConversation records an explicit ID, a Web chat or a cron run, without changing existing selection.
 func (r *Runtime) CreateConversation(ctx context.Context, conversation protocol.Conversation) error {
 	_, err := r.Sessions.recordConversation(ctx, &conversation, conversationFacts{kind: KindWebChat}, harness.AgentStickyOff)
 	return err
 }
 
-// CreateStickyConversation finds or creates the agent's sticky Web session and reports whether the
-// request resumed an existing session.
 func (s *SessionService) CreateStickyConversation(ctx context.Context, conversation protocol.Conversation, sticky harness.AgentSticky) (id string, resumed bool, err error) {
 	created, err := s.recordConversation(ctx, &conversation, conversationFacts{kind: KindWebChat}, sticky)
 
 	return conversation.ID, !created, err
 }
 
-// recordConversation creates conversation, or for a sticky agent finds or creates its session, and
-// reports whether it created the row.
 func (s *SessionService) recordConversation(ctx context.Context, conversation *protocol.Conversation, facts conversationFacts, sticky harness.AgentSticky) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -63,7 +58,6 @@ func (s *SessionService) recordConversation(ctx context.Context, conversation *p
 		return false, err
 	}
 
-	// A concurrent first request created the sticky chat while this one waited for it.
 	if !created && sticky != harness.AgentStickyOff {
 		if conversation.ID, err = dao.stickyConversationID(ctx, conversation.Agent, conversation.CreatedBy, sticky); err != nil {
 			return false, err
@@ -83,10 +77,6 @@ func (s *SessionService) recordConversation(ctx context.Context, conversation *p
 	return created, nil
 }
 
-// ContinueRun has a conversation show, and search find, a hidden run's history before its own,
-// taking the run's preview when it first does, and adopts the run when it reports to no
-// conversation. A shared destination shows the bound run without becoming a per-run continuation.
-// Nothing is copied, and continuing again changes nothing. The returned ID is the bound destination.
 func (r *Runtime) ContinueRun(ctx context.Context, run, conversationID string, shared bool) (string, error) {
 	tx, err := r.Sessions.beginStateTx(ctx, "run continuation")
 	if err != nil {
@@ -121,8 +111,6 @@ func (r *Runtime) ContinueRun(ctx context.Context, run, conversationID string, s
 	return owner, r.threads.armSchedules(ctx, owner, schedules)
 }
 
-// SlackThread returns the Slack channel and thread conversationID was stored with: both for a
-// Slack thread, empty for a conversation that is none.
 func (s *SessionService) SlackThread(ctx context.Context, conversationID string) (channelID, threadTS string, err error) {
 	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(max(slack_channel), ''), COALESCE(max(slack_thread), '') FROM conversations
 WHERE conversation_id = $1`, conversationID).Scan(&channelID, &threadTS); err != nil {
@@ -132,8 +120,6 @@ WHERE conversation_id = $1`, conversationID).Scan(&channelID, &threadTS); err !=
 	return channelID, threadTS, nil
 }
 
-// CronRun reports whether conversationID is a cron run, recorded or not, and the definition path
-// of the cron run it is or, as a Web chat, continues; empty when that is unknown.
 func (s *SessionService) CronRun(ctx context.Context, conversationID string) (path string, run bool, err error) {
 	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(max(COALESCE(c.cron_path, r.cron_path)), ''), COALESCE(bool_or(c.kind IN ($2, $3)), FALSE)
 FROM conversations c LEFT JOIN conversations r ON r.conversation_id = c.cron_run WHERE c.conversation_id = $1`, conversationID, KindCronRun, KindOneOffCronRun).Scan(&path, &run); err != nil {
@@ -143,8 +129,6 @@ FROM conversations c LEFT JOIN conversations r ON r.conversation_id = c.cron_run
 	return path, run, nil
 }
 
-// CronStem is the name the cron job at path is listed and loaded by: a cron file's stem, or
-// "<agent> · <schedule>" for the routine at agents/<agent>.md#<schedule>.
 func CronStem(path string) string {
 	if agent, schedule, ok := strings.Cut(strings.TrimPrefix(path, "agents/"), ".md#"); ok {
 		return agent + " · " + schedule
@@ -153,7 +137,6 @@ func CronStem(path string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(path, "cron/"), ".md")
 }
 
-// RunTurn waits for the submitted work's processing and terminal handling.
 func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage) error {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, inbound.ConversationID); err != nil {
 		return err
@@ -193,7 +176,6 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 		return r.PublishOutbound(ctx, message)
 	}
 
-	// A message sent here runs after the input a stopped parent held here (awaitSubagent), released ahead of it.
 	if err := bridge.releaseHeld(ctx); err != nil {
 		return err
 	}
@@ -241,8 +223,6 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 	}
 }
 
-// StartGoal records an active goal on a recorded conversation and submits its
-// first turn without waiting for the goal loop.
 func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessage, goal protocol.GoalRequest) error {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, inbound.ConversationID); err != nil {
 		return err
@@ -253,7 +233,6 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 		return err
 	}
 
-	// The goal's work runs after the input a stopped parent held here, released ahead of it.
 	if err := bridge.releaseHeld(ctx); err != nil {
 		return err
 	}
@@ -267,7 +246,7 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 		if eligible {
 			inbound.GoalAction = protocol.GoalActionKickoff
 
-			data, _ := json.Marshal(goal) // Only strings and an integer.
+			data, _ := json.Marshal(goal)
 
 			inbound.Metadata["web_goal"] = string(data)
 
@@ -291,7 +270,6 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 	return bridge.Submit(ctx, inbound)
 }
 
-// WorkflowDescriptions lists the saved workflows a human can start with $workflow.
 func (r *Runtime) WorkflowDescriptions() (descriptions []protocol.WorkflowDescription, err error) {
 	runtimeCfg := r.Cfg.Clone()
 
@@ -310,12 +288,10 @@ func (r *Runtime) WorkflowDescriptions() (descriptions []protocol.WorkflowDescri
 	return workflow.Descriptions(definitions), nil
 }
 
-// QueueItems returns persisted waiting work plus uninjected active steers.
 func (r *Runtime) QueueItems(conversationID string) ([]protocol.ThreadQueueItem, error) {
 	return r.threads.queueItems(conversationID)
 }
 
-// PopQueueItem releases held work at the end of the ordinary queue.
 func (r *Runtime) PopQueueItem(ctx context.Context, conversationID, id string) (bool, error) {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
 		return false, err
@@ -338,7 +314,6 @@ func (r *Runtime) PopQueueItem(ctx context.Context, conversationID, id string) (
 	return true, r.threads.PickLaterWork(ctx, conversationID)
 }
 
-// PromoteQueueItem claims one persisted enqueue and submits it as a steer, keeping its principal.
 func (r *Runtime) PromoteQueueItem(ctx context.Context, conversationID, id string) (bool, error) {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
 		return false, err
@@ -356,7 +331,6 @@ func (r *Runtime) PromoteQueueItem(ctx context.Context, conversationID, id strin
 	return r.threads.promoteQueueItem(ctx, conversationID, id)
 }
 
-// EditQueueItem changes only the text of a queued or held input that has not been claimed.
 func (r *Runtime) EditQueueItem(ctx context.Context, conversationID, id, text string) (bool, error) {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
 		return false, err
@@ -468,7 +442,6 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $3 AND reason <> $4 AND
 	return true, nil
 }
 
-// DeleteQueueItem drops one waiting steer or enqueue so it never runs.
 func (r *Runtime) DeleteQueueItem(ctx context.Context, conversationID, id string) (bool, error) {
 	if err := rejectShadowMutation(ctx, r.threads.store.db, conversationID); err != nil {
 		return false, err
@@ -477,7 +450,6 @@ func (r *Runtime) DeleteQueueItem(ctx context.Context, conversationID, id string
 	return r.threads.deleteQueueItem(ctx, conversationID, id)
 }
 
-// ReorderQueueItems writes persisted enqueue positions in the given ID order.
 func (r *Runtime) ReorderQueueItems(conversationID string, ids []string) error {
 	if err := rejectShadowMutation(context.Background(), r.Sessions.db, conversationID); err != nil {
 		return err
@@ -492,7 +464,6 @@ func (r *Runtime) ReorderQueueItems(conversationID string, ids []string) error {
 	return nil
 }
 
-// StashQueueItem persists waiting work and offers it to the conversation bridge.
 func (r *Runtime) StashQueueItem(ctx context.Context, conversationID string, item *protocol.ThreadQueueItem) error {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
 		return err
@@ -542,9 +513,6 @@ func (r *Runtime) StashQueueItem(ctx context.Context, conversationID string, ite
 	return r.threads.stashQueueItem(ctx, conversationID, item)
 }
 
-// MoveToBackground moves every running execute and task call of the conversation's allowed agents
-// into the background and reports whether any moved. Its running turn learns at its next step
-// which of its own calls moved, and a moved script's pending question is withdrawn.
 func (r *Runtime) MoveToBackground(ctx context.Context, conversationID string) (bool, error) {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
 		return false, err
@@ -555,7 +523,6 @@ func (r *Runtime) MoveToBackground(ctx context.Context, conversationID string) (
 		return false, err
 	}
 
-	// Holding b.mu until the note is queued makes the step after the moved calls drain it.
 	bridge.mu.Lock()
 	defer bridge.mu.Unlock()
 
@@ -574,7 +541,6 @@ func (r *Runtime) MoveToBackground(ctx context.Context, conversationID string) (
 	return len(moved) > 0, nil
 }
 
-// StopBackgroundJob stops, for the user, a running Background Job listed at conversationID.
 func (r *Runtime) StopBackgroundJob(ctx context.Context, conversationID, jobID string) (bool, error) {
 	if err := rejectShadowMutation(ctx, r.Sessions.db, conversationID); err != nil {
 		return false, err
@@ -583,8 +549,6 @@ func (r *Runtime) StopBackgroundJob(ctx context.Context, conversationID, jobID s
 	return r.background.stop(ctx, conversationID, jobID, errStoppedByUser)
 }
 
-// BackgroundJobs lists the Background Jobs shown at conversationID and reports whether
-// MoveToBackground has a running call to move there.
 func (r *Runtime) BackgroundJobs(ctx context.Context, conversationID string) ([]protocol.BackgroundJob, bool, error) {
 	jobs, err := r.Sessions.backgroundJobs(ctx, conversationID)
 	if err != nil {
@@ -594,8 +558,6 @@ func (r *Runtime) BackgroundJobs(ctx context.Context, conversationID string) ([]
 	return listedBackgroundJobs(jobs, conversationID), r.background.movable(conversationID), nil
 }
 
-// CompletionNotes returns, in finish order, the jobs whose Completion Notes a system input saved
-// at history delivers, by the job IDs it stored, with each note's text.
 func (r *Runtime) CompletionNotes(ctx context.Context, history string, jobIDs []string) ([]protocol.BackgroundJob, error) {
 	jobs, err := r.Sessions.notedBackgroundJobs(ctx, history, jobIDs)
 	if err != nil {
@@ -610,7 +572,6 @@ func (r *Runtime) CompletionNotes(ctx context.Context, history string, jobIDs []
 	return notes, nil
 }
 
-// listedBackgroundJobs shows jobs at conversationID, hiding those of the runs reporting there.
 func listedBackgroundJobs(jobs []backgroundJob, conversationID string) []protocol.BackgroundJob {
 	listed := make([]protocol.BackgroundJob, len(jobs))
 
@@ -626,15 +587,11 @@ func listedBackgroundJobs(jobs []backgroundJob, conversationID string) []protoco
 	return listed
 }
 
-// Drain commits the offered input before advancing any consumed state. A bound
-// child instead reads its parent's stream and waits at the final-answer boundary.
 func (b *Bridge) Drain(ctx context.Context, responseID string, phase harness.TurnPhase, applied []string) ([]harness.PromptInput, error) {
 	if b.shadow {
 		return b.drainShadowInputs(ctx, responseID, phase, applied)
 	}
 
-	// Slow persistence delays this bridge's admissions. Separating transactional
-	// admission ownership is the upgrade path; a partial unlock loses late inputs.
 	b.mu.Lock()
 	if b.historyMutation {
 		b.mu.Unlock()
@@ -669,8 +626,6 @@ func (b *Bridge) Drain(ctx context.Context, responseID string, phase harness.Tur
 	inputs := slices.Clone(snapshot.Inputs)
 	segment := shadowStepSegment(applied, snapshot.Resets)
 
-	// Completion Notes are claimed under b.mu, so a note this last step misses finds notesOpen false
-	// and wakes the conversation. A resumed turn is offered the notes it held once more.
 	notes, err := claimBackgroundNotes(context.WithoutCancel(ctx), tx, b.config.ConversationID, b.activeTurnID, true)
 	if err != nil {
 		b.mu.Unlock()
@@ -700,8 +655,7 @@ func (b *Bridge) Drain(ctx context.Context, responseID string, phase harness.Tur
 
 		b.log.Info("steer injected", "event", "steer_injected", "conversation_id", b.config.ConversationID, "queue_item_id", request.queueItemID, "phase", phase)
 	}
-	// A restart reoffers accepted steers and held notes, while the canonical
-	// stream already owns their earlier payload and ordering.
+
 	snapshot.Inputs = []harness.PromptInput{}
 
 	var offered []harness.PromptInput
@@ -720,8 +674,6 @@ func (b *Bridge) Drain(ctx context.Context, responseID string, phase harness.Tur
 		snapshot.Closed = true
 	}
 
-	// The response this drain follows is one step of budget for this turn's shadows, recorded
-	// before the turn's next response and once even when a restart drains it again.
 	if _, err := tx.ExecContext(ctx, `INSERT INTO shadow_steps (shadow_turn_id, child, response_id, segment)
 SELECT id, FALSE, $3, $4 FROM shadow_turns WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2 ON CONFLICT DO NOTHING`, b.config.ConversationID, b.activeTurnID, responseID, segment); err != nil {
 		b.mu.Unlock()
@@ -763,7 +715,6 @@ SELECT id, FALSE, $3, $4 FROM shadow_turns WHERE parent_source_conversation_id =
 	return offered, nil
 }
 
-// publishConsumed posts a web input's consume card once per turn, even across a restart.
 func (b *Bridge) publishConsumed(ctx context.Context, inbound *protocol.InboundMessage, header string) {
 	if b.shadow {
 		return

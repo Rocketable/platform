@@ -43,14 +43,13 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			entry := &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 123456789).UTC(), ReplayInput: []json.RawMessage{json.RawMessage(tc.raw)}}
-			// A chat recorded before its row stored a summary, as stores older than migration 052 hold.
 			_, err = service.db.ExecContext(t.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ($1, 'main', '', $2, TRUE)`, tc.name, KindWebChat)
 			require.NoError(t, err)
 			insertSessionEntryWithoutSummary(t, service, tc.name, entry)
 			insertSessionEntryWithoutSummary(t, service, tc.name, &harness.SessionEntry{Timestamp: entry.Timestamp, ReplayInput: replayInputForMessage("assistant", " \n")})
 			require.NoError(t, service.UpsertThread(tc.name, ThreadState{Agent: "main"}))
 			require.Equal(t, tc.want, sidebarSummaries(t, service)[tc.name].LastMessage)
-			// Following appends use only the stored summary.
+
 			for _, message := range []struct{ role, text, want string }{
 				{"assistant", "answer\x00", "answer"},
 				{"assistant", "\x00", "answer"},
@@ -65,7 +64,7 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, message.want, sidebarSummaries(t, service)[tc.name].LastMessage)
 			}
-			// A poisoned old row detects accidental history reads on initialized append/list paths.
+
 			_, err = service.db.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"timestamp":false}' WHERE conversation_id = $1`, tc.name)
 			require.NoError(t, err)
 			_, err = service.AppendEntryID(t.Context(), tc.name, &harness.SessionEntry{Timestamp: time.Unix(1, 987654321).UTC()})
@@ -78,7 +77,6 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 func TestSessionSummaryHistoryAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkLoadSessionSummaryHistory)
 	require.Positive(t, result.N)
-	// Reused buffers cost up to 12.1 MiB under CI's -race; copying them cost 17.8 MiB, or 20.1 MiB under -race.
 	require.Less(t, result.AllocedBytesPerOp(), int64(16<<20))
 }
 
@@ -95,7 +93,6 @@ func BenchmarkLoadSessionSummaryHistory(b *testing.B) {
 	entry.OutputTrace = []json.RawMessage{trace}
 	data, err := json.Marshal(entry)
 	require.NoError(b, err)
-	// A row without a stored summary, so loading it reads the history.
 	_, err = service.db.ExecContext(b.Context(), `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ('benchmark', 'main', '', 'web_chat', TRUE)`)
 	require.NoError(b, err)
 	_, err = service.db.ExecContext(b.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
@@ -116,7 +113,6 @@ SELECT 'benchmark', $1, '2000-01-02T03:04:05Z' FROM generate_series(1, 32)`, str
 	}
 }
 
-// sidebarSummaries returns the summary of each chat the sidebar lists, by conversation ID.
 func sidebarSummaries(t *testing.T, s *SessionService) map[string]*protocol.SessionSummary {
 	t.Helper()
 
@@ -137,7 +133,6 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
 
-	// CreateConversation initializes summaries through the same stateDAO path as External MCP registration.
 	for _, creation := range []string{"upsert", "external MCP"} {
 		t.Run(creation, func(t *testing.T) {
 			t.Cleanup(func() {
@@ -161,7 +156,6 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 			_, err = service.db.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"timestamp":false}'`)
 			require.NoError(t, err)
 
-			// Pin the listing pool's session setting; the lock uses a separate connection.
 			service.db.SetMaxOpenConns(1)
 			_, err = service.db.ExecContext(t.Context(), `SET lock_timeout = '10ms'`)
 			require.NoError(t, err)
@@ -175,7 +169,6 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 			require.NoError(t, err)
 			defer func() { require.NoError(t, transaction.Rollback()) }()
 
-			// Checking entry presence must not decode replay or wait for history writers.
 			_, err = transaction.ExecContext(t.Context(), `LOCK TABLE entries IN EXCLUSIVE MODE`)
 			require.NoError(t, err)
 
@@ -200,7 +193,6 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 	}
 }
 
-// Whether a chat has history is stored on its row (saveSessionSummary), so listing reads no entry.
 func TestSidebarSessionsReadNoHistory(t *testing.T) {
 	t.Parallel()
 
@@ -356,8 +348,6 @@ func TestSidebarSessionsListFirstTurnBeforeHistory(t *testing.T) {
 	require.Equal(t, "answer", row.Summary.LastMessage)
 }
 
-// A session asks while its running turn has an unanswered Web question; an answer or the turn's end stops it. A
-// question marks its keeper only when it makes the session ask.
 func TestSidebarSessionsMarkUnansweredQuestions(t *testing.T) {
 	t.Parallel()
 
@@ -436,10 +426,8 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	_, err := service.AppendEntryID(t.Context(), "zero", &harness.SessionEntry{})
 	require.NoError(t, err)
 	insertSessionEntryWithoutSummary(t, service, "missing", testSessionEntry("old", "answer"))
-	// A summary missing since before migration 052, which still stored that the chat has entries.
 	_, err = service.db.ExecContext(t.Context(), `UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = TRUE WHERE conversation_id = 'missing'`)
 	require.NoError(t, err)
-	// Enumeration must not parse replay even for missing summaries.
 	_, err = service.db.ExecContext(t.Context(), `UPDATE entries SET entry_json = '{"timestamp":false}'`)
 	require.NoError(t, err)
 
@@ -493,7 +481,6 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	_, err = service.AppendEntryID(t.Context(), "empty", testSessionEntryAt(stamp, "first message"))
 	require.NoError(t, err)
 
-	// A running turn keeps a cleared chat listed.
 	for _, turnID := range []string{"active-first", "active-second"} {
 		endTestTurn(t, service, "a", turnID, protocol.TerminalStopped)
 	}
@@ -511,8 +498,6 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 
 	require.Equal(t, []string{"Z", "empty", "ä", "missing", "zero"}, remaining)
 
-	// PostgreSQL accepts infinity timestamps, but Go time.Time cannot represent them.
-	// A bad stored row stops enumeration with a scan error before any row.
 	_, err = service.db.ExecContext(t.Context(), `UPDATE conversations SET last_updated = '-infinity' WHERE conversation_id = 'zero'`)
 	require.NoError(t, err)
 
@@ -532,7 +517,6 @@ func TestSidebarSessionsAllocationBudgets(t *testing.T) {
 	t.Parallel()
 
 	if os.Getenv("ROCKETCLAW_TEST_SIDEBAR_ALLOCATIONS") != "1" {
-		// The race detector randomly drops sync.Pool buffers; measure the store, not that churn.
 		executable := filepath.Join(t.TempDir(), "backend.test")
 		build := exec.CommandContext(t.Context(), "go", "test", "-c", "-race=false", "-cover=false", "-o", executable, ".")
 		output, err := build.CombinedOutput()
@@ -540,7 +524,6 @@ func TestSidebarSessionsAllocationBudgets(t *testing.T) {
 
 		cmd := exec.CommandContext(t.Context(), executable, "-test.run=^"+t.Name()+"$", "-test.cpu="+strconv.Itoa(goruntime.GOMAXPROCS(0)), "-test.benchtime=32x")
 
-		// Keep GC-driven pool eviction independent of the surrounding test runner, too.
 		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_SIDEBAR_ALLOCATIONS=1", "GOGC=100", "GOMEMLIMIT=off")
 		output, err = cmd.CombinedOutput()
 		require.NoError(t, err, "%s", output)
@@ -550,9 +533,7 @@ func TestSidebarSessionsAllocationBudgets(t *testing.T) {
 
 	result := testing.Benchmark(BenchmarkSidebarSessions)
 	require.Positive(t, result.N)
-	// Keep previews independently owned without a second full preview buffer.
 	require.Less(t, result.AllocedBytesPerOp(), int64(4<<20))
-	// Leave room for every row's origin fields in the shared scan buffer.
 	require.Less(t, result.AllocsPerOp(), int64(880))
 	result = testing.Benchmark(BenchmarkSidebarSessionTags)
 	require.Positive(t, result.N)
@@ -630,8 +611,6 @@ func BenchmarkSidebarSessions(b *testing.B) {
 	}
 }
 
-// A chat's arrival is its newest turn's creation, its External MCP run's included, and a running
-// chat's state began when its turn started, whatever the turn writes or the chat queues since.
 func TestSidebarSessionsWorkTimes(t *testing.T) {
 	t.Parallel()
 
@@ -681,7 +660,6 @@ func TestSidebarSessionsWorkTimes(t *testing.T) {
 	require.Equal(t, time.Unix(0, started.UnixNano()).UTC(), busy.StateSince)
 }
 
-// The work facts read waiting turns through their partial index at 1,000 chats and 50,000 finished turns.
 func TestSidebarSessionsWorkFactsUseWaitingIndex(t *testing.T) {
 	t.Parallel()
 
@@ -702,19 +680,13 @@ func TestSidebarSessionsWorkFactsUseWaitingIndex(t *testing.T) {
 	require.Greater(t, scans(), before)
 }
 
-// sidebarWorkFixture holds 1,000 chats and 50,000 finished turns, whose steps went when they ended. 50
-// chats run a turn with a pending question among 10 steps, 100 hold a queued item, and 100 have a
-// hidden run with a queued item and a running turn.
 func sidebarWorkFixture(tb testing.TB) *SessionService {
 	tb.Helper()
 
 	service, err := NewSessionService(tb.TempDir())
 	require.NoError(tb, err)
 	tb.Cleanup(func() { require.NoError(tb, service.Stop()) })
-	// One connection, closing the others well before any query: each flushes its scan statistics
-	// when it closes, and the one left flushes them when asked.
 	service.db.SetMaxOpenConns(1)
-	// Seeding skips the change triggers, which only notify listeners.
 	_, err = service.db.ExecContext(tb.Context(), `SET session_replication_role = replica;
 INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, preview, has_entries, last_updated, running)
 SELECT 'chat-' || n, 'main', '', 'web_chat', TRUE, 'preview'::bytea, TRUE, now(), n < 50 FROM generate_series(0, 999) n;
@@ -761,7 +733,6 @@ func TestSidebarSessionsCloseRowsOnEarlyStopAndCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	// Cancellation before the first read must also report failure, not an empty list.
 	next, stop = iter.Pull2(service.sidebarSessions(ctx, "", nil))
 	defer stop()
 
@@ -819,7 +790,7 @@ func TestSidebarSessionsCancelPendingDatabaseRow(t *testing.T) {
 		}
 
 		defer func() { _ = database.Close() }()
-		// pgx sends PostgreSQL cancellation over a separate short connection.
+
 		proxy.Go(func() error {
 			client, err := listener.Accept()
 			if err != nil {
@@ -861,8 +832,7 @@ func TestSidebarSessionsCancelPendingDatabaseRow(t *testing.T) {
 
 			return nil
 		})
-		// Gate the real PostgreSQL wire after its first DataRow, independently
-		// of SQL execution/planner buffering and of the Go iterator consumer.
+
 		for rows := 0; ; {
 			var header [5]byte
 			if _, err := io.ReadFull(database, header[:]); err != nil {
@@ -927,8 +897,6 @@ func insertSessionEntryWithoutSummary(t *testing.T, service *SessionService, con
 	require.NoError(t, err)
 }
 
-// Saving an entry writes its conversation's preview and time in the same transaction, and a
-// failed save leaves both as they were.
 func TestEntryPreviewCommitsWithItsEntry(t *testing.T) {
 	t.Parallel()
 
@@ -961,7 +929,6 @@ func TestEntryPreviewCommitsWithItsEntry(t *testing.T) {
 	require.NoError(t, tx.Rollback())
 	require.Equal(t, before, preview(service.db), "a rolled-back save leaves the preview")
 
-	// A rejected preview write fails the save, so neither the entry nor its preview lands.
 	_, err = service.db.ExecContext(ctx, `ALTER TABLE conversations ADD CONSTRAINT reject_preview CHECK (preview <> 'third') NOT VALID`)
 	require.NoError(t, err)
 	_, err = service.AppendEntryID(ctx, "chat", testSessionEntry("question", "third"))
@@ -977,9 +944,6 @@ func TestEntryPreviewCommitsWithItsEntry(t *testing.T) {
 	require.Equal(t, "second 1970-01-01T00:00:02Z", preview(service.db))
 }
 
-// The entry facts a chat's row stores for the sidebar and its origin follow the writes that change
-// them: a run attached with entries older than the chat's own, a run reporting after them, and
-// clearing the chat's history.
 func TestChatEntryFactsFollowWrites(t *testing.T) {
 	t.Parallel()
 

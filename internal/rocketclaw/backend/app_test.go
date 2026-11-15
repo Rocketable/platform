@@ -140,7 +140,6 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			}, nil
 		},
 	}
-	// A canceled workspace-lock wait must also join the pre-lock health reporter.
 	seed, err = NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	client, err := pglock.UnsafeNew(seed.db, pglock.WithCustomTable(runLockTable), pglock.WithHeartbeatFrequency(0))
@@ -370,8 +369,6 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// Shutdown waits for foreground bash with the run lock's heartbeat alive and stops frontends only
-// after; bash in a Background Job is killed instead, and its row left running for the next start.
 func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 	t.Parallel()
 
@@ -385,7 +382,7 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 			waiting, ended := filepath.Join(workspace, "waiting"), filepath.Join(workspace, "ended")
 			code := "def main():\n    return bash(command=r'''echo $$ > " + pid + " && touch " + started + " && sleep " + sleep + " && touch " + finished + "''')\n"
 
-			if background { // The script's last bash runs only once the turn that started it ended.
+			if background {
 				code = strings.Replace(code, "    return", "    bash(command=r'''touch "+waiting+" && until [ -f "+ended+" ]; do sleep 0.01; done''')\n    return", 1)
 			}
 
@@ -464,7 +461,6 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 					_, err := os.Stat(waiting)
 					return err == nil
 				}, 10*time.Second, 10*time.Millisecond)
-				// The active turn row ends only after the turn returned, so the script's next bash runs after it.
 				require.Eventually(t, func() bool {
 					active, err := rt.Sessions.HasActiveTurn(t.Context(), protocol.SlackThreadConversationID("C123", "111.0"))
 					return err == nil && !active
@@ -540,7 +536,6 @@ func TestShutdownKeepsRunLockAliveDuringBash(t *testing.T) {
 	}
 }
 
-// Invalid frontend assets, such as a broken cron file, stop startup before anything is assembled.
 func TestRunStopsOnInvalidFrontendAssets(t *testing.T) {
 	t.Parallel()
 
@@ -557,7 +552,6 @@ func TestRunStopsOnInvalidFrontendAssets(t *testing.T) {
 	assert.Empty(t, assembler.AssembleCalls())
 }
 
-// A person's Slack mention turn is not offered ask_user_question; Slack cannot show questions.
 func TestSlackMentionTurnHasNoQuestionTool(t *testing.T) {
 	t.Parallel()
 

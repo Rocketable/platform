@@ -26,8 +26,6 @@ type messageSearchTestRow struct {
 	Role, Text, TextLower  string
 }
 
-// messageSearchTestRows reads the search text lines search finds in conversationID: the entries of the
-// conversations reporting to it, else of itself, and its turns, which have no entry and read as entry 0.
 func messageSearchTestRows(t *testing.T, s *SessionService, conversationID string) []messageSearchTestRow {
 	t.Helper()
 
@@ -87,7 +85,7 @@ func testReplayEntry(items ...string) *harness.SessionEntry {
 }
 
 func jsonString(text string) string {
-	data, _ := json.Marshal(text) // Encoding a string cannot fail.
+	data, _ := json.Marshal(text)
 	return string(data)
 }
 
@@ -98,7 +96,6 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 	ctx := t.Context()
 	recordTestConversations(t, s, "main", map[string]ConversationKind{"web-chat": KindWebChat})
 	reference := uploadTestAttachment(t, s, "web-chat", "file-1")
-	// An easy agent's chat names its upload by host path.
 	uploadTestAttachment(t, s, "web-chat", "file-2")
 
 	easyReference := `attachment:file-2 "notes.txt" (path "/ws/.rocketclaw/uploads/web-chat/file-2/notes.txt")`
@@ -130,7 +127,6 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, messageSearchTestRows(t, s, "web-chat"), "deleted entries cascade")
 
-	// Like the summary projection, a save fails on output History cannot decode.
 	_, err = s.AppendEntryID(ctx, "web-chat", testReplayEntry(`{"type":"message","id":"msg_2","role":"assistant","content":[{"type":"output_text","text":"ok"},{"type":"refusal","refusal":"no","text":7}]}`))
 	require.ErrorContains(t, err, "decode")
 	entries, err := s.ObserveEntries(ctx, "web-chat")
@@ -144,7 +140,6 @@ func TestMessageSearchIndexesSavedEntries(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// A cron handoff's Web chat has a '/' from the job path, like a Delegation History.
 	const handoff = "web:cron:cron/daily.md:1"
 	require.NoError(t, s.UpsertThread(handoff, ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
 	recordTestConversations(t, s, "main", map[string]ConversationKind{handoff + "/call-1": KindSubagent})
@@ -212,7 +207,6 @@ func TestMessageSearchIndexesBoundRunEntries(t *testing.T) {
 	bindTestRun(t, s, "cron:daily", "web-dest")
 	require.Len(t, messageSearchTestRows(t, s, "web-dest"), 2, "binding again indexes nothing new")
 
-	// Binding a run whose entry History cannot show fails, as saving that entry would.
 	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:broken": KindCronRun})
 	_, err = s.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('cron:broken', '{"replay_input":[{"type":"message","id":"msg_2","role":"assistant","content":[{"type":"output_text","text":"ok"},{"type":"refusal","refusal":"no","text":7}]}]}', '')`)
 	require.NoError(t, err)
@@ -220,8 +214,6 @@ func TestMessageSearchIndexesBoundRunEntries(t *testing.T) {
 	require.ErrorContains(t, err, "decode")
 }
 
-// A run's entries only its own context holds, such as the compaction originals 049 left there or
-// those a chat's undo or deletion cut, never match in the chat it reports to.
 func TestMessageSearchSkipsSandboxEntries(t *testing.T) {
 	t.Parallel()
 
@@ -243,8 +235,6 @@ func TestMessageSearchSkipsSandboxEntries(t *testing.T) {
 	require.Equal(t, []MessageSearchHit{{ConversationID: "chat", Role: "user", Text: "report summary", MessageID: fmt.Sprintf("%d:0", reported)}}, hits)
 }
 
-// A Web chat that continues a run finds the run's messages, and lists its people, as its History
-// shows them, beside the chat the run reports to; a run it adopts is found there once.
 func TestMessageSearchFindsContinuedRun(t *testing.T) {
 	t.Parallel()
 
@@ -284,7 +274,6 @@ func TestMessageSearchFindsContinuedRun(t *testing.T) {
 	require.Equal(t, []string{"Ann", "Cron Writer"}, storedPrincipals(t, s)["web:cron:daily"], "a later run message reaches the chat that continues it")
 }
 
-// storedPrincipals reads the principals each conversation's row holds, sorted.
 func storedPrincipals(t *testing.T, s *SessionService) map[string][]string {
 	t.Helper()
 
@@ -307,8 +296,6 @@ SELECT conversation_id, principal FROM stored ORDER BY conversation_id COLLATE "
 	return principals
 }
 
-// A chat's row holds the principals of the user messages it shows, its runs' included, as each
-// write and undo leaves them, and SearchSessions lists them from there.
 func TestMessagePrincipalsFollowHistory(t *testing.T) {
 	t.Parallel()
 
@@ -352,7 +339,6 @@ func TestMessagePrincipalsFollowHistory(t *testing.T) {
 	require.Equal(t, map[string][]string{"chat": {"Cron Writer"}}, storedPrincipals(t, s), "a cleared chat keeps its run's principals")
 }
 
-// Each write of a chat's principals or of search text fails, and changes nothing, when that write does.
 func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
 	t.Parallel()
 
@@ -435,7 +421,6 @@ func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
 
 	require.Equal(t, map[string][]string{"chat": {"Ann", "Bob"}}, storedPrincipals(t, s), "no failed write changed them")
 
-	// A stopped turn whose prompt's attachments cannot be read does not end.
 	seedActiveTurn(t, s, "chat", "attached", testReplayEntry(`{"type":"message","role":"user","content":"see attachment:file"}`))
 	_, err = s.db.ExecContext(ctx, `ALTER TABLE attachments RENAME TO unavailable_attachments`)
 	require.NoError(t, err)
@@ -450,8 +435,6 @@ func TestMessagePrincipalsCommitWithTheirWrite(t *testing.T) {
 	require.ErrorContains(t, rt.ClearRevert(ctx, "chat"), "write unavailable", "redo")
 }
 
-// A run first reporting to a chat when its turn starts does not show its earlier entries in that
-// chat's search: they were saved in the run's own view.
 func TestMessageSearchSkipsRunEntriesBeforeAttach(t *testing.T) {
 	t.Parallel()
 
@@ -473,8 +456,6 @@ func TestMessageSearchSkipsRunEntriesBeforeAttach(t *testing.T) {
 	require.Equal(t, []MessageSearchHit{{ConversationID: "chat", Role: "user", Text: "later report", MessageID: fmt.Sprintf("%d:0", later)}}, hits)
 }
 
-// Search finds a large stopped record's messages in the text saved when the turn ended, with
-// History's message ID, and never reads the record itself.
 func TestMessageSearchReadsStoppedTurnText(t *testing.T) {
 	t.Parallel()
 
@@ -501,7 +482,6 @@ func TestMessageSearchReadsStoppedTurnText(t *testing.T) {
 	require.Equal(t, []MessageSearchHit{{ConversationID: "chat", Role: "user", Text: "find the needle"}, {ConversationID: "chat", Role: "assistant", Text: "needle found"}}, hits)
 }
 
-// bindTestRun binds run to report to chat, as a delivered cron report or a due reminder does.
 func bindTestRun(t *testing.T, s *SessionService, run, chat string) {
 	t.Helper()
 
@@ -580,7 +560,6 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 	_, matches = searchTestSessions(t, s, noSlackLookups{}, `principal:"Stopped Writer"`, SearchFields)
 	require.Len(t, matches, 1)
 
-	// A runner arriving after the stop changes nothing search finds.
 	turn.ReplayInput = append(turn.ReplayInput, json.RawMessage(`{"type":"message","role":"assistant","content":"Late answer"}`))
 	require.NoError(t, upsertTestTurn(ctx, s, turn))
 	_, err = s.finishTurn(ctx, "turn-1", &turnFinish{conversationID: strings.TrimSpace("web-chat"), outbound: protocol.NewOutboundMessage("web-chat", "late")})
@@ -638,7 +617,6 @@ func TestMessageSearchSkipsUndecodableTurnRecords(t *testing.T) {
 	require.Equal(t, 2, strings.Count(logs.String(), "\n"), logs.String())
 }
 
-// A turn whose step cannot become its row's record does not end, and keeps its steps.
 func TestFinishTurnKeepsUnreadableStep(t *testing.T) {
 	t.Parallel()
 
@@ -681,7 +659,6 @@ func TestFinishTurnLocksHistoryBeforeTurnRow(t *testing.T) {
 		return blocked
 	}, 5*time.Second, time.Millisecond)
 
-	// Like commitRevertDB, the history lock holder still reaches the turn row.
 	_, err = tx.ExecContext(ctx, `SET LOCAL lock_timeout = '1s'; UPDATE turns SET updated_at_unix_ns = 0 WHERE id = 'turn-1'`)
 	require.NoError(t, err)
 	require.NoError(t, tx.Rollback())
@@ -808,7 +785,6 @@ func TestSearchMessagesShowsWhatHistoryShows(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, all[:2], hits, "the undo hides later messages and the stopped turn anchored after it")
 
-	// Search reads only the saved text, and fails on text it cannot read.
 	_, err = s.db.ExecContext(ctx, `UPDATE entries SET search_text = '0 0 ["needle"' WHERE id = $1`, first)
 	require.NoError(t, err)
 	_, err = s.SearchMessages(ctx, "needle", nil)
@@ -831,7 +807,6 @@ func TestSearchMessagesMatchesGoReference(t *testing.T) {
 		return `{"type":"message","role":"` + role + `","content":` + jsonString(text.String()) + `}`
 	}
 
-	// Chat IDs sort the same in Go and in any database collation.
 	var want []MessageSearchHit
 
 	for chat := range 10 {
@@ -863,7 +838,6 @@ func TestSearchMessagesMatchesGoReference(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		// History, not the index, decides what the reference sees.
 		transcript, err := s.ObserveTranscript(ctx, id, 0, 0, nil)
 		require.NoError(t, err)
 
@@ -925,9 +899,6 @@ func TestSearchMessagesMatchesGoReference(t *testing.T) {
 		require.Equal(t, references[i], hits, "%q %q", search.needle, search.prefixes)
 	}
 
-	// A few hundred rows fit in a page or two, where the planner rightly skips
-	// the index; one connection without sequential scans runs the same searches through it.
-	// The migrations analyzed conversations while it was empty, so it is analyzed again first.
 	s.db.SetMaxOpenConns(1)
 	_, err := s.db.ExecContext(ctx, `ANALYZE conversations; SELECT gin_clean_pending_list('entries_search_text'::regclass); SET enable_seqscan = off`)
 	require.NoError(t, err)

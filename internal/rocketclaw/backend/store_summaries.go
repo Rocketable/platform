@@ -14,18 +14,11 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// lockSessionHistory serializes a conversation's history and the facts its row derives from it by
-// locking that row. A conversation still being created has no row yet; its primary key serializes
-// creators instead. NO KEY UPDATE leaves rows that reference it insertable.
 func lockSessionHistory(ctx context.Context, db stateStoreDB, conversationID string) error {
 	_, err := execState(ctx, db, "lock session history", `SELECT 1 FROM conversations WHERE conversation_id = $1 FOR NO KEY UPDATE`, conversationID)
 	return err
 }
 
-// lockHistories takes several history locks in the one order every transaction
-// shares: ordinary histories, then shadow comparison histories, each by bytes.
-// Shadow histories go last because lockShadowHistory reaches them through their
-// parent's lock. Taking two locks any other way can deadlock against it.
 func lockHistories(ctx context.Context, db stateStoreDB, ids []string) error {
 	if len(ids) == 1 {
 		return lockSessionHistory(ctx, db, ids[0])
@@ -60,8 +53,6 @@ SELECT DISTINCT a.id FROM ancestors a JOIN conversations b ON b.conversation_id 
 	return nil
 }
 
-// loadSessionSummary decodes history only when its row has no preview yet.
-// The caller holds the history lock until the projection is committed.
 func loadSessionSummary(ctx context.Context, db stateStoreDB, conversationID string) (protocol.SessionSummary, error) {
 	summary := protocol.SessionSummary{ConversationID: conversationID}
 
@@ -123,8 +114,6 @@ func projectSessionSummary(summary *protocol.SessionSummary, entry *harness.Sess
 	return nil
 }
 
-// entryFactsSQL is the CTE facts of conversation $1's entry facts (migration 052): whether it has
-// entries of its own, and where its earliest shown entry came from, as ChatOriginFacts reads it.
 const entryFactsSQL = `WITH own AS (
     SELECT id, f.sync_source_conversation_id AS source, CASE WHEN f.sync_source_conversation_id IS NULL THEN f.sync_source_entry_id::bigint END AS source_entry_id
     FROM entries, json_to_record(entry_json) AS f(sync_source_conversation_id text, sync_source_entry_id text) WHERE conversation_id = $1 ORDER BY id LIMIT 1
@@ -138,7 +127,6 @@ const entryFactsSQL = `WITH own AS (
     SELECT COALESCE(bool_or(own), FALSE) AS has_entries, (array_agg(source ORDER BY id))[1] AS first_source FROM firsts
 )`
 
-// saveSessionSummary saves the summary with its conversation's entry facts.
 func saveSessionSummary(ctx context.Context, db stateStoreDB, summary protocol.SessionSummary) error {
 	_, err := execState(ctx, db, "write session summary", entryFactsSQL+`
 UPDATE conversations SET preview = $2, last_updated = $3, has_entries = f.has_entries, first_source = f.first_source FROM facts f

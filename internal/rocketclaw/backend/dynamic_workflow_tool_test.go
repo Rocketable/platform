@@ -140,7 +140,6 @@ def main(args):
 	root := openWorkspaceRoot(t, workspace)
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}), config: Config{SessionService: &SessionService{}}, log: slog.New(slog.DiscardHandler)}
 
-	// Nested run with turn-start definitions (same freeze as production Call).
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
 
@@ -155,7 +154,6 @@ def main(args):
 	require.NoError(t, err)
 	assert.Equal(t, nestedWorkflowSilentCompleteText, text)
 
-	// maybeDynamicWorkflowTool: workflow allow → tool; task-only → omit; Call works.
 	var workflowAllow harness.PermissionSet
 	require.NoError(t, workflowAllow.Allow("workflow", "audit-routes"))
 	tool, ok := bridge.maybeDynamicWorkflowTool(root, &harness.Agent{Permission: workflowAllow}, "main", "main", nil, "")
@@ -173,7 +171,6 @@ def main(args):
 	_, ok = bridge.maybeDynamicWorkflowTool(root, &harness.Agent{Permission: taskOnly}, "main", "main", nil, "")
 	assert.False(t, ok)
 
-	// An easy agent's workflow group compiles to reviewed rules, which still offer the tool.
 	easy := harness.PermissionSet{Easy: true}
 	_, ok = bridge.maybeDynamicWorkflowTool(root, &harness.Agent{Permission: easy}, "main", "main", nil, "")
 	assert.False(t, ok)
@@ -182,7 +179,6 @@ def main(args):
 	require.True(t, ok)
 	assert.Contains(t, tool.VisibilitySubjects, "audit-routes")
 
-	// Load failure omits tool.
 	bad := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(bad, ".rocketclaw", "workflows"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(bad, ".rocketclaw", "workflows", "Bad_Name.star"), []byte("meta={}\n"), 0o600))
@@ -244,7 +240,6 @@ func TestNestedWorkflowSessionTags(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// A nested workflow inside a producer turn tags the turn's visible destination.
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "external_mcp:owning", SessionService: service}, log: slog.New(slog.DiscardHandler)}
 	definitions, err := workflow.Load(root, ".rocketclaw")
 	require.NoError(t, err)
@@ -263,8 +258,6 @@ func TestNestedWorkflowSessionTags(t *testing.T) {
 	require.Equal(t, []string{"customer"}, tags)
 }
 
-// A nested workflow's steps run with the environment of the turn that calls it, and an easy agent's with
-// that turn's shell, so they work in that turn's folder.
 func TestNestedWorkflowStepsSeeTurnEnvironment(t *testing.T) {
 	t.Parallel()
 
@@ -272,7 +265,6 @@ func TestNestedWorkflowStepsSeeTurnEnvironment(t *testing.T) {
 	root := openWorkspaceRoot(t, workspace)
 	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
 	require.NoError(t, root.WriteFile(".rocketclaw/workflows/env.star", []byte("meta = {\"name\": \"env\", \"description\": \"Env\"}\ndef main(args): return agent(\"print\", label=\"worker\")\n"), 0o600))
-	// The turn's shell prints its setup and the variable it sees.
 	require.NoError(t, root.WriteFile("shell.sh", []byte("#!/bin/sh\nread -r line\nprintf '%s|%s' \"${line%%,\\\"env\\\"*}\" \"$ROCKETCLAW_METADATA_TICKET\""), 0o755))
 
 	var output string

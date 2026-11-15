@@ -26,7 +26,6 @@ func TestMain(m *testing.M) {
 	err := func() (errResult error) {
 		base := strings.TrimSpace(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
 		if base == "" || os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL") != "" {
-			// Unit tests need no PostgreSQL; children reuse their parent's template.
 			code = m.Run()
 			return nil
 		}
@@ -50,8 +49,6 @@ func TestMain(m *testing.M) {
 		}
 
 		defer func() {
-			// Dropping during parallel tests forces checkpoints of their new schemas.
-			// Children inherit this template's prefix; all services have stopped now.
 			names, err := queryStrings(context.Background(), admin, "SELECT datname FROM pg_database WHERE starts_with(datname, $1) ORDER BY datname", "fixture clones", name+"_")
 
 			errResult = errors.Join(errResult, err)
@@ -88,8 +85,7 @@ func TestMain(m *testing.M) {
 		if err := os.Setenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL", location.String()); err != nil {
 			return fmt.Errorf("remember fixture template: %w", err)
 		}
-		// Only shadow and search helpers clone it; cold migration tests still
-		// use their original constructors. All test cleanups precede clone drops.
+
 		code = m.Run()
 
 		return nil
@@ -116,8 +112,7 @@ func newMigratedTestSessionServiceAt(t *testing.T, workspace string) *SessionSer
 	name := strings.TrimPrefix(template.Path, "/") + "_" + strings.ToLower(rand.Text())
 	_, err = admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE "+strings.TrimPrefix(template.Path, "/"))
 	require.NoError(t, errors.Join(err, admin.Close()))
-	// Stop closes the store first. Remove its relations before a later database
-	// drop checkpoints the cluster, including other tests' newly created schemas.
+
 	cfg.Database = name
 
 	t.Cleanup(func() {
@@ -176,8 +171,6 @@ func TestMigratedTestDatabaseMatchesColdAndIsolatesClones(t *testing.T) {
 	require.NoError(t, root.Close())
 	cold := newTestSessionServiceAt(t, workspace)
 
-	// Every definition is compared with a genuine cold startup, including the
-	// functions' captured search_path. No schema is renamed after migration.
 	const catalog = `WITH relations AS (
     SELECT c.oid, c.relname, c.relkind, c.relpersistence, c.reloptions, c.relrowsecurity
     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema()

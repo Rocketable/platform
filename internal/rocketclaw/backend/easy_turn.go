@@ -18,11 +18,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 )
 
-// setEasyShell sets up the emulated shell of agents' agent name, when it is easy or sets shell: emulated,
-// for a turn of the top-level session self whose variables are turnEnv: the sandbox in the folder its
-// workingDirectory names for self, so its subagents and workers share it, with its secrets for host commands
-// only. It shows read-only the uploads to self, or to the chat a shadow shadows, and the folders of the
-// skills in skills it may use.
 func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents harness.Agents, skills harness.Skills, name string, turnEnv map[string]string, self string) error {
 	agent := agents.Items[name]
 	if !agent.CustomShell.Emulated {
@@ -58,8 +53,6 @@ func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents ha
 		dirs = append(dirs, filepath.Join(skills.Root, filepath.FromSlash(path.Dir(skill.Location))))
 	}
 
-	// A folder inside another shows through it anyway, so only the outer one is mounted. A folder sorts before
-	// those in it.
 	var readOnly []string
 
 	slices.Sort(dirs)
@@ -76,18 +69,10 @@ func (b *Bridge) setEasyShell(ctx context.Context, cfg *config.Config, agents ha
 	return nil
 }
 
-// EasyUploadDir is the folder, relative to the workspace, that keeps the uploads to an easy agent's chat
-// conversationID: in the runtime directory, which reload keeps, named as a turn variable is in a
-// workingDirectory.
 func EasyUploadDir(cfg *config.Config, conversationID string) string {
 	return filepath.Join(cfg.RuntimeDirName(), "uploads", pathSegment(conversationID))
 }
 
-// resolveWorkingDirectory creates and returns the real folder that workingDirectory dir names, relative to
-// RocketClaw's working directory. A $VAR comes from turnEnv, escaped into one path segment since callers
-// choose those values, or else from RocketClaw's environment as written; an unset one fails. The folder
-// may not be or contain the workspace, nor be or lie inside the runtime directory or a folder that defines
-// agents, skills, cron jobs, scripts or workflows: the agent could rewrite its own rights there.
 func resolveWorkingDirectory(cfg *config.Config, dir string, turnEnv map[string]string) (string, error) {
 	unset := ""
 	expanded := os.Expand(dir, func(name string) string {
@@ -126,8 +111,6 @@ func resolveWorkingDirectory(cfg *config.Config, dir string, turnEnv map[string]
 		return "", fmt.Errorf("workingDirectory: workspace: %w", err)
 	}
 
-	// A definitions folder counts where it really is, which a link may put out of the workspace; a missing
-	// one, where it would be made.
 	refused := []string{cfg.RuntimeDirName(), "agents", "skills", "cron", "scripts", "workflows"}
 	for _, name := range refused {
 		dir := filepath.Join(workspace, name)
@@ -145,10 +128,7 @@ func resolveWorkingDirectory(cfg *config.Config, dir string, turnEnv map[string]
 	return folder, nil
 }
 
-// pathSegment escapes value, which a caller chooses, into one path segment no other value escapes to.
 func pathSegment(value string) string {
-	// "", "." and ".." would not stay one segment, so they get a "%" in front; PathEscape never writes a
-	// "%" before a dot or at the end, so no two values meet.
 	segment := url.PathEscape(value)
 	if strings.Trim(segment, ".") == "" {
 		segment = "%" + segment

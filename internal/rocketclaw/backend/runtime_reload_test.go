@@ -37,7 +37,6 @@ func TestRuntimeReload(t *testing.T) {
 			}
 
 			require.NoError(t, root.WriteFile("agents/main.md", []byte(updated), 0o600))
-			// Reload must not read configuration changes from disk.
 			require.NoError(t, root.WriteFile("rocketclaw.json", []byte("invalid config"), 0o600))
 
 			assembler := &frontendAssemblerMock{ValidateAssetsFunc: func(*config.Config, string) error {

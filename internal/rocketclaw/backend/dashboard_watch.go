@@ -14,33 +14,24 @@ import (
 
 const dashboardWatchInterval = 5 * time.Second
 
-// dashboardTab is a Dashboard a person has open: their username, the id of the space it is in, and its tab path.
 type dashboardTab struct{ username, space, path string }
 
-// seenDashboard is what a pass sorted into an open Dashboard: its layout, each lane's id and query in order, and what
-// each lane held.
 type seenDashboard struct {
 	layout string
 	lanes  []seenLane
 }
 
-// seenLane is what a lane held: the chats it listed, newest arrival first, how many it held, and when the last one
-// listed arrived.
 type seenLane struct {
 	ids   []string
 	total int
 	last  time.Time
 }
 
-// dashboardsSeen is what the Dashboard watch keeps from one pass to the next: a fingerprint of the session list
-// without anyone's marks, and what it sorted into each open Dashboard.
 type dashboardsSeen struct {
 	sessions   uint64
 	dashboards map[dashboardTab]seenDashboard
 }
 
-// WatchDashboards marks, every interval until ctx ends, each Dashboard a session entered a lane flagged to notify of
-// since the pass before, for everyone who has it open, resolving Slack rooms through slack. The first pass only records.
 func (s *SessionService) WatchDashboards(ctx context.Context, slack slackLookup) {
 	ticker := time.NewTicker(dashboardWatchInterval)
 	defer ticker.Stop()
@@ -48,7 +39,6 @@ func (s *SessionService) WatchDashboards(ctx context.Context, slack slackLookup)
 	var seen dashboardsSeen
 
 	for {
-		// A failed pass keeps what it could not sort; the next tries again.
 		var err error
 		if seen, err = s.watchDashboards(ctx, slack, seen); err != nil && ctx.Err() == nil {
 			s.log.Error("watch dashboards", "error", err)
@@ -62,12 +52,6 @@ func (s *SessionService) WatchDashboards(ctx context.Context, slack slackLookup)
 	}
 }
 
-// watchDashboards is one pass of WatchDashboards over seen, what the pass before kept, and returns what to keep. It
-// reads every Dashboard with a flagged lane and who has it open: in their own tabs, on their Top Shelf, or Shared in a
-// space they can see, its space being that tab's; a person with a Space Limit only in a space it admits. It sorts the
-// session list into each as Board does for that person and space, and gives each person a session entered a flagged
-// lane of one mark on it (dashboardArrivals). A Dashboard is sorted when the session list without anyone's marks
-// changed, or when it was not sorted with its layout before; one whose sort fails keeps what it held.
 func (s *SessionService) watchDashboards(ctx context.Context, slack slackLookup, seen dashboardsSeen) (dashboardsSeen, error) {
 	type lane struct {
 		tab       dashboardTab
@@ -105,7 +89,6 @@ ORDER BY d.username, d.space, d.path, s.position`, "open dashboards", func(row r
 	open := make(map[struct{ username, space string }][]dashboard)
 
 	for _, l := range rows {
-		// Only names are compared: a limit admits a space's ID exactly when it admits its name.
 		if !(SpaceLimit{names: cfg.PermittedSpaces(l.tab.username)}).AllowsSpaceName(l.spaceName) {
 			continue
 		}
@@ -127,7 +110,6 @@ ORDER BY d.username, d.space, d.path, s.position`, "open dashboards", func(row r
 		return dashboardsSeen{}, nil
 	}
 
-	// Rooms are part of the list: a room: lane depends on them.
 	sessions := fnv.New64a()
 	encoder := json.NewEncoder(sessions)
 
@@ -136,7 +118,7 @@ ORDER BY d.username, d.space, d.path, s.position`, "open dashboards", func(row r
 			return seen, err
 		}
 
-		_ = encoder.Encode(chat) // A chat always encodes, and a hash takes every write.
+		_ = encoder.Encode(chat)
 	}
 
 	next := dashboardsSeen{sessions: sessions.Sum64(), dashboards: make(map[dashboardTab]seenDashboard)}
@@ -199,11 +181,9 @@ ORDER BY d.username, d.space, d.path, s.position`, "open dashboards", func(row r
 	}
 
 	if len(errs) > 0 {
-		// Every Dashboard is sorted again on the next pass, so the ones that failed see what changed.
 		next.sessions = seen.sessions
 	}
 
-	// A mark that fails to be written is found again on the next pass, which sorts from the same contents.
 	if len(usernames) == 0 {
 		return next, errors.Join(errs...)
 	}
@@ -217,12 +197,6 @@ ORDER BY d.username, d.space, d.path, s.position`, "open dashboards", func(row r
 	return next, errors.Join(errs...)
 }
 
-// dashboardArrivals reads sorted, what Board sorted into a Dashboard's lanes. It returns what each lane
-// holds, and a note naming the lane and title of the newest session that entered a flagged lane since was, what the
-// lanes held the pass before, and how many more; none when was is nil: no pass before saw these lanes. A session entered
-// a lane that did not list it, unless it slid in from beyond the 200 listed: the lane held more, and the session arrived
-// before the last one listed. One that a lane of unread sessions lists for a quiet mark, such as the person's own, did
-// not enter it for anything that notifies.
 func dashboardArrivals(lanes []SavedSearch, was []seenLane, sorted []BoardLane) (held []seenLane, note string) {
 	held = make([]seenLane, len(sorted))
 
@@ -259,7 +233,6 @@ func dashboardArrivals(lanes []SavedSearch, was []seenLane, sorted []BoardLane) 
 		return held, ""
 	}
 
-	// The session's title as the Web shows it: its name, else its preview's first line, else its label.
 	var preview string
 	if newest.Session.Summary != nil {
 		preview, _, _ = strings.Cut(newest.Session.Summary.LastMessage, "\n")

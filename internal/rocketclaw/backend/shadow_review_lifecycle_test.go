@@ -135,7 +135,6 @@ func TestShadowReviewPayloadRelease(t *testing.T) {
 
 	for _, order := range []string{"parent finish first", "parent capture first", "child first", "concurrent", "failed", "stopped"} {
 		t.Run(order, func(t *testing.T) {
-			// Keep the migrated schema, but no prior case's history, bindings, or journals.
 			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
 			require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(t.Context(), protocol.Conversation{ID: "parent", Agent: "main"}))
@@ -290,8 +289,6 @@ func TestShadowReviewClearLiveProducer(t *testing.T) {
 		}
 	}
 
-	// Nothing in the thread follows its External MCP message, so a wipe removes nothing and leaves
-	// the run and its comparison working, as undo would.
 	deleted, err := store.DeleteSession(t.Context(), "0visible")
 	require.NoError(t, err)
 	require.Zero(t, deleted)

@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Notes never come from the input's text, stay readable once consumed, and resolve in Delegation Histories.
 func TestRuntimeCompletionNotesReadStoredJobs(t *testing.T) {
 	t.Parallel()
 

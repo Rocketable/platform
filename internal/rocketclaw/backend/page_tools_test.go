@@ -68,7 +68,6 @@ func TestPageTools(t *testing.T) {
 	team := pageSpace{sessions: store, threads: threads, agent: "reporter", space: "Billing Team"}.tools()
 	require.Equal(t, "https://rc.example/pages/Billing%20Team/reporter/a%20b/c.html", must(team, "rocketclaw_store", map[string]string{"path": "a b/c.html", "content": "x"}))
 
-	// A native session's store also reads a workspace file; given content wins, and an empty file stores an empty page.
 	native := pageSpace{sessions: store, threads: threads, agent: "reporter", space: "Billing"}.nativeTools(root, &harness.CustomShell{})
 	require.Contains(t, native[0].Parameters["properties"], "source")
 	require.Equal(t, "https://rc.example/pages/Billing/reporter/chart.js", must(native, "rocketclaw_store", map[string]string{"path": "chart.js", "source": "chart.js"}))
@@ -120,7 +119,6 @@ func TestPageTools(t *testing.T) {
 	require.Equal(t, "revenue", listed.Keys[0].Key)
 	require.Len(t, listed.Keys, 1)
 
-	// Tools for main see only main's files, never main/review's (AE7).
 	mainTools := pageSpace{sessions: store, threads: threads, agent: "main"}.tools()
 	require.NoError(t, json.Unmarshal([]byte(must(mainTools, "rocketclaw_list", struct{}{})), &listed))
 	require.Len(t, listed.Files, 1)
@@ -141,9 +139,6 @@ func TestPageTools(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Storing an HTML file reaches the people with that page's tab under any spelling of its path, and with the Pages list
-// of its space, or of any space for a page without one. A stylesheet, Page Data or a delete reaches nobody, and a person
-// limited to other spaces gets nothing.
 func TestPageStoreMarksPageTabs(t *testing.T) {
 	t.Parallel()
 
@@ -152,8 +147,8 @@ func TestPageStoreMarksPageTabs(t *testing.T) {
 	threads := &threadBridgeManager{runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Origin: "https://rc.example"}}}), store: store}
 
 	const (
-		carol = "carol@example.com" // limited to Billing
-		dave  = "dave@example.com"  // limited to Main
+		carol = "carol@example.com"
+		dave  = "dave@example.com"
 	)
 
 	require.NoError(t, store.definitions.Do(func(cfg *config.Config) error {
@@ -200,7 +195,6 @@ func TestPageStoreMarksPageTabs(t *testing.T) {
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM web_tab_attention`).Scan(&marks))
 	require.Zero(t, marks, "only an HTML file marks")
 
-	// Carol's own tab reaches her, but not the tab Shared in Main; nothing reaches Dave.
 	call(review, "rocketclaw_store", map[string]string{"path": "a b/index.html", "content": "<p>review</p>"})
 	assert.ElementsMatch(t, []string{
 		alice + " " + linked + " loud", alice + " /pages loud", alice + " " + shared + " loud",
@@ -208,12 +202,10 @@ func TestPageStoreMarksPageTabs(t *testing.T) {
 		carol + " /pages/billing/main%2Freview/a%20b/index.html loud",
 	}, locationMarks(t, store, "main/review · a b/index.html updated"))
 
-	// A page without a space is on the Pages list of every space, and reaches no limited person.
 	call(pageSpace{sessions: store, threads: threads, agent: "main"}.tools(), "rocketclaw_store", map[string]string{"path": "index.html", "content": "<p>main</p>"})
 	assert.ElementsMatch(t, []string{alice + " /pages loud", bob + " /pages loud"}, locationMarks(t, store, "main · index.html updated"))
 }
 
-// An easy agent stores a page from a file only through its file view, as it attaches one (R30).
 func TestPageStoreReadsEasyFileView(t *testing.T) {
 	dir := t.TempDir()
 	base, err := os.OpenRoot(dir)

@@ -25,7 +25,6 @@ type originPair struct {
 	Value string `json:"value"`
 }
 
-// cronOrigin is the chat origin of a conversation a cron run created.
 type cronOrigin struct {
 	Agent      string      `json:"agent"`
 	Kind       originKind  `json:"kind"`
@@ -43,8 +42,6 @@ type externalMCPOrigin struct {
 	Pairs                  []originPair `json:"pairs"`
 }
 
-// DecideOrigin applies the origin rules to stored facts and returns the origin with the
-// lowercased text origin search matches; a nil origin means none.
 func DecideOrigin(facts *ChatOriginFacts) (origin any, text string) {
 	mcpOn := facts.Binding.ManagedConversationID == facts.ConversationID
 	if mcpOn == (facts.Run != nil) {

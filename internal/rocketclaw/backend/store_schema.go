@@ -37,13 +37,8 @@ func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) e
 	defer func() { _ = tx.Rollback() }()
 
 	for _, query := range []string{
-		// shortcut: two first starts on an empty schema can race to create the ledger; the loser fails and starts on retry.
 		`CREATE TABLE IF NOT EXISTS pg_migrations (id text PRIMARY KEY, applied_at timestamptz)`,
 		lockMigrationsSQL,
-		// 001_baseline.sql is the schema 001_init.sql through 059_legacy_handoff.sql built, so a store
-		// at 059 or later adopts it in place: the legacy_ tables 059 kept go, and the baseline's ledger
-		// row replaces those migrations' rows, which sort at or before 059's; later rows stay. An older
-		// store is refused.
 		`DO $$
 DECLARE
     ids TEXT[];
@@ -122,11 +117,8 @@ END $$`,
 	return nil
 }
 
-// lockMigrationsSQL serializes startups migrating the same schema until the transaction ends.
 const lockMigrationsSQL = `LOCK TABLE pg_migrations IN EXCLUSIVE MODE`
 
-// applySessionMigration keeps each migration's schema and ledger row atomic, and skips one that a
-// concurrent startup applied first.
 func applySessionMigration(ctx context.Context, conn *sql.Conn, migration *migrate.Migration) error {
 	err := conn.Raw(func(raw any) error {
 		tx, err := raw.(*stdlib.Conn).Conn().Begin(ctx)

@@ -20,56 +20,37 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// errBackgroundAbandoned kills detached jobs at shutdown and before their conversation is
-// deleted. Unlike harness.ErrShutdown it also stops bash, and the job records nothing:
-// shutdown leaves its row running for the next start, and deletion removes the row.
 var errBackgroundAbandoned = fmt.Errorf("background job abandoned: %w", harness.ErrBackgroundKilled)
 
-// backgroundStopError is why a job was stopped; it becomes the stopped job's result.
 type backgroundStopError string
 
 const (
-	errStoppedByUser  backgroundStopError = "stopped by user"
-	errStoppedByAgent backgroundStopError = "stopped by agent"
-	// errStoppedWithOwner stops a subagent's own jobs with it; they leave no Completion Note.
+	errStoppedByUser    backgroundStopError = "stopped by user"
+	errStoppedByAgent   backgroundStopError = "stopped by agent"
 	errStoppedWithOwner backgroundStopError = "stopped with its subagent"
 )
 
 func (e backgroundStopError) Error() string { return string(e) }
 
-// Unwrap lets a stop kill the job's running bash.
 func (backgroundStopError) Unwrap() error { return harness.ErrBackgroundKilled }
 
-// errMovedToBackground ends a moved job's turn-bound waits, such as a script's pending question.
 var errMovedToBackground = errors.New("the user moved the work to the background")
 
-// backgroundMovedKey holds, in an attached job's work context, the context its move cancels.
 type backgroundMovedKey struct{}
 
-// movedNote follows OpenCode's Session.background note (packages/core/src/session.ts);
-// questionWithdrawn is what a moved script's pending ask_user_question returns, so the script keeps running.
 const (
 	movedNote         = "User requested that active blocking work be moved to the background.\n\nBackgrounded work:\n%s\nThe backgrounded work is still unfinished. Move on to other work if you can. If there is nothing else useful to do, finish your response. Do not wait, sleep, poll, or report the backgrounded work as complete until its result arrives as a note."
 	questionWithdrawn = "No answer: the user moved this script to the background while ask_user_question waited, so the question was withdrawn and nobody will answer it. This text is not the user's answer. Decide without it, or ask in the turn that receives this job's result."
 )
 
-// backgroundNotes reaches the sessions jobs report to and wait for: it delivers Completion Notes through
-// a session's bridge, and stops the turn of a subagent session whose task call stopped.
 type backgroundNotes interface {
-	// noteReady learns that conversationID has a new Completion Note.
 	noteReady(conversationID string)
-	// continueSubagent waits again, after a restart, for the subagent turn a task job awaited.
 	continueSubagent(ctx context.Context, job *backgroundJob) (string, error)
 	InterruptConversation(conversationID string) *protocol.InboundMessage
 }
 
-// backgroundNotesMetadataKey lists, in a wake turn's inbound, the jobs whose notes the turn delivers.
 const backgroundNotesMetadataKey = "background_job_ids"
 
-// backgroundNote follows OpenCode's shell notification (packages/core/src/shell/result.ts) and
-// subagent result (packages/core/src/tool/plugin/subagent.ts), and says why stopped or killed work
-// ended so the model does not simply run it again. A reply frames the target turn's answer as another
-// session's, not as the user's instructions; one that no turn answered says why.
 func backgroundNote(job *backgroundJob) string {
 	if job.kind == turnReply {
 		tag := fmt.Sprintf("<session_reply queue_item_id=%q session_id=%q agent=%q mode=%q state=%q url=%q>\n", job.jobID, job.target, job.agent, job.label, job.status, job.input)
@@ -125,21 +106,16 @@ func backgroundNotesText(notes []backgroundJob) string {
 	return strings.Join(texts, "\n\n")
 }
 
-// systemPromptInput is text entering a turn with a system origin, never a human one. Each
-// Completion Note uses its job ID as input ID, so a resumed turn offered it again injects it once.
 func systemPromptInput(id, text string) harness.PromptInput {
 	header := provenanceHeader(&promptProvenance{origin: "System"})
 	return harness.PromptInput{ID: id, Texts: []string{header + "\n\n" + text}, Header: header}
 }
 
-// conversationJobs kills a conversation's running jobs before its rows are deleted, and wakes the task
-// calls waiting for subagent turns and the owners of the replies a turn settled once it finishes.
 type conversationJobs interface {
 	abandon(conversationID string)
 	turnFinished(owners []string)
 }
 
-// noConversationJobs is the session service's conversationJobs before a run attaches its registry.
 type noConversationJobs struct{}
 
 func (noConversationJobs) abandon(string) {}
@@ -148,26 +124,18 @@ func (noConversationJobs) turnFinished([]string) {}
 
 type backgroundKey struct{ conversationID, jobID string }
 
-// backgroundRun is one job's in-memory state. An attached run's call waits for done, when it
-// finished attached, or moved, when a move reaches it first.
 type backgroundRun struct {
-	row    *backgroundJob
-	cancel context.CancelCauseFunc
-	// unlink stops forwarding the call's cancellation to an attached run.
-	unlink func() bool
-	// markMoved ends the attached run's moved context, which its call and turn-bound waits watch.
-	markMoved context.CancelCauseFunc
-	// recorded closes once the moved call wrote the row, failed to, or kept the work attached.
+	row            *backgroundJob
+	cancel         context.CancelCauseFunc
+	unlink         func() bool
+	markMoved      context.CancelCauseFunc
 	recorded, done chan struct{}
 
-	// Guarded by backgroundRegistry.mu.
 	attached bool
 	output   string
 	err      error
 }
 
-// backgroundRegistry runs this process's execute and task calls of agents allowed to use
-// background mode. Jobs run on one plain errgroup, so no job's error cancels another.
 type backgroundRegistry struct {
 	store    *SessionService
 	notes    backgroundNotes
@@ -175,9 +143,8 @@ type backgroundRegistry struct {
 	runnerID string
 	group    errgroup.Group
 
-	mu   sync.Mutex
-	runs map[backgroundKey]*backgroundRun
-	// finished closes, and is replaced, whenever a turn finishes, for the task calls awaiting subagent turns.
+	mu       sync.Mutex
+	runs     map[backgroundKey]*backgroundRun
 	finished chan struct{}
 }
 
@@ -185,8 +152,6 @@ func newBackgroundRegistry(store *SessionService, notes backgroundNotes, log *sl
 	return &backgroundRegistry{store: store, notes: notes, log: log, runnerID: rand.Text(), runs: map[backgroundKey]*backgroundRun{}, finished: make(chan struct{})}
 }
 
-// turnRoot is a turn's workspace root. The jobs the turn starts keep using it through their
-// tools after the turn ends, so its last user, the turn or one of its jobs, closes it.
 type turnRoot struct {
 	root *os.Root
 
@@ -211,19 +176,15 @@ func (r *turnRoot) release() {
 	}
 }
 
-// backgroundTurn is the registry as one conversation turn's harness.BackgroundJobs.
 type backgroundTurn struct {
 	registry       *backgroundRegistry
 	root           *turnRoot
 	conversationID string
-	// origin is the turn's inbound; each job's row freezes it when the row is created.
-	origin *protocol.InboundMessage
+	origin         *protocol.InboundMessage
 }
 
 func (backgroundTurn) Enabled() bool { return true }
 
-// Run runs work on a context detached from ctx. Until the job moves, ctx's cancellation
-// reaches the work with its cause, and Run waits for the work to finish.
 func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, work harness.BackgroundWork) (harness.BackgroundResult, error) {
 	r, key := t.registry, backgroundKey{t.conversationID, job.ID}
 
@@ -232,7 +193,7 @@ func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, wor
 		return harness.BackgroundResult{}, err
 	}
 
-	if len(rows) > 0 { // A resumed turn's call whose job already left it.
+	if len(rows) > 0 {
 		work.Detach()
 
 		return harness.BackgroundResult{Moved: true}, nil
@@ -298,7 +259,6 @@ func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, wor
 			defer close(run.recorded)
 
 			if _, _, err := createBackgroundJob(context.WithoutCancel(ctx), r.store.db, run.row); err != nil {
-				// Unrecorded work could neither report nor be stopped, so it ends with the call.
 				run.cancel(errBackgroundAbandoned)
 				<-run.done
 
@@ -308,7 +268,6 @@ func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, wor
 			return harness.BackgroundResult{Moved: true}, nil
 		}
 
-		// The work stored its result for the turn just before the move, so the call keeps it.
 		close(run.recorded)
 		<-run.done
 	}
@@ -324,8 +283,6 @@ func (t backgroundTurn) Run(ctx context.Context, job *harness.BackgroundJob, wor
 	return harness.BackgroundResult{Output: run.output}, nil
 }
 
-// work runs one job. A job that ended detached records its final state with a pending, wakeable
-// Completion Note for its owner, unless it was abandoned.
 func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *backgroundRun, work harness.BackgroundWork) {
 	defer close(run.done)
 
@@ -344,7 +301,7 @@ func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *b
 	}
 
 	cause := context.Cause(ctx)
-	if attached || errors.Is(cause, errBackgroundAbandoned) { // An attached call has no row, and an abandoned job records nothing.
+	if attached || errors.Is(cause, errBackgroundAbandoned) {
 		return
 	}
 
@@ -381,10 +338,6 @@ func (r *backgroundRegistry) work(ctx context.Context, key backgroundKey, run *b
 	}
 }
 
-// recoverJobs settles, before any frontend can start a turn, the jobs a stopped process left running.
-// A script is killed, and its note waits for its owner's next turn or, in a hidden run, wakes the run.
-// A task waits again for its subagent session's turn, which resumes on that session's bridge. Its run
-// holds its row at once but waits only once resume is called, which also wakes the owners of notes.
 func (r *backgroundRegistry) recoverJobs(ctx context.Context) (resume func(context.Context) error, err error) {
 	if err := r.store.releaseStaleBackgroundClaims(ctx); err != nil {
 		return nil, err
@@ -458,7 +411,6 @@ func (r *backgroundRegistry) recoverJobs(ctx context.Context) (resume func(conte
 	}, nil
 }
 
-// subagentTurn is a recovered task job's work: it waits again for its subagent session's turn.
 type subagentTurn struct {
 	notes backgroundNotes
 	job   *backgroundJob
@@ -470,9 +422,6 @@ func (w subagentTurn) RunBackground(ctx context.Context) (string, error) {
 
 func (subagentTurn) Detach() bool { return true }
 
-// subagentTurnSQL finds, in session $1, the turn running its input $2: saved with its entries, ended
-// stopped or failed, running, or not yet started. It also returns the session's parent and the input of
-// the turn the session runs.
 const subagentTurnSQL = `WITH saved AS (
     SELECT e.entry_json FROM entries e
     CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry_json::jsonb->'replay_input', 'null'::jsonb)) item
@@ -488,12 +437,6 @@ const subagentTurnSQL = `WITH saved AS (
 )
 SELECT s.entry_json, t.terminal, t.text, q.rows, r.parent, r.input FROM queued q LEFT JOIN saved s ON true LEFT JOIN turn t ON true LEFT JOIN running r ON true`
 
-// awaitSubagent waits until the turn of the subagent session conversationID that runs its input inputID
-// ends, and returns that turn's final answer, as a top-level turn's (runTurn), and attribution. A call that
-// stops waiting, other than for a shutdown, stops that turn once it runs. A stopped parent's call, unlike a
-// stopped job's, also stops the turn running ahead of its input, unless a background job waits for that
-// turn (OpenCode packages/core/src/tool/plugin/subagent.ts). Its input is not withdrawn but held, and it
-// leaves no note.
 func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, inputID string) (string, harness.ReplayAttribution, error) {
 	for {
 		r.mu.Lock()
@@ -534,8 +477,6 @@ func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, 
 			_, jobStopped := errors.AsType[backgroundStopError](cause)
 			stopped := !errors.Is(cause, harness.ErrShutdown) && !errors.Is(cause, errBackgroundAbandoned)
 
-			// A stopped parent's queued input is held, before its turn ahead stops, until the next write
-			// releases it (releaseHeldInputs). Unlike a stash's, its inbound stays an enqueue.
 			if stopped && !jobStopped {
 				if _, err := execState(context.WithoutCancel(ctx), r.store.db, "hold subagent input", `UPDATE turns SET reason = $3, delivery = $4 WHERE conversation_id = $1 AND input_id = $2 AND phase = 'waiting' AND delivery = $5`, conversationID, inputID, waitHeld, protocol.InboundKindHeld, protocol.InboundKindEnqueue); err != nil {
 					return "", harness.ReplayAttribution{}, err
@@ -556,8 +497,6 @@ func (r *backgroundRegistry) awaitSubagent(ctx context.Context, conversationID, 
 	}
 }
 
-// stopReplies stops the running replies of the subagent session conversationID and the sessions under it
-// without a note, as errStoppedWithOwner stops their jobs, so no reply wakes a stopped subagent again.
 func stopReplies(ctx context.Context, db stateStoreDB, conversationID string) error {
 	_, err := execState(ctx, db, "stop subagent replies", `WITH RECURSIVE roots AS (
     SELECT $1::text AS id
@@ -570,8 +509,6 @@ FROM sessions s WHERE r.conversation_id = s.id AND r.kind = 'reply' AND r.phase 
 	return err
 }
 
-// turnAnswer is a saved turn's final answer, as a top-level turn's (runTurn): its assistant text
-// without commentary.
 func turnAnswer(entry *harness.SessionEntry) (string, error) {
 	items, err := harness.ReplayInputToParams(entry.ReplayInput)
 	if err != nil {
@@ -594,8 +531,6 @@ func turnAnswer(entry *harness.SessionEntry) (string, error) {
 	return answer, nil
 }
 
-// turnFinished wakes the task calls awaiting subagent turns once a turn finished, and has owners'
-// bridges deliver the reply notes it settled.
 func (r *backgroundRegistry) turnFinished(owners []string) {
 	r.mu.Lock()
 	close(r.finished)
@@ -607,8 +542,6 @@ func (r *backgroundRegistry) turnFinished(owners []string) {
 	}
 }
 
-// move moves every attached job of conversationID into the background and returns them in job
-// ID order. A job whose work already finished is no longer listed, so its call keeps its real result.
 func (r *backgroundRegistry) move(conversationID string) []*backgroundRun {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -637,7 +570,6 @@ func (r *backgroundRegistry) movable(conversationID string) bool {
 	return r.attachedLocked(conversationID)
 }
 
-// detached reports whether the job at key runs in the background: started there, moved, or recovered.
 func (r *backgroundRegistry) detached(key backgroundKey) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -647,7 +579,6 @@ func (r *backgroundRegistry) detached(key backgroundKey) bool {
 	return ok && !run.attached
 }
 
-// attachedLocked reports whether conversationID has an attached job. Callers hold r.mu.
 func (r *backgroundRegistry) attachedLocked(conversationID string) bool {
 	for key, run := range r.runs {
 		if key.conversationID == conversationID && run.attached {
@@ -658,15 +589,12 @@ func (r *backgroundRegistry) attachedLocked(conversationID string) bool {
 	return false
 }
 
-// movableChanged wakes conversationID's Web views when movable flips, which no row change reports.
 func (r *backgroundRegistry) movableChanged(ctx context.Context, conversationID string) {
 	if _, err := r.store.db.ExecContext(context.WithoutCancel(ctx), `SELECT pg_notify('rocketclaw_transcript_' || md5(current_schema()), json_build_object('conversationId', $1::text, 'revision', pg_current_xact_id()::text)::text)`, conversationID); err != nil {
 		r.log.Error("notify movable change", "conversation_id", conversationID, "error", err)
 	}
 }
 
-// stop stops a running job listed at conversationID, its own or one of a hidden run whose destination
-// it is, and waits until its stopped note is recorded. It reports false when the job had already finished.
 func (r *backgroundRegistry) stop(ctx context.Context, conversationID, jobID string, reason backgroundStopError) (bool, error) {
 	jobs, err := r.store.backgroundJobs(ctx, conversationID)
 	if err != nil {
@@ -678,7 +606,6 @@ func (r *backgroundRegistry) stop(ctx context.Context, conversationID, jobID str
 		return false, fmt.Errorf("background job %q is neither running nor waiting to report in this conversation", jobID)
 	}
 
-	// A stopped subagent's own detached jobs and replies stop with it, so none of them wakes it again.
 	var sessions []string
 	if jobs[i].subagentKey != "" {
 		sessions, err = queryStrings(ctx, r.store.db, `WITH RECURSIVE roots AS (
@@ -701,8 +628,6 @@ SELECT id FROM roots UNION ALL SELECT conversation_id FROM descendants`, "stoppe
 	r.mu.Unlock()
 
 	if !running && jobs[i].kind == turnReply {
-		// No run holds a reply: it stops in the State Store, never touching its target, and its note
-		// waits for its owner's next turn.
 		end := jobs[i]
 		end.status, end.result, end.noteState, end.wake = backgroundStopped, reason.Error(), notePending, false
 
@@ -729,7 +654,6 @@ SELECT id FROM roots UNION ALL SELECT conversation_id FROM descendants`, "stoppe
 	}
 }
 
-// abandon kills conversationID's detached jobs without recording them and waits for them.
 func (r *backgroundRegistry) abandon(conversationID string) {
 	r.mu.Lock()
 
@@ -748,7 +672,6 @@ func (r *backgroundRegistry) abandon(conversationID string) {
 	}
 }
 
-// shutdown kills the detached jobs and waits for every job; attached calls follow their turns.
 func (r *backgroundRegistry) shutdown() {
 	r.mu.Lock()
 	for _, run := range r.runs {
@@ -758,5 +681,5 @@ func (r *backgroundRegistry) shutdown() {
 	}
 	r.mu.Unlock()
 
-	_ = r.group.Wait() // Jobs return no errors.
+	_ = r.group.Wait()
 }

@@ -18,9 +18,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// ForkConversation copies a recorded prefix and returns the excluded user prompt.
-// OpenCode V2: packages/app/src/session/commands/fork-dialog.tsx uses an exclusive
-// message boundary; packages/tui/src/routes/session/dialog-fork.tsx also allows all.
 func (s *SessionService) ForkConversation(ctx context.Context, source string, destination protocol.Conversation, before string) (string, error) {
 	if err := rejectShadowMutation(ctx, s.db, source); err != nil {
 		return "", err
@@ -86,8 +83,6 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 		return "", errors.New("fork message is no longer in the session")
 	}
 
-	// A fork starts live. Its copy says whether it leaves the agent paused: the last line saying who paused or
-	// resumed it, which a fork taken at an earlier message may hold even after the source resumed.
 	var paused bool
 
 	for i := range entries {
@@ -122,7 +117,6 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 		return "", err
 	}
 
-	// The new chat's history is copied below; it keeps its source's birth space.
 	if _, err := tx.ExecContext(ctx, `WITH source AS (SELECT space_id FROM conversations WHERE conversation_id = $4)
 INSERT INTO conversations (conversation_id, agent, created_by, forked_from, space_id, kind, listed) SELECT $1, $2, $3, $4, max(space_id), $5, TRUE FROM source`, destination.ID, destination.Agent, destination.CreatedBy, source, KindWebChat); err != nil {
 		return "", fmt.Errorf("create fork: %w", err)
@@ -144,8 +138,6 @@ INSERT INTO conversations (conversation_id, agent, created_by, forked_from, spac
 	return prompt, nil
 }
 
-// copySessionPrefix copies replay and referenced ownership, never live jobs or
-// producer routing. Both a fork and a newly attached shadow use this seed path.
 func (s *SessionService) copySessionPrefix(ctx context.Context, db stateStoreDB, destination string, entries []harness.SessionEntry, producers []string, prompt string) (string, error) {
 	payload, err := json.Marshal(entries)
 	if err != nil {
@@ -191,9 +183,6 @@ func (s *SessionService) copySessionPrefix(ctx context.Context, db stateStoreDB,
 		}
 	}
 
-	// Copied system inputs show their Completion Notes from the finished jobs their IDs list, so
-	// copy those as consumed notes that wake nothing. Running jobs stay with the source.
-	// A copied delegation keys the copy of its parent as its source did; it never expires on its own.
 	if _, err := db.ExecContext(ctx, `WITH RECURSIVE producers AS (
     SELECT DISTINCT unnest($2::text[]) AS id
 ), delegations AS (
@@ -219,9 +208,6 @@ FROM turns JOIN noted_jobs ON job_id = input_id WHERE conversation_id = ANY($2) 
 	return prompt, s.linkRetainedResults(destination, producers)
 }
 
-// linkRetainedResults links, rather than copies, the producers' retained execute output into
-// conversationID's, so the copied Completion Notes' result IDs still load in the fork. A link keeps
-// each file's modification time, which expires it with its source.
 func (s *SessionService) linkRetainedResults(conversationID string, producers []string) error {
 	root, found, err := s.openSpill()
 	if !found {
@@ -240,7 +226,6 @@ func (s *SessionService) linkRetainedResults(conversationID string, producers []
 
 		err = errors.Join(err, errRead, root.MkdirAll(dir, 0o700))
 		for _, entry := range entries {
-			// A result swept from the source since the listing stays gone.
 			if errLink := root.Link(filepath.Join(source, entry.Name()), filepath.Join(dir, entry.Name())); !errors.Is(errLink, fs.ErrNotExist) {
 				err = errors.Join(err, errLink)
 			}

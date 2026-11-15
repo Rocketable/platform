@@ -44,8 +44,6 @@ function readData(key) {
 }
 Pages only read data; they cannot write it or read another agent's.`
 
-// pageSpace holds agent's Hosted Pages and Page Data, linked under its space. Pages it stores belong to
-// conversation when it is set, so they go with that session.
 type pageSpace struct {
 	sessions     *SessionService
 	threads      *threadBridgeManager
@@ -65,7 +63,6 @@ func (p pageSpace) url(ctx context.Context, name string) (string, error) {
 		segments[i] = url.PathEscape(segments[i])
 	}
 
-	// The Web escapes the ":" of a session owner too, so both links open one tab.
 	return origin + "/pages/" + url.PathEscape(cmp.Or(p.space, "-")) + "/" + strings.ReplaceAll(url.PathEscape(p.agent), ":", "%3A") + "/" + strings.Join(segments, "/"), nil
 }
 
@@ -144,7 +141,6 @@ func (p pageSpace) tools() []harness.Tool {
 
 	return []harness.Tool{
 		tool("rocketclaw_store", pageStoreDescription, map[string]any{"path": str, "content": str, "content_base64": str, "content_type": str}, func(ctx context.Context, input *pageToolInput) (string, error) {
-			// Without a path, outboundAttachment reads no file, so it needs no root or shell.
 			file, err := outboundAttachment(nil, nil, &outboundAttachmentInput{Name: input.Path, MIMEType: input.ContentType, Content: input.Content, ContentBase64: input.ContentBase64})
 			if err != nil {
 				return "", err

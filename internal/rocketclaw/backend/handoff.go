@@ -16,7 +16,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// GenerateHandoff summarizes a snapshot without running tools or changing its session.
 func GenerateHandoff(ctx context.Context, locked *config.LockedConfig, agent, transcript string) (document string, err error) {
 	root, agents, skills, resolver, err := prepareRocketCode(locked, agent, slog.New(slog.DiscardHandler), toolModeWorkflow)
 	if err != nil {
