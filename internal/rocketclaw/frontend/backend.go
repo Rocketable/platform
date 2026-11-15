@@ -1,4 +1,3 @@
-// Package frontend defines the conversation operations consumed by frontends.
 package frontend
 
 import (
@@ -8,7 +7,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// Backend owns conversation execution, recording, ordering, and live output.
 type Backend interface {
 	Reload(string) (string, error)
 	Subscribe(context.Context) iter.Seq[protocol.Event]
