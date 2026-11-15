@@ -15,9 +15,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// attentionOf describes username's attention row at path: none without one, else its mark (read, an old or a new
-// one, and whether it is quiet), whether it is parked, its timer (soon, due, or done for a park until it is done) and
-// its note.
 func attentionOf(t *testing.T, s *SessionService, username, path string) string {
 	t.Helper()
 
@@ -34,8 +31,6 @@ FROM web_tab_attention WHERE username = $1 AND path = $2`, "attention", username
 	return got[0]
 }
 
-// markTab writes something new on path for username through the marking statement, as one reader of each of
-// readers: a question or not.
 func markTab(t *testing.T, db stateStoreDB, username, path string, readers ...reader) {
 	t.Helper()
 
@@ -51,7 +46,6 @@ func markTab(t *testing.T, db stateStoreDB, username, path string, readers ...re
 	require.NoError(t, err)
 }
 
-// reader is one reader of something new: a question or not.
 type reader uint8
 
 const (
@@ -59,7 +53,6 @@ const (
 	question
 )
 
-// Each row of the marking matrix, on a session's tab and on a tab that is not a session.
 func TestAttentionMatrix(t *testing.T) {
 	t.Parallel()
 
@@ -103,7 +96,6 @@ func TestAttentionMatrix(t *testing.T) {
 			}
 		}
 	}
-	// save saves the person's tabs as only the tab at path, or none, at revision.
 	save := func(t *testing.T, username, path string, open bool, revision int64) {
 		t.Helper()
 
@@ -126,7 +118,6 @@ func TestAttentionMatrix(t *testing.T) {
 		save(t, username, path, true, 2)
 	}
 
-	// seeded is a row's state before the event: an old mark, loud or quiet, a park, and a timer this far from now.
 	type seeded struct {
 		mark   string
 		parked bool
@@ -134,9 +125,9 @@ func TestAttentionMatrix(t *testing.T) {
 	}
 
 	for name, tc := range map[string]struct {
-		tab    bool // the person has the location as a tab before it is seeded
+		tab    bool
 		seeded seeded
-		viewed time.Duration // the person viewed the location this long ago; zero is not at all
+		viewed time.Duration
 		do     func(t *testing.T, username, path string)
 		want   string
 	}{
@@ -193,7 +184,6 @@ VALUES ($1, $2, NULLIF($3, ''), CASE WHEN $4 <> '' THEN now() - interval '1 day'
 	}
 }
 
-// Readers that name one person and location twice write one mark, a question's when one of them is.
 func TestAttentionMarkTakesStrongestReader(t *testing.T) {
 	t.Parallel()
 
@@ -207,8 +197,6 @@ func TestAttentionMarkTakesStrongestReader(t *testing.T) {
 	assert.Equal(t, "new quiet parked until=due note=news", attentionOf(t, service, alice, "/cron"), "a question among them makes the park due")
 }
 
-// Every decision that depends on the stored row is made on the locked row, so a change that commits while a mark is
-// being written, or a mark that commits while a change waits, is never lost.
 func TestAttentionDecidesOnLockedRow(t *testing.T) {
 	t.Parallel()
 
@@ -216,7 +204,6 @@ func TestAttentionDecidesOnLockedRow(t *testing.T) {
 	ctx := t.Context()
 	soon := time.Now().Add(time.Hour)
 
-	// held runs write in a transaction it keeps open until change, run beside it, waits on the row lock.
 	held := func(write func(tx *sql.Tx), change func() error) {
 		t.Helper()
 
@@ -241,14 +228,12 @@ func TestAttentionDecidesOnLockedRow(t *testing.T) {
 		require.NoError(t, changes.Wait())
 	}
 
-	// Unpark of a parked tab with no mark while a turn end commits a mark on it: unparked and bold.
 	require.NoError(t, service.ChangeAttention(ctx, alice, []string{"/cron"}, AttentionPark, nil))
 	held(func(tx *sql.Tx) { markTab(t, tx, alice, "/cron", turnEnd) }, func() error {
 		return service.ChangeAttention(ctx, alice, []string{"/cron"}, AttentionUnpark, nil)
 	})
 	assert.Equal(t, "new quiet note=news", attentionOf(t, service, alice, "/cron"))
 
-	// A park commits while a loud mark waits to be written: parked with a quiet mark.
 	held(func(tx *sql.Tx) {
 		_, err := tx.ExecContext(ctx, `INSERT INTO web_tab_attention (username, path, parked, until) VALUES ($1, '/cron', TRUE, now() + interval '1 hour')`, bob)
 		require.NoError(t, err)
@@ -261,7 +246,6 @@ func TestAttentionDecidesOnLockedRow(t *testing.T) {
 	})
 	assert.Equal(t, "new quiet parked until=soon", attentionOf(t, service, bob, "/cron"))
 
-	// A turn end and the person's Park create a session's first row at once: both succeed, and one row results.
 	recordTestConversations(t, service, "main", map[string]ConversationKind{"web:first": KindWebChat})
 
 	path := "/s/" + base64.RawURLEncoding.EncodeToString([]byte("web:first"))
@@ -276,7 +260,6 @@ func TestAttentionDecidesOnLockedRow(t *testing.T) {
 	assert.Equal(t, "none", attentionOf(t, service, alice, path))
 }
 
-// cronTabPath is the tab path of the cron named stem as the Web spells it: base64url of one byte per character.
 func cronTabPath(stem string) string {
 	raw := make([]byte, 0, len(stem))
 	for _, r := range stem {
@@ -286,7 +269,6 @@ func cronTabPath(stem string) string {
 	return "/cron/" + base64.RawURLEncoding.EncodeToString(raw)
 }
 
-// locationMarks lists, and then clears, every mark whose note is note: its person, path, and whether it is quiet.
 func locationMarks(t *testing.T, s *SessionService, note string) []string {
 	t.Helper()
 
@@ -300,8 +282,6 @@ FROM web_tab_attention WHERE unread_at IS NOT NULL AND note = $1`, "location mar
 	return got
 }
 
-// A cron run's turn end reaches the people with that cron's tab under any spelling the Web reads, and with the Cron
-// overview of the cron's space, or of any space for a cron without one; a person limited to other spaces gets nothing.
 func TestCronRunEndMarksCronTabs(t *testing.T) {
 	t.Parallel()
 
@@ -309,9 +289,9 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 	ctx := t.Context()
 
 	const (
-		carol = "carol@example.com" // limited to Ops
-		dave  = "dave@example.com"  // limited to Main
-		erin  = "erin@example.com"  // keeps the routine on her Top Shelf
+		carol = "carol@example.com"
+		dave  = "dave@example.com"
+		erin  = "erin@example.com"
 	)
 
 	require.NoError(t, service.definitions.Do(func(cfg *config.Config) error {
@@ -355,7 +335,6 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 		return locationMarks(t, service, "Run finished")
 	}
 
-	// The routine of Ops: Carol's own tab reaches her, but not the tab Shared in Main; nothing reaches Dave.
 	assert.ElementsMatch(t, []string{
 		alice + " /cron loud", alice + " " + shared + " loud", alice + " " + routine + " loud",
 		bob + " " + shared + " loud", bob + " " + typed + " loud",
@@ -363,11 +342,9 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 		erin + " " + shared + " loud", erin + " " + routine + " loud",
 	}, runEnds("cron:marketing", "agents/marketing.md#30m", "Ops"))
 
-	// A cron without a space is on the Cron overview of every space, and reaches no limited person.
 	assert.ElementsMatch(t, []string{alice + " /cron loud", alice + " " + cronTabPath("daily") + " loud", bob + " /cron loud"},
 		runEnds("cron:daily", "cron/daily.md", ""))
 
-	// A run marks once, when it ends: a turn that ends while another of the run waits in its queue marks nothing.
 	_, err = service.recordConversation(ctx, &protocol.Conversation{ID: "cron:twice", Agent: "marketing", CreatedBy: string(ThreadCreatedByCron), Run: &protocol.CronRun{Path: "cron/daily.md"}}, conversationFacts{}, harness.AgentStickyOff)
 	require.NoError(t, err)
 
@@ -390,15 +367,13 @@ func TestCronRunEndMarksCronTabs(t *testing.T) {
 	assert.ElementsMatch(t, []string{alice + " /cron loud", alice + " " + cronTabPath("daily") + " loud", bob + " /cron loud"}, turnEnds("turn:last"))
 }
 
-// A finished search marks the person's Search tab, loud, when it is among their own tabs, on their Top Shelf of this
-// server, or Shared in a space they can see.
 func TestMarkSearchFinished(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
 	ctx := t.Context()
 
-	const carol = "carol@example.com" // limited to Ops
+	const carol = "carol@example.com"
 
 	require.NoError(t, service.definitions.Do(func(cfg *config.Config) error {
 		cfg.Permissions = map[string][]string{carol: {"Ops"}}
@@ -419,7 +394,7 @@ func TestMarkSearchFinished(t *testing.T) {
 	for _, tc := range []struct{ username, path, want string }{
 		{alice, "/search/own", "new note=Search finished"},
 		{bob, "/search/shelf", "new note=Search finished"},
-		{bob, "/search/own", "none"}, // on the shelf of another server
+		{bob, "/search/own", "none"},
 		{bob, "/search/shared", "new note=Search finished"},
 		{carol, "/search/shared", "none"},
 	} {
@@ -428,9 +403,6 @@ func TestMarkSearchFinished(t *testing.T) {
 	}
 }
 
-// A park until it is done takes only a session's tab, lasts when the tab closes, and ends with the session's next turn
-// end: at the person's next poll the tab comes back, bold, with the turn's own notification. A turn end with the tab in
-// view, a question, or Unpark ends it too.
 func TestAttentionParkUntilDone(t *testing.T) {
 	t.Parallel()
 
@@ -458,7 +430,6 @@ func TestAttentionParkUntilDone(t *testing.T) {
 	require.True(t, saved)
 	assert.Equal(t, "read parked until=done", attentionOf(t, service, alice, session.Path), "closing keeps it")
 
-	// A turn nobody sent ends: it reaches Alice only through her park, and makes the park due.
 	require.NoError(t, startTurnDB(ctx, service.db, "turn:done", "web:done", protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "run", false)))
 	_, err = service.finishTurn(ctx, "turn:done", &turnFinish{conversationID: "web:done", outbound: protocol.NewOutboundMessage("web:done", "done")})
 	require.NoError(t, err)
@@ -498,8 +469,6 @@ VALUES ($1, 0, CASE WHEN $3 THEN $2 ELSE '' END, now())`, username, session.Path
 	}
 }
 
-// A person's message in a paused, idle chat posts at once under their name and starts no turn. It marks the
-// chat's other readers, not its sender, who has the chat among her tabs too.
 func TestPausedMessageMarksOtherReaders(t *testing.T) {
 	t.Parallel()
 
@@ -528,8 +497,6 @@ func TestPausedMessageMarksOtherReaders(t *testing.T) {
 	assert.Empty(t, turns)
 }
 
-// Auto-park is a choice kept on the session's attention row: it leaves the row's park and timer alone, keeps the row
-// through an unpark, and skips a location that is no session. The choice for every session starts on.
 func TestAttentionAutoPark(t *testing.T) {
 	t.Parallel()
 
@@ -553,7 +520,6 @@ func TestAttentionAutoPark(t *testing.T) {
 	assert.True(t, on)
 }
 
-// A timer that comes due on a closed tab brings it back where it was, once, with its Search page.
 func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 	t.Parallel()
 
@@ -598,7 +564,6 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 	save(&TabState{Tabs: []Tab{a}, Groups: group, Space: "main"})
 	due()
 
-	// Two polls at once: whichever locks the person's state first wakes and restores, and the other finds nothing due.
 	tx, err := service.db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 
@@ -642,7 +607,6 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 	assert.Equal(t, "new note=Park ended", attentionOf(t, service, alice, "/agents"), "one on a location never a tab ends alone")
 	assert.Equal(t, revision+1, poll(), "a second poll wakes nothing")
 
-	// The group is gone by the time the park comes due, and the strip is shorter: the tab comes back ungrouped, last.
 	revision++
 
 	require.NoError(t, service.ChangeAttention(ctx, alice, []string{"/search/x"}, AttentionPark, &soon))
@@ -655,8 +619,6 @@ func TestAttentionWakeRestoresClosedTabs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []Tab{{Path: a.Path, Space: "main"}, {Path: "/search/x", Space: "main", Search: page}}, state.Tabs)
 
-	// An agent's question on a closed tab parked with a time brings it back at the next poll, marked with the question;
-	// on a closed tab that is not parked it only marks.
 	revision++
 
 	require.NoError(t, service.ChangeAttention(ctx, alice, []string{a.Path}, AttentionPark, &soon))

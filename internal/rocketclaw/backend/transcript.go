@@ -15,9 +15,6 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
-// Changes registers before yielding an initial refresh, then waits for committed
-// changes to this conversation. Breaking iteration or cancelling ctx discards
-// the listening connection rather than returning LISTEN state to the pool.
 func (s *SessionService) Changes(ctx context.Context, conversationID string) iter.Seq2[protocol.ConversationChange, error] {
 	return func(yield func(protocol.ConversationChange, error) bool) {
 		conn, err := s.db.Conn(ctx)
@@ -82,16 +79,6 @@ func (s *SessionService) Changes(ctx context.Context, conversationID string) ite
 	}
 }
 
-// ObserveTranscript returns the ordered inventory from one database snapshot,
-// with payloads only for keys whose fingerprints differ from revisions.
-// Nil revisions requests all payloads. A saved logical turn supersedes its checkpoint.
-// Turn keys are producer-scoped and stable across checkpoint completion.
-// Checkpoints stay after the saved row visible when first persisted, preserving ID order.
-// Rows are limited to positions in [from, before); zero before means no upper
-// bound and also includes every running checkpoint. Positive before reads a
-// settled page, so running checkpoints are excluded.
-// Source attribution matches ObserveEntries; authorization belongs to the caller.
-// Fingerprints describe readable content, not the transaction IDs yielded by Changes.
 func (s *SessionService) ObserveTranscript(ctx context.Context, conversationID string, from, before int64, revisions map[string]string) ([]ObservedSessionEntry, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
@@ -169,7 +156,6 @@ FROM fingerprinted ORDER BY position, checkpoint, checkpoint_timestamp, turn_id`
 				return ObservedSessionEntry{}, fmt.Errorf("decode transcript entry: %w", err)
 			}
 
-			// A running turn's checkpoint keeps its compaction items.
 			if entry.ID != 0 {
 				if err := visibleEntry(&entry); err != nil {
 					return ObservedSessionEntry{}, err
@@ -187,9 +173,6 @@ FROM fingerprinted ORDER BY position, checkpoint, checkpoint_timestamp, turn_id`
 	}, conversationID, string(manifest), from, before)
 }
 
-// TranscriptPage returns the saved-entry ID that starts the newest limit
-// entries before (zero for no bound), or zero when fewer exist, and the
-// conversation's oldest saved-entry ID, which changes only when history is cleared.
 func (s *SessionService) TranscriptPage(ctx context.Context, conversationID string, before int64, limit int) (start, oldest int64, err error) {
 	err = s.db.QueryRowContext(ctx, transcriptPageSQL, conversationID, before, limit-1).Scan(&start, &oldest)
 	if err != nil {

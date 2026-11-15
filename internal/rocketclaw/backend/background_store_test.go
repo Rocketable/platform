@@ -21,7 +21,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// openTestSpill opens store's spill dir, creating it on the host as a turn's rocketcode would.
 func openTestSpill(t *testing.T, store *SessionService) *os.Root {
 	t.Helper()
 
@@ -33,7 +32,6 @@ func openTestSpill(t *testing.T, store *SessionService) *os.Root {
 	return root
 }
 
-// retainTestResult keeps output as a retained background result of conversationID, last modified at modified.
 func retainTestResult(t *testing.T, root *os.Root, conversationID, output string, modified time.Time) {
 	t.Helper()
 
@@ -43,7 +41,6 @@ func retainTestResult(t *testing.T, root *os.Root, conversationID, output string
 	require.NoError(t, root.Chtimes(name, modified, modified))
 }
 
-// retainedResults lists the retained directories under root and the output of their results.
 func retainedResults(t *testing.T, root *os.Root) []string {
 	t.Helper()
 
@@ -70,7 +67,6 @@ func retainedResults(t *testing.T, root *os.Root) []string {
 	return kept
 }
 
-// The sweep also removes the conversation dirs it empties, and keeps fresh results.
 func TestStartupSweepsExpiredRetainedResults(t *testing.T) {
 	t.Parallel()
 
@@ -89,13 +85,10 @@ func TestStartupSweepsExpiredRetainedResults(t *testing.T) {
 	require.Equal(t, []string{mixed, mixed + " fresh"}, retainedResults(t, root))
 }
 
-// testJobsSQL selects the Background Jobs: the turns j, of conversations c, that do not take the lane.
 const testJobsSQL = ` FROM turns j LEFT JOIN conversations c USING (conversation_id) WHERE NOT j.takes_lane`
 
-// testJobStatusSQL is job j's status.
 const testJobStatusSQL = `CASE WHEN j.phase = 'running' THEN 'running' WHEN j.terminal = '' THEN 'completed' ELSE j.terminal END`
 
-// reportTestRun has the hidden run report to destination, as the run's first turn for it does.
 func reportTestRun(t *testing.T, store *SessionService, run, destination string) {
 	t.Helper()
 
@@ -110,7 +103,6 @@ func testBackgroundJob(conversationID, jobID string) *backgroundJob {
 	return &backgroundJob{conversationID: conversationID, jobID: jobID, kind: turnScript, agent: "main", label: "tests", callID: "call", origin: &protocol.InboundMessage{Source: protocol.SourceSlack}, runnerID: "runner-1"}
 }
 
-// finishTestBackgroundJob ends a job as its runner with a pending note.
 func finishTestBackgroundJob(t *testing.T, store *SessionService, job *backgroundJob, status backgroundJobStatus, wake bool) {
 	t.Helper()
 
@@ -237,7 +229,6 @@ func TestBackgroundJobFinishStoresNoteAndClearsJournal(t *testing.T) {
 
 	job := testBackgroundJob("main", "turn-1/call/a")
 	createTestBackgroundJob(t, store, job)
-	// A job started by a host call of the script keeps running, and owns its steps, after it.
 	createTestBackgroundJob(t, store, testBackgroundJob("main", "turn-1/call/a/host/2"))
 
 	for _, key := range []string{"turn-1/call/a", "turn-1/call/a/host/1", "turn-1/call/a/host/2/task", "turn-1/call/ab/host/1"} {
@@ -327,7 +318,6 @@ func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 		terminal protocol.Terminal
 		saved    bool
 	}{
-		// Settlement depends on whether the turn saved entries, never on its terminal.
 		{protocol.TerminalStopped, true}, {protocol.TerminalStopped, false},
 	} {
 		t.Run(string(tt.terminal)+"/saved="+strconv.FormatBool(tt.saved), func(t *testing.T) {
@@ -366,9 +356,6 @@ func TestFinishTurnConsumesOrReleasesNoteClaims(t *testing.T) {
 	}
 }
 
-// A hidden run may have no next turn, so a turn of it that saves nothing leaves its notes to wake
-// it again 1 minute after the first failure, 5 minutes after the second, then every 30 minutes.
-// No wake takes them sooner, but a running turn does, and its saved answer consumes them.
 func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 	t.Parallel()
 
@@ -438,14 +425,10 @@ func TestHiddenRunTurnRetriesItsNotes(t *testing.T) {
 	})
 }
 
-// testReply is a running reply of caller's write, call key, to target.
 func testReply(caller, call, target string) *backgroundJob {
 	return &backgroundJob{conversationID: caller, jobID: caller + "/" + call, kind: turnReply, agent: "main", label: string(sessionWriteEnqueue), origin: &protocol.InboundMessage{}, target: target}
 }
 
-// AE2, AE3: a write's reply settles with the target's turn that consumed it, as that turn's input or an
-// applied steer, taking the turn's state and answer, and its caller then learns of the note. A turn of
-// another session with the same input, such as a shadow copy's, settles nothing.
 func TestFinishTurnSettlesSessionReplies(t *testing.T) {
 	t.Parallel()
 
@@ -500,10 +483,6 @@ func TestFinishTurnSettlesSessionReplies(t *testing.T) {
 	}
 }
 
-// R14: a subagent's wake turn, which no task call awaits, reports to its parent, waking it, as a task note
-// that continues the subagent: its answer as reviewed for the parent, or why it failed. The note of a
-// hidden-run parent wakes it in the chat it reports to. A stopped wake turn, a turn that ran a task's input, and a wake
-// turn that took a task's steer, whose task call gets the answer, report nothing.
 func TestFinishTurnReportsSubagentWakeUp(t *testing.T) {
 	t.Parallel()
 
@@ -621,8 +600,6 @@ func TestTurnCleanupKeepsBackgroundJournal(t *testing.T) {
 	require.Equal(t, []string{"turn-1/call/a/task"}, testTurnStepKeys(t, store, "main"), "running jobs keep their journals")
 }
 
-// Background Jobs are turns beside the lane: a running script and a failed one leave the conversation
-// idle, its session listed as not running, and its history without a live or ended turn.
 func TestBackgroundJobsStayOffTheLane(t *testing.T) {
 	t.Parallel()
 
@@ -708,7 +685,6 @@ func TestPruneKeepsConversationsWithLiveBackgroundJobs(t *testing.T) {
 		wake   bool
 		note   noteState
 		keep   bool
-		// hidden runs the jobs in a hidden run that reports to the conversation.
 		hidden bool
 	}{
 		{name: "running", status: backgroundRunning, note: noteNone, keep: true},
@@ -796,7 +772,6 @@ func TestConversationRemovalDeletesBackgroundJobs(t *testing.T) {
 		retainTestResult(t, spill, conversationID, conversationID, time.Now())
 	}
 
-	// An agent without shadows records them without comparison children.
 	recordTestConversations(t, store, "solo", map[string]ConversationKind{"main": KindWebChat, "other": KindWebChat})
 
 	for _, conversationID := range []string{"main", "other"} {
@@ -923,8 +898,6 @@ func TestBackgroundJobChangeNotices(t *testing.T) {
 	}
 }
 
-// A chat shows background work while a Background Job of its own or of a hidden run reporting to
-// it runs, or while such a hidden run's turn runs.
 func TestSidebarMarksRunningBackgroundJobs(t *testing.T) {
 	t.Parallel()
 

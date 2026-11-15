@@ -30,15 +30,11 @@ const (
 	sessionsSubject           = "rocketclaw_sessions"
 	recipientSetting          = "rocketclaw_sessions_recipient"
 
-	// Store-wide session reads compete with live turns for the State Store, so each call is capped.
 	maxListedSessions = 200
 	maxSessionEntries = 100
-	// summaryReaders is how many listed sessions' summaries are read at once.
-	summaryReaders = 8
+	summaryReaders    = 8
 )
 
-// checkTopLevelSession refuses id unless it is a top-level session: a chat Web shows. It returns the
-// session's agent.
 func (s *SessionService) checkTopLevelSession(ctx context.Context, id string) (string, error) {
 	var agent string
 
@@ -50,13 +46,10 @@ func (s *SessionService) checkTopLevelSession(ctx context.Context, id string) (s
 	return agent, err
 }
 
-// startSubagent records the subagent session write.Key names under conversation, run by write.Agent on
-// write.Model with write.Tools, which a continue changes. A continue, unlike a new subagent, needs a session
-// saved before: recorded, or a Delegation History older than subagent sessions.
 func (s *SessionService) startSubagent(ctx context.Context, conversation string, write *harness.SubagentWrite) error {
 	conversationID, parent, isNew := conversation+write.Key.Path, conversation+write.Key.Parent, write.Mode == ""
 
-	tools := "" // NULL: every tool of the agent.
+	tools := ""
 
 	if write.Tools != nil {
 		encoded, _ := json.Marshal(write.Tools)
@@ -81,10 +74,6 @@ ON CONFLICT (conversation_id) DO UPDATE SET agent = excluded.agent, kind = exclu
 	return fmt.Errorf("continue ID %q has no saved subagent history in this conversation", write.Key.Path)
 }
 
-// subagentLineage returns the top-level session the subagent session conversationID belongs to, the turn
-// the subagent acts for: that session's running turn and its inbound or, with no turn running, the routing
-// that session keeps as a hidden run, and, for each delegation from that session down to conversationID, the
-// task job whose input the delegated session's running turn runs, with no job ID when it runs no turn.
 func (s *SessionService) subagentLineage(ctx context.Context, conversationID string) (root, turnID string, origin *protocol.InboundMessage, jobs []backgroundKey, err error) {
 	var inbound, inputs []byte
 	if err := s.db.QueryRowContext(ctx, `WITH RECURSIVE lineage AS (
@@ -113,8 +102,6 @@ FROM lineage_turns t CROSS JOIN inputs i WHERE t.parent_conversation_id IS NULL`
 	return root, turnID, origin, jobs, nil
 }
 
-// checkSessionTarget refuses a write target that is not a top-level session or that is the
-// calling turn's own session. It returns the target's agent.
 func (s *SessionService) checkSessionTarget(ctx context.Context, owner, syncDestination, target string) (string, error) {
 	agent, err := s.checkTopLevelSession(ctx, target)
 	if err != nil {
@@ -133,7 +120,6 @@ func (s *SessionService) checkSessionTarget(ctx context.Context, owner, syncDest
 	return agent, nil
 }
 
-// agentTagGroups reads agent's tag groups: an easy agent's tags, or an advanced agent's rocketclaw_set_tag list.
 func agentTagGroups(agent *harness.Agent) ([][]string, error) {
 	groups := agent.TagGroups
 	if agent.Mode != harness.AgentModeEasy {
@@ -182,9 +168,6 @@ func agentTagGroups(agent *harness.Agent) ([][]string, error) {
 	return groups, nil
 }
 
-// agentRecipients reads agent's rocketclaw_sessions_recipient: whether every agent may write into its
-// sessions and, when not, the agents that may. Absent means every agent, or none for a sudo agent;
-// false means none. An easy agent's delegatedFrom says the same.
 func agentRecipients(agent *harness.Agent) (all bool, names []string, err error) {
 	if agent.Mode == harness.AgentModeEasy {
 		return agent.DelegatedFrom == nil, agent.DelegatedFrom, nil
@@ -219,8 +202,6 @@ func agentRecipients(agent *harness.Agent) (all bool, names []string, err error)
 	return false, names, nil
 }
 
-// checkRecipient refuses a write by agent sender into a session of agent target unless target's
-// rocketclaw_sessions_recipient, or an easy target's delegatedFrom, accepts sender.
 func checkRecipient(agents harness.Agents, target, sender string) error {
 	definition := agents.Items[target]
 	if all, names, _ := agentRecipients(&definition); all || slices.Contains(names, sender) {
@@ -317,7 +298,7 @@ func sessionTagTools(service *SessionService, conversationID string) []harness.T
 
 				result, _ := json.Marshal(struct {
 					Tags []string `json:"tags"`
-				}{tags}) // Encoding a string slice cannot fail.
+				}{tags})
 
 				return harness.TextToolResult(string(result)), nil
 			}})
@@ -401,14 +382,11 @@ func listSessionsTool(service *SessionService, threads *threadBridgeManager) har
 				ids     []string
 				search  *SessionSearch
 				matches []SessionMatch
-				shown   = make(map[string]int) // Message rows printed per listed chat.
+				shown   = make(map[string]int)
 				err     error
 			)
 
 			if criteria := strings.TrimSpace(params.Criteria); criteria == "" {
-				// Stored timestamps are UTC RFC3339Nano. Removing Z makes text order exact
-				// even across whole/fractional seconds, without PostgreSQL's microsecond rounding.
-				// A chat's entries include those of the hidden runs reporting to it or it continues, as its history does.
 				ids, err = queryStrings(ctx, service.db, `WITH RECURSIVE runs AS (
     SELECT conversation_id, reports_to FROM conversations WHERE reports_to IS NOT NULL
 ), viewed AS (
@@ -492,14 +470,13 @@ ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, v.conversation_id CO
 				var hits strings.Builder
 
 				for _, hit := range search.Hits {
-					// A stopped turn's hit has no message ID, so rocketclaw_sessions_get cannot open it.
 					if count, listed := shown[hit.ConversationID]; !listed || count == 3 || hit.MessageID == "" {
 						continue
 					}
 
 					shown[hit.ConversationID]++
 					entry, _, _ := strings.Cut(hit.MessageID, ":")
-					id, _ := strconv.ParseInt(entry, 10, 64) // The store builds message IDs from entry IDs.
+					id, _ := strconv.ParseInt(entry, 10, 64)
 
 					text := []rune(hit.Text)
 					fmt.Fprintf(&hits, "%s\t%s\t%d\t%s\t%s\n", escape.Replace(hit.ConversationID), hit.MessageID, id+1, hit.Role, escape.Replace(string(text[:min(len(text), 300)])))
@@ -526,10 +503,6 @@ ORDER BY MAX(rtrim(entry_timestamp, 'Z') COLLATE "C") DESC, v.conversation_id CO
 	}
 }
 
-// searchSessionsWithin runs SearchSessions for criteria with message search and
-// keeps the matches whose summary time, or newest running or waiting turn's creation
-// when later, is within the normalized since and until bounds, newest summary time
-// first unless criteria has a sort: term.
 func (s *SessionService) searchSessionsWithin(ctx context.Context, criteria string, params *sessionListParams, slack slackLookup) (*SessionSearch, []SessionMatch, error) {
 	search, err := s.SearchSessions(ctx, "", criteria, SearchMessages, slack)
 	if err != nil {
@@ -539,9 +512,6 @@ func (s *SessionService) searchSessionsWithin(ctx context.Context, criteria stri
 	var matches []SessionMatch
 
 	for i := range search.Matches {
-		// Times compare as the bounds do: UTC RFC3339Nano text without Z. Arriving work counts as
-		// activity, since queuing it does not update the chat.
-		// Remote OpenCode sessions are for people only; agents never see them.
 		if row := &search.Matches[i].Chat.Session; row.Summary != nil && row.Server == "" {
 			if at := strings.TrimSuffix(slices.MaxFunc([]time.Time{row.Summary.LastUpdated, row.ArrivedAt}, time.Time.Compare).Format(time.RFC3339Nano), "Z"); at >= params.Since && (params.Until == "" || at < params.Until) {
 				matches = append(matches, search.Matches[i])
@@ -558,8 +528,6 @@ func (s *SessionService) searchSessionsWithin(ctx context.Context, criteria stri
 	return search, matches, nil
 }
 
-// sessionToolSummaries reads, newest first, only the entries that hold each conversation's last
-// user and assistant messages: first its newest entry, then, when that lacks one, all of them.
 func (s *SessionService) sessionToolSummaries(ctx context.Context, ids []string, preview bool) ([]sessionListSummary, error) {
 	summaries := make([]sessionListSummary, len(ids))
 	group, ctx := errgroup.WithContext(ctx)
@@ -571,7 +539,6 @@ func (s *SessionService) sessionToolSummaries(ctx context.Context, ids []string,
 			summary.ConversationID = id
 
 			for _, limit := range []int{1, 0} {
-				// Of an entry's replay input, only message items, and items that cannot be decoded, matter.
 				err := readRows(ctx, s.db, `WITH `+sessionHistorySQL+`, counted AS (
     SELECT id, entry_json, count(*) OVER () AS turns FROM viewed_rows
 ), newest AS (
@@ -680,7 +647,6 @@ func sessionsGetURLTool(threads *threadBridgeManager) harness.Tool {
 	}
 }
 
-// sessionWriteMode is how rocketclaw_sessions_write delivers into an existing session.
 type sessionWriteMode string
 
 const (
@@ -689,7 +655,6 @@ const (
 	sessionWriteEnqueue sessionWriteMode = "enqueue"
 )
 
-// sessionWriteOutcome is what became of a rocketclaw_sessions_write call.
 type sessionWriteOutcome string
 
 const (
@@ -699,11 +664,8 @@ const (
 	sessionStopped sessionWriteOutcome = "stopped"
 )
 
-// stopLineStep prefixes the turn steps that park a stop write's "Stopped by" line for its session.
 const stopLineStep = "stopped_by/"
 
-// parkStopLine parks a stop write's "Stopped by" line for conversationID under key, with the write's
-// reply, unless nil because no turn was running, which postStopLines settles when it posts the line.
 func (s *SessionService) parkStopLine(ctx context.Context, conversationID, key string, line json.RawMessage, reply *backgroundJob) error {
 	tx, err := s.beginStateTx(ctx, "park stop line")
 	if err != nil {
@@ -733,10 +695,6 @@ func (s *SessionService) parkStopLine(ctx context.Context, conversationID, key s
 	return nil
 }
 
-// postStopLines moves conversationID's parked "Stopped by" lines into its history unless a turn
-// still runs there. Under the history lock a turn's finish also takes, each line posts once, after
-// the turn it stopped; the bridge calls this when it starts and after each request. Each line's reply
-// settles with the state that turn ended in, and wakes its caller.
 func (s *SessionService) postStopLines(ctx context.Context, conversationID string) error {
 	tx, err := s.beginStateTx(ctx, "post stop lines")
 	if err != nil {
@@ -749,7 +707,6 @@ func (s *SessionService) postStopLines(ctx context.Context, conversationID strin
 		return err
 	}
 
-	// A stopped turn's row ends with it; closeTurn deletes only a completed one.
 	owners, err := queryStrings(ctx, tx, `WITH running AS (SELECT count(*) AS turns FROM turns WHERE conversation_id = $1 AND phase = $3 AND takes_lane),
 parked AS (SELECT substr(key, length($2) + 1) AS input_id FROM steps, running WHERE conversation_id = $1 AND starts_with(key, $2) AND turns = 0),
 ended AS (
@@ -780,11 +737,6 @@ SELECT value FROM parked ORDER BY (value::jsonb->>'timestamp')::timestamptz`, co
 	return nil
 }
 
-// sessionsWriteTool builds rocketclaw_sessions_write for a turn of b acting as the turn agentName runs
-// for origin in the session self: b's own turn or, for a subagent session, its top-level session's, and
-// for the destination origin reports to as a hidden run. agents are the turn's definitions. It never waits
-// for the target's turn: each write's reply is a job of b's own session, routed as its turn, whose inbound
-// is msg.
 func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentName, self string, agents harness.Agents) harness.Tool {
 	owner := cmp.Or(origin.SyncDestination, self)
 	properties := map[string]any{"session_id": map[string]any{"type": "string"}, "mode": map[string]any{"type": "string", "enum": []sessionWriteMode{sessionWriteStop, sessionWriteSteer, sessionWriteEnqueue}}}
@@ -881,7 +833,6 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 					return harness.ToolResult{}, err
 				}
 
-				// The link is looked up before delivery, so a failed lookup delivers nothing.
 				result.SessionID = input.SessionID
 				if result.URL, err = b.threads.WebURL(ctx, input.SessionID); err != nil {
 					return harness.ToolResult{}, err
@@ -891,14 +842,9 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 				result.Outcome = sessionStopped
 
 				if stopOnly {
-					// A developer message is history the next turn reads and Web shows; posting it starts no turn.
-					// It is parked only after the stop succeeds and posts once no turn runs there: here if the
-					// stopped turn already ended, otherwise when the bridge flushes at that turn's end.
-					line, _ := json.Marshal(&harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: replayInputForMessage("developer", fmt.Sprintf("Stopped by session %s (agent %s)", owner, agent.Name))}) // Strings and messages cannot fail to encode.
+					line, _ := json.Marshal(&harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: replayInputForMessage("developer", fmt.Sprintf("Stopped by session %s (agent %s)", owner, agent.Name))})
 					key := stopLineStep + result.QueueItemID
 
-					// Only a stopped running turn gets a reply, which holds that turn, read before the stop
-					// can end it, to report how it ended.
 					if err = queryScalar(ctx, b.config.SessionService.db, "read stopped turn", `SELECT COALESCE(max(id), '') FROM turns WHERE conversation_id = $1 AND phase NOT IN ('waiting', 'done') AND takes_lane`, &reply.runnerID, input.SessionID); err == nil {
 						running, err = b.threads.stopSession(input.SessionID)
 					}
@@ -927,15 +873,12 @@ func sessionsWriteTool(b *Bridge, origin, msg *protocol.InboundMessage, agentNam
 				return harness.ToolResult{}, err
 			}
 
-			data, _ := json.Marshal(result) // Strings and a bool cannot fail to encode.
+			data, _ := json.Marshal(result)
 
 			return harness.TextToolResult(string(data)), nil
 		}}
 }
 
-// storedEventLine renders a stored item that is not a replay message: a Code Mode record shows the
-// call an Execute script made, or the approver's decision on the whole script; anything else is a
-// placeholder naming its kind.
 func storedEventLine(kind string, raw json.RawMessage) (role, text string) {
 	if calls := harness.CodeModeCallsFromTrace([]json.RawMessage{raw}); len(calls) > 0 {
 		return "code_mode", calls[0].String()
@@ -973,7 +916,6 @@ func getSessionTool(service *SessionService) harness.Tool {
 				return harness.ToolResult{}, fmt.Errorf("limit must be between 1 and %d and before_entry_id must not be negative", maxSessionEntries)
 			}
 
-			// The newest limit+1 rows are read, so one extra row reveals whether an older page exists.
 			observations, err := queryRows(ctx, service.db, `WITH `+sessionHistorySQL+`
 SELECT id, entry_json, source_conversation_id, synced, revert_index FROM effective_entries
 WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entries", scanObservedEntry, params.ConversationID, params.BeforeEntryID, params.Limit+1)
@@ -993,13 +935,12 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 
 			for i := range observations {
 				entry := &observations[i].Entry
+
 				timestamp := entry.Timestamp.Format(time.RFC3339Nano)
-				// Trace-only events have no recorded interleaving with replay items.
 				for s, source := range [][]json.RawMessage{entry.ReplayInput, entry.OutputTrace} {
 					for j, raw := range source {
 						kind := harness.ReplayInputRawKind(raw)
 						if kind == "" && s == 1 {
-							// Only replay input holds untyped messages; untyped trace data is entry bookkeeping such as a producer schedule.
 							kind = entry.Type
 						}
 
@@ -1023,7 +964,6 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 						}
 
 						if err != nil {
-							// The decoder only sees this one item, so its own location is a placeholder.
 							if errReplay, ok := errors.AsType[*harness.ReplayDecodeError](err); ok {
 								err = errReplay.Cause
 							}
@@ -1037,7 +977,6 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 
 						switch {
 						case message:
-							// The prompt header names the sender, so readers can tell an operator from a customer.
 							if item.OfMessage != nil && (role == "user" || role == "developer") {
 								if header, _ := item.OfMessage.ExtraFields()["prompt_header"].(string); header != "" {
 									text = header + "\n\n" + text
@@ -1092,8 +1031,6 @@ WHERE $2::bigint = 0 OR id < $2 ORDER BY id DESC LIMIT $3`, "session tool entrie
 	}
 }
 
-// sessionToolComparisonResult formats binding ownership separately from the
-// replay decoder so comparison inspection does not complicate message decoding.
 func sessionToolComparisonResult(ctx context.Context, db stateStoreDB, id string, before int64, output *strings.Builder) (harness.ToolResult, error) {
 	shadows, err := shadowHistoryDB(ctx, db, id, "", 0, before)
 	if err != nil {

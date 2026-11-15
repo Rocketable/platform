@@ -20,7 +20,6 @@ func TestHealthReportCadenceAndCancellation(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		// A zero pool's Stats requires no driver, DB I/O, or external goroutines.
 		db := new(sql.DB)
 
 		var logs lockedBuffer
@@ -119,7 +118,7 @@ func TestHealthSamplePreservesHistogramBackingCounts(t *testing.T) {
 	previous := sampleHealth(samples, sql.DBStats{})
 	counts := samples[4].Value.Float64Histogram().Counts
 	original := previous.scheduler.Counts[0]
-	counts[0]++ // Emulate the next metrics.Read reusing its backing storage.
+	counts[0]++
 
 	require.Equal(t, original, previous.scheduler.Counts[0])
 

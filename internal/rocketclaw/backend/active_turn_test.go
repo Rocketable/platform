@@ -29,7 +29,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// finalsPublisher completes delivery at once and reports every final outbound.
 type finalsPublisher struct {
 	finals chan *protocol.OutboundMessage
 }
@@ -42,9 +41,6 @@ func (p finalsPublisher) PublishOutbound(_ context.Context, message *protocol.Ou
 	return nil
 }
 
-// newResumeTestBridges returns a factory for bridges of one conversation that
-// survive a simulated restart, a provider whose request bodies are reported, and
-// the published finals. A blocked provider holds its first request until its context ends.
 func newResumeTestBridges(t *testing.T, blocked bool, databaseURL ...string) (newBridge func() *Bridge, service *SessionService, requests chan string, finals chan *protocol.OutboundMessage) {
 	t.Helper()
 
@@ -173,7 +169,6 @@ func TestStoppedInitialRequestKeepsAcceptedInput(t *testing.T) {
 	require.Empty(t, requests, "only the new turn executes")
 }
 
-// AE5: a crash after the claim and before any step leaves a row that runs exactly once after restart.
 func TestClaimedQueueItemRunsExactlyOnceAfterCrash(t *testing.T) {
 	t.Parallel()
 
@@ -212,15 +207,12 @@ func TestClaimedQueueItemRunsExactlyOnceAfterCrash(t *testing.T) {
 	assert.Empty(t, testTurnStepKeys(t, service, conversationID))
 }
 
-// AE6: a crash in the delivering phase re-delivers from the row with no model call
-// and no second goal accounting; the goal then continues exactly once.
 func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	t.Parallel()
 
 	newBridge, service, requests, finals := newResumeTestBridges(t, false)
 	crashed := newBridge()
 	conversationID := crashed.config.ConversationID
-	// One finished turn and one continuation exhaust the goal before we inspect it.
 	require.NoError(t, service.BeginGoal(conversationID, &GoalState{Objective: "ship it", MaxTurns: 2}))
 
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "continue", false)
@@ -263,8 +255,6 @@ func TestDeliveringRowRedeliversWithoutRunningAgain(t *testing.T) {
 	assert.Equal(t, GoalStatusBudgetExhausted, goal.Status)
 }
 
-// A runner that missed its turn's stop and saves and finishes afterwards leaves the stopped turn as
-// it was when it stopped, both in what Web shows and in what the agent replays.
 func TestLateRunnerLeavesStoppedTurn(t *testing.T) {
 	t.Parallel()
 
@@ -320,7 +310,6 @@ func TestFinishTurnKeepsLargeAttachment(t *testing.T) {
 	require.NoError(t, startTurnDB(t.Context(), service.db, "attachment-turn", inbound.ConversationID, inbound))
 
 	outbound := protocol.NewOutboundMessage(inbound.ConversationID, "file ready")
-	// 192 MiB in base64 exceeds jsonb's string limit; the finished turn stores the attachment ID and reloads the bytes.
 	outbound.Attachments = []protocol.OutboundAttachment{{ID: "large-file", Name: "file.bin", Data: bytes.Repeat([]byte{0x61}, 192<<20)}}
 	require.NoError(t, service.SaveAttachment(t.Context(), inbound.ConversationID, "", &outbound.Attachments[0], false))
 
@@ -336,7 +325,6 @@ func TestFinishTurnKeepsLargeAttachment(t *testing.T) {
 	assert.True(t, bytes.Equal(outbound.Attachments[0].Data, stored.outbound.Attachments[0].Data))
 }
 
-// AE9: $stop on a workflow row waiting to resume posts one stopped final and never runs it.
 func TestStopOnWaitingRowPostsStoppedFinalAndDoesNotRun(t *testing.T) {
 	t.Parallel()
 
@@ -355,7 +343,6 @@ func TestStopOnWaitingRowPostsStoppedFinalAndDoesNotRun(t *testing.T) {
 	assert.Equal(t, protocol.TerminalStopped, final.Terminal, "the workflow card shows the run stopped")
 	require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
 
-	// A shutdown before startup finishes is a clean stop.
 	ctx, cancel := context.WithCancelCause(t.Context())
 	cancel(errShutdown)
 	require.NoError(t, newBridge().Run(ctx))
@@ -371,8 +358,6 @@ func TestStopOnWaitingRowPostsStoppedFinalAndDoesNotRun(t *testing.T) {
 	assert.Equal(t, protocol.TerminalStopped, entries[0].Terminal, "the web transcript shows the stopped turn")
 }
 
-// A $stop after the bridge took an unfinished row but before it handled it
-// finishes the row as stopped once, and the taken request never runs it.
 func TestStopBetweenTakeAndHandleDoesNotRun(t *testing.T) {
 	t.Parallel()
 
@@ -395,9 +380,6 @@ func TestStopBetweenTakeAndHandleDoesNotRun(t *testing.T) {
 	assert.Empty(t, runningTestTurns(t, service))
 }
 
-// A $stop after the bridge started handling a request but before its turn
-// registered its cancel stops the turn before any model call, once, and the
-// next message runs normally.
 func TestStopBeforeTurnRegistersCancelStopsTurn(t *testing.T) {
 	t.Parallel()
 
@@ -430,13 +412,11 @@ FROM pg_stat_activity WHERE datname = current_database() AND cardinality(pg_bloc
 	}()
 
 	runTestBridge(t, bridge)
-	// A first turn outlasts startup and its own end, which take the history lock too.
 	require.NoError(t, bridge.Submit(t.Context(), protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "first", true)))
 	assert.Equal(t, "answer", readFinal(t, finals).Text)
 	<-requests
 	require.Eventually(t, func() bool { return !bridge.handlingSnapshot() }, 5*time.Second, 10*time.Millisecond)
 
-	// The held history lock parks the handler in activation, after handling starts.
 	tx, err := service.db.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 	require.NoError(t, lockSessionHistory(t.Context(), tx, bridge.config.ConversationID))
@@ -456,7 +436,6 @@ FROM pg_stat_activity WHERE datname = current_database() AND cardinality(pg_bloc
 	assert.Len(t, requests, 1)
 }
 
-// The same holds for a hidden producer's turn run behind its destination, whose stops reach the producer.
 func TestStopBeforeProducerTurnRegistersCancelStopsTurn(t *testing.T) {
 	t.Parallel()
 
@@ -474,7 +453,6 @@ func TestStopBeforeProducerTurnRegistersCancelStopsTurn(t *testing.T) {
 		require.NoError(t, nt.bridge(t, manager, managed).enqueue(t.Context(), &bridgeRequest{inbound: origin, producer: nt.bridge(t, manager, private)}, "test"))
 	}
 
-	// The held history lock parks the handler in activation, after it took the producer's request.
 	tx, err := nt.service.db.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 	require.NoError(t, lockSessionHistory(t.Context(), tx, private))
@@ -493,8 +471,6 @@ func TestStopBeforeProducerTurnRegistersCancelStopsTurn(t *testing.T) {
 	assert.Len(t, nt.requests, 1)
 }
 
-// Turn IDs key turns across conversations, so two issued within one
-// clock tick still differ, in issue order.
 func TestNewTurnIDIncreases(t *testing.T) {
 	t.Parallel()
 
@@ -510,8 +486,6 @@ func TestNewTurnIDIncreases(t *testing.T) {
 	}
 }
 
-// AE2: shutdown cancels a turn blocked on the model at once, publishes nothing,
-// and leaves its row running for the next start.
 func TestShutdownCancelsTurnWithoutPublishing(t *testing.T) {
 	t.Parallel()
 
@@ -532,7 +506,6 @@ func TestShutdownCancelsTurnWithoutPublishing(t *testing.T) {
 	assert.NotEmpty(t, testTurnStepKeys(t, service, bridge.config.ConversationID), "recorded steps survive")
 }
 
-// Startup wakes every row's worker; a private External MCP row runs on its destination.
 func TestStartActiveTurnsStartsRowWorkers(t *testing.T) {
 	t.Parallel()
 
@@ -566,7 +539,6 @@ func TestStartActiveTurnsStartsRowWorkers(t *testing.T) {
 	assert.Contains(t, logs.String(), `msg="active turn worker conversation is not recorded" component=thread_bridges conversation_id=`+unrecordedID)
 }
 
-// seedProducerEffects records a hidden run's schedule changes under its turn, as its tools do.
 func seedProducerEffects(t *testing.T, store *SessionService, conversationID, turnID string, effects ...producerEffect) {
 	t.Helper()
 
@@ -575,8 +547,6 @@ func seedProducerEffects(t *testing.T, store *SessionService, conversationID, tu
 	require.NoError(t, store.SaveTurnStep(t.Context(), conversationID, turnID+producerEffectsStep, data))
 }
 
-// newTestBridgeManager returns a running manager of real bridges that publish to
-// finals, and the shutdown that stops its loops.
 func newTestBridgeManager(t *testing.T, cfg *config.LockedConfig, service *SessionService, finals chan *protocol.OutboundMessage) (manager *threadBridgeManager, shutdown func()) {
 	t.Helper()
 
@@ -588,8 +558,6 @@ func newTestBridgeManager(t *testing.T, cfg *config.LockedConfig, service *Sessi
 	return manager, runTestManager(t, manager)
 }
 
-// A one-time reminder that came due while the process was down runs once at the next startup, and
-// the startup after that does not run it again.
 func TestOverdueScheduledTurnRunsOnceAfterRestart(t *testing.T) {
 	t.Parallel()
 
@@ -616,9 +584,6 @@ func TestOverdueScheduledTurnRunsOnceAfterRestart(t *testing.T) {
 	require.Never(t, func() bool { return len(requests) > 0 }, 300*time.Millisecond, 10*time.Millisecond, "the reminder ran once")
 }
 
-// A reply running when the agent pauses finishes, also across restarts, and takes no agent's steer;
-// the pause line posts at once, above it. The pause holds the queued work and the steer's row; resume posts
-// its line before the turns it releases, which run both and answer the steer's writer.
 func TestPausedChatFinishesInterruptedReply(t *testing.T) {
 	t.Parallel()
 
@@ -680,9 +645,6 @@ func TestPausedChatFinishesInterruptedReply(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond, "the steer's writer gets its reply once the turn that took it ends")
 }
 
-// A paused chat's goal, queued item, due schedules and Completion Note wake all wait across a restart,
-// and refusing the goal's continuation leaves the goal active. Resume runs the goal's turn first, which takes
-// the Completion Note, then each of the rest once, a recurring schedule that came due several times included.
 func TestPausedChatHoldsWorkUntilResume(t *testing.T) {
 	t.Parallel()
 
@@ -726,7 +688,6 @@ func TestPausedChatHoldsWorkUntilResume(t *testing.T) {
 
 	assert.Empty(t, released, "each held item runs after the goal")
 
-	// The Completion Note joins the goal's running turn at its next step rather than waking a turn of its own.
 	for range 4 {
 		readFinal(t, finals)
 	}
@@ -734,12 +695,10 @@ func TestPausedChatHoldsWorkUntilResume(t *testing.T) {
 	require.Never(t, func() bool { return len(requests) > 0 }, 300*time.Millisecond, 10*time.Millisecond, "each runs once")
 }
 
-// newCronTestManager returns a manager and the published finals.
 func newCronTestManager(t *testing.T, service *SessionService) (manager *threadBridgeManager, cfg *config.Config, finals chan *protocol.OutboundMessage) {
 	t.Helper()
 
 	cfg = &config.Config{Workspace: t.TempDir()}
-	// A cron's report chat reads the agents, as in any workspace.
 	require.NoError(t, os.MkdirAll(filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), "agents"), 0o755))
 
 	finals = make(chan *protocol.OutboundMessage, 4)
@@ -762,7 +721,6 @@ func seedCronRun(t *testing.T, service *SessionService, runID string) *protocol.
 	return msg
 }
 
-// A cron run with an empty reply reports nothing: it opens no chat and stays unbound.
 func TestSilentCronRunOpensNoReportChat(t *testing.T) {
 	t.Parallel()
 
@@ -794,7 +752,6 @@ func TestSilentCronRunOpensNoReportChat(t *testing.T) {
 	assert.False(t, reportsTo.Valid, "the run reports to no chat until it is continued in Web")
 }
 
-// A cron run resumed after a restart marks the Cron tabs when its turn ends, the overview in its agent's space.
 func TestResumedCronRunMarksCronTabs(t *testing.T) {
 	t.Parallel()
 
@@ -819,8 +776,6 @@ func TestResumedCronRunMarksCronTabs(t *testing.T) {
 	assert.ElementsMatch(t, []string{alice + " /cron loud", alice + " /cron/daily loud"}, locationMarks(t, nt.service, "Run finished"), "not Bob's overview of another space")
 }
 
-// AE2: a scheduled cron row resumed after restart opens its Web report chat, which shows
-// the run's history.
 func TestResumedCronRowOpensReportChat(t *testing.T) {
 	t.Parallel()
 
@@ -850,7 +805,6 @@ func TestResumedCronRowOpensReportChat(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, KindWebChat, kind)
 
-	// The cron names no space, so the report chat is born in its agent's.
 	spaces, err := service.Spaces(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, "Reports", spaces[len(spaces)-1].Name)
@@ -938,7 +892,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 		}
 
 		if strings.Contains(string(body), "function_call_output") {
-			writeRawRunMessage(t, w, "done", "done", "") // A silent reply.
+			writeRawRunMessage(t, w, "done", "done", "")
 			return
 		}
 
@@ -970,14 +924,10 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 		assert.Equal(t, "[ScheduledMessage source=Cron]", message.Origin, "a cron run's scheduled messages keep its source")
 	}
 
-	// The live tool schedules beyond the test timeout, so HTTP/database latency
-	// cannot make correct due-time Web creation fail this pre-due assertion.
 	_, recorded, err := service.Thread("web:cron:daily")
 	require.NoError(t, err)
 	require.False(t, recorded, "Web creation waits until due")
 
-	// Update only the one-shot due times here to control due data, not the production
-	// clock; leave the recurring schedule unchanged.
 	due := time.Now().Add(time.Second)
 
 	var recurringEffect protocol.ScheduledMessageState
@@ -999,7 +949,7 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 	require.NoError(t, manager.PickLaterWork(t.Context(), "cron:daily"))
 
 	remaining := []string{"follow up", "second follow up"}
-	// Concurrent claims are deferred: two finals need not mean two distinct prompts.
+
 	require.Eventually(t, func() bool {
 		for len(finals) > 0 {
 			final := readFinal(t, finals)
@@ -1099,7 +1049,6 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 
 	var recoveryDSN []string
 
-	// Failures across startup, live, and due entry paths.
 	for _, state := range []string{"completed before Sync", "binding before projection", "existing Web", "reset cancels", "reset then future", "creation failure", "active creation failure", "live Sync failure", "due read failure"} {
 		t.Run(state, func(t *testing.T) {
 			shared := state != "active creation failure"
@@ -1119,8 +1068,6 @@ func TestSilentCronLiveToolKeepsSchedulesPrivateUntilDue(t *testing.T) {
 DELETE FROM conversations WHERE conversation_id IN ('cron:pending', 'web:cron:pending')`)
 				require.NoError(t, err)
 				t.Cleanup(func() {
-					// Managers join first. Reserve the sole connection before closing this pool,
-					// so unjoined timer callbacks cannot write into the next case's schema.
 					conn, err := store.db.Conn(context.Background())
 					require.NoError(t, err)
 					require.NoError(t, store.Stop())
@@ -1177,9 +1124,6 @@ DELETE FROM conversations WHERE conversation_id IN ('cron:pending', 'web:cron:pe
 				bridge.config.ConversationID, bridge.threads = "cron:pending", manager
 
 				t.Cleanup(bridge.Stop)
-				// Fail metadata reads only after delivery closes the original turn.
-				// A sequence proves the failed attempt even when its query rolls back.
-				// STABLE lets reads that select no producer routing, as notify triggers do, skip it.
 				_, err = store.db.ExecContext(t.Context(), `
 CREATE SEQUENCE handoff_reads;
 ALTER TABLE conversations RENAME TO unavailable_conversations;
@@ -1245,17 +1189,14 @@ SELECT conversation_id, revert_message_id, paused, reports_to, unavailable_produ
 				}()
 
 				if state == "active creation failure" {
-					// A due timer can start this request before the old process stops.
 					require.NoError(t, manager.PickLaterWork(t.Context(), "cron:pending"))
 					require.Contains(t, <-calls, "original job")
 				}
 
 				if !strings.HasPrefix(state, "live ") {
-					// Lose the failed process: recovery uses only retained routing and effects.
 					shutdown()
 
 					manager, _ = newTestBridgeManager(t, runtime, store, outbounds)
-					// Match app startup: a timer may already have claimed the due turn.
 					require.NoError(t, manager.StartActiveTurns(t.Context()))
 				}
 			}
@@ -1286,7 +1227,7 @@ SELECT conversation_id, revert_message_id, paused, reports_to, unavailable_produ
 					}
 
 					t.Logf("recovered handoff: provider_requests=%d finals=%d database=%+v", len(calls), len(outbounds), store.db.Stats())
-					// Bound diagnostic SQL, not the test timeout, so a busy pool cannot stall cleanup.
+
 					ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 					defer cancel()
 
@@ -1319,8 +1260,7 @@ FROM conversations WHERE conversation_id IN ('cron:pending', 'web:cron:pending')
 			pending, err := store.ScheduledMessages()
 			require.NoError(t, err)
 			require.Empty(t, pending, "the completed one-shot has no executable row")
-			// Inspect prior calls before rediscovery; concurrent claims are outside
-			// this contract, but rediscovery must not rearm consumed work.
+
 			for len(calls) > 0 {
 				assert.Contains(t, <-calls, "original job")
 			}
@@ -1331,7 +1271,6 @@ FROM conversations WHERE conversation_id IN ('cron:pending', 'web:cron:pending')
 	}
 }
 
-// A failed scheduled cron run posts no report root, live or resumed.
 func TestFailedCronRunOpensNoReportChat(t *testing.T) {
 	t.Parallel()
 
@@ -1352,7 +1291,6 @@ func TestFailedCronRunOpensNoReportChat(t *testing.T) {
 	assert.False(t, recorded)
 }
 
-// A report that cannot open its chat, here because the agents no longer load, fails delivery.
 func TestCronReportFailsWhenAgentsDoNotLoad(t *testing.T) {
 	t.Parallel()
 
@@ -1371,8 +1309,6 @@ func TestCronReportFailsWhenAgentsDoNotLoad(t *testing.T) {
 	assert.False(t, recorded)
 }
 
-// A run already bound to a chat reports there: delivery keeps that chat and its agent, and
-// the turn closes.
 func TestCronReportKeepsBoundDestination(t *testing.T) {
 	t.Parallel()
 
@@ -1402,8 +1338,6 @@ func TestCronReportKeepsBoundDestination(t *testing.T) {
 	assert.Equal(t, existing, owner)
 }
 
-// A cron follows its agent: a sticky: global agent's run reports into its sticky session, opening it when
-// there is none, and that is the session a new Web session resumes. An ordinary chat of the agent is not it.
 func TestStickyGlobalCronReportsToStickySession(t *testing.T) {
 	t.Parallel()
 
@@ -1463,8 +1397,6 @@ func TestStickyGlobalCronReportsToStickySession(t *testing.T) {
 	}
 }
 
-// A silent sticky: global run's due reminder hands the run to the agent's sticky session, not to a chat of
-// its own.
 func TestStickyGlobalCronReminderOpensStickySession(t *testing.T) {
 	t.Parallel()
 
@@ -1479,7 +1411,6 @@ func TestStickyGlobalCronReminderOpensStickySession(t *testing.T) {
 	readFinal(t, finals)
 	require.NoError(t, service.PutScheduledMessage("later", &protocol.ScheduledMessageState{ConversationID: "cron:daily", Agent: "job", Message: "follow up", DueAt: time.Now().Add(-time.Minute)}))
 
-	// Web creation, a different cron's report, and this run's due reminder compete for the first session.
 	require.NoError(t, (&Runtime{Sessions: service}).CreateConversation(t.Context(), protocol.Conversation{ID: "cron:report", Agent: "job", CreatedBy: "cron", Run: &protocol.CronRun{Path: "cron/report.md"}}))
 	report := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: "cron:report", Agent: "job", SessionService: service}, slog.New(slog.DiscardHandler))
 	report.threads = manager
@@ -1544,9 +1475,6 @@ func TestStickyGlobalCronReminderOpensStickySession(t *testing.T) {
 	assert.False(t, recorded)
 }
 
-// AE3: an interrupted private External MCP turn, and an External MCP request
-// still queued behind work, each finish after restart on the destination worker,
-// and their result reaches the paired thread once.
 func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 	t.Parallel()
 
@@ -1643,8 +1571,6 @@ func TestPrivateExternalMCPWorkResumesAndSyncsOnce(t *testing.T) {
 	}
 }
 
-// AE7: a turn waiting on ask_user_question at shutdown asks the same question
-// again after restart, the answer continues the turn, and a later turn can still ask.
 func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 	t.Parallel()
 
@@ -1665,7 +1591,6 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 			return
 		}
 
-		// Platform tools run inside execute.
 		writeRawRunFunctionCall(t, w, "resp_1", "execute", struct {
 			Code string `json:"code"`
 		}{Code: "def main():\n    return ask_user_question(question=\"Ship?\", details=\"\", options=[], multiple=False)\n"})
@@ -1744,8 +1669,6 @@ func TestPendingQuestionContinuesAfterRestart(t *testing.T) {
 	assert.Equal(t, "answer", readFinal(t, finals).Text)
 }
 
-// KTD10: a steer accepted but not yet injected before a restart is injected
-// exactly once by the resumed turn.
 func TestSteerAcceptedBeforeRestartIsInjectedOnce(t *testing.T) {
 	t.Parallel()
 
@@ -1762,7 +1685,6 @@ func TestSteerAcceptedBeforeRestartIsInjectedOnce(t *testing.T) {
 		require.NoError(t, running.Wait())
 	})
 
-	// A non-human turn, as a goal continuation or an agent-created session's first prompt, takes steers.
 	msg := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "hello", false)
 	require.NoError(t, first.Submit(t.Context(), msg))
 	<-requests
@@ -1783,7 +1705,6 @@ func TestSteerAcceptedBeforeRestartIsInjectedOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, queued, "the late steer is not a new queued turn")
 
-	// The stopped loop drains accepted requests before the next process can resume.
 	require.NoError(t, running.Wait())
 	runTestBridge(t, newBridge())
 	assert.Contains(t, readFinal(t, finals).Text, "answer")
@@ -1812,8 +1733,6 @@ func TestSteerAcceptedBeforeRestartIsInjectedOnce(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(string(recorded), "and the metrics"), "the shutdown steer is in history once")
 }
 
-// R21, R19: a resumed turn that fails posts the normal internal-error final,
-// and nothing it posts mentions the restart.
 func TestResumedTurnFailurePostsInternalErrorFinal(t *testing.T) {
 	t.Parallel()
 
@@ -1858,7 +1777,6 @@ func TestResumedTurnFailurePostsInternalErrorFinal(t *testing.T) {
 	}
 }
 
-// A resumed turn does not post its web input's consume card a second time.
 func TestResumedTurnPostsConsumeCardOnce(t *testing.T) {
 	t.Parallel()
 
@@ -1898,8 +1816,6 @@ func TestResumedTurnPostsConsumeCardOnce(t *testing.T) {
 	assert.Empty(t, consumed, "the consume card is posted once")
 }
 
-// A row runs before a live message that reaches the conversation as soon as
-// connectors accept input.
 func TestRowRunsBeforeLiveMessage(t *testing.T) {
 	t.Parallel()
 
@@ -1916,10 +1832,6 @@ func TestRowRunsBeforeLiveMessage(t *testing.T) {
 	assert.NotEqual(t, "turn-waiting", readFinal(t, finals).TurnID)
 }
 
-// An output-decision retry interrupted mid-way resumes that retry without
-// repeating the finished first turn, and delivers once.
-// A cron turn mid-flight does not hold up shutdown: once bridges stop, the cron
-// runner's RunTurn returns, so cron manager Stop does not block.
 func TestShutdownReleasesCronRunnerWait(t *testing.T) {
 	t.Parallel()
 
@@ -1966,10 +1878,6 @@ func TestShutdownReleasesCronRunnerWait(t *testing.T) {
 	assert.Empty(t, destinationQueue)
 }
 
-// U7, AE4: a saved workflow interrupted by shutdown after two finished phases and
-// one of two parallel workers resumes without re-running any finished worker. Its
-// summary matches an uninterrupted run, and $stop on the resumed run still stops it.
-// A workflow turn's steps run with the environment of an ordinary turn, such as the person who asked.
 func TestWorkflowTurnStepsSeeTurnEnvironment(t *testing.T) {
 	t.Parallel()
 
@@ -2161,8 +2069,6 @@ def main(args):
 	}
 }
 
-// restart starts nt's bridges the way a new process does, settling the Background Jobs a stopped
-// one left running before any turn resumes.
 func (nt *noteTest) restart(t *testing.T) (manager *threadBridgeManager, shutdown func()) {
 	t.Helper()
 
@@ -2179,7 +2085,6 @@ func killedExecuteNote(jobID string) string {
 	return `<execute id="` + jobID + `" state="killed" description="tests">` + "\nThe job was killed because the server restarted.\n</execute>"
 }
 
-// The killed script's note waits for the conversation's next turn and starts no turn of its own.
 func TestRestartReportsKilledScriptAtNextTurn(t *testing.T) {
 	t.Parallel()
 
@@ -2201,7 +2106,6 @@ func TestRestartReportsKilledScriptAtNextTurn(t *testing.T) {
 	assert.Equal(t, []string{"turn-0/call/a consumed false"}, noteStates(t, nt.service))
 }
 
-// A subagent cut by a restart resumes its journaled turn, then delivers its note; a second start replays nothing.
 func TestRestartResumesBackgroundSubagent(t *testing.T) {
 	t.Parallel()
 
@@ -2213,7 +2117,7 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 		case strings.Contains(body, `"instructions":"Research`):
 			select {
 			case <-cut:
-				<-r.Context().Done() // The restart cuts the subagent's first run.
+				<-r.Context().Done()
 				return
 			default:
 			}
@@ -2231,7 +2135,7 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 	registry := nt.bridge(t, first, nt.conversationID).background
 	require.NoError(t, nt.bridge(t, first, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
 
-	for range 3 { // The task call, the subagent's cut run, and the turn's answer.
+	for range 3 {
 		nt.request(t)
 	}
 
@@ -2262,9 +2166,6 @@ func TestRestartResumesBackgroundSubagent(t *testing.T) {
 	assert.Empty(t, nt.requests, "a second start replays nothing")
 }
 
-// A crash while a foreground task call waits on its subagent writes nothing, so both turns stay running.
-// The next start runs the subagent's prompt once, and the parent's replayed call delivers nothing again and
-// answers with that run.
 func TestCrashDuringForegroundTaskRunsSubagentOnce(t *testing.T) {
 	t.Parallel()
 
@@ -2276,7 +2177,7 @@ func TestCrashDuringForegroundTaskRunsSubagentOnce(t *testing.T) {
 		case strings.Contains(body, `"instructions":"Research`):
 			select {
 			case <-cut:
-				<-r.Context().Done() // The crash freezes the subagent's first run.
+				<-r.Context().Done()
 				return
 			default:
 			}
@@ -2290,7 +2191,6 @@ func TestCrashDuringForegroundTaskRunsSubagentOnce(t *testing.T) {
 	})
 	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n---\nPrompt\n")
 
-	// A crash runs no shutdown: the first process's bridges stay frozen while a new one starts on the same State Store.
 	first, _ := nt.run(t, ignoreOutbound)
 	require.NoError(t, nt.bridge(t, first, nt.conversationID).Submit(t.Context(), nt.slackPrompt("hello")))
 	nt.request(t)
@@ -2313,8 +2213,6 @@ SELECT item->>'input_id' FROM items WHERE item->>'input_id' <> ''`, "subagent in
 	assert.Len(t, inputs, 1, "the subagent took its prompt once")
 }
 
-// The killed note wakes the hidden cron run, and its follow-up is posted in the thread the run posted.
-// The wake's reviews name the run's cron source.
 func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 	t.Parallel()
 
@@ -2328,7 +2226,6 @@ func TestRestartWakesHiddenRunForKilledScript(t *testing.T) {
 		case !strings.Contains(body, "function_call_output"):
 			writeRawRunFunctionCall(t, w, "act", "execute", executeBashScript("true"))
 		default:
-			// A cron run's reply is its report.
 			_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Report finished.","annotations":[]}]}]}`))
 		}
 	})
@@ -2378,7 +2275,6 @@ func reviewPrompt(t *testing.T, body string) string {
 	return messages[len(messages)-1].text
 }
 
-// A second start replays nothing.
 func TestRestartWakesUndeliveredNote(t *testing.T) {
 	t.Parallel()
 
@@ -2418,12 +2314,6 @@ func TestRestartDropsJobsOfDeletedConversation(t *testing.T) {
 	assert.Empty(t, backgroundRows(t, nt.service))
 }
 
-// A task runs its subagent as a session of its own: the subagent's turn runs on that session's bridge
-// and saves into its history, the parent's call answers with that turn, and the session stays out of
-// the sidebar and of rocketclaw_sessions_write. A replayed write delivers nothing again and a replayed
-// wait answers from the saved turn without a model call. A steer joins the subagent's running turn.
-// The subagent acts for its top-level session, delegates no deeper than that session's agent allows,
-// and answers with what a top-level turn shows as its final answer, never its commentary.
 func TestTaskRunsSubagentAsSession(t *testing.T) {
 	t.Parallel()
 
@@ -2492,7 +2382,6 @@ func TestTaskRunsSubagentAsSession(t *testing.T) {
 	_, err = nt.service.checkTopLevelSession(t.Context(), subagent)
 	require.ErrorContains(t, err, "is not a top-level session", "the sidebar and rocketclaw_sessions_write never reach a subagent")
 
-	// With no turn of its own running, a hidden run's subagent acts, as the run does, for the run's visible destination.
 	nt.waitIdle(t, manager, nt.conversationID)
 	recordTestConversations(t, nt.service, "main", map[string]ConversationKind{"web-chat": KindWebChat})
 	_, err = nt.service.db.ExecContext(t.Context(), `UPDATE conversations SET producer_inbound_json = '{"SyncDestination":"web-chat"}', reports_to = 'web-chat' WHERE conversation_id = $1`, nt.conversationID)
@@ -2519,7 +2408,6 @@ SELECT item->>'input_id' FROM items WHERE item->>'input_id' <> ''`, "subagent in
 	assert.Equal(t, []string{"found it", "researcher"}, []string{answer, final.Agent})
 	assert.Empty(t, nt.requests, "a replayed call delivers nothing and answers from the saved turn")
 
-	// A continue's prompt runs as the subagent's next turn; a steer joins it while it runs.
 	_, err = parent.WriteSubagent(t.Context(), &harness.SubagentWrite{Key: harness.ChildKey{Path: key}, CallKey: "turn-2/call/c", Agent: "researcher", Delegator: "main", Prompt: "check again", Mode: harness.ContinueEnqueue})
 	require.NoError(t, err)
 	nt.request(t)
@@ -2538,11 +2426,6 @@ SELECT item->>'input_id' FROM items WHERE item->>'input_id' <> ''`, "subagent in
 	assert.Empty(t, replyQueueItems(t, nt.service), "a task's prompts get no session reply")
 }
 
-// Stopping a parent stops the turn of the subagent its task call waits on (OpenCode
-// packages/core/src/tool/plugin/subagent.ts), here a turn ahead of the parent's prompt. The prompt is not
-// withdrawn but held, through a restart, while the rest of the subagent's queue moves on, until the next
-// write there, here a person's in Web, runs it just before that write. Its answer stays in the subagent's
-// transcript. The parent gets no note, so it stays stopped.
 func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 	t.Parallel()
 
@@ -2621,10 +2504,6 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 	assert.Empty(t, nt.requests, "the parent stays stopped")
 }
 
-// R14: a helper woken by its own late Background Job after its task call returned reports its new answer to
-// its parent, level by level up to the top-level session, as a note that continues it. A busy parent takes
-// the note into its running turn; an idle one wakes once, also when a restart came before it heard. A wake
-// turn that took a task's steer answers that task call instead.
 func TestSubagentWakeReportsUp(t *testing.T) {
 	t.Parallel()
 
@@ -2650,7 +2529,6 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 			}
 
 			nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, _ int, body string) {
-				// The first request of the busy parent or of the steered helper waits for release.
 				select {
 				case <-hold:
 					select {
@@ -2687,7 +2565,7 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 
 			var manager *threadBridgeManager
 
-			if tc.cut { // The helper's wake turn ended, but the process stopped before its parent heard.
+			if tc.cut {
 				inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", false)
 				inbound.Metadata = map[string]string{backgroundNotesMetadataKey: "turn-0/call/x"}
 				require.NoError(t, startTurnDB(t.Context(), nt.service.db, "turn-1", helper, inbound))
@@ -2714,7 +2592,6 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 				require.True(t, steered, "the steer joins the helper's wake turn")
 				close(release)
 
-				// The task call's wait, as a restart resumes it, answers as the call would.
 				answer, err := manager.continueSubagent(t.Context(), &backgroundJob{conversationID: nt.conversationID, jobID: "turn-2/call/s", subagentKey: "/a"})
 				require.NoError(t, err)
 				assert.Equal(t, "<task_result>\nfound it\nlogs fine\n</task_result>", answer, "the task call gets the wake turn's answer")
@@ -2753,11 +2630,6 @@ func TestSubagentWakeReportsUp(t *testing.T) {
 	}
 }
 
-// A subagent acts for its top-level session's running turn, as it did when it ran inside that turn:
-// the files it attaches reach that turn's reply, and the sessions it creates keep that turn's creator
-// and limits: a trusted person login when known, or a cron run's own agent and cron creator. Its shell
-// sees that turn's person and External MCP metadata. It is not offered scheduling, even when its agent
-// allows it.
 func TestSubagentActsForRootTurn(t *testing.T) {
 	t.Parallel()
 
@@ -2832,7 +2704,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 				}
 
 				t.Logf("subagent root reply: expected_conversation=%s provider_requests=%d helper_requests=%d reviews=%d finals=%d database=%+v", root, len(nt.requests), len(helper), len(reviews), len(nt.finals), nt.service.db.Stats())
-				// Bound diagnostic SQL only; preserve the original final-reply wait.
+
 				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 				defer cancel()
 
@@ -2864,15 +2736,11 @@ FROM turns t LEFT JOIN conversations c USING (conversation_id) ORDER BY t.id`, "
 	}
 }
 
-// As when subagents ran inside their task calls, a subagent whose task call, or an ancestor's, runs in the
-// background left the turn it acts for, so its turn-bound tools refuse, whether or not that turn still
-// runs. A subagent its task calls wait for, up to its top-level turn, keeps them.
 func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 	t.Parallel()
 
 	const refusal = "Refused: %[1]s did nothing, because this call now runs as background work, after the turn it acts on. Nothing was shown to the user, and nobody will answer. This text is not %[1]s's result or the user's answer. Decide without it, or call %[1]s in the turn that receives this job's result."
 
-	// Each tool and each mode once: one wrapper refuses both tools, and only attach has a detached-work branch.
 	for _, tc := range []struct {
 		tool, call, done   string
 		background, nested bool
@@ -2885,9 +2753,6 @@ func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 		t.Run(fmt.Sprintf("%s/background=%t/nested=%t", tc.tool, background, tc.nested), func(t *testing.T) {
 			t.Parallel()
 
-			// A background subagent's first model request waits until its top-level turn ended; a foreground
-			// subagent's top-level turn waits for it. Nested, the background subagent, a lead, starts the
-			// researcher in the foreground.
 			rootDone, results := make(chan struct{}), make(chan string, 1)
 			if !background {
 				close(rootDone)
@@ -2932,7 +2797,7 @@ func TestBackgroundSubagentRefusesTurnBoundTools(t *testing.T) {
 				}
 
 				t.Logf("turn-bound subagent: provider_requests=%d tool_results=%d finals=%d database=%+v", len(nt.requests), len(results), len(nt.finals), nt.service.db.Stats())
-				// Bound diagnostic SQL only; keep the original reply and tool waits.
+
 				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 				defer cancel()
 
@@ -2963,7 +2828,7 @@ FROM turns t LEFT JOIN conversations c USING (conversation_id) ORDER BY t.id`, "
 
 			if background {
 				assert.Contains(t, body, "["+fmt.Sprintf(refusal, tc.tool)+"]")
-				readFinalFor(t, nt.finals, nt.conversationID) // The job's note wakes the top-level session.
+				readFinalFor(t, nt.finals, nt.conversationID)
 			} else {
 				assert.Contains(t, body, tc.done)
 				assert.Len(t, final.Attachments, map[string]int{restartToolName: 0, attachFilesToolName: 1}[tc.tool], "a foreground subagent's file reaches its top-level turn's reply")

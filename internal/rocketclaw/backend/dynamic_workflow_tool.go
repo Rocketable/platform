@@ -40,8 +40,6 @@ func parseDynamicWorkflowParams(raw json.RawMessage) (dynamicWorkflowParams, err
 	return params, nil
 }
 
-// dynamicWorkflowTool runs a workflow's steps with shellEnv, the environment of the turn that calls it,
-// originHeader, that turn's trusted origin header, and shell, that turn's agent's shell.
 func (b *Bridge) dynamicWorkflowTool(permissions harness.PermissionSet, agentName, tagConversationID string, definitions map[string]*workflow.Definition, shellEnv map[string]string, originHeader string, shell *harness.CustomShell) (harness.Tool, bool) {
 	allowed := slices.DeleteFunc(workflow.Descriptions(definitions), func(description protocol.WorkflowDescription) bool {
 		return !permissions.Enabled("workflow", description.Name)

@@ -41,7 +41,6 @@ PREPARE birth_space_lookup(text) AS UPDATE ONLY conversations SET space_id = NUL
 	require.NoError(t, err)
 
 	for range 2 {
-		// The foreign key clears birth spaces with this lookup when DeleteSpace removes a space.
 		plan, err := queryStrings(ctx, store.db, `EXPLAIN EXECUTE birth_space_lookup('birth')`, "birth-space lookup plan")
 		require.NoError(t, err)
 		require.Contains(t, strings.Join(plan, "\n"), "conversations_space")
@@ -149,7 +148,6 @@ SELECT pg_stat_force_next_flush();`)
 	require.Equal(t, 128, seen)
 }
 
-// saveEntryFacts saves each conversation's summary again, which reads its entry facts as a write does.
 func saveEntryFacts(t *testing.T, store *SessionService, ids ...string) {
 	t.Helper()
 
@@ -160,8 +158,6 @@ func saveEntryFacts(t *testing.T, store *SessionService, ids ...string) {
 	}
 }
 
-// A few chats receiving many cron reports must not make the listing read every entry or
-// conversation once per chat: the planner bet a walk in ID order would soon meet a report.
 func TestChatListingReadsScaleWithReportingRuns(t *testing.T) {
 	t.Parallel()
 
@@ -169,8 +165,6 @@ func TestChatListingReadsScaleWithReportingRuns(t *testing.T) {
 	store.db.SetMaxOpenConns(1)
 
 	ctx := t.Context()
-	// The planner reads only the statistics set here. Autovacuum, woken by these writes, would
-	// change them mid-test, and the read count with them, though never with entries.
 	_, err := store.db.ExecContext(ctx, `
 ALTER TABLE conversations SET (autovacuum_enabled = false);
 ALTER TABLE entries SET (autovacuum_enabled = false);
@@ -270,7 +264,6 @@ SET plan_cache_mode = force_generic_plan;`)
 		}
 	}
 
-	// Explain the actual prepared lookup, not a separately maintained query.
 	queries, err := queryStrings(ctx, store.db, `SELECT format('EXPLAIN EXECUTE %I(%s)', name,
     (SELECT string_agg('NULL', ',') FROM unnest(parameter_types)))
 FROM pg_prepared_statements WHERE statement LIKE '%mcp_external_metadata%' AND statement NOT LIKE '%pg_prepared_statements%'`, "metadata lookup statement")
@@ -325,7 +318,6 @@ SET plan_cache_mode = force_generic_plan;`)
 		require.Equal(t, tc.id, oldest)
 	}
 
-	// Explain the actual prepared history query, including its shared visibility check.
 	queries, err := queryStrings(ctx, store.db, `SELECT format('EXPLAIN EXECUTE %I(%s)', name,
     (SELECT string_agg('NULL', ',') FROM unnest(parameter_types)))
 FROM pg_prepared_statements WHERE statement = $1`, "history statement", transcriptPageSQL)
@@ -380,7 +372,6 @@ SET plan_cache_mode = force_generic_plan;`)
 	require.NoError(t, err)
 	require.Equal(t, []protocol.ShadowBinding{{ParentConversationID: "producer", ParentAgent: "sample-agent", ShadowAgent: "sample-agent/comparison", ChildConversationID: "producer/comparison"}}, view.Shadows)
 
-	// Both prepared queries use the shared producer lookup, not a copied test query.
 	queries, err := queryStrings(ctx, store.db, `SELECT format('EXPLAIN EXECUTE %I(%s)', name,
     array_to_string(array_fill('NULL'::text, ARRAY[cardinality(parameter_types)]), ','))
 FROM pg_prepared_statements WHERE starts_with(statement, $1) ORDER BY name`, "shadow history statements", shadowHistorySQL)
@@ -417,7 +408,6 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 
 	for _, outcome := range []string{"success", "cancel", "cancel waiting", "connection loss"} {
 		t.Run(outcome, func(t *testing.T) {
-			// The baseline's extension lock spans schemas, so unrelated startups need a different database.
 			name := "t_" + strings.ToLower(rand.Text())
 			_, err := admin.ExecContext(t.Context(), `CREATE DATABASE `+name)
 
@@ -442,7 +432,6 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 			_, err = db.ExecContext(t.Context(), `CREATE SCHEMA `+name)
 			require.NoError(t, err)
 
-			// The ledger exists, so the barrier holds every caller at its migration lock.
 			_, err = db.ExecContext(t.Context(), `CREATE TABLE pg_migrations (id text PRIMARY KEY, applied_at timestamptz)`)
 			require.NoError(t, err)
 			barrier, err := db.BeginTx(t.Context(), nil)
@@ -527,7 +516,6 @@ func TestSessionMigrationsSerializeStartup(t *testing.T) {
 
 			require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&n))
 			require.Equal(t, sessionMigrationCount(t), n)
-			// No migration lock may survive startup and poison later pool users.
 			require.Eventually(t, func() bool {
 				var locks int
 
@@ -570,13 +558,11 @@ func TestSessionMigrationsCancelPlanning(t *testing.T) {
 	cancel()
 	require.Error(t, work.Wait())
 	require.NoError(t, barrier.Rollback())
-	// A single connection must suffice on the next call, even after cancellation.
 	store.db.SetMaxOpenConns(1)
 	require.NoError(t, initializeSessionDB(t.Context(), store.db, slog.New(slog.DiscardHandler)))
 	require.NoError(t, store.db.PingContext(t.Context()))
 }
 
-// A migration commits with its ledger row or not at all, and a ledger row this binary does not know stops startup.
 func TestSessionMigrationRollsBackWithItsLedgerWrite(t *testing.T) {
 	t.Parallel()
 
@@ -608,9 +594,6 @@ func TestSessionMigrationRollsBackWithItsLedgerWrite(t *testing.T) {
 	require.ErrorContains(t, initializeSessionDB(ctx, db, slog.New(slog.DiscardHandler)), "unknown migration")
 }
 
-// A store the migrations through 059_legacy_handoff.sql built adopts the baseline in place, keeping
-// its rows and the later migrations it ran and dropping the legacy_ tables; a store that stopped
-// before 059 is refused unchanged.
 func TestInitializeSessionDBAdoptsReleasedStore(t *testing.T) {
 	t.Parallel()
 
@@ -639,7 +622,6 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM legacy_thread_queue`).Scan(&kept))
 	require.Equal(t, 1, kept)
 
-	// The later migrations already ran here; running them again would fail on what they created.
 	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
@@ -656,7 +638,6 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.Equal(t, []string{"chat"}, chats)
 }
 
-// 084 deletes the history no conversation owns, keeps the rest, and refuses any more of it.
 func TestHistoryRequiresConversationMigration(t *testing.T) {
 	t.Parallel()
 
@@ -691,7 +672,6 @@ func TestDropWebTabStateBlobMigration(t *testing.T) {
 
 	store := newTestSessionService(t)
 	ctx := t.Context()
-	// Back to before 061, with alice's tabs still the blob 060's release unpacks at startup.
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 61)
 	require.NoError(t, err)
 	_, err = store.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, state, revision) VALUES ('alice', '\x0a00', 1), ('bob', NULL, 1)`)
@@ -729,7 +709,6 @@ func TestDropSpawnedByMigration(t *testing.T) {
 
 	store := newTestSessionService(t)
 	ctx := t.Context()
-	// Back to before 073, with a session another session created.
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 73)
 	require.NoError(t, err)
 	_, err = store.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, spawned_by, kind, listed) VALUES ('child', 'main', 'Alice', 'parent', $1, TRUE)`, KindWebChat)
@@ -751,7 +730,6 @@ func TestDropGuardrailEntriesMigration(t *testing.T) {
 
 	store := newTestSessionService(t)
 	ctx := t.Context()
-	// Back to before 075, with a subagent session that saved a guardrail run ahead of its own turn.
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 75)
 	require.NoError(t, err)
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"sub": KindSubagent})
@@ -773,7 +751,6 @@ func TestSlackThreadsMigration(t *testing.T) {
 
 	store := newTestSessionService(t)
 	ctx := t.Context()
-	// Back to before 069, with an External MCP session, a cron report, and a mention each on a Slack thread.
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 69)
 	require.NoError(t, err)
 	require.NoError(t, store.RegisterExternalMCPConversation("ticket", "main", &ExternalMCPSessionState{Agent: "main", PrivateConversationID: "private", ManagedConversationID: "mcp"}))
@@ -805,7 +782,6 @@ func TestSpaceLastTabMigration(t *testing.T) {
 
 	store := newTestSessionService(t)
 	ctx := t.Context()
-	// Back to before 064: main's last tab is open, ops's last tab is closed.
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 64)
 	require.NoError(t, err)
 	_, err = store.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, space, revision) VALUES ('alice', 'main', 1);
@@ -822,8 +798,6 @@ INSERT INTO web_tabs (username, path, position, space, last) VALUES ('alice', '/
 	require.Equal(t, []string{"/search"}, rows, "closed tabs kept only as a space's last tab are dropped")
 }
 
-// 087 unpacks every Search page into rows, whatever protobuf JSON or an older Web left out, and its Down leaves the
-// search columns that held them.
 func TestWebSearchPagesMigration(t *testing.T) {
 	t.Parallel()
 
@@ -838,7 +812,6 @@ UNION ALL SELECT 'function' WHERE to_regprocedure('delete_search_page()') IS NOT
 	require.NoError(t, err)
 	require.Equal(t, []string{"web_closed_tabs search", "web_shared_tabs search", "web_tabs search"}, shape)
 
-	// Repeated search ids, an active search naming none, and no searches, board, name or notify at all.
 	_, err = store.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, space, revision) VALUES ('alice', 'main', 1);
 INSERT INTO web_tabs (username, path, position, space, search) VALUES
     ('alice', '/search/a', 0, 'main', '{"name":"Triage","board":"kanban","searches":[{"id":"1","query":"is:unread"},{"id":"2","name":"Mine","query":"principal:alice","notify":true}],"active":"2"}'),
@@ -868,8 +841,6 @@ INSERT INTO web_closed_tabs (username, path, space, search, closed_at) VALUES ('
 	require.Equal(t, []Tab{{Path: "/search/e", Space: "main", Search: &SearchPage{}}}, closed)
 }
 
-// 088 unpacks every Top Shelf into rows, keeping each tab of a live session under its canonical path and leaving out
-// what names no session, and its Down leaves the blob table and no collapsed column.
 func TestWebTopShelfRowsMigration(t *testing.T) {
 	t.Parallel()
 
@@ -883,9 +854,6 @@ WHERE table_schema = current_schema() AND (table_name = 'web_top_shelves' OR col
 	require.NoError(t, err)
 	require.Equal(t, []string{"web_top_shelves shelf", "web_top_shelves username"}, shape)
 
-	// Alice's shelf holds a remote tab, a live session, a deleted one, a Search page, a live session under its legacy
-	// URI-encoded path, a path that does not decode, two repeats of earlier tabs, the same path on another server, and a
-	// tab with no space. Bob and Carol have a shelf and no saved tab state.
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"a": KindWebChat, "C1:1.2": KindWebChat})
 	_, err = store.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, space, revision) VALUES ('alice', 'main', 3);
 INSERT INTO web_top_shelves (username, shelf) VALUES
@@ -922,8 +890,6 @@ INSERT INTO web_top_shelves (username, shelf) VALUES
 	assertNoOrphanSearchPages(t, store)
 }
 
-// 089 clears the deck: mutes, snoozes, unread marks, the tab rows kept only for a mark and the views of sessions go,
-// and tabs stay. Its Down leaves the mutes table, the mark columns and a position that may be NULL.
 func TestWebTabAttentionMigration(t *testing.T) {
 	t.Parallel()
 
@@ -938,7 +904,6 @@ ORDER BY table_name COLLATE "C", column_name`, "attention shape")
 	require.NoError(t, err)
 	require.Equal(t, []string{"web_tab_mutes conversation_id NO", "web_tab_mutes until YES", "web_tab_mutes username NO", "web_tabs group_id NO", "web_tabs marked_unread NO", "web_tabs position YES", "web_tabs unread_at YES"}, shape)
 
-	// Alice has a mute, an ended snooze, a mark on an open tab, her own mark on a closed one, and a view of a session.
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"a": KindWebChat, "b": KindWebChat})
 	_, err = store.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, space, viewing, viewed_at) VALUES ('alice', 2, 'main', 'a', now());
 INSERT INTO web_tab_mutes (username, conversation_id, until) VALUES ('alice', 'a', NULL), ('alice', 'b', now() - interval '1 day');
@@ -969,12 +934,10 @@ func TestMessageSearchMigrationSharesExtension(t *testing.T) {
 
 	t.Cleanup(func() { require.NoError(t, admin.Close()) })
 
-	// A fresh database has no pg_trgm yet, so concurrent schemas really race to create it.
 	name := "t_" + strings.ToLower(rand.Text())
 	_, err = admin.ExecContext(t.Context(), `CREATE DATABASE `+name)
 	require.NoError(t, err)
 
-	// Cleanups run in reverse, so this drop follows every schema connection's close.
 	t.Cleanup(func() {
 		_, err := admin.ExecContext(context.Background(), `DROP DATABASE `+name+` WITH (FORCE)`)
 		require.NoError(t, err)
@@ -1006,8 +969,6 @@ func TestMessageSearchMigrationSharesExtension(t *testing.T) {
 
 		t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-		// Hold the first caller at its baseline's ledger write, after it creates the extension; the
-		// second then waits for the extension.
 		_, err = db.ExecContext(t.Context(), `CREATE TABLE pg_migrations (id text PRIMARY KEY, applied_at timestamptz)`)
 		require.NoError(t, err)
 		barrier, err := db.BeginTx(t.Context(), nil)
@@ -1053,7 +1014,6 @@ func TestMessageSearchMigrationSharesExtension(t *testing.T) {
 	require.Equal(t, []string{"public"}, schemas)
 }
 
-// The trigram indexes serve a search for a three-character term over saved entries and ended turns.
 func TestMessageSearchSchema(t *testing.T) {
 	t.Parallel()
 
@@ -1081,8 +1041,6 @@ SET enable_seqscan = off;`)
 	require.Contains(t, strings.Join(plan, "\n"), "turns_search_text")
 }
 
-// An External MCP call for an existing external ID finds its binding in one row through the
-// external ID's unique index.
 func TestExternalMCPBindingLookupUsesOneIndexedRow(t *testing.T) {
 	t.Parallel()
 
@@ -1103,7 +1061,6 @@ SET plan_cache_mode = force_generic_plan;`)
 	require.True(t, found)
 	require.Equal(t, ExternalMCPSessionState{Agent: "job", PrivateConversationID: "private", ManagedConversationID: "managed"}, session)
 
-	// Explain the actual prepared lookup, not a separately maintained query.
 	queries, err := queryStrings(ctx, store.db, `SELECT format('EXPLAIN EXECUTE %I(%s)', name,
     array_to_string(array_fill('NULL'::text, ARRAY[cardinality(parameter_types)]), ','))
 FROM pg_prepared_statements WHERE statement = $1`, "binding lookup statement", externalMCPSessionSQL+` AND external_id = $1`)
@@ -1122,7 +1079,6 @@ func TestExternalMCPMetadataMigration(t *testing.T) {
 	store := newTestSessionService(t)
 	ctx := t.Context()
 	migrations := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
-	// Back to before migration 080, which moves caller metadata, with External MCP inbounds whose Metadata holds the caller's keys in each place an inbound is stored.
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrations, migrate.Down, 79)
 	require.NoError(t, err)
 
@@ -1193,7 +1149,6 @@ func TestExternalMCPMetadataMigration(t *testing.T) {
 	require.Equal(t, map[string]string{"ticket": "T-2"}, moved.ExternalMCPMetadata)
 	require.Equal(t, []string{kept, web}, []string{read(`SELECT inbound_json FROM turns WHERE id = 'kept'`), read(`SELECT inbound_json FROM turns WHERE id = 'web'`)}, "rows with nothing to move are untouched")
 
-	// A newer binary's rows: caller keys the older binary deleted stay out of Metadata, and Metadata wins a clash.
 	seed(`INSERT INTO turns (id, conversation_id, created_at_unix_ns, updated_at_unix_ns, inbound_json) VALUES
 ('newer', 'mcp', 5, 5, '{"Source":"external_mcp","Metadata":{"rocketclaw_principal":"alice","rocketclaw_raw_text":"hi","ticket":"own"},"ExternalMCPMetadata":{"ticket":"T-3","note":"n","rocketclaw_principal_name":"Mallory","rocketclaw_sender_agent":"main"}}'),
 ('system', 'mcp', 6, 6, '{"Source":"system","Metadata":null,"ExternalMCPMetadata":null}')`)

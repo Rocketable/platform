@@ -40,9 +40,6 @@ type searchTestMatch struct {
 	Text  string
 }
 
-// newSessionSearchFixture records the chats of the session-list.test.ts cases,
-// a cron producer, an External MCP private chat and a Delegation History, which
-// Web never shows.
 func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 	t.Helper()
 
@@ -89,7 +86,6 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 		require.NoError(t, err)
 	}
 
-	// A Delegation History is an unlisted subagent session; Web never shows it.
 	require.NoError(t, s.startSubagent(ctx, searchChatD, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "main"}))
 	_, err := s.AppendEntryID(ctx, searchChatD+"/call-1", testSessionEntry("billing delegated", "support child"))
 	require.NoError(t, err)
@@ -114,7 +110,7 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 				return "support", []string{"main"}, nil
 			}
 
-			return channel, nil, nil // An unresolved room shows its channel ID.
+			return channel, nil, nil
 		},
 		SlackTagsMatchingFunc: func(_ context.Context, needle string) []string {
 			if needle == "ada" {
@@ -213,15 +209,12 @@ func TestSearchSessionsPrincipalCriteria(t *testing.T) {
 	require.Equal(t, searchChatA, criteria[0].Chat.Session.Conversation.ID)
 }
 
-// Ported from session-list.test.ts; its unfinished words are read as free text.
 func TestSearchSessionsReadsTermsAndFilters(t *testing.T) {
 	t.Parallel()
 
 	s, slack := newSessionSearchFixture(t)
 	all := []string{searchChatA, searchChatX, searchChatH, searchChatB, searchChatW, searchChatD, searchChatE}
 
-	// Bind the hidden runs as production does: the External MCP run reports to its chat and the
-	// daily chat continues its run, which another agent ran.
 	daily := strings.TrimPrefix(searchChatD, "web:")
 	_, err := s.db.ExecContext(t.Context(), `UPDATE conversations SET reports_to = $1 WHERE conversation_id = 'external_mcp:private'`, searchChatX)
 	require.NoError(t, err)
@@ -360,7 +353,6 @@ func TestSearchSessionsFilters(t *testing.T) {
 
 	s, slack := newSessionSearchFixture(t)
 
-	// Free text is the caller's to match: it changes nothing here, and no message is read.
 	_, matches := searchTestSessions(t, s, slack, "tag:customer", SearchFilters)
 	require.Equal(t, []searchTestMatch{{searchChatA, "", ""}}, matches)
 
@@ -415,8 +407,6 @@ VALUES ('opencode:box:assigned', '', '', 'remote', FALSE, 'remote', 'box', 'assi
 	require.Empty(t, matches)
 }
 
-// Turn ends that mark sessions unread are written directly; alice's view of searchChatW clears its mark, and her
-// parked searchChatH is not bold. The fixture opens no tabs, so every marked session's tab is closed.
 func TestSearchSessionsUnread(t *testing.T) {
 	t.Parallel()
 
@@ -456,9 +446,6 @@ VALUES ('alice', $6, $1, now(), FALSE), ('alice', $7, $2, now(), TRUE), ('alice'
 	require.Empty(t, criteria, "the agent tool searches for no person")
 }
 
-// Work terms count a chat's hidden runs as its own: W asks a question, B's question is answered, the
-// External MCP run reporting to X runs, A and W hold queued items, and H, named "external mcp notes",
-// only a reminder.
 func TestSearchSessionsWorkTerms(t *testing.T) {
 	t.Parallel()
 
@@ -507,8 +494,6 @@ func TestSearchSessionsWorkTerms(t *testing.T) {
 	require.Len(t, criteria, 1, "the agent tool reads the same terms")
 	require.Equal(t, searchChatW, criteria[0].Chat.Session.Conversation.ID)
 
-	// The fixture's chats were last updated in January; work arriving now makes A, W and X recent,
-	// while idle D and E stay out.
 	since := strings.TrimSuffix(time.Now().Add(-24*time.Hour).UTC().Format(time.RFC3339Nano), "Z")
 	for query, want := range map[string][]string{"is:queued": {searchChatA, searchChatW}, "agent:main": {searchChatX, searchChatA}} {
 		_, criteria, err := s.searchSessionsWithin(ctx, query, &sessionListParams{Since: since}, slack)
@@ -523,9 +508,6 @@ func TestSearchSessionsWorkTerms(t *testing.T) {
 	}
 }
 
-// An ASCII needle reads only the chats whose words may hold it, so each word a match can come from
-// must keep its chat: a cron run's time and kind, a pair spanning its "=", and names whose İ
-// and K (Kelvin sign) lowercase into ASCII.
 func TestSearchSessionsReadsEveryMatchingWord(t *testing.T) {
 	t.Parallel()
 
@@ -558,7 +540,6 @@ func TestSearchSessionsReadsEveryMatchingWord(t *testing.T) {
 	}
 }
 
-// searchCandidates reads every rune Go lowercases into a non-ASCII rune among its simple case folds.
 func TestSimpleFoldsHoldWhatLowercasesIntoRune(t *testing.T) {
 	t.Parallel()
 
@@ -577,7 +558,6 @@ func TestSimpleFoldsHoldWhatLowercasesIntoRune(t *testing.T) {
 	}
 }
 
-// A narrow search reads each candidate and chat with hits once, or every chat when they are many.
 func TestReadChats(t *testing.T) {
 	t.Parallel()
 
@@ -599,7 +579,6 @@ func TestSearchSessionsMessageHits(t *testing.T) {
 	s, slack := newSessionSearchFixture(t)
 	hitB := "ping <@U7> on support billing"
 
-	// The Delegation History's messages also hold billing and support; it neither matches nor hits.
 	for _, tc := range []struct {
 		query    string
 		hits     []string
@@ -644,7 +623,6 @@ func TestSearchSessionsSortOrder(t *testing.T) {
 	}
 
 	insertSessionEntryWithoutSummary(t, s, "c", testSessionEntry("old", "answer"))
-	// A summary missing since before migration 052, which still stored that the chat has entries.
 	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = TRUE WHERE conversation_id = 'c'`)
 	require.NoError(t, err)
 	_, err = s.AppendEntryID(ctx, "d", &harness.SessionEntry{})
@@ -671,9 +649,6 @@ func TestSearchSessionsSortOrder(t *testing.T) {
 	}
 }
 
-// A board shows a space's chats: those born there, those without a Birth Space whose agent's space has
-// its name ignoring case, and those with neither, each once per Dashboard in its first matching lane,
-// newest arrival first. Lane text matches fields, not message bodies.
 func TestSessionBoard(t *testing.T) {
 	t.Parallel()
 
@@ -714,7 +689,6 @@ SELECT 'bulk-' || lpad(n::text, 3, '0'), 'main', '', 'web_chat', TRUE, 'preview'
 		bulk[i] = fmt.Sprintf("bulk-%03d", i)
 	}
 
-	// A card is the chat as the session list has it, even when a model: lane matched its agent's model.
 	listed := make(map[string]SidebarChat)
 
 	for chat, err := range s.SidebarChats(ctx, "", noSlackLookups{}, nil) {
@@ -923,12 +897,10 @@ func TestSearchSessionsTermOffsets(t *testing.T) {
 	}
 }
 
-// A term's offsets do not re-encode the query before it, so a 1 MiB query parses in linear time.
 func TestSearchSessionsLongQueryParse(t *testing.T) {
 	t.Parallel()
 
 	if os.Getenv("ROCKETCLAW_TEST_LONG_QUERY_PARSE") != "1" {
-		// Measure the parser, not race detector work on atomic coverage counters.
 		binary := filepath.Join(t.TempDir(), "backend.test")
 		build := exec.CommandContext(t.Context(), "go", "test", "-c", "-race=false", "-cover=false", "-o", binary, ".")
 		output, err := build.CombinedOutput()
@@ -939,7 +911,6 @@ func TestSearchSessionsLongQueryParse(t *testing.T) {
 		cmd.Env = append(os.Environ(), "ROCKETCLAW_TEST_LONG_QUERY_PARSE=1")
 		output, err = cmd.CombinedOutput()
 		require.NoError(t, err, "%s", output)
-		// Count the isolated parser's CPU work, not time descheduled behind parallel tests.
 		require.Less(t, cmd.ProcessState.UserTime()+cmd.ProcessState.SystemTime(), 2*time.Second,
 			"parser child user=%s system=%s GOMAXPROCS=%d resources=%+v output=%s", cmd.ProcessState.UserTime(), cmd.ProcessState.SystemTime(), runtime.GOMAXPROCS(0), cmd.ProcessState.SysUsage(), output)
 

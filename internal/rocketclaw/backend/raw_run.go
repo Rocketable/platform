@@ -28,7 +28,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// RawRunProgress carries the conversation and destination for one cron run.
 type RawRunProgress struct {
 	ConversationID  string
 	Run             *protocol.CronRun
@@ -39,7 +38,7 @@ type RawRunProgress struct {
 type workflowAgentRunner struct {
 	definition    *workflow.Definition
 	cfg           *config.Config
-	shells        *sandbox.Runtime // runs the workers' emulated shells
+	shells        *sandbox.Runtime
 	agent, parent string
 	journal       harness.Journal
 	root          *os.Root
@@ -47,13 +46,10 @@ type workflowAgentRunner struct {
 	skills        harness.Skills
 	resolver      *modelResolver
 	customTools   []harness.Tool
-	// shellEnv is the environment of the turn the workflow runs for (Bridge.turnShellEnv), and
-	// originHeader that turn's trusted origin header (reviewOriginHeader).
-	shellEnv     map[string]string
-	originHeader string
+	shellEnv      map[string]string
+	originHeader  string
 }
 
-// workflowWorkerStep is a finished workflow worker's recorded result.
 type workflowWorkerStep struct {
 	Name   string          `json:"name"`
 	Hash   string          `json:"hash"`
@@ -77,8 +73,6 @@ func newWorkflowAgentRunner(locked *config.LockedConfig, shells *sandbox.Runtime
 	return &workflowAgentRunner{cfg: cfg, shells: shells, agent: agent, parent: parent, journal: journal, root: root, agents: agents, skills: skills, resolver: resolver, customTools: customTools}, nil
 }
 
-// Close releases prepared data ownership; an unprepared request has no
-// definition or open root. Every workflow.Run still receives a real runner.
 func (r *workflowAgentRunner) Close() error {
 	if r.root == nil {
 		return nil
@@ -94,9 +88,6 @@ func (r *workflowAgentRunner) Close() error {
 	return nil
 }
 
-// Run returns a worker's recorded result when the same request finished before a
-// restart. Otherwise it runs the worker as a turn journaled under the request's
-// key and hash, so an interrupted worker resumes and a changed request runs fresh.
 func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRequest) (result json.RawMessage, err error) {
 	encoded, _ := json.Marshal(request)
 	sum := sha256.Sum256(encoded)
@@ -126,7 +117,6 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	}
 
 	if model := request.Worker.Model; model != "" {
-		// An easy agent's effort comes only from its model's #effort, so this is its model as written.
 		own := strings.TrimSuffix(active.Model+"#"+active.ReasoningEffort, "#")
 		if active.Mode == harness.AgentModeEasy && !slices.Contains(append([]string{own}, active.Subagents...), model) {
 			return nil, fmt.Errorf("worker model %q is neither this agent's model nor one of its subagent models: %s", model, strings.Join(active.Subagents, ", "))
@@ -163,8 +153,6 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 		tools = slices.Collect(maps.Keys(runtime.Tools))
 	}
 
-	// Workflows call agents; agents reach every host and platform tool through execute.
-	// Strip task and names that live inside execute; permissions still govern those.
 	tools = slices.DeleteFunc(tools, func(name string) bool {
 		_, nested := runtime.CodeModeHosts[name]
 		return name == "task" || nested || harness.CodeModeOnlyHostTool(name)
@@ -217,7 +205,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 
 	result = json.RawMessage(last)
 	if request.Schema == nil {
-		result, _ = json.Marshal(last) // Encoding a string cannot fail.
+		result, _ = json.Marshal(last)
 	} else if !json.Valid(result) {
 		return nil, errors.New("workflow worker returned invalid JSON")
 	}
@@ -232,7 +220,6 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	return result, nil
 }
 
-// prepareWorkflowTags keeps worker limits and caller guidance local to one run.
 func prepareWorkflowTags(agents harness.Agents, worker string, tools []string) {
 	agent := agents.Items[worker]
 
@@ -253,7 +240,7 @@ func prepareWorkflowTags(agents harness.Agents, worker string, tools []string) {
 	for name := range agents.Items {
 		item := agents.Items[name]
 
-		groups, _ := agentTagGroups(&item) // readRocketCodeDefinitionsIn already rejected invalid groups.
+		groups, _ := agentTagGroups(&item)
 
 		appendSessionTagPrompt(&item, groups)
 		agents.Items[name] = item
@@ -283,7 +270,6 @@ func rocketcodeSpillDir(cfg *config.Config) string {
 	return filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), ".rocketcode", "spill")
 }
 
-// rocketcodeRetainedDir is a conversation's retained background output, relative to the spill dir.
 func rocketcodeRetainedDir(conversationID string) string {
 	sum := sha256.Sum256([]byte(conversationID))
 	return filepath.Join("retained", hex.EncodeToString(sum[:]))

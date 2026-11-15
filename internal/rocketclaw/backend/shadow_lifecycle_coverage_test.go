@@ -17,8 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// rejectShadowLifecycleWrite makes a real database write fail inside the tested
-// transaction. Each parent test owns an isolated schema; cases remove the trigger to retry.
 func rejectShadowLifecycleWrite(t *testing.T, store *SessionService, table, event string) {
 	t.Helper()
 
@@ -551,7 +549,6 @@ func TestShadowLifecycleFinishRollback(t *testing.T) {
 		{"turns", "UPDATE OF note"}, {"steps", "DELETE"},
 	} {
 		t.Run(step.table+" "+step.event, func(t *testing.T) {
-			// Cases share migrations only; every admission starts with empty history and journals.
 			_, err := store.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
 			ctx := t.Context()
@@ -611,8 +608,6 @@ func TestShadowLifecycleFinishRollback(t *testing.T) {
 	}
 }
 
-// A shadow's running-turn inbound, which its subagents act for, names the parent's person but not
-// the parent's prompt principal.
 func TestShadowTurnNamesParentPerson(t *testing.T) {
 	t.Parallel()
 

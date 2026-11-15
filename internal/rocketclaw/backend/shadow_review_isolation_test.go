@@ -105,7 +105,7 @@ func TestShadowReviewDefinitionIsolation(t *testing.T) {
 			if failure != "new malformed" {
 				var broken string
 				require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT conversation_id FROM conversations WHERE shadow_agent = 'main/a'`).Scan(&broken))
-				// Existing durable work must fail locally, never run a default agent.
+
 				inbound, err := json.Marshal(protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "saved input", true))
 				require.NoError(t, err)
 				_, err = store.db.ExecContext(t.Context(), `INSERT INTO shadow_turns (child_conversation_id, parent_source_conversation_id, parent_turn_id, inbound_json) VALUES ($1, 'parent', 'bound-work', $2)`, broken, inbound)
@@ -208,7 +208,6 @@ func TestShadowReviewOwnershipReadIsolation(t *testing.T) {
 	manager.mu.Unlock()
 	require.Equal(t, 1, constructed, "a failed ownership read cannot construct a worker")
 
-	// The lock transaction occupies the entire pool; an existing worker needs no I/O.
 	maxConnections := store.db.Stats().MaxOpenConnections
 	store.db.SetMaxOpenConns(1)
 

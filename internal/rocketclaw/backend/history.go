@@ -12,7 +12,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// HistoryInventory follows a stateless saved-entry view, not an event cursor.
 type HistoryInventory struct {
 	ConversationID string            `json:"conversation_id"`
 	Source         string            `json:"source"`
@@ -23,40 +22,30 @@ type HistoryInventory struct {
 	Shadows        string            `json:"shadows,omitempty"`
 }
 
-// HistorySnapshot keeps cutoff, page bounds, payloads and delegation links coherent.
 type HistorySnapshot struct {
 	Inventory   HistoryInventory
 	Entries     []ObservedSessionEntry
 	Delegations []Delegation
-	// Lineage is the conversations it nests under, from its top-level conversation down, then itself.
-	Lineage []SidebarSession
-	// Reviews are the Delegations that are permission reviews.
+	Lineage     []SidebarSession
 	Reviews     []string
 	Shadows     []protocol.ShadowBinding
 	Eligible    bool
 	Predecessor string
-	// Floor is the newest message undo must keep (revertStateDB), or "".
-	Floor string
-	Reset bool
+	Floor       string
+	Reset       bool
 }
 
-// ancestorsSQL pairs each conversation id of starts with itself and every conversation it nests
-// under, by parent link, depth levels up. A query using it starts WITH RECURSIVE.
 const ancestorsSQL = `ancestors AS (
     SELECT id, id AS conversation_id, 0 AS depth FROM starts
     UNION SELECT a.id, c.parent_conversation_id, a.depth + 1 FROM ancestors a JOIN conversations c ON c.conversation_id = a.conversation_id
     WHERE c.parent_conversation_id IS NOT NULL
 )`
 
-// descendantsSQL lists every conversation nested under a conversation id of roots, by parent
-// link. A query using it starts WITH RECURSIVE.
 const descendantsSQL = `descendants AS (
     SELECT c.conversation_id FROM roots r JOIN conversations c ON c.parent_conversation_id = r.id
     UNION SELECT c.conversation_id FROM descendants d JOIN conversations c ON c.parent_conversation_id = d.conversation_id
 )`
 
-// ShadowParent resolves comparison history (including delegations) through its
-// explicit binding and a private producer's recorded visible destination.
 func (s *SessionService) ShadowParent(ctx context.Context, id string) (string, error) {
 	var parent string
 
@@ -76,8 +65,6 @@ JOIN conversations m ON m.conversation_id = b.shadow_parent WHERE b.shadow_paren
 	return parent, nil
 }
 
-// Public mutations cannot admit work outside a shadow's parent-driven stream.
-// Internal persistence (model output, tool effects, and history seeds) stays local.
 func rejectShadowMutation(ctx context.Context, db stateStoreDB, id string) error {
 	var shadow bool
 	if err := db.QueryRowContext(ctx, `WITH RECURSIVE starts AS (
@@ -94,7 +81,6 @@ SELECT count(*) > 0 FROM ancestors a JOIN conversations b ON b.conversation_id =
 	return nil
 }
 
-// ObserveHistory reads every part of a followed view from one database snapshot.
 func (s *SessionService) ObserveHistory(ctx context.Context, id, source string, from, before int64, limit int, prior *HistoryInventory) (view HistorySnapshot, err error) {
 	previous := *prior
 
@@ -191,8 +177,6 @@ SELECT c.conversation_id, c.kind, c.agent FROM ancestors a JOIN conversations c 
 	return view, nil
 }
 
-// Shadow metadata uses the same effective parent prefix and page bounds as its
-// transcript. Live runs reporting here appear before they save.
 const shadowHistorySQL = `WITH ` + sessionHistorySQL + `, owners AS (
     SELECT $1::text AS id FROM viewer WHERE readable AND ($2 = '' OR $2 = $1)
     UNION

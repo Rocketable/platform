@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// boardChat lists the Web chat id, named id, arriving at the time given and tagged tags, or moves it there.
 func boardChat(t *testing.T, s *SessionService, id string, at time.Time, tags ...string) {
 	t.Helper()
 
@@ -21,8 +20,6 @@ ON CONFLICT (conversation_id) DO UPDATE SET last_updated = excluded.last_updated
 	require.NoError(t, err)
 }
 
-// watchPass runs one Dashboard watch pass over seen, then lists and reads every mark: its person, path, whether it is
-// quiet and parked, and its note.
 func watchPass(t *testing.T, s *SessionService, slack slackLookup, seen *dashboardsSeen) []string {
 	t.Helper()
 
@@ -41,8 +38,6 @@ FROM web_tab_attention WHERE unread_at IS NOT NULL`, "dashboard marks")
 	return marks
 }
 
-// A session entering a flagged lane of a Shared Dashboard marks everyone who can see its space, loud, and leaves a
-// parked Dashboard parked with a quiet mark; not the person viewing it, nor one limited to another space.
 func TestDashboardWatchMarksArrivals(t *testing.T) {
 	t.Parallel()
 
@@ -50,8 +45,8 @@ func TestDashboardWatchMarksArrivals(t *testing.T) {
 	ctx := t.Context()
 
 	const (
-		carol = "carol@example.com" // limited to Ops
-		dave  = "dave@example.com"  // views the Dashboard
+		carol = "carol@example.com"
+		dave  = "dave@example.com"
 		path  = "/search/team"
 	)
 
@@ -112,7 +107,6 @@ func TestDashboardWatchMarksArrivals(t *testing.T) {
 	assert.ElementsMatch(t, want("Needs you: five and 2 more"), watchPass(t, s, noSlackLookups{}, &seen))
 }
 
-// Editing a lane's query, reordering lanes or turning a flag on only records; the next session to enter marks.
 func TestDashboardWatchRecordsChangedLanes(t *testing.T) {
 	t.Parallel()
 
@@ -162,7 +156,6 @@ func TestDashboardWatchRecordsChangedLanes(t *testing.T) {
 	}
 }
 
-// A lane listing 200 of its 250 sessions: one sliding into the 200 as another leaves is not new; one arriving is.
 func TestDashboardWatchIgnoresSessionsSlidingIntoTheCap(t *testing.T) {
 	t.Parallel()
 
@@ -194,8 +187,6 @@ SELECT 'bulk-' || lpad(n::text, 3, '0'), 'main', '', 'web_chat', TRUE, 'preview'
 	assert.Equal(t, []string{alice + " " + path + " loud: tag:bulk: fresh"}, watchPass(t, s, noSlackLookups{}, &seen))
 }
 
-// A pass reads the session list only with a flagged lane, and while it is unchanged sorts only the Dashboards it has
-// not recorded. A pass whose sort fails keeps what the Dashboard held, so the session that entered marks on the next.
 func TestDashboardWatchSkipsUnchangedSessions(t *testing.T) {
 	t.Parallel()
 
@@ -205,7 +196,6 @@ func TestDashboardWatchSkipsUnchangedSessions(t *testing.T) {
 	spaces, err := s.Spaces(ctx)
 	require.NoError(t, err)
 
-	// Each read of the session list, and each sort, resolves the Slack thread's room once.
 	recordTestConversations(t, s, "main", map[string]ConversationKind{"slack-thread:C1:1.1": KindSlackThread})
 	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET has_entries = TRUE, last_updated = now() WHERE conversation_id = 'slack-thread:C1:1.1'`)
 	require.NoError(t, err)
@@ -270,8 +260,6 @@ func TestDashboardWatchSkipsUnchangedSessions(t *testing.T) {
 	assert.Equal(t, []string{bob + " /search/two loud: tag:b: second"}, watchPass(t, s, slack, &seen))
 }
 
-// A session a lane of unread sessions lists for a quiet mark, such as the person's own, is no arrival; one whose mark
-// notifies is, and so is the quiet one in a lane of anything else.
 func TestDashboardArrivalsSkipQuietMarksInUnreadLanes(t *testing.T) {
 	t.Parallel()
 

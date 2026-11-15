@@ -16,8 +16,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// SaveAttachment stores immutable original bytes before publishing a reference.
-// turnID names the turn whose final reply sends the file, or is empty.
 func (s *SessionService) SaveAttachment(ctx context.Context, conversationID, turnID string, attachment *protocol.OutboundAttachment, upload bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -45,7 +43,7 @@ func (s *SessionService) SaveAttachment(ctx context.Context, conversationID, tur
 	if err := s.attachments.Put(ctx, id, attachment.Data); err != nil {
 		return fmt.Errorf("store attachment original: %w", err)
 	}
-	// A failed commit may leave an orphan. Never adopt it with different metadata.
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit attachment: %w", err)
 	}
@@ -53,8 +51,6 @@ func (s *SessionService) SaveAttachment(ctx context.Context, conversationID, tur
 	return nil
 }
 
-// LoadAttachment requires the producer scope; callers must authorize its reference.
-// uploadOnly restricts prompt consumption to files acquired through upload.
 func (s *SessionService) LoadAttachment(ctx context.Context, conversationID, id string, uploadOnly bool) (protocol.OutboundAttachment, error) {
 	attachment, err := s.AttachmentMetadata(ctx, conversationID, id, uploadOnly)
 	if err != nil {
@@ -69,7 +65,6 @@ func (s *SessionService) LoadAttachment(ctx context.Context, conversationID, id 
 	return attachment, nil
 }
 
-// loadAttachmentData refills the bytes that persisted turn state leaves out.
 func (s *SessionService) loadAttachmentData(ctx context.Context, attachments []protocol.OutboundAttachment) error {
 	for i := range attachments {
 		data, err := s.attachments.Get(ctx, attachments[i].ID)
@@ -83,8 +78,6 @@ func (s *SessionService) loadAttachmentData(ctx context.Context, attachments []p
 	return nil
 }
 
-// AttachmentMetadata loads stored metadata without transferring the file bytes.
-// Callers must authorize the reference within its producer scope.
 func (s *SessionService) AttachmentMetadata(ctx context.Context, conversationID, id string, uploadOnly bool) (protocol.OutboundAttachment, error) {
 	attachment := protocol.OutboundAttachment{ID: id}
 
@@ -96,8 +89,6 @@ func (s *SessionService) AttachmentMetadata(ctx context.Context, conversationID,
 	return attachment, nil
 }
 
-// TurnAttachments returns, in the order they were attached, the files turnID's final reply sends,
-// naming the owner of those its subagent sessions attached.
 func (s *SessionService) TurnAttachments(ctx context.Context, conversationID, turnID string) ([]protocol.OutboundAttachment, error) {
 	return queryRows(ctx, s.db, `WITH RECURSIVE roots AS (
     SELECT $1::text AS id
@@ -115,8 +106,6 @@ JOIN attachments a USING (conversation_id) WHERE a.turn_id = $2 ORDER BY a.seq`,
 	}, conversationID, turnID)
 }
 
-// InputAttachments strips trailing upload references and returns their metadata
-// in text order, including actual owners of surviving correlated shadow inputs.
 func (s *SessionService) InputAttachments(ctx context.Context, producer, text string) (string, []protocol.OutboundAttachment, error) {
 	return inputAttachmentsDB(ctx, s.db, producer, text)
 }
@@ -140,7 +129,6 @@ WHERE a.id = $1 AND a.upload AND (a.conversation_id = $2 OR EXISTS (SELECT 1 FRO
     WHERE t.child_conversation_id = $2 AND t.parent_source_conversation_id = a.conversation_id AND t.child_turn_id <> ''))`, id, producer).Scan(&attachment.ConversationID, &attachment.Name, &attachment.MIMEType, &attachment.Size, &attachment.OriginalUnverified)
 		if err == nil && attachment.ConversationID != producer {
 			if turns == nil {
-				// Replay scanning is bounded by retained history; index consumed references if this becomes costly.
 				entries, errRead := observeTranscriptDB(ctx, db, producer, 0, 0, nil)
 				if errRead != nil {
 					return "", nil, errRead
@@ -169,7 +157,7 @@ WHERE a.id = $1 AND a.upload AND (a.conversation_id = $2 OR EXISTS (SELECT 1 FRO
 					}
 				}
 			}
-			// Correlation and the surviving consumed reference are both required; manifests may have released their payload.
+
 			err = db.QueryRowContext(ctx, `SELECT a.conversation_id, a.name, a.mime_type, a.size, a.original_unverified FROM attachments a
 WHERE a.id = $1 AND a.upload AND EXISTS (SELECT 1 FROM shadow_turns t
     WHERE t.child_conversation_id = $2 AND t.parent_source_conversation_id = a.conversation_id
@@ -193,8 +181,6 @@ WHERE a.id = $1 AND a.upload AND EXISTS (SELECT 1 FROM shadow_turns t
 			before, reference = text[:i], text[i+2:]
 		}
 
-		// An upload is referenced by its workspace path, or in an easy agent's chat by its host path, which
-		// ends in its ID and name.
 		host, easy := strings.CutPrefix(reference, fmt.Sprintf("attachment:%s %q (path \"", file.ID, file.Name))
 		if reference == fmt.Sprintf("attachment:%s %q (workspace path %q)", file.ID, file.Name, filepath.Join("artifacts", "uploads", file.ID, file.Name)) ||
 			easy && strings.HasSuffix(host, strings.TrimPrefix(fmt.Sprintf("%q)", "/"+file.ID+"/"+file.Name), `"`)) {
@@ -205,8 +191,6 @@ WHERE a.id = $1 AND a.upload AND EXISTS (SELECT 1 FROM shadow_turns t
 	return text, attachments, nil
 }
 
-// RevertAttachmentMetadata authorizes only an upload referenced by the current
-// staged user boundary. It never exposes the rest of the hidden replay.
 func (s *SessionService) RevertAttachmentMetadata(ctx context.Context, conversationID, id string) (protocol.OutboundAttachment, error) {
 	var raw json.RawMessage
 
@@ -239,8 +223,6 @@ func (s *SessionService) RevertAttachmentMetadata(ctx context.Context, conversat
 	return protocol.OutboundAttachment{}, sql.ErrNoRows
 }
 
-// ReplayAttachments resolves metadata for successful attach-tool output, never arbitrary paths.
-// calls belongs to one producer and survives entry boundaries during history projection.
 func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID string, root *os.Root, raw json.RawMessage, calls map[string]string) ([]protocol.OutboundAttachment, error) {
 	var item struct {
 		Type, Name, Arguments, Output string
@@ -288,7 +270,6 @@ func (s *SessionService) ReplayAttachments(ctx context.Context, conversationID s
 		if errors.Is(err, sql.ErrNoRows) {
 			attachment, err = outboundAttachment(root, &harness.CustomShell{}, &input.Attachments[i])
 			if err != nil {
-				// Historical files may no longer exist or be reachable within the root.
 				continue
 			}
 

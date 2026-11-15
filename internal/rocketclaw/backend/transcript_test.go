@@ -19,8 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// OpenCode V2 packages/core/src/session/projector.ts projects strictly before
-// the staged user message; RocketClaw boundaries may lie inside a saved turn.
 func TestRevertTranscriptPrefix(t *testing.T) {
 	t.Parallel()
 
@@ -158,7 +156,6 @@ func TestObserveTranscript(t *testing.T) {
 	require.False(t, entries[0].Entry.Timestamp.IsZero())
 	initialRevision := entries[0].Revision
 
-	// Legacy saved rows must not hide a checkpoint merely because their text matches.
 	legacy := testSessionEntry("hello", "partial")
 	legacyID, err := s.AppendEntryID(ctx, "main", legacy)
 	require.NoError(t, err)
@@ -191,7 +188,7 @@ func TestObserveTranscript(t *testing.T) {
 	require.Equal(t, "turn:main:turn-1", entries[1].Key)
 	require.False(t, entries[1].Active)
 	require.NotEqual(t, initialRevision, entries[1].Revision)
-	// A producer's identical turn ID must not replace the destination's own turn.
+
 	_, err = s.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'main' WHERE conversation_id = 'producer'`)
 	require.NoError(t, err)
 	producerID, err := s.AppendEntryID(ctx, "producer", saved)
@@ -203,7 +200,6 @@ func TestObserveTranscript(t *testing.T) {
 	require.Equal(t, "producer", withProducer[2].SourceConversationID)
 	require.True(t, withProducer[2].Synced)
 
-	// A running hidden run that reports here shows live after the history, under the key its saved entry takes.
 	hidden := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "hidden", false)
 	hidden.SyncDestination = "main"
 	require.NoError(t, startTurnDB(ctx, s.db, "producer-live", "producer", hidden))
@@ -436,7 +432,6 @@ func TestTranscriptChanges(t *testing.T) {
 	_, err = conn.ExecContext(ctx, "LISTEN "+pgx.Identifier{channel}.Sanitize())
 	require.NoError(t, err)
 
-	// An open transaction and a rolled-back one cannot emit transcript signals.
 	tx, err := s.db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 
@@ -457,8 +452,6 @@ func TestTranscriptChanges(t *testing.T) {
 	}))
 	require.NoError(t, tx.Rollback())
 
-	// The same transaction ID is opaque, shared by its row changes, and content-free. A hidden
-	// run's changes also reach the chat it reports to.
 	_, err = s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, reports_to, kind, listed) VALUES ('destination', 'main', '', NULL, 'web_chat', TRUE), ('source', 'main', '', 'destination', 'cron_run', FALSE)`)
 	require.NoError(t, err)
 
@@ -503,7 +496,6 @@ func TestTranscriptChanges(t *testing.T) {
 		return nil
 	}))
 
-	// Deleting a run's history invalidates it and the chat it reports to.
 	_, err = s.DeleteSession(ctx, "source")
 	require.NoError(t, err)
 	require.NoError(t, conn.Raw(func(raw any) error {
@@ -529,7 +521,6 @@ func TestTranscriptChanges(t *testing.T) {
 
 	require.Equal(t, 1, s.db.Stats().InUse, "initial consumer stop releases the listener connection")
 
-	// Registration precedes the initial yield, so an append from that yield is seen.
 	ctxChanges, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -597,7 +588,7 @@ func TestTranscriptChanges(t *testing.T) {
 
 		break
 	}
-	// No pooled connection may retain LISTEN state after iteration ends.
+
 	require.Equal(t, 1, s.db.Stats().InUse, "only the explicit test listener remains")
 
 	pooled := make([]*sql.Conn, 0, s.db.Stats().Idle)
@@ -868,8 +859,6 @@ func TestCodeModeCallsSavedOnTheirOwn(t *testing.T) {
 	require.Empty(t, saved, "a cleared row takes its records with it and cannot be recreated by one")
 }
 
-// A running turn's save writes its step and only its changed items, each once, and the live
-// transcript and a resumed turn read the record those saves leave.
 func TestJournalSavesTurnItemsOnce(t *testing.T) {
 	t.Parallel()
 
@@ -915,14 +904,11 @@ func TestJournalSavesTurnItemsOnce(t *testing.T) {
 	require.Equal(t, []string{string(item("a")), string(item("b <c>")), string(item("c"))}, replay())
 	require.Equal(t, []string{"turn-1", "turn-1/replay_input/0000000000", "turn-1/replay_input/0000000001", "turn-1/replay_input/0000000002", "turn-1/trace/0000000000"}, testTurnStepKeys(t, s, "main"))
 
-	// Compaction rewrites the replay from its start; items past its new end go.
 	save("resp-1", harness.TurnItems{List: harness.TurnReplayInput, Items: []json.RawMessage{item("summary")}}, harness.TurnItems{List: harness.TurnTrace})
 	require.Equal(t, []string{string(item("summary"))}, replay())
 	require.Equal(t, []string{"turn-1", "turn-1/replay_input/0000000000"}, testTurnStepKeys(t, s, "main"))
 }
 
-// testCheckpoint seeds a running turn as a taken request records it: the row
-// holds live trace and the journal root step holds the turn's record.
 type testCheckpoint struct {
 	TurnID, ConversationKey, Agent, Model, DisplayModel string
 	ReasoningEffort                                     *string
@@ -954,7 +940,6 @@ func upsertTestTurn(ctx context.Context, s *SessionService, c *testCheckpoint) e
 	return conversationJournal{store: s, conversationID: c.ConversationKey, log: slog.New(slog.DiscardHandler)}.SaveTrace(ctx, c.TurnID, c.OutputTrace)
 }
 
-// saveTestTurn journals a turn's record as the harness saves it: its step, and its replay input as the turn's list.
 func saveTestTurn(ctx context.Context, s *SessionService, conversationID, turnID string, applied []string, record *harness.SessionEntry) error {
 	header := *record
 	header.ReplayInput = nil
@@ -1015,16 +1000,12 @@ func TestTranscriptObservationReportsUnreadableStoredEntries(t *testing.T) {
 	require.ErrorContains(t, err, "decode transcript entry")
 }
 
-// A failed or running turn's record past jsonb's limit fails History, and a failed one its delegations
-// and undo's lookup, instead of being expanded in Postgres, as the jsonb records before it failed; a
-// smaller one still reads.
 func TestOversizedTurnRecordFailsReads(t *testing.T) {
 	t.Parallel()
 
 	s := newTestSessionService(t)
 	ctx := t.Context()
 
-	// The live conversations' turns are still running.
 	for id, text := range map[string]string{"small": "hi", "large": strings.Repeat("x", 2000), "small-live": "hi", "live": strings.Repeat("x", 2000)} {
 		require.NoError(t, s.UpsertThread(id, ThreadState{Agent: "main"}))
 		seedActiveTurn(t, s, id, id, testReplayEntry(`{"type":"message","role":"user","content":"`+text+`"}`))
@@ -1034,7 +1015,6 @@ func TestOversizedTurnRecordFailsReads(t *testing.T) {
 		}
 	}
 
-	// A record past the real limit, 256 MB, is too heavy for a test; this one's limit is 1000 bytes.
 	_, err := s.db.ExecContext(ctx, `DO $$ BEGIN EXECUTE replace(pg_get_functiondef('readable_replay(bigint)'::regprocedure), '268435455', '1000'); END $$`)
 	require.NoError(t, err)
 
@@ -1045,7 +1025,6 @@ func TestOversizedTurnRecordFailsReads(t *testing.T) {
 		require.Len(t, view.Entries[0].Entry.ReplayInput, 1)
 	}
 
-	// Each fails with the error jsonb's limit raised before.
 	const jsonbLimit = "ERROR: string too long to represent as jsonb string (SQLSTATE 54000)"
 
 	for _, id := range []string{"live", "large"} {
@@ -1059,7 +1038,6 @@ func TestOversizedTurnRecordFailsReads(t *testing.T) {
 	require.ErrorContains(t, err, jsonbLimit)
 }
 
-// finishTestRunTurn runs one turn of the hidden run reporting to chat that saves entry.
 func finishTestRunTurn(t *testing.T, s *SessionService, run, chat, turnID string, entry *harness.SessionEntry) {
 	t.Helper()
 
@@ -1090,9 +1068,6 @@ func observedEntryTexts(t *testing.T, s *SessionService, conversationID string) 
 	return texts
 }
 
-// AE1, AE3: a hidden run's turns wait in its chat's lane. The chat and its agent see the run's
-// history without its compaction; the run's agent sees only its own entries, compaction included.
-// History, search, and undo give the run's messages the same IDs, and a failed run turn shows only live.
 func TestHiddenRunViews(t *testing.T) {
 	t.Parallel()
 
@@ -1137,7 +1112,6 @@ func TestHiddenRunViews(t *testing.T) {
 	require.Empty(t, predecessor, "undo keeps the run's messages")
 	require.Equal(t, fmt.Sprintf("%d:1", compacted), floor, "undo addresses the run's message as history and search do")
 
-	// A person's running turn holds the lane; the run's next turn waits behind it, on the chat's worker.
 	require.NoError(t, startTurnDB(ctx, s.db, "person-turn", chat, protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "more", true)))
 
 	waiting := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "next call", true)
@@ -1168,8 +1142,6 @@ func TestHiddenRunViews(t *testing.T) {
 	require.False(t, slices.ContainsFunc(ended, func(entry ObservedSessionEntry) bool { return entry.Key == "turn:"+run+":run-3" }), "a failed run turn leaves its chat when it ends")
 }
 
-// Undo in a chat stops after a hidden run's entries, and a wipe keeps them as undo does, in the chat
-// and in the run.
 func TestUndoKeepsHiddenRunEntries(t *testing.T) {
 	t.Parallel()
 

@@ -97,7 +97,6 @@ func TestAttachmentStorage(t *testing.T) {
 				service.attachments = storage
 			}
 
-			// Each contender has different bytes and metadata; the same transaction must win both.
 			var writers errgroup.Group
 			for i := range 8 {
 				writers.Go(func() error {
@@ -119,8 +118,6 @@ func TestAttachmentStorage(t *testing.T) {
 			_, err = service.LoadAttachment(t.Context(), "other", "shared", false)
 			require.ErrorIs(t, err, sql.ErrNoRows)
 
-			// An earlier storage success followed by a failed DB commit leaves an orphan,
-			// which must never be paired with this new name, scope, size, or upload flag.
 			require.NoError(t, service.attachments.Put(t.Context(), "orphan", []byte("original")))
 			err = service.SaveAttachment(t.Context(), "producer", "", &protocol.OutboundAttachment{ID: "orphan", Name: "replacement", Data: []byte("different")}, true)
 			require.Error(t, err)
@@ -209,7 +206,7 @@ func TestFilesystemAttachmentsAtomicAndConfined(t *testing.T) {
 	require.Len(t, entries, 2, "failed and conflicting publications must remove pending files")
 	require.NoError(t, root.Remove("symlink"))
 	require.NoError(t, root.Remove("snapshot"))
-	// A non-directory storage path must fail rather than publish metadata.
+
 	parent, err := os.OpenRoot(filepath.Dir(storage.path))
 
 	require.NoError(t, err)

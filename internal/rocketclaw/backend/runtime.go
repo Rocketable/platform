@@ -27,12 +27,10 @@ type inertRefresher struct{}
 
 func (inertRefresher) Refresh() error { return nil }
 
-// sandboxPreparer is sandbox.Bubblewrap, or sandbox.None in tests that never run an emulated shell.
 type sandboxPreparer interface {
 	Prepare(ctx context.Context, dir string, log *slog.Logger) *sandbox.Runtime
 }
 
-// Runtime is the backend after construction, before frontends.
 type Runtime struct {
 	Cfg               *config.LockedConfig
 	Log               *slog.Logger
@@ -55,8 +53,6 @@ type Runtime struct {
 	subscribers map[chan protocol.Event]<-chan struct{}
 }
 
-// Reload validates and replaces runtime assets, then refreshes External MCP agents and the cron jobs.
-// It uses the startup configuration, never rereading the configuration file.
 func (r *Runtime) Reload(reason string) (string, error) {
 	r.reloadMu.Lock()
 	defer r.reloadMu.Unlock()
@@ -91,7 +87,6 @@ func (r *Runtime) Reload(reason string) (string, error) {
 	return "rocketclaw runtime assets reloaded", nil
 }
 
-// Subscribe registers a live-only event consumer. History is read separately.
 func (r *Runtime) Subscribe(ctx context.Context) iter.Seq[protocol.Event] {
 	ctx, cancel := context.WithCancel(ctx)
 	events := make(chan protocol.Event)
@@ -125,8 +120,6 @@ func (r *Runtime) Subscribe(ctx context.Context) iter.Seq[protocol.Event] {
 	}
 }
 
-// PublishOutbound completes delivery through live consumers, never a private
-// request response stream. Each consumer receives an independent rendering copy.
 func (r *Runtime) PublishOutbound(ctx context.Context, message *protocol.OutboundMessage) error {
 	r.eventsMu.Lock()
 	subscribers := maps.Clone(r.subscribers)
@@ -161,15 +154,12 @@ func (r *Runtime) PublishOutbound(ctx context.Context, message *protocol.Outboun
 	return errDelivery
 }
 
-// AttachSlack makes Slack the session search's Slack lookup.
 func (r *Runtime) AttachSlack(slack slackLookup) {
 	r.threads.mu.Lock()
 	r.threads.slackLookups = slack
 	r.threads.mu.Unlock()
 }
 
-// resumeScheduledSessions resumes, for RocketClaw, the paused sticky: global sessions of the agents the loaded
-// cron jobs and routines run: those runs report there, so these agents no longer pause.
 func (r *Runtime) resumeScheduledSessions(ctx context.Context) error {
 	ids, err := queryStrings(ctx, r.Sessions.db, `SELECT conversation_id FROM conversations WHERE paused AND sticky = 'global' AND agent = ANY($1) ORDER BY 1`, "scheduled paused sessions", r.Sessions.scheduledAgents())
 	if err != nil {

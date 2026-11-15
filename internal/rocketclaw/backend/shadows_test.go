@@ -30,7 +30,6 @@ import (
 
 func testDrainInputs(t *testing.T, drain *Bridge, phase harness.TurnPhase) []harness.PromptInput {
 	t.Helper()
-	// These tests simulate the model applying the preceding drain's payload.
 	snapshot, _, err := loadTurnInputs(t.Context(), drain.config.SessionService.db, drain.config.ConversationID, drain.activeTurnID)
 	require.NoError(t, err)
 
@@ -252,7 +251,7 @@ func TestShadowSeedAndFork(t *testing.T) {
 		require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM turns WHERE conversation_id = $1 AND takes_lane`, child).Scan(&count))
 		require.Zero(t, count, "copying seeds performs no execution")
 	}
-	// Removed definitions keep existing ownership but do not get new manifests.
+
 	require.NoError(t, root.Remove(filepath.Join(config.DefaultRuntimeDir, "agents", "main", "z.md")))
 	endTestTurn(t, store, "parent", request.turnID, "")
 	request = bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "next", true)}
@@ -517,7 +516,6 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, admitted)
 			require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "initial", Texts: []string{"write"}}}, Closed: true}))
-			// The parent answered in two steps, so the shadow's tool batch and answer fit its budget of three.
 			_, err = store.db.ExecContext(t.Context(), `INSERT INTO shadow_steps (shadow_turn_id, child, response_id, segment) SELECT id, FALSE, 'parent-' || n, 0 FROM shadow_turns CROSS JOIN generate_series(1, 2) n`)
 			require.NoError(t, err)
 
@@ -550,11 +548,9 @@ func TestShadowToolConstructionAndRealEffects(t *testing.T) {
 			require.Equal(t, "parent", capturedEnv[rocketclawConversationIDEnv])
 			require.NotContains(t, capturedEnv, "ROCKETCLAW_SHADOW", "shadow environment must not mutate captured parent inputs")
 
-			// A Web or Slack parent's env holds only its person; the shadow gains no conversation ID the parent lacked.
 			childConfig = child.rocketcodeConfig(root.Name(), map[string]string{"ROCKETCLAW_PRINCIPAL_NAME": "Alice"}, prohibited...)
 			require.Equal(t, map[string]string{"ROCKETCLAW_PRINCIPAL_NAME": "Alice", "ROCKETCLAW_SHADOW": "main/a"}, childConfig.ShellEnv)
 
-			// A subagent of the shadow runs as a session of its own, under the shadow's limits.
 			manager := newThreadBridgeManager(cfg, store, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(c *Config) directBridge {
 				return NewConversation(cfg, publisher, &Config{ConversationID: c.ConversationID, Agent: c.Agent, SessionService: store}, slog.New(slog.DiscardHandler))
 			}})
@@ -659,8 +655,7 @@ func TestShadowConsumedBatchIsAtomic(t *testing.T) {
 	var closed bool
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT bool_and(input_closed) FROM shadow_turns`).Scan(&closed))
 	require.True(t, closed)
-	// Overflow compaction can remove S1 from replay. Queue ownership must be
-	// released from journaled application, not from surviving prompt text.
+
 	for _, id := range []string{"s1", "waiting"} {
 		require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{ConversationID: "parent", Message: id}))
 	}
@@ -778,7 +773,6 @@ func TestShadowLiveFinalDrain(t *testing.T) {
 				t.Logf("shadow final drain startup: received model=%s inputs=%d", request.Model, len(request.Input))
 			}
 
-			// Bound only diagnostic SQL; preserve the startup wait and failure below.
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			rows, err := queryStrings(ctx, store.db, `SELECT format('conversation=%s agent=%s shadow_parent=%s turn=%s phase=%s lane=%s outbound=%s manifest=%s parent_turn=%s child_turn=%s inputs=%s input_closed=%s terminal=%s',
 c.conversation_id, c.agent, c.shadow_parent, t.id, t.phase, t.takes_lane, t.outbound_json IS NOT NULL,
@@ -933,7 +927,7 @@ func TestShadowStoppedInitialInputParity(t *testing.T) {
 
 				errStacks := pprof.Lookup("goroutine").WriteTo(&stacks, 2)
 				t.Logf("stopped shadow parity goroutines: snapshot_error=%v\n%s", errStacks, stacks.Bytes())
-				// Bound diagnostic SQL only; keep the original waits and assertions.
+
 				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 				defer cancel()
 
@@ -1140,7 +1134,7 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 
 			parentID, ownerID := "parent", "parent"
 			if mutation == "external MCP removal" {
-				parentID = "0parent" // The destination sorts before the producer: interruption must not wait serially.
+				parentID = "0parent"
 				ownerID = "external_mcp:private"
 				require.NoError(t, store.RegisterExternalMCPConversation("external", "main", &ExternalMCPSessionState{ManagedConversationID: parentID, PrivateConversationID: ownerID, Agent: "main"}))
 				require.NoError(t, store.UpsertThread(ownerID, ThreadState{Agent: "main"}))
@@ -1150,7 +1144,6 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 
 			finals := make(chan *protocol.OutboundMessage, 8)
 			manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
-			// Publish this logger before recordedBridge wakes the manager's first worker.
 			logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelError}))
 			manager.log = logger
 
@@ -1184,12 +1177,11 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 						final := <-finals
 						t.Logf("shadow mutation startup final: conversation=%s terminal=%s text=%q", final.ConversationID, final.Terminal, final.Text)
 					}
-					// Capture blocked workers before diagnostic SQL and cleanup change their state.
+
 					var stacks bytes.Buffer
 
 					errStacks := pprof.Lookup("goroutine").WriteTo(&stacks, 2)
 					t.Logf("shadow mutation startup goroutines: snapshot_error=%v\n%s", errStacks, stacks.Bytes())
-					// Bound diagnostic SQL only; preserve the startup wait and failure below.
 					ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 					rows, err := queryStrings(ctx, store.db, `WITH participants AS (
 SELECT DISTINCT l.pid FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
@@ -1299,7 +1291,7 @@ ORDER BY c.conversation_id, t.id, s.id LIMIT 20`, "shadow mutation startup state
 				}
 
 				t.Logf("shadow mutation restart: parent=parent child=%s buffered_requests=%d finals=%d database=%+v", childID, len(requests), len(finals), store.db.Stats())
-				// Bound diagnostic SQL, not the test's waits, so a busy pool cannot stall shutdown.
+
 				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 				defer cancel()
 
@@ -1347,7 +1339,6 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 			Model string `json:"model"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			// Shutdown cancels requests still in flight, which can cut a body short.
 			if !errors.Is(err, io.ErrUnexpectedEOF) {
 				t.Error(err)
 			}
@@ -1369,7 +1360,6 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 	manager, shutdown := newTestBridgeManager(t, cfg, store, finals)
 	t.Cleanup(shutdown)
 
-	// Only the shadows run in the manager; the parent is driven by runTestTurn below.
 	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: "parent", Agent: "main", SessionService: store, RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}}, slog.New(slog.DiscardHandler))
 	bridge.threads = manager
 
@@ -1378,14 +1368,14 @@ func TestShadowAdmissionPinsAgent(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, admitted)
 	bridge.SwitchAgent("other")
-	// Recovery reconstructs the request from durable state, not the admitted Go value.
+
 	head, found, err := store.headTurn(t.Context(), "parent")
 	require.NoError(t, err)
 	require.True(t, found)
 	result, err := runTestTurn(t.Context(), bridge, head.inbound, head.id)
 	require.NoError(t, err)
 	require.Equal(t, "main", result.attribution.Agent)
-	// Let the parent and both shadows reach the provider before shutdown cancels their requests.
+
 	for range 3 {
 		require.Equal(t, "gpt-6.1-sol", <-requests)
 	}
@@ -1512,7 +1502,6 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE shadow_turns DROP CONSTRAINT reject_capture`)
 	require.NoError(t, err)
 	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &snapshot))
-	// Change the definition after capture, before either loop journals the input.
 	require.NoError(t, root.WriteFile(filepath.Join(config.DefaultRuntimeDir, "agents", "main.md"), []byte("---\nmodel: gpt-6.1-sol\nadditionalInstructions: new frame\npermission: {}\n---\nnew system"), 0o600))
 
 	changed := replayInputForMessage("developer", "changed metadata must not replace captured metadata")
@@ -1565,8 +1554,6 @@ func TestShadowCanonicalCaptureRecovery(t *testing.T) {
 	_, captured, err = loadTurnInputs(t.Context(), store.db, "parent", request.turnID)
 	require.NoError(t, err)
 	require.False(t, captured, "successful parent settlement removed its canonical journal")
-	// Do not start the first manager's pending children. A fresh manager must
-	// discover the ready historyless child without any incoming message.
 	_, err = store.PruneStateBefore(t.Context(), time.Now().Add(time.Hour), 0)
 	require.NoError(t, err)
 	restarted, shutdown := newTestBridgeManager(t, cfg, store, finals)
@@ -1665,7 +1652,6 @@ func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
 
 	snapshot := turnInputSnapshot{Inputs: []harness.PromptInput{{ID: "initial", Texts: []string{"start"}}, {ID: "s1", Texts: []string{"same text"}}}}
 	require.NoError(t, store.captureTurnInputs(t.Context(), "parent", request.turnID, &snapshot))
-	// Two parent steps give the child's three final-answer drains their budget.
 	_, err = store.db.ExecContext(t.Context(), `INSERT INTO shadow_steps (shadow_turn_id, child, response_id, segment) SELECT id, FALSE, 'parent-' || n, 0 FROM shadow_turns CROSS JOIN generate_series(1, 2) n`)
 	require.NoError(t, err)
 
@@ -1687,8 +1673,6 @@ func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
 		return err
 	})
 	require.Eventually(t, func() bool { child.mu.Lock(); defer child.mu.Unlock(); return child.shadowInputWake != nil }, 3*time.Second, time.Millisecond)
-	// Registration cannot hold the bridge lock, and duplicate-only state must
-	// keep the existing child turn open until closure or cancellation.
 	cancel()
 	require.ErrorIs(t, group.Wait(), context.Canceled)
 	active, err := store.HasActiveTurn(t.Context(), childID)
@@ -1720,7 +1704,6 @@ func TestShadowFinalWaitCancellationAndClosure(t *testing.T) {
 	require.NoError(t, parent.notifyShadowInputs(t.Context(), request.turnID))
 }
 
-// startShadowStepTurn admits a parent turn whose shadows main/a and main/z have each claimed their copy.
 func startShadowStepTurn(t *testing.T) (*SessionService, *Bridge, map[string]*Bridge) {
 	t.Helper()
 
@@ -1773,7 +1756,6 @@ func TestShadowStepLimit(t *testing.T) {
 	store, parent, children := startShadowStepTurn(t)
 	answered, limited := children["main/a"], children["main/z"]
 
-	// A shadow ahead of its parent pauses until the parent's next step raises its budget.
 	drainShadowStep(t, parent, "p1", harness.TurnPhaseToolLoop, "initial")
 
 	ahead := make(chan error, 1)
@@ -1787,7 +1769,6 @@ func TestShadowStepLimit(t *testing.T) {
 	drainShadowStep(t, parent, "p2", harness.TurnPhaseToolLoop, "initial")
 	require.NoError(t, <-ahead)
 
-	// The parent ends its turn at its tenth step; p2 drained again after a restart is still one step.
 	for _, id := range []string{"p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9"} {
 		drainShadowStep(t, parent, id, harness.TurnPhaseToolLoop, "initial")
 	}
@@ -1815,7 +1796,6 @@ func TestShadowStepLimit(t *testing.T) {
 	require.True(t, cancelled, "the fifteenth step's tool results end the turn")
 	require.True(t, limited.activeTurnInterrupted)
 
-	// The stop says why in Web, outside the replay that later model context reads.
 	stopped, err := limited.finishStoppedShadow(t.Context(), &bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "start", false), turnID: limited.activeTurnID})
 	require.NoError(t, err)
 	require.True(t, stopped)
@@ -1833,8 +1813,6 @@ func TestShadowStepLimitRestartsAtPersonMessages(t *testing.T) {
 	store, parent, children := startShadowStepTurn(t)
 	limited := children["main/z"]
 
-	// The parent's first step takes a person's steer, another agent's steer, and a system notice;
-	// only the person's steer starts a new count.
 	parent.steers = []bridgeRequest{
 		{queueItemID: "s1", inbound: protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "also check the logs", true), completion: &turnCompletion{done: make(chan struct{})}},
 		{queueItemID: "agent", inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindSteer, "from another agent", false), completion: &turnCompletion{done: make(chan struct{})}},
@@ -1846,7 +1824,6 @@ func TestShadowStepLimitRestartsAtPersonMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"s1"}, mirrored.Resets)
 
-	// Out of steps before the steer, the shadow still takes it, then counts again from zero.
 	require.Len(t, drainShadowStep(t, limited, "z1", harness.TurnPhaseToolLoop, "initial"), 3)
 
 	cancelled := make(chan struct{})
@@ -1882,7 +1859,6 @@ func TestShadowWorkflowTurnsHaveNoShadows(t *testing.T) {
 	require.Zero(t, count)
 }
 
-// A shadow matches its parent's mode, and routine runs, unlike cron-file runs and Web chats, have no shadows.
 func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
 	var logs bytes.Buffer
 
@@ -1901,7 +1877,6 @@ func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
 	cfg := config.NewLockedConfig(&config.Config{Workspace: root.Name()})
 	store.definitions = cfg
 
-	// main/z stays advanced.
 	agents, _, err := LoadRuntimeDefinitions(cfg, config.DefaultRuntimeDir)
 	require.NoError(t, err)
 	require.Equal(t, []string{"main/a"}, agents.ShadowNames("main"))
@@ -1933,8 +1908,6 @@ func TestShadowEasyModeAndRoutineRuns(t *testing.T) {
 	require.Equal(t, []string{"cron-run", "web"}, shadows, "a routine run creates no shadow sessions")
 }
 
-// Deleting a Web copy while its producer's family holds history locks waits for
-// them instead of deadlocking: both sides lock the family in the same order.
 func TestHistoryMutationSharesLockOrder(t *testing.T) {
 	t.Parallel()
 

@@ -40,7 +40,6 @@ import (
 
 type discardPublisher struct{}
 
-// PublishOutbound completes delivery at once, as Runtime.PublishOutbound does with no consumers.
 func (discardPublisher) PublishOutbound(context.Context, *protocol.OutboundMessage) error {
 	return nil
 }
@@ -173,7 +172,6 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	require.Empty(t, testDrainInputs(t, bridge, harness.TurnPhaseFinalAnswer))
 	require.Empty(t, bus.outbound, "a second drain must not repeat consumption")
 
-	// A disconnected observer must not drop or replay an admitted steer.
 	var logged bytes.Buffer
 
 	bridge.log = slog.New(slog.NewTextHandler(&logged, nil))
@@ -514,8 +512,6 @@ func TestPickLaterWorkWaitsWhenParkedAfterFutureScheduled(t *testing.T) {
 	assert.Empty(t, bridge.requestCh)
 }
 
-// A one-time reminder waits as a turn of its conversation, which neither the lane's later work nor
-// the waiting-turn claim starts before its run-at time.
 func TestScheduledTurnWaitsForRunAt(t *testing.T) {
 	t.Parallel()
 
@@ -576,7 +572,6 @@ func TestOneShotScheduleActivatesOnce(t *testing.T) {
 	scheduled := protocol.ScheduledMessageState{ConversationID: "thread-1", Agent: "main", Message: "follow up", DueAt: now}
 	require.NoError(t, store.PutScheduledMessage("s1", &scheduled))
 
-	// Both timers can enqueue before either request consumes the one-shot.
 	for range 2 {
 		require.NoError(t, bridge.submitDueScheduled(t.Context(), "s1", &scheduled, now))
 	}
@@ -594,8 +589,6 @@ func TestOneShotScheduleActivatesOnce(t *testing.T) {
 	assert.Empty(t, runningTestTurns(t, store))
 }
 
-// A timer that saw the bridge running can reach its schedule after the bridge stopped; it must not
-// claim a run it cannot submit, or a recurring schedule skips that run.
 func TestStoppedBridgeLeavesDueScheduleUnclaimed(t *testing.T) {
 	t.Parallel()
 
@@ -617,7 +610,6 @@ func TestStoppedBridgeLeavesDueScheduleUnclaimed(t *testing.T) {
 func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
 	t.Parallel()
 
-	// Database connections opened outside the bubble crash the test binary when used in it.
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -737,8 +729,6 @@ func TestPickLaterWorkDoesNotClaimScheduledWhenTurnBusy(t *testing.T) {
 func TestBridgeStopDoesNotClassifyOrdinaryTurnAsInterrupted(t *testing.T) {
 	t.Parallel()
 
-	// The turn ends with its bridge context's cause even when Stop comes first, so a shutdown lets its running calls
-	// finish and a lost run lock still stops them.
 	for _, cause := range []error{errShutdown, context.Canceled} {
 		bridgeCtx, cancelBridge := context.WithCancelCause(t.Context())
 		turn, cancel := context.WithCancel(bridgeCtx)
@@ -812,7 +802,6 @@ func TestRestartToolAcceptsEmptyOutputAndPropagatesErrors(t *testing.T) {
 
 func testNoopRestart(string) (string, error) { return "", nil }
 
-// finishTestGoalTurn finishes a turn for msg as handleInbound does: accounting in the finish transaction, then continuation.
 func finishTestGoalTurn(t *testing.T, b *Bridge, msg *protocol.InboundMessage) {
 	t.Helper()
 
@@ -823,7 +812,6 @@ func finishTestGoalTurn(t *testing.T, b *Bridge, msg *protocol.InboundMessage) {
 	require.NoError(t, b.finishGoalTurn(t.Context(), &bridgeRequest{inbound: msg}))
 }
 
-// runTestTurn runs one turn and appends its staged history as a request finish does.
 func runTestTurn(ctx context.Context, b *Bridge, msg *protocol.InboundMessage, turnID string) (runResult, error) {
 	finish := turnFinish{conversationID: strings.TrimSpace(b.config.ConversationID)}
 	b.mu.Lock()
@@ -840,7 +828,6 @@ func runTestTurn(ctx context.Context, b *Bridge, msg *protocol.InboundMessage, t
 	return result, err
 }
 
-// startTestBridge arms schedules and starts the request loop as Run does.
 func startTestBridge(ctx context.Context, b *Bridge) error {
 	if b.requestCh == nil {
 		b.requestCh, b.stopCh = make(chan bridgeRequest, defaultQueueSize), make(chan struct{})
@@ -855,7 +842,6 @@ func startTestBridge(ctx context.Context, b *Bridge) error {
 	return nil
 }
 
-// handleTestInbound takes a request as the bridge loop does, then handles it.
 func handleTestInbound(ctx context.Context, b *Bridge, request *bridgeRequest) error {
 	if _, err := b.activateInbound(ctx, request); err != nil {
 		return err
@@ -989,7 +975,6 @@ func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 
 	for _, errDelivery := range []error{nil, errors.New("delivery failed")} {
 		synctest.Test(t, func(t *testing.T) {
-			// Database connections opened outside the bubble crash the test binary when used in it.
 			bridge.config.SessionService = newTestSessionService(t)
 			recordTestConversations(t, bridge.config.SessionService, "main", map[string]ConversationKind{bridge.config.ConversationID: KindSlackThread})
 
@@ -1072,7 +1057,7 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 		}
 
 		t.Logf("missing-agent reply: waiting_for=%s conversation=%s buffered_outbound=%d database=%+v", waitingFor, conversationID, len(bus.outbound), service.db.Stats())
-		// Bound diagnostic SQL only; keep both original outbound waits and assertions.
+
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 
@@ -1151,8 +1136,6 @@ func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T)
 	assert.Contains(t, prompt, "Uncommitted, untracked, or unconfigured files")
 }
 
-// A submission during shutdown is stored in the Thread Queue with its full
-// inbound, so it survives the process exit and starts after the restart.
 func TestBridgeSubmitAfterStopStoresRequestDurably(t *testing.T) {
 	t.Parallel()
 
@@ -1293,7 +1276,6 @@ func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 		registry *backgroundRegistry
 	)
 
-	// The subagent's session runs on its own bridge.
 	manager = newThreadBridgeManager(locked, service, slog.New(slog.DiscardHandler), &bridgeFactoryMock{newBridgeFunc: func(cfg *Config) directBridge {
 		cfg.SessionService = service
 		child := NewConversation(locked, bus, cfg, slog.New(slog.DiscardHandler))
@@ -1310,7 +1292,6 @@ func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 	bridge := NewConversation(locked, bus, &Config{ConversationID: conversationID, Agent: "main", SessionService: service}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	bridge.threads, bridge.background = manager, registry
 
-	// The subagent finds its top-level session's bridge through the manager, as every bridge is found.
 	manager.mu.Lock()
 	manager.bridges[conversationID] = bridge
 	manager.mu.Unlock()
@@ -1601,7 +1582,6 @@ func TestAttachFilesToolReportsInvalidInput(t *testing.T) {
 	require.ErrorContains(t, err, `read attachment "missing.txt"`)
 }
 
-// An easy agent attaches a file by host path from its file view, and none outside it.
 func TestAttachFilesToolEasyView(t *testing.T) {
 	t.Parallel()
 
@@ -1674,7 +1654,6 @@ func TestAttachmentFallbackAndImageAttachments(t *testing.T) {
 	inbound.AttachmentPresence = protocol.AttachmentPresenceUnsupported
 	inbound.Metadata = map[string]string{"web_message_id": "attachment-input"}
 
-	// The buffered bus needs no reader while the fallback handles its database work.
 	require.NoError(t, handleTestInbound(t.Context(), bridge, &bridgeRequest{inbound: inbound}))
 	require.Len(t, bus.outbound, 2, "fallback must publish consumed input followed by its final response")
 
@@ -2236,7 +2215,6 @@ func TestBridgeQueuesWebWorkflowInsteadOfSteering(t *testing.T) {
 	assert.Empty(t, bridge.requestCh)
 }
 
-// A steer submitted during shutdown joins the interrupted turn unless that turn is hidden or a $workflow.
 func TestStoppedSteerJoinsOnlyOpenTurns(t *testing.T) {
 	for name, tc := range map[string]struct {
 		turn  *protocol.InboundMessage
@@ -2287,8 +2265,6 @@ func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
 	assert.Equal(t, `[Web media=Voice principal="Alice"]`, provenanceHeader(&voice))
 }
 
-// R40: a review's trusted origin header names the turn's source, its person and the agent that wrote it,
-// never additional instructions; a follow-on turn keeps the header of the turn that created it.
 func TestReviewOriginHeader(t *testing.T) {
 	t.Parallel()
 
@@ -2306,17 +2282,12 @@ func TestReviewOriginHeader(t *testing.T) {
 	} {
 		assert.Equal(t, tc.want, reviewOriginHeader(tc.inbound), tc.name)
 
-		// A person's turn is reviewed under the very header their message carries in the transcript: any
-		// difference reads to the reviewer as someone else claiming to be them, and it denies benign commands.
 		if tc.inbound.Human {
 			assert.Equal(t, provenanceHeader(new(provenanceFromInbound(tc.inbound))), reviewOriginHeader(tc.inbound), tc.name)
 		}
 	}
 }
 
-// R17: the builder names an agent sender and picks the verb by how the message reaches the turn. An
-// agent's write tells the receiver its answer returns on its own; a task prompt's answer is the task
-// call's result, so its header does not.
 func TestBuildPromptNamesAgentSender(t *testing.T) {
 	msg := &protocol.InboundMessage{Source: protocol.SourceSystem, Text: "hi", Metadata: map[string]string{protocol.InboundSenderSessionMetadataKey: `web:"a"`, protocol.InboundSenderAgentMetadataKey: "planner"}}
 	instructions := ` additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]` + "\n\nhi"
@@ -2387,7 +2358,7 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	inbound.ConversationID, inbound.SyncDestination = privateConversationID, threadKey
 	require.NoError(t, startTurnDB(t.Context(), service.db, "producer", privateConversationID, inbound))
 	bridge := NewConversation(cfg, finalsPublisher{finals: finals}, &Config{ConversationID: privateConversationID, Agent: "planner", SessionService: service}, slog.New(slog.DiscardHandler))
-	bridge.activeTurnID = "producer" // The producer turn is running.
+	bridge.activeTurnID = "producer"
 	require.NoError(t, bridge.ScheduleMessage(inbound, 100*time.Millisecond, "later", false))
 	_, err = service.finishTurn(t.Context(), "producer", &turnFinish{conversationID: strings.TrimSpace(privateConversationID), entries: []harness.SessionEntry{*testSessionEntry("producer context", "producer answer")}, outbound: protocol.NewOutboundMessage(privateConversationID, "")})
 	require.NoError(t, err)
@@ -2923,8 +2894,6 @@ func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
 	require.Empty(t, items)
 }
 
-// A request whose queue row another turn already claimed, as a duplicate submission of the row between RunTurn's
-// admission and its enqueue does, still releases its caller: its input ran under that turn.
 func TestBridgeReleasesCallerOfClaimedQueueItem(t *testing.T) {
 	t.Parallel()
 
@@ -3034,7 +3003,6 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 
 			return ok
 		}, time.Second, time.Millisecond)
-		// Let the loop finish its later-work pass before the test context is canceled.
 		synctest.Wait()
 	})
 }
@@ -3430,7 +3398,6 @@ func TestRunTurnExposesPrincipalEnv(t *testing.T) {
 		bridge := &Bridge{runtime: runtime, config: Config{ConversationID: tc.conversationID, Agent: "planner", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 
 		if strings.HasPrefix(tc.conversationID, "external_mcp:") {
-			// The thread's metadata is saved once an External MCP turn ran.
 			seed := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "hello", true)
 			seed.ConversationID, seed.ExternalMCPMetadata = tc.conversationID, map[string]string{"a": "first"}
 			_, err := runTestTurn(t.Context(), bridge, seed, "seed-"+tc.conversationID)
@@ -3614,11 +3581,9 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 		}
 	}
 
-	// Web-created bridges know only the actual conversation ID, not pairing fields.
 	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmodel: gpt-6.1-sol\npermission:\n  edit:\n    '.tmp/${ROCKETCLAW_METADATA_A}/note.txt': allow\n  read: allow\n  bash: auto\n---\nPrompt\n")
 
 	managedBridge := &Bridge{runtime: bridge.runtime, config: Config{ConversationID: managedConversationID, Agent: "planner", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-	// The run reports to its Slack thread, which shows its entries without a copy.
 	_, err = service.db.ExecContext(t.Context(), `UPDATE conversations SET reports_to = $1 WHERE conversation_id = $2`, managedConversationID, bridge.config.ConversationID)
 	require.NoError(t, err)
 
@@ -3795,7 +3760,6 @@ Request: $ARGUMENTS
 		}
 	}
 
-	// A Slack mention's $<skill> reaches the agent as ordinary text.
 	recordTestConversations(t, service, "main", map[string]ConversationKind{"dollar-slack": KindWebChat, "missing-skill": KindWebChat})
 	mention := &Bridge{runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), config: Config{ConversationID: "dollar-slack", Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
 	mentionMsg := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, &protocol.InboundContent{Text: "$docs-helper write API docs"}, true)
@@ -4639,8 +4603,6 @@ func TestAppendSessionEntryKeepsPriorEntriesThenAdded(t *testing.T) {
 	assert.False(t, seen[1].Timestamp.Before(before))
 }
 
-// noteTest runs a Slack thread conversation's bridges wired to a background registry, as app.go
-// does, against a provider that reports each request body and answers through respond.
 type noteTest struct {
 	service        *SessionService
 	cfg            *config.Config
@@ -4649,14 +4611,12 @@ type noteTest struct {
 	finals         chan *protocol.OutboundMessage
 }
 
-// noteTestResponder answers the nth provider request, counted from 0.
 type noteTestResponder func(w http.ResponseWriter, r *http.Request, n int, body string)
 
 func answerNoteTest(w http.ResponseWriter, _ *http.Request, _ int, _ string) {
 	_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
 }
 
-// holdNoteTest holds the provider requests numbered in held until release closes or the request ends.
 func holdNoteTest(release <-chan struct{}, held ...int) noteTestResponder {
 	return func(w http.ResponseWriter, r *http.Request, n int, body string) {
 		if slices.Contains(held, n) {
@@ -4709,8 +4669,6 @@ func newNoteTest(t *testing.T, respond noteTestResponder) *noteTest {
 	return nt
 }
 
-// run starts a manager of real bridges that hands each published outbound to observe and reports
-// completed ones on finals. It returns the manager and its shutdown.
 func (nt *noteTest) run(t *testing.T, observe func(*protocol.OutboundMessage)) (manager *threadBridgeManager, shutdown func()) {
 	t.Helper()
 
@@ -4749,7 +4707,6 @@ func (nt *noteTest) bridge(t *testing.T, manager *threadBridgeManager, conversat
 	return bridge
 }
 
-// slackPrompt is a human Slack message in the conversation's thread.
 func (nt *noteTest) slackPrompt(text string) *protocol.InboundMessage {
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, text, true)
 	msg.ConversationID, msg.SlackReply = nt.conversationID, &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.333", ThreadTS: "111.222"}
@@ -4757,7 +4714,6 @@ func (nt *noteTest) slackPrompt(text string) *protocol.InboundMessage {
 	return msg
 }
 
-// addNote stores a completed main-agent job of conversationID, started by origin, with a wakeable note.
 func (nt *noteTest) addNote(t *testing.T, conversationID, jobID string, origin *protocol.InboundMessage) {
 	t.Helper()
 
@@ -4767,7 +4723,6 @@ func (nt *noteTest) addNote(t *testing.T, conversationID, jobID string, origin *
 	finishTestBackgroundJob(t, nt.service, job, backgroundCompleted, true)
 }
 
-// waitIdle waits until conversationID's bridge runs and holds no turn.
 func (nt *noteTest) waitIdle(t *testing.T, manager *threadBridgeManager, conversationID string) {
 	t.Helper()
 
@@ -4832,7 +4787,6 @@ func testExecuteNote(jobID string) string {
 	return `<execute id="` + jobID + `" state="completed" description="tests">` + "\ncompleted\n</execute>"
 }
 
-// One system turn holds all notes in finish order and replies in the thread of the turn that started the jobs.
 func TestBackgroundNotesWakeIdleConversation(t *testing.T) {
 	t.Parallel()
 
@@ -4863,7 +4817,6 @@ func TestBackgroundNotesWakeIdleConversation(t *testing.T) {
 	assert.Equal(t, "turn-1/call/b turn-1/call/a", items[0].OfMessage.ExtraFields()["input_id"], "the Web finds the turn's notes by their job IDs")
 }
 
-// The note enters the next step, also of a goal continuation or a final answer, and starts no turn of its own.
 func TestBackgroundNoteEntersRunningTurn(t *testing.T) {
 	t.Parallel()
 
@@ -4955,7 +4908,6 @@ func TestStoppedInitialTurnDoesNotReplayPendingNotes(t *testing.T) {
 			nt.addNote(t, nt.conversationID, "turn-0/call/a", nt.slackPrompt("run the tests"))
 
 			if human {
-				// A previously released note waits for human work rather than waking another turn.
 				_, err := nt.service.db.ExecContext(t.Context(), `UPDATE turns SET wake = FALSE WHERE conversation_id = $1 AND NOT takes_lane`, nt.conversationID)
 				require.NoError(t, err)
 			}
@@ -4992,7 +4944,6 @@ func TestStoppedInitialTurnDoesNotReplayPendingNotes(t *testing.T) {
 	}
 }
 
-// A note injected into a turn that is then stopped wakes nothing; the next turn delivers it.
 func TestStoppedTurnReleasesItsNotes(t *testing.T) {
 	t.Parallel()
 
@@ -5029,7 +4980,6 @@ func TestStoppedTurnReleasesItsNotes(t *testing.T) {
 	assert.Equal(t, []string{"turn-0/call/a consumed false"}, noteStates(t, nt.service))
 }
 
-// Released notes wake nothing again, and the owner's next turn delivers them.
 func TestFailedWakeReleasesItsNotes(t *testing.T) {
 	t.Parallel()
 
@@ -5060,7 +5010,7 @@ func TestFailedWakeReleasesItsNotes(t *testing.T) {
 		}
 
 		t.Logf("failed wake follow-up: stage=%s provider_requests=%d finals=%d handling=%t queued_requests=%d database=%+v", stage, len(nt.requests), len(nt.finals), bridge.handlingSnapshot(), len(bridge.requestCh), nt.service.db.Stats())
-		// Bound only the failure-state query, not the original provider or final waits.
+
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 
@@ -5129,7 +5079,6 @@ func TestResumedTurnInjectsNoteOnce(t *testing.T) {
 	assert.Equal(t, []string{"turn-0/call/a consumed true"}, noteStates(t, nt.service))
 }
 
-// A note claimed before any step recorded it enters the resumed turn.
 func TestResumedTurnInjectsNoteClaimedBeforeCrash(t *testing.T) {
 	t.Parallel()
 
@@ -5148,12 +5097,10 @@ func TestResumedTurnInjectsNoteClaimedBeforeCrash(t *testing.T) {
 	assert.Equal(t, []string{"turn-0/call/a consumed true"}, noteStates(t, nt.service))
 }
 
-// The destination is the chat a cron run reported in, subject to its output decision, or an External MCP managed chat.
 func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 	t.Parallel()
 
 	decide := func(w http.ResponseWriter, _ *http.Request, _ int, _ string) {
-		// A hidden run's reply is its output.
 		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Tests passed.","annotations":[]}]}]}`))
 	}
 
@@ -5162,7 +5109,6 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		manager, _ := nt.run(t, ignoreOutbound)
 		report := "web:cron:daily"
 
-		// The run started a background job, then reported "Report started" in a new chat.
 		msg := seedCronRun(t, nt.service, "cron:daily")
 		job := testBackgroundJob("cron:daily", "turn-cron/call/a")
 		job.origin = msg
@@ -5188,7 +5134,6 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 		assert.Equal(t, []string{"turn-cron/call/a consumed true"}, noteStates(t, nt.service))
 	})
 
-	// A wake queued from the run's origin before the run opened its report chat still reaches that chat.
 	t.Run("cron wake queued before the report chat", func(t *testing.T) {
 		nt := newNoteTest(t, decide)
 		manager, _ := nt.run(t, ignoreOutbound)
@@ -5222,7 +5167,7 @@ func TestHiddenProducerWakeReachesDestination(t *testing.T) {
 			}
 
 			t.Logf("queued cron wake: buffered_provider_requests=%d finals=%d database=%+v", len(nt.requests), len(nt.finals), nt.service.db.Stats())
-			// Bound diagnostic SQL, not the unchanged outbound wait.
+
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 
@@ -5270,14 +5215,10 @@ FROM conversations WHERE conversation_id IN ('cron:daily', 'web:cron:daily') ORD
 	})
 }
 
-// A hidden run may never have a next turn, so its failed wake retries after a growing delay, also
-// after a restart, until a wake delivers the note to the destination. Only the first failure
-// reaches the destination, saying the wake retries.
 func TestHiddenRunFailedWakeRetries(t *testing.T) {
 	t.Parallel()
 
 	nt := newNoteTest(t, func(w http.ResponseWriter, r *http.Request, n int, body string) {
-		// A kept-alive connection would block on the network and stop the bubble's clock.
 		w.Header().Set("Connection", "close")
 
 		if n < 3 {
@@ -5291,7 +5232,6 @@ func TestHiddenRunFailedWakeRetries(t *testing.T) {
 	})
 	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
 
-	// The provider stays outside the bubble; the store, whose connections hold bubble timers, inside.
 	synctest.Test(t, func(t *testing.T) {
 		nt.service = newTestSessionServiceAt(t, nt.cfg.Workspace)
 		for _, conversationID := range []string{nt.conversationID, private, managed} {
@@ -5303,7 +5243,6 @@ func TestHiddenRunFailedWakeRetries(t *testing.T) {
 		origin.ConversationID, origin.SyncDestination = private, managed
 		nt.addNote(t, private, "turn-mcp/call/a", origin)
 
-		// woken waits for the bubble to settle and returns the one wake request it sent.
 		woken := func() string {
 			t.Helper()
 
@@ -5313,7 +5252,6 @@ func TestHiddenRunFailedWakeRetries(t *testing.T) {
 			return <-nt.requests
 		}
 
-		// posted returns the final messages the destination got.
 		posted := func() []string {
 			var texts []string
 
@@ -5326,7 +5264,6 @@ func TestHiddenRunFailedWakeRetries(t *testing.T) {
 			return texts
 		}
 
-		// failed checks that the wake failed and left its note to retry after delay.
 		failed := func(attempts int, delay time.Duration) {
 			t.Helper()
 
@@ -5398,7 +5335,6 @@ func TestStopLeavesBackgroundJobsRunning(t *testing.T) {
 	readFinal(t, nt.finals)
 }
 
-// A hidden producer's wake that finds its notes already delivered starts no turn.
 func TestEmptyProducerWakeLeavesDestinationFree(t *testing.T) {
 	t.Parallel()
 
@@ -5419,7 +5355,6 @@ func TestEmptyProducerWakeLeavesDestinationFree(t *testing.T) {
 	assert.Same(t, destination, destination.stopTarget(), "a stop on the destination is not left routed to the producer")
 }
 
-// After a hidden producer's turn ends, schedules stay private, a nested workflow runs, and turn-bound tools refuse.
 func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 	t.Parallel()
 
@@ -5435,7 +5370,7 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 			Code        string `json:"code"`
 			Description string `json:"description"`
 			Background  bool   `json:"background"`
-		}{code, "tools", true}) // Encoding strings and a bool cannot fail.
+		}{code, "tools", true})
 
 		_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_b","name":"execute","arguments":%q}]}`, arguments)
 	})
@@ -5474,7 +5409,6 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 	assert.Len(t, scheduled, 1, "its private schedule reaches the destination with the wake's sync")
 }
 
-// Exactly the three turn-bound platform tools refuse to run in background work; the page tools are not among them.
 func TestTurnBoundPlatformTools(t *testing.T) {
 	t.Parallel()
 

@@ -38,7 +38,6 @@ func TestSessionTagDefinitions(t *testing.T) {
 			require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\nmodel: gpt-5.4\npermission:\n  rocketclaw:\n    rocketclaw_get_tags: allow\n    rocketclaw_sessions: allow\n"+frontmatter+"---\nPrompt\n"), 0o644))
 
 			if tags == "example" {
-				// Read the shipped example, then install the fixture through the sandbox root.
 				data, err := os.ReadFile("../skel/agents/examples/session-tags.example.md")
 				require.NoError(t, err)
 				require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", data, 0o644))
@@ -107,7 +106,6 @@ func TestLoadRocketCodeDefinitionsSudo(t *testing.T) {
 
 	tagged, untagged := agents.Items["tagged"], agents.Items["untagged"]
 
-	// Conversation helpers skip review; every other RocketClaw tool is reviewed.
 	for subject, want := range map[string]harness.PermissionAction{
 		reloadToolName: harness.PermissionAllow, scheduleMessageToolName: harness.PermissionAllow, attachFilesToolName: harness.PermissionAllow,
 		updateGoalToolName: harness.PermissionAllow, askUserQuestionToolName: harness.PermissionAllow,
@@ -130,7 +128,6 @@ func TestLoadRocketCodeDefinitionsSudo(t *testing.T) {
 	}
 }
 
-// Easy sections compile to reviewed rules; the conversation helpers stay unreviewed, and tags need tag groups.
 func TestLoadRocketCodeDefinitionsEasy(t *testing.T) {
 	t.Parallel()
 
@@ -254,7 +251,7 @@ func TestSessionTagsExistingPermissions(t *testing.T) {
 
 				return
 			}
-			// Match the live sudo agent's frontmatter and preserve its other rules.
+
 			require.Equal(t, [][]string{{"red", "yellow", "green"}}, groups)
 
 			for _, bucket := range []string{"webfetch", "websearch", "glob", "grep", "read", "edit", "skill"} {
@@ -283,8 +280,6 @@ func TestSessionTagsExistingPermissions(t *testing.T) {
 	}
 }
 
-// rocketclaw_sessions_recipient loads as a boolean or a non-empty list of unique agent names. Any other
-// value fails the load naming the file and key, except in a shadow definition, which is dropped.
 func TestSessionRecipientDefinitions(t *testing.T) {
 	t.Parallel()
 
@@ -344,8 +339,6 @@ func TestLoadRocketCodeDefinitionsKeepsBackgroundExact(t *testing.T) {
 	require.ErrorContains(t, err, "allow_background must be allow or deny")
 }
 
-// Only an exact rocketclaw_sessions rule offers the session tools; wildcards, the scalar form, the
-// removed children scope, and session.spawn_mode fail to load.
 func TestLoadRocketCodeDefinitionsSessions(t *testing.T) {
 	workspace := t.TempDir()
 	cases := []struct {

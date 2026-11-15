@@ -37,7 +37,6 @@ func sidebarChatAllocationCheck(tb testing.TB) func() {
 		{facts: ChatOriginFacts{ConversationID: "sample-chat"}},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: cron}, cron: true, stem: "Weekly report"},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: &protocol.CronRun{Path: "cron/.md", OneOff: true}}, cron: true},
-		// cron:marketing finds the marketing agent's routine runs.
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Run: &protocol.CronRun{Path: "agents/marketing.md#*/5 * * * *"}}, cron: true, stem: "marketing"},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Binding: binding}},
 		{facts: ChatOriginFacts{ConversationID: "sample-chat", Binding: binding, Run: cron}},
@@ -132,7 +131,6 @@ func externalOriginAllocationCheck(tb testing.TB) func() {
 func TestChatOriginFactsAllocationBudget(t *testing.T) {
 	result := testing.Benchmark(BenchmarkChatOriginFacts)
 	require.Positive(t, result.N)
-	// Decoding in place costs up to 6.0 MiB under CI's -race; copying first cost 7.4 MiB, or 8.4 MiB under -race.
 	require.Less(t, result.AllocedBytesPerOp(), int64(7<<20))
 }
 
@@ -224,7 +222,7 @@ func TestChatOriginFactsReportsFailures(t *testing.T) {
 
 	require.Len(t, errs, 1)
 	require.ErrorContains(t, errs[0], "decode external MCP origin pairs")
-	// A single-session origin read must neither visit nor decode unrelated bindings.
+
 	seen = 0
 
 	for facts, err := range store.ChatOriginFacts(ctx, "second") {

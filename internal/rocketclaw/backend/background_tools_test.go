@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The tool stops its conversation's jobs and those of hidden runs reporting there; no others.
 func TestStopBackgroundJobTool(t *testing.T) {
 	t.Parallel()
 
@@ -28,7 +27,6 @@ func TestStopBackgroundJobTool(t *testing.T) {
 	reportTestRun(t, store, "cron:daily", "main")
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"other": KindWebChat})
 
-	// A session write's reply has no run: stopping it ends the row, not the target's turn.
 	reply := testReply("main", "turn-1/call/w", "web:ops")
 	createTestBackgroundJob(t, store, reply)
 
@@ -67,7 +65,6 @@ func TestStopBackgroundJobTool(t *testing.T) {
 	require.Equal(t, backgroundRunning, testBackgroundRow(t, store, "other", "turn-1/call/3").status)
 }
 
-// Only an exact allow_background rule shows the tool and lets it run.
 func TestStopBackgroundJobToolNeedsAllowBackground(t *testing.T) {
 	t.Parallel()
 

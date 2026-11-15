@@ -82,7 +82,6 @@ func (r *modelResolver) Resolve(model string) (*openai.Client, harness.ProviderO
 
 	options = append(options, option.WithAPIKey(providerConfig.APIKey))
 	if strings.TrimSpace(providerConfig.APIBaseURL) != "" {
-		// WithUnsafeAllowHTTP keeps plain-HTTP base URLs working, local or remote.
 		options = append(options, option.WithBaseURL(providerConfig.APIBaseURL), option.WithUnsafeAllowHTTP())
 	}
 
@@ -127,7 +126,6 @@ func (r *modelResolver) options(origin harness.ProviderOrigin) []option.RequestO
 
 		boundary := "http_headers"
 		if r.providers[origin.Provider].Auth == "chatgpt" {
-			// Codex adapts streams and performs physical retries below SDK middleware.
 			boundary = "sdk_return"
 		}
 

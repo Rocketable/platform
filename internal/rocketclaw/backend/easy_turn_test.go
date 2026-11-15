@@ -18,9 +18,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-// An easy agent's workingDirectory starts from RocketClaw's working directory. Each turn variable becomes
-// one path segment, escaped so different values never meet; RocketClaw's own variables are used as
-// written. The folder is created, and refused where the agent could rewrite a definition or RocketClaw.
 func TestResolveWorkingDirectory(t *testing.T) {
 	workspace, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
@@ -62,7 +59,6 @@ func TestResolveWorkingDirectory(t *testing.T) {
 		require.True(t, info.IsDir(), "the folder is created")
 	}
 
-	// A link may not lead the folder into a definitions folder.
 	linked, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 
@@ -75,7 +71,6 @@ func TestResolveWorkingDirectory(t *testing.T) {
 	_, err = resolveWorkingDirectory(&config.Config{Workspace: linked}, filepath.Join(linked, "data", "x"), nil)
 	require.ErrorContains(t, err, "workingDirectory "+filepath.Join(linked, "agents", "x")+" must not")
 
-	// Nor may it be, hold or lie inside where a definitions folder that is a link leads, out of the workspace.
 	shared, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
 	require.NoError(t, os.Mkdir(filepath.Join(shared, "agents"), 0o755))
@@ -86,16 +81,12 @@ func TestResolveWorkingDirectory(t *testing.T) {
 		require.ErrorContains(t, err, "workingDirectory "+dir+" must not", dir)
 	}
 
-	// A link to where no folder is yet fails, since the agent could make that folder.
 	require.NoError(t, root.Symlink(filepath.Join(shared, "cron"), "cron"))
 
 	_, err = resolveWorkingDirectory(&config.Config{Workspace: linked}, t.TempDir(), nil)
 	require.ErrorContains(t, err, "workingDirectory: lstat "+filepath.Join(shared, "cron"))
 }
 
-// An easy agent's shell for a turn works in the folder of its top-level session, whatever its own
-// conversation ID, and shows that session's uploads and the folders of its skills read-only, one inside
-// another once. The emulator sees the turn's variables only; secrets reach host commands only.
 func TestEasyTurnShell(t *testing.T) {
 	t.Parallel()
 
@@ -142,7 +133,6 @@ func TestEasyTurnShell(t *testing.T) {
 	require.Equal(t, easy, agents.Items["easy"], "a failed setup leaves the shell failing closed")
 }
 
-// An easy shadow's file view and shell show the uploads of the chat it shadows, read-only.
 func TestEasyShadowReadsParentUploads(t *testing.T) {
 	t.Parallel()
 
@@ -175,9 +165,6 @@ func TestEasyShadowReadsParentUploads(t *testing.T) {
 	require.Equal(t, "parent upload", string(data))
 }
 
-// A background subagent's turn, also when a restart resumes it, works in its top-level session's folder,
-// though its own conversation ID differs, and runs on the model and with the tools its task call chose. One
-// level down, with maxRecursion omitted, it delegates no further.
 func TestEasySubagentWorksInParentFolder(t *testing.T) {
 	t.Parallel()
 
@@ -195,7 +182,7 @@ func TestEasySubagentWorksInParentFolder(t *testing.T) {
 			select {
 			case <-cut:
 				close(started)
-				<-r.Context().Done() // The restart cuts the subagent's first run.
+				<-r.Context().Done()
 
 				return
 			default:
@@ -284,7 +271,6 @@ func TestEasySubagentWorksInParentFolder(t *testing.T) {
 	registry.shutdown()
 	require.Equal(t, []string{nt.conversationID}, folders())
 
-	// The resolver makes folders on the host, outside any root; start again without them.
 	require.NoError(t, os.RemoveAll(data))
 
 	var model, tools string
@@ -310,7 +296,7 @@ func TestEasySubagentWorksInParentFolder(t *testing.T) {
 
 	stage = "subagent request bodies"
 
-	for range 2 { // The cut run and the resumed one.
+	for range 2 {
 		body := <-subagentBodies
 		assert.Contains(t, body, `"model":"gpt-6-luna"`)
 		assert.Contains(t, body, `\n- bash(`)

@@ -23,16 +23,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// fakeOpenCode serves the OpenCode v2 routes the sync and create paths call.
 type fakeOpenCode struct {
-	sessions []openCodeSession
-	active   []string
-	created  []string
-	// replies holds each session's newest assistant text; a session missing here fails the read.
-	replies map[string]string
-	// parents maps a child session to its parent. locations are the loaded locations, and shells
-	// maps each to its running shells, by ID, with their sessions; a location missing from shells
-	// fails its list. The event stream sends events after its connected event.
+	sessions  []openCodeSession
+	active    []string
+	created   []string
+	replies   map[string]string
 	parents   map[string]string
 	locations []string
 	shells    map[string]map[string]string
@@ -40,8 +35,6 @@ type fakeOpenCode struct {
 	messages  map[string][]openCodeTestMessage
 	reads     []string
 
-	// pending maps a list path, /api/form or /api/permission/request, to each location's pending
-	// requests' sessions; a location missing from it fails its list.
 	pending map[string]map[string][]string
 }
 
@@ -214,8 +207,6 @@ func openCodeTestSession(id, title, directory string, updated int64) openCodeSes
 	return session
 }
 
-// newOpenCodeTestService lists the remote sessions of the named servers, as RocketClaw
-// does for the servers its config names.
 func newOpenCodeTestService(t *testing.T, names ...string) *SessionService {
 	t.Helper()
 
@@ -278,8 +269,6 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	assert.False(t, rows[0].Running)
 	assert.False(t, rows[0].Offline)
 
-	// A session seen running and then idle stores its newest assistant text and keeps it while idle,
-	// even when a later read would fail; a failed read when the next turn ends clears it.
 	fake.active, fake.replies = nil, map[string]string{"ses_b": "Done: tests pass."}
 
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
@@ -300,12 +289,9 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 	assert.Empty(t, remoteSidebar(t, s)[1].Reply)
 
-	// Pin, name, and tag survive later syncs and state pruning.
 	updated, err := s.UpdateConversationDetails(ctx, "opencode:box:ses_c", new(true), new("old work"))
 	require.NoError(t, err)
 	require.True(t, updated)
-	// OpenCode v2 session.update uses PATCH and returns 204, not a JSON session:
-	// https://opencode.ai/v2/openapi.json#/paths/~1api~1session~1{sessionID}/patch
 	assert.Equal(t, "old work", fake.sessions[2].Title, "renaming in RocketClaw must rename the OpenCode session")
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
@@ -321,8 +307,6 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	assert.Equal(t, []string{"customer"}, rows[0].Tags)
 	assert.Equal(t, "old work", rows[0].Summary.LastMessage)
 
-	// The v2 Session.Info.title from GET /api/session is the shared name, not a local alias:
-	// https://opencode.ai/v2/openapi.json#/paths/~1api~1session/get
 	for _, title := range []string{"Delta", ""} {
 		fake.sessions[2].Title = title
 
@@ -337,7 +321,6 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	_, err = s.UpdateConversationDetails(ctx, "opencode:box:ses_c", nil, new("old work"))
 	require.NoError(t, err)
 
-	// Pins still work while OpenCode refuses writes, but a refused rename saves nothing locally.
 	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
 		cfg.OpenCode["box"] = config.OpenCodeConfig{URL: server.URL, Password: "wrong"}
 		return nil
@@ -370,13 +353,11 @@ func TestSyncOpenCodeListsRemoteSessions(t *testing.T) {
 	require.Len(t, search.Matches, 1)
 	assert.Equal(t, "opencode:box:ses_b", search.Matches[0].Chat.Session.Conversation.ID)
 
-	// A below-limit fetch is the whole root set, so a missing session was deleted (R6).
 	fake.sessions = fake.sessions[:2]
 
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 	assert.Len(t, remoteSidebar(t, s), 2)
 
-	// A failed poll writes nothing; rows age into offline once their stamp is stale.
 	box.Password = "wrong"
 	errSync := s.syncOpenCode(ctx, "box", box, &openCodeShells{})
 	require.ErrorAs(t, errSync, new(*openCodeError))
@@ -522,9 +503,8 @@ func TestSyncOpenCodeMarksBackgroundWork(t *testing.T) {
 	ctx := t.Context()
 	fake := &fakeOpenCode{
 		sessions: []openCodeSession{openCodeTestSession("ses_a", "", "/srv/app", 4000), openCodeTestSession("ses_b", "", "/srv/app", 3000), openCodeTestSession("ses_c", "", "/srv/api", 2000), openCodeTestSession("ses_d", "", "/srv/gone", 1000)},
-		// ses_b's background subagent runs, and a grandchild of ses_c runs a shell.
-		active:  []string{"ses_a", "ses_b_child"},
-		parents: map[string]string{"ses_b_child": "ses_b", "ses_c_grandchild": "ses_c_child", "ses_c_child": "ses_c"},
+		active:   []string{"ses_a", "ses_b_child"},
+		parents:  map[string]string{"ses_b_child": "ses_b", "ses_c_grandchild": "ses_c_child", "ses_c_child": "ses_c"},
 	}
 	server := httptest.NewServer(fake)
 	t.Cleanup(server.Close)
@@ -545,8 +525,6 @@ func TestSyncOpenCodeMarksBackgroundWork(t *testing.T) {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM conversations`)
 	require.NoError(t, err)
 
-	// A root asks while it or a child has a pending form or permission request. A form owned
-	// by no session, and a location whose list fails, mark nothing.
 	fake.sessions = fake.sessions[:3]
 	fake.locations = []string{"/srv/app", "/srv/api", "/srv/broken"}
 	fake.pending = map[string]map[string][]string{
@@ -574,7 +552,6 @@ func TestSyncOpenCodeMarksBackgroundWork(t *testing.T) {
 	assert.Equal(t, []bool{false, false, false}, asking())
 }
 
-// An OpenCode turn end marks the people whose stamped prompts it ran, once each (R13, R14, AE7).
 func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	t.Parallel()
 
@@ -623,7 +600,6 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	}
 	idle := func(created int64) openCodeTestMessage { return openCodeTestMessage{Type: "idle", Created: created} }
 
-	// A session created here marks Alice when its first turn, seen busy, ends.
 	turn(5000, true, prompt("alice", 5100))
 	assert.Empty(t, fake.reads, "a busy session reads no messages")
 	turn(5000, false, idle(5200))
@@ -635,26 +611,20 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{path}, paths, "the mark is on the tab path the Web spells")
 
-	// A turn never seen busy is found by its moved time.updated; Alice's prompt before the cursor
-	// and an unstamped TUI prompt mark no one.
 	turn(6000, false, prompt("bob", 5900), prompt("", 5950), idle(6000))
 	assert.Equal(t, []string{id}, unread("bob"))
 	assert.Empty(t, unread("alice"))
 
-	// An idle session whose time.updated did not move reads no messages.
 	reads := len(fake.reads)
 
 	turn(6000, false)
 	assert.Len(t, fake.reads, reads)
 
-	// A TUI-only turn and a /command turn with no user message mark no one, as nobody has the session's tab.
 	turn(7000, false, prompt("", 6500), idle(6600), idle(7000))
 	assert.Empty(t, unread("alice"))
 	assert.Empty(t, unread("bob"))
 	assert.Empty(t, unread(""))
 
-	// A turn no prompt started, as a background job's result starts one, still ends a park until it is done; a moved
-	// time.updated with no new idle marker, as a rename's, does not.
 	require.NoError(t, s.ChangeAttention(ctx, "alice", []string{path}, AttentionParkUntilDone, nil))
 
 	fake.sessions = []openCodeSession{openCodeTestSession("ses_new", "", "/srv/app", 7040)}
@@ -668,13 +638,11 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 	assert.Equal(t, "new quiet parked until=due", attentionOf(t, s, "alice", path))
 
-	// Two turns that ended between polls, after a sync saw the session busy, mark both senders.
 	turn(7000, true)
 	turn(7000, false, prompt("alice", 7100), idle(7200), prompt("bob", 7300), prompt("bob", 7350), idle(7400))
 	assert.Equal(t, []string{id}, unread("alice"))
 	assert.Equal(t, []string{id}, unread("bob"))
 
-	// Alice viewed the session 3 seconds ago, so only Bob, who viewed it long ago, is marked.
 	_, err = s.db.ExecContext(ctx, `DELETE FROM web_tab_attention; DELETE FROM web_tab_states`)
 	require.NoError(t, err)
 	_, err = s.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, revision, viewing, viewed_at) VALUES ('alice', 0, $1, now() - interval '3 seconds'), ('bob', 0, $1, now() - interval '30 seconds')`, path)
@@ -687,8 +655,6 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	assert.Empty(t, unread("alice"))
 	assert.Equal(t, []string{id}, unread("bob"))
 
-	// A failed message read leaves the cursor, so the next turn end marks the missed sender too.
-	// Carol's prompt after the newest marker belongs to a turn that has not ended.
 	fake.messages["ses_new"] = append(fake.messages["ses_new"], prompt("alice", 7900), idle(8000))
 	history := fake.messages["ses_new"]
 	delete(fake.messages, "ses_new")
@@ -702,8 +668,6 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	assert.Equal(t, []string{id}, unread("bob"))
 	assert.Empty(t, unread("carol"))
 
-	// In a space's Shared group, Carol's turn marks Dave, who keeps its tab, and every other Web person but Carol, who
-	// is viewing it, all with a notification.
 	require.NoError(t, s.ShareTab(ctx, "main", path, nil))
 	_, err = s.db.ExecContext(ctx, `DELETE FROM web_tab_attention; DELETE FROM web_tab_states`)
 	require.NoError(t, err)
@@ -721,8 +685,6 @@ func TestSyncOpenCodeMarksTurnSenders(t *testing.T) {
 	assert.Equal(t, []string{"alice loud", "bob loud", "dave loud"}, attentionOn(t, s, id))
 }
 
-// A remote session that starts asking marks its keepers, ending a park at their next poll, and the people whose
-// stamped prompts since its cursor it runs, tab or not; it marks no one again until it has stopped asking.
 func TestSyncOpenCodeMarksAskingStarts(t *testing.T) {
 	t.Parallel()
 
@@ -780,8 +742,6 @@ func TestOpenCodeShellsFollowEvents(t *testing.T) {
 	defer cancel()
 
 	fake := &fakeOpenCode{
-		// /srv/gone is loaded but its list fails. sh_old's exit is on the stream before the list
-		// that still names it, and it must apply after.
 		locations: []string{"/srv/app", "/srv/gone"},
 		shells:    map[string]map[string]string{"/srv/app": {"sh_old": "ses_a", "sh_kept": "ses_b"}},
 		events:    make(chan string, 4),
@@ -820,7 +780,7 @@ func TestOpenCodeShellsFollowEvents(t *testing.T) {
 	require.Eventually(t, running(map[string]string{"sh_new": "ses_c"}), 5*time.Second, 10*time.Millisecond)
 
 	close(fake.events)
-	<-done // An ended stream returns so the caller reconnects.
+	<-done
 }
 
 func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
@@ -840,7 +800,6 @@ func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
 	box := config.OpenCodeConfig{URL: server.URL, Password: "pw"}
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
 
-	// The newest 100 form a full window: the oldest row leaves the fetch but stays listed, online.
 	oldest := "opencode:box:" + fake.sessions[openCodeSyncLimit].ID
 	fake.sessions = fake.sessions[:openCodeSyncLimit]
 	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET synced_at = now() - interval '1 minute' WHERE kind = 'remote'`)
@@ -852,7 +811,6 @@ func TestSyncOpenCodeKeepsRowsOutsideTheWindow(t *testing.T) {
 	require.NotEqual(t, -1, i)
 	assert.False(t, rows[i].Offline)
 
-	// The daily prune drops the kept row once the server lost it, and never lists old sessions.
 	fake.sessions = append(fake.sessions, openCodeTestSession("ses_never_listed", "", "/srv", 1))
 
 	require.NoError(t, s.pruneOpenCode(ctx, "box", box))
@@ -889,14 +847,12 @@ VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 
 	require.ErrorIs(t, s.ToggleManualTag(ctx, agents, "web", "billing"), ErrTagNotAllowed)
 
-	// The agent's group makes internal replace customer; remote sessions take any tags.
 	for id, want := range map[string][]string{"web": {"internal"}, "opencode:box:ses_a": {"billing", "urgent"}} {
 		tags, err := sessionTags(ctx, s.db, id)
 		require.NoError(t, err)
 		assert.Equal(t, want, tags, id)
 	}
 
-	// Tags, pins, and names of both kinds are facts on their own conversation rows.
 	for _, id := range []string{"web", "opencode:box:ses_a"} {
 		updated, err := s.UpdateConversationDetails(ctx, id, new(true), new("Named "+id))
 		require.NoError(t, err)
@@ -938,7 +894,6 @@ func TestOpenCodeMovesOldNamesToTheServer(t *testing.T) {
 		return names
 	}
 
-	// A name stored before names synced with OpenCode moves there once the server accepts it.
 	_, err := s.db.ExecContext(ctx, `UPDATE conversations SET name = 'old work' WHERE conversation_id = 'opencode:box:ses_b'`)
 	require.NoError(t, err)
 	require.NoError(t, s.pushOpenCodeNames(ctx, "box", config.OpenCodeConfig{URL: server.URL, Password: "wrong"}))
@@ -954,7 +909,6 @@ func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
 
 	s := newOpenCodeTestService(t, "box")
 	ctx := t.Context()
-	// Keep the address reserved so another fixture cannot turn a failed poll into a successful one.
 	gone := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic(http.ErrAbortHandler)
 	}))
@@ -985,8 +939,6 @@ func TestOpenCodeUpstreamFailuresWriteNothing(t *testing.T) {
 	assert.Empty(t, remoteSidebar(t, s), "a failed poll writes nothing")
 }
 
-// Remote sessions carry their selected agent and model; a RocketClaw chat's model is its agent's
-// configured one. model: matches part of a model, ranking chats with the whole model first.
 func TestSearchSessionsFiltersByServerAgentAndModel(t *testing.T) {
 	t.Parallel()
 
@@ -1048,8 +1000,6 @@ func TestSearchSessionsFiltersByServerAgentAndModel(t *testing.T) {
 	}
 }
 
-// A created session is listed at once in the space it was created in. An unknown space records
-// none; recording the session again fills a missing space, and later syncs keep it.
 func TestCreateOpenCodeSessionListsItAtOnce(t *testing.T) {
 	t.Parallel()
 
@@ -1079,8 +1029,6 @@ func TestCreateOpenCodeSessionListsItAtOnce(t *testing.T) {
 	assert.Equal(t, spaces[0].ID, remoteSidebar(t, s)[0].SpaceID)
 }
 
-// A page an OpenCode session owns reads back in the session's space, and goes with the session
-// when sync no longer finds it; a session RocketClaw does not list owns nothing.
 func TestOpenCodeSessionPagesGoWithTheirSession(t *testing.T) {
 	t.Parallel()
 
@@ -1130,7 +1078,6 @@ VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	require.Len(t, rows, 1)
 	assert.Equal(t, "opencode:box:ses_a", rows[0].Conversation.ID)
 
-	// The removed server's row and its pin return when the server is configured again.
 	require.NoError(t, s.definitions.Do(func(cfg *config.Config) error {
 		cfg.OpenCode["gone"] = config.OpenCodeConfig{}
 		return nil
@@ -1141,8 +1088,6 @@ VALUES ('opencode:box:ses_a', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	assert.True(t, rows[0].Pinned)
 }
 
-// A remote session's history stays on its server: deleting its entries is refused, and its row,
-// updated time included, stays as it was.
 func TestDeleteSessionRefusesRemoteSessions(t *testing.T) {
 	t.Parallel()
 

@@ -29,8 +29,6 @@ func (noHistoryWorkers) historyBusy([]string) bool {
 	return false
 }
 
-// ownedHistoryIDs enumerates bindings before any cascade can erase ownership: the
-// roots, their shadows, and every conversation nested under one of them.
 func ownedHistoryIDs(ctx context.Context, db stateStoreDB, roots []string) ([]string, error) {
 	return queryStrings(ctx, db, `WITH RECURSIVE shadow_parents AS (
     SELECT DISTINCT shadow_parent AS id FROM conversations WHERE shadow_parent IS NOT NULL
@@ -46,12 +44,6 @@ func ownedHistoryIDs(ctx context.Context, db stateStoreDB, roots []string) ([]st
 SELECT id FROM roots UNION SELECT conversation_id FROM descendants ORDER BY 1`, "owned history IDs", roots)
 }
 
-// beginHistoryMutation returns locked ownership only after live family work settles.
-// First admission shares the root lock. A parent already past that lock can still
-// add children before its interruption settles, so enumerate again afterward.
-// No SQL lock or mutex crosses worker settlement. An idle mutation never pauses or
-// interrupts: it fails with errHistoryBusy while any family worker or comparison
-// is live, and otherwise returns the locked family at once.
 func (s *SessionService) beginHistoryMutation(ctx context.Context, roots []string, idle bool) (tx *sql.Tx, ids []string, workers []*Bridge, err error) {
 	pausedIDs := []string{}
 	settled := false
@@ -72,8 +64,6 @@ func (s *SessionService) beginHistoryMutation(ctx context.Context, roots []strin
 			return nil, nil, workers, fmt.Errorf("begin history mutation: %w", err)
 		}
 
-		// Lock the whole family in the shared order, then enumerate it again
-		// under those locks. If it grew, rolling back releases every lock.
 		var locked []string
 
 		locked, err = ownedHistoryIDs(ctx, tx, roots)
@@ -101,7 +91,6 @@ func (s *SessionService) beginHistoryMutation(ctx context.Context, roots []strin
 				return tx, nil, workers, err
 			}
 
-			// Locks are held, so work that starts after this check waits for the commit.
 			if open || s.historyWorkers.historyBusy(ids) {
 				return tx, nil, workers, errHistoryBusy
 			}
@@ -145,8 +134,7 @@ WHERE m.conversation_id = ANY($1) AND NOT (m.conversation_id = ANY($2::text[])) 
 
 			continue
 		}
-		// Flags precede this lock acquisition, so even admission already past its
-		// in-memory check has committed before cancellation is written.
+
 		if _, err = tx.ExecContext(ctx, `UPDATE shadow_turns SET terminal = $2, input_closed = TRUE
 WHERE child_conversation_id = ANY($1) AND terminal = ''`, ids, protocol.TerminalStopped); err != nil {
 			return tx, nil, workers, fmt.Errorf("cancel owned comparisons: %w", err)
@@ -168,7 +156,6 @@ WHERE child_conversation_id = ANY($1) AND terminal = ''`, ids, protocol.Terminal
 	}
 }
 
-// releaseHistory returns settled workers to admission after owned state is erased.
 func releaseHistory(workers []*Bridge) {
 	for _, b := range workers {
 		b.mu.Lock()
@@ -203,8 +190,6 @@ func (m *threadBridgeManager) pauseHistory(ctx context.Context, ids []string) (w
 	return workers, nil
 }
 
-// historyBusy reports whether a live worker of ids runs, holds, or awaits work.
-// It never starts a worker: a conversation without one has nothing in flight.
 func (m *threadBridgeManager) historyBusy(ids []string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -237,8 +222,6 @@ func (m *threadBridgeManager) settleHistory(ctx context.Context, ids []string) (
 }
 
 func settleHistoryWorkers(ctx context.Context, workers []*Bridge) error {
-	// A destination can own its producer's settlement. Interrupt all sides before
-	// waiting for any one of them, regardless of conversation-ID ordering.
 	for _, b := range workers {
 		b.InterruptActiveTurn()
 	}
@@ -263,8 +246,6 @@ func settleHistoryWorkers(ctx context.Context, workers []*Bridge) error {
 	return nil
 }
 
-// A mid-turn message selects its owning turn, including all physical checkpoints.
-// Unmaterialized future manifests belong to the same discarded branch.
 const shadowRevertSQL = `WITH parent_saves AS (
     SELECT entry_json->>'turn_id' AS turn_id, bool_or(id >= $2) AS later, bool_or(id < $2) AS earlier FROM entries WHERE conversation_id = $1 GROUP BY 1
 ), parent_shadows AS (
@@ -279,8 +260,6 @@ const shadowRevertSQL = `WITH parent_saves AS (
     SELECT t.* FROM shadow_turns t JOIN child_cuts c USING (child_conversation_id) WHERE t.parent_source_conversation_id = $1 AND t.id >= c.id
 ) `
 
-// settleShadowRevert commits cancellation before interrupting either live side.
-// A crash after the commit cannot restart effects from the discarded branch.
 func (r *Runtime) settleShadowRevert(ctx context.Context, parent string, boundary *ObservedSessionEntry) ([]*Bridge, error) {
 	tx, err := r.Sessions.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -385,10 +364,6 @@ DELETE FROM shadow_turns t USING affected a WHERE t.id = a.id`, parent, entry.ID
 	return recordRunning(ctx, db, children)
 }
 
-// turnInputSnapshot is the consumed stream, not an admission queue or a cursor.
-// Applied identities advance only in the harness's own journal checkpoint.
-// Resets lists the consumed inputs a person sent into the running turn: each
-// starts a fresh shadow step count, as the turn's first input does.
 type turnInputSnapshot struct {
 	Agent          string                 `json:"agent"`
 	Inputs         []harness.PromptInput  `json:"inputs"`
@@ -400,7 +375,6 @@ type turnInputSnapshot struct {
 	Resets         []string               `json:"resets"`
 }
 
-// emptyTurnInputsError reports a turn whose saved input holds no prompt to run.
 type emptyTurnInputsError struct{ TurnID string }
 
 func (e emptyTurnInputsError) Error() string {
@@ -438,8 +412,7 @@ func saveTurnInputs(ctx context.Context, db stateStoreDB, conversation, turn str
 	if err != nil {
 		return fmt.Errorf("encode canonical input: %w", err)
 	}
-	// Both sides see the payload only after this transaction commits. Parent
-	// cleanup removes its journal copy, but not the child's unconsumed manifest.
+
 	if _, err := db.ExecContext(ctx, `WITH journaled AS (
 INSERT INTO steps (conversation_id, key, value) VALUES ($1, $2 || '/canonical', $3)
 ON CONFLICT (conversation_id, key) DO UPDATE SET value = excluded.value)
@@ -456,8 +429,6 @@ WHERE parent_source_conversation_id = $1 AND parent_turn_id = $2`, conversation,
 	return nil
 }
 
-// releaseShadowPayloads needs both durable closure and successful child saving.
-// A running child may already have checkpoints but still needs its final drain.
 func releaseShadowPayloads(ctx context.Context, db stateStoreDB, conversation, turn string) error {
 	_, err := execState(ctx, db, "release completed comparison payloads", `WITH settled AS (
     SELECT t.id, t.child_conversation_id, t.child_turn_id FROM shadow_turns t
@@ -521,18 +492,11 @@ func (s *SessionService) captureTurnInputs(ctx context.Context, conversation, tu
 	return nil
 }
 
-// shadowStepSegment numbers the stretch of a turn a step belongs to: the
-// person-sent inputs the turn applied before the step.
 func shadowStepSegment(applied, resets []string) int {
 	return len(slices.DeleteFunc(slices.Clone(applied), func(id string) bool { return !slices.Contains(resets, id) }))
 }
 
-// drainShadowInputs holds a shadow to floor(1.5 x) its parent's steps since the
-// last message a person sent: ahead of its parent it waits for the parent's next
-// step, and after the parent's turn it ends once out of steps.
 func (b *Bridge) drainShadowInputs(ctx context.Context, responseID string, phase harness.TurnPhase, applied []string) ([]harness.PromptInput, error) {
-	// Register before rereading durable state, so a commit between registration
-	// and the query cannot strand a final-answer wait. No lock crosses the wait.
 	b.mu.Lock()
 	wake := make(chan struct{}, 1)
 	b.shadowInputWake = wake
@@ -553,7 +517,6 @@ func (b *Bridge) drainShadowInputs(ctx context.Context, responseID string, phase
 			return nil, inputPersistenceError{cause: err}
 		}
 
-		// The step is recorded before its budget is read, and once even when a restart drains its response again.
 		segment := shadowStepSegment(applied, snapshot.Resets)
 		if _, err := db.ExecContext(ctx, `INSERT INTO shadow_steps (shadow_turn_id, child, response_id, segment)
 SELECT id, TRUE, $3, $4 FROM shadow_turns WHERE child_conversation_id = $1 AND child_turn_id = $2 ON CONFLICT DO NOTHING`, b.config.ConversationID, turn, responseID, segment); err != nil {
@@ -574,13 +537,10 @@ WHERE t.child_conversation_id = $1 AND t.child_turn_id = $2 AND s.segment = $3`,
 		case !capped && (len(inputs) > 0 || snapshot.Closed || phase != harness.TurnPhaseFinalAnswer):
 			return inputs, nil
 		case slices.ContainsFunc(inputs, func(input harness.PromptInput) bool { return slices.Contains(snapshot.Resets, input.ID) }):
-			// A person's next message starts a fresh count, so it always gets through.
 			return inputs, nil
 		case snapshot.Closed && phase == harness.TurnPhaseFinalAnswer:
-			// Out of steps after the parent's turn, an answer stands.
 			return nil, nil
 		case snapshot.Closed:
-			// Out of steps after the parent's turn, this tool batch's results end the turn.
 			note := fmt.Sprintf("Hit the step limit: %d vs. parent's %d.", steps, parentSteps)
 			if _, err := db.ExecContext(ctx, `UPDATE shadow_turns SET terminal = $3, limit_note = $4 WHERE child_conversation_id = $1 AND child_turn_id = $2 AND terminal = ''`, b.config.ConversationID, turn, protocol.TerminalStopped, note); err != nil {
 				return nil, inputPersistenceError{cause: fmt.Errorf("stop shadow at step limit: %w", err)}
@@ -683,10 +643,7 @@ func (b *Bridge) startShadowWorkers(ctx context.Context, turn string) error {
 	return nil
 }
 
-// reconcileShadows attaches new definitions once under the parent's history lock.
-// Existing bindings survive removal and switching; the next activation fixes its roster.
 func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, parent, agent string) ([]string, error) {
-	// A shadow has no shadows of its own, and a routine's run, whatever started its turn, runs without them.
 	var unshadowed bool
 	if err := queryScalar(ctx, db, "read shadow ownership", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND (shadow_parent IS NOT NULL OR cron_path LIKE 'agents/%')`, &unshadowed, parent); err != nil || unshadowed {
 		return nil, err
@@ -701,8 +658,6 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 
 	defer func() { _ = root.Close() }()
 
-	// No matching directory is the ordinary, unshadowed case. Do not load unrelated
-	// definitions or require a skills directory just to create a conversation.
 	info, err := root.Stat(filepath.Join(cfg.RuntimeDirName(), "agents", agent))
 	if errors.Is(err, fs.ErrNotExist) || err == nil && !info.IsDir() {
 		return nil, nil
@@ -785,21 +740,16 @@ func (s *SessionService) reconcileShadows(ctx context.Context, db stateStoreDB, 
 	return names, nil
 }
 
-// admitShadowInputs fixes identity and roster in the parent's admission transaction.
-// Workflow turns have no shadows.
 func (b *Bridge) admitShadowInputs(ctx context.Context, db stateStoreDB, request *bridgeRequest, agent, turn string) error {
 	if request.inbound.Workflow.Name == "" {
 		if err := b.config.SessionService.startShadowManifests(ctx, db, b.config.ConversationID, agent, turn, request.inbound); err != nil {
 			return err
 		}
 	}
-	// Prepared workflows fix their agent before activation. Other requests fix it
-	// here, atomically with the roster, for execution and restart.
+
 	return saveTurnInputs(ctx, db, b.config.ConversationID, turn, &turnInputSnapshot{Agent: agent, Inputs: []harness.PromptInput{}})
 }
 
-// startShadowManifests fixes the roster in the same transaction as parent admission.
-// The manifest owns its payload independently of active-turn and journal cleanup.
 func (s *SessionService) startShadowManifests(ctx context.Context, db stateStoreDB, parent, agent, turnID string, inbound *protocol.InboundMessage) error {
 	names, err := s.reconcileShadows(ctx, db, parent, agent)
 	if err != nil || len(names) == 0 {
@@ -816,8 +766,6 @@ ORDER BY shadow_agent`, parent, agent, turnID, string(removeSessionEntryNUL(data
 	return err
 }
 
-// claimShadowTurn takes only the oldest pending manifest, after earlier child work
-// settles. The history anchor and claim commit together under the child history lock.
 func (s *SessionService) claimShadowTurn(ctx context.Context, child string) (activeTurn, bool, error) {
 	tx, err := s.beginStateTx(ctx, "shadow turn claim")
 	if err != nil {
@@ -850,12 +798,11 @@ SELECT h.id, h.inbound_json FROM head h CROSS JOIN busy b WHERE jsonb_array_leng
 	if err := json.Unmarshal(data, &parent); err != nil {
 		return activeTurn{}, false, fmt.Errorf("decode shadow admission: %w", err)
 	}
-	// Build a fresh request: connector reply, completion, goal, and sync ownership
-	// belong to the parent, never to its comparison child.
+
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, parent.Text, false)
 	inbound.ConversationID, inbound.OriginHeader = child, reviewOriginHeader(&parent)
+
 	inbound.PreserveWhitespace = parent.PreserveWhitespace
-	// The shadow's subagents act for the parent's person, as the shadow's captured environment does.
 	if name := parent.Metadata[protocol.InboundPrincipalNameMetadataKey]; name != "" {
 		inbound.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: name, protocol.InboundPrincipalEmailMetadataKey: parent.Metadata[protocol.InboundPrincipalEmailMetadataKey]}
 	}

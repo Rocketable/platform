@@ -39,11 +39,9 @@ func TestSessionTagToolsBridge(t *testing.T) {
 			writeMainAgentSkills(t, workspace, "---\nmodel: gpt-6.1-sol\npermission:\n  read: allow\n  rocketclaw:\n    rocketclaw_get_tags: allow\n"+groups+"---\nPrompt\n")
 			service := newTestSessionServiceAt(t, workspace)
 			recordPrivateHistories(t, service, map[string]ConversationKind{"external_mcp:owning": KindExternalMCPRun})
-			// A real PostgreSQL write failure must reach the tool without changing active tags.
 			_, err := service.db.ExecContext(t.Context(), `ALTER TABLE conversations ADD CONSTRAINT reject_resolved CHECK (NOT (tags ? 'resolved'))`)
 			require.NoError(t, err)
 
-			// Each call is one execute script; tag tools are reachable only inside execute.
 			calls := []string{
 				`rocketclaw_set_tag(tag="triage")`,
 				`rocketclaw_set_tag(tag="customer")`,
@@ -246,7 +244,6 @@ func TestSessionToolsStoredContract(t *testing.T) {
 		{`{"since":"2026-09-24T14:00:00Z","until":"2026-09-24T12:00:00Z","limit":200,"include_message_preview":true}`, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\n"},
 		{`{"since":" 2000-01-01T00:00:00Z ","until":" ","limit":200,"include_message_preview":true}`, "conversation_id\tturns\tlast_updated\tlast_user_message\tlast_assistant_message\nexec:last\t1\t2026-09-24T13:00:00Z\texec\tassistant\nexternal_mcp:private\t2\t2026-09-24T11:00:00Z\t  latest\\n user\\tΩ\\r\\\\  \tassistant\ncron:first\t1\t2026-09-24T12:00:00Z\told\tassistant\n"},
 	} {
-		// Empty criteria lists every stored conversation, private MCP and cron included.
 		for _, criteria := range []string{`""`, `"   "`} {
 			result, err := list.Call(t.Context(), json.RawMessage(`{"criteria":`+criteria+`,`+tc.input[1:]), nil)
 			require.NoError(t, err)
@@ -254,7 +251,6 @@ func TestSessionToolsStoredContract(t *testing.T) {
 		}
 	}
 
-	// Sprintf keeps dupword's autofix from merging the role and the content "assistant".
 	first, latest := fmt.Sprintf("2026-09-24T13:00:00Z\tuser\tfirst\n2026-09-24T13:00:00Z\tassistant\t%s\n", "assistant"), fmt.Sprintf("2026-09-24T11:00:00Z\tuser\t  latest\\n user\\tΩ\\r\\\\  \n2026-09-24T11:00:00Z\tassistant\t%s\n", "assistant")
 	for _, tc := range []struct {
 		limit  int
@@ -275,7 +271,6 @@ func TestSessionToolsStoredContract(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "timestamp\trole\tcontent\n", result.Output)
 
-	// The prompt header says who sent a human turn, so readers can tell an operator from a customer.
 	headed := &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: base, ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Slack principal=\"Operator\"]","content":"[Slack principal=\"Operator\"]\n\nsend it"}`),
 		json.RawMessage(`{"type":"message","role":"user","content":"no header"}`),
@@ -374,7 +369,7 @@ func TestSessionToolsReadOnlyRawScope(t *testing.T) {
 			json.RawMessage(`{"type":"rocketcode_code_mode_call","parent_call_id":"exec","key":"t/call/exec/host/0","name":"bash","arguments":"{\"command\":\"ls\"}","status":"ok","summary":"go.mod","outcome":"allow","reason":"Listing is read-only."}`),
 		},
 	}
-	// A synced producer schedule stores untyped bookkeeping, not a replay message, in its trace.
+
 	schedule := &harness.SessionEntry{Version: 1, Type: "producer_schedule", Timestamp: entry.Timestamp, OutputTrace: []json.RawMessage{json.RawMessage(`{"conversation_id":"producer","agent":"main","message":"later","due_at":"2026-10-07T00:00:00Z"}`)}}
 	for _, id := range []string{"external_mcp:private", "cron:one", "exec:one", "slack-thread:C1:1", "web:stored", "unrecorded"} {
 		_, err := service.AppendEntryID(t.Context(), id, entry)
@@ -457,7 +452,6 @@ func TestSessionToolsErrors(t *testing.T) {
 	require.Error(t, err)
 	_, err = get.Call(t.Context(), json.RawMessage(`{"conversation_id":"broken","limit":100,"before_entry_id":0}`), nil)
 	require.Error(t, err)
-	// Bodies outside the selected conversation limit must not be decoded.
 	_, err = service.AppendEntryID(t.Context(), "valid", testSessionEntryAt(time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC), "ok"))
 	require.NoError(t, err)
 	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":1,"include_message_preview":true}`), nil)
@@ -467,7 +461,6 @@ func TestSessionToolsErrors(t *testing.T) {
 	_, err = list.Call(t.Context(), json.RawMessage(`{"since":"2000-01-01T00:00:00Z","until":"","limit":200,"include_message_preview":true}`), nil)
 	require.Error(t, err)
 
-	// Each undecodable stored item is reported in place without hiding the rest of the read.
 	var brokenID int64
 
 	require.NoError(t, service.db.QueryRowContext(t.Context(), `UPDATE entries SET entry_json = '{"replay_input":[{"type":"message","role":"user","content":"before"},false,{"type":"message","role":"user","content":"after"}],"output_trace":[false]}' WHERE conversation_id = 'broken' RETURNING id`).Scan(&brokenID))
@@ -481,7 +474,6 @@ func TestSessionToolsErrors(t *testing.T) {
 func TestSessionToolsBridgePermissions(t *testing.T) {
 	t.Parallel()
 
-	// Permission cases only read this history; keep their runtimes and agent files separate.
 	service := newTestSessionService(t)
 
 	entries := []harness.SessionEntry{
@@ -497,7 +489,6 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// One rocketclaw_sessions rule offers all five session tools; the old per-tool rules load and offer none.
 	for _, tc := range []struct {
 		name, rules   string
 		visible, auto bool
@@ -554,7 +545,6 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 				requests++
 				if requests == 2 {
-					// Reviews so far came from the Execute call to rocketclaw_sessions_list alone.
 					listApprovals = approvals
 				}
 
@@ -580,7 +570,6 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 				}
 
 				if requests == probe {
-					// The strict schema stops a call without criteria before the tool runs.
 					writeRawRunFunctionCall(t, w, "missing-criteria", "execute", json.RawMessage(`{"code":"def main():\n    return rocketclaw_sessions_list(since=\"1h\", until=\"\", limit=1, include_message_preview=False)\n"}`))
 
 					return
@@ -657,7 +646,6 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			require.Equal(t, probe+1, requests)
 			require.Len(t, outputs, probe)
 
-			// Session tools are execute-only: direct calls never reach them.
 			require.Contains(t, outputs[2], "tool not found")
 			require.Contains(t, outputs[3], "tool not found")
 			require.Contains(t, outputs[5], "tool not found")
@@ -679,7 +667,6 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			require.Equal(t, tc.auto, approvals > 0)
 			require.Equal(t, tc.auto, listApprovals > 0)
 
-			// Calls made inside execute are saved with the turn only as records with a one-line summary.
 			for _, entry := range store.entries {
 				for _, raw := range entry.OutputTrace {
 					if strings.Contains(string(raw), `"parent_call_id"`) {
@@ -694,7 +681,6 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 
 func TestSessionsGetURLTool(t *testing.T) {
 	s, _ := newSessionSearchFixture(t)
-	// The fake CLI stands in for the host tailscale binary that RocketClaw shells out to.
 	bin := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "tailscale"), []byte("#!/bin/sh\necho 100.95.197.99\n"), 0o755))
 	t.Setenv("PATH", bin)
@@ -714,8 +700,6 @@ func TestSessionsGetURLTool(t *testing.T) {
 	}
 }
 
-// R7, R9: the write tool offers steer, enqueue, and stop, and tells the model its reply arrives later
-// as a note, so it neither waits nor writes again.
 func TestSessionsWriteToolDescription(t *testing.T) {
 	write := sessionsWriteTool(new(Bridge), new(protocol.InboundMessage), new(protocol.InboundMessage), "main", "web:sender", harness.Agents{})
 
@@ -733,9 +717,6 @@ func TestSessionsWriteToolDescription(t *testing.T) {
 	assert.JSONEq(t, `{"type":"string","enum":["stop","steer","enqueue"]}`, string(mode), "agents cannot stash")
 }
 
-// A stop write without a prompt stops the turn and goal without waiting, queues nothing, starts no
-// turn, and posts who stopped it into the target's transcript. Only a stopped running turn gets a
-// reply, so only then does the result carry a queue_item_id. Every other write needs a prompt.
 func TestSessionsWriteStopWithoutPrompt(t *testing.T) {
 	t.Parallel()
 
@@ -792,8 +773,6 @@ CREATE TRIGGER reject_goal_stop BEFORE UPDATE OF goal_status ON conversations FO
 	require.ErrorContains(t, err, "is not a top-level session")
 }
 
-// A stop write without a prompt to a running turn posts its line once, after the stopped turn saves
-// its history, and starts no turn.
 func TestSessionsWriteStopLineFollowsStoppedTurn(t *testing.T) {
 	t.Parallel()
 
@@ -830,7 +809,6 @@ SELECT COUNT(*) FROM entries, running WHERE conversation_id = $1 AND turns > 0`,
 	require.NoError(t, err)
 	assert.Equal(t, []replayInputMessage{{role: "developer", text: "Stopped by session web:sender (agent )"}}, messages, "the line is last, once")
 
-	// AE4: the stop's reply settles with the line, naming how the stopped turn ended.
 	assert.Equal(t, []string{"web:sender web:sender/ stopped pending true"}, replyQueueItems(t, nt.service))
 	replies, err := nt.service.notedBackgroundJobs(t.Context(), "web:sender", []string{"web:sender/"})
 	require.NoError(t, err)
@@ -838,8 +816,6 @@ SELECT COUNT(*) FROM entries, running WHERE conversation_id = $1 AND turns > 0`,
 	assert.Contains(t, backgroundNote(&replies[0]), "Session "+nt.conversationID+"'s turn that your stop interrupted is over (state stopped).")
 }
 
-// pausedTestChat records the Web chat conversationID and has Bob pause its agent. It returns a runtime whose
-// bridge for the chat only takes requests.
 func pausedTestChat(t *testing.T, s *SessionService, conversationID string) *Runtime {
 	t.Helper()
 
@@ -852,8 +828,6 @@ func pausedTestChat(t *testing.T, s *SessionService, conversationID string) *Run
 	return rt
 }
 
-// pausedWebMessage is sender's Web message of content in conversationID, as Web sends it; its message ID is its
-// text and sender's username their lowercased name at example.com.
 func pausedWebMessage(conversationID, sender string, content *protocol.InboundContent) *protocol.InboundMessage {
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, content, true)
 	inbound.ConversationID, inbound.Metadata["web_message_id"] = conversationID, content.Text
@@ -863,10 +837,6 @@ func pausedWebMessage(conversationID, sender string, content *protocol.InboundCo
 	return inbound
 }
 
-// Only a session a person started in the Web can pause its agent, and only while nothing outside reports into it:
-// not a cron report chat, an External MCP chat, a chat a run reports into, or the sticky: global session of an
-// agent cron jobs or routines run, whatever its sticky setting otherwise. Once its agent gets a cron job or routine,
-// RocketClaw resumes that session.
 func TestPausableSessions(t *testing.T) {
 	t.Parallel()
 
@@ -919,9 +889,6 @@ func TestPausableSessions(t *testing.T) {
 	assert.Equal(t, "message:\"RocketClaw\" resumed the agent.", observedEntryTexts(t, s, "team")[3])
 }
 
-// In a paused chat, people's messages post at once, also above a reply still running, in the order sent, and
-// once however often each is sent, with its image; search finds them under their senders, and none starts a
-// turn. A message sent once the agent is resumed runs as any Web message does, reading the paused chat in order.
 func TestPausedMessagesPostAtOnce(t *testing.T) {
 	t.Parallel()
 
@@ -1016,9 +983,6 @@ func TestPausedMessagesPostAtOnce(t *testing.T) {
 	readFinal(t, nt.finals)
 }
 
-// AE6, AE7: the target agent's rocketclaw_sessions_recipient decides which calling agents may create,
-// steer, enqueue into, or stop its sessions. The calling agent counts, not the top-level turn's agent
-// main, and a refused write leaves nothing behind.
 func TestSessionsWriteRecipients(t *testing.T) {
 	t.Parallel()
 
@@ -1033,11 +997,9 @@ func TestSessionsWriteRecipients(t *testing.T) {
 		writeAgent(t, workspace, name, "---\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_sessions: allow\n"+recipient+"---\nPrompt\n")
 	}
 
-	// A sudo agent refuses every agent unless its own setting says otherwise.
 	writeAgent(t, workspace, "root", "---\nmodel: gpt-6.1-sol\nsudo: yes\n---\nPrompt\n")
 	writeAgent(t, workspace, "admin", "---\nmodel: gpt-6.1-sol\nsudo: yes\npermission:\n  rocketclaw:\n    "+recipientSetting+": [researcher]\n---\nPrompt\n")
 
-	// An easy agent's delegatedFrom says the same; omitted, any agent may write.
 	for name, delegatedFrom := range map[string]string{"easyopen": "", "easyclosed": "delegatedFrom: false\n", "easylead": "delegatedFrom: [main]\n"} {
 		writeAgent(t, workspace, name, "---\nmode: easy\nmodel: gpt-6.1-sol\nspace: Ops\nworkingDirectory: work\n"+delegatedFrom+"---\nPrompt\n")
 	}
@@ -1102,7 +1064,7 @@ func TestSessionsWriteRecipients(t *testing.T) {
 
 			arguments, _ := json.Marshal(struct {
 				Code string `json:"code"`
-			}{"def main():\n    return rocketclaw_sessions_write(" + writes[len(outputs)].call + ")\n"}) // Encoding a string cannot fail.
+			}{"def main():\n    return rocketclaw_sessions_write(" + writes[len(outputs)].call + ")\n"})
 			_, _ = fmt.Fprintf(w, `{"id":"resp_%[1]d","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_%[1]d","type":"function_call","status":"completed","call_id":"call_%[1]d","name":"execute","arguments":%[2]q}]}`, len(outputs), arguments)
 		}))
 		t.Cleanup(server.Close)
@@ -1113,7 +1075,6 @@ func TestSessionsWriteRecipients(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-		// Every sender acts for a top-level turn of main, as a helper under Main does.
 		recordTestConversations(t, store, "main", map[string]ConversationKind{"web:caller-" + sender: KindWebChat})
 		caller := &Bridge{runtime: config.NewLockedConfig(&senderCfg), config: Config{ConversationID: "web:caller-" + sender, SessionService: store}, threads: manager, log: slog.New(slog.DiscardHandler)}
 		runtimeConfig := caller.rocketcodeConfig(workspace, nil, sessionsWriteTool(caller, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", caller.config.ConversationID, agents))
@@ -1165,9 +1126,6 @@ func TestSessionsWriteRecipients(t *testing.T) {
 	}
 }
 
-// Inside a turn, the write tool creates a session and writes to a Slack thread session. Both run the
-// prompt as a system turn under the sender header, and the thread's reply posts where a Web input's
-// reply would. Under auto every write is reviewed.
 func TestSessionsWriteRunsInTurn(t *testing.T) {
 	t.Parallel()
 
@@ -1176,7 +1134,7 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 	script := func(callID, code string) string {
 		arguments, _ := json.Marshal(struct {
 			Code string `json:"code"`
-		}{code}) // Encoding a string cannot fail.
+		}{code})
 
 		return fmt.Sprintf(`{"id":"resp_%[1]s","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_%[1]s","type":"function_call","status":"completed","call_id":%[1]q,"name":"execute","arguments":%[2]q}]}`, callID, arguments)
 	}
@@ -1188,7 +1146,6 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 		t.Run(tc.value, func(t *testing.T) {
 			permission := "permission:\n  rocketclaw: {rocketclaw_sessions: " + tc.value + "}"
 			if tc.value == "sudo" {
-				// Sudo reviews the script and each write. Its own sessions accept its writes only when it says so.
 				permission = "sudo: yes\npermission:\n  rocketclaw: {rocketclaw_sessions_recipient: true}"
 			}
 
@@ -1224,7 +1181,6 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 			require.Len(t, created, 1, "the creator is recorded")
 			require.Contains(t, finals, created[0])
 
-			// Each write's reply, the create's after the new session's first turn, reaches the caller once.
 			require.Eventually(t, func() bool {
 				rows := replyQueueItems(t, nt.service)
 				return len(rows) == 2 && !slices.ContainsFunc(rows, func(row string) bool { return !strings.HasSuffix(row, " completed consumed true") })
@@ -1235,8 +1191,6 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 
 			reviews := 0
 
-			// A reply can join the caller's turn after its script or wake it later, so only the requests
-			// each write must cause are looked up below.
 			for len(nt.requests) > 0 {
 				if body := <-nt.requests; strings.Contains(body, `"model":"review-model"`) {
 					reviews++
@@ -1267,9 +1221,6 @@ func TestSessionsWriteRunsInTurn(t *testing.T) {
 	}
 }
 
-// replyNoteTest runs the Web session web:caller, whose agent main may write to sessions, beside nt's
-// Slack thread session. Its first turn's script runs code, and answer answers each request that
-// carries a session reply note, a turn of a session the caller wrote to, or the caller after its script.
 func replyNoteTest(t *testing.T, code string, answer noteTestResponder) *noteTest {
 	t.Helper()
 
@@ -1290,7 +1241,6 @@ func replyNoteTest(t *testing.T, code string, answer noteTestResponder) *noteTes
 	return nt
 }
 
-// replyQueueItems lists the reply rows' queue item IDs with their state, note, and whether they wake.
 func replyQueueItems(t *testing.T, service *SessionService) []string {
 	t.Helper()
 
@@ -1300,7 +1250,6 @@ func replyQueueItems(t *testing.T, service *SessionService) []string {
 	return rows
 }
 
-// nextReplyBody returns the next request text that carried a session reply.
 func nextReplyBody(t *testing.T, bodies <-chan string) string {
 	t.Helper()
 
@@ -1313,8 +1262,6 @@ func nextReplyBody(t *testing.T, bodies <-chan string) string {
 	}
 }
 
-// AE1: an enqueue's reply reaches the caller as one note once the target's turn that ran it ends. An
-// idle caller wakes once for it; a busy one takes it into its running turn and wakes no more.
 func TestSessionWriteReplyReachesCaller(t *testing.T) {
 	t.Parallel()
 
@@ -1333,7 +1280,6 @@ func TestSessionWriteReplyReachesCaller(t *testing.T) {
 					return
 				}
 
-				// An idle caller ends its turn before the target answers; a busy one answers after it.
 				if wait := map[bool]chan struct{}{true: callerDone, false: targetDone}[target]; target != busy {
 					select {
 					case <-wait:
@@ -1375,9 +1321,6 @@ func TestSessionWriteReplyReachesCaller(t *testing.T) {
 	}
 }
 
-// AE5, R10, R13, R14: a helper's write is answered to the helper itself, never its top-level session: the
-// reply wakes the helper after its task call returned. The helper's new answer then reaches the top-level
-// session as a note that continues the helper.
 func TestSessionWriteReplyWakesHelper(t *testing.T) {
 	t.Parallel()
 
@@ -1398,7 +1341,7 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 			writeRawRunFunctionCall(t, w, "write", "execute", struct {
 				Code string `json:"code"`
 			}{"def main():\n    return rocketclaw_sessions_write(session_id='web:ops', mode='enqueue', prompt='summarize billing', title='', agent='')\n"})
-		case strings.Contains(body, "message from session"): // The target answers once the top-level turn ended.
+		case strings.Contains(body, "message from session"):
 			select {
 			case <-rootDone:
 			case <-r.Context().Done():
@@ -1449,7 +1392,6 @@ func TestSessionWriteReplyWakesHelper(t *testing.T) {
 	assert.Len(t, entries, 2, "the top-level session wakes once, for the helper's new answer")
 }
 
-// A hidden run's reply wakes it along its own routing, in the chat it reports to.
 func TestSessionWriteReplyWakesHiddenRun(t *testing.T) {
 	t.Parallel()
 
@@ -1495,8 +1437,6 @@ func TestSessionWriteReplyWakesHiddenRun(t *testing.T) {
 	assert.Equal(t, []string{"cron:daily cron:daily/ completed consumed true"}, replyQueueItems(t, nt.service))
 }
 
-// A restart that cuts the target's turn leaves the reply waiting; the resumed turn settles it once.
-// A reply settled before its caller heard of it wakes the caller at the next start.
 func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 	t.Parallel()
 
@@ -1513,7 +1453,7 @@ func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 
 			select {
 			case <-cut:
-				<-r.Context().Done() // The restart cuts the target's first run.
+				<-r.Context().Done()
 				return
 			default:
 			}
@@ -1565,8 +1505,6 @@ func TestSessionWriteReplySurvivesRestart(t *testing.T) {
 		assert.Equal(t, []string{"web:caller " + reply.jobID + " completed consumed true"}, replyQueueItems(t, nt.service))
 	})
 
-	// A crash after a bare stop's turn ended, but before its line posted, posts it at the next start, and
-	// the caller hears that the turn is over. A turn that left no row completed (closeTurn).
 	t.Run("stop line parked before a crash", func(t *testing.T) {
 		t.Parallel()
 
@@ -1602,8 +1540,6 @@ func TestCheckSessionTarget(t *testing.T) {
 	t.Parallel()
 
 	s, _ := newSessionSearchFixture(t)
-	// A one-off cron run writes for its visible chat searchChatE, and the private External MCP turn holds
-	// its managed chat searchChatX.
 	recordTestConversations(t, s, "main", map[string]ConversationKind{"one-off-cron:run": KindOneOffCronRun})
 	require.NoError(t, s.UpsertThread("caller", ThreadState{Agent: "main"}))
 
@@ -1623,7 +1559,6 @@ ON CONFLICT (conversation_id) DO UPDATE SET reports_to = excluded.reports_to`, s
 		{"caller", "", "one-off-cron:run", "is not a top-level session"},
 		{"caller", "", "external_mcp:private", "is not a top-level session"},
 		{"caller", "", "unrecorded/child", "is not a top-level session"},
-		// Subagents run with their owning conversation ID, so this also covers a subagent targeting its parent.
 		{"caller", "", "caller", "is this session"},
 		{"one-off-cron:run", searchChatE, searchChatE, "is this session"},
 		{"external_mcp:private", "", searchChatX, "is this session"},
@@ -1641,8 +1576,8 @@ func TestSessionToolsCriteria(t *testing.T) {
 	t.Parallel()
 
 	s, slack := newSessionSearchFixture(t)
+
 	ctx := t.Context()
-	// The private External MCP chat and the cron producer match, but Web never lists them.
 	for _, id := range []string{searchChatH, searchChatB, searchChatW, "external_mcp:private", "cron:cron/daily.md:20260102T030405.000000000Z:run"} {
 		_, err := s.toggleSessionTag(ctx, id, "billing", []string{"billing"})
 		require.NoError(t, err)
@@ -1685,7 +1620,6 @@ func TestSessionToolsCriteria(t *testing.T) {
 		{sessionListParams{Criteria: "room:support room:C9", Since: epoch, Limit: 200}, header + rowA + rowB + "[criteria: terms=room:support,room:C9; text=]\n"},
 		{sessionListParams{Criteria: "room:support tag:billing room:C9", Since: epoch, Limit: 200}, header + rowB + "[criteria: terms=room:support,tag:billing,room:C9; text=]\n"},
 		{sessionListParams{Criteria: "room:unknown room:missing", Since: epoch, Limit: 200}, header + "[criteria: terms=room:unknown,room:missing; text=]\n"},
-		// Newest first, even though the sidebar puts the pinned chat first.
 		{sessionListParams{Criteria: "agent:main", Since: epoch, Limit: 2}, header + "mcp-dest\t1\t2026-01-07T00:00:00Z\t\tmain\t\t\t\n" +
 			"slack-thread:C1:1.1\t1\t2026-01-05T00:00:00Z\t\tmain\tsupport\t*,Needs review,customer,is:pinned,say \"hello\"\t\n" +
 			"[criteria: terms=agent:main; text=]\n[truncated: 2 more matching sessions]\n"},
@@ -1693,7 +1627,6 @@ func TestSessionToolsCriteria(t *testing.T) {
 		require.Equal(t, tc.want, call(&tc.params), tc.params.Criteria)
 	}
 
-	// Free text also matches message text. A stopped turn's hit has no message ID, so it is left out.
 	seedActiveTurn(t, s, searchChatW, "stopped-turn", testReplayEntry(`{"type":"message","role":"user","content":"billing stopped"}`))
 	endTestTurn(t, s, searchChatW, "stopped-turn", protocol.TerminalStopped)
 
@@ -1705,7 +1638,6 @@ func TestSessionToolsCriteria(t *testing.T) {
 	var firstB, firstW int64
 	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT min(id) FILTER (WHERE conversation_id = $1), min(id) FILTER (WHERE conversation_id = $2) FROM entries`, searchChatB, searchChatW).Scan(&firstB, &firstW))
 
-	// The fixture's Delegation History also holds billing, but is never listed.
 	output := call(&sessionListParams{Criteria: "billing", Since: epoch, Limit: 200})
 	require.Equal(t, header+
 		"slack-thread:C9:2.2\t1\t2026-01-04T00:00:00Z\t\ttwo words\tC9\tbilling\tmessages\n"+
@@ -1724,7 +1656,6 @@ func TestSessionToolsCriteria(t *testing.T) {
 		"[criteria: terms=; text=billing]\n[truncated: 1 more matching sessions]\n",
 		call(&sessionListParams{Criteria: "billing", Since: epoch, Limit: 1}), "a chat cut by the limit prints no messages")
 
-	// Each printed before_entry_id opens a page whose last entry holds the message.
 	_, block, _ := strings.Cut(output, "\nmessages\n")
 	for _, row := range strings.Split(strings.TrimSuffix(block, "\n"), "\n")[1:5] {
 		fields := strings.Split(row, "\t")
@@ -1733,7 +1664,6 @@ func TestSessionToolsCriteria(t *testing.T) {
 		require.Contains(t, result.Output, "\t"+fields[3]+"\t"+fields[4], row)
 	}
 
-	// The window and the last_updated column use the summary time, not a later entry the summary missed.
 	insertSessionEntryWithoutSummary(t, s, searchChatW, testSessionEntryAt(time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC), "late"))
 	require.Equal(t, header+rowH+rowB+"[criteria: terms=tag:billing; text=]\n", call(&sessionListParams{Criteria: "tag:billing", Since: "2026-01-04T00:00:00Z", Limit: 200}))
 	require.Equal(t, header+rowH+rowB+strings.Replace(rowW, "\t1\t", "\t3\t", 1)+"[criteria: terms=tag:billing; text=]\n", call(&sessionListParams{Criteria: "tag:billing", Since: epoch, Limit: 200}))
@@ -1745,8 +1675,6 @@ func TestSessionToolsCriteria(t *testing.T) {
 	require.Equal(t, header+"[criteria: terms=; text=missing]\n", call(&sessionListParams{Criteria: "missing", Since: epoch, Limit: 200}), "a chat without a summary is never listed")
 }
 
-// A subagent session or review history under a Slack thread keeps the thread's channel, which
-// decides the agents Web offers it, as when its ID named the channel.
 func TestChildConversationsKeepSlackChannel(t *testing.T) {
 	t.Parallel()
 
@@ -1765,8 +1693,6 @@ func TestChildConversationsKeepSlackChannel(t *testing.T) {
 	}
 }
 
-// KTD9: an easy agent's subagent session keeps the model and tools its task call chose, no tools meaning
-// every tool, and a continue replaces them; an agent type's subagent keeps neither.
 func TestStartSubagentKeepsModelAndTools(t *testing.T) {
 	t.Parallel()
 
@@ -1783,7 +1709,6 @@ func TestStartSubagentKeepsModelAndTools(t *testing.T) {
 	require.NoError(t, store.startSubagent(t.Context(), "web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a", Turn: "turn-1", Call: "a"}, Agent: "main", Model: "gpt-6-luna#max", Tools: []string{"bash"}}))
 	require.Equal(t, []string{"gpt-6-luna#max", `["bash"]`}, saved("web/a"))
 
-	// A continue before the first turn saves an entry replaces them too.
 	require.NoError(t, store.startSubagent(t.Context(), "web", &harness.SubagentWrite{Key: harness.ChildKey{Path: "/a"}, Agent: "main", Model: "gpt-6-luna", Tools: []string{"read"}, Mode: harness.ContinueEnqueue}))
 	require.Equal(t, []string{"gpt-6-luna", `["read"]`}, saved("web/a"))
 
@@ -1797,7 +1722,6 @@ func TestStartSubagentKeepsModelAndTools(t *testing.T) {
 	require.Equal(t, []string{"NULL", "NULL"}, saved("web/b"))
 }
 
-// A parked "Stopped by" line that cannot be decoded fails its post, which leaves it parked.
 func TestPostStopLinesKeepsUndecodableLine(t *testing.T) {
 	t.Parallel()
 
@@ -1810,7 +1734,6 @@ func TestPostStopLinesKeepsUndecodableLine(t *testing.T) {
 	require.Equal(t, []string{key}, testTurnStepKeys(t, s, "main"))
 }
 
-// A summary reads past the newest entry only while it lacks a user or assistant message.
 func TestSessionToolSummaryReadsBackToLastMessages(t *testing.T) {
 	t.Parallel()
 

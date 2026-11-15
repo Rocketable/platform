@@ -76,7 +76,7 @@ func TestSessionTags(t *testing.T) {
 	tags, err := sessionTags(ctx, store.db, id)
 	require.NoError(t, err)
 	require.Equal(t, []string{"customer"}, tags)
-	// Regrouping removes every current member, but keeps unrelated names.
+
 	_, err = store.toggleSessionTag(ctx, id, "triage", groups[0])
 	require.NoError(t, err)
 	tags, err = store.toggleSessionTag(ctx, id, "resolved", []string{"customer", "triage", "resolved"})
@@ -115,7 +115,6 @@ func TestSessionTagsCommitRollback(t *testing.T) {
 	_, err = store.toggleSessionTag(ctx, "other", "resolved", group)
 	require.NoError(t, err)
 
-	// A deferred constraint fails at commit, after the replacement write succeeds.
 	_, err = store.db.ExecContext(ctx, `ALTER TABLE conversations ADD CONSTRAINT reject_duplicate_tags UNIQUE (tags) DEFERRABLE INITIALLY DEFERRED`)
 	require.NoError(t, err)
 	_, err = store.toggleSessionTag(ctx, "owning", "resolved", group)
@@ -181,7 +180,6 @@ func TestSessionTagsPrivateLifecycle(t *testing.T) {
 	recordPrivateHistories(t, store, map[string]ConversationKind{
 		"external_mcp:pre-epoch": KindExternalMCPRun, "external_mcp:orphan": KindExternalMCPRun, "cron:recent": KindCronRun, "external_mcp:queued": KindExternalMCPRun,
 	})
-	// Existing history, even before the epoch, takes precedence over the tag-only fallback.
 	_, err := store.AppendEntryID(ctx, "external_mcp:pre-epoch", testSessionEntryAt(time.Unix(-20, 0).UTC(), "old"))
 	require.NoError(t, err)
 	_, err = store.toggleSessionTag(ctx, "external_mcp:pre-epoch", "customer", []string{"customer"})
@@ -418,10 +416,9 @@ func BenchmarkObserveEntries(b *testing.B) {
 }
 
 func TestObserveEntriesJSONAllocationBudget(t *testing.T) {
-	// Decoded entries own their JSON; the input conversion can reuse the row buffer.
 	result := testing.Benchmark(BenchmarkObserveEntries)
 	require.Positive(t, result.N)
-	// 6.5 MiB. A reused buffer costs up to 5.8 MiB under CI's -race; a fresh one cost 6.9 MiB, or 7.9 MiB under -race.
+
 	if !assert.Less(t, result.AllocedBytesPerOp(), int64(13<<19),
 		"benchmark N=%d T=%s MemAllocs=%d MemBytes=%d B/op=%d allocs/op=%d GOMAXPROCS=%d GOGC=%q GOMEMLIMIT=%q",
 		result.N, result.T, result.MemAllocs, result.MemBytes, result.AllocedBytesPerOp(), result.AllocsPerOp(), goruntime.GOMAXPROCS(0), os.Getenv("GOGC"), os.Getenv("GOMEMLIMIT")) {
@@ -533,7 +530,6 @@ func TestProducerRoutingSurvivesCompletion(t *testing.T) {
 			require.Equal(t, "owner", owner)
 			require.Equal(t, destination == "", bound)
 
-			// A later activation and a competing authorized bind cannot replace the owner.
 			inbound.SyncDestination = "other"
 			require.NoError(t, startTurnDB(ctx, store.db, "second", "producer", inbound))
 			owner, bound, err = dao.bindProducer(ctx, "producer", "third")
@@ -635,7 +631,6 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
-	// The run lock creates its table at startup, as holdRunLock does.
 	client, _ := pglock.UnsafeNew(store.db, pglock.WithCustomTable(runLockTable))
 	require.NoError(t, client.TryCreateTable())
 
@@ -785,7 +780,6 @@ func TestSessionServiceDueCronSchedulesHonorsDueTime(t *testing.T) {
 	}, due)
 }
 
-// AE4: a cron line due while a run of its file is still running is skipped and moves to its next time.
 func TestSessionServiceClaimCronScheduleSerializesSamePathAndCompletionClearsRunning(t *testing.T) {
 	t.Parallel()
 
@@ -804,7 +798,6 @@ func TestSessionServiceClaimCronScheduleSerializesSamePathAndCompletionClearsRun
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	// The claimed run starts; a run of another file, and a reminder waiting in this one, do not count.
 	run := protocol.Conversation{ID: "cron:daily.md:run", Agent: "main", Run: &protocol.CronRun{Path: "daily.md", At: now}}
 	_, err = store.recordConversation(t.Context(), &run, conversationFacts{}, harness.AgentStickyOff)
 	require.NoError(t, err)
@@ -923,7 +916,6 @@ func TestHoldRunLockWaitsForReleaseOrCancellation(t *testing.T) {
 	t.Parallel()
 
 	service := newTestSessionService(t)
-	// This holder tests contention, not renewal; a heartbeat can race Close.
 	client, err := pglock.UnsafeNew(service.db, pglock.WithCustomTable(runLockTable), pglock.WithHeartbeatFrequency(0))
 	require.NoError(t, err)
 	require.NoError(t, client.TryCreateTable())
@@ -936,7 +928,7 @@ func TestHoldRunLockWaitsForReleaseOrCancellation(t *testing.T) {
 		require.NoError(t, ctx.Err())
 		return errWork
 	}}
-	// pglock waits on real PostgreSQL I/O; cancellation bounds the contended wait.
+
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 
@@ -955,7 +947,6 @@ func TestHoldRunLockAllowsSessionServiceWhileHeld(t *testing.T) {
 
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
-	// This holder tests service access, not renewal; a heartbeat can race Close.
 	client, err := pglock.UnsafeNew(service.db, pglock.WithCustomTable(runLockTable), pglock.WithHeartbeatFrequency(0))
 	require.NoError(t, err)
 	require.NoError(t, client.TryCreateTable())
@@ -1190,7 +1181,6 @@ func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "ship it", goal.Objective)
-	// The cleared chat stays listed only by its running turn's prompt; the other keeps its preview.
 	summaries := sidebarSummaries(t, service)
 	require.Equal(t, "seed", summaries["main"].LastMessage)
 	require.Equal(t, &protocol.SessionSummary{ConversationID: "thread", LastMessage: "assistant", LastUpdated: time.Unix(1, 0).UTC()}, summaries["thread"])
@@ -1217,7 +1207,6 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		storage := store.attachments.(filesystemAttachments)
 		path, err := filepath.Rel(root.Name(), storage.path)
 		require.NoError(t, err)
-		// Temporarily move the storage directory to simulate an unavailable backing store.
 		require.NoError(t, root.Rename(path, path+"-unavailable"))
 		_, err = store.DeleteSession(t.Context(), "parent")
 		require.ErrorIs(t, err, fs.ErrNotExist)
@@ -1238,7 +1227,6 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		require.ErrorIs(t, err, fs.ErrNotExist)
 		require.NoError(t, reopened.db.QueryRowContext(t.Context(), `SELECT count(*) FROM pending_attachment_deletions`).Scan(&count))
 		require.Zero(t, count)
-		// Simulate a crash after byte deletion but before the tombstone is removed.
 		_, err = reopened.db.ExecContext(t.Context(), `INSERT INTO pending_attachment_deletions (id) VALUES ('blob')`)
 		require.NoError(t, err)
 		_, err = reopened.PruneStateBefore(t.Context(), time.Unix(0, 0), 0)
@@ -1334,7 +1322,6 @@ func TestHistoryRemovalIncludesDelegations(t *testing.T) {
 		store, _ := newShadowTestStore(t)
 		id := protocol.SlackThreadConversationID("D_1", slackTestTS(cutoff.Add(-time.Hour)))
 		recordTestConversations(t, store, "main", map[string]ConversationKind{id: KindSlackThread})
-		// A person's Web message, which a wipe removes as undo would.
 		typed := testSessionEntryAt(cutoff.Add(-time.Hour), id)
 		typed.ReplayInput[0] = json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web]","content":"typed"}`)
 		_, err := store.AppendEntryID(t.Context(), id, typed)
@@ -1539,7 +1526,6 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 		oldThread: KindSlackThread, activeOldThread: KindSlackThread, newThread: KindSlackThread, boundaryThread: KindSlackThread, "slack-thread:D123:not-a-time": KindSlackThread,
 	})
 
-	// The histories that had no record; any but a private one goes only with its family.
 	orphanGoal := protocol.SlackThreadConversationID("DGOAL", slackTestTS(oldTime))
 	recordPrivateHistories(t, store, map[string]ConversationKind{
 		"external_mcp:cron:orphan": KindExternalMCPRun, "cron:daily:old": KindCronRun, "one-off-cron:daily:old": KindOneOffCronRun, "cron:daily:new": KindCronRun,
@@ -1665,7 +1651,6 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 		require.NoError(t, err)
 		_, err = store.AppendEntryID(ctx, "empty-user", testSessionEntryAt(old, "expired only"))
 		require.NoError(t, err)
-		// A chat born off keeps ordinary retention even though its agent is sticky.
 		require.NoError(t, (&Runtime{Sessions: store}).CreateConversation(ctx, protocol.Conversation{ID: "born-off", Agent: "user", CreatedBy: "carol@example.com"}))
 		_, err = store.AppendEntryID(ctx, "born-off", testSessionEntryAt(old, "expired ordinary"))
 		require.NoError(t, err)
@@ -2059,9 +2044,6 @@ func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t 
 	}
 }
 
-// A finished cron run past the cutoff loses the context only it replays. The run, the entries its
-// chat shows, and their attachments stay, and the chat still shows every message. A run with newer
-// entries or pending work keeps its context.
 func TestPruneStateDropsFinishedCronRunContext(t *testing.T) {
 	t.Parallel()
 
@@ -2119,7 +2101,6 @@ func pruneTestTime(cutoff time.Time, fresh bool) time.Time {
 	return cutoff.Add(-time.Second)
 }
 
-// storedEntries reads conversationID's saved history the way runTurn does.
 func storedEntries(t *testing.T, service *SessionService, conversationID string) iter.Seq2[harness.SessionEntry, error] {
 	t.Helper()
 
@@ -2178,7 +2159,6 @@ func testTurnStepKeys(t *testing.T, service *SessionService, conversationID stri
 	return keys
 }
 
-// seedActiveTurn records a running row and, when record is set, its root journal step.
 func seedActiveTurn(t *testing.T, service *SessionService, conversationID, turnID string, record *harness.SessionEntry) {
 	t.Helper()
 
@@ -2191,7 +2171,6 @@ func seedActiveTurn(t *testing.T, service *SessionService, conversationID, turnI
 	}
 }
 
-// endTestTurn finishes a seeded row as $stop or a failure does and closes it after delivery.
 func endTestTurn(t *testing.T, service *SessionService, conversationID, turnID string, terminal protocol.Terminal) {
 	t.Helper()
 
@@ -2228,8 +2207,6 @@ func testSessionEntryAt(ts time.Time, user string) *harness.SessionEntry {
 	return entry
 }
 
-// recordTestConversations records each conversation as the code creating its kind does, with a
-// Slack thread's channel and thread.
 func recordTestConversations(tb testing.TB, s *SessionService, agent string, kinds map[string]ConversationKind) {
 	tb.Helper()
 
@@ -2244,8 +2221,6 @@ func recordTestConversations(tb testing.TB, s *SessionService, agent string, kin
 	}
 }
 
-// recordLegacyDelegations records each history saved under a call ID of parent, as 051 records one
-// saved before delegations had their own key: started by that call, in no recorded turn.
 func recordLegacyDelegations(t *testing.T, s *SessionService, parent string, calls ...string) {
 	t.Helper()
 
@@ -2256,8 +2231,6 @@ VALUES ($1 || '/' || $2, '', '', $1, $3, FALSE, 'nested', $2)`, parent, call, Ki
 	}
 }
 
-// recordPrivateHistories records each conversation as 051 records a private history that had no
-// managed record: hidden, expiring by age while unreferenced.
 func recordPrivateHistories(t *testing.T, s *SessionService, kinds map[string]ConversationKind) {
 	t.Helper()
 
@@ -2269,8 +2242,6 @@ VALUES ($1, '', '', $2, FALSE, 'private', NULLIF($3, ''), NULLIF($4, ''))`, id, 
 	}
 }
 
-// testSlackThread returns the channel and thread a test names in a slack-thread: ID, as the code
-// creating that Slack thread knows them; empty for any other ID.
 func testSlackThread(id string) (channel, thread string) {
 	if rest, ok := strings.CutPrefix(id, "slack-thread:"); ok {
 		channel, thread, _ = strings.Cut(rest, ":")
@@ -2340,7 +2311,6 @@ func TestVoiceSettings(t *testing.T) {
 	assert.Equal(t, VoiceSettings{Transcript: true}, settings("bob"))
 }
 
-// A sticky chat is the one born for its agent, and its person for sticky: user. A chat born off never is.
 func TestStickySessions(t *testing.T) {
 	store := newTestSessionService(t)
 	ctx := t.Context()
@@ -2429,7 +2399,6 @@ func TestWebSpaces(t *testing.T) {
 	assert.Equal(t, ops.ID, birth("ops-1", "Operations"))
 	assert.Empty(t, birth("none", ""), "no name, no birth space")
 
-	// OpenCode sessions' pages go with the space they live in; other spaces' stay.
 	_, err := store.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention, server, title, directory, last_updated, running, synced_at, remote_session, space_id)
 VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), 'ses_b', $1),
     ('opencode:box:ses_o', '', '', 'remote', FALSE, 'remote', 'box', '', '/srv', now(), FALSE, now(), 'ses_o', $2)`, banana, ops.ID)
@@ -2447,7 +2416,6 @@ VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	require.Len(t, pages, 1)
 	assert.Equal(t, "opencode:box:ses_o", pages[0].Agent)
 
-	// Deleting the last space waits for a delete of the only other space in flight, then refuses: the last space stays.
 	tx, err := store.db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, `DELETE FROM web_spaces WHERE id = $1`, ops.ID)
@@ -2489,8 +2457,6 @@ VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	assert.Equal(t, TabState{Space: "second", Last: map[string]string{}, SharedOrder: []string{}}, state)
 	assert.Equal(t, int64(2), revision)
 
-	// A space's last tab may be a Shared tab whose own copy sits in another space, or a closed tab. The person's
-	// Shared order is kept as saved.
 	last, order := map[string]string{"main": "/cron", "ops": "/cron", "dev": "/search"}, []string{"/search", "/cron"}
 	saved, err := store.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}}, Space: "main", Last: last, SharedOrder: order}, revision)
 	require.NoError(t, err)
@@ -2500,7 +2466,6 @@ VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	require.NoError(t, err)
 	assert.Equal(t, TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}}, Space: "main", Last: last, SharedOrder: order}, state, "every space keeps its own last tab")
 
-	// A Search tab keeps its page through saves that move it; other tabs have none.
 	page := &SearchPage{Name: "Triage", Board: "kanban", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}, {ID: "1", Name: "Mine", Query: "principal:alice", Notify: true}}, Active: "1"}
 	for i, tab := range []Tab{{Path: "/search/a", Space: "main", Search: page}, {Path: "/search/a", Group: "g", Space: "ops", Search: page}} {
 		saved, err = store.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}, tab}, Space: "main"}, int64(3+i))
@@ -2513,7 +2478,6 @@ VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 		assertNoOrphanSearchPages(t, store)
 	}
 
-	// A Web from before Search pages saves the tab without its page, which stays.
 	saved, err = store.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: "/search/a", Space: "main"}}, Space: "main"}, 5)
 	require.NoError(t, err)
 	require.True(t, saved)
@@ -2580,7 +2544,6 @@ func TestWebSharedTabs(t *testing.T) {
 	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: ops, Path: "/cron"}, {Space: ops, Path: "/s/YQ"}, {Space: dev, Path: "/agents"}}, shared(),
 		"removing a tab from one space leaves it in another; removing one not shared changes nothing")
 
-	// Main is the oldest space, though every generated id sorts before "main".
 	share("main", "/s/YQ")
 	require.NoError(t, store.DeleteSpace(ctx, ops))
 	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/cron"}, {Space: dev, Path: "/agents"}, {Space: "main", Path: "/s/YQ"}}, shared(),
@@ -2595,8 +2558,6 @@ func TestWebSharedTabs(t *testing.T) {
 	assert.Equal(t, []SharedTab{{Space: "main", Path: "/search"}, {Space: "main", Path: "/cron"}, {Space: "main", Path: "/agents"}}, shared(),
 		"deleting a session takes it out of every space; the last space keeps its tabs")
 
-	// A Shared Search page holds its one page: sharing it again keeps the page, an edit replaces it, an edit to a
-	// page no longer shared adds nothing, and the page moves with the tab when its space is deleted.
 	require.NoError(t, store.CreateSpace(ctx, "Docs"))
 
 	spaces, err = store.Spaces(ctx)
@@ -2646,8 +2607,6 @@ func TestWebSharedTabs(t *testing.T) {
 		"a deleted space's Search pages move with their tabs, keeping when they were added; one shared there already keeps its own page")
 	assertNoOrphanSearchPages(t, store)
 
-	// Two edits made from the same page at once: whichever locks the tab first is saved, and the other is refused as
-	// stale once it sees that page.
 	tx, err := store.db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 
@@ -2668,7 +2627,6 @@ func TestWebSharedTabs(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		var waiting int
 
-		// The second edit waits behind the first, which waits behind the lock.
 		_ = store.db.QueryRowContext(ctx, `WITH RECURSIVE waiting AS (
     SELECT $1::integer AS pid
     UNION SELECT a.pid FROM pg_stat_activity a JOIN waiting w ON w.pid = ANY(pg_blocking_pids(a.pid))
@@ -2687,7 +2645,6 @@ SELECT count(*) - 1 FROM waiting`, holder).Scan(&waiting)
 	assertNoOrphanSearchPages(t, store)
 }
 
-// assertNoOrphanSearchPages asserts that every Search page is some row's; a search always is its page's.
 func assertNoOrphanSearchPages(t *testing.T, store *SessionService) {
 	t.Helper()
 
@@ -2700,7 +2657,6 @@ SELECT p.id::text FROM web_search_pages p LEFT JOIN owned o ON o.search_page = p
 	assert.Empty(t, orphans)
 }
 
-// Two saves of one person's Top Shelf made at once take turns, so the shelf is one of the two, whole.
 func TestWebTopShelfConcurrentSaves(t *testing.T) {
 	t.Parallel()
 
@@ -2728,7 +2684,6 @@ func TestWebTopShelfConcurrentSaves(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		var waiting int
 
-		// Both saves wait behind the lock.
 		_ = store.db.QueryRowContext(ctx, `WITH RECURSIVE waiting AS (
     SELECT $1::integer AS pid
     UNION SELECT a.pid FROM pg_stat_activity a JOIN waiting w ON w.pid = ANY(pg_blocking_pids(a.pid))
@@ -2798,7 +2753,6 @@ func TestWebClosedTabs(t *testing.T) {
 	assert.Equal(t, []string{"/s/Yg ops false", "/search/x main true"}, closed("alice"), "a reopened tab is no longer closed")
 	assert.Empty(t, closed("bob"), "each person's closed tabs are their own")
 
-	// Reopened as the Web reopens it, with the page it closed with, and closed again.
 	save("alice", a, cron, search)
 
 	state, _, err := store.TabState(ctx, "alice")
@@ -2833,8 +2787,6 @@ func TestWebClosedTabs(t *testing.T) {
 	assert.Empty(t, rows, "a closed tab's page and searches go with it")
 }
 
-// Each conversation-creating path stores what it creates and whether Web lists it, and Web lists,
-// and lets people undo in, exactly the conversations it did when it read their IDs.
 func TestConversationKindsAtCreation(t *testing.T) {
 	t.Parallel()
 
@@ -2907,7 +2859,6 @@ FROM conversations c WHERE c.shadow_parent IS NULL`, "kinds", func(row rowScanne
 
 	require.ElementsMatch(t, []string{"web", "web:" + run, "mcp-chat", slack}, listed)
 
-	// Each chat Web lists, and each shadow, whoever started it; never a hidden run or a delegation.
 	for _, id := range ids {
 		_, eligible, _, err := store.RevertState(ctx, id)
 		require.NoError(t, err)

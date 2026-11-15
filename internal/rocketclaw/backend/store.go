@@ -38,7 +38,6 @@ const (
 	runLockTable = "rocketclaw_locks"
 )
 
-// GoalStatusActive and related constants are persisted goal-loop statuses.
 const (
 	GoalStatusActive          = "active"
 	GoalStatusProgress        = "progress"
@@ -48,29 +47,21 @@ const (
 	GoalStatusBudgetExhausted = "budget_exhausted"
 )
 
-// ThreadState is the persisted state for one text-thread bridge.
 type ThreadState struct {
 	Agent     string        `json:"agent,omitempty"`
 	CreatedBy ThreadCreator `json:"created_by,omitempty"`
-	// parent is the session a subagent session belongs to, empty for any other.
-	parent string
-	// sticky is the kind of chat the session was born as, which never changes.
-	sticky harness.AgentSticky
+	parent    string
+	sticky    harness.AgentSticky
 }
 
-// Sticky is the kind of chat the session was born as: off, or its agent's sticky chat for one person or for
-// everyone.
 func (t ThreadState) Sticky() harness.AgentSticky {
 	return t.sticky
 }
 
-// ThreadCreator records which subsystem created a managed text conversation.
 type ThreadCreator string
 
-// ThreadCreatedByCron marks managed conversations created for cron output.
 const ThreadCreatedByCron ThreadCreator = "cron"
 
-// ExternalMCPSessionState binds an external MCP conversation ID to private and managed sessions.
 type ExternalMCPSessionState struct {
 	Agent                 string            `json:"agent,omitempty"`
 	PrivateConversationID string            `json:"private_conversation_id,omitempty"`
@@ -78,69 +69,56 @@ type ExternalMCPSessionState struct {
 	OriginPairs           map[string]string `json:"origin_pairs,omitempty"`
 }
 
-// CronScheduleState records one observed scheduled cron trigger.
 type CronScheduleState struct {
 	ScheduleID   string
 	RelativePath string
 	NextDue      time.Time
 }
 
-// GoalState records one active or terminal managed-thread goal loop.
 type GoalState struct {
-	Objective string    `json:"objective,omitempty"`
-	MaxTurns  int       `json:"max_turns,omitempty"`
-	TurnsUsed int       `json:"turns_used,omitempty"`
-	Status    string    `json:"status,omitempty"`
-	Note      string    `json:"note,omitempty"`
-	CreatedAt time.Time `json:"created_at,omitzero"`
-	UpdatedAt time.Time `json:"updated_at,omitzero"`
-	// PrincipalName and PrincipalEmail name the person who set the goal.
-	PrincipalName  string `json:"principal_name,omitempty"`
-	PrincipalEmail string `json:"principal_email,omitempty"`
-	// Origin is the trusted origin header of the turn that set the goal, which its continuations keep.
-	Origin string `json:"origin,omitempty"`
+	Objective      string    `json:"objective,omitempty"`
+	MaxTurns       int       `json:"max_turns,omitempty"`
+	TurnsUsed      int       `json:"turns_used,omitempty"`
+	Status         string    `json:"status,omitempty"`
+	Note           string    `json:"note,omitempty"`
+	CreatedAt      time.Time `json:"created_at,omitzero"`
+	UpdatedAt      time.Time `json:"updated_at,omitzero"`
+	PrincipalName  string    `json:"principal_name,omitempty"`
+	PrincipalEmail string    `json:"principal_email,omitempty"`
+	Origin         string    `json:"origin,omitempty"`
 }
 
-// SessionService owns runtime PostgreSQL session and state access inside one rocketclaw process.
 type SessionService struct {
-	db          *sql.DB
-	log         *slog.Logger
-	attachments attachmentStorage
-	definitions *config.LockedConfig
-	// jobs is the running process's job registry once its run starts.
+	db             *sql.DB
+	log            *slog.Logger
+	attachments    attachmentStorage
+	definitions    *config.LockedConfig
 	jobs           conversationJobs
 	historyWorkers interface {
 		pauseHistory(context.Context, []string) ([]*Bridge, error)
 		historyBusy([]string) bool
 	}
-	// spillDir is rocketcode's spill dir, which keeps conversations' retained background output.
 	spillDir string
-	// shells is the process's emulated shell sandbox, which every conversation's harness uses.
-	shells emulatedShells
+	shells   emulatedShells
 
 	lastTurnIDMu sync.Mutex
 	lastTurnID   int64
 
-	// scheduled names the agents of the cron definitions and routines the cron jobs last loaded. Their
-	// runs report into the sticky: global sessions of these agents, whose agents therefore never pause.
 	scheduledMu sync.Mutex
 	scheduled   []string
 }
 
-// ObservedSessionEntry carries saved or checkpoint metadata and an optional payload.
 type ObservedSessionEntry struct {
-	ID       int64
-	Entry    harness.SessionEntry
-	Key      string
-	Revision string
-	// SourceConversationID identifies the surviving source row of a synced entry.
+	ID                   int64
+	Entry                harness.SessionEntry
+	Key                  string
+	Revision             string
 	SourceConversationID string
 	Synced               bool
 	Active               bool
 	Terminal             protocol.Terminal
 }
 
-// PruneStateStats reports how much stale persisted state was removed.
 type PruneStateStats struct {
 	Threads, ExternalMCPSessions int
 	SessionRows                  int64
@@ -175,12 +153,11 @@ func execRows(ctx context.Context, db stateStoreDB, execOp, query string, args .
 		return 0, err
 	}
 
-	n, _ := result.RowsAffected() // pgx returns driver.RowsAffected, whose row count cannot fail.
+	n, _ := result.RowsAffected()
 
 	return n, nil
 }
 
-// NewSessionServiceIn starts a runtime-owned PostgreSQL session service.
 func NewSessionServiceIn(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*SessionService, error) {
 	driver, location, err := cfg.AttachmentLocation()
 	if err != nil {
@@ -206,7 +183,6 @@ func NewSessionServiceIn(ctx context.Context, cfg *config.Config, logger *slog.L
 	return &SessionService{db: db, log: logger, attachments: attachments, definitions: config.NewLockedConfig(cfg), jobs: noConversationJobs{}, historyWorkers: noHistoryWorkers{}, spillDir: rocketcodeSpillDir(cfg)}, nil
 }
 
-// UpsertThread records a Web chat, or updates a recorded conversation's agent and creator.
 func (s *SessionService) UpsertThread(conversationID string, thread ThreadState) error {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
@@ -253,7 +229,6 @@ func (s *SessionService) UpsertThread(conversationID string, thread ThreadState)
 	return nil
 }
 
-// BeginGoal records a new active goal for a managed conversation.
 func (s *SessionService) BeginGoal(conversationID string, goal *GoalState) error {
 	conversationID = strings.TrimSpace(conversationID)
 	goal.Objective = strings.TrimSpace(goal.Objective)
@@ -286,12 +261,10 @@ func beginGoalDB(ctx context.Context, db stateStoreDB, conversationID string, go
 	return nil
 }
 
-// Goal returns the persisted goal state for a conversation.
 func (s *SessionService) Goal(conversationID string) (GoalState, bool, error) {
 	return stateDAO{db: s.db}.goal(context.Background(), conversationID)
 }
 
-// UpdateGoalStatus records a model-controlled goal status update.
 func (s *SessionService) UpdateGoalStatus(conversationID, status, note string) (GoalState, error) {
 	status = strings.TrimSpace(status)
 	switch status {
@@ -305,13 +278,11 @@ func (s *SessionService) UpdateGoalStatus(conversationID, status, note string) (
 	return s.setGoalStatus(conversationID, status, note)
 }
 
-// StopGoal marks an active goal stopped.
 func (s *SessionService) StopGoal(conversationID string) error {
 	_, err := s.setGoalStatus(conversationID, GoalStatusStopped, "stopped by human")
 	return err
 }
 
-// UpsertExternalMCPSession records an external MCP conversation ID mapping.
 func (s *SessionService) UpsertExternalMCPSession(externalConversationID string, session *ExternalMCPSessionState) error {
 	externalConversationID = strings.TrimSpace(externalConversationID)
 	if externalConversationID == "" {
@@ -322,7 +293,6 @@ func (s *SessionService) UpsertExternalMCPSession(externalConversationID string,
 	session.PrivateConversationID = strings.TrimSpace(session.PrivateConversationID)
 	session.ManagedConversationID = strings.TrimSpace(session.ManagedConversationID)
 
-	// The binding leaves the conversation it was on before the one it moves to takes it.
 	_, err := execState(context.Background(), s.db, "upsert external MCP session", `WITH moved AS (
     UPDATE conversations SET external_id = NULL, external_run = NULL WHERE external_id = $1 AND conversation_id <> $3 RETURNING 1
 ), released AS (
@@ -333,11 +303,8 @@ func (s *SessionService) UpsertExternalMCPSession(externalConversationID string,
 	return err
 }
 
-// bindExternalMCPSQL stores binding $1 of private run $2, by agent $4 with origin pairs $5, on its Web chat.
 const bindExternalMCPSQL = `UPDATE conversations SET external_id = $1, external_run = NULLIF($2::text, ''), external_agent = $4, origin_pairs = $5`
 
-// RegisterExternalMCPConversation atomically persists the Web chat the session shows in, the private
-// conversation the session runs in, and their public binding.
 func (s *SessionService) RegisterExternalMCPConversation(externalConversationID, managedAgent string, session *ExternalMCPSessionState) error {
 	externalConversationID = strings.TrimSpace(externalConversationID)
 	managedAgent = strings.TrimSpace(managedAgent)
@@ -390,7 +357,6 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID,
 	return nil
 }
 
-// RemoveExternalMCPConversation removes a failed newly-created conversation and all of its durable state.
 func (s *SessionService) RemoveExternalMCPConversation(externalConversationID string) error {
 	ctx := context.Background()
 
@@ -411,7 +377,6 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 	defer func() { _ = tx.Rollback() }()
 	defer releaseHistory(workers)
 
-	// The binding goes with its Web chat's row.
 	if _, err := deleteOwnedHistory(ctx, tx, ids); err != nil {
 		return err
 	}
@@ -423,8 +388,6 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 	return s.removeHistoryFiles(ctx, ids)
 }
 
-// UpdateConversationDetails changes shared display metadata without touching history.
-// Nil fields are left unchanged. Remote names also update the OpenCode title.
 func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -470,32 +433,26 @@ func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversa
 	return rows > 0, nil
 }
 
-// ExternalMCPSession returns a persisted external MCP session mapping.
 func (s *SessionService) ExternalMCPSession(externalConversationID string) (ExternalMCPSessionState, bool, error) {
 	return stateDAO{db: s.db}.externalMCPSession(context.Background(), externalConversationID)
 }
 
-// ScheduledMessages returns all persisted scheduled messages.
 func (s *SessionService) ScheduledMessages() (map[string]protocol.ScheduledMessageState, error) {
 	return stateDAO{db: s.db}.scheduledMessages(context.Background(), "")
 }
 
-// ScheduledMessagesForConversation returns persisted scheduled messages for one conversation.
 func (s *SessionService) ScheduledMessagesForConversation(conversationID string) (map[string]protocol.ScheduledMessageState, error) {
 	return stateDAO{db: s.db}.scheduledMessages(context.Background(), conversationID)
 }
 
-// PutScheduledMessage persists one scheduled message.
 func (s *SessionService) PutScheduledMessage(id string, message *protocol.ScheduledMessageState) error {
 	return stateDAO{db: s.db}.putScheduledMessage(context.Background(), id, message)
 }
 
-// ResetScheduledMessages deletes pending scheduled messages for one conversation.
 func (s *SessionService) ResetScheduledMessages(conversationID string) error {
 	return stateDAO{db: s.db}.resetScheduledMessages(context.Background(), conversationID)
 }
 
-// ClaimScheduledMessage verifies one due scheduled message and advances recurring messages atomically.
 func (s *SessionService) ClaimScheduledMessage(id, conversationID string, dueAt, now time.Time) (message protocol.ScheduledMessageState, claimed bool, err error) {
 	tx, err := s.db.BeginTx(context.Background(), nil)
 	if err != nil {
@@ -533,7 +490,6 @@ func (s *SessionService) ClaimScheduledMessage(id, conversationID string, dueAt,
 		return protocol.ScheduledMessageState{}, false, nil
 	}
 
-	// A recurring rule releases the input parked after it and moves to its next time; a missed interval is not made up.
 	if message.Recurring {
 		message.DueAt = now.UTC().Add(message.Interval)
 		if _, err := execState(context.Background(), tx, "advance scheduled message", `WITH parked AS (UPDATE turns SET park_after = '' WHERE park_after = $1)
@@ -549,7 +505,6 @@ UPDATE schedules SET next_due_unix_ns = $2 WHERE id = $1`, id, timeUnixNano(mess
 	return message, true, nil
 }
 
-// SyncCronSchedules replaces observed scheduled cron definitions, keeping the next due time of those already observed.
 func (s *SessionService) SyncCronSchedules(schedules []CronScheduleState) error {
 	ids, paths, due := make([]string, len(schedules)), make([]string, len(schedules)), make([]int64, len(schedules))
 	for i, schedule := range schedules {
@@ -565,26 +520,21 @@ DELETE FROM schedules WHERE cron_path IS NOT NULL AND id <> ALL($1)`, ids, paths
 	return err
 }
 
-// ScheduleAgents records agents, those of the cron definitions and routines the cron jobs just loaded.
 func (s *SessionService) ScheduleAgents(agents []string) {
 	s.scheduledMu.Lock()
 	s.scheduled = agents
 	s.scheduledMu.Unlock()
 }
 
-// ResetCronSchedules clears scheduled cron state at daemon observation start.
 func (s *SessionService) ResetCronSchedules() error {
 	_, err := execState(context.Background(), s.db, "reset cron schedules", `DELETE FROM schedules WHERE cron_path IS NOT NULL`)
 	return err
 }
 
-// DueCronSchedules returns observed scheduled cron definitions due at now.
 func (s *SessionService) DueCronSchedules(now time.Time) ([]CronScheduleState, error) {
 	return queryRows(context.Background(), s.db, `SELECT id, cron_path, next_due_unix_ns FROM schedules WHERE cron_path IS NOT NULL AND next_due_unix_ns <= $1 ORDER BY next_due_unix_ns, id`, "due cron schedules", scanCronSchedule, timeUnixNano(now))
 }
 
-// ClaimCronSchedule moves one due scheduled cron trigger to nextDue and reports whether it runs: it is
-// skipped while a turn of a run of the same file is running.
 func (s *SessionService) ClaimCronSchedule(due CronScheduleState, nextDue, now time.Time) (bool, error) {
 	var claimed bool
 
@@ -600,7 +550,6 @@ SELECT count(*) > 0 FROM advanced LEFT JOIN running r ON TRUE WHERE r.id IS NULL
 	return claimed, err
 }
 
-// ActiveGoalThreads returns managed thread state for conversations with active goals.
 func (s *SessionService) ActiveGoalThreads() (map[string]ThreadState, error) {
 	threads, err := queryMap(context.Background(), s.db, `SELECT conversation_id, agent, created_by FROM conversations
 WHERE goal_status = '' OR goal_status = $1 ORDER BY conversation_id`, "active goal threads", activeGoalThreadScanner{}, GoalStatusActive)
@@ -636,19 +585,12 @@ const (
 	pruneSticky
 )
 
-// pruneCandidate is one unit of retention: a thread, the goal of a conversation that is
-// no record, an External MCP session's conversations, a private history that is no record, or
-// the context only a finished cron run itself replays.
 type pruneCandidate struct {
-	kind pruneKind
-	// id is the conversation; for an External MCP session, its managed one.
+	kind        pruneKind
 	id, private string
-	// threads counts the managed conversations the candidate removes.
-	threads int
+	threads     int
 }
 
-// stale reports whether c is still expired. Under c's history locks the answer
-// holds until commit, because every write that revives a conversation takes them.
 func (c pruneCandidate) stale(ctx context.Context, db stateStoreDB, cutoff time.Time) (bool, error) {
 	switch c.kind {
 	case pruneSticky:
@@ -684,11 +626,6 @@ func (c pruneCandidate) stale(ctx context.Context, db stateStoreDB, cutoff time.
 	return sessionLatestBefore(ctx, db, c.private, time.Unix(0, 0).UTC(), cutoff)
 }
 
-// PruneStateBefore removes thread and external-session state that expired before
-// cutoff. It never interrupts work: each candidate is deleted in its own short
-// transaction only while its family is idle and still expired, and is otherwise
-// left for a later pass. It waits a tenth of pace after each check and pace after
-// each deletion, so a background pass stays light on the store.
 func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time, pace time.Duration) (PruneStateStats, error) {
 	stickyIDs, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE sticky <> 'off' ORDER BY conversation_id`, "sticky conversations")
 	if err != nil {
@@ -773,7 +710,6 @@ SELECT DISTINCT r.conversation_id FROM runs r JOIN entries e USING (conversation
 	)
 
 	for _, c := range candidates {
-		// A check without locks skips most candidates cheaply; deletion checks again under locks.
 		stale, err := c.stale(ctx, s.db, cutoff)
 		pruned := false
 
@@ -805,11 +741,9 @@ SELECT DISTINCT r.conversation_id FROM runs r JOIN entries e USING (conversation
 		}
 	}
 
-	// Each pass also retries file deletions that an earlier removal left pending.
 	return stats, errors.Join(errCombined, s.removeHistoryFiles(ctx, nil))
 }
 
-// ObserveEntries loads observed session entries through the runtime service.
 func (s *SessionService) ObserveEntries(ctx context.Context, conversationID string) ([]ObservedSessionEntry, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
@@ -824,7 +758,6 @@ func (s *SessionService) ObserveEntries(ctx context.Context, conversationID stri
 	return entries, err
 }
 
-// AppendEntryID appends one entry through the runtime service and returns its row ID.
 func (s *SessionService) AppendEntryID(ctx context.Context, conversationID string, entry *harness.SessionEntry) (int64, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
@@ -849,8 +782,6 @@ func (s *SessionService) AppendEntryID(ctx context.Context, conversationID strin
 	return id, nil
 }
 
-// revertFloorSuffix returns the revert floor (revertStateDB) of conversationID, if it can undo,
-// and, after it, the message ID of its first user message, or "".
 func revertFloorSuffix(ctx context.Context, db stateStoreDB, conversationID string) (floor, first string, err error) {
 	var eligible bool
 	if _, eligible, _, floor, err = revertStateDB(ctx, db, conversationID); err != nil || floor == "" || !eligible {
@@ -867,8 +798,6 @@ SELECT COALESCE(max(id::text || ':' || idx::text), '') FROM after`, &first, conv
 	return floor, first, err
 }
 
-// DeleteSession removes all entries for one conversation ID and returns deleted rows. In a
-// conversation with a revert floor, it removes only what undo can (revertFloorSuffix).
 func (s *SessionService) DeleteSession(ctx context.Context, conversationID string) (int64, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
@@ -888,8 +817,6 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, ErrRemoteSession
 	}
 
-	// Like undo, it keeps the newest message from a cron run, External MCP, or Slack, and all before
-	// it, and disturbs nothing when no message follows that.
 	if floor, first, err := revertFloorSuffix(ctx, s.db, conversationID); err != nil || floor != "" && first == "" {
 		return 0, err
 	}
@@ -931,7 +858,6 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, err
 	}
 
-	// The chat stops continuing its run. A chat showing a hidden run's entries has a revert floor.
 	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET continues = NULL WHERE conversation_id = ANY($1) AND continues IS NOT NULL`, ids); err != nil {
 		return 0, fmt.Errorf("unlink continued run: %w", err)
 	}
@@ -940,7 +866,6 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, fmt.Errorf("delete rocketcode session summaries: %w", err)
 	}
 
-	// Ended turns go with their steps, and Background Jobs with the steps under their job IDs.
 	if _, err := tx.ExecContext(ctx, `WITH done AS (DELETE FROM turns WHERE conversation_id = $1 AND (phase = 'done' OR NOT takes_lane) RETURNING takes_lane, CASE WHEN takes_lane THEN id ELSE input_id END AS key)
 DELETE FROM steps s USING done d WHERE s.conversation_id = $1 AND (d.takes_lane AND s.key = d.key OR starts_with(s.key, d.key || '/'))`, conversationID); err != nil {
 		return 0, fmt.Errorf("delete terminal transcript turns: %w", err)
@@ -968,10 +893,6 @@ DELETE FROM steps s USING done d WHERE s.conversation_id = $1 AND (d.takes_lane 
 		return 0, fmt.Errorf("clear comparisons: %w", err)
 	}
 
-	// Queued input and unfinished unshadowed turns survive this entries-only clear.
-	// Their uploads, journaled tool results, and the files their replies send still own the original bytes.
-	// Like fork ownership, this scans payloads for opaque IDs. A large backlog
-	// would need indexed references instead of attachments times retained payload bytes.
 	if _, err := tx.ExecContext(ctx, `WITH retained AS (
 SELECT concat(message, content::text, inbound_json::text, outbound_json::text) AS payload FROM turns WHERE conversation_id = ANY($1) AND phase <> 'done' AND takes_lane
 UNION ALL SELECT s.value::text FROM steps s JOIN turns a ON a.conversation_id = s.conversation_id
@@ -995,10 +916,6 @@ INSERT INTO pending_attachment_deletions (id) SELECT id FROM removed`, ids); err
 	return rows, s.removeHistoryFiles(ctx, ids)
 }
 
-// Delegations returns saved direct child histories referenced by this transcript,
-// including unchanged entries omitted from a delta's readable payloads. Only saved
-// entries in [from, before) count; zero before means no upper bound and includes
-// checkpoints, matching ObserveTranscript.
 func (s *SessionService) Delegations(ctx context.Context, conversationID, sourceConversationID string, from, before int64) ([]Delegation, error) {
 	children, err := queryRows(ctx, s.db, delegationsSQL, "delegation histories", scanDelegation, conversationID, sourceConversationID, from, before)
 	if err != nil {
@@ -1008,12 +925,10 @@ func (s *SessionService) Delegations(ctx context.Context, conversationID, source
 	return children, nil
 }
 
-// Delegation is a direct child history that a call of Parent started.
 type Delegation struct {
 	ID, Parent, CallID string
-	// Legacy reports a history saved under its call ID alone, before delegations had their own key.
-	Legacy bool
-	Kind   ConversationKind
+	Legacy             bool
+	Kind               ConversationKind
 }
 
 func scanDelegation(row rowScanner) (Delegation, error) {
@@ -1025,8 +940,6 @@ func scanDelegation(row rowScanner) (Delegation, error) {
 	return delegation, nil
 }
 
-// A call's children are the histories it started: in its own turn, or under its call ID alone, as
-// before reviews and subagents had their own key.
 const delegationsSQL = `WITH ` + sessionHistorySQL + `, ` + turnReplaySQL + `, saved_turns AS (
     SELECT DISTINCT entry->>'turn_id' AS turn_id FROM physical_entries WHERE NOT synced OR source_conversation_id = $1
 ), calls AS (
@@ -1046,70 +959,40 @@ SELECT c.* FROM children c
 -- Exception to the no-subquery rule: stop at a child history's first entry.
 CROSS JOIN LATERAL (SELECT 1 FROM entries e WHERE e.conversation_id = c.id LIMIT 1) h ORDER BY c.id`
 
-// SidebarSession combines a recorded conversation with its optional durable summary.
 type SidebarSession struct {
-	Conversation protocol.Conversation
-	Kind         ConversationKind
-	// RemoteSession is a remote OpenCode session's own ID on its server, empty for any other session.
+	Conversation  protocol.Conversation
+	Kind          ConversationKind
 	RemoteSession string
 	Summary       *protocol.SessionSummary
 	Running       bool
-	// Background reports work that can wake the session after its turn: a running Background Job,
-	// its own or a hidden run's reporting to it, a running turn of a hidden run reporting to it, or
-	// a remote OpenCode session's running child session or shell command.
-	Background bool
-	// Asking reports a session waiting on a person: a running turn's unanswered Web question, or a
-	// remote OpenCode session's pending form or permission request, its own or a child session's.
-	Asking     bool
-	Pinned     bool
-	Paused     bool
-	Name       string
-	ForkedFrom string
-	Tags       []string
-	// Server names the remote OpenCode server of a synced session, empty for RocketClaw's own.
-	Server    string
-	Directory string
-	Offline   bool
-	// SpaceID is the Web space the session was born in, empty for none.
-	SpaceID string
-	// SlackChannel is the channel of a Slack thread, empty for any other session.
-	SlackChannel string
-	// CronPath is the definition path of the cron run a Web chat continues, empty for any other session.
-	CronPath string
-	// Reply is a remote OpenCode session's newest assistant text, read when its last seen turn ended.
-	Reply string
-	// Model is a remote OpenCode session's selected model, "<provider>/<model>"; its
-	// Conversation.Agent is its selected agent. Both are empty until it has them.
-	// SearchSessions fills a RocketClaw chat's Model with its agent's configured model.
-	Model string
-	// Attention is the listing person's attention on its tab; its Path is empty.
-	Attention Attention
-	// AutoPark reports that a prompt the listing person sends it parks its tab until it is done: by their choice for
-	// it, else their choice for every session.
-	AutoPark bool
-	// Origin holds the facts that decide its chat origin, as ChatOriginFacts reads them.
-	Origin ChatOriginFacts
-	// Work is the chat's work state, and StateSince when the turn defining it started, or its last
-	// update when idle. A Private Producer Conversation's turns count as those of the chat it reports to.
-	Work       WorkState
-	StateSince time.Time
-	// Queued reports waiting turns other than scheduled reminders.
-	Queued bool
-	// External reports an External MCP binding, the chat's own or a run's reporting to it.
-	External bool
-	// Pausable reports a session a person started in the Web that nothing outside reports into: no cron run,
-	// External MCP run or, for a sticky: global session, cron job or routine of its agent.
-	Pausable bool
-	// ArrivedAt is when the chat's newest running or waiting turn was created, else its last update:
-	// delivered turns are deleted.
-	ArrivedAt time.Time
+	Background    bool
+	Asking        bool
+	Pinned        bool
+	Paused        bool
+	Name          string
+	ForkedFrom    string
+	Tags          []string
+	Server        string
+	Directory     string
+	Offline       bool
+	SpaceID       string
+	SlackChannel  string
+	CronPath      string
+	Reply         string
+	Model         string
+	Attention     Attention
+	AutoPark      bool
+	Origin        ChatOriginFacts
+	Work          WorkState
+	StateSince    time.Time
+	Queued        bool
+	External      bool
+	Pausable      bool
+	ArrivedAt     time.Time
 }
 
-// WorkState is the first of asking (see SidebarSession.Asking), running work and queued turns a chat
-// has, else idle.
 type WorkState string
 
-// The work states.
 const (
 	WorkIdle     WorkState = "idle"
 	WorkNeedsYou WorkState = "needs_you"
@@ -1117,25 +1000,16 @@ const (
 	WorkQueued   WorkState = "queued"
 )
 
-// ChatOriginFacts are the stored facts that decide a conversation's chat origin.
 type ChatOriginFacts struct {
 	ConversationID         string
 	CreatedBy              ThreadCreator
 	ExternalConversationID string
 	Binding                ExternalMCPSessionState
-	// CreatingSource is the cron run a Web chat continues, else the creating entry's source
-	// conversation, attributed as ObserveTranscript does.
-	CreatingSource string
-	// ProducerAgent is the agent of the cron run Run locates.
-	ProducerAgent string
-	// Run locates CreatingSource when it is a cron run, nil otherwise.
-	Run *protocol.CronRun
+	CreatingSource         string
+	ProducerAgent          string
+	Run                    *protocol.CronRun
 }
 
-// chatOriginSQL continues a WITH that holds visible_chats into origins, visible_chats with the facts
-// that decide each one's chat origin (originColumns), with $2 the creator of cron's threads and $3 the
-// one-off cron run kind. The creating entry decides the origin only where it can: not for Slack
-// threads cron did not create, nor for Web chats that store the cron run they continue.
 const chatOriginSQL = `, creating AS (
     SELECT *, COALESCE(cron_run, CASE WHEN kind <> 'slack_thread' OR created_by = $2 THEN first_source END, '') AS creating_source FROM visible_chats
 ), origins AS (
@@ -1145,8 +1019,6 @@ const chatOriginSQL = `, creating AS (
     FROM creating c LEFT JOIN conversations p ON p.conversation_id = c.creating_source AND p.cron_run_at_unix_ns IS NOT NULL
 )`
 
-// shownChatsSQL continues a WITH that holds origins into shown: those chats, found when they have
-// history the sidebar lists them for.
 const shownChatsSQL = `, reporting AS (
     SELECT reports_to AS conversation_id FROM conversations WHERE reports_to IS NOT NULL
     UNION SELECT c.conversation_id FROM conversations c JOIN conversations r ON r.conversation_id = c.continues WHERE c.continues IS NOT NULL
@@ -1156,10 +1028,8 @@ const shownChatsSQL = `, reporting AS (
     FROM origins c LEFT JOIN reporting p USING (conversation_id)
 )`
 
-// originColumns are the origin facts of a chat c of origins, in scanChatOrigin's order.
 const originColumns = `c.external, c.binding_agent, c.managed, c.pairs, c.creating_source, c.producer_agent, c.run_path, c.run_at, c.one_off`
 
-// scanChatOrigin scans dest, then the origin facts chatOriginSQL reads after created_by, into facts.
 func scanChatOrigin(row rowScanner, facts *ChatOriginFacts, dest ...any) error {
 	var (
 		pairs sql.RawBytes
@@ -1181,9 +1051,6 @@ func scanChatOrigin(row rowScanner, facts *ChatOriginFacts, dest ...any) error {
 	return nil
 }
 
-// ChatOriginFacts yields, in one query, origin facts for every conversation people
-// may see: cron runs and private External MCP conversations are omitted.
-// A nonempty id restricts the inventory to that conversation.
 func (s *SessionService) ChatOriginFacts(ctx context.Context, id string) iter.Seq2[ChatOriginFacts, error] {
 	return func(yield func(ChatOriginFacts, error) bool) {
 		rows, err := s.db.QueryContext(ctx, `WITH `+visibleChatsSQL+chatOriginSQL+` SELECT c.conversation_id, c.created_by, `+originColumns+` FROM origins c`, id, ThreadCreatedByCron, KindOneOffCronRun)
@@ -1215,19 +1082,12 @@ func (s *SessionService) ChatOriginFacts(ctx context.Context, id string) iter.Se
 	}
 }
 
-// CronRunSource pairs a conversation with the cron run conversation its effective history came from.
 type CronRunSource struct {
 	ConversationID       string
 	SourceConversationID string
-	// Run locates the source run by its stored definition path and start time.
-	Run protocol.CronRun
+	Run                  protocol.CronRun
 }
 
-// CronRunSources returns, in one query, every recorded cron run with saved history or
-// a running, failed, or stopped turn, paired with itself, and with each recorded
-// conversation people may see whose effective history holds output of the run: the
-// chat it reports to and chats continuing it. Sessions under a run and copied entries
-// are not consulted. Only each chat's own revert cutoff applies; runs cannot revert.
 func (s *SessionService) CronRunSources(ctx context.Context) ([]CronRunSource, error) {
 	return queryRows(ctx, s.db, `WITH runs AS (
     SELECT conversation_id, reports_to, cron_path, cron_run_at_unix_ns FROM conversations WHERE kind IN ('cron_run', 'one_off_cron_run')
@@ -1265,7 +1125,6 @@ WHERE c.retention = 'record' AND t.takes_lane AND (t.phase NOT IN ('waiting', 'd
 	})
 }
 
-// ChannelFact returns a stored Slack name, never derived channel policy.
 func (s *SessionService) ChannelFact(ctx context.Context, workspaceID, channelID string) (name string, found bool, err error) {
 	err = queryScalar(ctx, s.db, "read Slack channel fact", `SELECT name FROM slack_channel_facts WHERE workspace_id = $1 AND channel_id = $2`, &name, workspaceID, channelID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1279,8 +1138,6 @@ func (s *SessionService) ChannelFact(ctx context.Context, workspaceID, channelID
 	return name, true, nil
 }
 
-// RecordChannelFact keeps the newest observation. Nanoseconds preserve ordering
-// even when a lookup and rename occur within one PostgreSQL timestamp microsecond.
 func (s *SessionService) RecordChannelFact(ctx context.Context, workspaceID, channelID, name string, observedAt time.Time) error {
 	_, err := execState(ctx, s.db, "record Slack channel fact", `INSERT INTO slack_channel_facts (workspace_id, channel_id, name, observed_at) VALUES ($1, $2, $3, $4)
 ON CONFLICT (workspace_id, channel_id) DO UPDATE SET name = EXCLUDED.name, observed_at = EXCLUDED.observed_at
@@ -1289,12 +1146,10 @@ WHERE slack_channel_facts.observed_at < EXCLUDED.observed_at`, workspaceID, chan
 	return err
 }
 
-// SlackChannelIDs lists the distinct channels of recorded Slack threads.
 func (s *SessionService) SlackChannelIDs(ctx context.Context) ([]string, error) {
 	return queryStrings(ctx, s.db, `SELECT DISTINCT slack_channel COLLATE "C" FROM conversations WHERE slack_channel IS NOT NULL ORDER BY 1`, "Slack channel IDs")
 }
 
-// Stop closes the runtime service and its database handle.
 func (s *SessionService) Stop() error {
 	if err := s.db.Close(); err != nil {
 		return fmt.Errorf("close rocketcode session db: %w", err)
@@ -1303,7 +1158,6 @@ func (s *SessionService) Stop() error {
 	return nil
 }
 
-// scheduledAgents names the agents ScheduleAgents last recorded.
 func (s *SessionService) scheduledAgents() []string {
 	s.scheduledMu.Lock()
 	defer s.scheduledMu.Unlock()
@@ -1311,10 +1165,6 @@ func (s *SessionService) scheduledAgents() []string {
 	return s.scheduled
 }
 
-// sidebarSessions yields pinned records first, then recent-first, bytewise-ID order, of chats when
-// not nil. Conversations without stored history are omitted until their first entry arrives,
-// except while a turn runs: then its prompt is the preview and its start the update time.
-// Breaking iteration or cancelling ctx closes the database rows.
 func (s *SessionService) sidebarSessions(ctx context.Context, username string, chats []string) iter.Seq2[SidebarSession, error] {
 	return func(yield func(SidebarSession, error) bool) {
 		limit, err := s.SpaceLimitFor(ctx, s.definitions.Clone().PermittedSpaces(username))
@@ -1426,7 +1276,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 		var (
 			sessions       []*SidebarSession
 			preview        pgtype.DriverBytes
-			tags           pgtype.DriverBytes // scanChatOrigin keeps a RawBytes destination until Next.
+			tags           pgtype.DriverBytes
 			updated        sql.NullTime
 			unread, until  sql.NullTime
 			work           sql.NullString
@@ -1459,7 +1309,6 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			}
 
 			if updated.Valid {
-				// RawBytes destinations hold off cancellation-driven Close; own the preview before Next.
 				row.Summary = &protocol.SessionSummary{ConversationID: row.Conversation.ID, LastMessage: string(preview), LastUpdated: updated.Time.UTC()}
 			}
 
@@ -1471,9 +1320,8 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			return
 		}
 
-		// Sorting here spares the database copying every wide row into its sort.
 		slices.SortFunc(sessions, func(a, b *SidebarSession) int {
-			var updated [2]time.Time // A missing time sorts as the zero time.
+			var updated [2]time.Time
 
 			for i, row := range [2]*SidebarSession{a, b} {
 				if row.Summary != nil {
@@ -1492,8 +1340,6 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 	}
 }
 
-// pruneCandidate deletes c's family in one transaction if c is still expired and
-// idle once its history is locked. It reports whether it deleted anything.
 func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, cutoff time.Time) (rows int64, pruned bool, err error) {
 	if c.kind == pruneGoal {
 		tx, err := s.beginStateTx(ctx, "goal prune")
@@ -1529,7 +1375,6 @@ func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, c
 		roots = append(roots, c.private)
 	}
 
-	// A sticky chat shows the runs that report into it, so their messages expire with its own.
 	if c.kind == pruneSticky {
 		runs, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM conversations WHERE reports_to = $1 ORDER BY 1`, "sticky chat reports", c.id)
 		if err != nil {
@@ -1554,7 +1399,6 @@ func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, c
 		return 0, false, err
 	}
 
-	// The run and what its chat shows stay, and so do the attachments and files they reference.
 	if c.kind == pruneRunContext {
 		rows, err = execRows(ctx, tx, "prune finished cron run context", `DELETE FROM entries WHERE conversation_id = $1 AND audience = 'sandbox'`, c.id)
 		if err != nil {
@@ -1568,7 +1412,6 @@ func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, c
 		return rows, true, nil
 	}
 
-	// A sticky chat stays; its expired messages go, and so do its finished turns, which would show them again.
 	if c.kind == pruneSticky {
 		rows, err = execRows(ctx, tx, "prune old sticky messages", `DELETE FROM entries WHERE conversation_id = ANY($1) AND entry_timestamp < $2`, ids, cutoff.UTC().Format(time.RFC3339Nano))
 		if err != nil {
@@ -1641,7 +1484,7 @@ func (s *SessionService) toggleSessionTag(ctx context.Context, conversationID, t
 
 	slices.Sort(tags)
 
-	data, _ := json.Marshal(tags) // Encoding a string slice cannot fail.
+	data, _ := json.Marshal(tags)
 
 	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET tags = $2 WHERE conversation_id = $1`, conversationID, data); err != nil {
 		return nil, fmt.Errorf("write session tags: %w", err)
@@ -1654,9 +1497,6 @@ func (s *SessionService) toggleSessionTag(ctx context.Context, conversationID, t
 	return tags, nil
 }
 
-// newTurnID issues the next turns key. The key spans every conversation of the one
-// process the run lock admits, and macOS clocks repeat readings within a microsecond, so each
-// ID is its clock reading or one past the last, whichever is later.
 func (s *SessionService) newTurnID() string {
 	s.lastTurnIDMu.Lock()
 	defer s.lastTurnIDMu.Unlock()
@@ -1672,8 +1512,6 @@ func (s *SessionService) externalMCPMetadataEntry(ctx context.Context, conversat
 		raw   string
 	)
 
-	// Keep the fixed type literal so generic plans can use the metadata-only index. A chat finds the
-	// metadata of the hidden runs it shows, as their entries are not copied into it.
 	err := s.db.QueryRowContext(ctx, `WITH shown AS (
     SELECT $1::text AS conversation_id UNION SELECT conversation_id FROM conversations WHERE reports_to = $1
     UNION SELECT continues FROM conversations WHERE conversation_id = $1 AND continues IS NOT NULL
@@ -1731,7 +1569,6 @@ func (s *SessionService) beginStateTx(ctx context.Context, label string) (*sql.T
 	return tx, nil
 }
 
-// openSpill opens the spill dir; found is false before any turn created it.
 func (s *SessionService) openSpill() (root *os.Root, found bool, err error) {
 	root, err = os.OpenRoot(s.spillDir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -1745,8 +1582,6 @@ func (s *SessionService) openSpill() (root *os.Root, found bool, err error) {
 	return root, true, nil
 }
 
-// sweepRetainedResults removes expired retained background output at startup, before any turn
-// can retain more.
 func (s *SessionService) sweepRetainedResults() error {
 	root, found, err := s.openSpill()
 	if !found {
@@ -1762,7 +1597,6 @@ func (s *SessionService) sweepRetainedResults() error {
 	return nil
 }
 
-// removeRetainedResults removes deleted conversations' retained background output.
 func (s *SessionService) removeRetainedResults(conversationIDs ...string) error {
 	root, found, err := s.openSpill()
 	if !found {
@@ -1780,7 +1614,6 @@ func (s *SessionService) removeRetainedResults(conversationIDs ...string) error 
 	return nil
 }
 
-// removeHistoryFiles also retries durable pending deletions during each prune.
 func (s *SessionService) removeHistoryFiles(ctx context.Context, ids []string) error {
 	blobs, err := queryStrings(ctx, s.db, `SELECT id FROM pending_attachment_deletions ORDER BY id`, "pending attachment deletions")
 	if err != nil {
@@ -1808,7 +1641,6 @@ func removeSessionEntryNUL(data []byte) []byte {
 	}
 
 	output := make([]byte, 0, len(data))
-	// Split after escaped backslashes so literal \u0000 text survives.
 	for part := range bytes.SplitAfterSeq(data, []byte(`\\`)) {
 		for text := range bytes.SplitSeq(part, []byte(`\u0000`)) {
 			output = append(output, text...)
@@ -1818,9 +1650,6 @@ func removeSessionEntryNUL(data []byte) []byte {
 	return output
 }
 
-// appendSessionEntryDB saves the entry with its search text, read with its conversation's attachments.
-// The chat a hidden run reports to shows the run's entry, so that text is as it shows it, and it takes
-// the entry's preview too.
 func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID string, entry *harness.SessionEntry) (int64, error) {
 	data, err := json.Marshal(entry)
 	if err != nil {
@@ -1839,8 +1668,6 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID s
 		return 0, err
 	}
 
-	// Search never shows an entry of a conversation that is neither listed nor reporting to a chat;
-	// listed never changes, and binding a run indexes its entries (bindRun).
 	var searched bool
 	if err := queryScalar(ctx, db, "read entry search", `SELECT COALESCE(bool_and(listed), TRUE) FROM conversations WHERE conversation_id = $1`, &searched, conversationID); err != nil {
 		return 0, err
@@ -1863,8 +1690,6 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID s
 		return 0, fmt.Errorf("append rocketcode session entry: %w", err)
 	}
 
-	// The chats showing the entry show its principals too, unless a staged undo hides everything
-	// after its cut, the new entry included.
 	if len(principals) > 0 {
 		if _, err := execState(ctx, db, "add message principals", `WITH current AS (
     SELECT conversation_id, principals FROM conversations WHERE (conversation_id = $1 OR continues = $3) AND revert_message_id = '' AND NOT principals @> $2::text[]
@@ -1877,7 +1702,6 @@ UPDATE conversations c SET principals = m.principals FROM merged m WHERE c.conve
 		}
 	}
 
-	// The unsynced entry hides its turn's record from History (observeTranscriptDB).
 	if entry.TurnID != "" {
 		hidden, err := execRows(ctx, db, "clear hidden turn message search", `UPDATE turns SET search_text = NULL
 WHERE conversation_id = $1 AND id = $2 AND search_text IS NOT NULL`, conversationID, entry.TurnID)
@@ -1899,7 +1723,6 @@ WHERE conversation_id = $1 AND id = $2 AND search_text IS NOT NULL`, conversatio
 	return id, projectEntrySummary(ctx, db, reportsTo, entry)
 }
 
-// projectEntrySummary makes entry the latest of conversationID's durable summary; the caller holds its history lock.
 func projectEntrySummary(ctx context.Context, db stateStoreDB, conversationID string, entry *harness.SessionEntry) error {
 	summary, err := loadSessionSummary(ctx, db, conversationID)
 	if err != nil {
@@ -1913,8 +1736,6 @@ func projectEntrySummary(ctx context.Context, db stateStoreDB, conversationID st
 	return saveSessionSummary(ctx, db, summary)
 }
 
-// lockRunHistories locks conversationID's history and, for a hidden run, that of the chat it
-// reports to, in lockHistories order, and returns that chat.
 func lockRunHistories(ctx context.Context, db stateStoreDB, conversationID string) (string, error) {
 	var reportsTo string
 	if err := queryScalar(ctx, db, "read run destination", `SELECT COALESCE(max(reports_to), '') FROM conversations WHERE conversation_id = $1`, &reportsTo, conversationID); err != nil {
@@ -1924,8 +1745,6 @@ func lockRunHistories(ctx context.Context, db stateStoreDB, conversationID strin
 	return reportsTo, lockHistories(ctx, db, slices.DeleteFunc([]string{conversationID, reportsTo}, func(id string) bool { return id == "" }))
 }
 
-// visibleEntry leaves an entry another conversation produced without its compaction items, as
-// sessionHistorySQL's replay does, so every surface shares its message IDs.
 func visibleEntry(observed *ObservedSessionEntry) error {
 	entry := &observed.Entry
 	if !observed.Synced {
@@ -1960,7 +1779,7 @@ func visibleEntry(observed *ObservedSessionEntry) error {
 func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, conversationID string, cutoff time.Time) (bool, error) {
 	var bound bool
 	if err := queryScalar(ctx, db, "read retention ownership", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND shadow_parent IS NOT NULL`, &bound, conversationID); err != nil || bound {
-		return false, err // Children expire only with their explicitly recorded owner.
+		return false, err
 	}
 
 	pending, err := conversationHasPendingWork(ctx, db, conversationID)
@@ -1968,8 +1787,6 @@ func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, convers
 		return false, err
 	}
 
-	// A chat, Web or Slack, expires with its newest entry, else with its Slack thread's time,
-	// else with its creation, so a new one survives until its first turn lands.
 	var created time.Time
 
 	err = queryScalar(ctx, db, "read chat time", `SELECT CASE WHEN slack_thread ~ '^[0-9]+(\.[0-9]+)?$' THEN to_timestamp(slack_thread::numeric) ELSE created_at END
@@ -1982,8 +1799,6 @@ FROM conversations WHERE conversation_id = $1 AND (listed AND retention = 'recor
 		return sessionLatestBefore(ctx, db, conversationID, created, cutoff)
 	}
 
-	// Any other empty conversation expires only once it is older than cutoff. The entries it
-	// shows of hidden runs count.
 	var emptyManaged bool
 	if err := queryScalar(ctx, db, "read empty managed conversation", `WITH shown AS (
     SELECT $1::text AS conversation_id UNION SELECT conversation_id FROM conversations WHERE reports_to = $1
@@ -2039,8 +1854,6 @@ func readRows(ctx context.Context, db stateStoreDB, query, label string, scan fu
 	return nil
 }
 
-// readParallelRows is readRows in a read-only transaction that plans with parallel workers costing
-// nothing to start, so a scan of a few thousand rows is split among them.
 func (s *SessionService) readParallelRows(ctx context.Context, query, label string, scan func(rowScanner) error, args ...any) error {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -2111,9 +1924,6 @@ func queryStrings(ctx context.Context, db stateStoreDB, query, label string, arg
 	}, args...)
 }
 
-// conversationHasPendingWork reports queued or scheduled messages, queued or running Background Jobs,
-// or wakeable Completion Notes, its own or those of hidden runs reporting to it,
-// which keep a conversation from being pruned.
 func conversationHasPendingWork(ctx context.Context, db stateStoreDB, conversationID string) (bool, error) {
 	var pending bool
 	if err := queryScalar(ctx, db, "check conversation pending work", `WITH `+remindersSQL+`, owners AS (
@@ -2143,8 +1953,6 @@ SELECT count(*) > 0 FROM pending_work`, &pending, conversationID, notePending); 
 	return pending, nil
 }
 
-// stalePrivateConversationIDs lists expired unreferenced private histories that are no record,
-// only conversationID's when it is not empty. Tags alone count as history older than any cutoff.
 func stalePrivateConversationIDs(ctx context.Context, db stateStoreDB, cutoff time.Time, conversationID string) ([]string, error) {
 	return queryStrings(ctx, db, `WITH private_entries AS (
     SELECT e.conversation_id, e.entry_timestamp FROM conversations c JOIN entries e USING (conversation_id) WHERE c.retention = 'private'
@@ -2171,8 +1979,6 @@ WHERE r.conversation_id IS NULL AND ($3 = '' OR h.conversation_id = $3)
 GROUP BY h.conversation_id HAVING MAX(h.entry_timestamp) < $1`, "stale private session conversations", cutoff.UTC().Format(time.RFC3339Nano), notePending, conversationID)
 }
 
-// deleteOwnedHistory shares full removal between retention and failed MCP creation.
-// Each table's family goes in one statement, since a conversation cannot go before its children.
 func deleteOwnedHistory(ctx context.Context, db stateStoreDB, conversationIDs []string) (int64, error) {
 	var deleted int64
 
@@ -2210,7 +2016,6 @@ type runLockWork interface {
 }
 
 func holdRunLock(ctx context.Context, db *sql.DB, work runLockWork) error {
-	// The opened DB and pglock's 20s lease/5s heartbeat defaults cannot fail validation.
 	client, _ := pglock.UnsafeNew(db, pglock.WithCustomTable(runLockTable))
 	if err := client.TryCreateTable(); err != nil {
 		return fmt.Errorf("acquire rocketclaw run lock: %w", err)
@@ -2233,8 +2038,6 @@ func openSessionDB(ctx context.Context, databaseURL string, logger *slog.Logger)
 	}
 
 	db := stdlib.OpenDB(*cfg)
-	// Reads run up to summaryReaders at once besides other work; reopening a connection for each, with
-	// its cold statement cache, costs more than keeping them idle.
 	db.SetMaxIdleConns(2 * summaryReaders)
 
 	if err := db.PingContext(ctx); err != nil {
@@ -2267,7 +2070,6 @@ func hideDSN(err error, databaseURL, op string) error {
 
 type memoryStore struct{ entries []harness.SessionEntry }
 
-// Append retains a completed turn in memory.
 func (m *memoryStore) Append(_ context.Context, entry *harness.SessionEntry) error {
 	m.entries = append(m.entries, *entry)
 	return nil

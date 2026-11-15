@@ -76,9 +76,6 @@ func TestRuntimeRecordsExplicitConversationsWithoutResettingSelection(t *testing
 	require.Equal(t, ThreadState{Agent: "selected", CreatedBy: "cron"}, thread)
 }
 
-// A hidden run reports to its destination: its tag tools act there, its reply reaches the
-// destination once, the destination shows its history without copies, and its schedule changes
-// take effect there only when its turn succeeds (AE2).
 func TestRuntimeProducerReportsToDestination(t *testing.T) {
 	t.Parallel()
 
@@ -159,7 +156,6 @@ func TestRuntimeProducerReportsToDestination(t *testing.T) {
 		producer.SlackReply = &protocol.SlackReplyTarget{MessageTS: "producer"}
 		require.NoError(t, rt.RunTurn(ctx, producer))
 		server.Close()
-		// The private producer's tag tools act on its human-visible destination, while its session ID stays private.
 		require.Equal(t, []string{strings.Join([]string{`{"tags":["Y-tag","red"]}`, `{"tags":["Y-tag","yellow"]}`, `{"tags":["Y-tag","yellow"]}`, `{"tags":["Y-tag"]}`, `{"tags":["Y-tag"]}`, `{"tags":["Y-tag","yellow"]}`, "X"}, "\n")}, tagOutputs)
 		synctest.Wait()
 		require.Equal(t, []string{"X", "X", "Y"}, delivered, "the reply reaches the destination once")
@@ -384,8 +380,6 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
 	require.NoError(t, root.Close())
 
-	// Keep the HTTP listener outside the bubble and close each connection so
-	// idle network reads do not prevent the delivery-boundary Wait calls.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Connection", "close")
@@ -422,7 +416,6 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 
 		var listeners errgroup.Group
 		listeners.Go(func() error {
-			// Holding the first turn's start keeps it running while the next steer arrives.
 			started := false
 
 			for event := range events {
@@ -539,7 +532,6 @@ func TestBridgeDrainSteersPreservesAcquiredContent(t *testing.T) {
 func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	t.Parallel()
 
-	// Database connections opened outside the bubble crash the test binary when used in it.
 	synctest.Test(t, func(t *testing.T) {
 		store := newTestSessionService(t)
 		target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
@@ -818,7 +810,6 @@ func TestRuntimeStartGoalRecordsGoalAndQueuesKickoff(t *testing.T) {
 
 	require.ErrorContains(t, rt.StartGoal(t.Context(), &protocol.InboundMessage{ConversationID: "web:missing"}, protocol.GoalRequest{Objective: "x"}), `conversation "web:missing" is not recorded`)
 
-	// A Slack thread opened in Web is not revert-eligible, so its goal starts through BeginGoal.
 	slackThread := protocol.SlackThreadConversationID("C123", "1.1")
 	require.NoError(t, store.UpsertThread(slackThread, ThreadState{Agent: "main"}))
 	manager.bridges[slackThread] = bridge
@@ -1122,8 +1113,6 @@ func TestRuntimeQueueEditRejectsPreservedSteer(t *testing.T) {
 	require.Equal(t, "original steer", bridge.steers[0].inbound.Text)
 }
 
-// A Web stash in a conversation Web cannot revert, such as a Slack thread, keeps its full request, so
-// once popped it runs as queued work that still names its writer.
 func TestRuntimePoppedWebStashRunsAsEnqueue(t *testing.T) {
 	t.Parallel()
 
@@ -1285,7 +1274,6 @@ func TestAttachSlack(t *testing.T) {
 	require.Same(t, slack, manager.slackLookups)
 }
 
-// The turn learns, after the calls' background results, which of its calls moved.
 func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	t.Parallel()
 
@@ -1298,7 +1286,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 				Code        string `json:"code"`
 				Description string `json:"description"`
 				Background  bool   `json:"background"`
-			}{code, "ask", false}) // Encoding strings and a bool cannot fail.
+			}{code, "ask", false})
 			task, _ := json.Marshal(struct {
 				Description  string `json:"description"`
 				Prompt       string `json:"prompt"`
@@ -1323,7 +1311,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 		}
 	})
 	releaseSubagent := sync.OnceFunc(func() { close(release) })
-	t.Cleanup(releaseSubagent) // Before the provider closes, which waits for the held request.
+	t.Cleanup(releaseSubagent)
 	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  task: allow\n  rocketclaw:\n    allow_background: allow\n    ask_user_question: allow\n---\nPrompt\n")
 
 	asked, withdrawn := make(chan string, 1), make(chan error, 1)
@@ -1332,11 +1320,11 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	asker := &userQuestionAskerMock{AskUserQuestionFunc: func(ctx context.Context, req *protocol.AskUserQuestionRequest) (protocol.AskUserQuestionAnswer, error) {
 		asked <- req.ID
 
-		<-ctx.Done() // The Web asker withdraws an unanswered question when its wait is cancelled.
+		<-ctx.Done()
 
 		withdrawn <- context.Cause(ctx)
 
-		<-question // Keep the execute pending until its call reports the move.
+		<-question
 
 		return protocol.AskUserQuestionAnswer{}, ctx.Err()
 	}}
@@ -1357,7 +1345,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	nt.service.jobs = registry
 
 	runTestManager(t, manager)
-	t.Cleanup(releaseQuestion) // Release before manager shutdown joins the pending call.
+	t.Cleanup(releaseQuestion)
 
 	rt := &Runtime{threads: manager, Sessions: nt.service, background: registry}
 	prompt := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "ship it", true)
@@ -1367,7 +1355,7 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	executeID, _, _ := strings.Cut(<-asked, "/host/")
 	taskID := strings.TrimSuffix(executeID, "call_e") + "call_t"
 
-	for range 2 { // The turn's calls and the subagent's run.
+	for range 2 {
 		nt.request(t)
 	}
 
@@ -1413,7 +1401,6 @@ func TestMoveToBackgroundWithdrawsQuestionAndMovesSubagent(t *testing.T) {
 	nt.waitIdle(t, manager, nt.conversationID)
 }
 
-// Nothing to move is a no-op, and a denied agent's running execute stays in the foreground.
 func TestMoveToBackgroundSkipsDeniedAgent(t *testing.T) {
 	t.Parallel()
 
@@ -1427,7 +1414,7 @@ func TestMoveToBackgroundSkipsDeniedAgent(t *testing.T) {
 		code := "def main():\n    bash(command=r'''touch " + gate + ".started; while [ ! -f " + gate + " ]; do sleep 0.05; done''')\n    return 'done'\n"
 		arguments, _ := json.Marshal(struct {
 			Code string `json:"code"`
-		}{code}) // Encoding a string cannot fail.
+		}{code})
 		_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_e","name":"execute","arguments":%q}]}`, arguments)
 	})
 	gate = filepath.Join(nt.cfg.Workspace, "gate")
@@ -1467,7 +1454,6 @@ func TestMoveToBackgroundSkipsDeniedAgent(t *testing.T) {
 	assert.Empty(t, backgroundRows(t, nt.service))
 }
 
-// A move racing a finish gives the call one outcome: its real result, or a background result whose note holds it.
 func TestMoveAsCallFinishes(t *testing.T) {
 	t.Parallel()
 
@@ -1510,7 +1496,6 @@ func TestMoveAsCallFinishes(t *testing.T) {
 	}
 }
 
-// Hidden runs' jobs are listed and stoppable at their destination; a killed job stays listed until its note is consumed.
 func TestRuntimeListsAndStopsBackgroundJobs(t *testing.T) {
 	t.Parallel()
 
@@ -1536,8 +1521,6 @@ func TestRuntimeListsAndStopsBackgroundJobs(t *testing.T) {
 	_, err = store.db.ExecContext(t.Context(), `UPDATE turns SET note = $1 WHERE input_id = 'turn-2/call/consumed' AND NOT takes_lane`, noteConsumed)
 	require.NoError(t, err)
 
-	// A reply settled stopped because the turn it waited for stopped keeps that turn's answer, and a bare
-	// stop's reply keeps none; nobody stopped either reply.
 	answered, bare := testReply("reports", "turn-3/call/r", "web:ops"), testReply("reports", "turn-3/call/s", "web:ops")
 	answered.result, bare.runnerID = "half done", "turn-9"
 
@@ -1571,7 +1554,6 @@ func TestRuntimeListsAndStopsBackgroundJobs(t *testing.T) {
 	require.Equal(t, append([]protocol.BackgroundJob{loop}, replies...), jobs, "a consumed note drops its job from the list")
 }
 
-// An attached call's start and finish flip movable, which no row change reports.
 func TestMovableChangeWakesWebViews(t *testing.T) {
 	t.Parallel()
 
@@ -1598,7 +1580,7 @@ func TestMovableChangeWakesWebViews(t *testing.T) {
 		require.NoError(t, listen.Wait())
 	})
 
-	<-changes // The listener's opening wake-up.
+	<-changes
 
 	next := func() protocol.ConversationChange {
 		select {

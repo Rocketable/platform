@@ -18,22 +18,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// ErrRestartRequested indicates rocketclaw should exit so a supervisor can restart it.
 var ErrRestartRequested = errors.New("restart requested")
 
-// errShutdown stops conversation work: bridges leave it for the next start, and
-// harness turns stop once their running calls finish.
 var errShutdown = fmt.Errorf("%w: %w", protocol.ErrBridgeStopped, harness.ErrShutdown)
 
 const (
-	stateRetention = 90 * 24 * time.Hour
-	// statePruneInterval separates background retention passes; statePrunePace
-	// is the pause after each deletion, a tenth of it after each check.
+	stateRetention     = 90 * 24 * time.Hour
 	statePruneInterval = time.Hour
 	statePrunePace     = time.Second
 )
 
-// FrontendAssembler constructs Slack and MCP frontends for a running backend.
 type FrontendAssembler interface {
 	Assemble(*Runtime) (<-chan struct{}, []func(context.Context) error, error)
 	ValidateAssets(*config.Config, string) error
@@ -85,7 +79,6 @@ func (s *runShutdown) start(reason string, restart bool) bool {
 	return started
 }
 
-// Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs.
 func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble FrontendAssembler, sandboxes sandboxPreparer) error {
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()

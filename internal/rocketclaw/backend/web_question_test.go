@@ -44,13 +44,13 @@ func TestWebQuestionIsListedAndTakesTheFirstAnswer(t *testing.T) {
 	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
 	req := &protocol.AskUserQuestionRequest{ID: "turn-1/call/c1", ConversationID: conversationID, Question: "Which?", Options: []protocol.AskUserQuestionOption{{Label: "A", Value: "a"}, {Label: "B", Value: "b"}}, Multiple: true}
 
-	listening, cancel := context.WithTimeout(t.Context(), 10*time.Second) // A missing notification fails, not hangs.
+	listening, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	changes, stop := iter.Pull2(service.Changes(listening, conversationID))
 	defer stop()
 
-	_, err, _ := changes() // The initial refresh.
+	_, err, _ := changes()
 	require.NoError(t, err)
 
 	answered := make(chan protocol.AskUserQuestionAnswer, 1)
@@ -113,7 +113,6 @@ func TestWebQuestionWithdrawsUnlessLeftForRestart(t *testing.T) {
 		}()
 
 		require.Eventually(t, func() bool {
-			// The row can be visible before the save returns; cancel only once the ask is waiting.
 			rt.questions.mu.Lock()
 			defer rt.questions.mu.Unlock()
 
@@ -138,7 +137,6 @@ func TestWebQuestionWithdrawsUnlessLeftForRestart(t *testing.T) {
 	assert.Len(t, pending, 1, "a turn left for restart keeps its question listed")
 	requireNotPending(t, rt.AnswerQuestion(t.Context(), conversationID, req.ID, protocol.AskUserQuestionAnswer{Custom: "early"}), conversationID, req.ID)
 
-	// An answer saved before the restart returns at once when the resumed turn asks again.
 	require.NoError(t, service.SaveTurnStep(t.Context(), conversationID, req.ID+"/answer", []byte(`{"selected":["yes"],"custom":"","source":"web"}`)))
 
 	answer, err := newTestWebQuestions(service).questions.AskUserQuestion(t.Context(), req)
@@ -150,9 +148,6 @@ func TestWebQuestionWithdrawsUnlessLeftForRestart(t *testing.T) {
 	assert.Empty(t, pending)
 }
 
-// A question the running turn of a listed session saves first reaches the people a turn end reaches: the people who
-// sent the turn or a steer it applied, its keepers, and everyone who sees it in Shared. A parked tab gets a quiet mark
-// and its park comes due at once, so the person's next poll ends it with a notification.
 func TestWebQuestionMarksItsReaders(t *testing.T) {
 	t.Parallel()
 
@@ -163,17 +158,16 @@ func TestWebQuestionMarksItsReaders(t *testing.T) {
 	const (
 		session = "web:asks"
 		turnID  = "turn-asks"
-		carol   = "carol@example.com" // parked the session, which she sees only in Shared
-		dave    = "dave@example.com"  // parked it with a mark
-		erin    = "erin@example.com"  // steered the running turn from the Web
-		frank   = "frank@example.com" // sent a steer the turn has not applied
+		carol   = "carol@example.com"
+		dave    = "dave@example.com"
+		erin    = "erin@example.com"
+		frank   = "frank@example.com"
 	)
 
 	require.NoError(t, service.UpsertThread(session, ThreadState{Agent: "main"}))
 	require.NoError(t, service.ShareTab(ctx, "main", sessionPath(session), nil))
 	require.NoError(t, startTurnDB(ctx, service.db, turnID, session, webMessage(protocol.InboundKindPrompt, "ask", bob)))
 
-	// Mid-turn, only the turn's own step lists the steers it applied.
 	require.NoError(t, saveTestTurn(ctx, service, session, turnID, []string{"s-erin"}, &harness.SessionEntry{Version: 1, Type: "turn", TurnID: turnID}))
 
 	steers, err := json.Marshal([]journaledSteer{{ID: "s-erin", Inbound: webMessage(protocol.InboundKindSteer, "also", erin)}, {ID: "s-frank", Inbound: webMessage(protocol.InboundKindSteer, "and", frank)}})
@@ -208,19 +202,15 @@ func TestWebQuestionMarksItsReaders(t *testing.T) {
 
 	assert.Equal(t, []string{alice + " loud", bob + " loud", carol + " loud", dave + " loud", erin + " loud", frank + " loud"}, attentionOn(t, service, session), "each park ends at its person's next poll")
 
-	// A resumed turn saves its unanswered question again, which marks no one again.
 	_, err = service.db.ExecContext(ctx, `DELETE FROM web_tab_attention`)
 	require.NoError(t, err)
 	assert.Empty(t, ask(session, turnID+"/call/c1"+webQuestionStep))
 
-	// A question saved in a hidden run marks no one, not even the person who sent its turn.
 	recordTestConversations(t, service, "main", map[string]ConversationKind{"run": KindExternalMCPRun})
 	require.NoError(t, startTurnDB(ctx, service.db, "turn-run", "run", webMessage(protocol.InboundKindPrompt, "ask", bob)))
 	assert.Empty(t, ask("run", "turn-run/call/c1"+webQuestionStep))
 }
 
-// A person's Web turn, here in a Slack-thread conversation, asks in Web, and its question
-// survives a restart: the resumed turn waits on it again and the Web answer continues the turn.
 func TestWebTurnQuestionContinuesAfterRestart(t *testing.T) {
 	t.Parallel()
 

@@ -21,8 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A decision provider's api_base_url, which includes the API version, can point at another service
-// speaking the same protocol.
 func TestDecidersUseConfiguredBaseURL(t *testing.T) {
 	t.Parallel()
 

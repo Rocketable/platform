@@ -30,8 +30,6 @@ func (b basicAuthTransport) RoundTrip(request *http.Request) (*http.Response, er
 	return response, nil
 }
 
-// An OpenCode session calls the bridge as its coding server, naming itself in _meta: its tools
-// act on its own RocketClaw session, a subagent's on its parent's, and pages need a space.
 func TestOpenCodeMCP(t *testing.T) {
 	t.Parallel()
 
@@ -46,7 +44,6 @@ func TestOpenCodeMCP(t *testing.T) {
 
 	box := config.OpenCodeConfig{URL: upstream.URL, Password: "pw"}
 	require.NoError(t, s.syncOpenCode(ctx, "box", box, &openCodeShells{}))
-	// ses_a and ses_c were born in Billing; ses_b, started in OpenCode, has no space.
 	_, err := s.db.ExecContext(ctx, `WITH space AS (INSERT INTO web_spaces (name) VALUES ('Billing') RETURNING id)
 UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_id IN ('opencode:box:ses_a', 'opencode:box:ses_c')`)
 	require.NoError(t, err)
@@ -109,7 +106,6 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 
 	assert.ElementsMatch(t, []string{"store", "read", "kv_store", "kv_read", "delete", "list", "get_tags", "toggle_tag"}, names)
 
-	// Tags: any tag, toggled on the calling session; a subagent acts for its parent.
 	assert.JSONEq(t, `{"tags":["customer"]}`, must("ses_a", "toggle_tag", map[string]string{"tag": " customer "}))
 	assert.JSONEq(t, `{"tags":["customer"]}`, must("ses_child", "get_tags", none))
 	assert.JSONEq(t, `{"tags":[]}`, must("ses_child", "toggle_tag", map[string]string{"tag": "customer"}))
@@ -122,7 +118,6 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 
 	assert.JSONEq(t, `{"tags":[]}`, must("ses_a", "get_tags", none))
 
-	// Refusals: no session ID, and sessions RocketClaw does not list, which it never creates.
 	out, failed := call("", "get_tags", none)
 	assert.True(t, failed)
 	assert.Contains(t, out, "ai.opencode/sessionID")
@@ -136,8 +131,6 @@ UPDATE conversations c SET space_id = space.id FROM space WHERE c.conversation_i
 	require.NoError(t, err)
 	assert.False(t, found)
 
-	// Pages live in the session's space; a session without one cannot store them. Its HTML file marks the Pages list
-	// of that space, not of another.
 	spaces, err := s.Spaces(ctx)
 	require.NoError(t, err)
 

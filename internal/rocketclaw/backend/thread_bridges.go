@@ -24,13 +24,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// errWriteDelivered refuses an agent write that a replayed call already delivered.
 var errWriteDelivered = errors.New("this write was already delivered")
 
-// inboundAgentMetadataKey names, in a task's write to a subagent session, the agent type its turn runs as.
 const inboundAgentMetadataKey = "rocketclaw_agent"
 
-// subagentPublisher delivers nothing: a subagent session's turns reach its parent through its history.
 type subagentPublisher struct{}
 
 func (subagentPublisher) PublishOutbound(context.Context, *protocol.OutboundMessage) error {
@@ -61,7 +58,6 @@ type threadBridgeManager struct {
 	store   *SessionService
 	factory bridgeFactory
 
-	// wake tells Run that a bridge is waiting for its loop.
 	wake chan struct{}
 
 	mu           sync.Mutex
@@ -71,14 +67,11 @@ type threadBridgeManager struct {
 	slackLookups slackLookup
 }
 
-// slackLookup gives session search the stored Slack room names and the Slack
-// user and group IDs whose names contain a needle.
 type slackLookup interface {
 	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
 	SlackTagsMatching(context.Context, string) []string
 }
 
-// noSlackLookups is the Slack lookup before Slack is attached: no room names, no tag IDs.
 type noSlackLookups struct{}
 
 func (noSlackLookups) SidebarChannelAgentChoices(context.Context, string) (name string, choices []string, err error) {
@@ -100,10 +93,6 @@ func newThreadBridgeManager(runtime *config.LockedConfig, store *SessionService,
 	}
 }
 
-// Run runs every bridge loop on ctx. Bridges start lazily, so Run starts each
-// loop when its bridge is created. Once ctx is done no loop starts: Run stops
-// every bridge, so later submissions are stored durably, and returns when every
-// loop has returned.
 func (m *threadBridgeManager) Run(ctx context.Context) {
 	var loops errgroup.Group
 
@@ -167,8 +156,6 @@ func (m *threadBridgeManager) Run(ctx context.Context) {
 	close(stopLog)
 }
 
-// StartActiveTurns starts every conversation worker that owns an unfinished
-// active turn; each runs that turn before any other work.
 func (m *threadBridgeManager) StartActiveTurns(ctx context.Context) error {
 	workers, err := queryStrings(ctx, m.store.db, `SELECT DISTINCT COALESCE(m.reports_to, a.conversation_id) FROM turns a
 LEFT JOIN conversations m ON m.conversation_id = a.conversation_id WHERE a.phase NOT IN ('waiting', 'done') AND a.takes_lane ORDER BY 1`, "active turn workers")
@@ -221,7 +208,6 @@ func (m *threadBridgeManager) StartPendingScheduledMessages(ctx context.Context)
 		}
 	}
 
-	// A finished hidden run's scheduled messages wait for its handoff, which startup resumes.
 	producers, err := queryStrings(ctx, m.store.db, `WITH `+remindersSQL+`
 SELECT DISTINCT r.conversation_id FROM reminders r JOIN conversations c USING (conversation_id) WHERE c.producer_inbound_json IS NOT NULL ORDER BY 1`, "pending producer IDs")
 	if err != nil {
@@ -237,8 +223,6 @@ SELECT DISTINCT r.conversation_id FROM reminders r JOIN conversations c USING (c
 	return nil
 }
 
-// StartActiveGoals continues each active goal, except where an unfinished turn
-// resumes first and continues the goal itself.
 func (m *threadBridgeManager) StartActiveGoals(ctx context.Context) error {
 	threads, err := m.store.ActiveGoalThreads()
 	if err != nil {
@@ -273,7 +257,6 @@ func (m *threadBridgeManager) StartActiveGoals(ctx context.Context) error {
 	return nil
 }
 
-// goalContinuation is the next turn of conversationID's active goal when no turn of it ends to continue it.
 func goalContinuation(conversationID string, goal *GoalState) *protocol.InboundMessage {
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "Continue the active goal loop.", false)
 	inbound.GoalAction, inbound.OriginHeader = protocol.GoalActionContinue, goal.Origin
@@ -284,20 +267,17 @@ func goalContinuation(conversationID string, goal *GoalState) *protocol.InboundM
 	return inbound
 }
 
-// The lines saying who paused or resumed a chat's agent, after that person's quoted name.
 const (
 	agentPausedLine  = " paused the agent. Until it is resumed, messages here are people talking to each other, not requests to you."
 	agentResumedLine = " resumed the agent."
 )
 
-// AgentPausedError refuses work that needs the agent of a paused Web chat now.
 type AgentPausedError struct{}
 
 func (AgentPausedError) Error() string {
 	return "the agent is paused in this chat"
 }
 
-// AgentPaused reports whether the agent of the Web chat conversationID is paused.
 func (r *Runtime) AgentPaused(ctx context.Context, conversationID string) (bool, error) {
 	var paused bool
 
@@ -306,10 +286,6 @@ func (r *Runtime) AgentPaused(ctx context.Context, conversationID string) (bool,
 	return paused, err
 }
 
-// SetAgentPaused pauses or resumes the agent of the Web chat conversationID for the person named by,
-// and adds a line to the chat saying so; asking for the state the chat already has changes nothing.
-// Frontends check that the chat may pause. A reply running when the agent pauses finishes without
-// taking more input. Resuming releases what the pause held: the chat's goal first, then its later work.
 func (r *Runtime) SetAgentPaused(ctx context.Context, conversationID, by string, paused bool) error {
 	text := strconv.Quote(by) + agentResumedLine
 	if paused {
@@ -344,7 +320,6 @@ func (r *Runtime) SetAgentPaused(ctx context.Context, conversationID, by string,
 	b.goalHeld = false
 	b.mu.Unlock()
 
-	// The pause dropped the goal's continuation, which has no row to pick again.
 	if held && found && goal.Status == GoalStatusActive && !running {
 		if err := b.Submit(ctx, goalContinuation(conversationID, &goal)); err != nil {
 			return fmt.Errorf("submit resumed goal continuation: %w", err)
@@ -354,10 +329,6 @@ func (r *Runtime) SetAgentPaused(ctx context.Context, conversationID, by string,
 	return b.pickLaterWork(ctx, false)
 }
 
-// recordAgentPauseLocked, under b.mu as admitWeb's transaction is, records whether the Web chat conversationID's
-// agent is paused, and adds line, the line saying who changed it, to its history, and reports whether the state
-// changed. Like a person's Web message it first settles the chat's staged undo, so the line stays in the history
-// the undo leaves. Pausing closes the running reply's input.
 func (r *Runtime) recordAgentPauseLocked(ctx context.Context, b *Bridge, conversationID string, paused bool, line *harness.SessionEntry) (bool, error) {
 	if b.historyMutation {
 		return false, errors.New("conversation history is busy")
@@ -405,19 +376,14 @@ func (r *Runtime) recordAgentPauseLocked(ctx context.Context, b *Bridge, convers
 	return true, nil
 }
 
-// PostPausedMessage posts a person's Web message into the paused Web chat it names at once, under their
-// name, and starts no turn. Like any Web message it first settles the chat's staged undo, and it marks the
-// chat's readers but its sender. Posting a message again changes nothing, and one sent into a chat whose
-// agent was resumed meanwhile runs as any Web message does.
 func (r *Runtime) PostPausedMessage(ctx context.Context, inbound *protocol.InboundMessage) error {
 	provenance := provenanceFromInbound(inbound)
 	header := provenanceHeader(&provenance)
-	// The message reads as a turn's prompt would, without the instructions to answer it.
 	_, body, _ := strings.Cut(buildPrompt(inbound, nil, false), "\n\n")
 
 	replay, _ := harness.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{harness.PromptInputMessage(&harness.PromptInput{
 		ID: inbound.Metadata["web_message_id"], Texts: []string{header + "\n\n" + body}, Header: header, Attachments: attachmentsFromInbound(inbound.Attachments),
-	})}) // A message of text, image and file strings cannot fail to encode.
+	})})
 
 	b, err := r.threads.recordedBridge(ctx, inbound.ConversationID)
 	if err != nil {
@@ -435,9 +401,6 @@ func (r *Runtime) PostPausedMessage(ctx context.Context, inbound *protocol.Inbou
 	return err
 }
 
-// postPausedMessageLocked, under b.mu as admitWeb's transaction is, settles the staged undo of the paused chat
-// inbound names, adds line, inbound's message, to its history, and marks the chat's readers but its sender. It
-// reports a chat whose agent is not paused, where the message goes to the agent instead.
 func (r *Runtime) postPausedMessageLocked(ctx context.Context, b *Bridge, inbound *protocol.InboundMessage, line *harness.SessionEntry) (bool, error) {
 	if b.historyMutation {
 		return false, errors.New("conversation history is busy")
@@ -497,8 +460,6 @@ func (r *Runtime) postPausedMessageLocked(ctx context.Context, b *Bridge, inboun
 	return false, nil
 }
 
-// SwitchConversationAgent persists selection and updates the existing live bridge.
-// Frontends validate their current human/producer policy before calling it.
 func (r *Runtime) SwitchConversationAgent(conversationID, agent string) (bool, error) {
 	if err := rejectShadowMutation(context.Background(), r.threads.store.db, conversationID); err != nil {
 		return false, err
@@ -512,8 +473,6 @@ func (r *Runtime) SwitchConversationAgent(conversationID, agent string) (bool, e
 	return switched, nil
 }
 
-// RunningAgent returns the agent of the turn running in conversationID, empty when none runs. A steer
-// joins that turn even when the conversation switched agents after it started.
 func (r *Runtime) RunningAgent(conversationID string) string {
 	r.threads.mu.Lock()
 	defer r.threads.mu.Unlock()
@@ -529,9 +488,6 @@ func (r *Runtime) RunningAgent(conversationID string) string {
 	return running.activeAttribution.Agent
 }
 
-// MentionThread treats a slack-thread: conversation that earlier versions created for a cron
-// report or bound to an External MCP session as a report thread; the prefix keeps cron's own
-// web: chats out.
 func (m *threadBridgeManager) MentionThread(target protocol.TextConversationTarget) (recorded, report bool, err error) {
 	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
 
@@ -548,9 +504,6 @@ func (m *threadBridgeManager) MentionThread(target protocol.TextConversationTarg
 	return recorded, thread.CreatedBy == ThreadCreatedByCron || paired, nil
 }
 
-// SubmitMention admits a Slack mention under its item ID, the input ID its active turn and
-// history record, so a redelivery that finds the ID waiting, running, or answered is refused.
-// The check, the conversation record, and the queue row share one history transaction.
 func (m *threadBridgeManager) SubmitMention(ctx context.Context, agent string, target protocol.TextConversationTarget, inbound *protocol.InboundMessage) (bool, error) {
 	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
 	id := "slack:" + inbound.SlackReply.ChannelID + ":" + inbound.SlackReply.MessageTS
@@ -609,7 +562,6 @@ SELECT count(s.*) > 0, q.position FROM queued q LEFT JOIN seen s ON TRUE GROUP B
 	return true, m.PickLaterWork(ctx, conversationID)
 }
 
-// WebURL links to conversationID at webOrigin.
 func (m *threadBridgeManager) WebURL(ctx context.Context, conversationID string) (string, error) {
 	origin, err := m.webOrigin(ctx)
 	if err != nil {
@@ -632,8 +584,6 @@ func (m *threadBridgeManager) InterruptThread(target protocol.TextConversationTa
 	return m.InterruptConversation(conversationID), nil
 }
 
-// StartQueuedConversations starts the conversations with queued work and those holding a parked stop
-// line, which their bridge posts when it starts (postStopLines), settling the stop's reply.
 func (m *threadBridgeManager) StartQueuedConversations(ctx context.Context) error {
 	conversationIDs, err := queryStrings(ctx, m.store.db, `SELECT conversation_id FROM turns WHERE phase = 'waiting' AND reason <> $1
 UNION SELECT conversation_id FROM steps WHERE starts_with(key, $2) ORDER BY conversation_id`, "queued conversation IDs", waitScheduled, stopLineStep)
@@ -693,9 +643,6 @@ func (m *threadBridgeManager) InterruptConversation(conversationID string) *prot
 	return managed.InterruptActiveTurn()
 }
 
-// webOrigin is the tsnet node's HTTPS origin once it serves. Before that it is
-// this machine's Tailscale IPv4 on the Web port, asking tailscale on every
-// call, so a changed address needs no restart.
 func (m *threadBridgeManager) webOrigin(ctx context.Context) (string, error) {
 	cfg := m.runtime.Clone()
 	if cfg.Web.Tsnet != nil && cfg.Web.Tsnet.Origin != "" {
@@ -785,9 +732,6 @@ func (m *threadBridgeManager) createSession(ctx context.Context, start *threadSt
 	return url, resumed, nil
 }
 
-// writeSession delivers an agent's write, inbound under queue item ID id, to the session target
-// without waiting for its turn, with reply, unless nil as for a task's prompt. It returns what became of
-// the write and, for a stop write, whether a turn was running.
 func (m *threadBridgeManager) writeSession(ctx context.Context, target, id string, mode sessionWriteMode, inbound *protocol.InboundMessage, reply *backgroundJob) (sessionWriteOutcome, bool, error) {
 	b, err := m.recordedBridge(ctx, target)
 	if err != nil {
@@ -822,11 +766,6 @@ func (m *threadBridgeManager) writeSession(ctx context.Context, target, id strin
 	return outcome, running, m.PickLaterWork(ctx, target)
 }
 
-// admitAgentWrite stores inbound, an agent's write, as a Thread Queue row first, so it outlives a
-// staged revert and a replayed write adds nothing, and a steer joins the running turn while its input
-// is open. A stop write's row goes first, and queued requests already handed to the loop wait behind
-// it, as StageRevert's do; it returns the loop's other requests to resubmit. A session write's reply, a
-// running job of its caller targeting this session, is recorded with the row.
 func (b *Bridge) admitAgentWrite(ctx context.Context, mode sessionWriteMode, inbound *protocol.InboundMessage, reply *backgroundJob) (outcome sessionWriteOutcome, resubmit []bridgeRequest, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -906,18 +845,12 @@ func (b *Bridge) admitAgentWrite(ctx context.Context, mode sessionWriteMode, inb
 	return outcome, resubmit, nil
 }
 
-// releaseHeldInputs releases the inputs stopped parents held in conversationID's queue (awaitSubagent): held
-// rows whose inbound is still an enqueue, unlike a stash's. At position, a newer write's, they run before it,
-// as older rows; with no position they keep theirs. It returns them in queue order.
 func releaseHeldInputs(ctx context.Context, db stateStoreDB, conversationID string, position *int) ([]protocol.ThreadQueueItem, error) {
 	return queryRows(ctx, db, `WITH released AS (UPDATE turns SET reason = $3, delivery = $4, position = COALESCE($5, position)
     WHERE conversation_id = $1 AND phase = 'waiting' AND reason = $2 RETURNING `+waitingColumns+`)
 SELECT * FROM released ORDER BY position, created_at_unix_ns, input_id COLLATE "C"`, "released held inputs", scanThreadQueueItem, conversationID, waitHeld, waitQueued, protocol.InboundKindEnqueue, position)
 }
 
-// releaseHeld releases the inputs stopped parents held in b's queue (releaseHeldInputs) for a person's
-// write, which reaches the loop directly, and hands them to the loop first. Later work would hand over
-// only the queue's head, and only once the loop holds no request, so after that write.
 func (b *Bridge) releaseHeld(ctx context.Context) error {
 	held, err := releaseHeldInputs(ctx, b.config.SessionService.db, b.config.ConversationID, nil)
 	for i := range held {
@@ -927,8 +860,6 @@ func (b *Bridge) releaseHeld(ctx context.Context) error {
 	return err
 }
 
-// stopSession stops target's goal and current turn without waiting, as Slack's stop does, and reports
-// whether a turn was running.
 func (m *threadBridgeManager) stopSession(target string) (bool, error) {
 	if err := m.store.StopGoal(target); err != nil {
 		return false, fmt.Errorf("stop goal: %w", err)
@@ -937,16 +868,12 @@ func (m *threadBridgeManager) stopSession(target string) (bool, error) {
 	return m.InterruptConversation(target) != nil, nil
 }
 
-// noteReady has conversationID's bridge, started when needed, deliver a new Completion Note: a
-// running turn takes it at its next step, and otherwise the bridge's later work wakes the conversation.
 func (m *threadBridgeManager) noteReady(conversationID string) {
 	if err := m.PickLaterWork(context.Background(), conversationID); err != nil {
 		m.log.Warn("pick later work for a background note", "conversation_id", conversationID, "error", err)
 	}
 }
 
-// continueSubagent answers, after a restart, the task job awaiting a turn of its subagent session, once
-// that turn ends, as the job's task call would have.
 func (m *threadBridgeManager) continueSubagent(ctx context.Context, job *backgroundJob) (string, error) {
 	bridge, err := m.recordedBridge(ctx, job.conversationID)
 	if err != nil {
@@ -990,7 +917,6 @@ func (m *threadBridgeManager) queueItems(conversationID string) ([]protocol.Thre
 		return nil, fmt.Errorf("list thread queue: %w", err)
 	}
 
-	// Shutdown stores other system prompts here; agent writes carry their sender.
 	items = slices.DeleteFunc(items, func(item protocol.ThreadQueueItem) bool {
 		return item.Inbound != nil && !item.Inbound.Human && item.Inbound.Metadata[protocol.InboundSenderSessionMetadataKey] == ""
 	})
