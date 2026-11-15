@@ -235,7 +235,6 @@ func TestStartSessionPromptServerUsesStatelessProtocol(t *testing.T) {
 	assert.Equal(t, "reply", content.Text)
 }
 
-// Older callers still send slack_channel; any value is accepted and ignored.
 func TestStartSessionPromptServerIgnoresSlackChannel(t *testing.T) {
 	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error) {
 		return SessionResult{Answer: "reply"}, nil
