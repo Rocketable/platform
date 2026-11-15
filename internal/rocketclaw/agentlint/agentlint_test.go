@@ -206,7 +206,6 @@ editor
 	}, result.Findings)
 }
 
-// An easy agent writes its workingDirectory, so RC010 reports one that holds an agent file.
 func TestLintEasyWorkingDirectory(t *testing.T) {
 	t.Setenv("ROCKETCLAW_CONVERSATION_ID", "")
 
@@ -243,7 +242,6 @@ func TestLintSudo(t *testing.T) {
 	}, result.Findings)
 }
 
-// Lint reads the frontmatter the runtime loaded, so agents the runtime accepts lint too.
 func TestLintAcceptsAgentsTheRuntimeLoads(t *testing.T) {
 	runtimeRoot := t.TempDir()
 	writeAgent(t, runtimeRoot, "colon.md", "---\ndescription: Use when: tests fail\n---\ncolon\n")
@@ -265,7 +263,6 @@ reasoningEffort: xhigh
 expensive
 `)
 	writeAgent(t, runtimeRoot, "suffix.md", "---\ndescription: suffix\n---\nsuffix\n", "gpt-6.1-sol#xhigh")
-	// writeAgent quotes the model, so a model line comment needs the raw file.
 	require.NoError(t, os.WriteFile(filepath.Join(runtimeRoot, "agents", "approved.md"), []byte("---\nmodel: gpt-6.1-sol#xhigh #nolint RC008: approved for hard reasoning\ndescription: approved\n---\napproved\n"), 0o644))
 
 	result, err := Lint(runtimeRoot, new(config.Config))
@@ -332,7 +329,6 @@ permission:
 ---
 hub
 `)
-	// task never runs an easy agent, and an easy agent's own task edges are models, not agents.
 	writeAgent(t, runtimeRoot, "easy.md", "---\nmode: easy\nspace: Ops\nworkingDirectory: data\n---\neasy\n")
 
 	dot, err := AgentGraphDOT(runtimeRoot, &config.Config{})
