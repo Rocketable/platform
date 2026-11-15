@@ -66,7 +66,6 @@ function MessageScrollerItem({
   scrollAnchor = false,
   ...props
 }: React.ComponentProps<typeof MessageScrollerPrimitive.Item>) {
-  // Measure every turn: estimated off-screen heights shift manual jump targets.
   return (
     <MessageScrollerPrimitive.Item
       data-slot="message-scroller-item"
