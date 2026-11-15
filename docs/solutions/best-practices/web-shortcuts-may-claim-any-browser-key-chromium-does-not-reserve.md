@@ -35,9 +35,9 @@ The repository already guarded the opposite case. A comment and assertion in `in
 
 **A Chrome extension bound to the same key still wins.** Its accelerators run at high priority before the page. Firefox and Safari were not checked.
 
-**Claim the key in a capture-phase window listener, and claim it even when there is nothing to do.** RocketClaw's Cmd/Ctrl+Shift+A and S (`AttentionButton`, `internal/rocketclaw/web/src/ui.tsx:1522-1538`) and Cmd/Ctrl+Shift+B (`PanelToggle`, `ui.tsx:840-859`, added with this learning) call `preventDefault()` and `stopPropagation()` before checking whether they can act. A key that sometimes falls through to the browser would sometimes open the bookmarks bar instead, which is harder to learn than a key that does nothing.
+**Claim the key in a capture-phase window listener, and claim it even when there is nothing to do.** RocketClaw's Cmd/Ctrl+Shift+A and S (`AttentionButton` in `internal/rocketclaw/web/src/ui.tsx`) and Cmd/Ctrl+Shift+B (`PanelToggle`, same file, added with this learning) call `preventDefault()` and `stopPropagation()` before checking whether they can act. A key that sometimes falls through to the browser would sometimes open the bookmarks bar instead, which is harder to learn than a key that does nothing.
 
-**Do not use a Playwright test to decide this.** Playwright sends keys with CDP `Input.dispatchKeyEvent` and no native key code, so Chrome delivers them straight into the page and its own shortcuts never see them. A test can only show that the page handler runs. The new Cmd/Ctrl+Shift+B assertions in `internal/rocketclaw/web/src/github-pr.browser.test.ts:513-518` cover the handler, not Chrome.
+**Do not use a Playwright test to decide this.** Playwright sends keys with CDP `Input.dispatchKeyEvent` and no native key code, so Chrome delivers them straight into the page and its own shortcuts never see them. A test can only show that the page handler runs. The Cmd/Ctrl+Shift+B assertions in `internal/rocketclaw/web/src/github-pr.browser.test.ts` (after the comment "Cmd/Ctrl+Shift+B does what the button does") cover the handler, not Chrome.
 
 ## Why This Matters
 

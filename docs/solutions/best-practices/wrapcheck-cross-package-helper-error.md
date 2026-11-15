@@ -32,7 +32,7 @@ This landed from [PR #27](https://github.com/Rocketable/platform/pull/27). That 
 
 The same boundary shows up wherever backend returns another package's error. `holdRunLock` returns the error from pglock's `Client.Do`, and wraps it with no prefix because the caller adds none:
 
-```2101:2106:internal/rocketclaw/backend/store.go
+```2219:2224:internal/rocketclaw/backend/store.go
 	err := client.Do(ctx, runLockName, func(lockCtx context.Context, _ *pglock.Lock) error {
 		return work.Run(lockCtx)
 	})
@@ -43,9 +43,9 @@ The same boundary shows up wherever backend returns another package's error. `ho
 
 `fmt.Errorf("%w", err)` adds no prefix. `Error()` stays the same as the wrapped error; `errors.Is` / `errors.As` still work. wrapcheck fails on an unwrapped cross-package `return err`. The repo wrapping convention is `%w`, not a wrapcheck check for the `%w` verb itself.
 
-wrapcheck is enabled for `internal/rocketclaw/...` (`internal/rocketclaw/.golangci.yml:49`; `internal/rocketclaw/Makefile:25` lints `./...`, which excludes `cmd/rocketclaw`). Default wrapcheck does not report same-package returns. It does report errors returned from another package. Do not add `//nolint` or disable wrapcheck without human approval (`AGENTS.md`).
+wrapcheck is enabled for `internal/rocketclaw/...` (`internal/rocketclaw/.golangci.yml:49`; `internal/rocketclaw/Makefile:70` lints `./...`, which excludes `cmd/rocketclaw`). Default wrapcheck does not report errors from same-package function calls. It does report errors returned from another package, and from exported interface methods even in the same package. Do not add `//nolint` or disable wrapcheck without human approval (`AGENTS.md`).
 
-`runServe` calls `loadRuntimeConfig` (`cmd/rocketclaw/serve.go:33`), which already lives in package `main` (`cmd/rocketclaw/main.go:82`), and wraps with a real prefix: `fmt.Errorf("load config: %w", err)`.
+`runServe` calls `loadRuntimeConfig` (`cmd/rocketclaw/serve.go:34`), which already lives in package `main` (`cmd/rocketclaw/main.go:87`), and wraps with a real prefix: `fmt.Errorf("load config: %w", err)`.
 
 ## Guidance
 
@@ -79,7 +79,7 @@ Cross-package: backend must wrap pglock's error, even with no extra text (`holdR
 
 Same-package reuse of `loadRuntimeConfig`, with a real wrap prefix at the serve call site:
 
-```33:36:cmd/rocketclaw/serve.go
+```34:37:cmd/rocketclaw/serve.go
 	selected, cfg, err := loadRuntimeConfig(*secretsARN)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)

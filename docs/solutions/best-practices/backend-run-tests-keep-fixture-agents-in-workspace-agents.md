@@ -27,18 +27,18 @@ tags: [test-fixtures, agents, runtime-dir, skel, backend-run, browser-tests, lis
 
 What did not explain it:
 
-- **Agents are read once and cached.** They are not. `ListAgents` reloads them from disk on every call (`internal/rocketclaw/frontend/rpc/server.go:1204`), from the runtime directory's `agents` folder (`internal/rocketclaw/backend/bridge.go:2789`).
+- **Agents are read once and cached.** They are not. `ListAgents` reloads them from disk on every call (`internal/rocketclaw/frontend/rpc/server.go:1340`, through `backend.LoadRuntimeDefinitions`), from the runtime directory's `agents` folder (`internal/rocketclaw/backend/bridge.go:2891`).
 - **The fixture's `main.md` works, so the folder is right.** It never worked. A debug print of the remote's `ListAgents` reply showed one agent, the built-in `main`, with the built-in description, not "Remote browser fixture". The test had passed only because the built-in `main` exists.
 
 ## Guidance
 
-`backend.Run` rebuilds the runtime directory at startup, so anything a test writes there first is gone by the time the server answers. Startup calls `skel.SyncInWithOverlays` (`internal/rocketclaw/backend/app.go:183`), which:
+`backend.Run` rebuilds the runtime directory at startup, so anything a test writes there first is gone by the time the server answers. Startup calls `skel.SyncInWithOverlays` (`internal/rocketclaw/backend/app.go:182`), which:
 
 1. unpacks the built-in agents and cron into the workspace's own `agents/` and `cron/` without overwriting existing files (`internal/rocketclaw/skel/skel.go:78`, `overwrite` is `false`);
 2. empties the runtime directory except a short keep list (`.rocketcode`, `attachments`, `sandbox`, `uploads`, `auth.json`, `auth.json.lock`, `.auth.json-*` files, and, at startup only, the overlay clones; `resetRuntimeDirectory`, `skel.go:595`, called at `skel.go:88`);
 3. rebuilds it from the built-in assets, then configured overlays, then last the workspace's `agents`, `skills`, `cron`, `scripts` and `workflows` directories, each overwriting what came before (`SyncEffectiveRuntimeAssets` at `skel.go:96`, `overlayWorkspaceIn` at `skel.go:401`).
 
-A reload (`skel.ReplaceRuntimeAssetsAfterValidation`, `internal/rocketclaw/backend/runtime.go:63`) runs steps 2 and 3 through a validated staging copy, so it wipes runtime-only fixtures too.
+A reload (`skel.ReplaceRuntimeAssetsAfterValidation`, `internal/rocketclaw/backend/runtime.go:67`) runs steps 2 and 3 through a validated staging copy, so it wipes runtime-only fixtures too.
 
 So when a test runs `backend.Run`, write fixture agents where startup reads them from: `<workspace>/agents/<name>.md`. Because step 1 keeps an existing workspace file and step 3 copies the workspace's `agents/` last, a fixture `agents/main.md` also replaces the built-in `main`. `pages_test.go` already writes its `main.md` there.
 
@@ -48,7 +48,7 @@ Tests that build the RPC `Server` directly, without `backend.Run`, can keep writ
 
 The failure is silent. A wiped fixture agent leaves the built-in agents in place, so a test that only needs some agent keeps passing and nobody notices its fixture does nothing. The cost shows up later, when someone needs the fixture to matter and spends time on caching, request paths and the Web code before suspecting the fixture.
 
-Two `backend.Run` fixtures still write the runtime directory and are wiped the same way: `internal/rocketclaw/frontend/rpc/live_test.go:98`–`99` ("Owned browser fixture") and `live_test.go:526`–`527` ("Revert fixture"). Their tests pass on the built-in `main`. Move them to `agents/` if either test ever depends on what its `main.md` says.
+Two `backend.Run` fixtures still write the runtime directory and are wiped the same way: `internal/rocketclaw/frontend/rpc/live_test.go:99`–`100` ("Owned browser fixture") and `live_test.go:529`–`530` ("Revert fixture"). Their tests pass on the built-in `main`. Move them to `agents/` if either test ever depends on what its `main.md` says.
 
 ## When to Apply
 
@@ -64,7 +64,7 @@ require.NoError(t, root.MkdirAll(filepath.Join(cfg.RuntimeDirName(), "agents"), 
 require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "main.md"), fixture, 0o600))
 ```
 
-After (`internal/rocketclaw/frontend/rpc/remote_test.go:66`–`71`, abridged):
+After (`internal/rocketclaw/frontend/rpc/remote_test.go:69`–`74`, abridged):
 
 ```go
 // Startup builds the runtime agents from the workspace's agents directory.

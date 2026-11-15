@@ -45,10 +45,7 @@ Nothing in either failure names the other run, so both looked like flaky tests.
 
 ## Guidance
 
-Both are fixed in `internal/rocketclaw/Makefile`:
-
-- `coverage-profile` keeps the ID that `docker run -d` prints instead of choosing a name (`:183`). A failed `docker run` leaves no ID, so the exit trap removes nothing (`:176`).
-- On a Mac, each workspace gets `/sandbox/<its path with / as _>` as `SANDBOX_TEST_DIR` (`:12`, `:27`). Only the package cache, `/sandbox/packages`, is shared, so a workspace's first run builds its image without downloading the packages again. Each run writes its workspace's path to `.workspace` in its folder and removes folders whose workspace no longer exists (`:105`). Folders without a `.workspace` file, such as the hand-made ones above, are left alone.
+Both are fixed in `internal/rocketclaw/Makefile`, whose comments say why (`:9`–`11`, `:170`–`171`): `coverage-profile` keeps the ID `docker run -d` prints (`:183`), and each workspace on a Mac gets its own `SANDBOX_TEST_DIR` under `/sandbox` (`:12`, `:27`), named after its path with `/` as `_`. A failed `docker run` leaves no ID, so the exit trap removes nothing (`:176`). Folders without a `.workspace` file, such as the hand-made ones above, are left alone (`:105`–`106`).
 
 Concurrent runs no longer need their own `ROCKETCLAW_TEST_DATABASE_URL`. A database of your own still works, for example to give it more shared memory (`docs/solutions/best-practices/test-postgres-container-needs-larger-shm.md`): the recipe starts no container when the URL is set (`:181`). Start it on the container's Docker context and pass the URL as a make argument, since the container receives only those:
 
@@ -62,7 +59,7 @@ make test ROCKETCLAW_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:$
 $D rm -f -v "$N"
 ```
 
-`127.0.0.1` works because the test container runs with `--network host` inside the same VM (`:26`).
+`127.0.0.1` works because the test container runs with `--network host` inside the same VM (`:25`).
 
 Keep the rule when changing these recipes: a name or path on the shared daemon or volume must be unique per run or per workspace. A PID from inside the container is neither, and neither is a fixed path under `/sandbox`.
 

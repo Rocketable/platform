@@ -22,7 +22,7 @@ tags: [web, tabs, tab-groups, sticky-groups, delete-group, placeholder, web-tabs
 
 ## Context
 
-A Web tab group has no position or space of its own. The strip is one ordered list of tabs, and a group is drawn where its first member is (`arrange`, `internal/rocketclaw/web/src/ui.tsx:981`). Its space is its members' space. The saved form drops every group without members except the reserved `shared` and `parked` entries (`savedState`, `ui.tsx:1052-1054`). So, with nothing else, a group vanishes when its last tab closes or leaves it.
+A Web tab group has no position or space of its own. The strip is one ordered list of tabs, and a group is drawn where its first member is (`arrange`, `internal/rocketclaw/web/src/ui.tsx:1006`). Its space is its members' space. The saved form drops every group without members except the reserved `shared` and `parked` entries (`savedState`, `ui.tsx:1077-1080`). So, with nothing else, a group vanishes when its last tab closes or leaves it.
 
 On 2026-11-03 "Keep group when empty" made that optional. It needed an empty group to stay exactly where it was, across reloads and devices. Two designs were weighed:
 
@@ -33,20 +33,20 @@ On 2026-11-11 the person asked for every group to be sticky: a group no longer g
 
 ## Guidance
 
-Every group holds one placeholder entry among the person's tabs, with path `group:<id>` and `group` set to the group's id (`keeper`/`isKeeper`, `ui.tsx:978`). A group exists as long as that entry, or any member, is in the tab list:
+Every group holds one placeholder entry among the person's tabs, with path `group:<id>` and `group` set to the group's id (`keeper`/`isKeeper`, `ui.tsx:1003`). A group exists as long as that entry, or any member, is in the tab list:
 
-- **Add to new group** creates the group and inserts its placeholder after the new members with the existing `join` (`ui.tsx:1388-1391`).
-- `savedTabs()` adds a placeholder after the last member of any saved group that lacks one (`ui.tsx:1029-1032`). This upgrades groups saved while keeping was optional, the first time a window loads them. A group with no members and no placeholder was already dropped by `savedState`, so nothing restores it.
-- **Delete group** is now the only way a group goes. It closes the group's tabs by the usual close rules, then filters out the placeholder (`ui.tsx:1407-1410`). **Ungroup** and **Close group** leave the empty group in place (`ui.tsx:1405-1406`). The old **Keep group when empty** / **Don't keep group when empty** commands are gone.
+- **Add to new group** creates the group and inserts its placeholder after the new members with the existing `join` (`ui.tsx:1417-1422`).
+- `savedTabs()` adds a placeholder after the last member of any saved group that lacks one (`ui.tsx:1054-1057`). This upgrades groups saved while keeping was optional, the first time a window loads them. A group with no members and no placeholder was already dropped by `savedState`, so nothing restores it.
+- **Delete group** is now the only way a group goes. It closes the group's tabs by the usual close rules, then filters out the placeholder (`ui.tsx:1436-1439`). **Ungroup** and **Close group** leave the empty group in place (`ui.tsx:1434-1435`). The old **Keep group when empty** / **Don't keep group when empty** commands are gone.
 - The placeholder saves, syncs, and three-way merges like any tab, so neither change added a proto field, Go field, column, or migration.
 
 Because the entry is not a real location, anything that treats tabs as pages must skip it. In the Web:
 
-- `strip` holds the current space's unparked tabs including placeholders, for drawing headers and as drop targets. `shown` leaves placeholders out, and closing, stepping (Cmd/Ctrl+[ and ]), selection, the keyboard stop, and the tab menu's commands read `shown` (`ui.tsx:1251`). `spaceTabs`, which bulk closes read, leaves them out too (`ui.tsx:1253`).
-- `entry()` skips placeholders when picking a space's first tab (`ui.tsx:1012-1014`).
-- `savedTabs()` drops a placeholder whose group is gone (`ui.tsx:1028`). Without that filter the orphan would keep being saved, and the strip would throw reading `group!.collapsed` on a group that no longer exists.
-- Close group needs no filter, because `close()` only acts on paths in `shown` or in Parked (`ui.tsx:1258`). Delete group has to remove the placeholder itself for the same reason.
-- Only the strip draws the placeholder: an expanded group with no shown members shows a "New session" row that starts a session in the group (`ui.tsx:1734`). A group whose only other tab is parked keeps its header for the same reason.
+- `strip` holds the current space's unparked tabs including placeholders, for drawing headers and as drop targets. `shown` leaves placeholders out, and closing, stepping (Cmd/Ctrl+[ and ]), selection, the keyboard stop, and the tab menu's commands read `shown` (`ui.tsx:1276`). `spaceTabs`, which bulk closes read, leaves them out too (`ui.tsx:1278`).
+- `entry()` skips placeholders when picking a space's first tab (`ui.tsx:1037-1040`).
+- `savedTabs()` drops a placeholder whose group is gone (`ui.tsx:1053`). Without that filter the orphan would keep being saved, and the strip would throw reading `group!.collapsed` on a group that no longer exists.
+- Close group needs no filter, because `close()` only acts on paths in `shown` or in Parked (`ui.tsx:1283`). Delete group has to remove the placeholder itself for the same reason.
+- Only the strip draws the placeholder: an expanded group with no shown members shows a "New session" row that starts a session in the group (`ui.tsx:1889-1894`). A group whose only other tab is parked keeps its header for the same reason.
 
 **The Go side mostly treats the placeholder as an ordinary row.** `SaveTabState` stores it like any other tab, and `TabConversation("group:…")` is empty, so the row has no conversation (`internal/rocketclaw/backend/store_dao.go:595`). `TabState` returns it in `Tabs`. Two places skip it explicitly: `SaveTabState` does not record a vanished `group:` row as a recently closed tab (`store_dao.go:741`), and `changeAttention` refuses attention on `group:` paths (`internal/rocketclaw/frontend/rpc/tabs.go:178`). Server code that lists a person's open tabs as pages, or counts them, must skip paths starting with `group:` in the same way.
 
@@ -54,7 +54,7 @@ Because the entry is not a real location, anything that treats tabs as pages mus
 
 A new consumer of `state.tabs`, `saved.state.tabs`, `backend.TabState.Tabs` or `web_tabs` that does not skip placeholders shows a bogus tab named after `group:<id>`, navigates to it, or counts it. Nothing fails loudly. For example, `entry()` picked a space's first tab from `state.tabs`; without its filter, entering a space whose first strip item is an empty group would navigate to `group:<id>`. Now that every group has a placeholder, this hits every person who uses groups, not only those who chose to keep one.
 
-Tests feel this too. When groups became sticky, browser tests that compared the saved tab list exactly failed with "the saved tab state never matched", because the list now held `group:<id>` rows. They were fixed either by expecting the placeholder or by filtering `group:` paths out before comparing (`internal/rocketclaw/web/src/tabs.browser.test.ts:930`). Strip-order assertions also changed, because an emptied group's header now stays.
+Tests feel this too. When groups became sticky, browser tests that compared the saved tab list exactly failed with "the saved tab state never matched", because the list now held `group:<id>` rows. They were fixed either by expecting the placeholder or by filtering `group:` paths out before comparing (`internal/rocketclaw/web/src/tabs.browser.test.ts:966`). Strip-order assertions also changed, because an emptied group's header now stays.
 
 A browser window still running a build from before placeholders shows them as odd extra tabs until it reloads.
 
@@ -72,23 +72,23 @@ A browser window still running a build from before placeholders shows them as od
 Reading the current space's real tabs in the Web:
 
 ```ts
-// ui.tsx:1251
+// ui.tsx:1276
 const strip = state.tabs.filter((tab) => tab.space === state.space && !parked.has(tab.path)), shown = strip.filter((tab) => !isKeeper(tab));
 ```
 
 Deleting a group, which must drop the placeholder itself:
 
 ```ts
-// ui.tsx:1407-1410
+// ui.tsx:1436-1439
 { key: "delete", label: "Delete group", run: () => {
   close(spaceTabs.flatMap((tab) => tab.group === id ? [tab.path] : []));
   update((tabs) => tabs.filter((tab) => tab.path !== keeper(id)));
 } },
 ```
 
-The browser test "an emptied group stays in place through reload, offers New session, takes dropped tabs, and goes only when deleted, with its tabs" (`tabs.browser.test.ts:1108`) covers emptying by close and by drag-out, reload, dropping a tab on the empty group, Close group, the New session row, and Delete group. "tab group editor moves New session in, ungroups, closes, and deletes" (`tabs.browser.test.ts:1043`) covers the editor's commands. The Park test at `tabs.browser.test.ts:1974` covers a group saved without a placeholder getting one on load.
+The browser test "an emptied group stays in place through reload, offers New session, takes dropped tabs, and goes only when deleted, with its tabs" (`tabs.browser.test.ts:1034`) covers emptying by close and by drag-out, reload, dropping a tab on the empty group, Close group, the New session row, and Delete group. "tab group editor moves New session in, ungroups, closes, and deletes; …" (`tabs.browser.test.ts:969`) covers the editor's commands. The Park test at `tabs.browser.test.ts:1906` (lines 1931-1939) covers a group saved without a placeholder getting one on load.
 
-The optional design shipped in PR #933. Sticky groups and Delete group were not yet committed or opened as a PR when this was updated, 2026-11-11.
+The optional design shipped in PR #933. Sticky groups and Delete group landed in commit "keep every tab group and auto-park sessions on send" (2026-11-11).
 
 ## Related
 

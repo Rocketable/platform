@@ -31,11 +31,11 @@ tags:
 
 The Web **⋯ → Pull requests** pane, added in PR #1071, found nothing for a Remote OpenCode Session that had opened a stack of seven PRs (#1097 to #1103). It had two independent causes. **Current checkout** asked `gh` for the current branch's PR, and a colocated jj workspace has no current Git branch. **Created in this thread** read only the thread's own session, while a subagent had opened the PRs in its own child session, using a multi-line script that the pane rejected on purpose.
 
-The fix changes `internal/rocketclaw/web/src/opencode-pr.ts` and `internal/rocketclaw/web/src/thread-pr.ts`. It was uncommitted and unmerged as of this writing.
+The fix changes `internal/rocketclaw/web/src/opencode-pr.ts` and `internal/rocketclaw/web/src/thread-pr.ts`, in the commit "internal/rocketclaw/web: show and follow a thread's pull requests".
 
 ## Symptoms
 
-- The pane showed the "gh login" error from `internal/rocketclaw/web/src/thread-pr-panel.tsx:40`. The login was fine.
+- The pane showed the "gh login" error from `internal/rocketclaw/web/src/thread-pr-panel.tsx:69`. The login was fine.
 - `opencode-pr.ts` counts only `no pull requests found for branch` as a normal "no PR" answer (`opencode-pr.ts:48`). Every other failure becomes the same login message (`opencode-pr.ts:3`, `:49`), so the real `gh` error stayed hidden.
 - In any colocated jj workspace, including the one where this doc was written, `GH_PROMPT_DISABLED=1 gh pr view --json url` exits 1 with `could not determine current branch: failed to run git: not on any branch`. This happens even when a jj bookmark points at `@`.
 - **Created in this thread** was empty although the thread's history showed the PR links.
@@ -66,7 +66,7 @@ await run(source, `gh pr view $(git symbolic-ref -q HEAD >/dev/null || jj log --
 - Without jj, the substitution is empty and `gh` fails as before.
 - `--ignore-working-copy` keeps the lookup from snapshotting another thread's working copy.
 
-**Created in this thread** walks the session tree one level at a time. For each session it reads that session's messages and lists its child sessions with `GET <api>/session?parentID=<id>`, paged by cursor (`thread-pr.ts:40-64`). The listing follows the upstream client's `listChildren` (`internal/rocketclaw/oc/packages/client/src/solid/data.ts:604-612`). `createdPRs` now accepts scripts, with the per-line quote pairing and the scoped `--dry-run` check described above.
+**Created in this thread** walks the session tree one level at a time. For each session it reads that session's messages and lists its child sessions with `GET <api>/session?parentID=<id>`, paged by cursor (`thread-pr.ts:31-70`). The listing follows the upstream client's `listChildren` (`internal/rocketclaw/oc/packages/client/src/solid/data.ts:606-612`). `createdPRs` now accepts scripts, with the per-line quote pairing and the scoped `--dry-run` check described above.
 
 The tests pin both halves:
 
@@ -78,7 +78,7 @@ On the real data, the lookup found #1103 under `sh` and `zsh`, and `createdPRs` 
 ## Why This Works
 
 - **Current checkout:** jj keeps Git on a detached HEAD, so any tool that asks Git for the current branch fails in a jj workspace. The branch name lives in jj's bookmarks, so the command has to read it there and pass it to `gh` explicitly.
-- **Created in this thread:** in OpenCode, a subagent is a separate session that records its parent. Its tool calls never appear in the parent's message history. Work done "in this thread" is therefore the whole session tree, not the root session.
+- **Created in this thread:** subagents are child sessions, so a thread's work is the whole session tree (`CONCEPTS.md`, Remote OpenCode Session).
 
 ## Prevention
 
@@ -86,7 +86,7 @@ On the real data, the lookup found #1103 under `sh` and `zsh`, and `createdPRs` 
 - **Session history:** anything that scans an OpenCode session's history for what the thread did must also walk its child sessions through `parentID`, reading every page. The same applies to commands run, files changed, and PRs opened.
 - **Test fixtures:** do not use a real environment's normal state as a fixture's error case. If the fake server's "unavailable" output had come from a real failure, the jj case would have needed its own fixture.
 - **Error messages (proposal, not done):** show the tool's own error text instead of one fixed explanation. Here, `not on any branch` would have pointed straight at the cause. The pane still shows the login message for any failure.
-- **Known limit:** the bookmark lookup finds only the top PR of a stack (#1103 here). The rest of the stack appears only under **Created in this thread**.
+- **Known limit:** the bookmark lookup finds only the top PR of a stack (#1103 here). The rest of the stack is found only by the session-tree walk, among the PRs created in this thread (the pane's header picker lists them).
 - **Verification:**
   - A browser test that runs while `internal/rocketclaw/web/src/` is being edited can test an older bundle. See `docs/solutions/best-practices/web-browser-tests-run-the-last-bundle-that-built.md`.
   - The `frontend/rpc` Go tests need a test database. See `docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md`.

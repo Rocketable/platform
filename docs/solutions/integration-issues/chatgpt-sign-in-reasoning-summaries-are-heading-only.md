@@ -32,14 +32,14 @@ tags:
 
 ## Problem
 
-A provider that signs in with ChatGPT gets each GPT thought (a reasoning summary) back as a short bold title with no text under it. This is OpenAI's backend behavior, not a RocketClaw bug, and no RocketClaw setting changes it. RocketClaw had two real bugs on top of it: it kept only the first part of each thought, and it showed nothing from a ChatGPT sign-in provider until the whole response had arrived. Both are fixed in PR #1086 (open, unmerged as of this writing).
+A provider that signs in with ChatGPT gets each GPT thought (a reasoning summary) back as a short bold title with no text under it. This is OpenAI's backend behavior, not a RocketClaw bug, and no RocketClaw setting changes it. RocketClaw had two real bugs on top of it: it kept only the first part of each thought, and it showed nothing from a ChatGPT sign-in provider until the whole response had arrived. Both are fixed in PR #1086.
 
 ## Symptoms
 
 - A Web chat on a GPT model showed at most one bold title per thought. At the Compact and Detailed timeline levels, the Thought row is folded into a collapsed group, which is labelled "Used N tools" when it also holds tool calls (`internal/rocketclaw/web/src/timeline-detail.ts:148`). So it is easy to miss. Quiet and Messages only hide thoughts entirely.
 - An OpenCode session in the same screenshot showed long thoughts. That session ran Claude, not GPT.
 - During a running turn, no thought and no answer text appeared live for ChatGPT sign-in providers. Live text worked only for providers reached over the Responses WebSocket.
-- Thought rows show the raw `**` marks, because the Web renders thought text as plain text (`internal/rocketclaw/web/src/ui.tsx:3869`). PR #1086 does not change this.
+- Thought rows show the raw `**` marks, because the Web renders thought text as plain text (`internal/rocketclaw/web/src/ui.tsx:4068`). PR #1086 does not change this.
 
 ## What Didn't Work
 
@@ -64,7 +64,7 @@ return reasoningReplayInput(item.ID, summary, item.EncryptedContent), true
 ```
 
 ```go
-// after (internal/rocketclaw/harness/looper.go:2472)
+// after (internal/rocketclaw/harness/looper.go:2474)
 // reasoningReplayInput keeps every summary part; one without parts keeps a blank part, as the field is required.
 func reasoningReplayInput(id string, summary []responses.ResponseReasoningItemSummary, encryptedContent string) responses.ResponseInputItemUnionParam {
 	parts := make([]responses.ResponseReasoningItemSummaryParam, max(len(summary), 1))
@@ -74,9 +74,9 @@ func reasoningReplayInput(id string, summary []responses.ResponseReasoningItemSu
 	...
 ```
 
-Both callers use it: `responseOutputToReplayInput` and `compactedOutputToReplayParams`. The History RPC already joins the non-blank parts with a newline into one `thinking` row (`internal/rocketclaw/frontend/rpc/server.go:950-963`). Nothing else had to change for saved thoughts.
+Both callers use it: `responseOutputToReplayInput` and `compactedOutputToReplayParams`. The History RPC already joins the non-blank parts with a newline into one `thinking` row (`internal/rocketclaw/frontend/rpc/server.go:957-970`). Nothing else had to change for saved thoughts.
 
-**2. Stream ChatGPT sign-in responses live.** `codexStreamingResponse` in `internal/rocketclaw/oai/oauth.go` used to read the whole event stream with `io.ReadAll` before parsing it. Now it reads line by line (`oauth.go:1076`, with no line-length limit at `:1108`, because the completed event holds the whole response). It passes each event to a `ResponseObserver` that the request's context carries. The harness attaches its observer to every non-WebSocket request (`internal/rocketclaw/harness/responses_websocket.go:135-138`). The observer records `response.reasoning_summary_text.delta` and `.done` events as a new `thinking` live-progress kind (`internal/rocketclaw/harness/public_progress.go:23`). The RPC shows each as a Thought row, and the saved thought replaces it when the response finishes. Raw `response.reasoning_text` events (private reasoning) are still ignored. The compaction side request is read with an inert observer, so it never shows up. A retry after a context overflow calls `BeginResponse` again, which clears the failed attempt's live text.
+**2. Stream ChatGPT sign-in responses live.** `codexStreamingResponse` in `internal/rocketclaw/oai/oauth.go` used to read the whole event stream with `io.ReadAll` before parsing it. Now it reads line by line (`oauth.go:1078`, with no line-length limit at `:1110`, because the completed event holds the whole response). It passes each event to a `ResponseObserver` that the request's context carries. The harness attaches its observer to every non-WebSocket request (`internal/rocketclaw/harness/responses_websocket.go:120-124`). The observer records `response.reasoning_summary_text.delta` and `.done` events as a new `thinking` live-progress kind (`internal/rocketclaw/harness/public_progress.go:23`). The RPC shows each as a Thought row, and the saved thought replaces it when the response finishes. Raw `response.reasoning_text` events (private reasoning) are still ignored. The compaction side request is read with an inert observer, so it never shows up. A retry after a context overflow calls `BeginResponse` again, which clears the failed attempt's live text.
 
 ## Why This Works
 
@@ -91,7 +91,7 @@ After the fix, RocketClaw shows what OpenCode shows for the same model and sign-
 ## Prevention
 
 - **Before calling missing or short thoughts a RocketClaw bug, compare the same model family with the same sign-in.** Claude sends full thinking text. GPT over ChatGPT sign-in sends titles only.
-- **Check how the provider authenticates.** A provider with `auth: chatgpt` goes through the `oai` ChatGPT transport. Its `provider request completed` log lines carry `boundary=sdk_return` (`internal/rocketclaw/backend/model_resolver.go:128-132`). The harness asks for summaries only when the agent sets a reasoning effort (`reasoning.Summary = auto`, `internal/rocketclaw/harness/looper.go:1835-1840`).
+- **Check how the provider authenticates.** A provider with `auth: chatgpt` goes through the `oai` ChatGPT transport. Its `provider request completed` log lines carry `boundary=sdk_return` (`internal/rocketclaw/backend/model_resolver.go:128-132`). The harness asks for summaries only when the agent sets a reasoning effort (`reasoning.Summary = auto`, `internal/rocketclaw/harness/looper.go:1836-1841`).
 - **Measure the stored thoughts, read-only.** Look at lengths and shape, not content. On RocketClaw's database:
 
   ```sql
@@ -131,6 +131,6 @@ After the fix, RocketClaw shows what OpenCode shows for the same model and sign-
 ## Related Issues
 
 - [openai/codex#34873](https://github.com/openai/codex/issues/34873): heading-only reasoning summaries (upstream, open).
-- PR #1086: keeps every summary part and streams ChatGPT sign-in responses live (open, unmerged as of this writing).
-- `docs/solutions/logic-errors/permission-review-reasons-read-from-transport-specific-trace.md`: the same live-progress records, read from the other side. It says that only the WebSocket transport writes them, which stops being true once PR #1086 merges.
+- PR #1086: keeps every summary part and streams ChatGPT sign-in responses live (merged).
+- `docs/solutions/logic-errors/permission-review-reasons-read-from-transport-specific-trace.md`: the same live-progress records, read from the other side. It notes that ChatGPT sign-in requests write them too since PR #1086, while plain API-key HTTPS requests still never do.
 - `docs/solutions/runtime-errors/chatgpt-codex-retired-responses-compact.md`: another ChatGPT sign-in transport change in `codexStreamingResponse`.

@@ -1,5 +1,5 @@
 ---
-title: An External MCP Slack Thread Lost Its Metadata When Hidden Runs Stopped Copying History
+title: An External MCP Chat Lost Its Metadata When Hidden Runs Stopped Copying History
 date: 2026-10-22
 category: docs/solutions/logic-errors/
 module: internal/rocketclaw/backend
@@ -22,11 +22,11 @@ tags:
   - query-plan
 ---
 
-# An External MCP Slack Thread Lost Its Metadata When Hidden Runs Stopped Copying History
+# An External MCP Chat Lost Its Metadata When Hidden Runs Stopped Copying History
 
 ## Problem
 
-The State Store consolidation (commit 77fabe81) stopped copying a hidden run's history into the chat it reports to. One lookup still read only the chat's own entries. That lookup finds the External MCP metadata that becomes the turn's environment, so turns in an External MCP Slack thread lost all of it.
+The State Store consolidation (commit 77fabe81) stopped copying a hidden run's history into the chat it reports to. One lookup still read only the chat's own entries. That lookup finds the External MCP metadata that becomes the turn's environment, so turns in the chat an External MCP session reports to (a Slack thread then, a Web chat since Slack began answering only mentions) lost all of it.
 
 ## Symptoms
 
@@ -41,7 +41,7 @@ The State Store consolidation (commit 77fabe81) stopped copying a hidden run's h
 
 ## Solution
 
-`SessionService.externalMCPMetadataEntry` (`internal/rocketclaw/backend/store.go:1556`) now searches every conversation the chat shows: its own, the runs whose `reports_to` is the chat, and the run it continues. This is the same set `sessionHistorySQL` reads (`reporting_runs` in `internal/rocketclaw/backend/revert.go:62`). It takes the newest metadata ID across those conversations, then reads that row:
+`SessionService.externalMCPMetadataEntry` (`internal/rocketclaw/backend/store.go:1669`) now searches every conversation the chat shows: its own, the runs whose `reports_to` is the chat, and the run it continues. This is the same set `sessionHistorySQL` reads (`reporting_runs` in `internal/rocketclaw/backend/revert.go:62`). It takes the newest metadata ID across those conversations, then reads that row:
 
 ```sql
 WITH shown AS (
@@ -55,20 +55,20 @@ SELECT e.id, e.entry_json FROM latest l JOIN entries e USING (id)
 
 In this session's runs with realistic data (thousands of threads, each with a metadata row), the plan probed `session_entries_mcp_metadata` once per shown conversation with `Index Cond: (conversation_id = ...)`. With only three metadata rows, Postgres chose a bitmap scan over the whole partial index instead. The plan test now seeds 4,096 thread metadata rows, and asserts the index is used, there is no Sort, and no `Filter:` reads `entry_json`.
 
-The caller in `bridge.go` needed no change. It already matches the stored entry against the paired private run's ID and then sets `ROCKETCLAW_CONVERSATION_ID` to the chat (`turnShellEnv`, `internal/rocketclaw/backend/bridge.go:2604`).
+The caller in `bridge.go` needed no change. It already matches the stored entry against the paired private run's ID and then sets `ROCKETCLAW_CONVERSATION_ID` to the chat (`turnShellEnv`, `internal/rocketclaw/backend/bridge.go:2688`).
 
 Fixed in PR #613, released in v0.2.1.
 
 ## Why This Works
 
-An External MCP call runs in a private conversation and sets `SyncDestination` to the chat it reports to, a Slack thread when this was written and a Web chat since (`submitExternalMCPInput` in `cmd/rocketclaw/mcp.go`). Starting that turn records that chat as the run's `reports_to` (`internal/rocketclaw/backend/store_dao.go:1083`). The run's first turn writes the `mcp_external_metadata` entry into the run's own conversation.
+An External MCP call runs in a private conversation and sets `SyncDestination` to the chat it reports to, a Slack thread when this was written and a Web chat since (`submitExternalMCPInput` in `cmd/rocketclaw/mcp.go`). Starting that turn records that chat as the run's `reports_to` (`startTurnDB`, `internal/rocketclaw/backend/store_dao.go:1473`). The run's first turn writes the `mcp_external_metadata` entry into the run's own conversation.
 
-Before 77fabe81 that entry was also copied into the thread, so a lookup of the thread's own rows found it. After 77fabe81 the thread shows the run's entries through `reports_to` and holds no copy. A turn in the thread then found no metadata, so `if foundMetadata || origin.Source == protocol.SourceExternalMCP` (`bridge.go:2615`) was false for any turn not sourced from External MCP (a Web message in the thread's conversation, for example), and the whole metadata block was skipped. Searching the shown set restores exactly what the thread's history already displays.
+Before 77fabe81 that entry was also copied into the thread, so a lookup of the thread's own rows found it. After 77fabe81 the thread shows the run's entries through `reports_to` and holds no copy. A turn in the thread then found no metadata, so `if foundMetadata || origin.Source == protocol.SourceExternalMCP` (`bridge.go:2699`) was false for any turn not sourced from External MCP (a Web message in the thread's conversation, for example), and the whole metadata block was skipped. Searching the shown set restores exactly what the thread's history already displays.
 
 ## Prevention
 
 - When storage moves from "copied into each reader" to "linked from each reader", audit every query that reads the old copy's location, not only the shared history query. A hand-tuned single-purpose lookup (`WHERE conversation_id = $1` on `entries`) is the likely miss, because it bypasses `sessionHistorySQL` for speed. The consolidation plan's rule already said visible-chat readers must union the entries of runs reporting to them; this lookup was a visible-chat reader nobody listed. For each such query, decide whether it means "rows this conversation owns" (deletes, undo, pruning) or "rows this conversation shows" (anything that feeds a turn or a view).
-- Build test state the way production builds it. `TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage` stayed green because it hand-inserted `sync_source_entry_id` copies of the run's entries into the thread, the retired copy model. It now sets `reports_to` on the run instead, and it failed with empty variables before the fix. When a change retires a mechanism, grep tests for fixtures that recreate it. Here that is `sync_source_entry_id`. Some uses remain legitimate, because migration 049 kept copies outside a run's `reports_to` chat and `store.go` and `store_summaries.go` still read them. `TestCopiedAttributionSurvivesSourceRetention` keeps one on purpose, to cover those leftover copies. `TestShadowHistorySourcePagesAndChildRevision` built a copy into the chat a run reports to, a state production no longer reaches; it now leaves the entry in the run, and still passes.
+- Build test state the way production builds it. `TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage` stayed green because it hand-inserted `sync_source_entry_id` copies of the run's entries into the thread, the retired copy model. It now sets `reports_to` on the run instead, and it failed with empty variables before the fix. When a change retires a mechanism, grep tests for fixtures that recreate it. Here that is `sync_source_entry_id`. Some uses remain legitimate, because migration 049 kept copies outside a run's `reports_to` chat and `revert.go` and `store_summaries.go` still read them. `TestCopiedAttributionSurvivesSourceRetention` keeps one on purpose, to cover those leftover copies. `TestShadowHistorySourcePagesAndChildRevision` built a copy into the chat a run reports to, a state production no longer reaches; it now leaves the entry in the run, and still passes.
 - Check every kind of turn that acts for a session, not only the session's own. The same lookup also failed for subagents: since subagents became sessions of their own, a subagent's turn read its own conversation and inbound, which never hold External MCP metadata. It now reads its top-level session and that session's turn, the lineage it already used for the person it acts for (`subagentLineage` in `internal/rocketclaw/backend/session_tools.go`), and `TestSubagentActsForRootTurn` covers it. A value scoped to a session reaches its own turns, its Web chat's turns, its subagents' turns, and the workers of a workflow; test each. Workflow workers once got no variables at all, as did goal check scripts before they were removed.
 - A plan test proves a query is fast, not that it reads the right rows. Pair it with a behavioral test of the rows it must find.
 - Seed plan tests with realistic cardinality. With three metadata rows the planner's choice differs from production's, and the test would pin the wrong shape.

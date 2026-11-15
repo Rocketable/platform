@@ -63,7 +63,7 @@ browser showed the sidebar list arriving at about 43 KB/s. An OpenCode session (
 | What | Size | When |
 |---|---|---|
 | `ListSessions`, the full listing | 7.5 MB raw, about 1.3 MB gzipped | every page load |
-| `ListSessions` poll with nothing changed | about 364 KB raw, about 80 KB gzipped, about 270 KB of it the `order` of every session ID | about every 2 s plus the listing's own time (`ui.tsx:696`) |
+| `ListSessions` poll with nothing changed | about 364 KB raw, about 80 KB gzipped, about 270 KB of it the `order` of every session ID | about every 2 s plus the listing's own time (`ui.tsx:731`) |
 | `ListCronJobs` | 1.1 MB raw, 225 KB gzipped | every page load, even on an OpenCode page |
 | A new OpenCode view | about 40 requests and 1–2 MB | every OpenCode tab switch |
 
@@ -79,7 +79,7 @@ Much of the Web client assumes that a view mounts when it becomes visible and un
 leaves. Keeping a view mounted but hidden breaks that assumption in places spread across unrelated
 components. In `internal/rocketclaw/web/src/ui.tsx` today:
 
-- `WarmTabs` keeps Cron, Agents, Skills and Config mounted once visited (or after preload) and hides
+- `WarmTabs` keeps Cron, Agents, Skills and Config mounted once visited and hides
   the inactive ones with `TabPane`.
 - `SessionApp` renders one `MessageScrollerProvider key={conversation.key}` and `Transcript` inside
   `TabPane show={showChat}`. `conversation` changes only while a chat route shows, so on any
@@ -98,28 +98,20 @@ part 2 below.
 - **Count bytes, not connections.** Before adding work to a page load, a poll, or a tab switch, add up
   what it sends. Everything shares one send path with the request the person is waiting for.
 - **A poll that finds nothing changed should cost almost nothing.** In the table above, the quiet poll
-  resent every session ID, and a reload downloaded the full listing again. PR #892 (open, not merged as
-  of this writing; the line references in this list are from its branch) changes that:
-  - The completion no longer sends `order`. It names the listing version it was sent since, plus the
-    IDs removed since then (`internal/rocketclaw/web/proto/web.proto:214-219`).
-  - The server keeps each person's last 8 listings and skips rows whose fingerprint has not changed
-    (`internal/rocketclaw/frontend/rpc/server.go:62-75`, `:234`).
-  - Listing events leave out default values (`internal/rocketclaw/frontend/rpc/http.go:389`).
-  - On reload, the page loads the saved listing and its version before the first poll, so the poll asks
-    only for changes (`ui.tsx:653`).
-  - The first message carries the owner and the OpenCode servers, so OpenCode tabs mount without waiting
-    for the rows (`ui.tsx:675`, `:2615`).
+  resent every session ID, and a reload downloaded the full listing again. PR #892 (merged 2026-11-01)
+  changed that; the mechanics are stated where they live (`web.proto` `ListSessionsResponse`,
+  `sessionListingsKept` in `internal/rocketclaw/frontend/rpc/server.go`, `ServerSessions` in `ui.tsx`).
 - **Know what #892 leaves alone.** The server still lists every session on each poll; only the bytes
   sent go down. A poll naming a listing the server no longer holds gets every row again. That happens
-  after a server restart, or once more than 8 pollers have run since. The full first listing, the
-  `WarmTabs` preload of agents, skills, cron jobs and config on every page load (`ui.tsx:472`,
-  `preload.ts`), and the OpenCode view remount on every tab switch (`RemoteSession`'s effect,
-  `ui.tsx:2600-2613`) are all still there. Sending only tab sessions in full and moving search to the
-  server is planned in `docs/plans/2026-11-01-1608-perf-slim-sidebar-list-plan.md`.
-- **Keeping views mounted trades bursts for steady traffic.** A kept-alive OpenCode view would avoid
-  the 1–2 MB burst on each switch, but a hidden view's streams and polls keep using the connection. It
-  was proposed and rejected here, because one session's state could leak into another. Part 2 shows
-  why that risk is real.
+  after a server restart, or once more than 8 pollers have run since. The full first listing is still
+  there. Later changes cut two other bursts: Cron, Agents, Skills and Config are no longer preloaded on
+  every page load, and switching between one server's OpenCode tabs moves its one view instead of
+  rebuilding it (`docs/specs/2026-11-02-opencode-tab-switch-design.md`). Sending only tab sessions in
+  full and moving search to the server is planned in
+  `docs/plans/2026-11-01-1608-perf-slim-sidebar-list-plan.md`.
+- **Keeping views mounted trades bursts for steady traffic.** A hidden view's streams and polls keep
+  using the connection. Keeping the OpenCode view alive behind RocketClaw tabs was rejected (same spec,
+  "Ruled out"), because one session's state could leak into another. Part 2 shows why that risk is real.
 
 #### Diagnosing small requests that wait
 
@@ -127,7 +119,7 @@ part 2 below.
   released together and then downloaded quickly, point to a queue on the connection, not to slow
   handlers.
 - While they reproduce it, take goroutine dumps every second. pprof is on by default
-  (`--pprof`, `cmd/rocketclaw/serve.go:28`) and listens at 127.0.0.1:6060. That address is reachable
+  (`--pprof`, `cmd/rocketclaw/serve.go:29`) and listens at 127.0.0.1:6060. That address is reachable
   only from the server's own network namespace, so inside a container run `curl` there. A deployment
   can turn it off with `--pprof=false`. Finished handlers in `http2.(*serverConn).writeHeaders`, behind
   a connection writer stuck in a TCP `Write`, mean the send path is full.
@@ -155,7 +147,7 @@ Before a view stays mounted while hidden, or before a second instance of it moun
 | Single global ref in context | `SessionCommands.composer` is one ref created in `SessionApp`. One composer mounts today, so palette `$` commands are unambiguous, but on a non-chat page the ref still points at the hidden composer. | With several instances, give hidden views a context copy whose ref is unused. Only the active view gets the real one. |
 | Imperative handle bound to one instance | `Composer` binds that ref with `useImperativeHandle` and no deps. With several composers the one that rendered last owns it, and an unmounting one resets it to `null` even if another owned it. | Bind the handle only from the active view. |
 | Document-wide id lookup | `SelectionQuote` calls `document.getElementById("transcript-scroll")`, and `openCall` queries `#transcript-scroll [data-tool-call-id=...]`. Only `Transcript` renders that viewport, so the id is unique today. | With two transcripts mounted these return the first one in DOM order. Pass each view its own viewport ref, or set the id only on the active viewport. |
-| Effects that assume mount means visible | The new-chat handoff in `Transcript` is a `useLayoutEffect` with no deps that calls `route.goSession(...)` once the draft has its session id, but only while `location.pathname === "/"`, so a chat created while another page shows opens when New session shows again (`tabs.browser.test.ts`). `SearchTabs`, the body of every Search page, focuses its input in a mount-only layout effect. | Gate navigation, focus and similar user-facing side effects on the view being active. Re-run them when the view becomes active, not only on mount. |
+| Effects that assume mount means visible | The new-chat handoff in `Transcript` is a `useLayoutEffect` with no deps that navigates to the session once the draft has its session id, but only while `pagePath() === "/"`, so a chat created while another page shows opens when New session shows again (`tabs.browser.test.ts`). `SearchTabs`, the body of every Search page, focuses its input in a mount-only layout effect. | Gate navigation, focus and similar user-facing side effects on the view being active. Re-run them when the view becomes active, not only on mount. |
 | URL-sync effects that would fight the active tab | `SearchTabs` calls `history.replaceState` to its own Search page location (`/search` or `/search/<id>`, plus `?q=`) in an effect with deps `[tab, search, path]`. That is safe only because `SearchPage` mounts only while the route is a Search page, one at a time. | If such a page becomes warm, return early off its own path. |
 | State that relies on remount | `SearchPage` keys `SearchTabs` by owner, location, and whether the page is Shared, so sharing or unsharing a page starts it fresh. `SearchTabs` saves typing still waiting to be saved in its unmount cleanup, and a link's `?q=` is used once, by the mount it led to. | If such a page becomes warm, save waiting typing when it is hidden, not only on unmount, and reset what the key change resets explicitly. The warm-tabs variant kept a stale saved-search draft for lack of that. |
 

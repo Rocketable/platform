@@ -33,7 +33,7 @@ tags:
 
 On this Mac, plain `docker` (the `colima` context) runs inside Colima's `default` VM. That VM's root disk is about 19 GB; images, containers and volumes sit on a separate Docker disk at `/var/lib/docker`.
 
-RocketClaw's `make` targets do not use that VM. Since 2026-11-01 they run in a Colima VM of their own, `rocketclaw-linux`, started with `--mount $(HOME):w`, and their test PostgreSQL starts on that VM's Docker daemon (`internal/rocketclaw/Makefile:7`–`8`, `:14`–`22`). There, a bind mount under your home folder does reach the Mac. The trap below applies to containers started with plain `docker` on the default VM.
+RocketClaw's `make` targets do not use that VM. Since 2026-11-01 they run in a Colima VM of their own, `rocketclaw-linux`, started with `--mount $(HOME):w`, and their test PostgreSQL starts on that VM's Docker daemon (`internal/rocketclaw/Makefile:7`–`8`, `:24`–`26`, `:33`). There, a bind mount under your home folder does reach the Mac. The trap below applies to containers started with plain `docker` on the default VM.
 
 The only Mac folder the default VM sees is `~/Library/Caches/colima`, shared read-only. Running `colima ssh -- mount` shows no other virtiofs mount, even though `~/.colima/default/colima.yaml` has `mounts: null` and its comment says the home folder is shared and writable by default. Why that default does not apply here was not established.
 

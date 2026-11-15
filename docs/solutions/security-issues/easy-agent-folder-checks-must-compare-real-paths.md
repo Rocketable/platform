@@ -21,7 +21,7 @@ tags: [symlink, path-containment, sandbox, easy-mode, working-directory, emulate
 
 ## Problem
 
-An easy agent is confined to its `workingDirectory`, plus read-only uploads and skill folders. Its folder may not be, contain or lie inside the folders that define agents, skills, cron jobs, scripts and workflows, or the agent could rewrite its own rights. The checks that enforce this compared some paths by their real location and others by the name they were given. Wherever a symlink sat on the "name" side, the check gave the wrong answer. One change (PR #822, unmerged as of this writing) hit this three times: `resolveWorkingDirectory` compared the definitions folders by name and had no "contains" test, and the emulated shell's workdir check compared a real path with mount names.
+An easy agent is confined to its `workingDirectory`, plus read-only uploads and skill folders. Its folder may not be, contain or lie inside the folders that define agents, skills, cron jobs, scripts and workflows, or the agent could rewrite its own rights. The checks that enforce this compared some paths by their real location and others by the name they were given. Wherever a symlink sat on the "name" side, the check gave the wrong answer. One change (PR #822) hit this three times: `resolveWorkingDirectory` compared the definitions folders by name and had no "contains" test, and the emulated shell's workdir check compared a real path with mount names.
 
 ## Symptoms
 
@@ -40,7 +40,7 @@ An easy agent is confined to its `workingDirectory`, plus read-only uploads and 
 
 Compare in one space (real paths), fail closed when a link cannot be resolved, and hand back paths in the space the consumer uses.
 
-Folder check, `internal/rocketclaw/backend/easy_turn.go:128-142`:
+Folder check, `internal/rocketclaw/backend/easy_turn.go:129-143`:
 
 ```go
 // A definitions folder counts where it really is, which a link may put out of the workspace; a missing
@@ -84,7 +84,7 @@ A containment check is only as strong as the weaker side of the comparison. `Eva
 
 ## Prevention
 
-- In any sandbox path check, resolve **every** path in the comparison, not just the one the caller supplies. Grep for `filepath.Join(workspace,` or `realpathSync(config.` next to a `within(`/`IsLocal` test and ask whether the other side was resolved.
+- In any sandbox path check, resolve **every** path in the comparison, not just the one the caller supplies. Grep for `filepath.Join(workspace,` next to a `within(`/`IsLocal` test and ask whether the other side was resolved.
 - Test both directions: the folder inside a refused folder, and the folder containing one. Once links exist, "contains" is no longer implied by "contains the workspace".
 - Treat "cannot resolve" as refuse, never as "use the name". Ask whether the agent could create the missing target.
 - Keep the check space (real paths) and the presentation space (names the user, prompt or mount uses) apart, and convert at the boundary.

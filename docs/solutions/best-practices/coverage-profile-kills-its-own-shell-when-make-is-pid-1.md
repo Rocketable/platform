@@ -36,19 +36,19 @@ tags:
 
 ## Context
 
-On a Mac, every `make` target in `internal/rocketclaw` runs again inside the `rocketclaw-linux` container. The Darwin `%` rule runs `docker run ... rocketclaw-linux make $(MAKEOVERRIDES) $@` (`internal/rocketclaw/Makefile:14`–`18`). The image's `ENTRYPOINT` is `/bin/sh -c "... exec setpriv ... \"$@\""` (`internal/rocketclaw/linux.Containerfile:43`). Each `exec` keeps the same process, so inside the container **`make` is PID 1**.
+On a Mac, every `make` target in `internal/rocketclaw` runs again inside the `rocketclaw-linux` container. The Darwin `%` rule runs `docker run ... rocketclaw-linux make $(linux_overrides) $@` (`internal/rocketclaw/Makefile:24`–`29`). The image's `ENTRYPOINT` is `/bin/sh -c "... exec setpriv ... \"$@\""` (`internal/rocketclaw/linux.Containerfile:43`). Each `exec` keeps the same process, so inside the container **`make` is PID 1**.
 
-The `coverage-profile` recipe clears leftover test browsers before and after its run with `pkill -P 1 -f 'ms-playwright/chromium'` (`internal/rocketclaw/Makefile:150` and `:152`). The comment above it (`:143`–`144`) explains the idea: a browser whose test run was killed is left as an orphan, orphans get PID 1 as their parent, so `-P 1` should match only orphans.
+The `coverage-profile` recipe clears leftover test browsers before and after its run with `pkill -P 1 -f`, whose pattern was then `'ms-playwright/chromium'` (now `internal/rocketclaw/Makefile:177` and `:179`). The comment above it (`:167`–`169`) explains the idea: a browser whose test run was killed is left as an orphan, orphans get PID 1 as their parent, so `-P 1` should match only orphans.
 
 That idea fails when `make` itself is PID 1:
 
 - `make` runs the recipe as `/bin/sh -c '<the whole recipe text>'`. That shell's parent is `make`, which is PID 1.
 - `pkill -f` matches the full command line, and the recipe text contains `ms-playwright/chromium`.
-- `pkill` never matches itself, but it does match its parent shell. That shell gets SIGTERM, and `make` reports `[Makefile:146: coverage-profile] Terminated`. Line 146 is the first line of the recipe.
+- `pkill` never matches itself, but it does match its parent shell. That shell gets SIGTERM, and `make` reports `[Makefile:146: coverage-profile] Terminated`. Line 146 was then the first line of the recipe.
 
-`make test` does not hit this. There, `coverage-profile` runs as a sub-make: `test` runs `$(MAKE) check-code-metrics`, which runs `$(MAKE) coverage-profile` (`Makefile:113`–`120`). So the recipe shell's parent is a sub-make, not PID 1. CI does not hit it either. It runs `make coverage-profile ...` straight on a Linux runner (`.github/workflows/test.yml:147`), where `make` is not PID 1.
+`make test` does not hit this. There, `coverage-profile` runs as a sub-make: `test` runs `$(MAKE) check-code-metrics`, which runs `$(MAKE) coverage-profile` (`Makefile:133`–`134`, `:139`–`140`). So the recipe shell's parent is a sub-make, not PID 1. CI does not hit it either. It runs `make coverage-profile ...` straight on a Linux runner (`.github/workflows/test.yml:147`), where `make` is not PID 1.
 
-The goals that do hit it are the ones that make PID 1 run the recipe itself. `coverage-profile` was seen to fail on the space-permissions run (2026-11-03). `check-coverage` should fail the same way, because it lists `coverage-profile` as a prerequisite (`Makefile:136`). That case was not run.
+The goals that do hit it are the ones that make PID 1 run the recipe itself. `coverage-profile` was seen to fail on the space-permissions run (2026-11-03). `check-coverage` should fail the same way, because it lists `coverage-profile` as a prerequisite (`Makefile:156`). That case was not run.
 
 This trap is easy to step into. `AGENTS.md` says RocketClaw tests run on a Mac only through `make`, and `coverage-profile GOTESTRUN=...` is the target that runs just a chosen subset of Go tests (the larger targets also run lint, the emulated shell's tests and the coverage minimum). The error names no cause, and the same recipe passes under `make test`.
 
@@ -58,7 +58,7 @@ Fixed on 2026-11-10: the `pkill` patterns in `internal/rocketclaw/Makefile` (`co
 
 Keep the rule when adding a `pkill -f` or `pgrep -f` to a recipe: write its pattern so the pattern's own text does not match it.
 
-The Darwin `%` rule used to pass `$(MAKEOVERRIDES)` to the container's `make` unquoted, so a `GOTESTRUN` such as `'^(TestFoo|TestBar)$$'` failed on a Mac with `syntax error near unexpected token '('`, and each `$` reached the shell doubled, where `$$` became its process ID. The rule now quotes each variable for the shell and undoes make's escaping (`linux_overrides`), so the container's `make` gets the variables as typed on the Mac. A dry run shows it: `make -n -C internal/rocketclaw coverage-profile 'GOTESTRUN=^(TestA|TestB)$$'` prints `make 'GOTESTRUN=^(TestA|TestB)$$' coverage-profile`.
+The Darwin `%` rule passes command-line variables to the container's `make` as typed (`linux_overrides`, `Makefile:14`–`18`; its comment explains the escaping), so a focused run such as `make -C internal/rocketclaw coverage-profile 'GOTESTRUN=^(TestA|TestB)$$'` works on a Mac.
 
 ## Why This Matters
 
@@ -82,6 +82,6 @@ After the fix, the same command runs the chosen tests and writes `.coverage.out`
 
 ## Related
 
-- `docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md`: older setup for running RocketClaw tests from a workspace. It predates the move of Mac runs into the Linux container.
+- `docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md`: the setup a fresh workspace needs before RocketClaw tests run, on a Mac through the Linux container.
 - `docs/solutions/best-practices/colima-bind-mounts-fill-vm-disk.md`: a disk trap on Colima's default VM, which plain `docker` uses. These runs use the `rocketclaw-linux` VM instead.
 - `docs/solutions/best-practices/concurrent-make-test-runs-share-one-test-database-container-name.md`: the same repeating in-container PID once named the recipe's PostgreSQL container, so concurrent runs removed each other's database; the recipe now uses the container's ID.

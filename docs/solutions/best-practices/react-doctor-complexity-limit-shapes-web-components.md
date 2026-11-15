@@ -36,7 +36,7 @@ So in practice 15 passes and 16 fails. `SessionApp` and `CommandPalette` both si
 Move a new branch out of the big component instead of adding it inline:
 
 - Put state-plus-branch logic in a small hook. `usePaletteSessions` in `ui.tsx` holds the "plain text or filter" routing and the title filter that would otherwise sit in `CommandPalette`.
-- Put a conditional list in a plain module function. `keyCommands(step, toggle, medium)` builds the palette's tab commands, including the `medium` condition, outside `SessionApp`.
+- Put a conditional list in a plain module function. `keyCommands(tabs, toggle, medium)` builds the palette's tab and theme commands, including the reopen and `medium` conditions, outside `SessionApp`.
 - Let a page decide its own visibility. `ShortcutsPage({ show })` returns `null` when hidden, like `PageIndex`, so `SessionApp` renders it without a ternary.
 - Move behavior that belongs to a hook into that hook. Tab stepping became `useTabs().step`, which removed two branches from `SessionApp`'s key handler.
 
@@ -50,4 +50,3 @@ These helpers look like the single-use abstractions that `AGENTS.md` says to inl
 
 - Before adding a branch to `SessionApp` or `CommandPalette`, expect lint to fail and plan where the branch will live.
 - Before inlining a small hook or function in `ui.tsx`, check whether it exists to keep a component under the limit.
-- Do not raise the limit, add a react-doctor config, or suppress the rule without the human partner's approval (`AGENTS.md`, linter suppression rule).

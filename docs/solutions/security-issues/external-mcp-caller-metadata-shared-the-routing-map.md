@@ -24,7 +24,7 @@ tags: [external-mcp, metadata, trust-boundary, deny-list, inbound-message, routi
 
 An External MCP caller sends a free-form `metadata` map with each prompt. `submitExternalMCPInput` (`cmd/rocketclaw/mcp.go:194`) copied that map into `InboundMessage.Metadata`, the same map RocketClaw uses for its own routing and provenance keys. It then deleted six keys. Every other key went through, so an authenticated caller could steer RocketClaw's internals. The worst case was choosing which agent ran the turn, which skipped the "only exposed agents" rule (`mcp.go:118` and `:129`).
 
-The fix is on this branch, in the change "internal/rocketclaw: keep External MCP caller metadata out of routing". Its PR was not open yet when this was written.
+The fix shipped in "internal/rocketclaw: keep page sources and External MCP metadata in bounds" (6cc7f9a2), first released in v0.2.21.
 
 ## Symptoms
 
@@ -32,11 +32,11 @@ What a caller could do by setting a key that RocketClaw reads from `Metadata`:
 
 | Caller key | Read at | Effect |
 |---|---|---|
-| `rocketclaw_agent` | `internal/rocketclaw/backend/bridge.go:1068` | Turn runs as any agent, exposed or not |
-| `rocketclaw_allowed_agents` | `internal/rocketclaw/backend/session_tools.go:849` | Widens which agents the session may start new sessions with |
-| `rocketclaw_sender_session`, `rocketclaw_sender_action` | `internal/rocketclaw/backend/bridge.go:3442`, `internal/rocketclaw/frontend/rpc/server.go:1629` | Fake "message from session X" sender in the prompt and the Web queue |
-| `web_message_id`, `background_job_ids` | `internal/rocketclaw/backend/bridge.go:2423` and the queue code | Choose internal turn input and queue item IDs |
-| `rocketclaw_raw_text` | `internal/rocketclaw/frontend/rpc/server.go:1637` | Text the Web queue offers when someone edits the message |
+| `rocketclaw_agent` | `internal/rocketclaw/backend/bridge.go:1080` | Turn runs as any agent, exposed or not |
+| `rocketclaw_allowed_agents` | `internal/rocketclaw/backend/session_tools.go:853` | Widens which agents the session may start new sessions with |
+| `rocketclaw_sender_session`, `rocketclaw_sender_action` | `internal/rocketclaw/backend/bridge.go:3501`, `internal/rocketclaw/frontend/rpc/server.go:1900` | Fake "message from session X" sender in the prompt and the Web queue |
+| `web_message_id`, `background_job_ids` | `internal/rocketclaw/backend/bridge.go:2486` and the queue code | Choose internal turn input and queue item IDs |
+| `rocketclaw_raw_text` | `internal/rocketclaw/frontend/rpc/server.go:1908` | Text the Web queue offers when someone edits the message |
 
 The leak also ran the other way. `ROCKETCLAW_METADATA_*` variables were built from `Metadata` minus a skip list. So a Web turn in an External MCP chat turned RocketClaw's own `web_message_id` and `rocketclaw_raw_text` into variables.
 
@@ -44,10 +44,10 @@ An end-to-end test proved the main case. `TestExternalMCPMetadataReachesWebChatT
 
 ## What Didn't Work
 
-- **Extending the delete list.** This was rejected before coding. A deny list is only as good as its author's memory of every internal key, and nobody kept that list. Several keys the code reads are not `Inbound*MetadataKey` constants in `protocol`: `rocketclaw_agent` is `inboundAgentMetadataKey` in `internal/rocketclaw/backend/thread_bridges.go:29`, `background_job_ids` is in `internal/rocketclaw/backend/background.go:67`, and `web_message_id` and `web_goal_prompt` are bare strings. Each new internal key would reopen the hole unless someone remembered to add it.
+- **Extending the delete list.** This was rejected before coding. A deny list is only as good as its author's memory of every internal key, and nobody kept that list. Several keys the code reads are not `Inbound*MetadataKey` constants in `protocol`: `rocketclaw_agent` is `inboundAgentMetadataKey` in `internal/rocketclaw/backend/thread_bridges.go:31`, `background_job_ids` is in `internal/rocketclaw/backend/background.go:67`, and `web_message_id` and `web_goal_prompt` are bare strings. Each new internal key would reopen the hole unless someone remembered to add it.
 - **Dropping every `rocketclaw_*` key.** This is smaller, but it is still a rule list. `web_message_id`, `web_goal_prompt` and `background_job_ids` have no prefix, so it needs exceptions on day one, and every future internal key has to follow the prefix rule.
 - **Accepting that queued work loses its variables once.** The first plan added the new field and let items queued before the upgrade lose their `ROCKETCLAW_METADATA_*` values. The user asked for a safe upgrade, which led to the migration. That also cleans planted keys out of input that was already queued.
-- **Writing the migration with `json` functions because rows "may hold NUL".** The plan claimed that stored `inbound_json` could contain `\u0000`, which a `::jsonb` cast rejects. A plan review showed this is false. Every writer of these columns strips it with `removeSessionEntryNUL` (`internal/rocketclaw/backend/store.go:1739`, called from `startTurnDB` in `internal/rocketclaw/backend/store_dao.go`, `putThreadQueueItem`, `internal/rocketclaw/backend/conversations.go:390` and `internal/rocketclaw/backend/shadows.go`). The migration uses `jsonb`. Check the writers before designing around a data shape you only assume.
+- **Writing the migration with `json` functions because rows "may hold NUL".** The plan claimed that stored `inbound_json` could contain `\u0000`, which a `::jsonb` cast rejects. A plan review showed this is false. Every writer of these columns strips it with `removeSessionEntryNUL` (`internal/rocketclaw/backend/store.go:1805`, called from `startTurnDB` in `internal/rocketclaw/backend/store_dao.go`, `putThreadQueueItem`, `internal/rocketclaw/backend/conversations.go:435` and `internal/rocketclaw/backend/shadows.go`). The migration uses `jsonb`. Check the writers before designing around a data shape you only assume.
 - **The first migration draft** kept a caller-planted `rocketclaw_raw_text` in `Metadata`, and left `Metadata` as `null` when every key moved out. Plan reviews caught both.
 
 ## Solution
@@ -72,7 +72,7 @@ if principal != "" {
 }
 ```
 
-`turnShellEnv` builds the variables from `origin.ExternalMCPMetadata` (`internal/rocketclaw/backend/bridge.go:2655` and `:2670`). The six-key delete list and the skip list in `externalMCPMetadataEnv` are gone. `Metadata` on an External MCP inbound now holds only what RocketClaw sets: the raw text from `NewInboundMessageFromContent` (`internal/rocketclaw/protocol/types.go:267`) and the authenticated principal.
+`turnShellEnv` builds the variables from `origin.ExternalMCPMetadata` (`internal/rocketclaw/backend/bridge.go:2718` and `:2733`). The six-key delete list and the skip list in `externalMCPMetadataEnv` are gone. `Metadata` on an External MCP inbound now holds only what RocketClaw sets: the raw text from `NewInboundMessageFromContent` (`internal/rocketclaw/protocol/types.go:269`) and the authenticated principal.
 
 Migration `internal/rocketclaw/backend/migrations/080_external_mcp_metadata.sql` rewrites stored External MCP inbounds wherever an inbound is stored: `turns.inbound_json`, `shadow_turns.inbound_json`, `conversations.producer_inbound_json`, and each element of the journaled steer arrays in `steps` under `<turn>/steers`. The steers were the place that was easy to miss. For each one:
 
@@ -92,7 +92,7 @@ The old guard asked "which keys are dangerous?", and that list could never be co
 ## Prevention
 
 - Never merge a caller-controlled map into a map that also carries trusted keys. Give untrusted input its own field or type, and convert it in one place. If you catch yourself writing `delete(m, someKey)` after copying input into a shared map, the design is wrong.
-- The comment on `InboundMessage.Metadata` (`internal/rocketclaw/protocol/types.go:158`) still says it "carries source-supplied context". Read that as context RocketClaw's own connectors set. Do not use it to carry outside keys. Today the connectors each set named keys: Web (`internal/rocketclaw/frontend/rpc/server.go:1527`), voice (`internal/rocketclaw/frontend/rpc/voice.go:455`) and Slack (`internal/rocketclaw/frontend/slack/connector.go:1113`). Only External MCP ever bulk-copied a map from outside. Keep it that way for any new connector, page or API.
+- The comment on `InboundMessage.Metadata` (`internal/rocketclaw/protocol/types.go:158`) still says it "carries source-supplied context". Read that as context RocketClaw's own connectors set. Do not use it to carry outside keys. Today the connectors each set named keys: Web (`internal/rocketclaw/frontend/rpc/server.go:1744`), voice (`internal/rocketclaw/frontend/rpc/voice.go:467`) and Slack (`internal/rocketclaw/frontend/slack/connector.go:1177`). Only External MCP ever bulk-copied a map from outside. Keep it that way for any new connector, page or API.
 - To find who could abuse a shared map, list its readers, not its writers. Grep for `Metadata[` across the backend and frontends. The internal keys are spread across several packages and not all of them are `protocol` constants.
 - Test the whole map with `Equal`, not `NotContains` for a few chosen keys. The old unit test asserted that three keys were absent, and stayed green while every other key leaked.
 - Prove the exploit end to end before the fix. Seed a forbidden agent with a different prompt and assert the model request carries the allowed agent's prompt.

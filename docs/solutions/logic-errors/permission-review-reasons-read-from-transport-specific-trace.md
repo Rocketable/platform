@@ -36,7 +36,7 @@ The Web showed no approver reason for any permission review on wallace, which re
 ## Solution
 Read the decision the way `reviewPermission` makes it. `(*SessionEntry).PermissionReviewDecision` in `internal/rocketclaw/harness/permission_review.go` scans `ReplayInput` from the end. It takes the last assistant message outside the commentary phase whose content decodes as an allow or deny decision. It never runs the SDK replay decode.
 
-Reading the reviewed action has a second trap, the size of the review prompt. The comments on `(PermissionReview).CodeModeCall` in the same file explain how it decodes only the prompt's tail and why a forged delimiter never matches.
+Reading the reviewed action has a second trap, the size of the review prompt. The comments on `(PermissionReview).CodeModeCall` in the same file explain how it decodes only the prompt's tail and why a forged delimiter never matches. `TestPermissionReviewCodeModeCallDecodesOnlyPlannedAction` bounds the bytes that decode allocates, and `TestPermissionReviewCodeModeCallUsesPlannedAction` holds the forged-delimiter case.
 
 ## Why This Works
 `ReplayInput` is saved the same way for every transport, and it holds the exact message the review decided from. The trace only holds what a given transport chose to stream.
