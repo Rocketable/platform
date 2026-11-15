@@ -45,12 +45,10 @@ The copy path is:
 
 1. Load and validate provider JSON. `Validate` runs `normalizeOpenAIConfig` on `openai` and every named provider (`internal/rocketclaw/config/config.go:451-466`).
 2. `modelResolver.Resolve` copies `providerConfig.AutocompactionThreshold` onto `ProviderOrigin.CompactThreshold` (`internal/rocketclaw/backend/model_resolver.go:71`).
-3. Every looper is built by `toolFactory.newLooper`, which uses `cmp.Or(origin.CompactThreshold, f.compactThreshold)` so a set provider value wins and a zero origin falls back (`internal/rocketclaw/harness/tools.go:237`). Root (`internal/rocketclaw/harness/rocketcode.go:426`, which also builds each Task Subagent Session's turn), steer agent-type switches (`asRecordAgent`, `internal/rocketclaw/harness/tasks.go:353`) and permission-review children (`internal/rocketclaw/harness/permission_review.go:181`) all call it.
+3. Every looper is built by `toolFactory.newLooper`, which uses `cmp.Or(origin.CompactThreshold, defaultCompactThreshold)` so a set provider value wins and a zero origin falls back. Root turns, each Task Subagent Session's turn, steer agent-type switches and permission-review children all call it.
 4. `looper.compactThreshold()` still treats `<= 0` as `defaultCompactThreshold` (`internal/rocketclaw/harness/looper.go:34`, `internal/rocketclaw/harness/looper.go:1873-1879`). `buildParams` sends that value as Responses `context_management[].compact_threshold` (`internal/rocketclaw/harness/looper.go:1825-1828`).
 
-`normalizeConfig` also writes `defaultCompactThreshold` onto `Config.CompactThreshold` when the factory input is `0` (`internal/rocketclaw/harness/rocketcode.go:541-543`). RocketClaw `NewWithModelResolver` sites either pass `CompactThreshold: 0` or omit the field (same zero). The RocketClaw path depends on the resolver origin plus that default.
-
-The harness uses the supplied `ModelResolver`; an origin with no threshold relies on `Config.CompactThreshold`.
+The harness uses the supplied `ModelResolver`; an origin with no threshold uses `defaultCompactThreshold`. There is no separate harness configuration override.
 
 ChatGPT / Codex cannot keep `context_management` on the wire. `cleanCodexRequest` reads `compact_threshold` out of that array, then deletes `context_management` (and `max_output_tokens`) (`internal/rocketclaw/oai/oauth.go:707-754`). After a successful `/responses` call, `codexCompaction` compares `usage.total_tokens` to the extracted threshold and, when usage is not strictly below the threshold and the output has no compaction item yet, prepends the compaction item that `codexCompactItem` gets from a streamed `/responses` request whose input ends with `{"type":"compaction_trigger"}` (`internal/rocketclaw/oai/oauth.go:860-925`, `internal/rocketclaw/oai/oauth.go:968-1046`; see `docs/solutions/runtime-errors/chatgpt-codex-retired-responses-compact.md`). Codex does not honor the OpenAI Responses compaction field directly; the transport applies the same threshold check itself.
 
@@ -100,10 +98,10 @@ Resolver copies the selected provider's field onto the origin:
 	origin := harness.ProviderOrigin{Provider: provider, Model: apiModel, CompactThreshold: providerConfig.AutocompactionThreshold, PromptCacheMarkersRelativePosition: providerConfig.PromptCacheMarkersRelativePosition}
 ```
 
-Origin wins over factory config:
+Origin wins over the runtime default:
 
 ```237:237:internal/rocketclaw/harness/tools.go
-		CompactThreshold:       cmp.Or(origin.CompactThreshold, f.compactThreshold),
+		CompactThreshold:       cmp.Or(origin.CompactThreshold, defaultCompactThreshold),
 ```
 
 Default and request field:

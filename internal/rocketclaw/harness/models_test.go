@@ -218,14 +218,13 @@ func TestNewUsesResolverCompactThreshold(t *testing.T) {
 	client := openai.NewClient()
 	cfg := testConfig(dir)
 
-	cfg.CompactThreshold = 11111
 	for _, tc := range []struct {
 		origin ProviderOrigin
 		model  string
 		want   int64
 	}{
 		{ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol", CompactThreshold: 80000}, "work/gpt-6.1-sol", 80000},
-		{ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, "gpt-6.1-sol", 11111},
+		{ProviderOrigin{Provider: "openai", Model: "gpt-6.1-sol"}, "gpt-6.1-sol", defaultCompactThreshold},
 	} {
 		loop, err := NewWithModelResolver(testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
 			return &client, tc.origin, nil
@@ -248,9 +247,8 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 		return client, ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, nil
 	})
 	cfg := testConfig(dir)
-	cfg.ReasoningEffort = "low"
 
-	for _, effort := range []string{"high", ""} {
+	for _, effort := range []string{"low", ""} {
 		t.Run("agent_effort="+effort, func(t *testing.T) {
 			loop, err := NewWithModelResolver(resolver, cfg, root, Agents{Items: map[string]Agent{
 				"main": {Name: "main", Model: "work/template", Prompt: "prompt", ReasoningEffort: effort},
@@ -260,7 +258,7 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 			require.Equal(t, "work/gpt-6.1-sol", loop.DisplayModel)
 			require.Equal(t, ProviderOrigin{Provider: "work", Model: "gpt-6.1-sol"}, loop.ProviderOrigin)
 
-			require.Equal(t, cmp.Or(effort, "low"), string(loop.ReasoningEffort))
+			require.Equal(t, cmp.Or(effort, "high"), string(loop.ReasoningEffort))
 
 			sink := recordingJournal()
 			loop.Journal = sink
@@ -399,7 +397,6 @@ func testOpenAILoop(t *testing.T, client *openai.Client) *Runtime {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	config := testConfig(dir)
-	config.Model = "gpt-6.1-sol"
 	loop, err := NewWithModelResolver(testResolverForClient(client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Model: "gpt-6.1-sol", Prompt: "prompt"},
 	}}, Skills{Items: map[string]Skill{}}, "main", nil)

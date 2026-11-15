@@ -33,7 +33,6 @@ type toolFactory struct {
 	autoApproverMinConfidence  float64
 	deciders                   map[string]Decider
 	reasoningEffort            shared.ReasoningEffort
-	compactThreshold           int64
 	parallelToolCalls          int
 	diagnostics                bool
 	experimentalStrongerSkills bool
@@ -221,7 +220,7 @@ func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, err
 		DisplayModel:           origin.displayModel(),
 		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
 		Verbosity:              agent.Verbosity,
-		CompactThreshold:       cmp.Or(origin.CompactThreshold, f.compactThreshold),
+		CompactThreshold:       cmp.Or(origin.CompactThreshold, defaultCompactThreshold),
 		ParallelToolCalls:      f.parallelToolCalls,
 		ResponseFormat:         agentOutputResponseFormat(agent.OutputSchema),
 		Permissions:            agent.Permission,
