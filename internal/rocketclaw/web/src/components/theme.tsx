@@ -64,7 +64,6 @@ export function setThemeMode(mode: Mode) {
   window.dispatchEvent(new Event("themechange"));
 }
 
-// Applies the saved theme and palette, and follows the system while the theme is Auto.
 export function useTheme() {
   useEffect(() => {
     apply(storedMode());
