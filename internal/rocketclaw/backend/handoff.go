@@ -43,9 +43,7 @@ func GenerateHandoff(ctx context.Context, locked *config.LockedConfig, agent, tr
 		return "", fmt.Errorf("prepare handoff: %w", err)
 	}
 
-	if err := runtime.RestrictTools([]string{}); err != nil {
-		return "", fmt.Errorf("disable handoff tools: %w", err)
-	}
+	clear(runtime.Tools)
 
 	memory := new(memoryStore)
 	input := make(chan harness.PromptInput, 1)
