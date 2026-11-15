@@ -1193,8 +1193,8 @@ a.pid, a.state, a.wait_event_type, a.wait_event, pg_blocking_pids(a.pid), a.quer
 FROM participants p JOIN pg_stat_activity a ON a.pid = p.pid
 WHERE a.pid <> pg_backend_pid() AND a.state <> 'idle' ORDER BY a.pid`, "shadow mutation startup database activity")
 					t.Logf("shadow mutation startup database_activity=%v query_error=%v", rows, err)
-					rows, err = queryStrings(ctx, store.db, `SELECT format('conversation=%s agent=%s shadow_parent=%s turn=%s phase=%s lane=%s outbound=%s manifest=%s parent_turn=%s child_turn=%s inputs=%s input_closed=%s terminal=%s',
-c.conversation_id, c.agent, c.shadow_parent, t.id, t.phase, t.takes_lane, t.outbound_json IS NOT NULL,
+					rows, err = queryStrings(ctx, store.db, `SELECT format('conversation=%s agent=%s shadow_parent=%s turn=%s phase=%s turn_terminal=%s lane=%s outbound=%s outbound_text=%s manifest=%s parent_turn=%s child_turn=%s inputs=%s input_closed=%s terminal=%s',
+c.conversation_id, c.agent, c.shadow_parent, t.id, t.phase, t.terminal, t.takes_lane, t.outbound_json IS NOT NULL, t.outbound_json->>'Text',
 s.id, s.parent_turn_id, s.child_turn_id, jsonb_array_length(s.inputs), s.input_closed, s.terminal)
 FROM conversations c LEFT JOIN turns t ON t.conversation_id = c.conversation_id
 LEFT JOIN shadow_turns s ON s.child_conversation_id = c.conversation_id
