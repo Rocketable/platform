@@ -389,7 +389,6 @@ func TestSocketLoopRecreatesWhenStableEventChannelIsFull(t *testing.T) {
 		case <-release:
 			return errStale
 		case <-ctx.Done():
-			<-loopDone
 			return ctx.Err()
 		}
 	}
@@ -754,7 +753,7 @@ func TestChannelFactsRefreshTimingAndCoalescing(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		connector.inboundStop = cancel
 
-		connector.factsGroup.Go(func() error { return connector.refreshChannelFacts(ctx) })
+		connector.inbound.Go(func() error { return connector.refreshChannelFacts(ctx) })
 		go connector.eventLoop(ctx)
 
 		synctest.Wait()
@@ -912,7 +911,7 @@ func TestChannelFactsRefreshRetryRetentionAndConvergence(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	connector.inboundStop = cancel
-	connector.factsGroup.Go(func() error { return connector.refreshChannelFacts(ctx) })
+	connector.inbound.Go(func() error { return connector.refreshChannelFacts(ctx) })
 	t.Cleanup(func() { require.NoError(t, connector.Stop(ctx)) })
 
 	at := <-rateLimited
