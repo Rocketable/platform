@@ -1,4 +1,3 @@
-// Package slackconnector bridges Slack events into rocketclaw.
 package slackconnector
 
 import (
@@ -60,7 +59,6 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-// Connector bridges Slack DM events into the shared rocketclaw bus.
 type Connector struct {
 	log    *slog.Logger
 	config config.SlackConfig
@@ -90,8 +88,6 @@ type Connector struct {
 	refreshWake chan struct{}
 	factsGroup  errgroup.Group
 
-	// nameMu covers nameByID and namesAt, including Slack I/O for a load or miss, so
-	// event handling on c.mu never waits. namesAt is the last successful users.list.
 	nameMu       sync.Mutex
 	nameByID     map[string]string
 	namesAt      time.Time
@@ -107,8 +103,6 @@ type channelFactsStore interface {
 	ChannelFact(ctx context.Context, workspaceID, channelID string) (string, bool, error)
 	RecordChannelFact(ctx context.Context, workspaceID, channelID, name string, observedAt time.Time) error
 	SlackChannelIDs(ctx context.Context) ([]string, error)
-	// SlackThread returns the channel and thread a conversation was stored with; the thread is
-	// empty unless the conversation is a Slack thread.
 	SlackThread(ctx context.Context, conversationID string) (channelID, threadTS string, err error)
 	LoadTurnStep(ctx context.Context, conversationID, key string) (json.RawMessage, bool, error)
 	SaveTurnStep(ctx context.Context, conversationID, key string, value json.RawMessage) error
@@ -146,7 +140,6 @@ type rawSlackEventsPayload struct {
 	} `json:"event"`
 }
 
-// New constructs a Slack connector.
 func New(cfg *config.SlackConfig, threadRouter protocol.PrimaryTextRouter, facts channelFactsStore, logger *slog.Logger) *Connector {
 	opts := []slack.Option{slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3)}
 	if endpoint := strings.TrimSpace(os.Getenv("ROCKETCLAW_SLACK_API_URL")); endpoint != "" {
@@ -176,7 +169,6 @@ func New(cfg *config.SlackConfig, threadRouter protocol.PrimaryTextRouter, facts
 	}
 }
 
-// ChannelAgentChoices resolves current configured policy for a Slack channel ID.
 func (c *Connector) ChannelAgentChoices(ctx context.Context, channelID string) ([]string, error) {
 	name, _, ok := c.socialModeChannel(ctx, channelID)
 	if !ok {
@@ -186,8 +178,6 @@ func (c *Connector) ChannelAgentChoices(ctx context.Context, channelID string) (
 	return slices.Clone(c.socialModeAgents(name)), nil
 }
 
-// SidebarChannelAgentChoices returns the stored name and display choices without contacting Slack.
-// Unknown channels return their stable ID and no choices.
 func (c *Connector) SidebarChannelAgentChoices(ctx context.Context, channelID string) (name string, choices []string, err error) {
 	name, ok, err := c.facts.ChannelFact(ctx, c.teamID, channelID)
 	if err != nil {
@@ -205,9 +195,6 @@ func (c *Connector) SidebarChannelAgentChoices(ctx context.Context, channelID st
 	return name, slices.Clone(c.socialModeAgents("@")), nil
 }
 
-// SlackNames returns bare display names for Slack user, user group, and channel
-// IDs, omitting IDs it cannot resolve. Users and groups come from a directory
-// reloaded every 8 hours; channels come from stored facts without calling Slack.
 func (c *Connector) SlackNames(ctx context.Context, ids []string) map[string]string {
 	c.nameMu.Lock()
 	defer c.nameMu.Unlock()
@@ -225,9 +212,6 @@ func (c *Connector) SlackNames(ctx context.Context, ids []string) map[string]str
 				name = stored
 			}
 		case !ok && !strings.HasPrefix(id, "S"):
-			// Unknown users stay cached as "" until the next reload so they
-			// cannot exhaust the users.info limit slackPrincipal shares.
-			// Transient failures, including cancellation, are not cached.
 			user, err := c.api.GetUserInfoContext(ctx, id)
 			if err == nil {
 				name = slackDisplayName(user)
@@ -245,7 +229,6 @@ func (c *Connector) SlackNames(ctx context.Context, ids []string) map[string]str
 	return names
 }
 
-// SlackTagsMatching returns user and group IDs whose bare names contain needle.
 func (c *Connector) SlackTagsMatching(ctx context.Context, needle string) []string {
 	c.nameMu.Lock()
 	defer c.nameMu.Unlock()
@@ -273,7 +256,6 @@ func slackDisplayName(user *slack.User) string {
 	return cmp.Or(strings.TrimSpace(user.Profile.DisplayName), strings.TrimSpace(user.RealName))
 }
 
-// Authenticate identifies the bot and workspace before other frontends use the connector.
 func (c *Connector) Authenticate() error {
 	auth, err := c.api.AuthTest()
 	if err != nil {
@@ -286,7 +268,6 @@ func (c *Connector) Authenticate() error {
 	return nil
 }
 
-// Start begins consuming Slack input; call it after Authenticate.
 func (c *Connector) Start(ctx context.Context) {
 	inboundCtx, inboundStop := context.WithCancel(ctx)
 
@@ -298,7 +279,6 @@ func (c *Connector) Start(ctx context.Context) {
 	c.factsGroup.Go(func() error { return c.refreshChannelFacts(inboundCtx) })
 }
 
-// Stop stops Slack socket intake while leaving response delivery usable.
 func (c *Connector) Stop(context.Context) error {
 	c.inboundStop()
 
@@ -309,8 +289,6 @@ func (c *Connector) Stop(context.Context) error {
 	return nil
 }
 
-// SendResponse sets a mention thread's agent session to processing when a turn starts, and posts
-// the turn's final as a new message before setting the session active again.
 func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMessage) (err error) {
 	c.responseMu.Lock()
 	defer c.responseMu.Unlock()
@@ -363,7 +341,6 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 	return nil
 }
 
-// AbortResponse releases Slack state after final response delivery cannot recover.
 func (c *Connector) AbortResponse(msg *protocol.OutboundMessage) {
 	c.responseMu.Lock()
 	defer c.responseMu.Unlock()
@@ -374,8 +351,6 @@ func (c *Connector) AbortResponse(msg *protocol.OutboundMessage) {
 	c.finishResponse(cleanupCtx, msg, c.mentionThread(cleanupCtx, msg))
 }
 
-// RenameThreadSession titles a mention thread's agent session after its conversation's new Web
-// name. Other conversations and empty names change nothing; a failure is only logged.
 func (c *Connector) RenameThreadSession(ctx context.Context, conversationID, name string) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -399,7 +374,6 @@ func slackReplyDestination(replyTarget *protocol.SlackReplyTarget) (channelID, t
 func titledMessageLayout(header, fallback, text string) (fallbackText string, blocks []slack.Block, overflow []string) {
 	header = slackTruncatedText(header, 150)
 	bodyChunks := splitSlackText(text, slackBlockTextLimit)
-	// One of Slack's 50 blocks stays free for the footer.
 	rootBodyCount := min(len(bodyChunks), 47)
 
 	blocks = make([]slack.Block, 0, rootBodyCount+2)
@@ -415,8 +389,6 @@ func titledMessageLayout(header, fallback, text string) (fallbackText string, bl
 	return fallback, blocks, bodyChunks[rootBodyCount:]
 }
 
-// slackFooter renders the "agent · state · Open in Web" footer as fallback text and its
-// context block. A Web link the router cannot build is logged and left out.
 func (c *Connector) slackFooter(ctx context.Context, agent, state, conversationID string) (string, []slack.Block) {
 	text := agent + " · " + state
 
@@ -622,7 +594,6 @@ func (c *Connector) sendFooterOnlyResponse(ctx context.Context, msg *protocol.Ou
 	}
 }
 
-// logDelivery owns outcome formatting separately from the reply-recovery flow.
 func (c *Connector) logDelivery(msg *protocol.OutboundMessage, startedAt time.Time, err error) {
 	outcome := "acknowledged"
 
@@ -682,7 +653,6 @@ func (c *Connector) flushChannelFacts(ctx context.Context) {
 	}
 }
 
-// refreshChannelFacts is the single lifecycle-owned lane for channel refreshes.
 func (c *Connector) refreshChannelFacts(ctx context.Context) error {
 	ticker := time.NewTicker(3 * time.Minute)
 	defer ticker.Stop()
@@ -740,15 +710,11 @@ func (c *Connector) refreshChannelFacts(ctx context.Context) error {
 	return nil
 }
 
-// slackPosting is recorded before a journaled step posts its Slack message, so a
-// step cut off mid-post finds that message instead of posting it again.
 type slackPosting struct {
 	ChannelID string `json:"channel_id"`
 	ThreadTS  string `json:"thread_ts"`
 }
 
-// The message must carry key as its block ID: a post cut off before its
-// target was recorded is found by that block ID instead of being repeated.
 func (c *Connector) postOnce(ctx context.Context, conversationID, key, channelID, threadTS string, options ...slack.MsgOption) (protocol.TextConversationTarget, error) {
 	var target protocol.TextConversationTarget
 
@@ -809,8 +775,6 @@ func (c *Connector) postOnce(ctx context.Context, conversationID, key, channelID
 	return target, nil
 }
 
-// recordPost saves a posted message's target. A failure is only logged: the
-// message is already posted, and the posting marker finds it again on replay.
 func (c *Connector) recordPost(ctx context.Context, conversationID, key string, target *protocol.TextConversationTarget) {
 	data, _ := json.Marshal(target)
 	if err := c.facts.SaveTurnStep(context.WithoutCancel(ctx), conversationID, key, data); err != nil {
@@ -818,8 +782,6 @@ func (c *Connector) recordPost(ctx context.Context, conversationID, key string, 
 	}
 }
 
-// findPosted returns the timestamp of a message carrying blockID that posting
-// sent, searching its thread.
 func (c *Connector) findPosted(ctx context.Context, posting *slackPosting, blockID string) (string, error) {
 	cursor := ""
 
@@ -1068,7 +1030,6 @@ func (c *Connector) handleAgentSessionStopped(ctx context.Context, ev *slackeven
 		pressedDuringTurn := session.processingSince.Before(time.UnixMicro(int64(pressedAt * 1e6)))
 
 		if ok && c.socialModeAllowsUser(channel, ev.User) && pressedDuringTurn {
-			// Interrupting an idle turn delivers its final through SendResponse before returning.
 			c.responseMu.Unlock()
 			_, err := c.threadRouter.InterruptThread(protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: ev.ThreadTimestamp})
 			c.responseMu.Lock()
@@ -1148,8 +1109,6 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 			return
 		}
 
-		// Earlier versions posted cron and External MCP roots, and old records are pruned, so a
-		// root RocketClaw posted marks a report thread.
 		if slices.ContainsFunc(messages, func(message slack.Message) bool { return message.Timestamp == threadTS && message.User == c.botUserID }) {
 			return
 		}
@@ -1159,7 +1118,6 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	c.responseMu.Lock()
 	if turnID, _ := c.sessionTurn(protocol.SlackThreadConversationID(ev.Channel, threadTS)); turnID == "" {
-		// Slack shows the thread working at once; the session's title and initiator apply only when this creates it.
 		c.setSessionStatus(ctx, &slack.AgentSessionSetStatusParameters{Status: slack.AgentSessionStatusProcessing, ChannelID: ev.Channel, ThreadTS: threadTS, Title: slackTruncatedText(strings.TrimSpace(text), slackSessionTitleLimit), InitiatorUserID: ev.User})
 	}
 	c.responseMu.Unlock()
@@ -1192,7 +1150,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		return
 	}
 
-	if err != nil { // Admitted: the queued mention runs at the next pickup.
+	if err != nil {
 		c.log.Warn("pick up accepted Slack mention", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent)
 	}
 
@@ -1271,7 +1229,6 @@ func (c *Connector) slackThreadReplies(ctx context.Context, channelID, threadTS 
 		cursor = nextCursor
 	}
 
-	// A stable sort keeps the first copy of a message that several pages repeat.
 	slices.SortStableFunc(messages, func(a, b slack.Message) int { return strings.Compare(a.Timestamp, b.Timestamp) })
 
 	return slices.CompactFunc(messages, func(a, b slack.Message) bool { return a.Timestamp == b.Timestamp }), true
@@ -1358,9 +1315,6 @@ func (c *Connector) stripSlackBotMention(text string) string {
 	return text
 }
 
-// refreshNames reloads the user and group directory when it is 8 hours old
-// and no recent load failed.
-// Callers hold nameMu.
 func (c *Connector) refreshNames(ctx context.Context) {
 	if time.Since(c.namesAt) < 8*time.Hour || time.Now().Before(c.namesRetryAt) {
 		return
@@ -1368,9 +1322,6 @@ func (c *Connector) refreshNames(ctx context.Context) {
 
 	users, err := c.api.GetUsersContext(ctx)
 	if err != nil {
-		// A failed load keeps the previous directory and is retried after a
-		// minute, so an outage or missing scope does not put a Slack call on
-		// every name lookup and search.
 		c.namesRetryAt = time.Now().Add(time.Minute)
 
 		return
@@ -1397,8 +1348,6 @@ func (c *Connector) refreshNames(ctx context.Context) {
 	c.namesAt = time.Now()
 }
 
-// slackPrincipal returns the prompt principal and, when Slack names the user, that name and the profile
-// email, which is empty without the users:read.email scope.
 func (c *Connector) slackPrincipal(ctx context.Context, userID string) (principal, name, email string) {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
@@ -1508,7 +1457,6 @@ func (c *Connector) addSlackForward(ctx context.Context, content *protocol.Inbou
 			return
 		}
 
-		// A failed read returns no messages.
 		messages, _ = c.slackThreadReplies(ctx, forward.channelID, forward.threadTS)
 	}
 

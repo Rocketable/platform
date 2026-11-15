@@ -130,8 +130,6 @@ func TestHandleAppMentionEventAdoptsBareThreadMention(t *testing.T) {
 	assert.NotContains(t, started[0].Inbound.Text, "<@U999>")
 }
 
-// Earlier versions posted cron and External MCP roots, and startup prunes old records, so a
-// mention under a root RocketClaw posted is a report-thread mention.
 func TestHandleAppMentionEventIgnoresThreadUnderBotRoot(t *testing.T) {
 	for name, root := range map[string]string{"cron report": "🔁 nightly.md | main", "External MCP relay": "📡 MCP request | ext-1 | main"} {
 		t.Run(name, func(t *testing.T) {

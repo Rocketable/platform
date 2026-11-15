@@ -27,7 +27,6 @@ func splitSlackText(text string, limit int) []string {
 
 	chunks := make([]string, 0, len(runes)/limit+1)
 	for len(runes) > 0 {
-		// Slack escapes these characters when returning blocks; budget that form so a footer edit still fits.
 		size, hardEnd := 0, 0
 
 		for i, r := range runes {

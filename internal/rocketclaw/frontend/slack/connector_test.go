@@ -539,8 +539,6 @@ func TestSocketLoopAcksEventsAPIBeforeEnqueue(t *testing.T) {
 	}
 }
 
-// Slack has no question buttons, so an interactive event, such as a press on one left from
-// before, makes no Slack call and does not stop the event loop.
 func TestEventLoopIgnoresInteractiveEvents(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
@@ -603,7 +601,6 @@ func TestEventLoopRoutesEventsAPI(t *testing.T) {
 	server := newSlackStackTestServer(t, &posted, &reactions)
 	defer server.Close()
 
-	// The working status precedes SubmitMention on the same context, so cancel only after Slack served it.
 	statusServed := make(chan struct{}, 1)
 	inner := server.Config.Handler
 	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -768,7 +765,7 @@ func TestChannelFactsRefreshTimingAndCoalescing(t *testing.T) {
 		time.Sleep(time.Nanosecond)
 		synctest.Wait()
 		require.Len(t, facts.SlackChannelIDsCalls(), 2)
-		// Hold the existing lane while many reconnects request another pass.
+
 		release := make(chan struct{})
 		facts.SlackChannelIDsFunc = func(ctx context.Context) ([]string, error) {
 			select {
@@ -860,7 +857,6 @@ func TestChannelFactsRefreshRetryRetentionAndConvergence(t *testing.T) {
 		require.NoError(t, store.RecordChannelFact(t.Context(), "T1", id, "old", time.Unix(1, 0)))
 	}
 
-	// The channels of recorded Slack threads; only RocketClaw's own Slack handling records those.
 	facts := &channelFactsStoreMock{
 		ChannelFactFunc:       store.ChannelFact,
 		RecordChannelFactFunc: store.RecordChannelFact,
@@ -1285,8 +1281,6 @@ func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 
 const testFooterLink = "http://100.95.197.99:3000/s/c2xhY2s"
 
-// newFooterRouter answers every thread as a mention or report thread and links each
-// conversation to testFooterLink, or fails the link with errLink.
 func newFooterRouter(t *testing.T, report bool, errLink error) *primaryTextRouterMock {
 	t.Helper()
 
@@ -1304,7 +1298,6 @@ func newFooterRouter(t *testing.T, report bool, errLink error) *primaryTextRoute
 	}
 }
 
-// slackContextTexts returns the text of each context block in a Slack blocks form value.
 func slackContextTexts(t *testing.T, blocks string) (texts []string, count int) {
 	t.Helper()
 
@@ -1431,7 +1424,7 @@ func TestSendResponseFooterOnlyPostsOncePerTurn(t *testing.T) {
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
 		case "/conversations.replies":
 			assert.Equal(t, "111.222", r.PostForm.Get("ts"))
-			// The footer is on the second page of the thread.
+
 			if r.PostForm.Get("cursor") == "" {
 				writeJSON(t, w, map[string]any{"ok": true, "has_more": true, "response_metadata": map[string]any{"next_cursor": "next"}, "messages": []map[string]any{
 					{"ts": "555.0", "blocks": []map[string]any{{"type": "context", "block_id": "turn-0/footer", "elements": []map[string]any{}}}},
@@ -1469,7 +1462,6 @@ func TestSendResponseFooterOnlyPostsOncePerTurn(t *testing.T) {
 	assert.Equal(t, []string{"main · stopped · <" + testFooterLink + "|Open in Web>"}, texts)
 	assert.Equal(t, 1, count)
 
-	// A crash after the post but before it was recorded finds the footer in its thread instead of posting again.
 	cut := map[string]json.RawMessage{"turn-1/footer/posting": json.RawMessage(`{"channel_id":"C123","thread_ts":"111.222"}`)}
 	connector := newTestConnectorWithOptions(server.URL, testSocialChannels(), newFooterRouter(t, false, nil))
 	connector.facts = newTestTurnSteps(t, final.ConversationID, cut)
@@ -1477,7 +1469,6 @@ func TestSendResponseFooterOnlyPostsOncePerTurn(t *testing.T) {
 	require.Len(t, posted, 1)
 	assert.Contains(t, string(cut["turn-1/footer"]), "555.1", "the found footer is recorded")
 
-	// A post cut off before it reached Slack is not in its thread, so it posts.
 	unposted := protocol.CloneOutboundMessage(final)
 	unposted.TurnID = "turn-2"
 	cut["turn-2/footer/posting"] = cut["turn-1/footer/posting"]
@@ -1490,8 +1481,6 @@ type agentSessionCalls struct {
 	statuses, posts, edits, renames []string
 }
 
-// newAgentSessionServer fakes Slack for agentSessionCalls; a non-empty errStatus fails every
-// agents.sessions.setStatus call with it.
 func newAgentSessionServer(t *testing.T, errStatus string) (*httptest.Server, *agentSessionCalls) {
 	t.Helper()
 
@@ -1535,7 +1524,6 @@ func newAgentSessionServer(t *testing.T, errStatus string) (*httptest.Server, *a
 	return server, calls
 }
 
-// newMentionThreadTurn returns turnID's start or, when terminal is set, its final in thread 111.222.
 func newMentionThreadTurn(turnID string, terminal protocol.Terminal) *protocol.OutboundMessage {
 	msg := protocol.NewOutboundMessage("slack-thread:C123:111.222", "")
 	msg.TurnID, msg.Agent, msg.Terminal, msg.Complete = turnID, "main", terminal, terminal != ""
@@ -1708,8 +1696,6 @@ func TestMentionTurnPollRenewsAndEndsStaleSession(t *testing.T) {
 	assert.Empty(t, connector.sessions)
 }
 
-// Every writer of a thread's session status defers to the running turn's session: a mention, or
-// Slack redelivering one, while the turn waits on a Web question leaves the thread suspended.
 func TestMentionDuringWaitingTurnKeepsItSuspended(t *testing.T) {
 	server, calls := newAgentSessionServer(t, "")
 	progress := protocol.TurnProgress{Running: true, Asking: true}
@@ -1749,8 +1735,6 @@ func TestMentionTurnPollsUntilItEnds(t *testing.T) {
 	assert.LessOrEqual(t, len(facts.TurnProgressCalls()), polls+1, "an ended turn stops polling")
 }
 
-// A final whose post-once journal cannot be read or written posts nothing and fails, so its delivery
-// is retried instead of risking a duplicate; an answer posted but not recorded is still delivered.
 func TestSendResponseFinalJournalFailures(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
@@ -2486,7 +2470,6 @@ func TestHandleAppMentionEventUsesPerChannelAllowlist(t *testing.T) {
 	assert.Equal(t, "triage", started[0].Agent)
 }
 
-// Former Slack $ commands reach the channel's agent as ordinary mention text.
 func TestSlackDollarTextReachesOrdinaryRouting(t *testing.T) {
 	for _, root := range []bool{false, true} {
 		for _, text := range []string{"$stop", "$agent factory hi", "$agent", "$goal ship it", "$enqueue later", "$queue", "$", "$review  \"first area\"  second", "$skill stop inspect the logs"} {
@@ -2552,8 +2535,6 @@ func TestHandleAppMentionEventIgnoresReportThread(t *testing.T) {
 	assert.Empty(t, reactions)
 }
 
-// Slack starts work only from app_mention: a reply without a mention, in a thread
-// RocketClaw answered earlier, a reaction, or an edited mention reach no router call and no Slack call.
 func TestHandleEventsAPIIgnoresMessagesAndReactions(t *testing.T) {
 	server := newSlackStackTestServer(t, new([]url.Values), new([]string))
 	defer server.Close()
@@ -2574,8 +2555,6 @@ func TestHandleEventsAPIIgnoresMessagesAndReactions(t *testing.T) {
 	assert.Empty(t, router.SubmitMentionCalls())
 }
 
-// A mention in a thread RocketClaw answers continues that conversation as its next turn, never
-// a steer of a running one, and keeps its attachments and forward; the thread is not re-read.
 func TestHandleAppMentionEventQueuesMentionInKnownThread(t *testing.T) {
 	var (
 		posted    []url.Values
@@ -2741,7 +2720,7 @@ func TestSlackPrincipal(t *testing.T) {
 		display string
 		real    string
 		email   string
-		want    []string // principal, person's name, email
+		want    []string
 	}{
 		{name: "display name", userID: userID, ok: true, display: "Ulderico", real: "Other", email: "u@example.com", want: []string{"Ulderico (U0ADDPB7P4K)", "Ulderico", "u@example.com"}},
 		{name: "real name when display empty", userID: userID, ok: true, real: "Ulderico Cirello", want: []string{"Ulderico Cirello (U0ADDPB7P4K)", "Ulderico Cirello", ""}},
@@ -2792,7 +2771,6 @@ func newTestConnector(apiURL string) *Connector {
 	return newTestConnectorWithOptions(apiURL, testSocialChannels(), inertThreadRouter{})
 }
 
-// testSocialChannels returns a fresh copy because tests edit the channel list.
 func testSocialChannels() []config.SlackChannelConfig {
 	return []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social"}, AllowedUserIDs: []string{"U123"}}}
 }
@@ -2840,7 +2818,6 @@ func newTestConnectorWithOptions(apiURL string, channels []config.SlackChannelCo
 	return connector
 }
 
-// newMentionRouter reports every thread as recorded or not and accepts each mention.
 func newMentionRouter(recorded bool) *primaryTextRouterMock {
 	return &primaryTextRouterMock{
 		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return recorded, false, nil },
@@ -2855,7 +2832,6 @@ func newTestChannelFacts() *channelFactsStoreMock {
 		ChannelFactFunc:       func(context.Context, string, string) (string, bool, error) { return "", false, nil },
 		RecordChannelFactFunc: func(context.Context, string, string, string, time.Time) error { return nil },
 		SlackChannelIDsFunc:   func(context.Context) ([]string, error) { return nil, nil },
-		// A test names each Slack thread's conversation slack-thread:<channel>:<thread>, as the code creating it does.
 		SlackThreadFunc: func(_ context.Context, id string) (string, string, error) {
 			rest, ok := strings.CutPrefix(id, "slack-thread:")
 			if !ok {
@@ -2874,8 +2850,6 @@ func newTestChannelFacts() *channelFactsStoreMock {
 	}
 }
 
-// newTestTurnSteps returns channel facts whose turn steps for conversationID
-// live in steps, which survives the connectors of a simulated restart.
 func newTestTurnSteps(t *testing.T, conversationID string, steps map[string]json.RawMessage) *channelFactsStoreMock {
 	t.Helper()
 
@@ -2973,7 +2947,6 @@ func newSlackStackTestServer(t *testing.T, posted *[]url.Values, slackWrites *[]
 			writeJSON(t, w, map[string]any{"ok": true})
 		case "/users.info":
 			writeJSON(t, w, map[string]any{"ok": true, "user": map[string]any{"id": "U123", "profile": map[string]any{"display_name": "Ann", "email": "ann@example.com"}}})
-		// slack-go v0.30.1 sends the file token only to the API host.
 		case "/image.png", "/notes.txt":
 			_, err := w.Write([]byte("acquired " + r.URL.Path))
 			assert.NoError(t, err)
