@@ -120,7 +120,6 @@ func TestSyncReportsWorkspaceDirectoryConflicts(t *testing.T) {
 	}
 }
 
-// placeConflict replaces path with a symlink to symlink when set, a directory with dirMode's permissions when dirMode has os.ModeDir, or a regular file otherwise.
 func placeConflict(t *testing.T, path, symlink string, dirMode os.FileMode) {
 	t.Helper()
 
@@ -146,7 +145,6 @@ func TestResetRuntimeDirectoryPreservesAuthAndAttachments(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(target, "remove-me"), []byte("trash"), 0o600))
 	require.NoError(t, os.Mkdir(filepath.Join(target, "attachments"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(target, "attachments", "original"), []byte("immutable"), 0o600))
-	// A reload keeps the emulated shell's unpacked rootfs, which running bash calls use.
 	require.NoError(t, os.Mkdir(filepath.Join(target, "sandbox"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(target, "sandbox", "rootfs"), []byte("rootfs"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(target, "uploads", "web:c1", "up1"), 0o700))
