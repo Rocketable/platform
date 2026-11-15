@@ -9,7 +9,6 @@ import (
 
 var errInvalidAWSRef = errors.New("aws object requires arn and key")
 
-// mergeJSON and resolveAWS consume the fresh decoded trees owned by Load.
 func mergeJSON(dst, src any) any {
 	dstMap, dstOK := dst.(map[string]any)
 

@@ -1,4 +1,3 @@
-// Package config loads and validates rocketclaw configuration files.
 package config
 
 import (
@@ -17,58 +16,47 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
 )
 
-// Config is the top-level rocketclaw runtime configuration.
 type Config struct {
-	Workspace         string                            `json:"workspace"`
-	DatabaseURL       string                            `json:"database_url"`
-	Attachments       AttachmentsConfig                 `json:"attachments,omitzero"`
-	WorkDir           string                            `json:"-"`
-	Overlays          []string                          `json:"overlays,omitempty"`
-	Web               WebConfig                         `json:"web,omitzero"`
-	ServerDisplayName string                            `json:"server_display_name,omitempty"`
-	Environment       []string                          `json:"environment,omitempty"`
-	Logging           LoggingConfig                     `json:"logging"`
-	MCPExternal       MCPExternalConfig                 `json:"mcp_external"`
-	MCPServers        map[string]MCPServerConfig        `json:"mcp_servers,omitempty"`
-	OpenCode          map[string]OpenCodeConfig         `json:"opencode,omitempty"`
-	RocketClaws       map[string]RemoteRocketClawConfig `json:"rocketclaws,omitempty"`
-	// TrustedRocketClaws are the https origins of the RocketClaw pages whose browsers may call this server's tailnet
-	// address as the person on the connection; a page from any other origin gets no cross-site access.
-	TrustedRocketClaws []string                `json:"trusted_rocketclaws,omitempty"`
-	Slack              SlackConfig             `json:"slack"`
-	OpenAI             OpenAIConfig            `json:"openai"`
-	Providers          map[string]OpenAIConfig `json:"providers,omitempty"`
-	AutoApproverModel  string                  `json:"auto_approver_model"`
-	// Decision configures decision-model providers by name, openai or typesafe.
-	Decision map[DecisionProvider]DecisionProviderConfig `json:"decision,omitempty"`
-	// AutoApproverDecision is the decision model the built-in guardian's reviews ask first.
-	AutoApproverDecision AutoApproverDecisionConfig `json:"auto_approver_decision,omitzero"`
-	Instrumentation      InstrumentationConfig      `json:"instrumentation"`
-	PostHog              PostHogConfig              `json:"posthog,omitzero"`
-	// Permissions maps a Tailscale login to the names of the spaces it is limited to in the Web.
-	Permissions map[string][]string `json:"permissions,omitempty"`
+	Workspace            string                                      `json:"workspace"`
+	DatabaseURL          string                                      `json:"database_url"`
+	Attachments          AttachmentsConfig                           `json:"attachments,omitzero"`
+	WorkDir              string                                      `json:"-"`
+	Overlays             []string                                    `json:"overlays,omitempty"`
+	Web                  WebConfig                                   `json:"web,omitzero"`
+	ServerDisplayName    string                                      `json:"server_display_name,omitempty"`
+	Environment          []string                                    `json:"environment,omitempty"`
+	Logging              LoggingConfig                               `json:"logging"`
+	MCPExternal          MCPExternalConfig                           `json:"mcp_external"`
+	MCPServers           map[string]MCPServerConfig                  `json:"mcp_servers,omitempty"`
+	OpenCode             map[string]OpenCodeConfig                   `json:"opencode,omitempty"`
+	RocketClaws          map[string]RemoteRocketClawConfig           `json:"rocketclaws,omitempty"`
+	TrustedRocketClaws   []string                                    `json:"trusted_rocketclaws,omitempty"`
+	Slack                SlackConfig                                 `json:"slack"`
+	OpenAI               OpenAIConfig                                `json:"openai"`
+	Providers            map[string]OpenAIConfig                     `json:"providers,omitempty"`
+	AutoApproverModel    string                                      `json:"auto_approver_model"`
+	Decision             map[DecisionProvider]DecisionProviderConfig `json:"decision,omitempty"`
+	AutoApproverDecision AutoApproverDecisionConfig                  `json:"auto_approver_decision,omitzero"`
+	Instrumentation      InstrumentationConfig                       `json:"instrumentation"`
+	PostHog              PostHogConfig                               `json:"posthog,omitzero"`
+	Permissions          map[string][]string                         `json:"permissions,omitempty"`
 }
 
-// DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
 const DefaultRuntimeDir = ".rocketclaw"
 
-// AttachmentDriver selects where immutable attachment originals are stored.
 type AttachmentDriver string
 
-// FilesystemAttachments and S3Attachments select the supported original-file stores.
 const (
 	FilesystemAttachments AttachmentDriver = "filesystem"
 	S3Attachments         AttachmentDriver = "s3"
 )
 
-// AttachmentsConfig selects an attachment directory or S3 bucket.
 type AttachmentsConfig struct {
 	Driver    AttachmentDriver `json:"driver"`
 	Path      string           `json:"path,omitempty"`
 	BucketARN string           `json:"bucket_arn,omitempty"`
 }
 
-// AttachmentLocation validates storage configuration and resolves its directory or bucket name.
 func (c *Config) AttachmentLocation() (AttachmentDriver, string, error) {
 	switch c.Attachments.Driver {
 	case "", FilesystemAttachments:
@@ -94,7 +82,6 @@ func (c *Config) AttachmentLocation() (AttachmentDriver, string, error) {
 	}
 }
 
-// RuntimeDirName returns the selected generated runtime directory name.
 func (c *Config) RuntimeDirName() string {
 	if strings.TrimSpace(c.WorkDir) != "" {
 		return c.WorkDir
@@ -103,29 +90,21 @@ func (c *Config) RuntimeDirName() string {
 	return DefaultRuntimeDir
 }
 
-// WebConfig controls the Web listener and conversation presentation.
 type WebConfig struct {
-	ListenAddress string `json:"listen_address,omitempty"`
-	// TLSCertFile and TLSKeyFile are the PEM certificate and key the listen_address listener serves
-	// HTTPS with. Without them it serves a self-signed certificate made at each start.
-	TLSCertFile string       `json:"tls_cert_file,omitempty"`
-	TLSKeyFile  string       `json:"tls_key_file,omitempty"`
-	Sentry      SentryConfig `json:"sentry,omitzero"`
-	Tsnet       *TsnetConfig `json:"tsnet,omitempty"`
+	ListenAddress string       `json:"listen_address,omitempty"`
+	TLSCertFile   string       `json:"tls_cert_file,omitempty"`
+	TLSKeyFile    string       `json:"tls_key_file,omitempty"`
+	Sentry        SentryConfig `json:"sentry,omitzero"`
+	Tsnet         *TsnetConfig `json:"tsnet,omitempty"`
 }
 
-// TsnetConfig runs an embedded Tailscale node serving the Web over tailnet HTTPS.
-// Its auth key comes only from TS_AUTHKEY, never from config.
 type TsnetConfig struct {
 	Hostname string   `json:"hostname,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
-	// AuthKey logs the node in without a login link; it is used only while the node is logged out.
-	AuthKey string `json:"auth_key,omitempty"`
-	// Origin is the node's HTTPS origin, set at runtime once it serves.
-	Origin string `json:"-"`
+	AuthKey  string   `json:"auth_key,omitempty"`
+	Origin   string   `json:"-"`
 }
 
-// SentryConfig contains only public browser tracing settings, never an auth token.
 type SentryConfig struct {
 	DSN              string   `json:"dsn,omitempty"`
 	Environment      string   `json:"environment,omitempty"`
@@ -159,18 +138,15 @@ func (c SentryConfig) validate() error {
 	return nil
 }
 
-// LoggingConfig controls rocketclaw logging.
 type LoggingConfig struct {
 	Level string `json:"level"`
 }
 
-// MCPExternalConfig configures the persistent external MCP HTTP server.
 type MCPExternalConfig struct {
 	Enabled    bool   `json:"enabled"`
 	ListenAddr string `json:"listen_addr"`
 }
 
-// MCPServerConfig configures one outbound MCP server for code mode.
 type MCPServerConfig struct {
 	Command string            `json:"command,omitempty"`
 	Args    []string          `json:"args,omitempty"`
@@ -181,13 +157,11 @@ type MCPServerConfig struct {
 	Tools   MCPToolGroups     `json:"tools,omitzero"`
 }
 
-// MCPToolGroups lists one server's read and write tool-name patterns, the groups easy agents select.
 type MCPToolGroups struct {
 	Read  []string `json:"read,omitempty"`
 	Write []string `json:"write,omitempty"`
 }
 
-// MCPToolGroups returns every MCP server's tool groups keyed by group name.
 func (c *Config) MCPToolGroups() map[string]map[string][]string {
 	groups := make(map[string]map[string][]string, len(c.MCPServers))
 	for name := range c.MCPServers {
@@ -197,35 +171,25 @@ func (c *Config) MCPToolGroups() map[string]map[string][]string {
 	return groups
 }
 
-// ProviderNames returns every configured model provider name, openai included.
 func (c *Config) ProviderNames() []string {
 	return append(slices.Sorted(maps.Keys(c.Providers)), "openai")
 }
 
-// OpenCodeConfig names one remote OpenCode server the Web lists and proxies under /oc/{name}/.
 type OpenCodeConfig struct {
 	URL      string `json:"url"`
 	Password string `json:"password"`
 }
 
-// RemoteRocketClawConfig names another RocketClaw whose chats the Web page lists and operates.
-// URL is the remote's tsnet HTTPS origin, which the browser calls directly.
 type RemoteRocketClawConfig struct {
 	URL string `json:"url"`
 }
 
-// MCP server names follow the same character rules as MCP tool names in the
-// official Go SDK (modelcontextprotocol/go-sdk validateToolName): non-empty,
-// max 128 runes, and only [A-Za-z0-9_.-].
-
-// SlackConfig configures Slack channel conversations.
 type SlackConfig struct {
 	BotToken string               `json:"bot_token"`
 	AppToken string               `json:"app_token"`
 	Channels []SlackChannelConfig `json:"channels,omitempty"`
 }
 
-// Channel returns the configured Slack channel with this name.
 func (s SlackConfig) Channel(name string) (SlackChannelConfig, bool) {
 	for _, channel := range s.Channels {
 		if channel.Channel == name {
@@ -236,36 +200,28 @@ func (s SlackConfig) Channel(name string) (SlackChannelConfig, bool) {
 	return SlackChannelConfig{}, false
 }
 
-// SlackChannelConfig configures one Slack channel.
 type SlackChannelConfig struct {
 	Channel        string   `json:"channel"`
 	Agents         []string `json:"agents,omitempty"`
 	AllowedUserIDs []string `json:"allowed_user_ids,omitempty"`
 }
 
-// OpenAIConfig configures the OpenAI client used by the agent harness.
 type OpenAIConfig struct {
-	APIKey     string `json:"api_key"`
-	APIBaseURL string `json:"api_base_url"`
-	Auth       string `json:"auth"`
-	// LegacyAuth is the old name of Auth, read when Auth is unset.
-	LegacyAuth              string `json:"rocketcode_auth,omitempty"`
-	AutocompactionThreshold int64  `json:"autocompaction_threshold,omitempty"`
-	// PromptCacheMarkersRelativePosition, when set, marks the text piece at this
-	// negative index of the last request message with an Anthropic cache_control.
-	PromptCacheMarkersRelativePosition *int `json:"prompt_cache_markers_relative_position,omitempty"`
+	APIKey                             string `json:"api_key"`
+	APIBaseURL                         string `json:"api_base_url"`
+	Auth                               string `json:"auth"`
+	LegacyAuth                         string `json:"rocketcode_auth,omitempty"`
+	AutocompactionThreshold            int64  `json:"autocompaction_threshold,omitempty"`
+	PromptCacheMarkersRelativePosition *int   `json:"prompt_cache_markers_relative_position,omitempty"`
 }
 
-// DecisionProvider names a decision-model API.
 type DecisionProvider string
 
-// The decision-model APIs RocketClaw can call.
 const (
 	DecisionOpenAI   DecisionProvider = "openai"
 	DecisionTypeSafe DecisionProvider = "typesafe"
 )
 
-// DecisionProviderNames returns every configured decision provider name.
 func (c *Config) DecisionProviderNames() []string {
 	names := make([]string, 0, len(c.Decision))
 	for name := range c.Decision {
@@ -275,20 +231,16 @@ func (c *Config) DecisionProviderNames() []string {
 	return names
 }
 
-// DecisionProviderConfig configures one decision-model API; it never shares the chat providers' credentials.
 type DecisionProviderConfig struct {
 	APIKey     string `json:"api_key"`
 	APIBaseURL string `json:"api_base_url,omitempty"`
 }
 
-// AutoApproverDecisionConfig is the decision model, a provider/model under decision, that the built-in
-// guardian asks first, and the confidence every answer needs to settle a review.
 type AutoApproverDecisionConfig struct {
 	Model         string  `json:"model,omitempty"`
 	MinConfidence float64 `json:"min_confidence,omitempty"`
 }
 
-// Provider returns the default or named provider configuration.
 func (c *Config) Provider(name string) (OpenAIConfig, bool) {
 	if name == "openai" {
 		return c.OpenAI, true
@@ -299,7 +251,6 @@ func (c *Config) Provider(name string) (OpenAIConfig, bool) {
 	return provider, ok
 }
 
-// InstrumentationConfig configures OpenTelemetry/OpenInference tracing.
 type InstrumentationConfig struct {
 	Enabled           bool   `json:"enabled"`
 	CollectorEndpoint string `json:"collector_endpoint"`
@@ -309,14 +260,11 @@ type InstrumentationConfig struct {
 	HideOutputs       bool   `json:"hide_outputs"`
 }
 
-// PostHogConfig sends log events, errors, and browser sessions to PostHog Cloud when ProjectToken is set,
-// and traces too while instrumentation is enabled. The project token is public: the browser receives it.
 type PostHogConfig struct {
 	ProjectToken string `json:"project_token,omitempty"`
 	Host         string `json:"host,omitempty"`
 }
 
-// Load reads, normalizes, and validates the rocketclaw configuration file.
 func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error) {
 	absPath, err := filepath.Abs(configPath)
 	if err != nil {
@@ -352,7 +300,6 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 		return nil, err
 	}
 
-	// Resolution only replaces decoded JSON values with fetched strings.
 	data, _ = json.Marshal(resolved)
 
 	var cfg Config
@@ -380,7 +327,6 @@ func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error)
 	return &cfg, nil
 }
 
-// LoadExternalMCPUsers reads the optional rocketclaw.users.json file next to configPath.
 func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
 	usersPath := filepath.Join(filepath.Dir(configPath), "rocketclaw.users.json")
 
@@ -414,7 +360,6 @@ func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
 	return users, nil
 }
 
-// Validate verifies the configuration is usable.
 func (c *Config) Validate() error {
 	c.Web.ListenAddress = cmp.Or(c.Web.ListenAddress, "0.0.0.0:3000")
 	if _, _, err := c.AttachmentLocation(); err != nil {
@@ -426,7 +371,6 @@ func (c *Config) Validate() error {
 	}
 
 	if tsnet := c.Web.Tsnet; tsnet != nil {
-		// The hostname names the state directory, so it must stay a DNS label.
 		tsnet.Hostname = cmp.Or(tsnet.Hostname, "rocketclaw")
 		if strings.Trim(tsnet.Hostname, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || slices.ContainsFunc(tsnet.Tags, func(tag string) bool { return !strings.HasPrefix(tag, "tag:") }) {
 			return errors.New(`web.tsnet.hostname must use only a-z, 0-9 and -, and each web.tsnet.tags entry must start with "tag:"`)
@@ -503,8 +447,6 @@ func (c *Config) Validate() error {
 	return c.validateSlack()
 }
 
-// PermittedSpaces returns the names of the spaces permissions lists for login, matched ignoring
-// case, or nil when it lists no such login: then login is not limited to any space.
 func (c *Config) PermittedSpaces(login string) []string {
 	for listed, spaces := range c.Permissions {
 		if strings.EqualFold(listed, login) {
@@ -645,8 +587,6 @@ func (c *Config) validateMCPServers() error {
 
 		for _, read := range server.Tools.Read {
 			for _, write := range server.Tools.Write {
-				// A shared pattern, or a pattern matching a literal name in the other group, puts a tool in both
-				// groups. filepath.Match agrees with permission wildcards on MCP tool names ([A-Za-z0-9_.-]).
 				readWrite, _ := filepath.Match(read, write)
 				writeRead, _ := filepath.Match(write, read)
 
@@ -705,13 +645,11 @@ func (c *Config) validateInstrumentation() error {
 
 func (c *Config) validateRocketClaws() error {
 	for _, name := range slices.Sorted(maps.Keys(c.RocketClaws)) {
-		// Names appear in page URLs as /r/{name}/; the URL is a bare origin the browser calls.
 		if name == "" || strings.Trim(name, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || !httpsOrigin(c.RocketClaws[name].URL) {
 			return fmt.Errorf("rocketclaws[%q]: name must use a-z, 0-9 and -, and url must be an https origin with no path", name)
 		}
 	}
 
-	// A trusted page is matched against the Origin its browser sends, which is a bare origin too.
 	for i, origin := range c.TrustedRocketClaws {
 		if !httpsOrigin(origin) {
 			return fmt.Errorf("trusted_rocketclaws[%d]: must be an https origin with no path", i)
@@ -744,7 +682,6 @@ func (c *Config) validatePermissions() error {
 	return nil
 }
 
-// httpsOrigin reports whether raw is an https origin with nothing after its host and port.
 func httpsOrigin(raw string) bool {
 	parsed, err := url.Parse(raw)
 	return err == nil && !strings.ContainsAny(raw, "?#") && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == ""
@@ -769,8 +706,6 @@ func (c *Config) validateOpenCode() error {
 	return nil
 }
 
-// validateMCPServerName mirrors modelcontextprotocol/go-sdk mcp.validateToolName
-// character rules so config keys are no stricter than MCP protocol names.
 func validateMCPServerName(name string) error {
 	if name == "" {
 		return errors.New("name cannot be empty")
