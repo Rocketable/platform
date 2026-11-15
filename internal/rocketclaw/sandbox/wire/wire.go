@@ -1,5 +1,3 @@
-// Package wire is the emulated shell's relay protocol: length-delimited protobuf Frames over a Unix socket, one
-// invocation per connection (wire.proto, docs/explainers/2026-11-01-emulated-shell-sandbox.md).
 package wire
 
 //go:generate protoc --go_out=. --go_opt=paths=source_relative wire.proto
@@ -15,25 +13,18 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Version is the only protocol version the broker accepts.
 const Version = 1
 
-// MaxFrame is the largest encoded frame, 1 MiB (spec §10.1); larger lengths fail before allocation.
 const MaxFrame = 1 << 20
 
-// ChunkSize is the largest stdin, stdout or stderr chunk a peer sends.
 const ChunkSize = 64 << 10
 
-// Reader reads frames from one connection.
 type Reader struct {
 	r *bufio.Reader
 }
 
-// NewReader returns a Reader on r.
 func NewReader(r io.Reader) *Reader { return &Reader{r: bufio.NewReaderSize(r, ChunkSize)} }
 
-// Read reads one frame. It refuses frames over MaxFrame, other versions, empty bodies, and unknown
-// fields anywhere, so a forged field such as a host environment is an error, not silently ignored.
 func (r *Reader) Read() (*Frame, error) {
 	f := &Frame{}
 	if err := (protodelim.UnmarshalOptions{MaxSize: MaxFrame}).UnmarshalFrom(r.r, f); err != nil {
@@ -63,16 +54,13 @@ func (r *Reader) Read() (*Frame, error) {
 	return f, nil
 }
 
-// Writer writes frames; it is safe for concurrent use, so stdout and stderr can share a connection.
 type Writer struct {
 	mu sync.Mutex
 	w  io.Writer
 }
 
-// NewWriter returns a Writer on w.
 func NewWriter(w io.Writer) *Writer { return &Writer{w: w} }
 
-// Write sets the version and writes f as one length-delimited message.
 func (w *Writer) Write(f *Frame) error {
 	f.Version = Version
 

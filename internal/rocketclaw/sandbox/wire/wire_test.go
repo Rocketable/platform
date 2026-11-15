@@ -55,7 +55,6 @@ func TestFrameRoundTrip(t *testing.T) {
 	}
 }
 
-// F02: an advertised length over MaxFrame is refused from the varint alone, before allocating it.
 func TestReadRejectsOversizedBeforeAllocating(t *testing.T) {
 	for _, n := range []uint64{MaxFrame + 1, 1 << 31, 1 << 62} {
 		in := binary.AppendUvarint(nil, n)
@@ -72,7 +71,6 @@ func TestReadRejectsOversizedBeforeAllocating(t *testing.T) {
 			t.Fatalf("Read(len %d) = %v; want SizeTooLargeError", n, err)
 		}
 
-		// The Reader's own buffer is ChunkSize; anything near the advertised size would dwarf it.
 		if got := after.TotalAlloc - before.TotalAlloc; got > 2*ChunkSize {
 			t.Errorf("Read(len %d) allocated %d bytes; want the size check to fail first", n, got)
 		}
@@ -94,7 +92,6 @@ func marshal(t *testing.T, f *Frame) []byte {
 	return b
 }
 
-// G05: forged fields, such as an invented hostEnv, are rejected rather than ignored.
 func TestReadRejectsInvalidFrames(t *testing.T) {
 	start := &Frame{Version: Version, Body: &Frame_InvokeStart{InvokeStart: &InvokeStart{Name: []byte("deploy"), GuestEnv: [][]byte{[]byte("DEPLOY_TOKEN=fourth-fake")}}}}
 
@@ -145,7 +142,6 @@ func TestWriteRefusesOversized(t *testing.T) {
 	}
 }
 
-// F01: arbitrary bytes never panic, and every accepted frame re-encodes to an equal frame.
 func FuzzRead(f *testing.F) {
 	var seed bytes.Buffer
 
