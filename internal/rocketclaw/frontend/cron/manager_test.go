@@ -30,7 +30,6 @@ func newCronScheduleStore(t *testing.T) *backend.SessionService {
 	return store
 }
 
-// newCronScheduleStoreDB also opens the store's database, for a runner that records its run's turn as the backend does.
 func newCronScheduleStoreDB(t *testing.T) (*backend.SessionService, *sql.DB) {
 	t.Helper()
 
@@ -439,7 +438,6 @@ func TestScanScheduledRunsLoadedDefinitionUntilRefresh(t *testing.T) {
 		return protocol.CronRunResult{}, nil
 	}}, slog.New(slog.DiscardHandler))
 
-	// The ticker reads the clock after each Refresh, so the test moves it under a lock.
 	var (
 		clockMu sync.Mutex
 		elapsed time.Duration
@@ -466,14 +464,12 @@ func TestScanScheduledRunsLoadedDefinitionUntilRefresh(t *testing.T) {
 
 		select {
 		case prompt := <-runPrompt:
-			// Every scheduled run's reply is reported in a Web chat, so every run is told so.
 			require.Equal(t, want+"\n\n"+cronReplyInstruction, prompt)
 		case <-time.After(time.Second):
 			t.Fatal("scheduled cronjob did not run")
 		}
 	}
 
-	// An edit takes effect only once a reload refreshes the definitions, and a broken file or a failed sync never does.
 	require.NoError(t, os.WriteFile(cronPath, []byte("---\nschedule: 2s\nagent: helper\n---\nnew body"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(cronDir, "broken.md"), []byte("not frontmatter"), 0o644))
 	scan(10*time.Second, "old body")
@@ -512,7 +508,6 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 	runStarted := make(chan error, 2)
 	release := make(chan struct{})
 	m := New(newCronConfig(t, workspace, "."), ".", store, &runnerMock{RunFunc: func(ctx context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
-		// As the backend's runner does, the run's conversation holds a running turn while the run goes.
 		_, errConversation := db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, cron_path) VALUES ($1, 'helper', 'cron', 'cron_run', FALSE, $2)`, progress.ConversationID, progress.Run.Path)
 
 		_, errTurn := db.ExecContext(ctx, `INSERT INTO turns (id, conversation_id, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $1, 0, 0)`, progress.ConversationID)
@@ -693,7 +688,6 @@ func TestLoadOneOffCronjobReportsWorkspaceOpenError(t *testing.T) {
 	}
 }
 
-// newCronConfig is workspace's configuration with an agents folder in runtimeDir, which loading needs.
 func newCronConfig(t *testing.T, workspace, runtimeDir string) *config.LockedConfig {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, runtimeDir, "agents"), 0o755))
@@ -708,7 +702,6 @@ func TestRoutinesRunAsCronDefinitions(t *testing.T) {
 	cfg := newCronConfig(t, workspace, ".")
 	agentPath := filepath.Join(workspace, "agents", "marketing.md")
 	require.NoError(t, os.WriteFile(agentPath, []byte(easyRoutineAgent+"  - '*/5 * * * *': Check X.\n  - 30m\n---\nPrompt\n"), 0o644))
-	// A shadow's own routines never run.
 	require.NoError(t, os.Mkdir(filepath.Join(workspace, "agents", "marketing"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "marketing", "twin.md"), []byte(easyRoutineAgent+"  - 1h\n---\nPrompt\n"), 0o644))
 
@@ -737,7 +730,6 @@ func TestRoutinesRunAsCronDefinitions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, protocol.OneOffCronjob{RelativePath: "agents/marketing.md#30m", Agent: "marketing", Space: "Ops", Prompt: "Scheduled run (30m).\n\n" + cronReplyInstruction}, job)
 
-	// Reordering keeps each routine's identity, so neither next-due time resets.
 	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
 	require.NoError(t, store.SyncCronSchedules(m.scheduledStates(definitions, start)))
 	before, err := store.DueCronSchedules(start.Add(24 * time.Hour))
@@ -784,7 +776,6 @@ func TestOneOffAddedByRefreshFiresOnce(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		workspace := t.TempDir()
 		runs, release := make(chan string, 10), make(chan struct{})
-		// The cron file's run lasts until released.
 		m := New(newCronConfig(t, workspace, "."), ".", store, &runnerMock{RunFunc: func(_ context.Context, _, _ string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 			runs <- progress.Run.Path
 
@@ -796,7 +787,6 @@ func TestOneOffAddedByRefreshFiresOnce(t *testing.T) {
 		m.tickerInterval = 10 * time.Millisecond
 		require.NoError(t, m.Start(t.Context()))
 
-		// A past-due one-off added after start waits for the refresh a reload makes.
 		require.NoError(t, os.Mkdir(filepath.Join(workspace, "cron"), 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(workspace, "cron", "launch.md"), []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\n---\nBody"), 0o644))
 		time.Sleep(10 * m.tickerInterval)
@@ -811,7 +801,6 @@ func TestOneOffAddedByRefreshFiresOnce(t *testing.T) {
 			t.Fatal("the one-off added by a refresh did not run")
 		}
 
-		// Scans and refreshes go on while the cron file still runs and exists.
 		require.NoError(t, m.Refresh())
 		time.Sleep(30 * m.tickerInterval)
 		synctest.Wait()
@@ -834,7 +823,6 @@ func TestStaleOneOffTimerRunsNothing(t *testing.T) {
 		name, edit string
 		want       []string
 	}{
-		// The new time comes after the old one, so the old timer fires while the edited file is there.
 		{"edited time", "---\nschedule: \"2000-01-01T00:00:00.2Z\"\n---\nNew", []string{"New\n\n" + cronReplyInstruction}},
 		{"deleted", "", nil},
 	} {
@@ -855,7 +843,6 @@ func TestStaleOneOffTimerRunsNothing(t *testing.T) {
 				m.tickerInterval = 10 * time.Millisecond
 				require.NoError(t, m.Start(t.Context()))
 
-				// Changed before the old time comes.
 				if tc.edit == "" {
 					require.NoError(t, os.Remove(cronPath))
 				} else {
