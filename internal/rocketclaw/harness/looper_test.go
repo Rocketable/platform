@@ -1318,48 +1318,6 @@ func TestWebSearchOutputWithEmptyActionTypeIsTraceOnly(t *testing.T) {
 	require.Contains(t, string(saved[0].OutputTrace[0]), `"web_search_call"`)
 }
 
-func TestLooperInjectsCompactionSteering(t *testing.T) {
-	mock := mockResponses(
-		responseWithCompactionAndMessage("resp-compact", "encrypted-compact", "answer"),
-		responseWithMessage("resp-next", "next answer"),
-	)
-	looper := testLooper(mock)
-	looper.CompactionSteering = "Use the compacted context carefully."
-	output := make(chan ChatResponse, 10)
-	nextOutput := make(chan ChatResponse, 10)
-
-	input := make(chan PromptInput, 2)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
-
-	input <- testPromptInput(PromptInputRoleUser, "next question", nextOutput)
-
-	close(input)
-
-	interrupts := make(chan os.Signal, 1)
-
-	var saved []SessionEntry
-
-	err := looper.Loop(context.Background(), input, emptySession(), &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error {
-		saved = append(saved, *entry)
-
-		return nil
-	}}, interrupts)
-	require.NoError(t, err)
-	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
-	require.Equal(t, []ChatResponse{assistantMessage("next answer")}, collectResponses(nextOutput))
-	require.Len(t, saved, 2)
-	require.Len(t, saved[0].ReplayInput, 4)
-	require.JSONEq(t, `{"content":"Use the compacted context carefully.","role":"developer","type":"message"}`, string(saved[0].ReplayInput[3]))
-
-	require.Len(t, newParams(mock), 2)
-	items := newParams(mock)[1].Input.OfInputItemList
-	require.Len(t, items, 4)
-	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, items[0]))
-	require.Contains(t, marshalJSON(t, items[1]), `"role":"assistant"`)
-	require.JSONEq(t, `{"content":"Use the compacted context carefully.","role":"developer","type":"message"}`, marshalJSON(t, items[2]))
-	require.Contains(t, marshalJSON(t, items[3]), `"content":"next question"`)
-}
-
 func TestPruneHistoryBeforeLatestCompaction(t *testing.T) {
 	items := []responses.ResponseInputItemUnionParam{
 		responses.ResponseInputItemParamOfMessage("old", responses.EasyInputMessageRole("user")),

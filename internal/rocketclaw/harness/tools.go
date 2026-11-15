@@ -34,7 +34,6 @@ type toolFactory struct {
 	deciders                   map[string]Decider
 	reasoningEffort            shared.ReasoningEffort
 	compactThreshold           int64
-	compactionSteering         string
 	parallelToolCalls          int
 	diagnostics                bool
 	experimentalStrongerSkills bool
@@ -223,7 +222,6 @@ func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, err
 		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
 		Verbosity:              agent.Verbosity,
 		CompactThreshold:       cmp.Or(origin.CompactThreshold, f.compactThreshold),
-		CompactionSteering:     f.compactionSteering,
 		ParallelToolCalls:      f.parallelToolCalls,
 		ResponseFormat:         agentOutputResponseFormat(agent.OutputSchema),
 		Permissions:            agent.Permission,

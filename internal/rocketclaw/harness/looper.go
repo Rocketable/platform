@@ -157,7 +157,6 @@ type looper struct {
 	ReasoningEffort        shared.ReasoningEffort
 	Verbosity              string
 	CompactThreshold       int64
-	CompactionSteering     string
 	ParallelToolCalls      int
 	ResponseFormat         responses.ResponseFormatTextConfigUnionParam
 	Permissions            PermissionSet
@@ -1074,7 +1073,6 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 func (l *looper) appendProviderReplay(record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, resp *responses.Response) error {
 	record.ResponseID = resp.ID
 	record.addTokenUsageFromResponse(resp)
-	hadCompaction := slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "compaction" })
 
 	for i := range resp.Output {
 		asInput, ok := responseOutputToReplayInput(&resp.Output[i])
@@ -1091,16 +1089,6 @@ func (l *looper) appendProviderReplay(record *SessionEntry, turnItems *[]respons
 		}
 
 		*turnItems = append(*turnItems, asInput)
-	}
-
-	if hadCompaction && l.CompactionSteering != "" {
-		steeringInput := inputMessageParam(responses.EasyInputMessageRole("developer"), easyInputStringContent(l.CompactionSteering))
-
-		if err := appendReplayInput(record, &steeringInput); err != nil {
-			return err
-		}
-
-		*turnItems = append(*turnItems, steeringInput)
 	}
 
 	return nil

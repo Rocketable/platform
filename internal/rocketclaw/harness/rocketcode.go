@@ -55,7 +55,6 @@ type Config struct {
 	ExperimentalStrongerSkills bool
 	ExpandPromptShellCommands  PromptShellCommandExpansion
 	CompactThreshold           int64
-	CompactionSteering         string
 	ParallelToolCalls          int
 	ShellTempDir               string
 	SpillDir                   string
@@ -333,7 +332,6 @@ func NewWithModelResolver(
 		deciders:                   config.Deciders,
 		reasoningEffort:            reasoningEffort,
 		compactThreshold:           config.CompactThreshold,
-		compactionSteering:         config.CompactionSteering,
 		parallelToolCalls:          config.ParallelToolCalls,
 		diagnostics:                config.Diagnostics,
 		experimentalStrongerSkills: config.ExperimentalStrongerSkills,
