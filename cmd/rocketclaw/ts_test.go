@@ -30,7 +30,7 @@ import (
 )
 
 func TestRunTS(t *testing.T) {
-	prepareOAIConfig(t) // Its configuration has no web.tsnet.
+	prepareOAIConfig(t)
 
 	assert.Contains(t, captureStdout(t, func() error { return runTS(nil) }), "rocketclaw ts login")
 	require.EqualError(t, runTS([]string{"logout"}), `unknown ts command "logout"`)
@@ -38,11 +38,8 @@ func TestRunTS(t *testing.T) {
 	require.ErrorIs(t, runTS([]string{"login"}), errTailnetNotConfigured)
 }
 
-// TestTailnetLogin runs the Web's node against Tailscale's test control server, as
-// tsnet's own tests do: the server never waits on a login, `ts login` prints the link
-// and returns once it is completed, and the logged-in server then serves its HTTPS name.
 func TestTailnetLogin(t *testing.T) {
-	netns.SetEnabled(false) // As tsnet's tests: loopback control and DERP need no interface binding.
+	netns.SetEnabled(false)
 	t.Cleanup(func() { netns.SetEnabled(true) })
 
 	control := &testcontrol.Server{
@@ -123,8 +120,6 @@ func TestTailnetLogin(t *testing.T) {
 	require.NoError(t, stop(t.Context()))
 }
 
-// startTestDERP serves a relay, as tsnet's tests do: a node counts as running only once
-// it reaches one. Local STUN replies let its network check finish without waiting for failed probes.
 func startTestDERP(t *testing.T) *tailcfg.DERPMap {
 	t.Helper()
 

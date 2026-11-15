@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The helper process waits for the first signal, then for the parent to release its graceful shutdown.
 func TestShutdownSignalsHelper(t *testing.T) {
 	if os.Getenv("ROCKETCLAW_SIGNAL_HELPER") == "" {
 		t.Skip("run by TestShutdownSignals")
@@ -29,8 +28,6 @@ func TestShutdownSignalsHelper(t *testing.T) {
 	fmt.Println("stopped")
 }
 
-// A second SIGTERM, as systemd sends once a unit's main process exits, leaves the graceful shutdown running; a
-// second Ctrl-C still forces the exit.
 func TestShutdownSignals(t *testing.T) {
 	for _, tc := range []struct {
 		signal  syscall.Signal

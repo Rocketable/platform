@@ -26,7 +26,6 @@ import (
 )
 
 func TestDiagnosticsRoutes(t *testing.T) {
-	// Runtime samplers are process-wide; keep this test serial.
 	runtime.SetBlockProfileRate(0)
 	previousMutexRate := runtime.SetMutexProfileFraction(0)
 	t.Cleanup(func() {
@@ -44,7 +43,6 @@ func TestDiagnosticsRoutes(t *testing.T) {
 		var before, after bytes.Buffer
 
 		require.NoError(t, pprof.Lookup("block").WriteTo(&before, 1))
-		// A wait longer than the sampling interval records a native blocking event.
 		<-time.After(20 * time.Millisecond)
 		require.NoError(t, pprof.Lookup("block").WriteTo(&after, 1))
 		require.NotEqual(t, before.String(), after.String())
@@ -121,7 +119,6 @@ func TestDiagnosticsServeFailureIsLoggedImmediately(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, response.Body.Close())
 	require.Equal(t, http.StatusOK, response.StatusCode)
-	// The listener fails after a successful request, while the command could run on.
 	require.NoError(t, listener.Close())
 	require.NoError(t, serving.Wait())
 	require.Contains(t, logs.String(), `msg="private pprof HTTP serving failed"`)
@@ -138,7 +135,6 @@ func TestDiagnosticsImmediateClose(t *testing.T) {
 	var connections sync.WaitGroup
 
 	server := newDiagnosticsServer(t.Context(), &connections)
-	// Close before Serve runs: Serve still owns and closes the bound listener.
 	require.NoError(t, server.Close())
 
 	var logs bytes.Buffer
@@ -151,12 +147,9 @@ func TestDiagnosticsImmediateClose(t *testing.T) {
 	require.NoError(t, rebound.Close())
 }
 
-// Runtime recording is process-wide: these real-network tests must stay serial.
 func TestDiagnosticsLiveCapturesAndCancellation(t *testing.T) {
-	// Each capture and each cancellation once: both captures wait in the same pprof sleep.
 	for _, tc := range []struct{ name, cancelBy string }{{"profile", "server"}, {"trace", "request"}} {
 		t.Run(tc.name+" cancel by "+tc.cancelBy, func(t *testing.T) {
-			// No capture may create application files; all responses stay in memory.
 			workspace := t.TempDir()
 			t.Chdir(workspace)
 
@@ -219,7 +212,6 @@ func TestDiagnosticsLiveCapturesAndCancellation(t *testing.T) {
 
 			var body io.Reader = http.NoBody
 			if tc.cancelBy == "server" {
-				// An unread GET body prevents net/http's background disconnect read.
 				body = strings.NewReader("unread request body")
 			}
 
@@ -244,8 +236,6 @@ func TestDiagnosticsLiveCapturesAndCancellation(t *testing.T) {
 
 				_ = requesting.Wait()
 			})
-			// Inspect the native handler's sleep through the goroutine endpoint.
-			// That frame follows StartCPUProfile/trace.Start, unlike connection acceptance.
 			require.EventuallyWithT(t, func(check *assert.CollectT) {
 				request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"goroutine?debug=2", http.NoBody)
 				if !assert.NoError(check, err) {
@@ -281,14 +271,12 @@ func TestDiagnosticsLiveCapturesAndCancellation(t *testing.T) {
 			}
 
 			errRequest := requesting.Wait()
-			// Server cancellation can finish the response before Close reaches the socket.
 			if tc.cancelBy == "request" {
 				require.ErrorIs(t, errRequest, context.Canceled)
 			}
 
 			connections.Wait()
 			require.Less(t, time.Since(cancelStarted), 5*time.Second, "cancellation must end the 60-second capture early")
-			// Joining must finish native Stop, not leave a recording alive after close.
 			if tc.name == "profile" {
 				require.NoError(t, pprof.StartCPUProfile(io.Discard))
 				pprof.StopCPUProfile()

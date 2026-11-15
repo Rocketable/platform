@@ -24,7 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// externalMCPAssembler starts the External MCP server as the process assembler does, with Slack faked.
 type externalMCPAssembler struct {
 	started chan externalMCPStarted
 }
@@ -54,9 +53,6 @@ func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []
 	return make(chan struct{}), []func(context.Context) error{server.Close}, nil
 }
 
-// An External MCP call and a later turn in its Web chat both run their shell commands with the
-// call's metadata, each under its own conversation ID. The metadata cannot pick the agent, and
-// neither RocketClaw's raw text nor a Web turn's own metadata becomes a variable.
 func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{}`), 0o600))
@@ -66,7 +62,6 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 		outputs []string
 	)
 
-	// The model runs one shell command per turn and records what it printed.
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Instructions string `json:"instructions"`
@@ -132,7 +127,6 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 
 	started := <-assembler.started
 
-	// Startup installs the workspace's runtime assets, so the agents are written after it.
 	for name, prompt := range map[string]string{"planner": "Planner prompt", "intruder": "Intruder prompt"} {
 		require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "agents", name+".md"), []byte("---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n---\n"+prompt+"\n"), 0o600))
 	}

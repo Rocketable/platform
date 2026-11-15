@@ -13,7 +13,6 @@ import (
 )
 
 func newDiagnosticsServer(ctx context.Context, connections *sync.WaitGroup) *http.Server {
-	// Sample one blocking event per 10 ms blocked and one in 100 mutex contention events.
 	runtime.SetBlockProfileRate(10_000_000)
 	runtime.SetMutexProfileFraction(100)
 
@@ -33,14 +32,12 @@ func newDiagnosticsServer(ctx context.Context, connections *sync.WaitGroup) *htt
 			}
 
 			if state == http.StateClosed {
-				// Context cancellation stops recording; Close does not join handlers.
 				connections.Done()
 			}
 		},
 	}
 }
 
-// serveDiagnostics reports failures immediately without interrupting backend work.
 func serveDiagnostics(server *http.Server, listener net.Listener, logger *slog.Logger) {
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("private pprof HTTP serving failed", "error_type", fmt.Sprintf("%T", err))

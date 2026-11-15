@@ -19,16 +19,12 @@ import (
 	"tailscale.com/tsnet"
 )
 
-// startTailnet starts the Web's tsnet node and serves handler over HTTPS on the tailnet in
-// serving, and returns what closes it. It never waits on a person: a logged-out node without
-// an auth key is closed at once, and the Web serves only its plain listener.
 func startTailnet(rt *backend.Runtime, tailnet *config.TsnetConfig, handler http.Handler, serving *errgroup.Group) (func() error, error) {
 	node, err := newTailnetNode(tailnet)
 	if err != nil {
 		return nil, err
 	}
 
-	// The node's login state is known once it started.
 	status, err := node.client.StatusWithoutPeers(context.Background())
 	if err != nil {
 		_ = node.server.Close()
@@ -65,24 +61,19 @@ func startTailnet(rt *backend.Runtime, tailnet *config.TsnetConfig, handler http
 	}, nil
 }
 
-// tailnetLoginNotice is what the server logs when its tsnet node is logged out.
 const tailnetLoginNotice = "Tailscale authentication unavailable, so Web HTTPS on the tailnet is off: run `rocketclaw ts login`, then restart RocketClaw"
 
 var errTailnetLogin = errors.New("tailscale node needs a login")
 
-// tailnetBackendError is an error the node's backend reported.
 type tailnetBackendError string
 
 func (e tailnetBackendError) Error() string { return "tailscale node: " + string(e) }
 
-// tailnetNode is the Web's tsnet node and its local API client.
 type tailnetNode struct {
 	server *tsnet.Server
 	client *local.Client
 }
 
-// newTailnetNode starts the Web's tsnet node. Its state lives outside the workspace, it
-// never prints (so no login link appears in logs), and Tailscale's log upload is off.
 func newTailnetNode(tailnet *config.TsnetConfig) (*tailnetNode, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {
@@ -99,7 +90,7 @@ func newTailnetNode(tailnet *config.TsnetConfig) (*tailnetNode, error) {
 		UserLogf:      func(string, ...any) {},
 	}
 
-	client, err := server.LocalClient() // Starts the node.
+	client, err := server.LocalClient()
 	if err != nil {
 		return nil, fmt.Errorf("start Tailscale node: %w", err)
 	}
@@ -110,12 +101,11 @@ func newTailnetNode(tailnet *config.TsnetConfig) (*tailnetNode, error) {
 type tailnetStep int
 
 const (
-	tailnetRunning  tailnetStep = iota
-	tailnetLogin                // needs a person to open a login link
-	tailnetApproval             // needs the device approved in the admin console
+	tailnetRunning tailnetStep = iota
+	tailnetLogin
+	tailnetApproval
 )
 
-// tailnetWait reports the node's next step: running, a login link to open, or device approval.
 func tailnetWait(watcher *local.IPNBusWatcher) (tailnetStep, string, error) {
 	for {
 		notify, err := watcher.Next()
@@ -136,8 +126,6 @@ func tailnetWait(watcher *local.IPNBusWatcher) (tailnetStep, string, error) {
 	}
 }
 
-// serveTailnet serves the Web over HTTPS once the node runs. A node that loses its
-// login stops with errTailnetLogin instead of waiting on a link nobody sees.
 func serveTailnet(ctx context.Context, rt *backend.Runtime, node *tailnetNode, server *http.Server) error {
 	watcher, err := node.client.WatchIPNBus(ctx, ipn.NotifyInitialState)
 	if err != nil {
@@ -163,7 +151,6 @@ func serveTailnet(ctx context.Context, rt *backend.Runtime, node *tailnetNode, s
 		rt.Log.Warn("the Tailscale node waits for device approval in the admin console")
 	}
 
-	// ListenTLS needs a running node; Up finishes tsnet's setup and returns at once now.
 	if _, err := node.server.Up(ctx); err != nil {
 		return fmt.Errorf("bring up Tailscale node: %w", err)
 	}
