@@ -20,7 +20,6 @@ func TestInboundAttachmentCopy(t *testing.T) {
 		{Name: "nil.png", MIMEType: "image/png"},
 		{Name: "empty.png", MIMEType: "image/png", Data: []byte{}},
 	}}
-	// Fourteen entries expose Clone's spare capacity without Clip.
 	content.Attachments = append(content.Attachments, make([]InboundAttachment, 10)...)
 	inbound := NewInboundMessageFromContent(SourceSlack, InboundKindPrompt, &content, true)
 

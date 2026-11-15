@@ -9,79 +9,50 @@ import (
 	"sync"
 )
 
-// MaxInboundTextAttachmentBytes is the per-file size limit for attachments converted to prompt text.
 const MaxInboundTextAttachmentBytes = 256 << 10
 
 const (
-	// InboundRawTextMetadataKey retains typed text before attachment text is merged.
-	InboundRawTextMetadataKey = "rocketclaw_raw_text"
-	// InboundOriginMetadataKey overrides the trusted prompt provenance origin.
-	InboundOriginMetadataKey = "rocketclaw_origin"
-	// InboundMediaMetadataKey overrides the trusted prompt provenance media.
-	InboundMediaMetadataKey = "rocketclaw_media"
-	// InboundPrincipalMetadataKey identifies the trusted human principal for prompt provenance.
-	InboundPrincipalMetadataKey = "rocketclaw_principal"
-	// InboundPrincipalNameMetadataKey names the person a turn's shell sees as ROCKETCLAW_PRINCIPAL_NAME.
-	InboundPrincipalNameMetadataKey = "rocketclaw_principal_name"
-	// InboundPrincipalEmailMetadataKey is that person's email, the source of ROCKETCLAW_PRINCIPAL_EMAIL and _ID.
+	InboundRawTextMetadataKey        = "rocketclaw_raw_text"
+	InboundOriginMetadataKey         = "rocketclaw_origin"
+	InboundMediaMetadataKey          = "rocketclaw_media"
+	InboundPrincipalMetadataKey      = "rocketclaw_principal"
+	InboundPrincipalNameMetadataKey  = "rocketclaw_principal_name"
 	InboundPrincipalEmailMetadataKey = "rocketclaw_principal_email"
-	// InboundAllowedAgentsMetadataKey lists source-surface allowed agents for model-created child conversations.
-	InboundAllowedAgentsMetadataKey = "rocketclaw_allowed_agents"
-	// InboundSenderSessionMetadataKey names the session whose agent wrote the inbound.
-	InboundSenderSessionMetadataKey = "rocketclaw_sender_session"
-	// InboundSenderAgentMetadataKey names the agent that wrote the inbound.
-	InboundSenderAgentMetadataKey = "rocketclaw_sender_agent"
-	// InboundSenderActionMetadataKey records what the sender did before the inbound; see SenderActionStopped.
-	InboundSenderActionMetadataKey = "rocketclaw_sender_action"
-	// SenderActionStopped means the sender stopped the target's previous turn and sent the inbound to run next.
-	SenderActionStopped = "stopped"
+	InboundAllowedAgentsMetadataKey  = "rocketclaw_allowed_agents"
+	InboundSenderSessionMetadataKey  = "rocketclaw_sender_session"
+	InboundSenderAgentMetadataKey    = "rocketclaw_sender_agent"
+	InboundSenderActionMetadataKey   = "rocketclaw_sender_action"
+	SenderActionStopped              = "stopped"
 )
 
-// InboundKind describes how an inbound message should be handled.
 type InboundKind string
 
 const (
-	// InboundKindPrompt is a normal conversational prompt.
-	InboundKindPrompt InboundKind = "prompt"
-	// InboundKindSteer joins the running turn while it accepts input, whoever sent it or
-	// started the turn, and otherwise runs next.
-	InboundKindSteer InboundKind = "steer"
-	// InboundKindEnqueue waits for its own turn.
+	InboundKindPrompt  InboundKind = "prompt"
+	InboundKindSteer   InboundKind = "steer"
 	InboundKindEnqueue InboundKind = "enqueue"
-	// InboundKindHeld waits for manual release into the queue.
-	InboundKindHeld InboundKind = "held"
-	// InboundKindCancel interrupts the active conversation owner.
-	InboundKindCancel InboundKind = "cancel"
+	InboundKindHeld    InboundKind = "held"
+	InboundKindCancel  InboundKind = "cancel"
 )
 
-// AttachmentPresence records which attachments the source message carried, whether or not they reached the model.
 type AttachmentPresence string
 
-// Attachment presences; images win when a message carries both images and unsupported files.
 const (
-	// AttachmentPresenceNone means the source message carried no attachments the model could miss.
-	AttachmentPresenceNone AttachmentPresence = ""
-	// AttachmentPresenceUnsupported means the source message carried only files the model cannot read as images or text.
+	AttachmentPresenceNone        AttachmentPresence = ""
 	AttachmentPresenceUnsupported AttachmentPresence = "unsupported"
-	// AttachmentPresenceImages means the source message carried images, even when none survived download.
-	AttachmentPresenceImages AttachmentPresence = "images"
+	AttachmentPresenceImages      AttachmentPresence = "images"
 )
 
-// GoalAction identifies goal-loop work that consumes the goal's turn budget.
-// Its zero value denotes ordinary work, including human re-steering.
 type GoalAction string
 
-// Goal actions distinguish budget-neutral input from kickoff and continuation work.
 const (
 	GoalActionNone     GoalAction = ""
 	GoalActionKickoff  GoalAction = "goal"
 	GoalActionContinue GoalAction = "goal_continuation"
 )
 
-// Source identifies where an inbound or outbound message originated.
 type Source string
 
-// Known inbound and outbound message source labels.
 const (
 	SourceSlack       Source = "slack"
 	SourceWeb         Source = "web"
@@ -89,20 +60,17 @@ const (
 	SourceSystem      Source = "system"
 )
 
-// InboundResponse is the final plain-text result for a queued inbound turn.
 type InboundResponse struct {
 	Text        string
 	Attachments []OutboundAttachment
 	Err         error
 }
 
-// InboundAttachment carries an inline attachment into a conversation prompt.
 type InboundAttachment struct {
 	Name, MIMEType string
 	Data           []byte
 }
 
-// InboundContent carries source-acquired inbound text and attachments before message routing details are applied.
 type InboundContent struct {
 	Text               string
 	TextAttachments    []string
@@ -111,104 +79,69 @@ type InboundContent struct {
 	AttachmentWarnings []string
 }
 
-// OutboundAttachment carries a human-visible file attachment to output sinks.
 type OutboundAttachment struct {
 	ID                 string
-	ConversationID     string `json:"conversation_id,omitempty"` // Actual owner when projecting an input reference.
+	ConversationID     string `json:"conversation_id,omitempty"`
 	Name, MIMEType     string
-	Data               []byte `json:"-"` // Persisted turn state keeps only ID; large files exceed Postgres JSON limits.
+	Data               []byte `json:"-"`
 	OriginalUnverified bool
-	Size               int64 // Stored byte length for metadata-only reads.
+	Size               int64
 }
 
-// CronjobMessage identifies a human-visible cronjob result.
 type CronjobMessage struct {
 	RelativePath, Agent, RanAt string
-	// Space is the cron's own Web space, empty when it names none.
-	Space string
+	Space                      string
 }
 
-// InboundMessage is a message headed into its conversation prompt queue.
 type InboundMessage struct {
-	// Source is the surface that produced the message.
-	Source Source
-	// Text is the prompt body, with any text attachments appended after the typed text.
-	Text string
-	// Attachments are inline files, such as images, sent to the model alongside Text.
-	Attachments []InboundAttachment
-	// SlackReply is the Slack message that receives the reply; nil when the reply has no Slack target.
-	SlackReply *SlackReplyTarget
-	// AttachmentPresence records which attachments the source message carried, so the model can be told about ones it did not receive.
-	AttachmentPresence AttachmentPresence
-	// Human reports that a person wrote the message, rather than RocketClaw itself.
-	Human bool
-	// GoalTurn marks a turn that runs while a goal is active, including human input that does not spend the goal's turn budget.
-	GoalTurn bool
-	// AttachmentWarnings explain to the model, in plain text, why attachments were skipped.
-	AttachmentWarnings []string
-	// Kind says how the message enters the conversation's input queue.
-	Kind InboundKind
-	// GoalAction marks goal kickoff or continuation work that spends the goal's turn budget.
-	GoalAction GoalAction
-	// PreserveWhitespace keeps Text unchanged when framing the prompt instead of trimming it.
-	PreserveWhitespace bool
-	// ConversationID is the conversation that runs the turn; empty until the message is routed.
-	ConversationID string
-	// Metadata carries source-supplied context; the Inbound*MetadataKey keys are RocketClaw's trusted provenance and routing hints.
-	Metadata map[string]string
-	// ExternalMCPMetadata is an External MCP caller's free-form metadata, which its turns see as
-	// ROCKETCLAW_METADATA_* variables. RocketClaw never reads it for routing.
-	ExternalMCPMetadata map[string]string
-	// Workflow, when it names a workflow, starts that workflow instead of an ordinary model turn.
-	Workflow WorkflowInvocation
-	// SyncDestination, when set, is a conversation that receives this turn: the turn waits in its queue,
-	// runs in ConversationID, and then its new history and final reply are copied into SyncDestination.
-	SyncDestination string
-	// RequireOutputDecision marks a private cron-style background turn; an empty reply posts nothing.
+	Source                Source
+	Text                  string
+	Attachments           []InboundAttachment
+	SlackReply            *SlackReplyTarget
+	AttachmentPresence    AttachmentPresence
+	Human                 bool
+	GoalTurn              bool
+	AttachmentWarnings    []string
+	Kind                  InboundKind
+	GoalAction            GoalAction
+	PreserveWhitespace    bool
+	ConversationID        string
+	Metadata              map[string]string
+	ExternalMCPMetadata   map[string]string
+	Workflow              WorkflowInvocation
+	SyncDestination       string
 	RequireOutputDecision bool
-	// Cronjob identifies the cron job that produced the message; nil for other messages.
-	Cronjob *CronjobMessage
-	// OriginHeader, set on a follow-on message such as a scheduled message, a goal continuation or a
-	// background wake, is the trusted origin header of the turn that created it, which permission
-	// reviews of its turn read instead of one rendered from Source and Metadata.
-	OriginHeader string
+	Cronjob               *CronjobMessage
+	OriginHeader          string
 
 	responseInit, responseOnce sync.Once
 	responseCh                 chan InboundResponse
 }
 
-// SlackReplyTarget identifies the Slack message a reply answers.
 type SlackReplyTarget struct{ ChannelID, MessageTS, ThreadTS string }
 
-// TextConversationTarget identifies a conversation/message in the configured primary text connector.
 type TextConversationTarget struct{ ChannelID, MessageID, ThreadID string }
 
-// TurnProgress is what a turn shows people while it runs.
 type TurnProgress struct {
 	Running, Asking bool
 	Steps           []TurnStep
 }
 
-// TurnStep is one script or subagent delegation of a turn, titled with the label its call gave people.
 type TurnStep struct {
 	ID, Title string
 	State     TurnStepState
 }
 
-// TurnStepState is how far a turn's step has got.
 type TurnStepState string
 
-// Turn step states.
 const (
 	TurnStepRunning TurnStepState = "running"
 	TurnStepDone    TurnStepState = "done"
 	TurnStepFailed  TurnStepState = "failed"
 )
 
-// AskUserQuestionOption is one native UI choice for ask_user_question.
 type AskUserQuestionOption struct{ Label, Value, Description string }
 
-// AskUserQuestionRequest asks a Web turn's human for input.
 type AskUserQuestionRequest struct {
 	ID, Question, Details string
 	ConversationID        string
@@ -216,19 +149,16 @@ type AskUserQuestionRequest struct {
 	Multiple              bool
 }
 
-// AskUserQuestionAnswer is returned to the harness after a human answers.
 type AskUserQuestionAnswer struct {
 	Selected []string `json:"selected"`
 	Custom   string   `json:"custom"`
 	Source   Source   `json:"source"`
 }
 
-// UserQuestionAsker asks a turn's human an ask_user_question and waits for the answer.
 type UserQuestionAsker interface {
 	AskUserQuestion(context.Context, *AskUserQuestionRequest) (AskUserQuestionAnswer, error)
 }
 
-// OutboundMessage is a text message headed to enabled connectors.
 type OutboundMessage struct {
 	ConsumedID, ConsumedText           string
 	ConsumedHeader                     string
@@ -245,18 +175,15 @@ type OutboundMessage struct {
 	Attachments                        []OutboundAttachment
 	GoalTurn, GoalComplete, GoalActive bool
 	GoalTurnNumber, GoalMaxTurns       int
-	// Terminal is how a final's turn ended: complete, failed, or stopped.
-	Terminal Terminal
+	Terminal                           Terminal
 }
 
-// NewInboundMessage constructs an unrouted inbound message.
 func NewInboundMessage(source Source, kind InboundKind, text string, human bool) *InboundMessage {
 	return &InboundMessage{
 		Source: source, Text: text, Human: human, Kind: kind,
 	}
 }
 
-// SetInboundAllowedAgents records surface-constrained agents on an inbound message.
 func SetInboundAllowedAgents(inbound *InboundMessage, agents []string) {
 	if inbound.Metadata == nil {
 		inbound.Metadata = map[string]string{}
@@ -265,7 +192,6 @@ func SetInboundAllowedAgents(inbound *InboundMessage, agents []string) {
 	inbound.Metadata[InboundAllowedAgentsMetadataKey] = strings.Join(agents, ",")
 }
 
-// NewInboundMessageFromContent constructs an unrouted inbound message from normalized source content.
 func NewInboundMessageFromContent(source Source, kind InboundKind, content *InboundContent, human bool) *InboundMessage {
 	text := content.Text
 	if len(content.TextAttachments) > 0 {
@@ -280,7 +206,7 @@ func NewInboundMessageFromContent(source Source, kind InboundKind, content *Inbo
 	inbound := NewInboundMessage(source, kind, text, human)
 
 	inbound.Metadata = map[string]string{InboundRawTextMetadataKey: content.Text}
-	// Empty sources become nil; populated copies retain no spare append capacity.
+
 	inbound.Attachments = slices.Clip(append([]InboundAttachment(nil), content.Attachments...))
 	for i := range inbound.Attachments {
 		inbound.Attachments[i].Data = append([]byte(nil), inbound.Attachments[i].Data...)
@@ -298,7 +224,6 @@ func NewInboundMessageFromContent(source Source, kind InboundKind, content *Inbo
 	return inbound
 }
 
-// NormalizeMIMEType returns a lowercase media type, or the trimmed lowercase input if parsing fails.
 func NormalizeMIMEType(mimeType string) string {
 	if mediaType, _, err := mime.ParseMediaType(mimeType); err == nil {
 		mimeType = mediaType
@@ -307,17 +232,14 @@ func NormalizeMIMEType(mimeType string) string {
 	return strings.ToLower(strings.TrimSpace(mimeType))
 }
 
-// IsTextAttachment reports whether an attachment should be included as literal prompt text.
 func IsTextAttachment(name, mimeType string) bool {
 	mediaType := NormalizeMIMEType(mimeType)
 
 	return strings.HasPrefix(mediaType, "text/") || slices.Contains([]string{"application/json", "application/jsonl", "application/ld+json", "application/xml", "application/yaml", "application/x-yaml", "application/toml", "application/x-toml", "application/csv", "application/x-ndjson"}, mediaType) || slices.Contains([]string{".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml", ".xml", ".ini", ".log"}, strings.ToLower(filepath.Ext(strings.TrimSpace(name))))
 }
 
-// EnableResponseWait returns a channel that receives the final result for this inbound turn.
 func (m *InboundMessage) EnableResponseWait() <-chan InboundResponse { return m.responseChannel() }
 
-// CompleteResponseWithAttachments marks this inbound turn result ready with response attachments.
 func (m *InboundMessage) CompleteResponseWithAttachments(text string, attachments []OutboundAttachment, err error) {
 	ch := m.responseChannel()
 	m.responseOnce.Do(func() {
@@ -327,12 +249,10 @@ func (m *InboundMessage) CompleteResponseWithAttachments(text string, attachment
 	})
 }
 
-// NewOutboundMessage constructs an outbound message for one explicit conversation.
 func NewOutboundMessage(conversationID, text string) *OutboundMessage {
 	return &OutboundMessage{Text: text, ConversationID: strings.TrimSpace(conversationID)}
 }
 
-// CloneOutboundAttachments returns a deep copy of attachments.
 func CloneOutboundAttachments(attachments []OutboundAttachment) []OutboundAttachment {
 	cloned := slices.Clip(append([]OutboundAttachment(nil), attachments...))
 	for i := range cloned {
