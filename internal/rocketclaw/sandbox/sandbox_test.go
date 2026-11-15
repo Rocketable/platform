@@ -9,8 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A command name becomes a file in /extensions and a Bash function, so it must be a plain shell word that is
-// not curl, a reserved word, or RocketClaw's own.
 func TestCheckCommandName(t *testing.T) {
 	for _, name := range []string{"deploy", "stripe-write", "a", "_x", "0day", "my.cmd", "g++", "echo", strings.Repeat("a", 64)} {
 		require.NoError(t, CheckCommandName(name), name)
@@ -33,7 +31,6 @@ func TestCheckCommandName(t *testing.T) {
 	}
 }
 
-// The zero Runtime is unavailable, and says so, rather than running anything.
 func TestZeroRuntimeRefuses(t *testing.T) {
 	var rt Runtime
 
@@ -43,7 +40,6 @@ func TestZeroRuntimeRefuses(t *testing.T) {
 	require.EqualError(t, err, "sandbox not prepared")
 }
 
-// While Prepare works, Err says so without waiting, and waiting for it lasts only as long as the context.
 func TestPreparingRuntime(t *testing.T) {
 	rt := Runtime{p: &prepared{ready: make(chan struct{})}}
 
@@ -58,7 +54,6 @@ func TestPreparingRuntime(t *testing.T) {
 
 	require.Equal(t, 127, probeHost{}.Command(ctx, "deploy", nil, "/", nil, nil, nil), "the probe runs no host commands")
 
-	// A copy taken while preparing, as every turn's harness takes one, sees how the preparation ends.
 	turn := rt
 	rt.p.err = errors.New("no bubblewrap")
 	close(rt.p.ready)

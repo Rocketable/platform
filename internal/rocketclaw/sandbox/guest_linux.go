@@ -18,9 +18,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox/wire"
 )
 
-// Guest is RocketClaw's entry point inside a sandbox, where the binary is mounted read-only at guestRelay.
-// It reports whether this process runs there and, if so, its exit status: "init" starts the sandbox's Bash,
-// and the /extensions/<name> links relay <name> to the host.
 func Guest(args []string) (code int, ok bool) {
 	if exe, err := os.Executable(); err != nil || exe != guestRelay {
 		return 0, false
@@ -34,8 +31,6 @@ func Guest(args []string) (code int, ok bool) {
 	return relay(filepath.Base(args[0]), args[1:]), true
 }
 
-// guestInit sets resource limits, tells the host the sandbox is up through the ready descriptor, marks every
-// inherited descriptor close-on-exec, and execs the command. args: FSIZE NOFILE READYFD -- argv...
 func guestInit(args []string) error {
 	if len(args) < 5 || args[3] != "--" {
 		return errors.New("usage: rocketclaw init FSIZE NOFILE READYFD -- COMMAND [ARG...]")
@@ -73,13 +68,11 @@ func guestInit(args []string) error {
 	argv := args[4:]
 	err := unix.Exec(argv[0], argv, os.Environ())
 
-	// The ready descriptor closes on a successful exec; it is still open here, so the host learns Bash never ran.
 	_, _ = unix.Write(int(n[2]), []byte{'E'})
 
 	return fmt.Errorf("exec %s: %w", argv[0], err)
 }
 
-// relay runs host command name with args and returns its exit status; 126 when it cannot reach the host.
 func relay(name string, args []string) int {
 	code, err := relayCommand(name, args)
 	if err != nil {
@@ -114,8 +107,6 @@ func relayCommand(name string, args []string) (int, error) {
 		return 0, fmt.Errorf("send start: %w", err)
 	}
 
-	// A signal cancels the host command; the host then ends the connection, and the relay ends as the signal
-	// says, as the command would have.
 	signals, cancelled := make(chan os.Signal, 1), make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
@@ -142,7 +133,6 @@ func relayCommand(name string, args []string) (int, error) {
 
 		switch body := f.GetBody().(type) {
 		case *wire.Frame_StdoutChunk:
-			// A closed stdout pipe raises SIGPIPE here, ending the relay as it would any command.
 			if _, err := os.Stdout.Write(body.StdoutChunk); err != nil {
 				return 0, fmt.Errorf("stdout: %w", err)
 			}
@@ -157,7 +147,6 @@ func relayCommand(name string, args []string) (int, error) {
 	}
 }
 
-// pumpStdin streams stdin as chunks, then StdinEOF. Each write blocks while the host is not reading.
 func pumpStdin(w *wire.Writer) {
 	buf := make([]byte, wire.ChunkSize)
 	for {

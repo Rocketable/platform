@@ -25,30 +25,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// The guest is Ubuntu 26.04 LTS from one archive snapshot (Snapshot, in snapshot.gen.go), so every package
-// version is fixed; packages.<arch>.lock beside this file records them all, and a build whose packages differ
-// fails. `go generate ./internal/rocketclaw/sandbox` moves it all to the newest snapshot (rootfs/main.go);
-// commit what it changes, and each host builds the new image at its next start. A new Ubuntu release is a
-// change of suite, then the same command.
 const (
-	suite = "resolute"
-	// Installed on top of Ubuntu's essential set (spec §4.2). Adding one needs a security review, then go
-	// generate.
+	suite    = "resolute"
 	packages = "bash,bzip2,ca-certificates,coreutils,diffutils,file,findutils,gawk,grep,gzip,jq,nodejs,procps,python3,sed,sqlite3,tar,wget,xz-utils"
 )
 
-// The archive signing keys, from ubuntu-keyring 2023.11.28.1 in the snapshot (sha256
-// 36de43b15853ccae0028e9a767613770c704833f82586f28eb262f0311adb8a8); trusted as committed.
-//
 //go:embed ubuntu-archive-keyring.gpg
 var keyring []byte
 
-// BuildImage builds the guest image for arch from the archive snapshot (a moment like Snapshot) into dst:
-// mmdebstrap (Linux, unprivileged user namespaces, and qemu-user emulation for the other architecture)
-// writes a tar, and extract writes it out without device nodes, setuid or setgid bits, or file capabilities,
-// plus the guest user and js-exec. It returns the installed packages as name=version lines and the Ubuntu
-// release. Prepare builds Snapshot's at the first start, and the update tool in rootfs/ the newest.
-// mmdebstrap runs in a cgroup, build, under cgroup ("" for the caller's), killed when the build ends.
 func BuildImage(ctx context.Context, snapshot, arch, dst, cgroup string) (installed []string, release string, err error) {
 	work := dst + ".work"
 	if err := os.RemoveAll(work); err != nil {
@@ -60,8 +44,6 @@ func BuildImage(ctx context.Context, snapshot, arch, dst, cgroup string) (instal
 	}
 	defer func() { _ = os.RemoveAll(work) }()
 
-	// mmdebstrap builds as root of a user namespace, a subordinate uid that cannot reach into a private home
-	// folder, where work may be, so it builds in /tmp, in one folder per image folder that each build clears.
 	sum := sha256.Sum256([]byte(filepath.Dir(dst)))
 	tmp := "/tmp/rocketclaw-build-" + hex.EncodeToString(sum[:8])
 
@@ -87,10 +69,6 @@ func BuildImage(ctx context.Context, snapshot, arch, dst, cgroup string) (instal
 	epoch, _ := time.Parse("20060102T150405Z", snapshot)
 	mirror := "https://snapshot.ubuntu.com/ubuntu/" + snapshot
 
-	// ROCKETCLAW_SANDBOX_PACKAGE_MIRROR, when set, is an Ubuntu mirror tried first for the packages, as CI
-	// sets the one beside its runners; the snapshot serves the indexes, and whatever packages the mirror lacks.
-	// apt checks each package against the snapshot's signed indexes, so the versions stay pinned. The list's path
-	// stays the same from build to build, as apt names a package cache's indexes after it.
 	source := mirror
 
 	if fast := os.Getenv("ROCKETCLAW_SANDBOX_PACKAGE_MIRROR"); fast != "" {
@@ -106,13 +84,8 @@ func BuildImage(ctx context.Context, snapshot, arch, dst, cgroup string) (instal
 
 	args := []string{"--mode=unshare", "--variant=essential", "--arch=" + arch, "--format=tar",
 		"--keyring=" + key, "--aptopt=Acquire::Check-Valid-Until false", "--aptopt=Acquire::Retries 5",
-		// Pipelined requests crawl through some networks' proxies, as on GitHub's runners, whose own apt has
-		// pipelining off.
 		"--aptopt=Acquire::http::Pipeline-Depth 0"}
 
-	// ROCKETCLAW_SANDBOX_PACKAGE_CACHE, when set, is a folder that keeps the downloaded packages and indexes
-	// between builds, as CI sets it, so a build fetches only the archive's signed InRelease files, which apt
-	// checks the kept files against. mmdebstrap's cleanup leaves them out of the image.
 	cache := os.Getenv("ROCKETCLAW_SANDBOX_PACKAGE_CACHE")
 	if cache != "" {
 		if cache, err = filepath.Abs(cache); err == nil {
@@ -131,7 +104,6 @@ func BuildImage(ctx context.Context, snapshot, arch, dst, cgroup string) (instal
 			"--customize-hook=sync-out /var/lib/apt/lists '"+filepath.Join(cache, "lists")+"'")
 	}
 
-	// On a pipe, Run would wait for mmdebstrap's helpers, which outlive it when the OOM killer takes it alone.
 	output, err := os.Create(filepath.Join(tmp, "output"))
 	if err != nil {
 		return nil, "", fmt.Errorf("create build output: %w", err)
@@ -181,7 +153,6 @@ func BuildImage(ctx context.Context, snapshot, arch, dst, cgroup string) (instal
 	return installed, release, err
 }
 
-// clearBuild removes the build folder tmp; only mmdebstrap's helper can remove what its subordinate uid left.
 func clearBuild(tmp string) error {
 	helper := exec.Command("mmdebstrap", "--unshare-helper", "find", tmp, "-mindepth", "2", "-delete")
 	helper.Dir = "/"
@@ -194,8 +165,6 @@ func clearBuild(tmp string) error {
 	return nil
 }
 
-// pruneCache deletes the cached packages the image no longer installs, so a cache carried over from an
-// older lock keeps only what the next build needs.
 func pruneCache(archives string, installed []string) error {
 	debs, err := filepath.Glob(filepath.Join(archives, "*.deb"))
 	if err != nil {
@@ -203,7 +172,6 @@ func pruneCache(archives string, installed []string) error {
 	}
 
 	for _, deb := range debs {
-		// apt names a package name_version_arch.deb, with the epoch's colon escaped.
 		name, rest, _ := strings.Cut(strings.TrimSuffix(filepath.Base(deb), ".deb"), "_")
 		version, _, _ := strings.Cut(rest, "_")
 
@@ -219,8 +187,6 @@ func pruneCache(archives string, installed []string) error {
 	return nil
 }
 
-// BuildError is a failed mmdebstrap. Its message is the first error line of the output, which is long and
-// goes to the server log whole.
 type BuildError struct {
 	Err    error
 	Output []byte
@@ -243,8 +209,6 @@ func (e *BuildError) Error() string {
 
 func (e *BuildError) Unwrap() error { return e.Err }
 
-// extract writes the mmdebstrap tar at raw into dst. Directories keep owner write, so the image can be
-// rebuilt or removed; the sandbox mounts it read-only anyway. .complete marks the image done.
 func extract(raw, dst string) (installed []string, release string, err error) {
 	if err := os.RemoveAll(dst); err != nil {
 		return nil, "", fmt.Errorf("clear %s: %w", dst, err)
@@ -286,7 +250,6 @@ func extract(raw, dst string) (installed []string, release string, err error) {
 			return nil, "", fmt.Errorf("%s has file capabilities (spec §4.2)", name)
 		}
 
-		// Perm drops setuid and setgid (spec §4.2).
 		mode := fs.FileMode(h.Mode).Perm()
 
 		switch h.Typeflag {
@@ -326,8 +289,6 @@ func extract(raw, dst string) (installed []string, release string, err error) {
 	return installed, release, nil
 }
 
-// guestFiles adds the guest user and js-exec to the extracted image, and reads from it what the lock and
-// SBOM need: the installed packages and the Ubuntu release.
 func guestFiles(root *os.Root) (installed []string, release string, err error) {
 	for _, f := range []struct{ name, line string }{
 		{"etc/passwd", "user:x:1000:1000::/home/user:/bin/bash\n"},
@@ -394,7 +355,6 @@ func writeFile(root *os.Root, name string, r io.Reader, mode fs.FileMode) error 
 	return nil
 }
 
-// dpkgInstalled lists the installed packages in dpkg's status file as sorted name=version lines.
 func dpkgInstalled(status []byte) []string {
 	var out []string
 

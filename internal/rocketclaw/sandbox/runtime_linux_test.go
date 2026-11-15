@@ -26,14 +26,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// TestMain lets this binary stand in for mmdebstrap: it writes a small Ubuntu-like tar where the real one
-// would, with the things the build must strip, add or refuse.
 func TestMain(m *testing.M) {
 	if filepath.Base(os.Args[0]) != "mmdebstrap" {
 		os.Exit(m.Run())
 	}
 
-	// The build clears its folder through mmdebstrap's helper, which runs the rest as the build's uid.
 	if os.Args[1] == "--unshare-helper" {
 		path, err := exec.LookPath(os.Args[2])
 		if err == nil {
@@ -89,7 +86,6 @@ func TestMain(m *testing.M) {
 	case "fail quietly":
 		os.Exit(1)
 	case "fail twice":
-		// The archive is flaky for two tries; ROOTFS_TEST_TRIES counts them.
 		tries, _ := os.ReadFile(os.Getenv("ROOTFS_TEST_TRIES"))
 		if err := os.WriteFile(os.Getenv("ROOTFS_TEST_TRIES"), append(tries, 'x'), 0o644); err != nil {
 			panic(err)
@@ -100,7 +96,6 @@ func TestMain(m *testing.M) {
 			os.Exit(100)
 		}
 	case "hang":
-		// Like mmdebstrap: a folder in TMPDIR, and a helper on its output that outlives it unless its cgroup goes.
 		dir, err := os.MkdirTemp("", "mmdebstrap.")
 		helper := exec.Command("sleep", "infinity")
 		helper.Stdout = os.Stdout
@@ -148,7 +143,6 @@ func TestMain(m *testing.M) {
 	os.Exit(0)
 }
 
-// fakeMmdebstrap puts this test binary on PATH as mmdebstrap.
 func fakeMmdebstrap(t *testing.T) {
 	t.Helper()
 
@@ -158,15 +152,9 @@ func fakeMmdebstrap(t *testing.T) {
 	bin := t.TempDir()
 	require.NoError(t, os.Symlink(self, filepath.Join(bin, "mmdebstrap")))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	// The fake tool finishes its tar synchronously; only its exit sleep is unnecessary. The test process's
-	// race runtime is already initialized, so its exit grace and race detection stay unchanged.
 	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
 }
 
-// The build turns mmdebstrap's tar into the guest image: devices gone, setuid dropped, directories owner-
-// writable, the guest user added and js-exec linked; it reports the installed packages and the release the
-// image says it is. It refuses a file capability, an unknown entry or an image without a release, and fails
-// with the reason on anything it cannot write or read back.
 func TestBuildImage(t *testing.T) {
 	fakeMmdebstrap(t)
 
@@ -219,8 +207,6 @@ func TestBuildImage(t *testing.T) {
 		require.ErrorContains(t, err, want, mode)
 	}
 
-	// A failed mmdebstrap says why in its first error line, else its last line; its whole output stays with
-	// the error for the server log.
 	for mode, want := range map[string]string{
 		"fail":           "mmdebstrap failed (exit status 25): E: cannot reach the archive",
 		"fail without E": "mmdebstrap failed (exit status 2): I: gave up",
@@ -242,7 +228,6 @@ func TestBuildImage(t *testing.T) {
 	require.ErrorIs(t, err, exec.ErrNotFound, "no mmdebstrap")
 }
 
-// A package cache carried over from an older lock keeps only the packages the new image installs.
 func TestBuildImagePrunesPackageCache(t *testing.T) {
 	fakeMmdebstrap(t)
 
@@ -271,8 +256,6 @@ func TestBuildImagePrunesPackageCache(t *testing.T) {
 	require.DirExists(t, filepath.Join(cache, "lists"))
 }
 
-// A cancelled build, or one whose mmdebstrap alone is killed as the OOM killer does, leaves no process and no
-// folder behind, and the next build clears what a crash left.
 func TestBuildImageLeavesNothing(t *testing.T) {
 	fakeMmdebstrap(t)
 	t.Setenv("ROOTFS_TEST_MODE", "hang")
@@ -326,9 +309,6 @@ func TestBuildImageLeavesNothing(t *testing.T) {
 	require.NoError(t, err, "the next build clears the folder first")
 }
 
-// While mmdebstrap fails, as it does when Ubuntu's archive is flaky, the build tries again after growing pauses
-// and says why and when, then carries on once a try works. A failure no retry fixes, no mmdebstrap at all,
-// returns at once.
 func TestBuildImageRetries(t *testing.T) {
 	fakeMmdebstrap(t)
 	t.Setenv("ROOTFS_TEST_MODE", "fail twice")
@@ -371,9 +351,6 @@ func TestBuildImageRetries(t *testing.T) {
 	require.ErrorIs(t, err, exec.ErrNotFound)
 }
 
-// A host folder under one of the image's folders, such as /var/lib/rocketclaw, gets that folder rebuilt around
-// it from the image's entries, since bwrap cannot make a mount point inside a read-only bind. Everything else
-// stays one read-only bind per top folder.
 func TestImageBinds(t *testing.T) {
 	image := t.TempDir()
 	for _, d := range []string{"usr/bin", "var/lib/dpkg", "var/tmp", "var/cache", "etc", "srv", "home"} {
@@ -405,8 +382,6 @@ func TestImageBinds(t *testing.T) {
 	}, mounts)
 }
 
-// Prepare fails closed, without waiting commands forever: without bubblewrap the Runtime refuses with what to
-// do about it, which the server log records too.
 func TestPrepareFailsClosed(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
@@ -424,8 +399,6 @@ func TestPrepareFailsClosed(t *testing.T) {
 	require.ErrorIs(t, err, errNotReady)
 }
 
-// Outside a sandbox the guest entry points refuse: this is not the relay, there is no broker, and init checks
-// its arguments before touching limits.
 func TestGuestOutsideSandbox(t *testing.T) {
 	_, ok := Guest([]string{"rocketclaw"})
 	require.False(t, ok)
@@ -434,8 +407,6 @@ func TestGuestOutsideSandbox(t *testing.T) {
 	require.ErrorContains(t, guestInit(nil), "usage: rocketclaw init")
 	require.ErrorContains(t, guestInit([]string{"x", "1024", "5", "--", "/bin/true"}), "init:")
 
-	// When Bash cannot start, init says so after its ready byte, so the host knows no guest code ran. The
-	// limits are this process's own, so it keeps working.
 	var fsize, nofile unix.Rlimit
 	require.NoError(t, unix.Getrlimit(unix.RLIMIT_FSIZE, &fsize))
 	require.NoError(t, unix.Getrlimit(unix.RLIMIT_NOFILE, &nofile))

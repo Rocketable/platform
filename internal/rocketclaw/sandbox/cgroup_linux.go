@@ -17,10 +17,6 @@ import (
 
 const cgroupRoot = "/sys/fs/cgroup"
 
-// delegateCgroup returns a cgroup the sandbox owns inside RocketClaw's own delegated cgroup (systemd
-// Delegate=yes). cgroup v2 forbids processes in a cgroup whose children have controllers, so RocketClaw
-// moves into a "supervisor" leaf and the sandbox gets the sibling "sandbox". Commands a crash left there are
-// killed and removed (spec §5.4).
 func delegateCgroup() (string, error) {
 	data, err := os.ReadFile("/proc/self/cgroup")
 	if err != nil {
@@ -34,7 +30,7 @@ func delegateCgroup() (string, error) {
 
 	dir := filepath.Join(cgroupRoot, own)
 	if filepath.Base(dir) == "supervisor" {
-		dir = filepath.Dir(dir) // a reload: RocketClaw already moved
+		dir = filepath.Dir(dir)
 	}
 
 	for _, leaf := range []string{"supervisor", "sandbox"} {
@@ -43,8 +39,6 @@ func delegateCgroup() (string, error) {
 		}
 	}
 
-	// Everything in RocketClaw's cgroup moves, not just RocketClaw: `go run` leaves its go command there, and a
-	// cgroup holding processes cannot enable controllers for its children.
 	procs, err := os.ReadFile(filepath.Join(dir, "cgroup.procs"))
 	if err != nil {
 		return "", fmt.Errorf("cgroup: %w", err)
@@ -76,7 +70,6 @@ func delegateCgroup() (string, error) {
 	return parent, nil
 }
 
-// enableControllers turns on cpu, memory and pids for dir's children, which must all be available to it.
 func enableControllers(dir string) error {
 	data, err := os.ReadFile(filepath.Join(dir, "cgroup.controllers"))
 	if err != nil {
@@ -96,13 +89,11 @@ func enableControllers(dir string) error {
 	return nil
 }
 
-// execCgroup is one command's cgroup.
 type execCgroup struct {
 	path string
-	fd   int // for CLONE_INTO_CGROUP
+	fd   int
 }
 
-// newExecCgroup creates dir with the limits set before any process enters it.
 func newExecCgroup(dir string) (*execCgroup, error) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("cgroup: %w", err)
@@ -121,7 +112,6 @@ func newExecCgroup(dir string) (*execCgroup, error) {
 		}
 	}
 
-	// Swap would let the guest exceed memory.max; the file is missing only without swap accounting.
 	if err := os.WriteFile(filepath.Join(dir, "memory.swap.max"), []byte("0"), 0); err != nil && !errors.Is(err, os.ErrNotExist) {
 		_ = cg.remove()
 		return nil, fmt.Errorf("cgroup memory.swap.max: %w", err)
@@ -138,7 +128,6 @@ func newExecCgroup(dir string) (*execCgroup, error) {
 	return cg, nil
 }
 
-// killCgroup kills every process in dir and waits until none is left.
 func killCgroup(dir string) error {
 	if err := os.WriteFile(filepath.Join(dir, "cgroup.kill"), []byte("1"), 0); err != nil {
 		return fmt.Errorf("cgroup.kill: %w", err)
@@ -155,7 +144,6 @@ func killCgroup(dir string) error {
 	}
 }
 
-// cgroupKey reads one "key value" line of a flat-keyed cgroup file.
 func cgroupKey(dir, file, key string) (int64, error) {
 	data, err := os.ReadFile(filepath.Join(dir, file))
 	if err != nil {
@@ -176,7 +164,6 @@ func cgroupKey(dir, file, key string) (int64, error) {
 	return 0, fmt.Errorf("%s: no %s", file, key)
 }
 
-// hitResourceLimit reports whether the cgroup killed for memory or refused a fork.
 func (cg *execCgroup) hitResourceLimit() bool {
 	oom, _ := cgroupKey(cg.path, "memory.events", "oom_kill")
 	pids, _ := cgroupKey(cg.path, "pids.events", "max")
@@ -184,7 +171,6 @@ func (cg *execCgroup) hitResourceLimit() bool {
 	return oom > 0 || pids > 0
 }
 
-// remove closes the descriptor and removes the cgroup, which killCgroup emptied.
 func (cg *execCgroup) remove() error {
 	if cg.fd >= 0 {
 		_ = unix.Close(cg.fd)
@@ -197,7 +183,6 @@ func (cg *execCgroup) remove() error {
 	return nil
 }
 
-// cgroupRelative is dir as /proc/<pid>/cgroup reports it.
 func cgroupRelative(dir string) (string, error) {
 	rel, err := filepath.Rel(cgroupRoot, dir)
 	if err != nil || !filepath.IsLocal(rel) {
