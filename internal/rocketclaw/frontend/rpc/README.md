@@ -652,20 +652,27 @@ OpenCode branches of `CreateSession` and `ForkSession` refuse them.
 Use a dedicated test PostgreSQL database, never a production database. Each run
 creates an isolated schema via the existing test helper.
 
+RocketClaw's Go packages do not build on macOS. On a Mac, run the tests through
+`make`, which runs them in the Linux container with its own test database and
+the browser-test variables set:
+
 ```sh
-main=${PWD%%/.tmp/workspaces/*}  # the main checkout, even when run from a JJ workspace
-mkdir -p "$main/.tmp/t"
-export TMPDIR="$main/.tmp/t"
+make -C internal/rocketclaw web-assets  # once in a fresh workspace
+make -C internal/rocketclaw coverage-profile 'GOTESTRUN=^(TestWebRPC|TestSessionEntries)$$'
+```
+
+On a Linux host, run `go test` with a test database of your own:
+
+```sh
 export ROCKETCLAW_TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:55435/rocketclaw_test?sslmode=disable'
 go test -race -count=1 -run '^(TestWebRPC|TestSessionEntries)$' \
   ./cmd/rocketclaw ./internal/rocketclaw/frontend/rpc
 ```
 
-The tests bind Unix sockets under `TMPDIR`, and on macOS a socket path must stay
-under 104 bytes, so `TMPDIR` can be at most 86 bytes. A JJ workspace under
-`.tmp/workspaces/` uses most of that before its own `.tmp/` is added, so no
-directory there fits reliably; use the main checkout's `.tmp/`. See
-[Frontend RPC Tests Need Setup in Every Fresh JJ Workspace](../../../../docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md)
+The tests bind Unix sockets under `TMPDIR`, and a socket path must stay under
+108 bytes on Linux, so keep `TMPDIR` short. A long Mac workspace path seen
+inside the Linux container can exceed it. See
+[Frontend RPC Browser Tests Fail Without Their Setup](../../../../docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md)
 for the full workspace setup, including the browser-test variables below.
 
 `TestSessionEntries` starts real Unix gRPC and the Go HTTP adapter, uses Bun as its
@@ -676,7 +683,8 @@ must already be installed. The TypeScript integration test needs the URL and
 conversation ID that Go passes it with its isolated storage fixture, so it fails
 when run alone.
 
-For real desktop/mobile transcript gestures, build Web first and provide an
+For real desktop/mobile transcript gestures, build Web first. The Linux
+container already provides Playwright and Chromium; on a Linux host, provide an
 installed Playwright module and Chromium executable:
 
 ```sh
