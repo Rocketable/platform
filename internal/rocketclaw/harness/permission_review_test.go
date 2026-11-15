@@ -373,6 +373,7 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 
 			require.Contains(t, asked.Instructions, `The review request opens with the line "Turn origin (written by RocketClaw): [...]".`)
 			require.Contains(t, asked.Instructions, tc.wantRules)
+			require.Equal(t, agent.Mode == AgentModeEasy, strings.Contains(asked.Instructions, "# Whole Scripts"))
 			require.Contains(t, asked.Input, "Planned action JSON:")
 
 			var names []string
@@ -388,6 +389,7 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 				instructions := newParams(mock)[0].Instructions.Value
 				require.NotContains(t, instructions, "Deny deploys on Fridays.")
 				require.Equal(t, 1, strings.Count(instructions, "# Turn Origin"))
+				require.Equal(t, agent.Mode == AgentModeEasy, strings.Contains(instructions, "# Whole Scripts"))
 				require.Equal(t, "guardian", decision.Rationale)
 				require.Contains(t, diagnostics[0].Subagent.Text, "decision model openai/gpt-6-luna fell back to "+cmp.Or(tc.reviewer, "guardian")+": "+tc.wantFallback)
 
@@ -466,6 +468,7 @@ func TestPermissionReviewSystemPromptIncludesRootInstructionsAndCodeMode(t *test
 			require.Contains(t, instructions, "You are judging one planned coding-agent action.")
 			require.Contains(t, instructions, "## Code Mode")
 			require.Contains(t, instructions, `The review request opens with the line "Turn origin (written by RocketClaw): [...]".`)
+			require.NotContains(t, instructions, "# Whole Scripts")
 		}
 	}
 }

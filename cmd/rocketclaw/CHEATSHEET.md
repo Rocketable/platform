@@ -406,7 +406,7 @@ Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-ex
 
 ## Easy Mode Agent Frontmatter
 
-`mode: easy` selects the easy format (see the [README](../../README.md#easy-mode-agents)). A section left out or set to `auto` turns on everything in it; a written section turns on only what it lists. Everything on is reviewed by the agent's approver, except `skill`, `find_skills`, `task`, `decision`, hosted `websearch`, and the default-on RocketClaw tools (`rocketclaw_reload`, scheduled messages, `rocketclaw_attach_files_to_response`, `rocketclaw_update_goal`, `ask_user_question`). Each `execute` script is reviewed whole, and its calls one by one.
+`mode: easy` selects the easy format (see the [README](../../README.md#easy-mode-agents)). A section left out or set to `auto` turns on everything in it; a written section turns on only what it lists. Everything on is reviewed by the agent's approver, except `skill`, `find_skills`, `task`, `decision`, hosted `websearch`, and the default-on RocketClaw tools (`rocketclaw_reload`, scheduled messages, `rocketclaw_attach_files_to_response`, `rocketclaw_update_goal`, `ask_user_question`). Each `execute` script is reviewed once, whole, and that approves every call it makes: they are not reviewed again, but a call the file does not turn on is still refused.
 
 | Key | Meaning | Left out |
 | --- | --- | --- |

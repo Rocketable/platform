@@ -75,7 +75,7 @@ func CheckNestedToolCall(ctx context.Context, toolName string, tool *looperTool,
 		return permissionDeniedError(decision.message)
 	}
 
-	if decision.review == nil {
+	if decision.review == nil || tc.looper.Permissions.Easy {
 		return nil
 	}
 

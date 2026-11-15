@@ -577,7 +577,7 @@ func TestWorkflowAgentRunnerKeepsEasyLimits(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	require.Equal(t, []string{"gpt-6-luna", "gpt-approver", "gpt-approver", "gpt-6-luna", "gpt-6.1-sol", "gpt-approver", "gpt-approver", "gpt-6.1-sol"}, models, "the script and its read are reviewed")
+	require.Equal(t, []string{"gpt-6-luna", "gpt-approver", "gpt-6-luna", "gpt-6.1-sol", "gpt-approver", "gpt-6.1-sol"}, models, "the script is reviewed once, which approves its read")
 	require.True(t, reviewedByTenant, "the approver's prompt is in the review")
 	require.Len(t, outputs, 2)
 

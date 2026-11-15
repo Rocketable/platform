@@ -738,17 +738,21 @@ func TestExecuteWholeScriptApproval(t *testing.T) {
 		outcome               permissionReviewOutcome
 		wantCalls             int
 		wantReview            bool
+		easy                  bool
 	}{
-		{"unset", "read: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, false},
-		{"explicit allow", "rocketclaw: {code_mode_approve: allow}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, false},
-		{"built-in reviewer", "rocketclaw: {code_mode_approve: auto}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, true},
-		{"custom reviewer", "rocketclaw: {code_mode_approve: 'auto(release-reviewer)'}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeAllow, 1, true},
-		{"last exact rule wins", "rocketclaw: {code_mode_approve: allow, code_mode_approve: 'auto(release-reviewer)'}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeAllow, 1, true},
-		{"review denial prevents script", "rocketclaw: {code_mode_approve: 'auto(release-reviewer)'}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeDeny, 0, true},
-		{"entry approval does not grant nested read", "rocketclaw: {code_mode_approve: auto}\nread: {another: allow}", "", permissionReviewOutcomeAllow, 0, true},
+		{"unset", "read: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, false, false},
+		{"explicit allow", "rocketclaw: {code_mode_approve: allow}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, false, false},
+		{"built-in reviewer", "rocketclaw: {code_mode_approve: auto}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, true, false},
+		{"custom reviewer", "rocketclaw: {code_mode_approve: 'auto(release-reviewer)'}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeAllow, 1, true, false},
+		{"last exact rule wins", "rocketclaw: {code_mode_approve: allow, code_mode_approve: 'auto(release-reviewer)'}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeAllow, 1, true, false},
+		{"review denial prevents script", "rocketclaw: {code_mode_approve: 'auto(release-reviewer)'}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeDeny, 0, true, false},
+		{"entry approval does not grant nested read", "rocketclaw: {code_mode_approve: auto}\nread: {another: allow}", "", permissionReviewOutcomeAllow, 0, true, false},
+		{"easy script review approves its calls", "rocketclaw: {code_mode_approve: auto}\nread: {allowed: auto}", "", permissionReviewOutcomeAllow, 1, true, true},
+		{"easy script review does not grant a call", "rocketclaw: {code_mode_approve: auto}\nread: {another: auto}", "", permissionReviewOutcomeAllow, 0, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			permissions := parsePermissionYAML(t, tc.rules)
+			permissions.Easy = tc.easy
 			calls := 0
 			readTool := testLooperTool("read")
 			readTool.Permission = "read"

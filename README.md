@@ -315,6 +315,7 @@ An agent file with `mode: easy` uses a shorter format. Leaving `mode` out, or `m
 
 - A section left out, or set to `auto`, turns on everything in it. A section written out turns on only what it lists.
 - Everything turned on is reviewed before it runs by the agent's approver: the guardian, on `approver.model` when set, with `approver.prompt` added to its rules. `approver.decision` (`model`, `minConfidence`, `prompt`) sets the decision model asked first and its own rules. With `approver.prompt` set and no `approver.decision.prompt`, reviews are never pre-gated; write the rules in both to pre-gate them. As under `sudo`, skills, `task`, web search and the default-on RocketClaw tools (reload, scheduled messages, attaching files, goal updates and questions) run without review, and so does the `decision` tool for the models the `decision` list names.
+- An `execute` script is reviewed once, whole, before it runs, and that approves every call it makes: its calls are not reviewed again. The approver sees the script's code but not the values it reads or fetches while it runs. A call the file does not turn on is still refused.
 - `model`, `space` and `workingDirectory` are required. A misspelled or unknown key fails to load, and so do the advanced keys `description`, `reasoningEffort`, `verbosity`, `shell`, `permission`, `sudo`, `guardrail` and `additionalInstructions`.
 - The body is the agent's whole instructions. Easy agents never load `AGENTS.md` and get no reply-style line; write ``!`cat AGENTS.md` `` in the body to include it.
 

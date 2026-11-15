@@ -339,7 +339,7 @@ The body must also end with an extra instruction that explicitly tells the agent
 
 An agent file with `mode: easy` uses a shorter format. Write it when the human asks for an easy agent, or for one that works in its own folder, turns whole features on or off, and has every action reviewed by an approver. Otherwise write the advanced format above. Leaving `mode` out means advanced; any value other than `easy` or `advanced` fails loading.
 
-A section left out, or set to `auto`, turns on everything in it, reviewed by the agent's approver; a written section turns on only what it lists. For creation, ask for the target name, `model`, `space`, `workingDirectory` and purpose, and which sections to narrow. Do not ask for a description, permission opt-ins, `shell` or `sudo`.
+A section left out, or set to `auto`, turns on everything in it, reviewed by the agent's approver; a written section turns on only what it lists. The approver reviews each `execute` script once, whole, and that approves every call the script makes. For creation, ask for the target name, `model`, `space`, `workingDirectory` and purpose, and which sections to narrow. Do not ask for a description, permission opt-ins, `shell` or `sudo`.
 
 Keys:
 - `mode: easy`
