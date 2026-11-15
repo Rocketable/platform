@@ -1191,7 +1191,17 @@ func TestShadowLiveHistoryMutation(t *testing.T) {
 					t.Logf("shadow mutation startup goroutines: snapshot_error=%v\n%s", errStacks, stacks.Bytes())
 					// Bound diagnostic SQL only; preserve the startup wait and failure below.
 					ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-					rows, err := queryStrings(ctx, store.db, `SELECT format('conversation=%s agent=%s shadow_parent=%s turn=%s phase=%s lane=%s outbound=%s manifest=%s parent_turn=%s child_turn=%s inputs=%s input_closed=%s terminal=%s',
+					rows, err := queryStrings(ctx, store.db, `WITH participants AS (
+SELECT DISTINCT l.pid FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
+JOIN pg_database d ON d.oid = l.database AND d.datname = current_database()
+JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema()
+)
+SELECT format('pid=%s state=%s wait=%s/%s blockers=%s query=%s',
+a.pid, a.state, a.wait_event_type, a.wait_event, pg_blocking_pids(a.pid), a.query)
+FROM participants p JOIN pg_stat_activity a ON a.pid = p.pid
+WHERE a.pid <> pg_backend_pid() AND a.state <> 'idle' ORDER BY a.pid`, "shadow mutation startup database activity")
+					t.Logf("shadow mutation startup database_activity=%v query_error=%v", rows, err)
+					rows, err = queryStrings(ctx, store.db, `SELECT format('conversation=%s agent=%s shadow_parent=%s turn=%s phase=%s lane=%s outbound=%s manifest=%s parent_turn=%s child_turn=%s inputs=%s input_closed=%s terminal=%s',
 c.conversation_id, c.agent, c.shadow_parent, t.id, t.phase, t.takes_lane, t.outbound_json IS NOT NULL,
 s.id, s.parent_turn_id, s.child_turn_id, jsonb_array_length(s.inputs), s.input_closed, s.terminal)
 FROM conversations c LEFT JOIN turns t ON t.conversation_id = c.conversation_id
