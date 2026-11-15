@@ -1,4 +1,3 @@
-// Package skel seeds the embedded rocketclaw skeleton into workspaces.
 package skel
 
 import (
@@ -32,7 +31,6 @@ const (
 	scriptSymlinkExcludeEnd   = "# END rocketclaw generated script symlinks"
 )
 
-// OverlayInfo describes one configured git overlay materialized by SyncInWithOverlays.
 type OverlayInfo struct {
 	Spec, URL, Ref, ClonePath string
 }
@@ -40,9 +38,8 @@ type OverlayInfo struct {
 //go:embed AGENTS.md main-update-cortex.sh all:.rocketclaw all:agents all:cron
 var payload embed.FS
 
-// SyncInWithOverlays materializes embedded setup files, configured git overlays, and local overlays into runtimeDir.
 func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger *slog.Logger) error {
-	entries, _ := fs.ReadDir(payload, ".") // The embedded root always exists.
+	entries, _ := fs.ReadDir(payload, ".")
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -65,7 +62,7 @@ func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger 
 			return fmt.Errorf("stat root setup path %s: %w", dst, err)
 		}
 
-		data, _ := fs.ReadFile(payload, name) // Enumerated regular files in an immutable embed.FS.
+		data, _ := fs.ReadFile(payload, name)
 
 		if err := os.WriteFile(dst, data, embeddedFileMode(name)); err != nil {
 			return fmt.Errorf("write root setup file %s: %w", dst, err)
@@ -108,7 +105,6 @@ func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger 
 	return nil
 }
 
-// SyncEffectiveRuntimeAssets materializes startup-equivalent runtime assets into target without touching runtime state or workspace script symlinks.
 func SyncEffectiveRuntimeAssets(workspace, target string, overlays []string, logger *slog.Logger) error {
 	if err := syncFSFiltered(payload, payloadRoot, target, "syncing embedded rocketclaw skeleton", logger, true, false, inertFileFilter{}); err != nil {
 		return fmt.Errorf("sync embedded rocketclaw skeleton: %w", err)
@@ -138,8 +134,6 @@ func SyncEffectiveRuntimeAssets(workspace, target string, overlays []string, log
 	return nil
 }
 
-// ReplaceRuntimeAssetsAfterValidation rebuilds runtime assets in a stage and replaces live assets only after validate accepts the staged work dir.
-// locked must be shared with definition readers; validation runs outside Do so it can load staged definitions.
 func ReplaceRuntimeAssetsAfterValidation(workspace, runtimeDir string, overlays []string, logger *slog.Logger, locked *config.LockedConfig, validate func(string) error) error {
 	stage, err := os.MkdirTemp(workspace, ".rocketclaw-reload-*")
 	if err != nil {
@@ -238,7 +232,6 @@ func syncWorkspaceScriptSymlinks(workspace, runtimeDir string, logger *slog.Logg
 			return fmt.Errorf("walk runtime scripts %s: %w", path, err)
 		}
 
-		// Directories, symlinks, and other non-regular entries carry a ModeType bit.
 		if d.Type()&os.ModeType != 0 {
 			return nil
 		}
@@ -466,7 +459,6 @@ func isRuntimeScriptSymlink(workspace, path string) bool {
 	return false
 }
 
-// OverlayInfos returns normalized configured overlay clone metadata in config order.
 func OverlayInfos(workspace, runtimeDir string, overlays []string) []OverlayInfo {
 	return overlayInfosIn(filepath.Join(workspace, runtimeDir), overlays)
 }
