@@ -19,17 +19,14 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox/wire"
 )
 
-// startTimeout bounds how long a connection may wait before sending InvokeStart.
 const startTimeout = 10 * time.Second
 
-// broker serves one command's socket. Every connection is untrusted: it must come from a process in the
-// command's cgroup, name one of names, and stay within the budgets.
 type broker struct {
 	execID string
-	cgroup string // the command's cgroup as /proc/<pid>/cgroup shows it
+	cgroup string
 	names  []string
 	host   Host
-	out    *budget // host command output, against outputBytes
+	out    *budget
 	ln     *net.UnixListener
 	slots  chan struct{}
 
@@ -39,7 +36,6 @@ type broker struct {
 	wg          sync.WaitGroup
 }
 
-// serve accepts connections until the listener closes. ctx ends with the command.
 func (b *broker) serve(ctx context.Context) {
 	for {
 		conn, err := b.ln.AcceptUnix()
@@ -74,8 +70,6 @@ func (b *broker) serve(ctx context.Context) {
 	}
 }
 
-// close stops accepting, closes every connection, and waits for the connection goroutines. A host command
-// still running is abandoned with its context cancelled (spec §6.5).
 func (b *broker) close() {
 	b.mu.Lock()
 	_ = b.ln.Close()
@@ -90,7 +84,6 @@ func (b *broker) close() {
 	b.wg.Wait()
 }
 
-// peerInExec reports whether the connecting process is in the command's cgroup: reaching the socket is not proof.
 func (b *broker) peerInExec(conn *net.UnixConn) bool {
 	raw, err := conn.SyscallConn()
 	if err != nil {
@@ -158,7 +151,6 @@ func (b *broker) handle(ctx context.Context, conn *net.UnixConn) {
 	b.invoke(ctx, conn, r, w, name, start)
 }
 
-// safeName echoes a guest-supplied name only when it is a plausible command name.
 func safeName(name string) string {
 	if commandName.MatchString(name) {
 		return name
@@ -176,10 +168,8 @@ func exit(w *wire.Writer, code int, msg string) {
 	_ = w.Write(&wire.Frame{Body: &wire.Frame_InvokeExit{InvokeExit: e}})
 }
 
-// errRevoked fails writes of a host command that outlived its invocation.
 var errRevoked = errors.New("host command ended")
 
-// invocation is one running host command; its output stops when it ends.
 type invocation struct {
 	mu      sync.Mutex
 	revoked bool
@@ -212,8 +202,6 @@ func (b *broker) invoke(ctx context.Context, conn *net.UnixConn, r *wire.Reader,
 	stdinR, stdinW := io.Pipe()
 	defer func() { _ = stdinR.Close() }()
 
-	// Guest frames become a stdin stream. A pipe write blocks until the host command reads, which stops
-	// reading the socket, which blocks the guest relay: backpressure end to end.
 	go func() {
 		var total int
 
@@ -235,11 +223,10 @@ func (b *broker) invoke(ctx context.Context, conn *net.UnixConn, r *wire.Reader,
 					return
 				}
 
-				// Once the host command stops reading, input is dropped, so the guest never blocks writing.
 				_, _ = stdinW.Write(body.StdinChunk)
 			case *wire.Frame_StdinEof:
 				_ = stdinW.Close()
-			default: // Cancel, or a frame a guest may not send
+			default:
 				stdinW.CloseWithError(context.Canceled)
 				cancel()
 
@@ -266,12 +253,10 @@ func (b *broker) invoke(ctx context.Context, conn *net.UnixConn, r *wire.Reader,
 
 		_ = conn.CloseWrite()
 	case <-ctx.Done():
-		// Go cannot stop a host command that ignores its context (spec §6.5); its output is revoked now.
 		inv.revoke()
 	}
 }
 
-// frameWriter sends host command output as bounded frames. The socket blocks when the guest stops reading.
 type frameWriter struct {
 	w      *wire.Writer
 	stderr bool
@@ -308,7 +293,6 @@ func (f *frameWriter) Write(p []byte) (int, error) {
 	return written, nil
 }
 
-// budget is a byte allowance shared by concurrent writers; the first overrun closes over.
 type budget struct {
 	mu        sync.Mutex
 	remaining int
@@ -318,7 +302,6 @@ type budget struct {
 
 func newBudget(n int) *budget { return &budget{remaining: n, over: make(chan struct{})} }
 
-// take grants as much of n as remains; granting less marks the budget exceeded.
 func (b *budget) take(n int) int {
 	b.mu.Lock()
 	defer b.mu.Unlock()

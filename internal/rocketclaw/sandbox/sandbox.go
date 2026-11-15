@@ -1,11 +1,5 @@
-// Package sandbox runs RocketClaw's emulated shell: real Bash and Linux programs in a bubblewrap sandbox
-// with no network, no host files but the agent's folders, cgroup limits and seccomp
-// (docs/specs/2026-11-01-linux-native-just-bash-spec.md). Commands an agent declares, and curl, run on the
-// host through Host; the RocketClaw binary, mounted read-only, relays them out of the sandbox.
 package sandbox
 
-// go generate moves the guest image to the newest Ubuntu snapshot (rootfs/main.go), through make, which runs
-// it on Linux, in a container on a Mac. It takes minutes.
 //go:generate make -C .. sandbox-rootfs-update
 
 import (
@@ -19,42 +13,31 @@ import (
 	"time"
 )
 
-// Host runs, outside the sandbox, what an emulated shell may ask of the host: the agent's commands and curl.
-// Everything it receives comes from the guest and is untrusted.
 type Host interface {
-	// Command runs name with args and stdin, writing its output, and returns its exit status, 0 to 255. cwd
-	// is the guest's working directory, a guest path.
 	Command(ctx context.Context, name string, args []string, cwd string, stdin io.Reader, stdout, stderr io.Writer) int
 }
 
-// Command is one emulated shell command line.
 type Command struct {
 	Script   string
-	Cwd      string        // guest working directory; folders show at their host paths
-	Dir      string        // the agent's writable folder
-	ReadOnly []string      // folders shown read-only
-	Env      []string      // the guest's whole environment; never RocketClaw's
-	Commands []string      // names Host runs; the guest reaches only these and curl
-	Timeout  time.Duration // whole command
+	Cwd      string
+	Dir      string
+	ReadOnly []string
+	Env      []string
+	Commands []string
+	Timeout  time.Duration
 }
 
-// Result is the outcome of a shell that started: stdout and stderr together, as host bash gives them.
 type Result struct {
-	Output   []byte
-	ExitCode int
-	TimedOut bool
-	// Truncated means the output limit stopped the command.
+	Output    []byte
+	ExitCode  int
+	TimedOut  bool
 	Truncated bool
 }
 
-// Curl is the managed HTTP client every emulated shell has; Host runs it like a command.
 const Curl = "curl"
 
-// commandName is a name a guest can call: a shell word that is not a path, option, or assignment.
 var commandName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.+-]{0,63}$`)
 
-// CheckCommandName reports why an agent cannot declare a command named name: it becomes a file and a Bash
-// function in the sandbox.
 func CheckCommandName(name string) error {
 	switch name {
 	case Curl:
@@ -70,20 +53,14 @@ func CheckCommandName(name string) error {
 	return nil
 }
 
-// errNotReady is the zero Runtime's error: RocketClaw never prepared a sandbox.
 var errNotReady = errors.New("sandbox not prepared")
 
-// None prepares no sandbox, for tests that never run an emulated shell.
 type None struct{}
 
-// Prepare returns the zero Runtime, which refuses every command.
 func (None) Prepare(context.Context, string, *slog.Logger) *Runtime { return &Runtime{} }
 
-// ErrPreparing is what Err reports while Prepare still works; commands wait for it instead.
 var ErrPreparing = errors.New("the first start builds the sandbox's Ubuntu image, which takes a minute or two; commands wait for it")
 
-// Err reports why commands cannot run, ErrPreparing while that is still being decided (wrapped with the last
-// failed try when the image build is retrying), or nil when the sandbox is ready. It never waits.
 func (rt *Runtime) Err() error {
 	if rt.p == nil {
 		return errNotReady
@@ -105,7 +82,6 @@ func (rt *Runtime) Err() error {
 	return ErrPreparing
 }
 
-// Wait is Err once Prepare has finished, or ctx's error first.
 func (rt *Runtime) Wait(ctx context.Context) error {
 	if rt.p == nil {
 		return errNotReady
@@ -119,7 +95,6 @@ func (rt *Runtime) Wait(ctx context.Context) error {
 	}
 }
 
-// probeHost runs no host commands.
 type probeHost struct{}
 
 func (probeHost) Command(context.Context, string, []string, string, io.Reader, io.Writer, io.Writer) int {

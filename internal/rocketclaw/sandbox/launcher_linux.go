@@ -23,61 +23,50 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Spec §10.1 limits.
 const (
-	memoryBytes     = 256 << 20 // cgroup memory.max
-	tasks           = 64        // cgroup pids.max, bwrap's own processes included
-	cpuMillis       = 1000      // cgroup cpu.max: one CPU
-	outputBytes     = 16 << 20  // stdout and stderr together, host command output separately
-	fileBytes       = 256 << 20 // RLIMIT_FSIZE: the largest file the guest can write
-	tmpBytes        = 256 << 20 // the per-command /tmp
+	memoryBytes     = 256 << 20
+	tasks           = 64
+	cpuMillis       = 1000
+	outputBytes     = 16 << 20
+	fileBytes       = 256 << 20
+	tmpBytes        = 256 << 20
 	scriptBytes     = 8 << 20
-	hostInputBytes  = 16 << 20 // stdin per host command
-	hostInvocations = 128      // host commands per shell command
+	hostInputBytes  = 16 << 20
+	hostInvocations = 128
 	hostConcurrency = 16
 	guestNoFile     = 1024
 )
 
-// Guest paths of the per-command files.
 const (
-	guestRunDir = "/run/rocketclaw"
-	guestScript = guestRunDir + "/script"
-	guestExecID = guestRunDir + "/exec-id"
-	guestSocket = guestRunDir + "/command.sock"
-	guestExtDir = "/extensions"
-	guestRelay  = guestExtDir + "/.rocketclaw/rocketclaw"
-	// bootstrap makes every Bash, nested ones too, call a host command for a bare name even when a builtin
-	// has it (spec §6.2).
+	guestRunDir   = "/run/rocketclaw"
+	guestScript   = guestRunDir + "/script"
+	guestExecID   = guestRunDir + "/exec-id"
+	guestSocket   = guestRunDir + "/command.sock"
+	guestExtDir   = "/extensions"
+	guestRelay    = guestExtDir + "/.rocketclaw/rocketclaw"
 	bootstrapPath = guestExtDir + "/.rocketclaw/bootstrap"
-	readyFD       = 5 // ExtraFiles: 3 bwrap arguments, 4 seccomp, 5 ready
+	readyFD       = 5
 )
 
-// shellIdentifier names get a Bash function, so they win over builtins; others are reached through PATH.
 var shellIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Runtime runs emulated shell commands. It is a handle: copies share one preparation, which Prepare fills in
-// the background, so a copy taken while it works sees the outcome too. The zero value is unavailable: every
-// Run fails, never falling back to host Bash.
 type Runtime struct {
 	p *prepared
 }
 
-// prepared is a Runtime's state. Prepare sets it in the background and then closes ready.
 type prepared struct {
 	ready   chan struct{}
-	err     error // why the sandbox is unavailable, read after ready
+	err     error
 	mu      sync.Mutex
-	retry   error  // while preparing: why the last try to build the image failed, and when the next is
-	rootfs  string // the guest image directory
-	self    string // this executable, the guest relay
+	retry   error
+	rootfs  string
+	self    string
 	bwrap   string
-	cgroup  string // delegated cgroup parent
-	state   string // per-command files and sockets
+	cgroup  string
+	state   string
 	seccomp []byte
 }
 
-// Run runs cmd in a fresh sandbox, once the sandbox is ready. A shell that started always yields a Result,
-// whatever its exit; an error means no guest code ran.
 func (rt *Runtime) Run(ctx context.Context, cmd *Command, host Host) (Result, error) {
 	if err := rt.Wait(ctx); err != nil {
 		return Result{}, err
@@ -145,8 +134,6 @@ func (rt *Runtime) run(ctx context.Context, cmd *Command, host Host) (Result, er
 	return rt.sandbox(ctx, cmd, dir, cg, b.out)
 }
 
-// writeExecFiles writes the read-only files one sandbox sees: the script, its ID, the command shims and the
-// Bash bootstrap.
 func writeExecFiles(dir, execID, script string, names []string) error {
 	run := filepath.Join(dir, "run")
 	ext := filepath.Join(dir, "extensions")
@@ -174,7 +161,7 @@ func writeExecFiles(dir, execID, script string, names []string) error {
 		filepath.Join(run, "script"):        script,
 		filepath.Join(run, "exec-id"):       execID,
 		filepath.Join(helper, "bootstrap"):  bootstrap.String(),
-		filepath.Join(helper, "rocketclaw"): "", // mount point for the relay
+		filepath.Join(helper, "rocketclaw"): "",
 	} {
 		if err := os.WriteFile(name, []byte(data), 0o444); err != nil {
 			return fmt.Errorf("write %s: %w", name, err)
@@ -184,9 +171,6 @@ func writeExecFiles(dir, execID, script string, names []string) error {
 	return nil
 }
 
-// imageArgs mounts the image's entry e at /name read-only. A folder that holds one of binds, the host folders
-// shown at their own paths, is rebuilt on the scratch root from its entries instead, since bwrap cannot make
-// a mount point inside a read-only bind; --remount-ro then locks it like the rest.
 func (rt *Runtime) imageArgs(args []string, e os.DirEntry, name string, binds []string) []string {
 	host, guest := filepath.Join(rt.p.rootfs, name), "/"+name
 
@@ -206,8 +190,6 @@ func (rt *Runtime) imageArgs(args []string, e os.DirEntry, name string, binds []
 	return args
 }
 
-// bwrapArgs builds the sandbox (docs/explainers/2026-11-01-emulated-shell-sandbox.md). They reach bwrap through --args, so the guest's
-// /proc/1/cmdline shows no host paths.
 func (rt *Runtime) bwrapArgs(cmd *Command, dir string) []string {
 	args := []string{
 		"--unshare-user", "--unshare-pid", "--unshare-net", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup",
@@ -218,7 +200,7 @@ func (rt *Runtime) bwrapArgs(cmd *Command, dir string) []string {
 
 	binds := append([]string{cmd.Dir}, cmd.ReadOnly...)
 
-	entries, _ := os.ReadDir(rt.p.rootfs) // checked by Prepare
+	entries, _ := os.ReadDir(rt.p.rootfs)
 	for _, e := range entries {
 		switch e.Name() {
 		case "proc", "dev", "sys", "tmp", "run", "home", ".complete":
@@ -250,8 +232,6 @@ func (rt *Runtime) bwrapArgs(cmd *Command, dir string) []string {
 	return args
 }
 
-// listenIn binds a Unix socket named name in dir through /proc/self/fd, so the 108-byte socket path limit
-// never depends on how deep dir is.
 func listenIn(dir, name string) (*net.UnixListener, error) {
 	fd, err := unix.Open(dir, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -264,13 +244,11 @@ func listenIn(dir, name string) (*net.UnixListener, error) {
 		return nil, fmt.Errorf("listen %s: %w", name, err)
 	}
 
-	// The /proc path stops naming the socket once fd closes; removing the command's directory deletes it.
 	ln.SetUnlinkOnClose(false)
 
 	return ln, nil
 }
 
-// memfd returns a file holding data, for bwrap to read through an inherited descriptor.
 func memfd(name string, data []byte) (*os.File, error) {
 	fd, err := unix.MemfdCreate(name, unix.MFD_CLOEXEC)
 	if err != nil {
@@ -286,7 +264,6 @@ func memfd(name string, data []byte) (*os.File, error) {
 	return f, nil
 }
 
-// sandbox starts bwrap in cg and collects the result.
 func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *execCgroup, hostOut *budget) (Result, error) {
 	argsFile, err := memfd("rocketclaw-bwrap-args", []byte(strings.Join(rt.bwrapArgs(cmd, dir), "\x00")+"\x00"))
 	if err != nil {
@@ -320,12 +297,12 @@ func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *ex
 			guestRelay, "init", strconv.Itoa(fileBytes), strconv.Itoa(guestNoFile), strconv.Itoa(readyFD), "--",
 			"/bin/bash", "--noprofile", "--norc", guestScript,
 		},
-		Env:        []string{}, // the guest reads bwrap's own environment through /proc/1/environ
+		Env:        []string{},
 		Stdout:     outW,
 		Stderr:     outW,
 		ExtraFiles: []*os.File{argsFile, seccompFile, readyW},
 		SysProcAttr: &syscall.SysProcAttr{
-			UseCgroupFD: true, // CLONE_INTO_CGROUP: the limits hold from the first instruction
+			UseCgroupFD: true,
 			CgroupFD:    cg.fd,
 			Pdeathsig:   syscall.SIGKILL,
 		},
@@ -382,7 +359,6 @@ func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *ex
 	case <-hostOut.over:
 	}
 
-	// Kill whatever is left: the shell after a limit, background jobs after a normal exit.
 	errKill := killCgroup(cg.path)
 
 	<-exited
@@ -392,7 +368,6 @@ func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *ex
 		return Result{}, errKill
 	}
 
-	// "1" when init ran; "1E" when it ran but could not exec Bash; nothing when bwrap failed.
 	ready, _ := io.ReadAll(io.LimitReader(readyR, 2))
 	if string(ready) != "1" {
 		return Result{}, fmt.Errorf("the sandbox did not start: %s", strings.TrimSpace(output.String()))
@@ -400,7 +375,6 @@ func (rt *Runtime) sandbox(ctx context.Context, cmd *Command, dir string, cg *ex
 
 	res := Result{Output: output.Bytes(), TimedOut: timedOut, Truncated: out.spent() || hostOut.spent()}
 
-	// The agent sees only the output, so it learns here why a command stopped early.
 	switch {
 	case res.Truncated:
 		res.Output = fmt.Appendf(res.Output, "\n[emulated shell: output stopped at %d MiB]\n", outputBytes>>20)

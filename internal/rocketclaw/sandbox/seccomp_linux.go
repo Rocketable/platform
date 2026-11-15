@@ -9,11 +9,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Offsets into struct seccomp_data.
 const (
 	seccompNr   = 0
 	seccompArch = 4
-	seccompArg0 = 16 // low 32 bits of args[0] on little-endian targets
+	seccompArg0 = 16
 )
 
 const (
@@ -22,11 +21,6 @@ const (
 	seccompRetAllow       = 0x7fff0000
 )
 
-// seccompProgram assembles the filter bwrap installs with --seccomp, as native-endian sock_filter structs
-// (docs/explainers/2026-11-01-emulated-shell-sandbox.md). Denied system calls fail with EPERM: they reach
-// kernel attack surface or host-wide state no guest command needs, which the user namespace mostly makes
-// powerless already. Sockets other than AF_UNIX fail with EAFNOSUPPORT, though the network namespace has no
-// route anyway.
 func seccompProgram() []byte {
 	denied := append([]uintptr{
 		unix.SYS_ACCT, unix.SYS_ADD_KEY, unix.SYS_BPF, unix.SYS_CHROOT, unix.SYS_CLOCK_ADJTIME,
@@ -72,7 +66,6 @@ func seccompProgram() []byte {
 
 	prog = append(prog, allow)
 
-	// The fixed 4-byte loads, valid jump conditions, and constant returns cannot fail assembly.
 	raw, _ := bpf.Assemble(prog)
 
 	out := make([]byte, 0, 8*len(raw))
