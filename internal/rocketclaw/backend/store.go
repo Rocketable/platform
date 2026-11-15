@@ -437,10 +437,6 @@ func (s *SessionService) ExternalMCPSession(externalConversationID string) (Exte
 	return stateDAO{db: s.db}.externalMCPSession(context.Background(), externalConversationID)
 }
 
-func (s *SessionService) ScheduledMessages() (map[string]protocol.ScheduledMessageState, error) {
-	return stateDAO{db: s.db}.scheduledMessages(context.Background(), "")
-}
-
 func (s *SessionService) ScheduledMessagesForConversation(conversationID string) (map[string]protocol.ScheduledMessageState, error) {
 	return stateDAO{db: s.db}.scheduledMessages(context.Background(), conversationID)
 }
