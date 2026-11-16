@@ -1,7 +1,7 @@
 ---
 title: PostHog AI Observability Reads OpenTelemetry GenAI Attributes, Not OpenInference
 date: 2026-10-26
-last_updated: 2026-10-29
+last_updated: 2026-11-15
 category: docs/solutions/best-practices/
 module: internal/rocketclaw
 problem_type: best_practice
@@ -34,7 +34,7 @@ tags:
 
 ## Context
 
-RocketClaw's spans follow OpenInference (`openinference.span.kind`, `llm.model_name`, `llm.token_count.*`, `input.value`, `output.value`), which Phoenix reads. PR #680 added optional PostHog Cloud export. When `posthog.project_token` is set and `instrumentation.enabled` is true, `configureInstrumentation` (`internal/rocketclaw/backend/instrumentation.go:69-77`) sends the same spans to two PostHog endpoints: the AI endpoint (`/i/v0/ai/otel`), which keeps only GenAI spans for AI Observability, and distributed tracing (`/i/v1/traces`), which keeps every span.
+RocketClaw's spans follow OpenInference (`openinference.span.kind`, `llm.model_name`, `llm.token_count.*`, `input.value`, `output.value`), which Phoenix reads. PR #680 added optional PostHog Cloud export. When `posthog.project_token` is set, `configureInstrumentation` (`internal/rocketclaw/backend/instrumentation.go:26-38`) sends the same spans to two PostHog endpoints: the AI endpoint (`/i/v0/ai/otel`), which keeps only GenAI spans for AI Observability, and distributed tracing (`/i/v1/traces`), which keeps every span.
 
 PostHog's AI endpoint accepts OpenInference spans with HTTP 2xx and then never shows them as generations. It classifies a span by `gen_ai.operation.name`, which OpenInference does not emit, and maps only `gen_ai.*` attributes to its `$ai_*` properties. This is upstream issue PostHog/posthog#66614, still open as of 2026-10-26. The issue's reproduction shows the gap: the export succeeds and nothing appears, so RocketClaw's logs would show no error either.
 
@@ -45,7 +45,7 @@ This was found by reading that issue before any code was written, not by watchin
 
 ## Guidance
 
-Every span RocketClaw sends carries the OpenTelemetry GenAI attributes next to the OpenInference ones. They are not duplicates. Phoenix reads one set and PostHog reads the other.
+Every span RocketClaw sends carries the OpenTelemetry GenAI attributes next to the OpenInference ones. They are not duplicates: PostHog reads only the GenAI set. RocketClaw no longer exports to Phoenix or any other OpenTelemetry collector, so PostHog is the only place its spans go.
 
 | Span | GenAI attributes PostHog needs | Where |
 | --- | --- | --- |
@@ -55,7 +55,7 @@ Every span RocketClaw sends carries the OpenTelemetry GenAI attributes next to t
 | `rocketcode.provider` | `gen_ai.request.model`, `gen_ai.provider.name`, `gen_ai.response.id`, `gen_ai.output.messages`, `gen_ai.usage.input_tokens` / `output_tokens` | `looper.newProviderResponse` (`internal/rocketclaw/harness/looper.go:1272-1284`) and `TokenUsage.attributes` (`internal/rocketclaw/harness/looper.go:535-536`) |
 | `rocketcode.tool.*` | `gen_ai.tool.name`, `gen_ai.tool.call.id` | `startToolSpan`, `internal/rocketclaw/harness/observability.go:110-111` |
 
-`gen_ai.output.messages` holds the reply masked by `hide_outputs`, like `output.value`. Token counts of zero are left off the span.
+`gen_ai.output.messages` holds a reply whose content is always `__REDACTED__`, like `output.value`. Token counts of zero are left off the span.
 
 Two more attributes decide what PostHog shows for a trace:
 
@@ -65,21 +65,21 @@ Two more attributes decide what PostHog shows for a trace:
   - **External MCP:** the MCP principal, because caller metadata goes to a separate field and never sets the email key (`cmd/rocketclaw/mcp.go:197-202`).
   - **Cron:** no principal at all (`cmd/rocketclaw/cron.go:37`), so cron traces still get a random person.
   - **Goal-loop continuations and shadow turns:** the email saved from the person who started the goal or the parent turn (`internal/rocketclaw/backend/bridge.go:2118`, `internal/rocketclaw/backend/shadows.go:860`), when there is one.
-- **Trace input.** The trace list's Input column reads `$ai_input_state`. When this was written, PostHog's ingestion filled that field only in its middleware for some instrumentation libraries (Traceloop and Vercel AI), from `$ai_input`. RocketClaw sends no `gen_ai.input.messages`, so nothing fills it. `Bridge.runTurn` therefore sets a literal `$ai_input_state` attribute on `rocketclaw.turn` to the turn's message, masked by `hide_inputs` (`internal/rocketclaw/backend/bridge.go:2193`). Per the ingestion source read in this session, PostHog keeps span attributes it does not map as event properties, unchanged. **Not yet confirmed:** nobody had checked in the PostHog UI that the Input column shows this value when this was written. The person and the reply text were both confirmed there.
+- **Trace input.** The trace list's Input column reads `$ai_input_state`. When this was written, PostHog's ingestion filled that field only in its middleware for some instrumentation libraries (Traceloop and Vercel AI), from `$ai_input`. RocketClaw sends no `gen_ai.input.messages`, so nothing fills it. `Bridge.runTurn` therefore sets a literal `$ai_input_state` attribute on `rocketclaw.turn` to `__REDACTED__`, like `input.value` (`internal/rocketclaw/backend/bridge.go:2193`). Per the ingestion source read in this session, PostHog keeps span attributes it does not map as event properties, unchanged. **Not yet confirmed:** nobody had checked in the PostHog UI that the Input column shows this value when this was written. The person and the reply text were both confirmed there.
 
-The request messages of each model call (`gen_ai.input.messages`) are deliberately not sent. Each call repeats the whole conversation, and PostHog's docs say an OTLP export over 4 MB is rejected with HTTP 413. For the same reason, the PostHog exporters send batches of 32 spans instead of the 512 that Phoenix's exporter uses (`internal/rocketclaw/backend/instrumentation.go:64` and `internal/rocketclaw/backend/instrumentation.go:73`). Tool spans carry whole tool outputs. The same docs say a single AI event over 8 MB is dropped from an otherwise successful export, with no error.
+The request messages of each model call (`gen_ai.input.messages`) are deliberately not sent. Each call repeats the whole conversation, and PostHog's docs say an OTLP export over 4 MB is rejected with HTTP 413. For the same reason, the PostHog exporters send batches of 32 spans (`internal/rocketclaw/backend/instrumentation.go:34`).
 
 ## Why This Matters
 
-The GenAI attributes look like a redundant copy of the OpenInference ones, so a cleanup could remove them. Phoenix would keep working. PostHog's AI view would go empty with no export error, which is the failure PostHog/posthog#66614 describes. Two tests guard these attributes and would fail: `TestObservabilityEmitsAgentProviderAndToolSpans` (`internal/rocketclaw/harness/observability_test.go:70`) checks the GenAI attributes on RocketCode spans. `TestRunTurnSpanPreservesMaskingAndFailure` (`internal/rocketclaw/backend/observability_test.go:22`) checks `user.id` on every span of the turn, plus `$ai_input_state` and the GenAI attributes on `rocketclaw.turn`. Nothing at runtime would report the loss.
+The GenAI attributes look like a redundant copy of the OpenInference ones, so a cleanup could remove them. PostHog's AI view would go empty with no export error, which is the failure PostHog/posthog#66614 describes. Two tests guard these attributes and would fail: `TestObservabilityEmitsAgentProviderAndToolSpans` (`internal/rocketclaw/harness/observability_test.go:70`) checks the GenAI attributes on RocketCode spans. `TestRunTurnSpanPreservesMaskingAndFailure` (`internal/rocketclaw/backend/observability_test.go:22`) checks `user.id` on every span of the turn, plus `$ai_input_state` and the GenAI attributes on `rocketclaw.turn`. Nothing at runtime would report the loss.
 
-Looking up these attributes in PostHog does not help when debugging. After mapping, its ingestion removes `gen_ai.operation.name`, `user.id`, and `posthog.distinct_id` from the event properties (per the ingestion source read in this session). So a working span does not show them in PostHog either. Check the span RocketClaw sends, for example in Phoenix or a test, instead of the PostHog event.
+Looking up these attributes in PostHog does not help when debugging. After mapping, its ingestion removes `gen_ai.operation.name`, `user.id`, and `posthog.distinct_id` from the event properties (per the ingestion source read in this session). So a working span does not show them in PostHog either. Check the span RocketClaw sends, for example in a test, instead of the PostHog event.
 
 ## When to Apply
 
 - **Adding a span kind or a span:** give it a `gen_ai.operation.name`. Otherwise PostHog's AI view ignores it, though distributed tracing still shows it.
 - **Adding a turn source:** set principal metadata, preferably the email the browser identifies with. Otherwise its traces have no person.
-- **Adding request or tool content to spans:** keep exports under 4 MB and events under 8 MB, and keep `hide_inputs` / `hide_outputs` masking.
+- **Adding attributes to spans:** never put prompt, history, tool argument, reply, or tool result text in them; RocketClaw's traces always redact it.
 - **Debugging "spans exported but nothing in AI Observability":** check `gen_ai.operation.name` before you suspect the token or the endpoint.
 - **After PostHog/posthog#66614 closes:** check whether the GenAI attributes are still needed before you remove them.
 

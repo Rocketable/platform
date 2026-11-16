@@ -149,16 +149,6 @@ func TestRuntimeInspectAgents(t *testing.T) {
   "logging": {
     "level": ""
   },
-  "instrumentation": {
-    "hide_inputs": false,
-    "hide_outputs": false
-  },
-  "web": {
-    "sentry": {
-      "environment": "",
-      "traces_sample_rate": null
-    }
-  },
   "overlays": null
 }
 `, 0},

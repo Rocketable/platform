@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"testing/synctest"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	otelsemconv "go.opentelemetry.io/otel/semconv/v1.37.0"
@@ -26,45 +24,6 @@ func TestTokenUsageAttributes(t *testing.T) {
 		attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheWrite, 4),
 		otelsemconv.GenAIUsageOutputTokens(5),
 	}, usage.attributes())
-}
-
-func TestObservabilityExportsUTF8Values(t *testing.T) {
-	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer collector.Close()
-
-	exporter, err := otlptracehttp.New(t.Context(), otlptracehttp.WithEndpointURL(collector.URL), otlptracehttp.WithEncoding(otlptracehttp.EncodingProtobuf))
-
-	require.NoError(t, err)
-	defer func() { require.NoError(t, exporter.Shutdown(t.Context())) }()
-
-	for _, test := range []struct {
-		name, text, want string
-		hide             bool
-	}{
-		{name: "valid", text: "hello 世界", want: "hello 世界"},
-		{name: "invalid bytes", text: "before\xff\xfeafter", want: "before�after"},
-		{name: "truncated rune", text: "hello\xe2\x82", want: "hello�"},
-		{name: "hidden", text: "before\xffafter", want: instrumentation.RedactedValue, hide: true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			recorder := tracetest.NewSpanRecorder()
-
-			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
-			defer func() { require.NoError(t, provider.Shutdown(t.Context())) }()
-
-			observability := ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test"), TraceConfig: instrumentation.TraceConfig{HideInputs: test.hide, HideOutputs: test.hide}}
-			_, span := observability.startSpan(t.Context(), "test", semconv.SpanKindTool, observability.inputValue(test.text), observability.outputValue(test.text))
-			span.span.End()
-
-			spans := recorder.Ended()
-			require.NoError(t, exporter.ExportSpans(t.Context(), spans))
-			require.Len(t, spans, 1)
-			require.Contains(t, spans[0].Attributes(), attribute.String(semconv.InputValue, test.want))
-			require.Contains(t, spans[0].Attributes(), attribute.String(semconv.OutputValue, test.want))
-		})
-	}
 }
 
 func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
@@ -97,20 +56,29 @@ func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
 	require.Equal(t, "rocketcode.tool.read", spans[1].Name())
 	require.Equal(t, "rocketcode.provider", spans[2].Name())
 	require.Equal(t, "rocketcode.turn", spans[3].Name())
-	require.Contains(t, spans[3].Attributes(), attribute.String(semconv.InputValue, "inspect secret"))
-	require.Contains(t, spans[3].Attributes(), attribute.String(semconv.OutputValue, "final answer"))
+
+	for _, span := range spans {
+		for _, attr := range span.Attributes() {
+			for _, text := range []string{"inspect secret", "final answer", "secret.txt", "file contents"} {
+				require.NotContains(t, attr.Value.String(), text, span.Name())
+			}
+		}
+	}
+
+	require.Contains(t, spans[3].Attributes(), attribute.String(semconv.InputValue, instrumentation.RedactedValue))
+	require.Contains(t, spans[3].Attributes(), attribute.String(semconv.OutputValue, instrumentation.RedactedValue))
 	require.Contains(t, spans[2].Attributes(), attribute.Int64(semconv.LLMTokenCountPrompt, 12))
 	require.Contains(t, spans[2].Attributes(), attribute.Int64(semconv.LLMTokenCountCompletion, 5))
 	require.Contains(t, spans[2].Attributes(), attribute.Int64(semconv.LLMTokenCountTotal, 17))
 	require.Contains(t, spans[2].Attributes(), attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheRead, 3))
 	require.Contains(t, spans[2].Attributes(), attribute.Int64(semconv.LLMTokenCountCompletionDetailsReasoning, 2))
-	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.InputValue, `{"filePath":"secret.txt"}`))
-	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.OutputValue, "file contents"))
+	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.InputValue, instrumentation.RedactedValue))
+	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.OutputValue, instrumentation.RedactedValue))
 
 	require.Subset(t, spans[3].Attributes(), []attribute.KeyValue{otelsemconv.GenAIOperationNameInvokeAgent, otelsemconv.GenAIAgentName("main")})
 	require.Subset(t, spans[2].Attributes(), []attribute.KeyValue{
 		otelsemconv.GenAIOperationNameChat, otelsemconv.GenAIRequestModel("gpt-6-luna"), otelsemconv.GenAIProviderNameKey.String("openai"), otelsemconv.GenAIResponseID("resp-final"),
-		otelsemconv.GenAIUsageInputTokens(12), otelsemconv.GenAIUsageOutputTokens(5), otelsemconv.GenAIOutputMessagesKey.String(`[{"content":"final answer","role":"assistant"}]`),
+		otelsemconv.GenAIUsageInputTokens(12), otelsemconv.GenAIUsageOutputTokens(5), otelsemconv.GenAIOutputMessagesKey.String(`[{"content":"` + instrumentation.RedactedValue + `","role":"assistant"}]`),
 	})
 	require.Subset(t, spans[1].Attributes(), []attribute.KeyValue{otelsemconv.GenAIOperationNameExecuteTool, otelsemconv.GenAIToolName("read"), otelsemconv.GenAIToolCallID("call-1")})
 }
@@ -141,29 +109,6 @@ func TestObservabilityUsesResolvedProviderAndModel(t *testing.T) {
 		attribute.String("rocketcode.provider_diagnostic.provider", "work"),
 		attribute.String("rocketcode.provider_diagnostic.model", "api-model"),
 	})
-}
-
-func TestObservabilityRedactionComesFromConfigObject(t *testing.T) {
-	t.Setenv(instrumentation.EnvHideInputs, "false")
-	t.Setenv(instrumentation.EnvHideOutputs, "false")
-
-	recorder := tracetest.NewSpanRecorder()
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
-	looper := testLooper(mockResponses(responseWithMessage("resp-final", "hidden output")))
-	looper.agent = Agent{Name: "main"}
-	looper.DisplayModel = "gpt-test"
-	looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test"), TraceConfig: instrumentation.TraceConfig{HideInputs: true, HideOutputs: true}}
-
-	_, _, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, nil, new(testPromptInput(PromptInputRoleUser, "hidden input", nil)))
-
-	require.NoError(t, err)
-	require.False(t, interrupted)
-
-	spans := recorder.Ended()
-	require.Len(t, spans, 2)
-	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.InputValue, instrumentation.RedactedValue))
-	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.OutputValue, instrumentation.RedactedValue))
-	require.Contains(t, spans[0].Attributes(), otelsemconv.GenAIOutputMessagesKey.String(`[{"content":"`+instrumentation.RedactedValue+`","role":"assistant"}]`))
 }
 
 func TestObservabilityEmitsProviderDiagnosticSpanEvents(t *testing.T) {

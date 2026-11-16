@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	"github.com/Rocketable/platform/internal/rocketclaw/mcpclient"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/openai/openai-go/v3/shared"
@@ -108,9 +107,8 @@ func (InertChildSessions) AwaitSubagent(context.Context, string, string) (string
 }
 
 type ObservabilityConfig struct {
-	Enabled     bool
-	Tracer      trace.Tracer
-	TraceConfig instrumentation.TraceConfig
+	Enabled bool
+	Tracer  trace.Tracer
 }
 
 type PromptShellCommandExpansion struct {

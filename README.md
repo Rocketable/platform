@@ -18,7 +18,6 @@ See [LICENSE](LICENSE) for the full license terms.
 - Saves conversations and unfinished work in PostgreSQL. After a restart, work continues from the last finished step.
 - Takes requests from the web page, Slack mentions, MCP, scheduled jobs, and one-off or repeating scheduled messages.
 - Sends model requests to OpenAI or to any service with the same API, and can use several services side by side.
-- Can send traces of agent runs to OpenTelemetry-compatible tools.
 - Can send events, errors, traces, and browser sessions to PostHog Cloud.
 
 ## Main parts
@@ -35,7 +34,7 @@ go run github.com/Rocketable/platform/cmd/rocketclaw@main
 
 Run `rocketclaw help` to list commands. RocketClaw reads `rocketclaw.json` (or the older `femtoclaw.json`) from the current folder. That file holds setup and secrets: it points at the workspace and the database, holds the Slack and provider credentials, and turns on other integrations. Values can also come from AWS Secrets Manager.
 
-Behavior Settings live in PostgreSQL instead: `auto_approver_model`, `slack.channels`, `server_display_name`, `logging.level`, `instrumentation.hide_inputs` and `hide_outputs`, `web.sentry.environment` and `traces_sample_rate`, and `overlays`. The first start copies them from the file once every startup check passes. After that, RocketClaw ignores them in the file and logs a warning naming each one it ignored. The people named in the file's `web.admins` (their Tailscale logins, for example `"web": {"admins": ["alice@example.com"]}`) edit them on the Config page, one control per setting. A save is checked whole and applies to the running server at once, or is refused and changes nothing. Everyone else sees the page read-only.
+Behavior Settings live in PostgreSQL instead: `auto_approver_model`, `slack.channels`, `server_display_name`, `logging.level`, and `overlays`. The first start copies them from the file once every startup check passes. After that, RocketClaw ignores them in the file and logs a warning naming each one it ignored. The people named in the file's `web.admins` (their Tailscale logins, for example `"web": {"admins": ["alice@example.com"]}`) edit them on the Config page, one control per setting. A save is checked whole and applies to the running server at once, or is refused and changes nothing. Everyone else sees the page read-only.
 
 If the stored settings stop RocketClaw from starting (the error starts with `stored behavior settings:`), fix them in place with `psql` on the `database_url` database:
 
@@ -55,7 +54,7 @@ A workspace contains `AGENTS.md` and, optionally, `agents/`, `skills/`, `scripts
 
 The web page is the main way to work with RocketClaw. It is built into RocketClaw and serves HTTPS on `0.0.0.0:3000`; plain `http://` does not answer. To change the address, set `"web": {"listen_address": "127.0.0.1:3000"}`. To use your own certificate, set both `"tls_cert_file"` and `"tls_key_file"` under `web` to PEM files; without them RocketClaw makes a self-signed certificate at each start, which browsers warn about until you accept it. Over HTTPS, browsers carry every tab over one connection, so many open tabs never run out of connections. Links RocketClaw hands out use the tsnet node's HTTPS name once that node serves (see [Voice](#voice)), and this machine's Tailscale address otherwise. The browser tab reads `<name> - RocketClaw`, so several servers stay apart: `name` is `"server_display_name"` when set, else the Tailscale node name (`web.tsnet.hostname`, or this machine's node). A saved change shows on pages loaded after the save.
 
-RocketClaw identifies each browser by its Tailscale login, found with a Tailscale lookup of the browser's IP address. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features and optional Sentry error tracking.
+RocketClaw identifies each browser by its Tailscale login, found with a Tailscale lookup of the browser's IP address. It refuses browsers it cannot identify. See the [Web README](internal/rocketclaw/web/README.md) for the page's features.
 
 #### Voice
 
@@ -567,9 +566,9 @@ With a token, RocketClaw sends:
 - Every log line at info level or above as an event. The event is named by the line's `event` field, such as `turn_started` or `cron_completed`, or else by its message, such as `rocketclaw health`. All of the line's fields become event properties.
 - Warnings and errors to Error Tracking, with the stack of the code that logged them.
 - Browser page views, clicks, heatmaps, Web Vitals, JavaScript errors, and session replays. Replays record typed text, console logs, and network requests in full, and each browser is identified by its Web username.
-- Traces of agent turns, model calls, and tools, but only while `instrumentation.enabled` is true. They go to PostHog's AI Observability (model, tokens, latency, and reply text for each model call) and to its distributed tracing. `instrumentation.collector_endpoint` is then optional, and when set, traces also keep going there. Each trace belongs to the person who sent the turn: their email when known, else their principal name. Turns nobody sent, such as cron jobs, have no person. The request messages of each model call are not sent, because they repeat the whole conversation and PostHog rejects exports over 4 MB. Only the message that started the turn is sent, as the trace's input.
+- Traces of agent turns, model calls, and tools. They go to PostHog's AI Observability (model, tokens, and latency for each model call) and to its distributed tracing. Each trace belongs to the person who sent the turn: their email when known, else their principal name. Turns nobody sent, such as cron jobs, have no person. Traces never include the text of prompts, conversation history, tool arguments, replies, or tool results: each of those reads `__REDACTED__`.
 
-Traces carry the text of prompts, replies, and tool calls unless `instrumentation.hide_inputs` or `instrumentation.hide_outputs` hides it. To get console logs and network requests in replays, also turn them on in the PostHog project settings.
+To get console logs and network requests in replays, also turn them on in the PostHog project settings.
 
 ## Repository layout
 

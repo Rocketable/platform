@@ -58,9 +58,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 
 	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: config.SlackConfig{
 		Channels: []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}, {Channel: "#general", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}},
-	}, MCPExternal: config.MCPExternalConfig{Enabled: true}, Instrumentation: config.InstrumentationConfig{
-		Enabled: true, CollectorEndpoint: collector.URL, ProjectName: "rocketclaw-test", APIKey: "token",
-	}}
+	}, MCPExternal: config.MCPExternalConfig{Enabled: true}, PostHog: config.PostHogConfig{ProjectToken: "phc_test", Host: collector.URL}}
 	require.NoError(t, cfg.ValidateBehavior())
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -279,7 +277,7 @@ func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
 	require.Empty(t, runQueuedStartup(t, time.Second))
 }
 
-func TestConfigureInstrumentationExportsToCollectorAndPostHog(t *testing.T) {
+func TestConfigureInstrumentationExportsToPostHog(t *testing.T) {
 	var mu sync.Mutex
 
 	authorizations := map[string]string{}
@@ -291,9 +289,7 @@ func TestConfigureInstrumentationExportsToCollectorAndPostHog(t *testing.T) {
 	}))
 	t.Cleanup(collector.Close)
 
-	stop, err := configureInstrumentation(t.Context(), config.InstrumentationConfig{
-		Enabled: true, CollectorEndpoint: collector.URL, ProjectName: "rocketclaw-test", APIKey: "token",
-	}, config.PostHogConfig{ProjectToken: "phc_test", Host: collector.URL})
+	stop, err := configureInstrumentation(t.Context(), config.PostHogConfig{ProjectToken: "phc_test", Host: collector.URL})
 	require.NoError(t, err)
 
 	_, span := otel.Tracer("test").Start(t.Context(), "turn")
@@ -301,11 +297,8 @@ func TestConfigureInstrumentationExportsToCollectorAndPostHog(t *testing.T) {
 	require.NoError(t, stop(t.Context()))
 
 	mu.Lock()
-	assert.Equal(t, map[string]string{"/v1/traces": "Bearer token", "/i/v0/ai/otel": "Bearer phc_test", "/i/v1/traces": "Bearer phc_test"}, authorizations)
+	assert.Equal(t, map[string]string{"/i/v0/ai/otel": "Bearer phc_test", "/i/v1/traces": "Bearer phc_test"}, authorizations)
 	mu.Unlock()
-
-	_, err = configureInstrumentation(t.Context(), config.InstrumentationConfig{Enabled: true, CollectorEndpoint: "not-a-url"}, config.PostHogConfig{})
-	require.ErrorContains(t, err, "parse instrumentation.collector_endpoint")
 }
 
 func TestKeyedConversationLocksSerializeOneIDAndReleaseEntries(t *testing.T) {

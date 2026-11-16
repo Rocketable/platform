@@ -1,7 +1,7 @@
 ---
 title: Frontend RPC Browser Tests Fail Without Their Setup, and That Blocks Verification
 date: 2026-10-29
-last_updated: 2026-11-12
+last_updated: 2026-11-15
 category: docs/solutions/best-practices/
 module: internal/rocketclaw/frontend/rpc
 problem_type: developer_experience
@@ -15,7 +15,7 @@ applies_when:
   - About to run make lint or make generate while another test run uses the same workspace
   - Linux-container tests use a long workspace TMPDIR or a Mac-shared temporary directory
 symptoms:
-  - "bun test output in frontend/rpc says Could not resolve \"@sentry/react\" (web packages not installed)"
+  - "bun test output in frontend/rpc says Could not resolve \"@tanstack/react-query\" (web packages not installed)"
   - "error: Cannot find package 'undefined' from '.../internal/rocketclaw/web/src/<name>-transport.test.ts'"
   - "Chromium reports SingletonSocket path too long, RPC sockets fail with bind: invalid argument, or the setgid-preservation test fails"
   - "Tests fail with is explicitly required in go.mod, but not marked as explicit in vendor/modules.txt, or open ../../../vendor/...: no such file or directory"
@@ -57,7 +57,7 @@ Nine Go tests in `internal/rocketclaw/frontend/rpc` start a real backend and the
 
 All paths are under `internal/rocketclaw/frontend/rpc/`. These tests need two things the Go toolchain does not provide:
 
-1. **The web packages in `internal/rocketclaw/web/node_modules`.** A new JJ workspace has none, because `internal/rocketclaw/web/.gitignore:2` ignores them. Without them, Bun cannot load `internal/rocketclaw/web/src/api.ts`, whose first line imports `@sentry/react`.
+1. **The web packages in `internal/rocketclaw/web/node_modules`.** A new JJ workspace has none, because `internal/rocketclaw/web/.gitignore:2` ignores them. Without them, Bun cannot load `internal/rocketclaw/web/src/api.ts`, whose first line imports `@tanstack/react-query`.
 2. **`ROCKETCLAW_PLAYWRIGHT_MODULE` and `ROCKETCLAW_CHROMIUM`.** `playwright-core` is not in `internal/rocketclaw/web/package.json`. The test files load it from the variable, for example `await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE!)` (`internal/rocketclaw/web/src/pages-transport.test.ts:5`). When the variable is unset, Bun prints `Cannot find package 'undefined'`. Nothing in the message names the variable.
 
 On a Mac, `make` provides both. Every target in `internal/rocketclaw` runs again in the `rocketclaw-linux` container (`internal/rocketclaw/Makefile:24`–`29`). That image sets both Playwright variables (`internal/rocketclaw/linux.Containerfile:20`–`21`). `make test` depends on `generate` and `lint` (`Makefile:133`), and both depend on `web-assets`, which runs `bun install --frozen-lockfile` (`Makefile:54`–`55`, `:60`, `:69`). Plain `go test` of RocketClaw packages does not build on macOS at all (`AGENTS.md:45`).
@@ -87,7 +87,7 @@ Read the errors this way:
 
 | Error | Cause | Can still happen when |
 |---|---|---|
-| `Could not resolve "@sentry/react"` (or another web package) in a `bun test` step | No `internal/rocketclaw/web/node_modules` | A Linux host runs plain `go test`; a focused Mac run skips `web-assets` in a fresh workspace (inferred, not run) |
+| `Could not resolve "@tanstack/react-query"` (or another web package) in a `bun test` step | No `internal/rocketclaw/web/node_modules` | A Linux host runs plain `go test`; a focused Mac run skips `web-assets` in a fresh workspace (inferred, not run) |
 | `Cannot find package 'undefined'` in a `bun test` step | `ROCKETCLAW_PLAYWRIGHT_MODULE` is unset where the tests ran | A Linux host runs plain `go test` without CI's Playwright step |
 | `not marked as explicit in vendor/modules.txt`, or `open ../../../vendor/...: no such file or directory` | `make lint` or `make generate` rewrote `vendor/` during the test run | Any platform, when those targets overlap another test run in the same workspace. Wait for it to finish and rerun |
 | Chromium `SingletonSocket` path too long, or RPC `listen unix ...: bind: invalid argument` | Temporary socket pathname is too long | Linux containers too, when `TMPDIR` retains the long Mac workspace prefix |

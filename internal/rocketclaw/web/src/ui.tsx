@@ -1,7 +1,6 @@
 "use client";
 
-import { QueryClient, QueryCache, MutationCache, QueryClientProvider, queryOptions, useQueries, useQuery, useMutation, useIsMutating } from "@tanstack/react-query";
-import { captureException } from "@sentry/react";
+import { QueryClient, QueryClientProvider, queryOptions, useQueries, useQuery, useMutation, useIsMutating } from "@tanstack/react-query";
 import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
 import { Drawer } from "@base-ui/react/drawer";
@@ -59,8 +58,6 @@ import {
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { queryKeyHashFn: queryKeyHash } },
-  queryCache: new QueryCache({ onError: (error) => { captureException(error); } }),
-  mutationCache: new MutationCache({ onError: (error) => { captureException(error); } }),
 });
 type SessionCommand = { mode: "fork" | "handoff" | "name" | "tag" | "delete"; source: string; target?: MessageMatch };
 const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
@@ -4351,7 +4348,6 @@ function readHistoryDelta(id: string, draft: ComposerDraft, onDraftChange: () =>
         if (signal?.aborted) throw err;
         // A history failure must not turn an accepted Prompt into a failed send.
         draft.missing = err instanceof RPCError && err.code === 5;
-        if (!draft.missing) captureException(err);
         draft.historyError = err instanceof Error ? err.message : "history failed";
       }
       onDraftChange();
@@ -4386,7 +4382,6 @@ function readEarlierHistory(id: string, draft: ComposerDraft, onDraftChange: () 
       }
     } catch (err) {
       if (signal?.aborted) throw err;
-      captureException(err);
       draft.historyError = err instanceof Error ? err.message : "history failed";
     }
     onDraftChange();
@@ -4835,7 +4830,6 @@ async function sendComposer(input: {
     }
   } catch (err) {
     draft.parked = draft.parked?.filter((line) => line.id !== optimistic.id);
-    captureException(err);
     if (dispatchedEdit === undefined) draft.sending = false;
     else if (draft.edit === dispatchedEdit && draft.submission === submission) {
       draft.text = input.text;

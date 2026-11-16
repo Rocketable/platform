@@ -21,16 +21,11 @@ import (
 
 func TestRunTurnSpanPreservesMaskingAndFailure(t *testing.T) {
 	for _, test := range []struct {
-		name                    string
-		hideInputs, hideOutputs bool
-		fail                    bool
-		input, output           string
+		name string
+		fail bool
 	}{
-		{"visible", false, false, false, "private input", "answer"},
-		{"hide input", true, false, false, instrumentation.RedactedValue, "answer"},
-		{"hide output", false, true, false, "private input", instrumentation.RedactedValue},
-		{"hide both", true, true, false, instrumentation.RedactedValue, instrumentation.RedactedValue},
-		{"failure", false, false, true, "private input", ""},
+		{"success", false},
+		{"failure", true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := tracetest.NewSpanRecorder()
@@ -45,7 +40,7 @@ func TestRunTurnSpanPreservesMaskingAndFailure(t *testing.T) {
 
 			nt := newNoteTest(t, answerNoteTest)
 
-			nt.cfg.Instrumentation = config.InstrumentationConfig{Enabled: true, HideInputs: test.hideInputs, HideOutputs: test.hideOutputs}
+			nt.cfg.PostHog.ProjectToken = "phc_test"
 			if test.fail {
 				nt.cfg.Workspace = filepath.Join(nt.cfg.Workspace, "missing")
 			}
@@ -76,9 +71,9 @@ func TestRunTurnSpanPreservesMaskingAndFailure(t *testing.T) {
 				require.True(t, found)
 				output, found := attributes.Value(attribute.Key(semconv.OutputValue))
 				require.True(t, found)
-				require.Equal(t, test.input, input.AsString())
-				require.Contains(t, span.Attributes(), attribute.String("$ai_input_state", test.input))
-				require.Equal(t, test.output, output.AsString())
+				require.Equal(t, instrumentation.RedactedValue, input.AsString())
+				require.Contains(t, span.Attributes(), attribute.String("$ai_input_state", instrumentation.RedactedValue))
+				require.Equal(t, instrumentation.RedactedValue, output.AsString())
 				require.Subset(t, span.Attributes(), []attribute.KeyValue{otelsemconv.GenAIOperationNameInvokeAgent, otelsemconv.GenAIAgentName("main"), otelsemconv.GenAIConversationID(nt.conversationID)})
 
 				if test.fail {

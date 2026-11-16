@@ -17,10 +17,8 @@ async function assets() {
       import React from 'react'; import {createRoot} from 'react-dom/client';
       import {QueryClient, QueryClientProvider} from '@tanstack/react-query';
       import {TranscriptText, MarkdownText} from './transcript-text';
-      import './sentry'; import './posthog'; import posthog from 'posthog-js';
-      import {flush, getActiveSpan, getRootSpan} from '@sentry/react';
+      import './posthog'; import posthog from 'posthog-js';
       window.telemetryEvents=[]; window.posthog=posthog;
-      window.flushTelemetry=async()=>{const span=getActiveSpan();if(span)getRootSpan(span).end();await flush(5000)};
       posthog.set_config({opt_out_useragent_filter:true, disable_compression:true, request_batching:false, before_send:event=>{window.telemetryEvents.push(event);return event}});
       const root=createRoot(document.getElementById('root'));
       root.render(<QueryClientProvider client={new QueryClient()}><MarkdownText text={'[change](${href})'}/><TranscriptText text={'${href}'}/><textarea aria-label="Conversation draft" defaultValue="draft survives"/><button>recordable-positive-control</button></QueryClientProvider>);
@@ -38,8 +36,6 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
   const built = await assets();
   const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true });
   const github: { url: string; headers: Record<string, string> }[] = [];
-  const envelopes: string[] = [];
-  const sentrySent = Promise.withResolvers<void>();
   const posthogPayloads: string[] = [];
   let privatePR = false, failPage = false, changed = false;
   let hold: "metadata" | "files" | "" = "";
@@ -88,13 +84,12 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
         posthogPayloads.push(request.postData() ?? "");
         return route.fulfill({ json: { status: 1 } });
       }
-      if (url.pathname.includes("envelope")) { envelopes.push(request.postData() ?? ""); sentrySent.resolve(); return route.fulfill({ json: {} }); }
       if (url.pathname === "/entry.js") return route.fulfill({ body: built.js, contentType: "text/javascript" });
       if (url.pathname === "/styles.css") return route.fulfill({ body: built.css, contentType: "text/css" });
       if (url.pathname === "/api/Identity") return route.fulfill({ json: { username: "synthetic-viewer" } });
       if (url.pathname.endsWith("/api/History")) return route.fulfill({ json: { messages: [{ codeModeCalls: [{ summary: "private-history-summary-marker" }] }] } });
       if (url.pathname === "/oc/box/api/shell/sh_private/output" && url.searchParams.has("pull-request-discovery")) return route.fulfill({ json: { data: { output: "private-lookup-network-marker" } } });
-      if (url.hostname === "preview.test" && url.pathname === "/") return route.fulfill({ contentType: "text/html", body: `<html><head><link rel="stylesheet" href="/styles.css"><script id="posthog-config" type="application/json">{"project_token":"synthetic-project","host":"https://telemetry.test"}</script><script id="sentry-config" type="application/json">{"dsn":"https://public@preview.test/1","traces_sample_rate":1}</script></head><body><div id="root"></div><script type="module" src="/entry.js"></script></body></html>` });
+      if (url.hostname === "preview.test" && url.pathname === "/") return route.fulfill({ contentType: "text/html", body: `<html><head><link rel="stylesheet" href="/styles.css"><script id="posthog-config" type="application/json">{"project_token":"synthetic-project","host":"https://telemetry.test"}</script></head><body><div id="root"></div><script type="module" src="/entry.js"></script></body></html>` });
       unexpected.push(url.hostname);
       return route.abort();
     });
@@ -106,7 +101,7 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     expect(await page.getByRole("link", { name: "change", exact: true }).getAttribute("href")).toBe(href);
     expect(await page.getByRole("link", { name: "change", exact: true }).getAttribute("target")).toBe("_blank");
     await page.waitForFunction(() => (window as any).posthog.sessionRecording?.started === true);
-    // Observe cancellation only after both SDKs have installed their native fetch instrumentation.
+    // Observe cancellation only after PostHog has installed its native fetch instrumentation.
     await page.evaluate(() => {
       (window as any).requestAborts = 0;
       const fetchRequest = window.fetch;
@@ -303,8 +298,6 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     await page.evaluate(() => { (window as any).posthog.stopSessionRecording(); });
     const data = await page.evaluate(() => JSON.stringify((window as any).telemetryEvents));
     expect(data).toContain("visible-header");
-    await page.evaluate(() => (window as any).flushTelemetry());
-    await sentrySent.promise;
     const storage = await page.evaluate(async () => {
       const databases = await Promise.all((await indexedDB.databases()).map(async ({ name }) => {
         const db = await new Promise<IDBDatabase>((resolve) => { const request = indexedDB.open(name!); request.onsuccess = () => resolve(request.result); });
@@ -322,18 +315,15 @@ test("four real presentations, paging, cancellation and telemetry privacy with a
     expect(await viewer().getByLabel("Personal read token").count()).toBe(0);
     await viewer().getByText("Token entry requires a secure browser context with a trusted certificate. Open this app over HTTPS.", { exact: true }).waitFor();
     await page.goto("about:blank");
-    expect(envelopes.join("\n")).toContain('"type":"span"');
     expect(posthogPayloads.length).toBeGreaterThan(0);
     expect(posthogPayloads.join("\n")).toContain("network-positive-control");
     expect(posthogPayloads.join("\n")).toContain("recordable-positive-control");
-    expect(envelopes.join("\n")).toContain("public-control.test/control");
     for (const secret of ["synthetic-token-marker", "hidden-token-marker", "quota-token-marker", "Synthetic title marker", "description-marker", "file-marker-", "patch-marker", "fixture-repository-marker", "secret-error-marker", "private-lookup-network-marker", "private-lookup-folder-marker", "private-lookup-header-marker", "private-history-summary-marker"]) {
       expect(data).not.toContain(secret);
-      expect(envelopes.join("\n")).not.toContain(secret);
       expect(posthogPayloads.join("\n")).not.toContain(secret);
       expect(storage).not.toContain(secret);
     }
-    expect(github.every(({ url, headers }) => url.startsWith("https://api.github.com/repos/") && !headers.cookie && !headers.referer && !headers["sentry-trace"] && !headers.baggage)).toBe(true);
+    expect(github.every(({ url, headers }) => url.startsWith("https://api.github.com/repos/") && !headers.cookie && !headers.referer && !headers.baggage)).toBe(true);
     expect(github.some(({ headers }) => headers.authorization === "Bearer synthetic-token-marker")).toBe(true);
     expect(unexpected).toEqual([]);
     expect(errors).toEqual([]);

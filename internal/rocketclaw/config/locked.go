@@ -4,8 +4,6 @@ import (
 	"maps"
 	"slices"
 	"sync"
-
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
 type LockedConfig struct {
@@ -74,7 +72,6 @@ func clone(source *Config) Config {
 	}
 
 	cfg.Web.Admins = slices.Clone(cfg.Web.Admins)
-	cfg.Web.Sentry.TracesSampleRate = protocol.Clone(cfg.Web.Sentry.TracesSampleRate)
 
 	if cfg.Web.Tsnet != nil {
 		tsnet := *cfg.Web.Tsnet

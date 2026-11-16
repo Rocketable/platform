@@ -37,7 +37,6 @@ type Config struct {
 	AgentEditorModel     string                                      `json:"agent_editor_model,omitempty"`
 	Decision             map[DecisionProvider]DecisionProviderConfig `json:"decision,omitempty"`
 	AutoApproverDecision AutoApproverDecisionConfig                  `json:"auto_approver_decision,omitzero"`
-	Instrumentation      InstrumentationConfig                       `json:"instrumentation"`
 	PostHog              PostHogConfig                               `json:"posthog,omitzero"`
 	Permissions          map[string][]string                         `json:"permissions,omitempty"`
 }
@@ -49,17 +48,7 @@ type Behavior struct {
 	} `json:"slack"`
 	ServerDisplayName string        `json:"server_display_name"`
 	Logging           LoggingConfig `json:"logging"`
-	Instrumentation   struct {
-		HideInputs  bool `json:"hide_inputs"`
-		HideOutputs bool `json:"hide_outputs"`
-	} `json:"instrumentation"`
-	Web struct {
-		Sentry struct {
-			Environment      string   `json:"environment"`
-			TracesSampleRate *float64 `json:"traces_sample_rate"`
-		} `json:"sentry"`
-	} `json:"web"`
-	Overlays []string `json:"overlays"`
+	Overlays          []string      `json:"overlays"`
 }
 
 func (c *Config) Behavior() Behavior {
@@ -67,8 +56,6 @@ func (c *Config) Behavior() Behavior {
 
 	b.AutoApproverModel, b.Slack.Channels = c.AutoApproverModel, c.Slack.Channels
 	b.ServerDisplayName, b.Logging, b.Overlays = c.ServerDisplayName, c.Logging, c.Overlays
-	b.Instrumentation.HideInputs, b.Instrumentation.HideOutputs = c.Instrumentation.HideInputs, c.Instrumentation.HideOutputs
-	b.Web.Sentry.Environment, b.Web.Sentry.TracesSampleRate = c.Web.Sentry.Environment, c.Web.Sentry.TracesSampleRate
 
 	return b
 }
@@ -76,8 +63,6 @@ func (c *Config) Behavior() Behavior {
 func (c *Config) SetBehavior(b *Behavior) {
 	c.AutoApproverModel, c.Slack.Channels = b.AutoApproverModel, b.Slack.Channels
 	c.ServerDisplayName, c.Logging, c.Overlays = b.ServerDisplayName, b.Logging, b.Overlays
-	c.Instrumentation.HideInputs, c.Instrumentation.HideOutputs = b.Instrumentation.HideInputs, b.Instrumentation.HideOutputs
-	c.Web.Sentry.Environment, c.Web.Sentry.TracesSampleRate = b.Web.Sentry.Environment, b.Web.Sentry.TracesSampleRate
 }
 
 func (b *Behavior) RedactUsers() {
@@ -139,7 +124,6 @@ type WebConfig struct {
 	Admins        []string     `json:"admins,omitempty"`
 	TLSCertFile   string       `json:"tls_cert_file,omitempty"`
 	TLSKeyFile    string       `json:"tls_key_file,omitempty"`
-	Sentry        SentryConfig `json:"sentry,omitzero"`
 	Tsnet         *TsnetConfig `json:"tsnet,omitempty"`
 }
 
@@ -148,35 +132,6 @@ type TsnetConfig struct {
 	Tags     []string `json:"tags,omitempty"`
 	AuthKey  string   `json:"auth_key,omitempty"`
 	Origin   string   `json:"-"`
-}
-
-type SentryConfig struct {
-	DSN              string   `json:"dsn,omitempty"`
-	Environment      string   `json:"environment,omitempty"`
-	TracesSampleRate *float64 `json:"traces_sample_rate,omitempty"`
-}
-
-func (c *WebConfig) validate() error {
-	if (c.TLSCertFile == "") != (c.TLSKeyFile == "") {
-		return errors.New("web.tls_cert_file and web.tls_key_file must be set together")
-	}
-
-	return c.Sentry.validate()
-}
-
-func (c SentryConfig) validate() error {
-	if c.DSN != "" {
-		parsed, err := url.Parse(c.DSN)
-		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Hostname() == "" || parsed.User == nil || parsed.User.Username() == "" || parsed.Path == "" || parsed.Path == "/" || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return errors.New("web.sentry.dsn must be a public Sentry DSN (https://public-key@host/project-id)")
-		}
-
-		if _, private := parsed.User.Password(); private {
-			return errors.New("web.sentry.dsn must not contain a private key")
-		}
-	}
-
-	return nil
 }
 
 type LoggingConfig struct {
@@ -292,15 +247,6 @@ func (c *Config) Provider(name string) (OpenAIConfig, bool) {
 	return provider, ok
 }
 
-type InstrumentationConfig struct {
-	Enabled           bool   `json:"enabled"`
-	CollectorEndpoint string `json:"collector_endpoint"`
-	ProjectName       string `json:"project_name"`
-	APIKey            string `json:"api_key"`
-	HideInputs        bool   `json:"hide_inputs"`
-	HideOutputs       bool   `json:"hide_outputs"`
-}
-
 type PostHogConfig struct {
 	ProjectToken string `json:"project_token,omitempty"`
 	Host         string `json:"host,omitempty"`
@@ -403,8 +349,8 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	if err := c.Web.validate(); err != nil {
-		return err
+	if (c.Web.TLSCertFile == "") != (c.Web.TLSKeyFile == "") {
+		return errors.New("web.tls_cert_file and web.tls_key_file must be set together")
 	}
 
 	if tsnet := c.Web.Tsnet; tsnet != nil {
@@ -444,7 +390,7 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	if err := c.validateInstrumentation(); err != nil {
+	if err := c.validatePostHog(); err != nil {
 		return err
 	}
 
@@ -489,10 +435,6 @@ func (c *Config) ValidateBehavior() error {
 	c.AutoApproverModel, err = normalizeOpenAIModel("auto_approver_model", c.AutoApproverModel)
 	if err != nil {
 		return err
-	}
-
-	if rate := c.Web.Sentry.TracesSampleRate; rate != nil && (*rate < 0 || *rate > 1) {
-		return errors.New("web.sentry.traces_sample_rate must be between 0 and 1")
 	}
 
 	return c.validateSlack()
@@ -671,15 +613,7 @@ func (c *Config) validateDecision() error {
 	return nil
 }
 
-func (c *Config) validateInstrumentation() error {
-	c.Instrumentation.CollectorEndpoint = strings.TrimSpace(c.Instrumentation.CollectorEndpoint)
-	c.Instrumentation.ProjectName = strings.TrimSpace(c.Instrumentation.ProjectName)
-
-	c.Instrumentation.APIKey = strings.TrimSpace(c.Instrumentation.APIKey)
-	if c.Instrumentation.Enabled && c.Instrumentation.CollectorEndpoint == "" && c.PostHog.ProjectToken == "" {
-		return errors.New("instrumentation.collector_endpoint or posthog.project_token is required when instrumentation is enabled")
-	}
-
+func (c *Config) validatePostHog() error {
 	c.PostHog.Host = strings.TrimRight(cmp.Or(c.PostHog.Host, "https://us.i.posthog.com"), "/")
 	if c.PostHog.ProjectToken != "" && !strings.HasPrefix(c.PostHog.ProjectToken, "phc_") {
 		return errors.New("posthog.project_token must be a public project token (phc_...), never a personal API key")

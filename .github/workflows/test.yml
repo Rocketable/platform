@@ -230,7 +230,6 @@ jobs:
         working-directory: internal/rocketclaw/web
       - *playwright-cache
       - *playwright
-      # The Sentry test reads the source maps the build writes.
       - run: bun run build
         working-directory: internal/rocketclaw/web
       # Transport tests need the live PostgreSQL/provider fixtures owned by Go, so the rocketclaw job runs them.
