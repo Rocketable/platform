@@ -30,17 +30,6 @@ var customToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 func customLooperTools(customTools []Tool, reserved map[string]looperTool) (map[string]looperTool, error) {
 	tools := make(map[string]looperTool, len(customTools))
 
-	reservedNames := map[string]struct{}{
-		"find_skills":             {},
-		"skill":                   {},
-		"task":                    {},
-		executeToolName:           {},
-		loadExecuteResultToolName: {},
-	}
-	for name := range reserved {
-		reservedNames[name] = struct{}{}
-	}
-
 	for i := range customTools {
 		tool, err := customLooperTool(&customTools[i])
 		if err != nil {
@@ -48,7 +37,7 @@ func customLooperTools(customTools []Tool, reserved map[string]looperTool) (map[
 		}
 
 		name := customTools[i].Name
-		if _, exists := reservedNames[name]; exists {
+		if _, exists := reserved[name]; exists || slices.Contains([]string{"find_skills", "skill", "task", executeToolName, loadExecuteResultToolName}, name) {
 			return nil, fmt.Errorf("custom tool %q collides with a built-in tool", name)
 		}
 
