@@ -71,8 +71,6 @@ func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronj
 		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s frontmatter: schedule is required", relativePath)
 	}
 
-	oneOff := false
-
 	schedules := make([]CronSchedule, 0, len(raw.Schedule.values))
 	for _, value := range raw.Schedule.values {
 		schedule, err := ParseCronSchedule(value)
@@ -80,12 +78,7 @@ func ParseCronDefinition(data []byte, relativePath string) (protocol.OneOffCronj
 			return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s schedule %q: %w", relativePath, value, err)
 		}
 
-		oneOff = oneOff || !schedule.DueAt.IsZero()
 		schedules = append(schedules, schedule)
-	}
-
-	if oneOff && len(raw.Schedule.values) != 1 {
-		return protocol.OneOffCronjob{}, nil, fmt.Errorf("parse cronjob %s schedules: timestamp schedules cannot be combined with other schedules", relativePath)
 	}
 
 	return protocol.OneOffCronjob{RelativePath: relativePath, Agent: cmp.Or(string(raw.Agent), "main"), Space: raw.Space, Prompt: body}, schedules, nil
@@ -161,7 +154,6 @@ func splitCronFrontmatter(data []byte) (frontmatter []byte, body string, err err
 
 type CronSchedule struct {
 	Raw      string
-	DueAt    time.Time
 	duration time.Duration
 	parsed   cron.Schedule
 }
@@ -170,10 +162,6 @@ func ParseCronSchedule(raw string) (CronSchedule, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return CronSchedule{}, errors.New("schedule must not be blank")
-	}
-
-	if dueAt, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-		return CronSchedule{Raw: raw, DueAt: dueAt}, nil
 	}
 
 	if duration, err := time.ParseDuration(raw); err == nil {
