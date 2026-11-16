@@ -176,6 +176,8 @@ FROM space, unnest(ARRAY['a', 'b']) n`)
 }
 
 func TestPagesRealBrowser(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Slack: liveSlack()}

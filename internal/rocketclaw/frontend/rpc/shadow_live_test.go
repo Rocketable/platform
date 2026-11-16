@@ -29,6 +29,8 @@ import (
 )
 
 func TestShadowsRealBackendBrowser(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
