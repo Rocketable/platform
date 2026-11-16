@@ -426,9 +426,10 @@ func TestOpenCodeRenamesKeepRemoteAndLocalOrder(t *testing.T) {
 			var blocked int
 
 			err := queryScalar(ctx, s.db, "read blocked rename", `WITH blocked AS (
-    SELECT pid FROM pg_stat_activity WHERE wait_event_type = 'Lock'
+    SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'
 ), sessions AS (
-    SELECT pid FROM pg_locks WHERE relation = 'conversations'::regclass
+    SELECT l.pid FROM pg_locks l JOIN pg_database d ON d.oid = l.database
+    WHERE d.datname = current_database() AND l.relation = 'conversations'::regclass
 )
 SELECT count(*) FROM blocked JOIN sessions USING (pid)`, &blocked)
 

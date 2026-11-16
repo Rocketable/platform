@@ -29,7 +29,7 @@ import (
 func TestConversationSpaceIndexMigration(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	store.db.SetMaxOpenConns(1)
 
 	ctx := t.Context()
@@ -61,7 +61,7 @@ PREPARE birth_space_lookup(text) AS UPDATE ONLY conversations SET space_id = NUL
 func TestDelegationLookupStopsAtFirstChildEntry(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	store.db.SetMaxOpenConns(1)
 
 	ctx := t.Context()
@@ -111,7 +111,7 @@ func saveEntryFacts(t *testing.T, store *SessionService, ids ...string) {
 func TestChatListingReadsScaleWithReportingRuns(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	store.db.SetMaxOpenConns(1)
 
 	ctx := t.Context()
@@ -180,7 +180,7 @@ LEFT JOIN pg_index i ON i.indexrelid = c.oid WHERE c.oid IN ('entries'::regclass
 func TestExternalMCPMetadataLookupUsesIndex(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	store.db.SetMaxOpenConns(1)
 
 	ctx := t.Context()
@@ -236,7 +236,7 @@ FROM pg_prepared_statements WHERE statement LIKE '%mcp_external_metadata%' AND s
 func TestHistoryVisibilityUsesRevertedParentIndex(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	store.db.SetMaxOpenConns(1)
 
 	ctx := t.Context()
@@ -283,7 +283,7 @@ FROM pg_prepared_statements WHERE statement = $1`, "history statement", transcri
 func TestShadowHistoryUsesProducerDestinationIndex(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	store.db.SetMaxOpenConns(1)
 
 	ctx := t.Context()
@@ -462,7 +462,7 @@ func TestSessionMigrationsCancelPlanning(t *testing.T) {
 	t.Parallel()
 
 	workspace := t.TempDir()
-	store := newTestSessionServiceAt(t, workspace)
+	store := newColdTestSessionServiceAt(t, workspace)
 	store.db.SetMaxOpenConns(2)
 	barrier, err := store.db.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
@@ -528,7 +528,7 @@ func TestSessionMigrationRollsBackWithItsLedgerWrite(t *testing.T) {
 func TestInitializeSessionDBAdoptsReleasedStore(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	recordTestConversations(t, store, "main", map[string]ConversationKind{"chat": KindWebChat})
 
@@ -572,7 +572,7 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 func TestHistoryRequiresConversationMigration(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 84)
 	require.NoError(t, err)
@@ -601,7 +601,7 @@ func TestHistoryRequiresConversationMigration(t *testing.T) {
 func TestAgentDraftsMigrationDown(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	recordTestConversations(t, store, "bot", map[string]ConversationKind{"draft-chat": KindAgentDraft, "kept": KindWebChat})
 	recordLegacyDelegations(t, store, "draft-chat", "call-1")
@@ -632,7 +632,7 @@ func TestHiddenRunCopiesMigration(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 
 	downTo95(store)
@@ -688,7 +688,7 @@ UPDATE conversations SET external_id = 'ext-1', external_run = 'mcp-run', last_u
 		require.Len(t, observed[0].Entry.ReplayInput, items, "the chat leaves out the run's compaction items")
 	}
 
-	refused := newTestSessionService(t)
+	refused := newColdTestSessionServiceAt(t, t.TempDir())
 	downTo95(refused)
 	recordTestConversations(t, refused, "main", map[string]ConversationKind{"run": KindCronRun})
 	_, err = refused.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp, audience) VALUES ('run', '{}', '', 'visible')`)
@@ -703,7 +703,7 @@ UPDATE conversations SET external_id = 'ext-1', external_run = 'mcp-run', last_u
 func TestDropWebTabStateBlobMigration(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 61)
 	require.NoError(t, err)
@@ -723,7 +723,7 @@ func TestDropWebTabStateBlobMigration(t *testing.T) {
 func TestDropWebTabPinMigration(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 63)
 	require.NoError(t, err)
@@ -740,7 +740,7 @@ INSERT INTO web_tabs (username, path, position, pinned, preview, group_id, space
 func TestDropSpawnedByMigration(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 73)
 	require.NoError(t, err)
@@ -761,7 +761,7 @@ func TestDropSpawnedByMigration(t *testing.T) {
 func TestDropGuardrailEntriesMigration(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 75)
 	require.NoError(t, err)
@@ -782,7 +782,7 @@ func TestDropGuardrailEntriesMigration(t *testing.T) {
 func TestSlackThreadsMigration(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 69)
 	require.NoError(t, err)
@@ -813,7 +813,7 @@ func TestSlackThreadsMigration(t *testing.T) {
 func TestSpaceLastTabMigration(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 64)
 	require.NoError(t, err)
@@ -834,7 +834,7 @@ INSERT INTO web_tabs (username, path, position, space, last) VALUES ('alice', '/
 func TestWebSearchPagesMigration(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 87)
 	require.NoError(t, err)
@@ -877,7 +877,7 @@ INSERT INTO web_closed_tabs (username, path, space, search, closed_at) VALUES ('
 func TestWebTopShelfRowsMigration(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 87)
 	require.NoError(t, err)
@@ -926,7 +926,7 @@ INSERT INTO web_top_shelves (username, shelf) VALUES
 func TestWebTabAttentionMigration(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 89)
 	require.NoError(t, err)
@@ -1050,7 +1050,7 @@ func TestMessageSearchMigrationSharesExtension(t *testing.T) {
 func TestMessageSearchSchema(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	store.db.SetMaxOpenConns(1)
 
 	ctx := t.Context()
@@ -1077,7 +1077,7 @@ SET enable_seqscan = off;`)
 func TestExternalMCPBindingLookupUsesOneIndexedRow(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	store.db.SetMaxOpenConns(1)
 
 	ctx := t.Context()
@@ -1109,7 +1109,7 @@ FROM pg_prepared_statements WHERE statement = $1`, "binding lookup statement", e
 func TestExternalMCPMetadataMigration(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	migrations := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
 	_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(ctx, store.db, "postgres", migrations, migrate.Down, 79)

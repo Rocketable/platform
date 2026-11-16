@@ -630,7 +630,7 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 func TestSessionServiceHeadSchemaTables(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 	client, _ := pglock.UnsafeNew(store.db, pglock.WithCustomTable(runLockTable))
 	require.NoError(t, client.TryCreateTable())
 
@@ -647,7 +647,7 @@ func TestSessionServiceHeadSchemaTables(t *testing.T) {
 func TestSessionServiceInitializesActiveTurnIndexes(t *testing.T) {
 	t.Parallel()
 
-	store := newTestSessionService(t)
+	store := newColdTestSessionServiceAt(t, t.TempDir())
 
 	rows, err := store.db.QueryContext(context.Background(), `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND tablename LIKE 'turns%' UNION SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() AND indexname LIKE 'turns%' ORDER BY 1`)
 
@@ -2116,7 +2116,7 @@ func newTestSessionService(t *testing.T) *SessionService {
 	return newTestSessionServiceAt(t, t.TempDir())
 }
 
-func newTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
+func newColdTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
 	t.Helper()
 
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "agents"), 0o755))
@@ -2359,7 +2359,7 @@ VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	assert.Eventually(t, func() bool {
 		var waiting bool
 
-		_ = store.db.QueryRowContext(ctx, `SELECT count(*) > 0 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%web_spaces%'`).Scan(&waiting)
+		_ = store.db.QueryRowContext(ctx, `SELECT count(*) > 0 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%web_spaces%'`).Scan(&waiting)
 
 		return waiting || len(deleted) > 0
 	}, 5*time.Second, time.Millisecond)

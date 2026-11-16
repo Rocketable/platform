@@ -392,7 +392,7 @@ func TestTranscriptChangesReachSyncDestination(t *testing.T) {
 func TestTranscriptChanges(t *testing.T) {
 	t.Parallel()
 
-	s := newTestSessionService(t)
+	s := newColdTestSessionServiceAt(t, t.TempDir())
 	ctx := t.Context()
 	recordTestConversations(t, s, "main", map[string]ConversationKind{"main": KindWebChat, "unrelated": KindWebChat})
 	conn, err := s.db.Conn(ctx)
@@ -504,7 +504,7 @@ func TestTranscriptChanges(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, err)
 	require.Equal(t, protocol.ConversationChange{ConversationID: "main"}, change)
-	other := newTestSessionService(t)
+	other := newColdTestSessionServiceAt(t, t.TempDir())
 	recordTestConversations(t, other, "main", map[string]ConversationKind{"main": KindWebChat})
 	_, err = other.AppendEntryID(ctx, "main", testSessionEntry("other schema", "SECRET"))
 	require.NoError(t, err)
@@ -588,7 +588,7 @@ func TestTranscriptChangesReportsListenerFailures(t *testing.T) {
 
 	for _, scenario := range []string{"missing schema", "malformed signal", "disconnected"} {
 		t.Run(scenario, func(t *testing.T) {
-			s := newTestSessionService(t)
+			s := newColdTestSessionServiceAt(t, t.TempDir())
 			ctx := t.Context()
 
 			var channel string
