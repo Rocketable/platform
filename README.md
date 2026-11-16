@@ -342,6 +342,7 @@ workingDirectory: sessions/marketing/$ROCKETCLAW_CONVERSATION_ID
 subagents:
   - openai/gpt-6-luna#max
   - anthropic/claude-haiku-4-5#high
+  - "openai/gpt-6*"
 maxRecursion: 1
 
 approver:
@@ -391,7 +392,7 @@ The [cheatsheet](cmd/rocketclaw/CHEATSHEET.md#easy-mode-agent-frontmatter) lists
 - The emulated shell sees only the turn's `ROCKETCLAW_*` variables. The programs `commands` starts run in host bash with RocketClaw's environment plus the `secretsARN` secrets. Each secret is a JSON object of string values, and each key becomes one variable. Secrets are fetched on every turn; a failure fails the turn and names the ARN and key.
 - ``!`…` `` lines in the body, in a routine's instruction and in the `SKILL.md` of a skill the agent loads run in host bash, from the workspace, with the secrets. A skill's lines run before the model's arguments go in, so text the model passes never runs.
 - `allowedNetworkTargets` limits `webfetch` with exactly the rules the shell's `curl` follows: both use the same client.
-- `task` takes a `model` from `subagents` and the `tools` the subagent gets, `null` for all of the parent's. The subagent runs the parent's own file, with the same folder, approver and secrets. Advanced agents cannot `task` an easy agent; they write to its sessions with `rocketclaw_sessions`, which `delegatedFrom` limits.
+- `task` takes a `model` from `subagents` and the `tools` the subagent gets, `null` for all of the parent's. An entry ending in `*`, such as `anthropic/*`, allows every model whose name, `#effort` included, starts with the text before the `*`; a `*` anywhere else fails loading. The subagent runs the parent's own file, with the same folder, approver and secrets. Advanced agents cannot `task` an easy agent; they write to its sessions with `rocketclaw_sessions`, which `delegatedFrom` limits.
 - Each routine runs the agent on a schedule written as in a cron file, with its instruction, or with `Scheduled run (<schedule>).` for a bare schedule. It reports like a cron job, in the agent's `space`. The Cron page lists it as `<agent> · <schedule>`, and `cron:<agent>` finds its runs. Schedules repeat: a one-off RFC 3339 time fails loading, and `rocketclaw_schedule_message` sends a single future run. A cron file cannot name an easy agent. Renaming the agent file leaves earlier routine runs under the old name.
 - A shadow must use its parent's mode; one that does not is dropped with a warning. An easy shadow needs the same required keys, and its `space` may differ. Routine runs get no shadows, and a shadow's own `routines` never run.
 

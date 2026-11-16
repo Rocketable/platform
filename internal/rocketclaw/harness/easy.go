@@ -34,6 +34,33 @@ type AgentRoutine struct {
 	Instruction string
 }
 
+func (a *Agent) allowsSubagentModel(model string) bool {
+	return !strings.Contains(model, "*") && slices.ContainsFunc(a.Subagents, func(entry string) bool {
+		prefix, wildcard := strings.CutSuffix(entry, "*")
+
+		return entry == model || wildcard && len(model) > len(prefix) && strings.HasPrefix(model, prefix)
+	})
+}
+
+func easySubagents(node *yaml.Node) ([]string, error) {
+	subagents, err := easyList(frontmatterField(node, "subagents"), "subagents")
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range subagents {
+		if strings.Contains(strings.TrimSuffix(entry, "*"), "*") {
+			return nil, fmt.Errorf("subagents: %q: * may only end an entry", entry)
+		}
+	}
+
+	if subagents == nil {
+		subagents = []string{strings.TrimSpace(frontmatterField(node, "model").Value)}
+	}
+
+	return subagents, nil
+}
+
 func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 	node, keys := agent.FrontmatterNode, easyKeys()
 	if err := checkKeys(node, "", "not an easy-mode key", keys[""]...); err != nil {
@@ -82,13 +109,9 @@ func compileEasyAgent(agent *Agent, cfg AgentLoadConfig) error {
 	agent.MaxRecursion = &maxRecursion
 	agent.ApproverModel, agent.ApproverPrompt = strings.TrimSpace(approver.Model), approver.Prompt
 
-	subagents, err := easyList(frontmatterField(node, "subagents"), "subagents")
+	subagents, err := easySubagents(node)
 	if err != nil {
 		return err
-	}
-
-	if subagents == nil {
-		subagents = []string{strings.TrimSpace(frontmatterField(node, "model").Value)}
 	}
 
 	agent.Subagents = subagents

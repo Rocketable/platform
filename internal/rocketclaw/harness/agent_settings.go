@@ -58,7 +58,7 @@ func AgentSettings() []AgentSetting {
 			Default:     "The model's own default.", Allowed: "A verbosity the model accepts, such as low, medium or high."},
 		{Key: "subagents", Modes: easy, Group: "Helpers", Label: "Helper models", Control: AgentSettingList,
 			Explanation: "Models the agent may run copies of itself on, to hand off part of a task.",
-			Default:     "The agent's own model.", Allowed: "auto, or a list of model names, each written like the model setting; [] for none."},
+			Default:     "The agent's own model.", Allowed: "auto, or a list of model names, each written like the model setting; [] for none. A name ending in * allows every model, #effort included, that starts with the text before it; a * anywhere else fails."},
 		{Key: "maxRecursion", Modes: easy, Group: "Helpers", Label: "Helper depth", Control: AgentSettingText,
 			Explanation: "How many levels deep helpers may hand work to further helpers; 0 turns helpers off.",
 			Default:     "1 level.", Allowed: "A whole number, 0 or more."},

@@ -74,7 +74,7 @@ func (f *toolFactory) taskTool() looperTool {
 func (f *toolFactory) taskDescription() string {
 	var selection, available string
 	if f.agent.Mode == AgentModeEasy {
-		selection = "When using the Task tool, you must specify a model parameter, one of the models listed below, to select which model runs the subagent, and a tools parameter: null to give it all of your tools, or the names of the ones it may use, MCP tools as server.tool."
+		selection = "When using the Task tool, you must specify a model parameter, one of the models listed below, to select which model runs the subagent, and a tools parameter: null to give it all of your tools, or the names of the ones it may use, MCP tools as server.tool. A listed entry ending in * stands for every model whose name, #effort included, starts with the text before the *; name a concrete model in its place."
 		available = "Available models:\n- " + strings.Join(f.agent.Subagents, "\n- ")
 	} else {
 		selection = "When using the Task tool, you must specify a subagent_type parameter to select which agent type to use."
@@ -261,7 +261,7 @@ func (f *toolFactory) subagentWrite(ctx context.Context, params *taskParams) (Su
 		return SubagentWrite{Agent: agent.Name, Delegator: f.agent.Name, Prompt: params.Prompt}, nil
 	}
 
-	if !slices.Contains(f.agent.Subagents, params.Model) {
+	if !f.agent.allowsSubagentModel(params.Model) {
 		return SubagentWrite{}, fmt.Errorf("model %q is not one of this agent's subagent models: %s", params.Model, strings.Join(f.agent.Subagents, ", "))
 	}
 
