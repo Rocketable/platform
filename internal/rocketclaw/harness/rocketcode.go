@@ -188,7 +188,7 @@ func (c *shellTempConfig) effectivePermissions(permissions PermissionSet) Permis
 	return PermissionSet{Buckets: buckets, Sudo: permissions.Sudo, Easy: permissions.Easy, skillRead: permissions.skillRead}
 }
 
-func interpolateAllAgentPermissions(agents map[string]Agent, env []string) map[string]Agent {
+func interpolateAllAgentPermissions(agents map[string]Agent, env map[string]string) map[string]Agent {
 	prepared := make(map[string]Agent, len(agents))
 
 	for name := range agents {
@@ -270,7 +270,7 @@ func NewWithModelResolver(
 		return nil, fmt.Errorf("missing required default agent %q", defaultAgent)
 	}
 
-	agents.Items = interpolateAllAgentPermissions(agents.Items, shellEnv)
+	agents.Items = interpolateAllAgentPermissions(agents.Items, config.ShellEnv)
 
 	agents = skills.withReadPermissions(root, agents)
 
