@@ -31,14 +31,14 @@ routines:
 ```
 
 - Each entry is a schedule string, or a one-entry map from schedule to instruction.
-- A schedule uses the cron-file syntax below for repeating schedules, one schedule per entry: 5-field cron, a Go duration, or an `@daily`-style shortcut. `@every` and a one-off RFC 3339 time fail loading: routines repeat. For a single future run, use `rocketclaw_schedule_message`.
+- A schedule uses the cron-file syntax below, one schedule per entry: 5-field cron, a Go duration, or an `@daily`-style shortcut. `@every` fails loading.
 - An entry with an instruction sends it as the prompt; a bare entry sends `Scheduled run (<schedule>).` Runs report like cron runs, in the agent's `space`.
 - A routine is its agent plus its schedule text: editing the instruction keeps it, changing the schedule starts a new one, and the same schedule twice in one file fails loading.
 - Only top-level agents' routines run; a shadow's own `routines` never run, and routine runs get no shadows.
 
 ## Heartbeat interval
 
-Changing the `schedule:` interval is allowed, but the value must conform to RFC3339 timestamp syntax, Go `time.ParseDuration` syntax, or to cronjob syntax (`man 5 crontab`). It can be a single value or a list of values, except timestamp schedules must be single values:
+Changing the `schedule:` interval is allowed, but the value must conform to Go `time.ParseDuration` syntax or to cronjob syntax (`man 5 crontab`). It can be a single value or a list of values:
 
 Valid Examples:
 - Go `time.ParseDuration` format
@@ -51,12 +51,6 @@ schedule: "5s"
 ```
 ---
 schedule: "*/5 * * * *"
----
-```
-- One-off timestamp format
-```
----
-schedule: "2026-05-21T15:04:05Z"
 ---
 ```
 - Many schedules
@@ -74,9 +68,7 @@ A cron has no Slack channel. A non-empty reply opens a new Web chat with the rep
 
 The optional `space:` frontmatter value is one Web space name, such as `space: "Billing"`. Without it, the cron uses its agent's `space`. Its runs are born in that space, which is created when missing. Web's Cron page and Run cron palette show a cron only in the space of that name, ignoring case; a cron with no space shows in every space. Set or change `space:` only when the human asks.
 
-Timestamp schedules are one-off crons. A one-off cron is a durable `cron/*.md` file that survives rocketclaw restarts until due, runs through normal cronjob execution and output routing, and self-deletes after one completed run attempt. Do not combine a timestamp schedule with any other schedule.
-
-Do not confuse one-off crons with `rocketclaw_schedule_message`. `rocketclaw_schedule_message` creates a short-lived delayed prompt inside the current conversation/session, including the current Slack thread when applicable, and its eventual output appears in that same session/thread. One-off crons are file-backed cron definitions and their output is handled exactly like any other cronjob output.
+Cron schedules and routines repeat. For a single future run, use `rocketclaw_schedule_message`: it creates a delayed prompt inside the current conversation/session, including the current Slack thread when applicable, and its eventual output appears in that same session/thread.
 
 Interpret requests like these as referring to the `schedule:` value:
 
@@ -96,11 +88,6 @@ Examples of valid durations include:
 - `15m`
 - `90s`
 - `1h30m`
-
-Examples of valid one-off timestamps include:
-
-- `2026-05-21T15:04:05Z`
-- `2026-05-21T15:04:05.123456789Z`
 
 If `go` is available, validate any intended interval before writing it.
 

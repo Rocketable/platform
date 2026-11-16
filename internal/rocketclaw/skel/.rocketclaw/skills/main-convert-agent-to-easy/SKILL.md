@@ -98,7 +98,6 @@ Collect every open question first, tell the human how many there are, then ask t
 Each local `cron/<file>.md` that runs the agent becomes routine entries:
 
 - Each schedule becomes one entry, with the cron body as its instruction: `- "<schedule>": "<body>"`. A file with several schedules gives several entries with the same instruction. Use a YAML block scalar for a body with several lines.
-- A one-off RFC 3339 schedule cannot be a routine. Ask whether to drop it, keep the agent advanced, or schedule it once later with `rocketclaw_schedule_message`.
 - Routines report in the agent's `space`. When the cron file's `space` differs, ask which one to keep.
 - The same schedule twice fails loading. When two cron files share a schedule, ask how to merge their instructions.
 - Tell the human that past runs stay under `cron/<file>.md`, and routine runs are recorded as `agents/<name>.md#<schedule>`.

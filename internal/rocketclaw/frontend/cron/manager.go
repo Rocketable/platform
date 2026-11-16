@@ -35,13 +35,10 @@ type Manager struct {
 	now                   func() time.Time
 	tickerInterval        time.Duration
 
-	refreshed chan struct{}
-
 	mu          sync.Mutex
 	stop        context.CancelFunc
 	closed      bool
 	definitions []definition
-	armed       map[string]bool
 	wg          sync.WaitGroup
 }
 
@@ -70,7 +67,7 @@ const (
 )
 
 func New(cfg *config.LockedConfig, runtimeDir string, store cronScheduleStore, run Runner, logger *slog.Logger) *Manager {
-	return &Manager{cfg: cfg, workspace: cfg.Clone().Workspace, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, runtimeDir: runtimeDir, refreshed: make(chan struct{}, 1), armed: map[string]bool{}}
+	return &Manager{cfg: cfg, workspace: cfg.Clone().Workspace, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, runtimeDir: runtimeDir}
 }
 
 func ValidateRuntimeDefinitions(cfg *config.LockedConfig, runtimeDir string) error {
@@ -85,12 +82,11 @@ func (m *Manager) Start(ctx context.Context) error {
 		return err
 	}
 
-	now := m.now()
 	if err := m.store.ResetCronSchedules(); err != nil {
 		return fmt.Errorf("reset cron schedules: %w", err)
 	}
 
-	if err := m.store.SyncCronSchedules(m.scheduledStates(definitions, now)); err != nil {
+	if err := m.store.SyncCronSchedules(m.scheduledStates(definitions, m.now())); err != nil {
 		return fmt.Errorf("sync cron schedules: %w", err)
 	}
 
@@ -102,8 +98,6 @@ func (m *Manager) Start(ctx context.Context) error {
 	defer m.mu.Unlock()
 
 	m.stop, m.definitions = cancel, definitions
-
-	m.armOneOffs(runCtx, definitions, now)
 
 	m.wg.Add(1)
 	go m.runTickerLoop(runCtx)
@@ -138,11 +132,6 @@ func (m *Manager) Refresh() error {
 	m.mu.Lock()
 	m.definitions = definitions
 	m.mu.Unlock()
-
-	select {
-	case m.refreshed <- struct{}{}:
-	default:
-	}
 
 	return nil
 }
@@ -213,9 +202,6 @@ func (m *Manager) Jobs() ([]Job, error) {
 		job := Job{RelativePath: definition.relativePath, Agent: definition.agent, Body: definition.body, Space: definition.space}
 		for i, schedule := range definition.schedules {
 			job.Schedules = append(job.Schedules, schedule.Raw)
-			if !schedule.DueAt.IsZero() && !schedule.DueAt.Before(now) && !schedule.DueAt.After(now.Add(24*time.Hour)) {
-				job.Upcoming = append(job.Upcoming, schedule.DueAt)
-			}
 
 			for _, trigger := range triggers {
 				if trigger.ScheduleID == scheduleID(definition.relativePath, i, schedule.Raw) && !trigger.NextDue.Before(now) {
@@ -269,68 +255,6 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCron
 	return result, nil
 }
 
-func (m *Manager) armOneOffs(ctx context.Context, definitions []definition, now time.Time) {
-	for _, definition := range definitions {
-		if len(definition.schedules) != 1 || definition.schedules[0].DueAt.IsZero() {
-			continue
-		}
-
-		id := scheduleID(definition.relativePath, 0, definition.schedules[0].Raw)
-		if m.armed[id] {
-			continue
-		}
-
-		m.armed[id] = true
-
-		m.wg.Add(1)
-		go m.runOneOffTimer(ctx, id, max(definition.schedules[0].DueAt.Sub(now), 0))
-	}
-}
-
-func (m *Manager) runOneOffTimer(ctx context.Context, id string, interval time.Duration) {
-	defer m.wg.Done()
-
-	timer := time.NewTimer(interval)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return
-	case <-timer.C:
-	}
-
-	m.mu.Lock()
-	closed, definitions := m.closed, m.definitions
-
-	i := slices.IndexFunc(definitions, func(d definition) bool {
-		return len(d.schedules) == 1 && scheduleID(d.relativePath, 0, d.schedules[0].Raw) == id
-	})
-	if i < 0 {
-		delete(m.armed, id)
-	}
-
-	m.mu.Unlock()
-
-	if closed || i < 0 {
-		return
-	}
-
-	definition := &definitions[i]
-
-	m.executeJob(ctx, definition)
-
-	relativePath := filepath.ToSlash(filepath.Join(m.runtimeDir, "cron", filepath.Base(definition.relativePath)))
-	if err := os.Remove(filepath.Join(m.workspace, relativePath)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		m.log.Warn("delete one-off cronjob", "file", definition.relativePath, "error", err)
-	}
-
-	if m.runtimeDir != "." {
-		if err := os.Remove(filepath.Join(m.workspace, definition.relativePath)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			m.log.Warn("delete local one-off cronjob", "file", definition.relativePath, "error", err)
-		}
-	}
-}
-
 func (m *Manager) runTickerLoop(ctx context.Context) {
 	defer m.wg.Done()
 
@@ -341,14 +265,6 @@ func (m *Manager) runTickerLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-m.refreshed:
-			m.mu.Lock()
-			if !m.closed {
-				m.armOneOffs(ctx, m.definitions, m.now())
-			}
-			m.mu.Unlock()
-
-			continue
 		case <-ticker.C:
 		}
 
@@ -445,10 +361,6 @@ func (m *Manager) scheduledStates(definitions []definition, now time.Time) []bac
 
 	for _, definition := range definitions {
 		for index, schedule := range definition.schedules {
-			if !schedule.DueAt.IsZero() {
-				continue
-			}
-
 			states = append(states, backend.CronScheduleState{
 				ScheduleID:   scheduleID(definition.relativePath, index, schedule.Raw),
 				RelativePath: definition.relativePath,
@@ -520,10 +432,6 @@ func loadDefinitionsIn(cfg *config.LockedConfig, runtimeDir string) ([]definitio
 			schedule, err := config.ParseCronSchedule(routine.Schedule)
 			if err != nil {
 				return nil, fmt.Errorf("agents/%s: routines: schedule %q: %w", agent.Location, routine.Schedule, err)
-			}
-
-			if !schedule.DueAt.IsZero() {
-				return nil, fmt.Errorf("agents/%s: routines: schedule %q: a routine repeats; for a single future run use rocketclaw_schedule_message", agent.Location, schedule.Raw)
 			}
 
 			relativePath := "agents/" + agent.Location + "#" + schedule.Raw
