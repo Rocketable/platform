@@ -857,6 +857,7 @@ test("saving picks a variant and a layer, warns, reviews live changes, and follo
     await until("alice's save runs", async () => (await read(hold.id)).saveState === "saving");
     await dialog(b).getByRole("button", { name: "Save to workspace", exact: true }).click();
     await dialog(b).getByText("alice is saving this draft already.", { exact: true }).waitFor();
+    expect((await fetch(`${alice}/test/release-save`, { method: "POST" })).ok).toBe(true);
     await dialog(a).getByText("Saved and reloaded: hold is live.", { exact: true }).waitFor();
 
     const main = await call<{ id: string }>("CreateAgentDraft", { name: "main", copy: true });
