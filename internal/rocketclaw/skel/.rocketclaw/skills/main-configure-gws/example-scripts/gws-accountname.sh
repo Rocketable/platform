@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ask the human partner whether to bake the ARN into this per-account script
-# or read it from the environment. Baked-in ARN is the default recommendation.
 SECRET_ID='arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:gws/accountname-PLACEHOLDER'
 
 secret_json="$(
