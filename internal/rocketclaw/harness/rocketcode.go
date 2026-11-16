@@ -347,33 +347,6 @@ func NewWithModelResolver(
 	return looper, nil
 }
 
-func (r *Runtime) RestrictTools(names []string) error {
-	if names == nil {
-		return nil
-	}
-
-	allowed := make(map[string]bool, len(names))
-	for _, name := range names {
-		if allowed[name] {
-			return fmt.Errorf("duplicate tool %q", name)
-		}
-
-		if _, ok := r.Tools[name]; !ok {
-			return fmt.Errorf("unknown tool %q", name)
-		}
-
-		allowed[name] = true
-	}
-
-	for name := range r.Tools {
-		if !allowed[name] {
-			delete(r.Tools, name)
-		}
-	}
-
-	return nil
-}
-
 func validateAutoPermissionReviewers(agents Agents) error {
 	if _, ok := agents.Items[guardianAgentName]; ok {
 		return fmt.Errorf("agent name %q is reserved when auto permission approval is enabled", guardianAgentName)
