@@ -119,7 +119,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 			runtimeConfig := bridge.rocketcodeConfig(workspace, nil, sessionTagTools(service, "external_mcp:owning")...)
 			runtimeConfig.Journal = harness.InertJournal{}
 			runtimeConfig.ChildSessions = harness.InertChildSessions{}
-			runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+			runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main")
 			require.NoError(t, err)
 
 			for _, name := range []string{"rocketclaw_set_tag", "rocketclaw_get_tags"} {
@@ -173,7 +173,7 @@ func TestSessionTagToolsBridge(t *testing.T) {
 					}
 
 					runtimeConfig.CustomTools = sessionTagTools(service, "external_mcp:owning")
-					runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+					runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main")
 					require.NoError(t, err)
 
 					input := make(chan harness.PromptInput, 1)
@@ -612,7 +612,7 @@ func TestSessionToolsBridgePermissions(t *testing.T) {
 			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil, currentSessionIDTool(bridge.config.ConversationID), sessionsWriteTool(bridge, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", bridge.config.ConversationID, agents))
 			runtimeConfig.Journal = harness.InertJournal{}
 			runtimeConfig.ChildSessions = harness.InertChildSessions{}
-			runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+			runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main")
 			require.NoError(t, err)
 
 			list, hasList := runtime.CodeModeHosts[sessionsListToolName]
@@ -1080,7 +1080,7 @@ func TestSessionsWriteRecipients(t *testing.T) {
 		runtimeConfig := caller.rocketcodeConfig(workspace, nil, sessionsWriteTool(caller, new(protocol.InboundMessage), new(protocol.InboundMessage), "main", caller.config.ConversationID, agents))
 		runtimeConfig.Journal = harness.InertJournal{}
 		runtimeConfig.ChildSessions = harness.InertChildSessions{}
-		runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, sender, io.Discard)
+		runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, sender)
 		require.NoError(t, err)
 
 		input := make(chan harness.PromptInput, 1)

@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -38,7 +37,7 @@ func GenerateHandoff(ctx context.Context, locked *config.LockedConfig, agent, tr
 
 	runtimeConfig := harness.Config{ShellTempDir: filepath.Join(cfg.Workspace, scratch), SpillDir: rocketcodeSpillDir(cfg), RetainedResultDir: filepath.Join("retained", "unused"), ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, BackgroundJobs: harness.InertBackgroundJobs{}, ShellCommand: harness.DefaultShellCommand{}}
 
-	runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, agent, io.Discard)
+	runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, agent)
 	if err != nil {
 		return "", fmt.Errorf("prepare handoff: %w", err)
 	}

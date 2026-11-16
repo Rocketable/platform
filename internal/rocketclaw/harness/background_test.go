@@ -433,7 +433,7 @@ func TestSteerSwitchesRunningSessionType(t *testing.T) {
 			run := func(mock *mockResponsesAPI) (string, error) {
 				config := testConfig(dir)
 				config.Journal = journal
-				loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), config, root, agents.Agents, Skills{Items: map[string]Skill{}}, "child", nil)
+				loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), config, root, agents.Agents, Skills{Items: map[string]Skill{}}, "child")
 				require.NoError(t, err)
 
 				loop.PermissionReviewer.(*toolFactory).baseTools["probe"] = probe

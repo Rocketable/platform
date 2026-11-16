@@ -3,7 +3,6 @@ package backend
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"path/filepath"
 	"testing"
@@ -81,7 +80,7 @@ func TestStopBackgroundJobToolNeedsAllowBackground(t *testing.T) {
 
 			bridge := &Bridge{runtime: config.NewLockedConfig(cfg), config: Config{ConversationID: "main", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
 			runtimeConfig := bridge.rocketcodeConfig(filepath.Join(workspace, "shell"), nil)
-			runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+			runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main")
 			require.NoError(t, err)
 
 			host, hosted := runtime.CodeModeHosts[stopBackgroundJobToolName]

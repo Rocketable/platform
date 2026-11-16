@@ -208,7 +208,7 @@ func TestDecisionToolIsOptInAndCodeModeOnly(t *testing.T) {
 		client := openai.NewClient()
 		config := testWorkspaceConfig(t, dir)
 		config.Deciders = deciders
-		loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: PermissionSet{Sudo: true}}}}, Skills{Items: map[string]Skill{}}, "main", nil)
+		loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: PermissionSet{Sudo: true}}}}, Skills{Items: map[string]Skill{}}, "main")
 		require.NoError(t, err)
 
 		require.NotContains(t, loop.Tools, "decision")

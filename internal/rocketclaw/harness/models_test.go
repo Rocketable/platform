@@ -60,7 +60,7 @@ func testResolverClient(t *testing.T, output string) (client *openai.Client, req
 }
 
 func TestNewWithModelResolverRequiresResolverBeforeInitialization(t *testing.T) {
-	_, err := NewWithModelResolver(nil, nil, nil, Agents{}, Skills{}, "", nil)
+	_, err := NewWithModelResolver(nil, nil, nil, Agents{}, Skills{}, "")
 
 	require.EqualError(t, err, "resolver is required")
 }
@@ -83,7 +83,7 @@ func TestNewWithModelResolverRejectsEmptyRootModelWithoutResolving(t *testing.T)
 
 			_, err := NewWithModelResolver(resolver, testConfig(dir), root, Agents{Items: map[string]Agent{
 				"main": {Name: "main", Model: model, Prompt: "prompt"},
-			}}, Skills{Items: map[string]Skill{}}, "main", nil)
+			}}, Skills{Items: map[string]Skill{}}, "main")
 
 			require.ErrorContains(t, err, "required non-empty string")
 			require.Zero(t, calls)
@@ -106,7 +106,7 @@ func TestNewAppliesAgentOutputSchema(t *testing.T) {
 			"properties": map[string]any{"answer": map[string]any{"type": "string"}},
 			"required":   []any{"answer"},
 		}},
-	}}, Skills{Items: map[string]Skill{}}, "main", nil)
+	}}, Skills{Items: map[string]Skill{}}, "main")
 
 	require.NoError(t, err)
 	require.NotNil(t, loop.ResponseFormat.OfJSONSchema)
@@ -141,7 +141,7 @@ func TestNewWithModelResolverResolvesRootAgent(t *testing.T) {
 		"main":   {Name: "main", Model: "work/gpt-6.1-sol", Prompt: "prompt", Permission: parsePermissionYAML(t, `edit: {".tmp/${ROCKETCLAW_METADATA_FRUIT}/note.txt": allow}`)},
 		"unused": {Name: "unused", Model: "   ", Prompt: "unused", Permission: parsePermissionYAML(t, `edit: {"unused/note.txt": allow}`)},
 	}}
-	loop, err := NewWithModelResolver(resolver, cfg, root, agents, Skills{Items: map[string]Skill{}}, "main", nil)
+	loop, err := NewWithModelResolver(resolver, cfg, root, agents, Skills{Items: map[string]Skill{}}, "main")
 	require.NoError(t, err)
 	require.Equal(t, []string{"work/gpt-6.1-sol"}, resolved)
 	require.Contains(t, loop.SystemPrompt, ".tmp/banana/note.txt")
@@ -162,7 +162,7 @@ func TestNewWithModelResolverResolvesRootAgent(t *testing.T) {
 
 	for _, env := range []map[string]string{nil, {}, {"ROCKETCLAW_METADATA_FRUIT": ""}} {
 		cfg.ShellEnv = env
-		loop, err := NewWithModelResolver(resolver, cfg, root, agents, Skills{Items: map[string]Skill{}}, "main", nil)
+		loop, err := NewWithModelResolver(resolver, cfg, root, agents, Skills{Items: map[string]Skill{}}, "main")
 		require.NoError(t, err)
 
 		action, _ := loop.Permissions.Evaluate("edit", ".tmp/banana/note.txt")
@@ -202,7 +202,7 @@ func TestNewWithModelResolverRejectsUnknownProvider(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := NewWithModelResolver(tt.resolve, testConfig(dir), root, Agents{Items: map[string]Agent{
 				"main": {Name: "main", Model: "work/gpt-6.1-sol", Prompt: "prompt"},
-			}}, Skills{Items: map[string]Skill{}}, "main", nil)
+			}}, Skills{Items: map[string]Skill{}}, "main")
 
 			require.ErrorContains(t, err, tt.wantText)
 		})
@@ -230,7 +230,7 @@ func TestNewUsesResolverCompactThreshold(t *testing.T) {
 			return &client, tc.origin, nil
 		}), cfg, root, Agents{Items: map[string]Agent{
 			"main": {Name: "main", Model: tc.model, Prompt: "prompt"},
-		}}, Skills{Items: map[string]Skill{}}, "main", nil)
+		}}, Skills{Items: map[string]Skill{}}, "main")
 
 		require.NoError(t, err, tc.model)
 		require.Equal(t, tc.want, loop.CompactThreshold, tc.model)
@@ -252,7 +252,7 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 		t.Run("agent_effort="+effort, func(t *testing.T) {
 			loop, err := NewWithModelResolver(resolver, cfg, root, Agents{Items: map[string]Agent{
 				"main": {Name: "main", Model: "work/template", Prompt: "prompt", ReasoningEffort: effort},
-			}}, Skills{Items: map[string]Skill{}}, "main", nil)
+			}}, Skills{Items: map[string]Skill{}}, "main")
 
 			require.NoError(t, err)
 			require.Equal(t, "work/gpt-6.1-sol", loop.DisplayModel)
@@ -399,7 +399,7 @@ func testOpenAILoop(t *testing.T, client *openai.Client) *Runtime {
 	config := testConfig(dir)
 	loop, err := NewWithModelResolver(testResolverForClient(client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Model: "gpt-6.1-sol", Prompt: "prompt"},
-	}}, Skills{Items: map[string]Skill{}}, "main", nil)
+	}}, Skills{Items: map[string]Skill{}}, "main")
 	require.NoError(t, err)
 
 	return loop

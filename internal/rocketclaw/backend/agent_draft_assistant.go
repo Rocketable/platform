@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"maps"
 	"os"
@@ -103,7 +102,7 @@ func (s *SessionService) ProposeAgentDraftChanges(ctx context.Context, id, usern
 
 	runtimeConfig := harness.Config{ShellTempDir: filepath.Join(cfg.Workspace, cfg.RuntimeDirName()), SpillDir: rocketcodeSpillDir(cfg), RetainedResultDir: filepath.Join("retained", "unused"), ChildSessions: harness.InertChildSessions{}, Journal: harness.InertJournal{}, BackgroundJobs: harness.InertBackgroundJobs{}, ShellCommand: harness.DefaultShellCommand{}}
 
-	runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main", io.Discard)
+	runtime, err := harness.NewWithModelResolver(resolver, &runtimeConfig, root, agents, skills, "main")
 	if err != nil {
 		return nil, fmt.Errorf("prepare agent draft assistant: %w", err)
 	}

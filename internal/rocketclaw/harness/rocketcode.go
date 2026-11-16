@@ -213,7 +213,6 @@ func NewWithModelResolver(
 	agents Agents,
 	skills Skills,
 	defaultAgent string,
-	diagnosticsWriter io.Writer,
 ) (*Runtime, error) {
 	if resolver == nil {
 		return nil, errors.New("resolver is required")
@@ -266,10 +265,6 @@ func NewWithModelResolver(
 
 	if defaultAgent == "" {
 		return nil, errors.New("defaultAgent is required")
-	}
-
-	if config.Diagnostics && diagnosticsWriter == nil {
-		return nil, errors.New("diagnosticsWriter is required when diagnostics are enabled")
 	}
 
 	if config.ChildSessions == nil {
@@ -357,12 +352,6 @@ func NewWithModelResolver(
 	}
 
 	looper.Journal, looper.expandInputPrompts = config.Journal, config.ExpandPromptShellCommands.InputPrompts
-
-	if config.Diagnostics {
-		if err := printRuntimeDiagnostics(diagnosticsWriter, &activeAgent, looper.Tools, skills, looper.SystemPrompt); err != nil {
-			return nil, err
-		}
-	}
 
 	return looper, nil
 }
@@ -452,15 +441,4 @@ func loadRootInstructions(root *os.Root) (string, error) {
 	}
 
 	return "Instructions from: AGENTS.md\n" + string(data), nil
-}
-
-func printRuntimeDiagnostics(w io.Writer, activeAgent *Agent, tools map[string]looperTool, skills Skills, systemPrompt string) error {
-	toolNames := slices.Sorted(maps.Keys(tools))
-	skillNames := slices.Sorted(maps.Keys(skills.Items))
-
-	if _, err := fmt.Fprintf(w, "agent: %s\ntools: %s\nskills: %s\nsystem_prompt:\n---\n%s\n---\n", activeAgent.Name, strings.Join(toolNames, ", "), strings.Join(skillNames, ", "), systemPrompt); err != nil {
-		return fmt.Errorf("write runtime diagnostics: %w", err)
-	}
-
-	return nil
 }
