@@ -2419,7 +2419,6 @@ func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol
 			}
 
 			if len(transientEnv) > 0 {
-				shellEnv = maps.Clone(metadataEnv)
 				maps.Copy(shellEnv, transientEnv)
 
 				replayInput := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP turn has additional metadata:", transientEnv))
@@ -2437,7 +2436,6 @@ func (b *Bridge) turnShellEnv(ctx context.Context, self string, origin *protocol
 	}
 
 	if name, email := origin.Metadata[protocol.InboundPrincipalNameMetadataKey], origin.Metadata[protocol.InboundPrincipalEmailMetadataKey]; name != "" {
-		shellEnv = maps.Collect(maps.All(shellEnv))
 		shellEnv["ROCKETCLAW_PRINCIPAL_NAME"] = name
 
 		if email != "" {
