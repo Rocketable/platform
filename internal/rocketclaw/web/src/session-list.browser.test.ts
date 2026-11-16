@@ -260,7 +260,7 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       for (const width of [1280, 320]) {
         await page.setViewportSize({ width, height: 800 });
         await dialog.getByRole("button", { name: "Tabs: Toggle sidebar", exact: true }).waitFor({ state: width === 1280 ? "visible" : "detached" });
-        expect(await keys()).toEqual({ "Quick view": [modifier, "Shift", "D"], "Sessions: New": [modifier, alternate, "N"], "Tabs: Next": [modifier, "]"], "Tabs: Previous": [modifier, "["], ...(width === 1280 ? { "Tabs: Toggle sidebar": [modifier, "B"] } : {}) });
+        expect(await keys()).toEqual({ "Sessions: New": [modifier, alternate, "N"], "Tabs: Next": [modifier, "]"], "Tabs: Previous": [modifier, "["], ...(width === 1280 ? { "Tabs: Toggle sidebar": [modifier, "B"] } : {}) });
         await dialog.evaluate((node: HTMLElement) => Promise.all(node.getAnimations({ subtree: true }).map((animation) => animation.finished)));
         expect(await dialog.evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth && [...node.querySelectorAll("kbd")].every((key) => {
           const bounds = key.getBoundingClientRect(), parent = node.getBoundingClientRect();
@@ -288,7 +288,7 @@ for (const [platform, modifier, alternate] of [["MacIntel", "⌘", "Option"], ["
       const shortcutList = page.getByRole("list", { name: "Keyboard shortcuts" });
       const shortcutKeys: string[][] = await shortcutList.getByRole("listitem").evaluateAll((items: Element[]) => items.map((item) => [...item.querySelectorAll("kbd")].map((key) => key.textContent!)));
       expect(shortcutKeys).toEqual([
-        [modifier, "P"], [modifier, "Shift", "P"], [modifier, alternate, "N"], [modifier, "["], [modifier, "]"], [modifier, alternate, "T"], [modifier, "Shift", "A"], [modifier, "Shift", "S"], [modifier, "Shift", "D"], [modifier, "B"], [modifier, "Shift", "B"], ["Escape"], [modifier, "Enter"], [modifier, alternate, "Enter"]]);
+        [modifier, "P"], [modifier, "Shift", "P"], [modifier, alternate, "N"], [modifier, "["], [modifier, "]"], [modifier, alternate, "T"], [modifier, "Shift", "A"], [modifier, "Shift", "S"], [modifier, "B"], [modifier, "Shift", "B"], ["Escape"], [modifier, "Enter"], [modifier, alternate, "Enter"]]);
       // Chromium keeps new and closed tabs, windows and tab cycling for itself and never hands these keys to a page
       // (kReservedCommandIds, chrome/browser/ui/accelerator_table.cc). Headless test browsers do hand them over, so a test
       // pressing one passes while the real key does nothing; RocketClaw adds Alt instead, as in mod+Alt+N.
@@ -959,8 +959,8 @@ test("actual App restores, merges, isolates and keeps composer independent", asy
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
     // The theme commands run earlier in this test come first, as recently used.
-    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Theme: Auto", "Theme: Dark", "Theme: Light", "Cron: Dashboard", "Cron: Run", "Cron: Timeline", "Help: Keyboard Shortcuts", "List Agents", "List Skills", "New dashboard",
-      "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Quick view⌘ShiftD", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Copy link", "Tabs: Next⌘]", "Tabs: Previous⌘[", "Tabs: Recently closed", "Tabs: Toggle sidebar⌘B",
+    expect(await commandPalette.getByRole("button").allTextContents()).toEqual(["Theme: Auto", "Theme: Dark", "Theme: Light", "Cron: Dashboard", "Cron: Run", "Cron: Timeline", "Help: Keyboard Shortcuts", "List Agents", "List Skills",
+      "Output: MarkdownCurrent · Render messages as Markdown, including headings and tables.", "Output: RawShow messages with Slack formatting.", "Pages: Index", "Sessions: New⌘OptionN", "Sessions: Search", "Settings", "Tabs: Add to new group", "Tabs: Close", "Tabs: Close all", "Tabs: Close others", "Tabs: Close to the right", "Tabs: Copy link", "Tabs: Next⌘]", "Tabs: Previous⌘[", "Tabs: Recently closed", "Tabs: Toggle sidebar⌘B",
       // Timeline levels follow the Config slider, with its descriptions, and mark the active level.
       "Timeline: Messages onlyHide all activity.", "Timeline: QuietGroup subagents and skills. Hide other activity.", "Timeline: CompactCurrent · Group all activity with details collapsed.",
       "Timeline: DetailedExpand execute output. Show subagents and skills separately and group other activity.", "Timeline: EverythingShow all activity separately and expanded.", "Voice"]);

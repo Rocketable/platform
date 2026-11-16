@@ -20,8 +20,8 @@ const rows: { id: string; name: string; agent: string; running?: boolean; backgr
 ];
 const href = (id: string) => `/s/${Buffer.from(id).toString("base64url")}`;
 type SharedTab = { space: string; path: string; search?: SearchPage };
-// A Search page as the server compares it: field order, empty names and board styles, and unset notify marks do not matter.
-const plain = (page?: SearchPage) => JSON.stringify(page ? [page.name ?? "", page.board ?? "", page.searches.map(({ id, name, query, notify }) => [id, name ?? "", query, !!notify]), page.active] : null);
+// A Search page as the server compares it: field order and empty names do not matter.
+const plain = (page?: SearchPage) => JSON.stringify(page ? [page.name ?? "", page.searches.map(({ id, name, query }) => [id, name ?? "", query]), page.active] : null);
 type Change = { paths: string[]; action: string; until?: string };
 // attention is this person's attention on each tab location, sent is every attention change, and polls counts session lists.
 type Saved = { spaces: { id: string; name: string }[]; state: { tabs: { path: string; group?: string; space?: string; search?: SearchPage }[]; groups: { id: string; name: string; color?: string; collapsed?: boolean }[]; space: string; last: Record<string, string>; sharedOrder: string[] }; revision: number; refused: number; shared: SharedTab[]; closed: { path: string; space?: string; search?: SearchPage }[]; topShelf?: { tabs: { space: string; path: string }[] }; attention: TabAttention[]; sent: Change[]; polls: number; autoPark?: boolean };
@@ -95,7 +95,7 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
       const index = (await Bun.file(path.join(dist, "index.html")).text()).replace("<title>RocketClaw</title>", "<title>lab - RocketClaw</title>");
       return new Response(index, { headers: { "Content-Type": "text/html" } });
     }
-    const input = await request.json().catch(() => ({})) as { id: string; text: string; name: string; query: string; agent?: string; dashboards: { lanes: string[] }[] } & Parameters<typeof tabsCall>[1];
+    const input = await request.json().catch(() => ({})) as { id: string; text: string; name: string; query: string; agent?: string } & Parameters<typeof tabsCall>[1];
     if (url.pathname === "/api/UpdateSession") sessions.find((row) => row.id === input.id)!.name = input.name;
     switch (url.pathname) {
       case "/api/Identity": return Response.json({ username: "tester" });
@@ -114,7 +114,6 @@ async function withPage(options: object, run: (page: any, origin: string, prompt
         return Response.json({ id: "fresh" });
       case "/api/Prompt": prompts.push(input); return Response.json({ privateText: "" });
       case "/api/Tabs": return tabsCall(saved, input);
-      case "/api/Board": return Response.json({ dashboards: input.dashboards.map(({ lanes }) => ({ lanes: lanes.map(() => ({ sessions: [], total: 0 })) })) });
       // Fixed fixture: searching a row's exact name returns that row.
       case "/api/SearchSessions": return Response.json({ terms: [], text: input.query, needle: input.query.toLowerCase(), matches: rows.filter((row) => row.name === input.query).map((row) => ({ conversationId: row.id, field: "Name", text: row.name })), messages: [], mentionIds: [] });
       default: return Response.json({});
@@ -763,8 +762,8 @@ for (const [platform, modifier] of [["MacIntel", "⌘"], ["Linux x86_64", "Ctrl"
     { id: "parked", name: "Parked", agent: "main", unreadAt: at(0), parked: true },
     { id: "untabbed", name: "Untabbed", agent: "main", running: true, asking: true, stateSince: at(0), unreadAt: at(0) },
   ];
-  const ops = { name: "Ops", board: "kanban", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" };
-  // Unread old is only in Shared, Shelved only on the Top Shelf, and the Ops Dashboard waits through its tab row.
+  const ops = { name: "Ops", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" };
+  // Unread old is only in Shared, Shelved only on the Top Shelf, and the Ops Search page waits through its tab row.
   saved.state = { ...saved.state, space: "main", tabs: [...sessions.flatMap(({ id }) => ["untabbed", "unread-old", "shelved"].includes(id) ? [] : [{ path: href(id), space: "main" }]), { path: "/search/dash", space: "main", search: ops }] };
   saved.shared = [{ space: "main", path: href("unread-old") }];
   saved.topShelf = { tabs: [{ space: "main", path: href("shelved") }] };
@@ -1719,39 +1718,6 @@ test("Shared hides while empty, takes tabs from the tab menu, highlights both co
   expect(await tab("New session").evaluate((node: HTMLElement) => document.activeElement === node)).toBe(true);
 }), 60_000);
 
-test("a Dashboard's board style and lane notify marks survive edits, reload, other people's changes, and rebases", () => withPage({}, async (page, origin, _prompts, saved) => {
-  const query = page.getByRole("main").getByRole("textbox", { name: "Search sessions", exact: true });
-  const own = () => saved.state.tabs.find((item) => item.path === "/search/d")?.search;
-  const shows = (value: string) => page.waitForFunction((text: string) => (document.querySelector('main input[aria-label="Search sessions"]') as HTMLInputElement | null)?.value === text, value);
-  saved.state = { tabs: [{ path: "/search/d", space: "main", search: { name: "Ops", board: "kanban", searches: [{ id: "1", query: "a", notify: true }], active: "1" } }], groups: [], space: "main", last: { main: "/search/d" }, sharedOrder: [] };
-  await openSaved(page, origin, "/search/d", "Ops", saved);
-  await shows("a");
-  // Another window changes only the board style; an edit here keeps it and the lane's notify mark, also after reload.
-  [own()!.board, saved.revision] = ["radar", saved.revision + 1];
-  await focus(page);
-  await query.fill("a b");
-  await until(() => plain(own()) === plain({ name: "Ops", board: "radar", searches: [{ id: "1", query: "a b", notify: true }], active: "1" }));
-  await page.reload();
-  await shows("a b");
-  await query.fill("a c");
-  await until(() => plain(own()) === plain({ name: "Ops", board: "radar", searches: [{ id: "1", query: "a c", notify: true }], active: "1" }));
-
-  // Shared, another person's notify mark arrives on focus, with a rename that shows it arrived, and an edit here keeps it.
-  saved.shared = [{ space: "main", path: "/search/team", search: { name: "Team", board: "strips", searches: [{ id: "1", query: "a" }, { id: "2", query: "b" }], active: "1" } }];
-  await focus(page);
-  await shared(page).getByRole("tab", { name: "Team", exact: true }).click();
-  await shows("a");
-  saved.shared[0].search = { name: "Lanes", board: "strips", searches: [{ id: "1", query: "a", notify: true }, { id: "2", query: "b" }], active: "1" };
-  await focus(page);
-  await shared(page).getByRole("tab", { name: "Lanes", exact: true }).waitFor();
-  await query.fill("a x");
-  await until(() => plain(saved.shared[0].search) === plain({ name: "Lanes", board: "strips", searches: [{ id: "1", query: "a x", notify: true }, { id: "2", query: "b" }], active: "1" }));
-  // An edit made from a page someone restyled and marked meanwhile is made again onto theirs, keeping both changes.
-  saved.shared[0].search = { name: "Lanes", board: "kanban", searches: [{ id: "1", query: "a x", notify: true }, { id: "2", query: "b", notify: true }], active: "1" };
-  await query.fill("a y");
-  await until(() => plain(saved.shared[0].search) === plain({ name: "Lanes", board: "kanban", searches: [{ id: "1", query: "a y", notify: true }, { id: "2", query: "b", notify: true }], active: "1" }));
-}), 30_000);
-
 test("other people's Shared changes arrive on focus, and a window on a Shared tab stays on it", () => withPage({}, async (page, origin, _prompts, saved) => {
   const row = (name: string) => shared(page).getByRole("tab", { name, exact: true }), space = page.getByRole("button", { name: /^Space: / });
   saved.spaces.push({ id: "ops", name: "Ops" });
@@ -2082,7 +2048,7 @@ test("a Shared row offers the attention items as a tab of the person's own does,
   const row = (name: string) => shared(page).getByRole("tab", { name, exact: true }), opacity = (path: string) => shared(page).locator(`[data-tab="${path}"]`).evaluate((node: HTMLElement) => getComputedStyle(node).opacity);
   const close = async () => { await page.keyboard.press("Escape"); await page.getByRole("menu").waitFor({ state: "hidden" }); };
   saved.state = { ...saved.state, tabs: [{ path: href("alpha"), space: "main" }], space: "main" };
-  saved.shared = [{ space: "main", path: href("bravo") }, { space: "main", path: "/search/d", search: { name: "Ops", board: "kanban", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" } }];
+  saved.shared = [{ space: "main", path: href("bravo") }, { space: "main", path: "/search/d", search: { name: "Ops", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" } }];
   await page.goto(`${origin}${href("alpha")}`);
   expect(await sharedMenu(page, "Bravo")).toEqual(["Pull requests", "—", "Copy link", "Remove from Shared", "—", "Mark as unread", "Park", "Auto-park when I send"]);
   await close();

@@ -1,6 +1,6 @@
 "use client";
 
-import { QueryClient, QueryCache, MutationCache, QueryClientProvider, keepPreviousData, queryOptions, useQueries, useQuery, useMutation, useIsMutating } from "@tanstack/react-query";
+import { QueryClient, QueryCache, MutationCache, QueryClientProvider, queryOptions, useQueries, useQuery, useMutation, useIsMutating } from "@tanstack/react-query";
 import { captureException } from "@sentry/react";
 import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
@@ -17,9 +17,9 @@ import { queries, queryKeyHash, mutations, listSessions, rpc, searchAll, RPCErro
 import { draftContent } from "./drafts";
 import { holdWakeLock, startVoice, stopVoice, subscribeVoice, useVoice, voiceChoice, voiceLevel, voiceView, type VoiceCaption, type VoiceState, type VoiceView } from "./voice";
 import type { ChatOrigin, HistoryView, MessageMatch, PendingQuestion, PromptDelivery, SearchSessionsResponse, ShadowBinding } from "./types";
-import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Layers, LayoutGrid, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
+import { ArrowUp, BellRing, Bot, Brain, Captions, Check, ChevronDown, ChevronRight, CircleAlert, CirclePause, Clock, Copy, Download, Ellipsis, FileIcon, Files, FileText, GitFork, GripVertical, History, Hourglass, Inbox, Keyboard, Layers, ListChecks, LoaderCircle, MessageSquare, Mic, MicOff, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Pin, Play, Plus, ScrollText, Search, Settings, ShieldCheck, Sparkles, Square, SquareParking, SquarePen, SquareTerminal, Undo2, Users, Wrench, X } from "lucide-react";
 import Link, { usePathname, useSearch, useServer, navigate, pagePath, panelHref, rocketclaws, server, serverURL, at as serverPath } from "./navigation";
-import { createContext, Fragment, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
+import { createContext, memo, use, useCallback, useContext, useEffect, useEffectEvent, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type ReactElement, type SyntheticEvent, type RefObject, type ComponentProps, type CSSProperties } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { flushSync } from "react-dom";
@@ -28,7 +28,6 @@ import { CodeBlock, InlineText, MarkdownText, OUTPUT_KEY, TranscriptText, cleanT
 import { projectTimeline, setTimelineRows, timelineFailure, timelineLevel, timelineLevels, useTimelineDetail, type TimelineRows } from "./timeline-detail";
 import { TimelineDetailCard } from "./timeline-detail-card";
 import { BehaviorSettings } from "./behavior-settings";
-import { quickLanes, dotOf, quickViews, type Dot, type QuickAction, type QuickRules } from "./quick-view";
 import { ThreadPRContent, ThreadPRWatch } from "./thread-pr-panel";
 import { reportTyping, TypingPill } from "./typing";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -476,7 +475,6 @@ function useRoute() {
     voice: pathname === "/voice",
     pages: pathname === "/pages",
     shortcuts: pathname === "/shortcuts",
-    quick: pathname === quickPath,
     closed: pathname === "/closed",
     // A page path keeps its escaped agent and file path after the space segment.
     page: pathname.startsWith("/pages/") ? pathname.split("/").slice(3).join("/") : "",
@@ -966,13 +964,12 @@ type Space = { id: string; name: string };
 // last names each space's last active tab; sharedOrder is this person's order of Shared tabs by path.
 type TabState = { owner?: string; tabs: Tab[]; active: string; groups: TabGroup[]; spaces: Space[]; space: string; last: Record<string, string>; sharedOrder: string[] };
 const TabActions = createContext<ReturnType<typeof useTabs>>(null!);
-const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/agents/new": ["Create New Agent", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard], "/quick-view": ["Quick view", LayoutGrid], "/closed": ["Recently closed", History] };
+const pageTabs: Record<string, [string, typeof Search]> = { "/": ["New session", SquarePen], "/voice": ["Voice", Mic], "/cron": ["Cron", Clock], "/agents": ["Agents", Bot], "/agents/new": ["Create New Agent", Bot], "/skills": ["Skills", Sparkles], "/config": ["Settings", Settings], "/pages": ["Pages", Files], "/shortcuts": ["Shortcuts", Keyboard], "/closed": ["Recently closed", History] };
 
 // A Search page is /search or a location under it, each its own tab; it is titled with its name, else the query it shows.
 const isSearch = (path: string) => /^\/search(\/|$)/.test(path);
 const searchTitle = (search?: SearchPageState) => search?.name || search?.searches.find((item) => item.id === search.active)?.query || "Search";
 const freshSearch = () => `/search/${crypto.getRandomValues(new Uint32Array(2)).join("-")}`;
-const newDashboard: SearchPageState = { board: "strips", active: "0", searches: ([["Needs you", "is:waiting", true], ["Running", "is:running", false], ["Queued", "is:queued", true], ["External", "is:external", true]] as const).map(([name, query, notify], i) => ({ id: String(i), name, query, notify })) };
 
 // A hosted page, from its escaped agent and file path, is labeled "<agent> · <path>".
 function pageLabel(page: string) {
@@ -1314,14 +1311,12 @@ function useTabs() {
     if (theirs) saveShared(space, path, theirs, rebase(base, page, theirs));
   } });
   const open = (path: string, query = "", space?: string, preview = false, list = reach, search?: SearchPageState) => flushSync(() => { setState((current) => openTab(space ? { ...current, space } : current, path, list, preview, search)); navigate(path + query, preview); });
-  // Adds path's tab as open does, staying on the tab in view.
-  const behind = (path: string) => setState((current) => ({ ...openTab(current, path, reach), active: current.active, space: current.space, last: current.last }));
   const addSearch = (page: SearchPageState, inShared: boolean) => {
     const path = freshSearch(), id = (i: number) => `${path.slice("/search/".length)}-${i}`, search = { ...page, searches: page.searches.map((item, i) => ({ ...item, id: id(i) })), active: id(page.searches.findIndex((item) => item.id === page.active)) };
     return inShared ? sharing.mutate({ share: { space: state.space, path, search } }, { onSuccess: (reply) => open(path, "", undefined, false, reply.shared) }) : open(path, "", undefined, false, reach, search);
   };
   return {
-    state, strip, shown, groups, here, shared, reach, closed, pathname, close, enter, edit, editor, setEditor, settle, picking, setPicking, parked, setParked, attend, open, behind, addSearch, pending: spaceChange.isPending,
+    state, strip, shown, groups, here, shared, reach, closed, pathname, close, enter, edit, editor, setEditor, settle, picking, setPicking, parked, setParked, attend, open, addSearch, pending: spaceChange.isPending,
     deleted: (path: string) => {
       close([path]);
       const shelved = shelf?.tabs?.find((tab) => (tab.server ?? "") === name && tab.path === path);
@@ -1573,120 +1568,6 @@ function AttentionButton() {
   return <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Next session needing you" disabled={!next} onClick={next}>
     <Inbox className="size-[var(--navigation-icon)]" />
   </TooltipTrigger><TooltipContent side="top">Next session needing you</TooltipContent></Tooltip>;
-}
-
-// Cmd/Ctrl+Shift+D, or the palette's Quick view, opens the Quick view page, which Escape closes like any other page: every
-// server's sessions as a board of tiles, in one of ten variations (quick-view.ts), picked by its chips or the keys 1 to 0
-// and remembered in this browser.
-function QuickViewShortcut() {
-  const onKey = useEffectEvent((event: KeyboardEvent) => {
-    if (event.defaultPrevented || !(event.metaKey || event.ctrlKey) || event.altKey || !event.shiftKey || event.code !== "KeyD") return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (!event.repeat) navigate(quickPath);
-  });
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => onKey(event);
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
-  }, []);
-  return null;
-}
-
-const quickPath = "/quick-view", quickKey = "rocketclaw.quick-view";
-const dotColors: Record<Dot, string> = { needs: "oklch(0.8 0.16 80)", unread: "oklch(0.7 0.14 240)", working: "oklch(0.63 0.22 30)", queued: "oklch(0.62 0.15 295)", done: "oklch(0.72 0.17 150)", parked: "oklch(0.62 0 0)", offline: "oklch(0.42 0 0)" };
-
-// The page starts afresh each time it is shown, so its times are those of its opening.
-function QuickViewPage({ show }: { show: boolean }) {
-  return show ? <QuickView /> : null;
-}
-
-function QuickView() {
-  const [id, setId] = useState(() => localStorage.getItem(quickKey) ?? "ranks"), rules = quickViews.find((view) => view.id === id) ?? quickViews[0];
-  const { all } = useContext(Sidebar), { state } = useContext(TabActions), [now] = useState(Date.now);
-  const [peek, setPeek] = useState<Session>(), [picked, setPicked] = useState(new Set<string>()), [swept, setSwept] = useState(new Set<string>());
-  const clear = () => { setPeek(undefined); setPicked(new Set()); };
-  const pick = (next: string) => { localStorage.setItem(quickKey, next); setId(next); clear(); };
-  const onKey = useEffectEvent((event: KeyboardEvent) => {
-    const n = "1234567890".indexOf(event.key), target = event.target as HTMLElement;
-    if (n < 0 || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
-    pick(quickViews[n].id);
-  });
-  useEffect(() => {
-    const key = (event: KeyboardEvent) => onKey(event);
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, []);
-  const lanes = quickLanes(rules, all, now, new Map(state.spaces.map((space) => [space.id, space.name])), swept), count = lanes.reduce((sum, lane) => sum + lane.tiles.length, 0);
-  const clicks = useQuickClick(setPeek, setPicked, setSwept);
-  // Tiles outlined: the peeked or picked ones, or where a click adds a tab, those that have one.
-  const active = rules.action === "behind" ? new Set(all.flatMap((row) => state.tabs.some((tab) => tab.path === rowPath(row)) ? [row.id] : [])) : new Set([...picked, peek?.id ?? ""]);
-  return <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-2 sm:p-4">
-    <section aria-label="Quick view" className="mx-auto flex w-full max-w-5xl flex-col gap-3 rounded-xl border border-border bg-card p-4">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <h1 className="flex items-center gap-2 font-medium"><span className="flex size-6 items-center justify-center rounded-md bg-foreground text-background"><LayoutGrid className="size-4" /></span>Quick view<span className="font-normal text-muted-foreground">· {rules.name} · {count} sessions</span></h1>
-        <ul aria-label="Legend" className="ml-auto flex flex-wrap gap-3 text-xs text-muted-foreground">{rules.legend.map(([dot, label]) => <li key={dot} className="flex items-center gap-1.5"><span className="size-1.5 rounded-full" style={{ background: dotColors[dot] }} />{label}</li>)}</ul>
-      </div>
-      <div role="tablist" aria-label="Variations" className="-mx-4 flex gap-1.5 overflow-x-auto px-4 scrollbar-none">{quickViews.map((view, i) => <button key={view.id} type="button" role="tab" aria-selected={view === rules} onClick={() => pick(view.id)}
-        className="shrink-0 rounded-full border border-border px-2.5 py-1 text-xs text-foreground/80 aria-selected:border-foreground aria-selected:bg-foreground aria-selected:text-background"><span className="mr-1 font-mono opacity-60">{(i + 1) % 10}</span>{view.name}</button>)}</div>
-      <QuickLanes lanes={lanes} rank={!!rules.rank} age={!!rules.age} now={now} active={active} click={clicks[rules.action]} open={rules.action === "sweep" ? clicks.open : undefined} />
-      <QuickFooter rules={rules} peek={peek} picked={picked} all={all} clear={clear} />
-    </section>
-  </div>;
-}
-
-// What a click on a tile does, for each action a variation may name.
-function useQuickClick(setPeek: (row: Session) => void, setPicked: Dispatch<SetStateAction<Set<string>>>, setSwept: Dispatch<SetStateAction<Set<string>>>): Record<QuickAction, (row: Session) => void> {
-  const tabs = useContext(TabActions), here = (row: Session) => (row.rocketclaw ?? "") === server();
-  const toggle = (row: Session) => (set: Set<string>) => set.symmetricDifference(new Set([row.id]));
-  return {
-    open: (row) => openRow(tabs, row),
-    peek: setPeek,
-    behind: (row) => { if (here(row)) tabs.behind(rowPath(row)); },
-    preview: (row) => here(row) ? tabs.open(rowPath(row), "", undefined, true) : openRow(tabs, row),
-    space: (row) => here(row) && row.spaceId ? tabs.open(rowPath(row), "", row.spaceId) : openRow(tabs, row),
-    window: (row) => void window.open(serverURL(row.rocketclaw ?? "") + serverPath(rowPath(row), row.rocketclaw ?? ""), "_blank", "noopener"),
-    origin: (row) => (row.kind === "CRON_RUN" || row.kind === "ONE_OFF_CRON_RUN") && row.cronName ? navigate(cronPath(row.cronName)) : openRow(tabs, row),
-    select: (row) => setPicked(toggle(row)),
-    sweep: (row) => { setSwept((set) => new Set(set).add(row.id)); if (here(row) && row.unreadAt) tabs.attend([rowPath(row)], "MARK_READ"); },
-    park: (row) => { if (here(row)) tabs.attend([rowPath(row)], row.parked ? "UNPARK" : "PARK_UNTIL_DONE"); },
-  };
-}
-
-function QuickLanes({ lanes, rank, age, now, active, click, open }: { lanes: ReturnType<typeof quickLanes>; rank: boolean; age: boolean; now: number; active: Set<string>; click: (row: Session) => void; open?: (row: Session) => void }) {
-  if (!lanes.length) return <p className="py-10 text-center text-muted-foreground">Nothing to show in this view.</p>;
-  return <div>
-    {lanes.map((lane) => <section key={lane.label} aria-label={lane.label} className="grid items-start gap-x-3 gap-y-1 py-1 sm:grid-cols-[7rem_1fr]">
-      <h3 className="font-mono sm:pt-3 text-[0.65rem] tracking-wider break-words text-muted-foreground uppercase">{lane.label}</h3>
-      <ul className={cn("grid gap-1.5", rank ? "grid-cols-9" : "grid-cols-[repeat(auto-fill,minmax(2.75rem,1fr))] sm:grid-cols-[repeat(auto-fill,minmax(5.5rem,1fr))]")}>{lane.tiles.map(({ row, dot }) => {
-        const title = cleanText(sessionTitle(row), {});
-        return <li key={rowKey(row.id, row.rocketclaw)}><button type="button" title={`${title} · ${row.agent ?? ""}`} aria-label={`${title}, ${dot}`} aria-pressed={active.has(row.id)} onClick={() => click(row)} onDoubleClick={open && (() => open(row))}
-          className="flex h-16 w-full flex-col justify-between rounded-md border border-border bg-muted/60 p-1.5 text-left sm:p-2 text-xs text-foreground/80 transition-colors hover:border-foreground/40 hover:bg-muted aria-pressed:border-foreground aria-pressed:ring-1 aria-pressed:ring-foreground">
-          <span className="flex items-center justify-between"><span className={cn("size-1.5 rounded-full", dot === "working" && "animate-pulse")} style={{ background: dotColors[dot] }} />{age ? <span className="font-mono text-[0.6rem] text-muted-foreground">{Math.round((now - Date.parse(row.stateSince ?? "")) / 60_000)}m</span> : null}</span>
-          <span className="block w-full truncate">{title}</span>
-        </button></li>;
-      })}</ul>
-    </section>)}
-  </div>;
-}
-
-// The variation's rules in words, or what the tiles picked offer: a peeked session's last message, or the selection's actions.
-function QuickFooter({ rules, peek, picked, all, clear }: { rules: QuickRules; peek?: Session; picked: Set<string>; all: Session[]; clear: () => void }) {
-  const tabs = useContext(TabActions), rows = all.filter((row) => picked.has(row.id) && (row.rocketclaw ?? "") === server());
-  if (peek) return <div className="sticky bottom-0 flex flex-col gap-2 rounded-md border border-border bg-card p-3">
-    <p className="font-medium"><InlineText text={sessionTitle(peek)} /> <span className="text-xs font-normal text-muted-foreground">· {peek.agent} · {dotOf(peek)}</span></p>
-    <p className="line-clamp-3 text-xs text-foreground/80">{cleanText((peek.server ? peek.reply : peek.preview) ?? "", {}) || "No messages yet."}</p>
-    <div className="flex gap-2"><Button size="sm" onClick={() => openRow(tabs, peek)}>Open</Button><Button size="sm" variant="ghost" onClick={clear}>Close</Button></div>
-  </div>;
-  if (picked.size) return <div className="sticky bottom-0 flex flex-wrap items-center gap-2 rounded-md border border-border bg-card p-2 text-xs">{picked.size} selected
-    <Button size="sm" onClick={() => { for (const row of rows) tabs.open(rowPath(row)); }}>Open</Button>
-    <Button size="sm" variant="secondary" onClick={() => { tabs.attend(rows.map(rowPath), "PARK_UNTIL_DONE"); clear(); }}>Park until done</Button>
-    <Button size="sm" variant="secondary" onClick={() => { tabs.attend(rows.map(rowPath), "MARK_READ"); clear(); }}>Mark read</Button>
-    <Button size="sm" variant="ghost" onClick={clear}>Clear</Button>
-  </div>;
-  return <dl className="grid grid-cols-[3.5rem_1fr] gap-x-2 gap-y-0.5 border-t border-border pt-2 text-xs text-muted-foreground">
-    {([["Shows", rules.shows], ["Rows", rules.rows], ["Click", rules.click]] as const).map(([term, text]) => <Fragment key={term}><dt className="text-muted-foreground/70">{term}</dt><dd>{text}</dd></Fragment>)}
-  </dl>;
 }
 
 // The server decides who is marked, on a session's row or a tab location's row: a mark that moves past the one this window
@@ -2218,7 +2099,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = ![route.editor, route.cron, route.timeline, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.pages, route.shortcuts, route.quick, route.closed, route.page, route.remote].some(Boolean);
+  const showChat = ![route.editor, route.cron, route.timeline, route.agents, route.skills, route.skill, route.config, route.search, route.voice, route.pages, route.shortcuts, route.closed, route.page, route.remote].some(Boolean);
   // The screen stays on while the Voice page is open or a call runs.
   const awake = useSyncExternalStore(subscribeVoice, () => route.voice || !["idle", "error"].includes(voiceView().state));
   useEffect(() => awake ? holdWakeLock() : undefined, [awake]);
@@ -2301,7 +2182,7 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
     setConversation({ id: route.id, created: "", key: created ? conversation.key : conversation.key + 1 });
   }
   return (
-          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabSettling /><TabNotifications /><QuickViewShortcut />
+          <DraftScope value={scope}><SessionCommands value={commands}><TabActions value={tabs}><TabSettling /><TabNotifications />
            {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts} onDraftChange={onDraftChange} /> : null}
             {tabs.picking ? <PickTimeDialog picking={tabs.picking} /> : null}
             <CommandPalette key={palette.key} drafts={drafts} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} keyCommands={keyCommands(tabs, sidebar.toggle, sidebar.medium)} opencode={palette.opencode} />
@@ -2331,7 +2212,6 @@ function SessionApp({ scope, scopeError }: { scope?: string; scopeError?: string
               {route.voice ? <VoicePage /> : null}
               <PageIndex show={route.pages} />
               <ShortcutsPage show={route.shortcuts} />
-              <QuickViewPage show={route.quick} />
               <AgentEditorPage show={route.editor} />
               <ClosedTabsPage show={route.closed} />
               <HostedPage key={route.page} page={route.page} />
@@ -2568,10 +2448,9 @@ function paletteRows(
     ...actions,
     { key: "new", label: "Sessions: New", run: newChat },
     { key: "search", label: "Sessions: Search", run: () => tabs.open(freshSearch()) },
-    { key: "dashboard", label: "New dashboard", run: () => tabs.addSearch(newDashboard, true) },
     { key: "run-cron", label: "Cron: Run", keep: true, run: () => openCron("cron") },
     { key: "cron-timeline", label: "Cron: Timeline", keep: true, run: () => openCron("timeline") },
-    ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["closed", "Tabs: Recently closed"], ["shortcuts", "Help: Keyboard Shortcuts"], ["quick-view", "Quick view"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
+    ...([["voice", "Voice"], ["cron", "Cron: Dashboard"], ["agents", "List Agents"], ["skills", "List Skills"], ["config", "Settings"], ["pages", "Pages: Index"], ["closed", "Tabs: Recently closed"], ["shortcuts", "Help: Keyboard Shortcuts"]] as const).map(([key, label]) => ({ key, label, run: () => navigate(`/${key}`) })),
     // VS Code: src/vs/platform/quickinput/browser/commandsQuickAccess.ts, _getPicks.
   ].filter((item) => tier(item.label) < 3).sort((a, b) => {
     // Better matches come first. Within a tier, recently run commands lead, except Timeline levels, which always keep the Config slider's order.
@@ -2898,7 +2777,6 @@ const shortcuts = [
   { id: "tab-reopen", label: "Reopen the last closed tab", keys: ["mod", "Alt", "T"] },
   { id: "attention-next", label: "Next session needing you", where: "Waiting tabs: sessions that ask a question, then the rest, longest waiting first", keys: ["mod", "Shift", "A"] },
   { id: "tab-park-done", label: "Park the tab until it is done", where: "A session's tab", keys: ["mod", "Shift", "S"] },
-  { id: "quick-view", label: "Open Quick view", where: "Every session as a board of tiles; keys 1 to 0 switch its variation", keys: ["mod", "Shift", "D"] },
   { id: "tab-sidebar", label: "Show or hide the tab sidebar", where: "Tabs in the left sidebar, on a wide window", keys: ["mod", "B"] },
   { id: "right-pane", label: "Show or hide the right pane", where: "Opens a session's pull requests, or closes the open pane", keys: ["mod", "Shift", "B"] },
   { id: "page-close", label: "Close the tab", where: "Pages other than sessions and Search pages", keys: ["Escape"] },
@@ -3250,7 +3128,7 @@ type SavedSearch = SearchPageState["searches"][number];
 type LegacySearch = SavedSearch & { agentFilter?: string; roomFilter?: string };
 
 // mine, made from base, made again onto theirs: their searches with mine's changes, those mine added, and none mine
-// closed; mine's name, board style, and shown search when it changed them.
+// closed; mine's name and shown search when it changed them.
 function rebase(base: SearchPageState | undefined, mine: SearchPageState, theirs: SearchPageState): SearchPageState {
   const find = (page: SearchPageState | undefined, id: string) => page?.searches.find((item) => item.id === id);
   const searches = [
@@ -3261,10 +3139,10 @@ function rebase(base: SearchPageState | undefined, mine: SearchPageState, theirs
     ...mine.searches.filter((item) => !find(theirs, item.id) && !find(base, item.id)),
   ];
   const active = mine.active !== base?.active ? mine.active : theirs.active;
-  return { name: mine.name !== base?.name ? mine.name : theirs.name, board: mine.board !== base?.board ? mine.board : theirs.board, searches, active: searches.some((item) => item.id === active) ? active : searches[0]?.id ?? "" };
+  return { name: mine.name !== base?.name ? mine.name : theirs.name, searches, active: searches.some((item) => item.id === active) ? active : searches[0]?.id ?? "" };
 }
 
-const comparablePage = (searches: SavedSearch[] = [], active = "") => JSON.stringify([searches.map(({ id, name, query, notify }) => [id, name ?? "", query, !!notify]), active]);
+const comparablePage = (searches: SavedSearch[] = [], active = "") => JSON.stringify([searches.map(({ id, name, query }) => [id, name ?? "", query]), active]);
 
 // Legacy agent and room filters fold into the query once, in one canonical form.
 function foldFilters(query: string, agent?: string | null, room?: string | null) {
@@ -3428,11 +3306,8 @@ function SearchTabs({ path, owner, inShared, page, link, consumeLink }: { path: 
         update({ searches: [...saved.searches, { id, query: "" }], active: id });
         requestAnimationFrame(() => input.current?.focus());
       }}><Plus className="size-4" /></Button>
-      <Select items={boardChoices} value={page?.board ?? ""} onValueChange={(board) => tabs.editSearch(path, { board: board as string }, inShared)}><SelectTrigger aria-label="Board style" className="shrink-0"><SelectValue /></SelectTrigger><SelectContent><SelectGroup>{boardChoices.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectGroup></SelectContent></Select>
-      {page?.board ? <Button variant={tab.notify ? "default" : "outline"} size="icon" aria-label="Notify" title="Notify when a session enters this lane" aria-pressed={!!tab.notify} onClick={() => edit(() => ({ notify: !tab.notify }))}><BellRing className="size-4" /></Button> : null}
     </div>
-    <SearchResults key={tab.id} path={path} held={held.some((item) => item.id === tab.id && item.query === tab.query)} tab={tab} rows={sidebar.all} edit={edit} input={input} board={page?.board} />
-    {page?.board ? <Board style={page.board} /> : null}
+    <SearchResults key={tab.id} path={path} held={held.some((item) => item.id === tab.id && item.query === tab.query)} tab={tab} rows={sidebar.all} edit={edit} input={input} />
   </section>;
 }
 
@@ -3482,11 +3357,11 @@ function SearchStatus({ search, empty = false, incomplete = false }: { search: {
 
 const searchPage = 200;
 
-function SearchResults({ path, held, tab, rows, edit, input, board }: { path: string; held: boolean; tab: SavedSearch; rows: Session[]; edit: (change: (item: SavedSearch) => Partial<SavedSearch>, typed?: boolean) => void; input: RefObject<HTMLInputElement | null>; board?: string }) {
+function SearchResults({ path, held, tab, rows, edit, input }: { path: string; held: boolean; tab: SavedSearch; rows: Session[]; edit: (change: (item: SavedSearch) => Partial<SavedSearch>, typed?: boolean) => void; input: RefObject<HTMLInputElement | null> }) {
   const sidebar = useContext(Sidebar);
-  // Opening a saved search or a link sends its whole query. A Dashboard shows no results, so its search ends with the request.
+  // Opening a saved search or a link sends its whole query.
   const [entered, setEntered] = useState(true);
-  const search = useSessionSearch(tab.query, "messages", entered, board ? undefined : { tab: path, searchId: tab.id, held });
+  const search = useSessionSearch(tab.query, "messages", entered, { tab: path, searchId: tab.id, held });
   const { response } = search.result;
   // Rows are drawn a page at a time as the end nears the screen; a new response starts again at one page.
   const [budget, setBudget] = useState({ response, rows: searchPage });
@@ -3507,57 +3382,14 @@ function SearchResults({ path, held, tab, rows, edit, input, board }: { path: st
     <div id="search-tab-panel" role="tabpanel" aria-label="Search" className="min-w-0">
       <SessionSearch rows={rows} query={tab.query} setQuery={(update) => { setEntered(false); edit((item) => ({ query: update(item.query) }), true); }} search={search} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { setEntered(true); void search.run(tab.query.trimEnd()); } }} />
     </div>
-    {board ? null : <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
+    <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
       <SearchStatus search={search} empty={!!search.sent && !search.pending && !search.error && search.found.length === 0} incomplete={!searchIsAuthoritative(sidebar) || search.missing} />
       {search.sent ? <ul data-pending={search.pending} className="flex min-w-0 flex-col gap-4 data-[pending=true]:opacity-50">
         {groups}
         {more ? <li aria-hidden ref={loadMore((node) => node.closest('[aria-label="Search results"]'), () => setBudget((last) => ({ response, rows: (last.response === response ? last.rows : searchPage) + searchPage })))} /> : null}
       </ul> : <p className="text-muted-foreground">Type to search messages and conversations.</p>}
-    </div>}
+    </div>
   </>;
-}
-
-// Board styles by id: a label, then cards in order of arrival or of the start of their state, oldest first (1) or newest first (-1).
-const boardStyles: Record<string, [string, "arrivedAt" | "stateSince", number]> = { strips: ["Strip Bay", "arrivedAt", -1], dispatch: ["Dispatch Console", "stateSince", 1], triage: ["Triage Census", "stateSince", 1], kanban: ["Kanban", "arrivedAt", 1], radar: ["Radar Scope", "stateSince", 1] };
-const boardChoices = [{ value: "", label: "List" }, ...Object.entries(boardStyles).map(([value, [label]]) => ({ value, label }))], workStates = { IDLE: "Idle", NEEDS_YOU: "Needs you", RUNNING: "Running", QUEUED: "Queued" };
-
-let boardSeen = new Map<string, { sessions: Session[]; total: number; fresh: Set<Session>; layout: string }>();
-function useBoard() {
-  const { rows } = useContext(Sidebar), { state: { tabs, space }, shared } = useContext(TabActions);
-  const boards = [...new Map([...tabs, ...shared].flatMap((tab) => tab.space === space && tab.search?.board ? [[tab.path, tab.search.searches.map((lane, i) => ({ ...lane, name: lane.name || lane.query || `Search ${i + 1}`, dashboard: searchTitle(tab.search), key: `${space} ${tab.path} ${lane.id}\n${lane.query}` }))] as const] : []))];
-  const board = useQuery({ queryKey: ["board", boards.map(([, lanes]) => lanes.map((lane) => lane.key))], gcTime: 0, refetchOnWindowFocus: false, retry: false, placeholderData: keepPreviousData, queryFn: async ({ signal }) => {
-    const { dashboards } = boards.length ? await rpc<{ dashboards: { lanes: { sessions?: Session[]; total?: number }[] }[] }>("Board", { spaceId: space, dashboards: boards.map(([, lanes]) => ({ lanes: lanes.map((lane) => lane.query) })) }, signal) : { dashboards: [] };
-    const last = boardSeen, arrived = (row?: Session) => Date.parse(row?.arrivedAt ?? "");
-    // A lane lists its newest 200 arrivals: when it held more, one sliding in from beyond them as another leaves is not new.
-    // A session sits only in the first lane it matches, so when a Dashboard's lanes change, nothing in it is new once.
-    return boardSeen = new Map(boards.flatMap(([, own], d) => own.map(({ key }, i) => {
-      const { sessions = [], total = 0 } = dashboards[d].lanes[i], was = last.get(key), held = new Set(was?.sessions.map((row) => row.id)), layout = own.map((lane) => lane.key).join("\0");
-      return [key, { sessions, total, layout, fresh: new Set(sessions.filter((row) => was?.layout === layout && !held.has(row.id) && (was.total <= was.sessions.length || arrived(row) > arrived(was.sessions.at(-1))))) }];
-    })));
-  } });
-  const seen = useRef({ rows, again: false });
-  const refresh = useEffectEvent(() => {
-    const old = new Set(boards.length ? seen.current.rows : []), again = boards.length > 0 && (seen.current.again || rows.some((row) => !old.has(row) && (!row.spaceId || row.spaceId === space)));
-    seen.current = { rows, again: again && board.isFetching };
-    if (again && !board.isFetching) void board.refetch({ cancelRefetch: false });
-  });
-  useEffect(() => refresh(), [rows, board.isFetching]);
-  return { board, boards };
-}
-
-function Board({ style }: { style: string }) {
-  const { board, boards } = useBoard(), { data } = board, path = usePathname();
-  const [, field, order] = boardStyles[style], since = (at?: string) => Math.floor((Date.now() - Date.parse(at!)) / 60_000), lanes = boards.find(([at]) => at === path)?.[1] ?? [];
-  return <div aria-label="Board" className="min-h-0 flex-1 overflow-auto text-sm">
-    <SearchStatus search={{ pending: board.isPending, error: board.error?.message, sent: "", run: () => board.refetch() }} />
-    {data ? <div data-board={style} style={{ "--lanes": lanes.length } as CSSProperties}>{lanes.map((lane, i) => {
-      const { sessions = [], total = 0, fresh = new Set<Session>() } = data.get(lane.key) ?? {};
-      return <section key={lane.id} aria-label={lane.name} style={{ "--lane": i } as CSSProperties}><h3>{lane.name} <span>{total}</span></h3><ol>
-        {sessions.toSorted((a, b) => order * (Date.parse(a[field]!) - Date.parse(b[field]!))).map((row, j) => <li key={row.id} data-state={row.workState ?? "IDLE"} data-new={fresh.has(row)} data-external={!!row.external} style={{ "--age": since(row.stateSince), "--i": j } as CSSProperties}>
-          <Link href={rowPath(row)}><b><InlineText text={sessionTitle(row)} /></b> <span>{row.agent}</span> <em>{workStates[row.workState ?? "IDLE"]}</em> <time dateTime={row.arrivedAt}>{new Date(row.arrivedAt!).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time> <span data-age>{since(row.stateSince)}</span></Link></li>)}
-      </ol></section>;
-    })}</div> : null}
-  </div>;
 }
 
 // Values offered for the operator word being typed; a completed value commits on space or Enter instead of offering itself again.

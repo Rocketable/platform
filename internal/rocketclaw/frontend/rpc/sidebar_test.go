@@ -31,35 +31,31 @@ import (
 func TestSidebarSessionTimestamps(t *testing.T) {
 	at := time.Date(2024, time.January, 2, 3, 4, 5, 123456789, time.UTC)
 	for _, tc := range []struct {
-		name                    string
-		state, arrived, updated time.Time
-		wantState               string
-		wantArrived             string
-		wantUpdated             string
+		name                   string
+		state, updated         time.Time
+		wantState, wantUpdated string
 	}{
-		{"identical", at, at, at, "2024-01-02T03:04:05.123456789Z", "2024-01-02T03:04:05.123456789Z", "2024-01-02T03:04:05.123456789Z"},
-		{"different instants", at, at.Add(time.Second), at.Add(2 * time.Second), "2024-01-02T03:04:05.123456789Z", "2024-01-02T03:04:06.123456789Z", "2024-01-02T03:04:07.123456789Z"},
-		{"same instant in another zone", at, at.In(time.FixedZone("example", 3600)), at.In(time.FixedZone("example", -3600)), "2024-01-02T03:04:05.123456789Z", "2024-01-02T04:04:05.123456789+01:00", "2024-01-02T02:04:05.123456789-01:00"},
-		{"zero arrival", at, time.Time{}, at, "2024-01-02T03:04:05.123456789Z", "0001-01-01T00:00:00Z", "2024-01-02T03:04:05.123456789Z"},
-		{"zero state", time.Time{}, at, at, "", "", "2024-01-02T03:04:05.123456789Z"},
-		{"zero updated", at, at, time.Time{}, "2024-01-02T03:04:05.123456789Z", "2024-01-02T03:04:05.123456789Z", ""},
+		{"identical", at, at, "2024-01-02T03:04:05.123456789Z", "2024-01-02T03:04:05.123456789Z"},
+		{"different instants", at, at.Add(2 * time.Second), "2024-01-02T03:04:05.123456789Z", "2024-01-02T03:04:07.123456789Z"},
+		{"same instant in another zone", at, at.In(time.FixedZone("example", -3600)), "2024-01-02T03:04:05.123456789Z", "2024-01-02T02:04:05.123456789-01:00"},
+		{"zero state", time.Time{}, at, "", "2024-01-02T03:04:05.123456789Z"},
+		{"zero updated", at, time.Time{}, "2024-01-02T03:04:05.123456789Z", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := sidebarSession(&backend.SidebarChat{Session: backend.SidebarSession{StateSince: tc.state, ArrivedAt: tc.arrived, Summary: &protocol.SessionSummary{LastUpdated: tc.updated}}})
+			got := sidebarSession(&backend.SidebarChat{Session: backend.SidebarSession{StateSince: tc.state, Summary: &protocol.SessionSummary{LastUpdated: tc.updated}}})
 			require.Equal(t, tc.wantState, got.StateSince)
-			require.Equal(t, tc.wantArrived, got.ArrivedAt)
 			require.Equal(t, tc.wantUpdated, got.UpdatedAt)
 		})
 	}
 
-	chat := backend.SidebarChat{Session: backend.SidebarSession{StateSince: at, ArrivedAt: at, Summary: &protocol.SessionSummary{LastUpdated: at}}}
+	chat := backend.SidebarChat{Session: backend.SidebarSession{StateSince: at, Summary: &protocol.SessionSummary{LastUpdated: at}}}
 
 	var got *Session
 
 	allocs := testing.AllocsPerRun(1, func() { got = sidebarSession(&chat) })
 
-	require.Equal(t, "2024-01-02T03:04:05.123456789Z", got.ArrivedAt)
-	require.Equal(t, got.ArrivedAt, got.UpdatedAt)
+	require.Equal(t, "2024-01-02T03:04:05.123456789Z", got.UpdatedAt)
+	require.Equal(t, got.StateSince, got.UpdatedAt)
 	require.LessOrEqual(t, allocs, float64(2), "identical timestamps need only one formatted string and the response")
 }
 
@@ -250,27 +246,6 @@ func TestSidebarHTTPStreamsBeforeGoTailAndCancels(t *testing.T) {
 	}
 }
 
-func TestListSessionsExternalArrival(t *testing.T) {
-	t.Parallel()
-
-	server, ctx := sidebarChoicesFixture(t, 0)
-	require.NoError(t, server.sessions.RegisterExternalMCPConversation("ticket", "choice-00", &backend.ExternalMCPSessionState{Agent: "choice-00", PrivateConversationID: "private", ManagedConversationID: "mcp"}))
-	_, err := server.sessions.AppendEntryID(ctx, "mcp", &harness.SessionEntry{Timestamp: time.Unix(1, 0)})
-	require.NoError(t, err)
-
-	var sessions []*Session
-
-	require.NoError(t, server.listSessions(&ListSessionsRequest{}, &mockServerStream{ContextFunc: func() context.Context { return ctx }, SendMsgFunc: func(message any) error {
-		sessions = append(sessions, message.(*ListSessionsResponse).Sessions...)
-		return nil
-	}}))
-	require.Len(t, sessions, 1)
-	require.True(t, sessions[0].External)
-	require.Equal(t, WorkState_IDLE, sessions[0].WorkState)
-	require.Equal(t, "1970-01-01T00:00:01Z", sessions[0].ArrivedAt)
-	require.Equal(t, "1970-01-01T00:00:01Z", sessions[0].StateSince)
-}
-
 func TestListSessionsSendsChangesSince(t *testing.T) {
 	t.Parallel()
 
@@ -322,7 +297,6 @@ func TestListSessionsSendsChangesSince(t *testing.T) {
 
 	sent, queued := list(ctx, unchanged.Version)
 	require.Equal(t, []string{"chat-00"}, sent, "queueing work into an idle chat changes its work state")
-	require.Equal(t, WorkState_QUEUED, rows["chat-00"].WorkState)
 	require.Equal(t, queuedAt.UTC().Format(time.RFC3339Nano), rows["chat-00"].StateSince, "a queued chat's state began when its turn was queued")
 
 	_, err := server.updateSession(ctx, &UpdateSessionRequest{Id: "chat-01", Name: new("Renamed")})

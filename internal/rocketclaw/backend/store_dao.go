@@ -495,16 +495,14 @@ type Tab struct {
 
 type SearchPage struct {
 	Name     string        `json:"name,omitempty"`
-	Board    string        `json:"board,omitempty"`
 	Active   string        `json:"active,omitempty"`
 	Searches []SavedSearch `json:"searches,omitempty"`
 }
 
 type SavedSearch struct {
-	ID     string `json:"id,omitempty"`
-	Name   string `json:"name,omitempty"`
-	Query  string `json:"query,omitempty"`
-	Notify bool   `json:"notify,omitempty"`
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Query string `json:"query,omitempty"`
 }
 
 func (p *SearchPage) Scan(src any) error {
@@ -517,20 +515,20 @@ func (p *SearchPage) Scan(src any) error {
 
 const searchPageJoinSQL = `LEFT JOIN web_search_pages p ON p.id = t.search_page LEFT JOIN web_searches s ON s.page = p.id`
 
-const searchPageSQL = `CASE WHEN p.id IS NOT NULL THEN jsonb_strip_nulls(jsonb_build_object('name', NULLIF(p.name, ''), 'board', NULLIF(p.board, ''), 'active', NULLIF(p.active, ''),
-    'searches', jsonb_agg(jsonb_build_object('id', NULLIF(s.id, ''), 'name', NULLIF(s.name, ''), 'query', NULLIF(s.query, ''), 'notify', NULLIF(s.notify, FALSE)) ORDER BY s.position) FILTER (WHERE s.page IS NOT NULL))) END`
+const searchPageSQL = `CASE WHEN p.id IS NOT NULL THEN jsonb_strip_nulls(jsonb_build_object('name', NULLIF(p.name, ''), 'active', NULLIF(p.active, ''),
+    'searches', jsonb_agg(jsonb_build_object('id', NULLIF(s.id, ''), 'name', NULLIF(s.name, ''), 'query', NULLIF(s.query, '')) ORDER BY s.position) FILTER (WHERE s.page IS NOT NULL))) END`
 
 const searchPagesSQL = `pages AS (
-    INSERT INTO web_search_pages (id, name, board, active)
-    SELECT search_page, COALESCE(search->>'name', ''), COALESCE(search->>'board', ''), COALESCE(search->>'active', '') FROM written
-    ON CONFLICT (id) DO UPDATE SET name = excluded.name, board = excluded.board, active = excluded.active
+    INSERT INTO web_search_pages (id, name, active)
+    SELECT search_page, COALESCE(search->>'name', ''), COALESCE(search->>'active', '') FROM written
+    ON CONFLICT (id) DO UPDATE SET name = excluded.name, active = excluded.active
 ), dropped AS (
     DELETE FROM web_searches s USING written w WHERE s.page = w.search_page AND s.position > jsonb_array_length(COALESCE(w.search->'searches', '[]'))
 ), searches AS (
-    INSERT INTO web_searches (page, position, id, name, query, notify)
-    SELECT w.search_page, s.n, COALESCE(s.search->>'id', ''), COALESCE(s.search->>'name', ''), COALESCE(s.search->>'query', ''), COALESCE((s.search->>'notify')::boolean, FALSE)
+    INSERT INTO web_searches (page, position, id, name, query)
+    SELECT w.search_page, s.n, COALESCE(s.search->>'id', ''), COALESCE(s.search->>'name', ''), COALESCE(s.search->>'query', '')
     FROM written w CROSS JOIN jsonb_array_elements(w.search->'searches') WITH ORDINALITY AS s(search, n)
-    ON CONFLICT (page, position) DO UPDATE SET id = excluded.id, name = excluded.name, query = excluded.query, notify = excluded.notify
+    ON CONFLICT (page, position) DO UPDATE SET id = excluded.id, name = excluded.name, query = excluded.query
 )`
 
 type TabGroup struct {
@@ -692,10 +690,10 @@ WHERE t.username = $1 GROUP BY t.username, t.path, p.id`, "tab search pages", fu
 ), copied AS (
     SELECT c.source, c.search_page FROM closed JOIN closing c USING (search_page)
 ), pages AS (
-    INSERT INTO web_search_pages (id, name, board, active) SELECT c.search_page, p.name, p.board, p.active FROM copied c JOIN web_search_pages p ON p.id = c.source
+    INSERT INTO web_search_pages (id, name, active) SELECT c.search_page, p.name, p.active FROM copied c JOIN web_search_pages p ON p.id = c.source
 ), searches AS (
-    INSERT INTO web_searches (page, position, id, name, query, notify)
-    SELECT c.search_page, s.position, s.id, s.name, s.query, s.notify FROM copied c JOIN web_searches s ON s.page = c.source
+    INSERT INTO web_searches (page, position, id, name, query)
+    SELECT c.search_page, s.position, s.id, s.name, s.query FROM copied c JOIN web_searches s ON s.page = c.source
 ), touched AS (
     SELECT a.path, c.path IS NOT NULL AS closing FROM web_tab_attention a
     LEFT JOIN closing c USING (path) LEFT JOIN opening n USING (path)

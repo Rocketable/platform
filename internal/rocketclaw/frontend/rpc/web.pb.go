@@ -21,59 +21,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// The first of these a session has: asking, running work, queued turns.
-type WorkState int32
-
-const (
-	WorkState_IDLE      WorkState = 0
-	WorkState_NEEDS_YOU WorkState = 1
-	WorkState_RUNNING   WorkState = 2
-	WorkState_QUEUED    WorkState = 3
-)
-
-// Enum value maps for WorkState.
-var (
-	WorkState_name = map[int32]string{
-		0: "IDLE",
-		1: "NEEDS_YOU",
-		2: "RUNNING",
-		3: "QUEUED",
-	}
-	WorkState_value = map[string]int32{
-		"IDLE":      0,
-		"NEEDS_YOU": 1,
-		"RUNNING":   2,
-		"QUEUED":    3,
-	}
-)
-
-func (x WorkState) Enum() *WorkState {
-	p := new(WorkState)
-	*p = x
-	return p
-}
-
-func (x WorkState) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (WorkState) Descriptor() protoreflect.EnumDescriptor {
-	return file_web_proto_enumTypes[0].Descriptor()
-}
-
-func (WorkState) Type() protoreflect.EnumType {
-	return &file_web_proto_enumTypes[0]
-}
-
-func (x WorkState) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use WorkState.Descriptor instead.
-func (WorkState) EnumDescriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{0}
-}
-
 // What a conversation is, as RocketClaw records it when it creates the conversation.
 type ConversationKind int32
 
@@ -126,11 +73,11 @@ func (x ConversationKind) String() string {
 }
 
 func (ConversationKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_web_proto_enumTypes[1].Descriptor()
+	return file_web_proto_enumTypes[0].Descriptor()
 }
 
 func (ConversationKind) Type() protoreflect.EnumType {
-	return &file_web_proto_enumTypes[1]
+	return &file_web_proto_enumTypes[0]
 }
 
 func (x ConversationKind) Number() protoreflect.EnumNumber {
@@ -139,7 +86,7 @@ func (x ConversationKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ConversationKind.Descriptor instead.
 func (ConversationKind) EnumDescriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{1}
+	return file_web_proto_rawDescGZIP(), []int{0}
 }
 
 type PromptDelivery int32
@@ -175,11 +122,11 @@ func (x PromptDelivery) String() string {
 }
 
 func (PromptDelivery) Descriptor() protoreflect.EnumDescriptor {
-	return file_web_proto_enumTypes[2].Descriptor()
+	return file_web_proto_enumTypes[1].Descriptor()
 }
 
 func (PromptDelivery) Type() protoreflect.EnumType {
-	return &file_web_proto_enumTypes[2]
+	return &file_web_proto_enumTypes[1]
 }
 
 func (x PromptDelivery) Number() protoreflect.EnumNumber {
@@ -188,7 +135,7 @@ func (x PromptDelivery) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PromptDelivery.Descriptor instead.
 func (PromptDelivery) EnumDescriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{2}
+	return file_web_proto_rawDescGZIP(), []int{1}
 }
 
 type VoiceSettingsAction int32
@@ -222,11 +169,11 @@ func (x VoiceSettingsAction) String() string {
 }
 
 func (VoiceSettingsAction) Descriptor() protoreflect.EnumDescriptor {
-	return file_web_proto_enumTypes[3].Descriptor()
+	return file_web_proto_enumTypes[2].Descriptor()
 }
 
 func (VoiceSettingsAction) Type() protoreflect.EnumType {
-	return &file_web_proto_enumTypes[3]
+	return &file_web_proto_enumTypes[2]
 }
 
 func (x VoiceSettingsAction) Number() protoreflect.EnumNumber {
@@ -235,7 +182,7 @@ func (x VoiceSettingsAction) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use VoiceSettingsAction.Descriptor instead.
 func (VoiceSettingsAction) EnumDescriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{3}
+	return file_web_proto_rawDescGZIP(), []int{2}
 }
 
 // AttentionAction is what a person does to the attention of their tabs.
@@ -293,11 +240,11 @@ func (x AttentionAction) String() string {
 }
 
 func (AttentionAction) Descriptor() protoreflect.EnumDescriptor {
-	return file_web_proto_enumTypes[4].Descriptor()
+	return file_web_proto_enumTypes[3].Descriptor()
 }
 
 func (AttentionAction) Type() protoreflect.EnumType {
-	return &file_web_proto_enumTypes[4]
+	return &file_web_proto_enumTypes[3]
 }
 
 func (x AttentionAction) Number() protoreflect.EnumNumber {
@@ -306,7 +253,7 @@ func (x AttentionAction) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AttentionAction.Descriptor instead.
 func (AttentionAction) EnumDescriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{4}
+	return file_web_proto_rawDescGZIP(), []int{3}
 }
 
 type ListSessionsRequest struct {
@@ -421,13 +368,8 @@ type Session struct {
 	// The session waits on a person: a running turn's unanswered question, or a remote OpenCode
 	// session's pending form or permission request, its own or a child session's.
 	Asking bool `protobuf:"varint,28,opt,name=asking,proto3" json:"asking,omitempty"`
-	// What the session's work waits on, its runs reporting to it included, and since when, RFC3339Nano.
-	WorkState  WorkState `protobuf:"varint,29,opt,name=work_state,json=workState,proto3,enum=rpc.WorkState" json:"work_state,omitempty"`
-	StateSince string    `protobuf:"bytes,30,opt,name=state_since,json=stateSince,proto3" json:"state_since,omitempty"`
-	// The session is bound to External MCP, or a run reporting to it is.
-	External bool `protobuf:"varint,31,opt,name=external,proto3" json:"external,omitempty"`
-	// When its newest running or waiting turn was created, else its last update, RFC3339Nano.
-	ArrivedAt string `protobuf:"bytes,32,opt,name=arrived_at,json=arrivedAt,proto3" json:"arrived_at,omitempty"`
+	// When the session's work, its runs reporting to it included, entered its current state, RFC3339Nano.
+	StateSince string `protobuf:"bytes,30,opt,name=state_since,json=stateSince,proto3" json:"state_since,omitempty"`
 	// The caller's mark raises no notification: they set it themselves, or it was written while the tab was parked
 	// or was there when they parked it.
 	MarkedUnread bool `protobuf:"varint,33,opt,name=marked_unread,json=markedUnread,proto3" json:"marked_unread,omitempty"`
@@ -647,30 +589,9 @@ func (x *Session) GetAsking() bool {
 	return false
 }
 
-func (x *Session) GetWorkState() WorkState {
-	if x != nil {
-		return x.WorkState
-	}
-	return WorkState_IDLE
-}
-
 func (x *Session) GetStateSince() string {
 	if x != nil {
 		return x.StateSince
-	}
-	return ""
-}
-
-func (x *Session) GetExternal() bool {
-	if x != nil {
-		return x.External
-	}
-	return false
-}
-
-func (x *Session) GetArrivedAt() string {
-	if x != nil {
-		return x.ArrivedAt
 	}
 	return ""
 }
@@ -2679,247 +2600,6 @@ func (x *SearchSessionsResponse) GetPrincipals() []string {
 	return nil
 }
 
-// BoardRequest asks for the lanes of the Dashboards open in a space; each lane is a session search
-// query whose free text matches session fields only.
-type BoardRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SpaceId       string                 `protobuf:"bytes,1,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
-	Dashboards    []*BoardDashboard      `protobuf:"bytes,2,rep,name=dashboards,proto3" json:"dashboards,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BoardRequest) Reset() {
-	*x = BoardRequest{}
-	mi := &file_web_proto_msgTypes[28]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BoardRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BoardRequest) ProtoMessage() {}
-
-func (x *BoardRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[28]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BoardRequest.ProtoReflect.Descriptor instead.
-func (*BoardRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{28}
-}
-
-func (x *BoardRequest) GetSpaceId() string {
-	if x != nil {
-		return x.SpaceId
-	}
-	return ""
-}
-
-func (x *BoardRequest) GetDashboards() []*BoardDashboard {
-	if x != nil {
-		return x.Dashboards
-	}
-	return nil
-}
-
-type BoardDashboard struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Lanes         []string               `protobuf:"bytes,1,rep,name=lanes,proto3" json:"lanes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BoardDashboard) Reset() {
-	*x = BoardDashboard{}
-	mi := &file_web_proto_msgTypes[29]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BoardDashboard) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BoardDashboard) ProtoMessage() {}
-
-func (x *BoardDashboard) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[29]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BoardDashboard.ProtoReflect.Descriptor instead.
-func (*BoardDashboard) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{29}
-}
-
-func (x *BoardDashboard) GetLanes() []string {
-	if x != nil {
-		return x.Lanes
-	}
-	return nil
-}
-
-// BoardResponse holds the requested Dashboards' lanes in request order. A session is in its
-// Dashboard's first lane it matches; a lane lists at most 200 of its sessions, newest arrival
-// first, as ListSessions would list them, and total counts them all.
-type BoardResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Dashboards    []*BoardLanes          `protobuf:"bytes,1,rep,name=dashboards,proto3" json:"dashboards,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BoardResponse) Reset() {
-	*x = BoardResponse{}
-	mi := &file_web_proto_msgTypes[30]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BoardResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BoardResponse) ProtoMessage() {}
-
-func (x *BoardResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[30]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BoardResponse.ProtoReflect.Descriptor instead.
-func (*BoardResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{30}
-}
-
-func (x *BoardResponse) GetDashboards() []*BoardLanes {
-	if x != nil {
-		return x.Dashboards
-	}
-	return nil
-}
-
-type BoardLanes struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Lanes         []*BoardLane           `protobuf:"bytes,1,rep,name=lanes,proto3" json:"lanes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BoardLanes) Reset() {
-	*x = BoardLanes{}
-	mi := &file_web_proto_msgTypes[31]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BoardLanes) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BoardLanes) ProtoMessage() {}
-
-func (x *BoardLanes) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[31]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BoardLanes.ProtoReflect.Descriptor instead.
-func (*BoardLanes) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{31}
-}
-
-func (x *BoardLanes) GetLanes() []*BoardLane {
-	if x != nil {
-		return x.Lanes
-	}
-	return nil
-}
-
-type BoardLane struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Sessions      []*Session             `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
-	Total         int32                  `protobuf:"varint,2,opt,name=total,proto3" json:"total,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *BoardLane) Reset() {
-	*x = BoardLane{}
-	mi := &file_web_proto_msgTypes[32]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *BoardLane) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*BoardLane) ProtoMessage() {}
-
-func (x *BoardLane) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[32]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use BoardLane.ProtoReflect.Descriptor instead.
-func (*BoardLane) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{32}
-}
-
-func (x *BoardLane) GetSessions() []*Session {
-	if x != nil {
-		return x.Sessions
-	}
-	return nil
-}
-
-func (x *BoardLane) GetTotal() int32 {
-	if x != nil {
-		return x.Total
-	}
-	return 0
-}
-
 // SlackNamesRequest asks for display names of Slack IDs.
 type SlackNamesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2930,7 +2610,7 @@ type SlackNamesRequest struct {
 
 func (x *SlackNamesRequest) Reset() {
 	*x = SlackNamesRequest{}
-	mi := &file_web_proto_msgTypes[33]
+	mi := &file_web_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2942,7 +2622,7 @@ func (x *SlackNamesRequest) String() string {
 func (*SlackNamesRequest) ProtoMessage() {}
 
 func (x *SlackNamesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[33]
+	mi := &file_web_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2955,7 +2635,7 @@ func (x *SlackNamesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SlackNamesRequest.ProtoReflect.Descriptor instead.
 func (*SlackNamesRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{33}
+	return file_web_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SlackNamesRequest) GetIds() []string {
@@ -2976,7 +2656,7 @@ type SlackNamesResponse struct {
 
 func (x *SlackNamesResponse) Reset() {
 	*x = SlackNamesResponse{}
-	mi := &file_web_proto_msgTypes[34]
+	mi := &file_web_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2988,7 +2668,7 @@ func (x *SlackNamesResponse) String() string {
 func (*SlackNamesResponse) ProtoMessage() {}
 
 func (x *SlackNamesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[34]
+	mi := &file_web_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3001,7 +2681,7 @@ func (x *SlackNamesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SlackNamesResponse.ProtoReflect.Descriptor instead.
 func (*SlackNamesResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{34}
+	return file_web_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *SlackNamesResponse) GetNames() map[string]string {
@@ -3020,7 +2700,7 @@ type HandoffRequest struct {
 
 func (x *HandoffRequest) Reset() {
 	*x = HandoffRequest{}
-	mi := &file_web_proto_msgTypes[35]
+	mi := &file_web_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3032,7 +2712,7 @@ func (x *HandoffRequest) String() string {
 func (*HandoffRequest) ProtoMessage() {}
 
 func (x *HandoffRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[35]
+	mi := &file_web_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3045,7 +2725,7 @@ func (x *HandoffRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HandoffRequest.ProtoReflect.Descriptor instead.
 func (*HandoffRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{35}
+	return file_web_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *HandoffRequest) GetId() string {
@@ -3064,7 +2744,7 @@ type HandoffResponse struct {
 
 func (x *HandoffResponse) Reset() {
 	*x = HandoffResponse{}
-	mi := &file_web_proto_msgTypes[36]
+	mi := &file_web_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3076,7 +2756,7 @@ func (x *HandoffResponse) String() string {
 func (*HandoffResponse) ProtoMessage() {}
 
 func (x *HandoffResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[36]
+	mi := &file_web_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3089,7 +2769,7 @@ func (x *HandoffResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HandoffResponse.ProtoReflect.Descriptor instead.
 func (*HandoffResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{36}
+	return file_web_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *HandoffResponse) GetDocument() string {
@@ -3108,7 +2788,7 @@ type JoinRequest struct {
 
 func (x *JoinRequest) Reset() {
 	*x = JoinRequest{}
-	mi := &file_web_proto_msgTypes[37]
+	mi := &file_web_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3120,7 +2800,7 @@ func (x *JoinRequest) String() string {
 func (*JoinRequest) ProtoMessage() {}
 
 func (x *JoinRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[37]
+	mi := &file_web_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3133,7 +2813,7 @@ func (x *JoinRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinRequest.ProtoReflect.Descriptor instead.
 func (*JoinRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{37}
+	return file_web_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *JoinRequest) GetId() string {
@@ -3154,7 +2834,7 @@ type ConversationChange struct {
 
 func (x *ConversationChange) Reset() {
 	*x = ConversationChange{}
-	mi := &file_web_proto_msgTypes[38]
+	mi := &file_web_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3166,7 +2846,7 @@ func (x *ConversationChange) String() string {
 func (*ConversationChange) ProtoMessage() {}
 
 func (x *ConversationChange) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[38]
+	mi := &file_web_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3179,7 +2859,7 @@ func (x *ConversationChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConversationChange.ProtoReflect.Descriptor instead.
 func (*ConversationChange) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{38}
+	return file_web_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ConversationChange) GetConversationId() string {
@@ -3211,7 +2891,7 @@ type ReportTypingRequest struct {
 
 func (x *ReportTypingRequest) Reset() {
 	*x = ReportTypingRequest{}
-	mi := &file_web_proto_msgTypes[39]
+	mi := &file_web_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3223,7 +2903,7 @@ func (x *ReportTypingRequest) String() string {
 func (*ReportTypingRequest) ProtoMessage() {}
 
 func (x *ReportTypingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[39]
+	mi := &file_web_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3236,7 +2916,7 @@ func (x *ReportTypingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportTypingRequest.ProtoReflect.Descriptor instead.
 func (*ReportTypingRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{39}
+	return file_web_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ReportTypingRequest) GetId() string {
@@ -3275,7 +2955,7 @@ type ReportTypingResponse struct {
 
 func (x *ReportTypingResponse) Reset() {
 	*x = ReportTypingResponse{}
-	mi := &file_web_proto_msgTypes[40]
+	mi := &file_web_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3287,7 +2967,7 @@ func (x *ReportTypingResponse) String() string {
 func (*ReportTypingResponse) ProtoMessage() {}
 
 func (x *ReportTypingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[40]
+	mi := &file_web_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3300,7 +2980,7 @@ func (x *ReportTypingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportTypingResponse.ProtoReflect.Descriptor instead.
 func (*ReportTypingResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{40}
+	return file_web_proto_rawDescGZIP(), []int{35}
 }
 
 type WatchTypingRequest struct {
@@ -3312,7 +2992,7 @@ type WatchTypingRequest struct {
 
 func (x *WatchTypingRequest) Reset() {
 	*x = WatchTypingRequest{}
-	mi := &file_web_proto_msgTypes[41]
+	mi := &file_web_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3324,7 +3004,7 @@ func (x *WatchTypingRequest) String() string {
 func (*WatchTypingRequest) ProtoMessage() {}
 
 func (x *WatchTypingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[41]
+	mi := &file_web_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3337,7 +3017,7 @@ func (x *WatchTypingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchTypingRequest.ProtoReflect.Descriptor instead.
 func (*WatchTypingRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{41}
+	return file_web_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *WatchTypingRequest) GetId() string {
@@ -3359,7 +3039,7 @@ type TypingEvent struct {
 
 func (x *TypingEvent) Reset() {
 	*x = TypingEvent{}
-	mi := &file_web_proto_msgTypes[42]
+	mi := &file_web_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3371,7 +3051,7 @@ func (x *TypingEvent) String() string {
 func (*TypingEvent) ProtoMessage() {}
 
 func (x *TypingEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[42]
+	mi := &file_web_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3384,7 +3064,7 @@ func (x *TypingEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TypingEvent.ProtoReflect.Descriptor instead.
 func (*TypingEvent) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{42}
+	return file_web_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *TypingEvent) GetPrincipal() string {
@@ -3445,7 +3125,7 @@ type TranscriptEvent struct {
 
 func (x *TranscriptEvent) Reset() {
 	*x = TranscriptEvent{}
-	mi := &file_web_proto_msgTypes[43]
+	mi := &file_web_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3457,7 +3137,7 @@ func (x *TranscriptEvent) String() string {
 func (*TranscriptEvent) ProtoMessage() {}
 
 func (x *TranscriptEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[43]
+	mi := &file_web_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3470,7 +3150,7 @@ func (x *TranscriptEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TranscriptEvent.ProtoReflect.Descriptor instead.
 func (*TranscriptEvent) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{43}
+	return file_web_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *TranscriptEvent) GetText() string {
@@ -3675,7 +3355,7 @@ type CodeModeCall struct {
 
 func (x *CodeModeCall) Reset() {
 	*x = CodeModeCall{}
-	mi := &file_web_proto_msgTypes[44]
+	mi := &file_web_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3687,7 +3367,7 @@ func (x *CodeModeCall) String() string {
 func (*CodeModeCall) ProtoMessage() {}
 
 func (x *CodeModeCall) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[44]
+	mi := &file_web_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3700,7 +3380,7 @@ func (x *CodeModeCall) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CodeModeCall.ProtoReflect.Descriptor instead.
 func (*CodeModeCall) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{44}
+	return file_web_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *CodeModeCall) GetName() string {
@@ -3768,7 +3448,7 @@ type Attachment struct {
 
 func (x *Attachment) Reset() {
 	*x = Attachment{}
-	mi := &file_web_proto_msgTypes[45]
+	mi := &file_web_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3780,7 +3460,7 @@ func (x *Attachment) String() string {
 func (*Attachment) ProtoMessage() {}
 
 func (x *Attachment) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[45]
+	mi := &file_web_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3793,7 +3473,7 @@ func (x *Attachment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Attachment.ProtoReflect.Descriptor instead.
 func (*Attachment) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{45}
+	return file_web_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *Attachment) GetId() string {
@@ -3858,7 +3538,7 @@ type PromptRequest struct {
 
 func (x *PromptRequest) Reset() {
 	*x = PromptRequest{}
-	mi := &file_web_proto_msgTypes[46]
+	mi := &file_web_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3870,7 +3550,7 @@ func (x *PromptRequest) String() string {
 func (*PromptRequest) ProtoMessage() {}
 
 func (x *PromptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[46]
+	mi := &file_web_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3883,7 +3563,7 @@ func (x *PromptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromptRequest.ProtoReflect.Descriptor instead.
 func (*PromptRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{46}
+	return file_web_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *PromptRequest) GetId() string {
@@ -3930,7 +3610,7 @@ type PromptResponse struct {
 
 func (x *PromptResponse) Reset() {
 	*x = PromptResponse{}
-	mi := &file_web_proto_msgTypes[47]
+	mi := &file_web_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3942,7 +3622,7 @@ func (x *PromptResponse) String() string {
 func (*PromptResponse) ProtoMessage() {}
 
 func (x *PromptResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[47]
+	mi := &file_web_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3955,7 +3635,7 @@ func (x *PromptResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromptResponse.ProtoReflect.Descriptor instead.
 func (*PromptResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{47}
+	return file_web_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *PromptResponse) GetPrivateText() string {
@@ -3984,7 +3664,7 @@ type CronJob struct {
 
 func (x *CronJob) Reset() {
 	*x = CronJob{}
-	mi := &file_web_proto_msgTypes[48]
+	mi := &file_web_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3996,7 +3676,7 @@ func (x *CronJob) String() string {
 func (*CronJob) ProtoMessage() {}
 
 func (x *CronJob) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[48]
+	mi := &file_web_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4009,7 +3689,7 @@ func (x *CronJob) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CronJob.ProtoReflect.Descriptor instead.
 func (*CronJob) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{48}
+	return file_web_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *CronJob) GetStem() string {
@@ -4107,7 +3787,7 @@ type Agent struct {
 
 func (x *Agent) Reset() {
 	*x = Agent{}
-	mi := &file_web_proto_msgTypes[49]
+	mi := &file_web_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4119,7 +3799,7 @@ func (x *Agent) String() string {
 func (*Agent) ProtoMessage() {}
 
 func (x *Agent) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[49]
+	mi := &file_web_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4132,7 +3812,7 @@ func (x *Agent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Agent.ProtoReflect.Descriptor instead.
 func (*Agent) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{49}
+	return file_web_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *Agent) GetName() string {
@@ -4235,7 +3915,7 @@ type ListAgentsRequest struct {
 
 func (x *ListAgentsRequest) Reset() {
 	*x = ListAgentsRequest{}
-	mi := &file_web_proto_msgTypes[50]
+	mi := &file_web_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4247,7 +3927,7 @@ func (x *ListAgentsRequest) String() string {
 func (*ListAgentsRequest) ProtoMessage() {}
 
 func (x *ListAgentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[50]
+	mi := &file_web_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4260,7 +3940,7 @@ func (x *ListAgentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentsRequest.ProtoReflect.Descriptor instead.
 func (*ListAgentsRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{50}
+	return file_web_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *ListAgentsRequest) GetConversationId() string {
@@ -4280,7 +3960,7 @@ type ListAgentsResponse struct {
 
 func (x *ListAgentsResponse) Reset() {
 	*x = ListAgentsResponse{}
-	mi := &file_web_proto_msgTypes[51]
+	mi := &file_web_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4292,7 +3972,7 @@ func (x *ListAgentsResponse) String() string {
 func (*ListAgentsResponse) ProtoMessage() {}
 
 func (x *ListAgentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[51]
+	mi := &file_web_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4305,7 +3985,7 @@ func (x *ListAgentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentsResponse.ProtoReflect.Descriptor instead.
 func (*ListAgentsResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{51}
+	return file_web_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *ListAgentsResponse) GetAgents() []*Agent {
@@ -4336,7 +4016,7 @@ type Skill struct {
 
 func (x *Skill) Reset() {
 	*x = Skill{}
-	mi := &file_web_proto_msgTypes[52]
+	mi := &file_web_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4348,7 +4028,7 @@ func (x *Skill) String() string {
 func (*Skill) ProtoMessage() {}
 
 func (x *Skill) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[52]
+	mi := &file_web_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4361,7 +4041,7 @@ func (x *Skill) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Skill.ProtoReflect.Descriptor instead.
 func (*Skill) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{52}
+	return file_web_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *Skill) GetName() string {
@@ -4415,7 +4095,7 @@ type ListSkillsRequest struct {
 
 func (x *ListSkillsRequest) Reset() {
 	*x = ListSkillsRequest{}
-	mi := &file_web_proto_msgTypes[53]
+	mi := &file_web_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4427,7 +4107,7 @@ func (x *ListSkillsRequest) String() string {
 func (*ListSkillsRequest) ProtoMessage() {}
 
 func (x *ListSkillsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[53]
+	mi := &file_web_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4440,7 +4120,7 @@ func (x *ListSkillsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSkillsRequest.ProtoReflect.Descriptor instead.
 func (*ListSkillsRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{53}
+	return file_web_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ListSkillsRequest) GetAgent() string {
@@ -4459,7 +4139,7 @@ type ListSkillsResponse struct {
 
 func (x *ListSkillsResponse) Reset() {
 	*x = ListSkillsResponse{}
-	mi := &file_web_proto_msgTypes[54]
+	mi := &file_web_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4471,7 +4151,7 @@ func (x *ListSkillsResponse) String() string {
 func (*ListSkillsResponse) ProtoMessage() {}
 
 func (x *ListSkillsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[54]
+	mi := &file_web_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4484,7 +4164,7 @@ func (x *ListSkillsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSkillsResponse.ProtoReflect.Descriptor instead.
 func (*ListSkillsResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{54}
+	return file_web_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *ListSkillsResponse) GetSkills() []*Skill {
@@ -4502,7 +4182,7 @@ type ListCronJobsRequest struct {
 
 func (x *ListCronJobsRequest) Reset() {
 	*x = ListCronJobsRequest{}
-	mi := &file_web_proto_msgTypes[55]
+	mi := &file_web_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4514,7 +4194,7 @@ func (x *ListCronJobsRequest) String() string {
 func (*ListCronJobsRequest) ProtoMessage() {}
 
 func (x *ListCronJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[55]
+	mi := &file_web_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4527,7 +4207,7 @@ func (x *ListCronJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCronJobsRequest.ProtoReflect.Descriptor instead.
 func (*ListCronJobsRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{55}
+	return file_web_proto_rawDescGZIP(), []int{50}
 }
 
 type ListCronJobsResponse struct {
@@ -4539,7 +4219,7 @@ type ListCronJobsResponse struct {
 
 func (x *ListCronJobsResponse) Reset() {
 	*x = ListCronJobsResponse{}
-	mi := &file_web_proto_msgTypes[56]
+	mi := &file_web_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4551,7 +4231,7 @@ func (x *ListCronJobsResponse) String() string {
 func (*ListCronJobsResponse) ProtoMessage() {}
 
 func (x *ListCronJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[56]
+	mi := &file_web_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4564,7 +4244,7 @@ func (x *ListCronJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCronJobsResponse.ProtoReflect.Descriptor instead.
 func (*ListCronJobsResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{56}
+	return file_web_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *ListCronJobsResponse) GetJobs() []*CronJob {
@@ -4587,7 +4267,7 @@ type PageRequest struct {
 
 func (x *PageRequest) Reset() {
 	*x = PageRequest{}
-	mi := &file_web_proto_msgTypes[57]
+	mi := &file_web_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4599,7 +4279,7 @@ func (x *PageRequest) String() string {
 func (*PageRequest) ProtoMessage() {}
 
 func (x *PageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[57]
+	mi := &file_web_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4612,7 +4292,7 @@ func (x *PageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PageRequest.ProtoReflect.Descriptor instead.
 func (*PageRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{57}
+	return file_web_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *PageRequest) GetAgent() string {
@@ -4648,7 +4328,7 @@ type Page struct {
 
 func (x *Page) Reset() {
 	*x = Page{}
-	mi := &file_web_proto_msgTypes[58]
+	mi := &file_web_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4660,7 +4340,7 @@ func (x *Page) String() string {
 func (*Page) ProtoMessage() {}
 
 func (x *Page) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[58]
+	mi := &file_web_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4673,7 +4353,7 @@ func (x *Page) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Page.ProtoReflect.Descriptor instead.
 func (*Page) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{58}
+	return file_web_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *Page) GetSpace() string {
@@ -4705,7 +4385,7 @@ type ListPagesRequest struct {
 
 func (x *ListPagesRequest) Reset() {
 	*x = ListPagesRequest{}
-	mi := &file_web_proto_msgTypes[59]
+	mi := &file_web_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4717,7 +4397,7 @@ func (x *ListPagesRequest) String() string {
 func (*ListPagesRequest) ProtoMessage() {}
 
 func (x *ListPagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[59]
+	mi := &file_web_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4730,7 +4410,7 @@ func (x *ListPagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPagesRequest.ProtoReflect.Descriptor instead.
 func (*ListPagesRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{59}
+	return file_web_proto_rawDescGZIP(), []int{54}
 }
 
 // ListPagesResponse lists the HTML files of agents that still exist.
@@ -4743,7 +4423,7 @@ type ListPagesResponse struct {
 
 func (x *ListPagesResponse) Reset() {
 	*x = ListPagesResponse{}
-	mi := &file_web_proto_msgTypes[60]
+	mi := &file_web_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4755,7 +4435,7 @@ func (x *ListPagesResponse) String() string {
 func (*ListPagesResponse) ProtoMessage() {}
 
 func (x *ListPagesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[60]
+	mi := &file_web_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4768,7 +4448,7 @@ func (x *ListPagesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPagesResponse.ProtoReflect.Descriptor instead.
 func (*ListPagesResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{60}
+	return file_web_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *ListPagesResponse) GetPages() []*PageEntry {
@@ -4789,7 +4469,7 @@ type PageEntry struct {
 
 func (x *PageEntry) Reset() {
 	*x = PageEntry{}
-	mi := &file_web_proto_msgTypes[61]
+	mi := &file_web_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4801,7 +4481,7 @@ func (x *PageEntry) String() string {
 func (*PageEntry) ProtoMessage() {}
 
 func (x *PageEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[61]
+	mi := &file_web_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4814,7 +4494,7 @@ func (x *PageEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PageEntry.ProtoReflect.Descriptor instead.
 func (*PageEntry) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{61}
+	return file_web_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *PageEntry) GetAgent() string {
@@ -4847,7 +4527,7 @@ type RunCronJobRequest struct {
 
 func (x *RunCronJobRequest) Reset() {
 	*x = RunCronJobRequest{}
-	mi := &file_web_proto_msgTypes[62]
+	mi := &file_web_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4859,7 +4539,7 @@ func (x *RunCronJobRequest) String() string {
 func (*RunCronJobRequest) ProtoMessage() {}
 
 func (x *RunCronJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[62]
+	mi := &file_web_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4872,7 +4552,7 @@ func (x *RunCronJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunCronJobRequest.ProtoReflect.Descriptor instead.
 func (*RunCronJobRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{62}
+	return file_web_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *RunCronJobRequest) GetStem() string {
@@ -4891,7 +4571,7 @@ type RunCronJobResponse struct {
 
 func (x *RunCronJobResponse) Reset() {
 	*x = RunCronJobResponse{}
-	mi := &file_web_proto_msgTypes[63]
+	mi := &file_web_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4903,7 +4583,7 @@ func (x *RunCronJobResponse) String() string {
 func (*RunCronJobResponse) ProtoMessage() {}
 
 func (x *RunCronJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[63]
+	mi := &file_web_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4916,7 +4596,7 @@ func (x *RunCronJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunCronJobResponse.ProtoReflect.Descriptor instead.
 func (*RunCronJobResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{63}
+	return file_web_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *RunCronJobResponse) GetId() string {
@@ -4940,7 +4620,7 @@ type AnswerQuestionRequest struct {
 
 func (x *AnswerQuestionRequest) Reset() {
 	*x = AnswerQuestionRequest{}
-	mi := &file_web_proto_msgTypes[64]
+	mi := &file_web_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4952,7 +4632,7 @@ func (x *AnswerQuestionRequest) String() string {
 func (*AnswerQuestionRequest) ProtoMessage() {}
 
 func (x *AnswerQuestionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[64]
+	mi := &file_web_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4965,7 +4645,7 @@ func (x *AnswerQuestionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerQuestionRequest.ProtoReflect.Descriptor instead.
 func (*AnswerQuestionRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{64}
+	return file_web_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *AnswerQuestionRequest) GetConversationId() string {
@@ -5004,7 +4684,7 @@ type AnswerQuestionResponse struct {
 
 func (x *AnswerQuestionResponse) Reset() {
 	*x = AnswerQuestionResponse{}
-	mi := &file_web_proto_msgTypes[65]
+	mi := &file_web_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5016,7 +4696,7 @@ func (x *AnswerQuestionResponse) String() string {
 func (*AnswerQuestionResponse) ProtoMessage() {}
 
 func (x *AnswerQuestionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[65]
+	mi := &file_web_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5029,7 +4709,7 @@ func (x *AnswerQuestionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerQuestionResponse.ProtoReflect.Descriptor instead.
 func (*AnswerQuestionResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{65}
+	return file_web_proto_rawDescGZIP(), []int{60}
 }
 
 type ConfigChannel struct {
@@ -5042,7 +4722,7 @@ type ConfigChannel struct {
 
 func (x *ConfigChannel) Reset() {
 	*x = ConfigChannel{}
-	mi := &file_web_proto_msgTypes[66]
+	mi := &file_web_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5054,7 +4734,7 @@ func (x *ConfigChannel) String() string {
 func (*ConfigChannel) ProtoMessage() {}
 
 func (x *ConfigChannel) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[66]
+	mi := &file_web_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5067,7 +4747,7 @@ func (x *ConfigChannel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigChannel.ProtoReflect.Descriptor instead.
 func (*ConfigChannel) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{66}
+	return file_web_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ConfigChannel) GetChannel() string {
@@ -5105,7 +4785,7 @@ type ConfigView struct {
 
 func (x *ConfigView) Reset() {
 	*x = ConfigView{}
-	mi := &file_web_proto_msgTypes[67]
+	mi := &file_web_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5117,7 +4797,7 @@ func (x *ConfigView) String() string {
 func (*ConfigView) ProtoMessage() {}
 
 func (x *ConfigView) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[67]
+	mi := &file_web_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5130,7 +4810,7 @@ func (x *ConfigView) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigView.ProtoReflect.Descriptor instead.
 func (*ConfigView) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{67}
+	return file_web_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ConfigView) GetWorkspace() string {
@@ -5225,7 +4905,7 @@ type ListConfigRequest struct {
 
 func (x *ListConfigRequest) Reset() {
 	*x = ListConfigRequest{}
-	mi := &file_web_proto_msgTypes[68]
+	mi := &file_web_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5237,7 +4917,7 @@ func (x *ListConfigRequest) String() string {
 func (*ListConfigRequest) ProtoMessage() {}
 
 func (x *ListConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[68]
+	mi := &file_web_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5250,7 +4930,7 @@ func (x *ListConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConfigRequest.ProtoReflect.Descriptor instead.
 func (*ListConfigRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{68}
+	return file_web_proto_rawDescGZIP(), []int{63}
 }
 
 type SaveBehaviorSettingsRequest struct {
@@ -5262,7 +4942,7 @@ type SaveBehaviorSettingsRequest struct {
 
 func (x *SaveBehaviorSettingsRequest) Reset() {
 	*x = SaveBehaviorSettingsRequest{}
-	mi := &file_web_proto_msgTypes[69]
+	mi := &file_web_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5274,7 +4954,7 @@ func (x *SaveBehaviorSettingsRequest) String() string {
 func (*SaveBehaviorSettingsRequest) ProtoMessage() {}
 
 func (x *SaveBehaviorSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[69]
+	mi := &file_web_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5287,7 +4967,7 @@ func (x *SaveBehaviorSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveBehaviorSettingsRequest.ProtoReflect.Descriptor instead.
 func (*SaveBehaviorSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{69}
+	return file_web_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *SaveBehaviorSettingsRequest) GetDocumentJson() string {
@@ -5306,7 +4986,7 @@ type ListConfigResponse struct {
 
 func (x *ListConfigResponse) Reset() {
 	*x = ListConfigResponse{}
-	mi := &file_web_proto_msgTypes[70]
+	mi := &file_web_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5318,7 +4998,7 @@ func (x *ListConfigResponse) String() string {
 func (*ListConfigResponse) ProtoMessage() {}
 
 func (x *ListConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[70]
+	mi := &file_web_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5331,7 +5011,7 @@ func (x *ListConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConfigResponse.ProtoReflect.Descriptor instead.
 func (*ListConfigResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{70}
+	return file_web_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *ListConfigResponse) GetConfig() *ConfigView {
@@ -5351,7 +5031,7 @@ type TestModelRequest struct {
 
 func (x *TestModelRequest) Reset() {
 	*x = TestModelRequest{}
-	mi := &file_web_proto_msgTypes[71]
+	mi := &file_web_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5363,7 +5043,7 @@ func (x *TestModelRequest) String() string {
 func (*TestModelRequest) ProtoMessage() {}
 
 func (x *TestModelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[71]
+	mi := &file_web_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5376,7 +5056,7 @@ func (x *TestModelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestModelRequest.ProtoReflect.Descriptor instead.
 func (*TestModelRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{71}
+	return file_web_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *TestModelRequest) GetModel() string {
@@ -5398,7 +5078,7 @@ type TestModelResponse struct {
 
 func (x *TestModelResponse) Reset() {
 	*x = TestModelResponse{}
-	mi := &file_web_proto_msgTypes[72]
+	mi := &file_web_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5410,7 +5090,7 @@ func (x *TestModelResponse) String() string {
 func (*TestModelResponse) ProtoMessage() {}
 
 func (x *TestModelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[72]
+	mi := &file_web_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5423,7 +5103,7 @@ func (x *TestModelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestModelResponse.ProtoReflect.Descriptor instead.
 func (*TestModelResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{72}
+	return file_web_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *TestModelResponse) GetError() string {
@@ -5462,7 +5142,7 @@ type AgentDraft struct {
 
 func (x *AgentDraft) Reset() {
 	*x = AgentDraft{}
-	mi := &file_web_proto_msgTypes[73]
+	mi := &file_web_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5474,7 +5154,7 @@ func (x *AgentDraft) String() string {
 func (*AgentDraft) ProtoMessage() {}
 
 func (x *AgentDraft) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[73]
+	mi := &file_web_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5487,7 +5167,7 @@ func (x *AgentDraft) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraft.ProtoReflect.Descriptor instead.
 func (*AgentDraft) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{73}
+	return file_web_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *AgentDraft) GetId() string {
@@ -5580,7 +5260,7 @@ type AgentDraftPending struct {
 
 func (x *AgentDraftPending) Reset() {
 	*x = AgentDraftPending{}
-	mi := &file_web_proto_msgTypes[74]
+	mi := &file_web_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5592,7 +5272,7 @@ func (x *AgentDraftPending) String() string {
 func (*AgentDraftPending) ProtoMessage() {}
 
 func (x *AgentDraftPending) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[74]
+	mi := &file_web_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5605,7 +5285,7 @@ func (x *AgentDraftPending) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftPending.ProtoReflect.Descriptor instead.
 func (*AgentDraftPending) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{74}
+	return file_web_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *AgentDraftPending) GetDestination() string {
@@ -5670,7 +5350,7 @@ type AgentDraftVariant struct {
 
 func (x *AgentDraftVariant) Reset() {
 	*x = AgentDraftVariant{}
-	mi := &file_web_proto_msgTypes[75]
+	mi := &file_web_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5682,7 +5362,7 @@ func (x *AgentDraftVariant) String() string {
 func (*AgentDraftVariant) ProtoMessage() {}
 
 func (x *AgentDraftVariant) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[75]
+	mi := &file_web_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5695,7 +5375,7 @@ func (x *AgentDraftVariant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftVariant.ProtoReflect.Descriptor instead.
 func (*AgentDraftVariant) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{75}
+	return file_web_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *AgentDraftVariant) GetName() string {
@@ -5730,7 +5410,7 @@ type AgentDraftSetting struct {
 
 func (x *AgentDraftSetting) Reset() {
 	*x = AgentDraftSetting{}
-	mi := &file_web_proto_msgTypes[76]
+	mi := &file_web_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5742,7 +5422,7 @@ func (x *AgentDraftSetting) String() string {
 func (*AgentDraftSetting) ProtoMessage() {}
 
 func (x *AgentDraftSetting) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[76]
+	mi := &file_web_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5755,7 +5435,7 @@ func (x *AgentDraftSetting) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftSetting.ProtoReflect.Descriptor instead.
 func (*AgentDraftSetting) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{76}
+	return file_web_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *AgentDraftSetting) GetKey() string {
@@ -5784,7 +5464,7 @@ type AgentDraftExternalMCP struct {
 
 func (x *AgentDraftExternalMCP) Reset() {
 	*x = AgentDraftExternalMCP{}
-	mi := &file_web_proto_msgTypes[77]
+	mi := &file_web_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5796,7 +5476,7 @@ func (x *AgentDraftExternalMCP) String() string {
 func (*AgentDraftExternalMCP) ProtoMessage() {}
 
 func (x *AgentDraftExternalMCP) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[77]
+	mi := &file_web_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5809,7 +5489,7 @@ func (x *AgentDraftExternalMCP) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftExternalMCP.ProtoReflect.Descriptor instead.
 func (*AgentDraftExternalMCP) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{77}
+	return file_web_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *AgentDraftExternalMCP) GetOn() bool {
@@ -5845,7 +5525,7 @@ type AgentDraftSplice struct {
 
 func (x *AgentDraftSplice) Reset() {
 	*x = AgentDraftSplice{}
-	mi := &file_web_proto_msgTypes[78]
+	mi := &file_web_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5857,7 +5537,7 @@ func (x *AgentDraftSplice) String() string {
 func (*AgentDraftSplice) ProtoMessage() {}
 
 func (x *AgentDraftSplice) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[78]
+	mi := &file_web_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5870,7 +5550,7 @@ func (x *AgentDraftSplice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftSplice.ProtoReflect.Descriptor instead.
 func (*AgentDraftSplice) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{78}
+	return file_web_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *AgentDraftSplice) GetAt() int32 {
@@ -5925,7 +5605,7 @@ type AgentDraftOp struct {
 
 func (x *AgentDraftOp) Reset() {
 	*x = AgentDraftOp{}
-	mi := &file_web_proto_msgTypes[79]
+	mi := &file_web_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5937,7 +5617,7 @@ func (x *AgentDraftOp) String() string {
 func (*AgentDraftOp) ProtoMessage() {}
 
 func (x *AgentDraftOp) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[79]
+	mi := &file_web_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5950,7 +5630,7 @@ func (x *AgentDraftOp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftOp.ProtoReflect.Descriptor instead.
 func (*AgentDraftOp) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{79}
+	return file_web_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *AgentDraftOp) GetRevision() int64 {
@@ -6058,7 +5738,7 @@ type AgentDraftPresence struct {
 
 func (x *AgentDraftPresence) Reset() {
 	*x = AgentDraftPresence{}
-	mi := &file_web_proto_msgTypes[80]
+	mi := &file_web_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6070,7 +5750,7 @@ func (x *AgentDraftPresence) String() string {
 func (*AgentDraftPresence) ProtoMessage() {}
 
 func (x *AgentDraftPresence) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[80]
+	mi := &file_web_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6083,7 +5763,7 @@ func (x *AgentDraftPresence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftPresence.ProtoReflect.Descriptor instead.
 func (*AgentDraftPresence) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{80}
+	return file_web_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *AgentDraftPresence) GetClient() string {
@@ -6128,7 +5808,7 @@ type CreateAgentDraftRequest struct {
 
 func (x *CreateAgentDraftRequest) Reset() {
 	*x = CreateAgentDraftRequest{}
-	mi := &file_web_proto_msgTypes[81]
+	mi := &file_web_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6140,7 +5820,7 @@ func (x *CreateAgentDraftRequest) String() string {
 func (*CreateAgentDraftRequest) ProtoMessage() {}
 
 func (x *CreateAgentDraftRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[81]
+	mi := &file_web_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6153,7 +5833,7 @@ func (x *CreateAgentDraftRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateAgentDraftRequest.ProtoReflect.Descriptor instead.
 func (*CreateAgentDraftRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{81}
+	return file_web_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *CreateAgentDraftRequest) GetName() string {
@@ -6192,7 +5872,7 @@ type ListAgentDraftsRequest struct {
 
 func (x *ListAgentDraftsRequest) Reset() {
 	*x = ListAgentDraftsRequest{}
-	mi := &file_web_proto_msgTypes[82]
+	mi := &file_web_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6204,7 +5884,7 @@ func (x *ListAgentDraftsRequest) String() string {
 func (*ListAgentDraftsRequest) ProtoMessage() {}
 
 func (x *ListAgentDraftsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[82]
+	mi := &file_web_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6217,7 +5897,7 @@ func (x *ListAgentDraftsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentDraftsRequest.ProtoReflect.Descriptor instead.
 func (*ListAgentDraftsRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{82}
+	return file_web_proto_rawDescGZIP(), []int{77}
 }
 
 // ListAgentDraftsResponse is every draft, newest first, and the starter agents a draft can begin from.
@@ -6231,7 +5911,7 @@ type ListAgentDraftsResponse struct {
 
 func (x *ListAgentDraftsResponse) Reset() {
 	*x = ListAgentDraftsResponse{}
-	mi := &file_web_proto_msgTypes[83]
+	mi := &file_web_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6243,7 +5923,7 @@ func (x *ListAgentDraftsResponse) String() string {
 func (*ListAgentDraftsResponse) ProtoMessage() {}
 
 func (x *ListAgentDraftsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[83]
+	mi := &file_web_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6256,7 +5936,7 @@ func (x *ListAgentDraftsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentDraftsResponse.ProtoReflect.Descriptor instead.
 func (*ListAgentDraftsResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{83}
+	return file_web_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *ListAgentDraftsResponse) GetDrafts() []*AgentDraft {
@@ -6284,7 +5964,7 @@ type GetAgentDraftRequest struct {
 
 func (x *GetAgentDraftRequest) Reset() {
 	*x = GetAgentDraftRequest{}
-	mi := &file_web_proto_msgTypes[84]
+	mi := &file_web_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6296,7 +5976,7 @@ func (x *GetAgentDraftRequest) String() string {
 func (*GetAgentDraftRequest) ProtoMessage() {}
 
 func (x *GetAgentDraftRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[84]
+	mi := &file_web_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6309,7 +5989,7 @@ func (x *GetAgentDraftRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAgentDraftRequest.ProtoReflect.Descriptor instead.
 func (*GetAgentDraftRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{84}
+	return file_web_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *GetAgentDraftRequest) GetId() string {
@@ -6342,7 +6022,7 @@ type GetAgentDraftResponse struct {
 
 func (x *GetAgentDraftResponse) Reset() {
 	*x = GetAgentDraftResponse{}
-	mi := &file_web_proto_msgTypes[85]
+	mi := &file_web_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6354,7 +6034,7 @@ func (x *GetAgentDraftResponse) String() string {
 func (*GetAgentDraftResponse) ProtoMessage() {}
 
 func (x *GetAgentDraftResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[85]
+	mi := &file_web_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6367,7 +6047,7 @@ func (x *GetAgentDraftResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAgentDraftResponse.ProtoReflect.Descriptor instead.
 func (*GetAgentDraftResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{85}
+	return file_web_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *GetAgentDraftResponse) GetDraft() *AgentDraft {
@@ -6423,7 +6103,7 @@ type AgentDraftMessage struct {
 
 func (x *AgentDraftMessage) Reset() {
 	*x = AgentDraftMessage{}
-	mi := &file_web_proto_msgTypes[86]
+	mi := &file_web_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6435,7 +6115,7 @@ func (x *AgentDraftMessage) String() string {
 func (*AgentDraftMessage) ProtoMessage() {}
 
 func (x *AgentDraftMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[86]
+	mi := &file_web_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6448,7 +6128,7 @@ func (x *AgentDraftMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftMessage.ProtoReflect.Descriptor instead.
 func (*AgentDraftMessage) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{86}
+	return file_web_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *AgentDraftMessage) GetInputId() string {
@@ -6499,7 +6179,7 @@ type ApplyAgentDraftOpRequest struct {
 
 func (x *ApplyAgentDraftOpRequest) Reset() {
 	*x = ApplyAgentDraftOpRequest{}
-	mi := &file_web_proto_msgTypes[87]
+	mi := &file_web_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6511,7 +6191,7 @@ func (x *ApplyAgentDraftOpRequest) String() string {
 func (*ApplyAgentDraftOpRequest) ProtoMessage() {}
 
 func (x *ApplyAgentDraftOpRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[87]
+	mi := &file_web_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6524,7 +6204,7 @@ func (x *ApplyAgentDraftOpRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyAgentDraftOpRequest.ProtoReflect.Descriptor instead.
 func (*ApplyAgentDraftOpRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{87}
+	return file_web_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *ApplyAgentDraftOpRequest) GetId() string {
@@ -6562,7 +6242,7 @@ type ApplyAgentDraftOpResponse struct {
 
 func (x *ApplyAgentDraftOpResponse) Reset() {
 	*x = ApplyAgentDraftOpResponse{}
-	mi := &file_web_proto_msgTypes[88]
+	mi := &file_web_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6574,7 +6254,7 @@ func (x *ApplyAgentDraftOpResponse) String() string {
 func (*ApplyAgentDraftOpResponse) ProtoMessage() {}
 
 func (x *ApplyAgentDraftOpResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[88]
+	mi := &file_web_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6587,7 +6267,7 @@ func (x *ApplyAgentDraftOpResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApplyAgentDraftOpResponse.ProtoReflect.Descriptor instead.
 func (*ApplyAgentDraftOpResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{88}
+	return file_web_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *ApplyAgentDraftOpResponse) GetRevision() int64 {
@@ -6622,7 +6302,7 @@ type SetAgentDraftPresenceRequest struct {
 
 func (x *SetAgentDraftPresenceRequest) Reset() {
 	*x = SetAgentDraftPresenceRequest{}
-	mi := &file_web_proto_msgTypes[89]
+	mi := &file_web_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6634,7 +6314,7 @@ func (x *SetAgentDraftPresenceRequest) String() string {
 func (*SetAgentDraftPresenceRequest) ProtoMessage() {}
 
 func (x *SetAgentDraftPresenceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[89]
+	mi := &file_web_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6647,7 +6327,7 @@ func (x *SetAgentDraftPresenceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetAgentDraftPresenceRequest.ProtoReflect.Descriptor instead.
 func (*SetAgentDraftPresenceRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{89}
+	return file_web_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *SetAgentDraftPresenceRequest) GetId() string {
@@ -6672,7 +6352,7 @@ type SetAgentDraftPresenceResponse struct {
 
 func (x *SetAgentDraftPresenceResponse) Reset() {
 	*x = SetAgentDraftPresenceResponse{}
-	mi := &file_web_proto_msgTypes[90]
+	mi := &file_web_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6684,7 +6364,7 @@ func (x *SetAgentDraftPresenceResponse) String() string {
 func (*SetAgentDraftPresenceResponse) ProtoMessage() {}
 
 func (x *SetAgentDraftPresenceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[90]
+	mi := &file_web_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6697,7 +6377,7 @@ func (x *SetAgentDraftPresenceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetAgentDraftPresenceResponse.ProtoReflect.Descriptor instead.
 func (*SetAgentDraftPresenceResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{90}
+	return file_web_proto_rawDescGZIP(), []int{85}
 }
 
 // AgentSettingsRequest asks for the setting help of mode, easy or advanced.
@@ -6710,7 +6390,7 @@ type AgentSettingsRequest struct {
 
 func (x *AgentSettingsRequest) Reset() {
 	*x = AgentSettingsRequest{}
-	mi := &file_web_proto_msgTypes[91]
+	mi := &file_web_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6722,7 +6402,7 @@ func (x *AgentSettingsRequest) String() string {
 func (*AgentSettingsRequest) ProtoMessage() {}
 
 func (x *AgentSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[91]
+	mi := &file_web_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6735,7 +6415,7 @@ func (x *AgentSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentSettingsRequest.ProtoReflect.Descriptor instead.
 func (*AgentSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{91}
+	return file_web_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *AgentSettingsRequest) GetMode() string {
@@ -6755,7 +6435,7 @@ type AgentSettingsResponse struct {
 
 func (x *AgentSettingsResponse) Reset() {
 	*x = AgentSettingsResponse{}
-	mi := &file_web_proto_msgTypes[92]
+	mi := &file_web_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6767,7 +6447,7 @@ func (x *AgentSettingsResponse) String() string {
 func (*AgentSettingsResponse) ProtoMessage() {}
 
 func (x *AgentSettingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[92]
+	mi := &file_web_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6780,7 +6460,7 @@ func (x *AgentSettingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentSettingsResponse.ProtoReflect.Descriptor instead.
 func (*AgentSettingsResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{92}
+	return file_web_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *AgentSettingsResponse) GetSettings() []*AgentSettingHelp {
@@ -6811,7 +6491,7 @@ type AgentSettingHelp struct {
 
 func (x *AgentSettingHelp) Reset() {
 	*x = AgentSettingHelp{}
-	mi := &file_web_proto_msgTypes[93]
+	mi := &file_web_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6823,7 +6503,7 @@ func (x *AgentSettingHelp) String() string {
 func (*AgentSettingHelp) ProtoMessage() {}
 
 func (x *AgentSettingHelp) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[93]
+	mi := &file_web_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6836,7 +6516,7 @@ func (x *AgentSettingHelp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentSettingHelp.ProtoReflect.Descriptor instead.
 func (*AgentSettingHelp) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{93}
+	return file_web_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *AgentSettingHelp) GetKey() string {
@@ -6922,7 +6602,7 @@ type DraftPromptRequest struct {
 
 func (x *DraftPromptRequest) Reset() {
 	*x = DraftPromptRequest{}
-	mi := &file_web_proto_msgTypes[94]
+	mi := &file_web_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6934,7 +6614,7 @@ func (x *DraftPromptRequest) String() string {
 func (*DraftPromptRequest) ProtoMessage() {}
 
 func (x *DraftPromptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[94]
+	mi := &file_web_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6947,7 +6627,7 @@ func (x *DraftPromptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DraftPromptRequest.ProtoReflect.Descriptor instead.
 func (*DraftPromptRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{94}
+	return file_web_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *DraftPromptRequest) GetId() string {
@@ -6978,7 +6658,7 @@ type RestartDraftChatRequest struct {
 
 func (x *RestartDraftChatRequest) Reset() {
 	*x = RestartDraftChatRequest{}
-	mi := &file_web_proto_msgTypes[95]
+	mi := &file_web_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6990,7 +6670,7 @@ func (x *RestartDraftChatRequest) String() string {
 func (*RestartDraftChatRequest) ProtoMessage() {}
 
 func (x *RestartDraftChatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[95]
+	mi := &file_web_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7003,7 +6683,7 @@ func (x *RestartDraftChatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestartDraftChatRequest.ProtoReflect.Descriptor instead.
 func (*RestartDraftChatRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{95}
+	return file_web_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *RestartDraftChatRequest) GetId() string {
@@ -7040,7 +6720,7 @@ type AgentDraftProblem struct {
 
 func (x *AgentDraftProblem) Reset() {
 	*x = AgentDraftProblem{}
-	mi := &file_web_proto_msgTypes[96]
+	mi := &file_web_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7052,7 +6732,7 @@ func (x *AgentDraftProblem) String() string {
 func (*AgentDraftProblem) ProtoMessage() {}
 
 func (x *AgentDraftProblem) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[96]
+	mi := &file_web_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7065,7 +6745,7 @@ func (x *AgentDraftProblem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftProblem.ProtoReflect.Descriptor instead.
 func (*AgentDraftProblem) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{96}
+	return file_web_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *AgentDraftProblem) GetVariant() string {
@@ -7104,7 +6784,7 @@ type DraftPromptResponse struct {
 
 func (x *DraftPromptResponse) Reset() {
 	*x = DraftPromptResponse{}
-	mi := &file_web_proto_msgTypes[97]
+	mi := &file_web_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7116,7 +6796,7 @@ func (x *DraftPromptResponse) String() string {
 func (*DraftPromptResponse) ProtoMessage() {}
 
 func (x *DraftPromptResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[97]
+	mi := &file_web_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7129,7 +6809,7 @@ func (x *DraftPromptResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DraftPromptResponse.ProtoReflect.Descriptor instead.
 func (*DraftPromptResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{97}
+	return file_web_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *DraftPromptResponse) GetTestChat() string {
@@ -7173,7 +6853,7 @@ type DraftLayersRequest struct {
 
 func (x *DraftLayersRequest) Reset() {
 	*x = DraftLayersRequest{}
-	mi := &file_web_proto_msgTypes[98]
+	mi := &file_web_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7185,7 +6865,7 @@ func (x *DraftLayersRequest) String() string {
 func (*DraftLayersRequest) ProtoMessage() {}
 
 func (x *DraftLayersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[98]
+	mi := &file_web_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7198,7 +6878,7 @@ func (x *DraftLayersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DraftLayersRequest.ProtoReflect.Descriptor instead.
 func (*DraftLayersRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{98}
+	return file_web_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *DraftLayersRequest) GetId() string {
@@ -7235,7 +6915,7 @@ type AgentLayer struct {
 
 func (x *AgentLayer) Reset() {
 	*x = AgentLayer{}
-	mi := &file_web_proto_msgTypes[99]
+	mi := &file_web_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7247,7 +6927,7 @@ func (x *AgentLayer) String() string {
 func (*AgentLayer) ProtoMessage() {}
 
 func (x *AgentLayer) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[99]
+	mi := &file_web_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7260,7 +6940,7 @@ func (x *AgentLayer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentLayer.ProtoReflect.Descriptor instead.
 func (*AgentLayer) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{99}
+	return file_web_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *AgentLayer) GetLayer() string {
@@ -7305,7 +6985,7 @@ type DraftLayersResponse struct {
 
 func (x *DraftLayersResponse) Reset() {
 	*x = DraftLayersResponse{}
-	mi := &file_web_proto_msgTypes[100]
+	mi := &file_web_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7317,7 +6997,7 @@ func (x *DraftLayersResponse) String() string {
 func (*DraftLayersResponse) ProtoMessage() {}
 
 func (x *DraftLayersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[100]
+	mi := &file_web_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7330,7 +7010,7 @@ func (x *DraftLayersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DraftLayersResponse.ProtoReflect.Descriptor instead.
 func (*DraftLayersResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{100}
+	return file_web_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *DraftLayersResponse) GetLayers() []*AgentLayer {
@@ -7399,7 +7079,7 @@ type SaveDraftRequest struct {
 
 func (x *SaveDraftRequest) Reset() {
 	*x = SaveDraftRequest{}
-	mi := &file_web_proto_msgTypes[101]
+	mi := &file_web_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7411,7 +7091,7 @@ func (x *SaveDraftRequest) String() string {
 func (*SaveDraftRequest) ProtoMessage() {}
 
 func (x *SaveDraftRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[101]
+	mi := &file_web_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7424,7 +7104,7 @@ func (x *SaveDraftRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveDraftRequest.ProtoReflect.Descriptor instead.
 func (*SaveDraftRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{101}
+	return file_web_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *SaveDraftRequest) GetId() string {
@@ -7486,7 +7166,7 @@ type AgentDraftReviewSetting struct {
 
 func (x *AgentDraftReviewSetting) Reset() {
 	*x = AgentDraftReviewSetting{}
-	mi := &file_web_proto_msgTypes[102]
+	mi := &file_web_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7498,7 +7178,7 @@ func (x *AgentDraftReviewSetting) String() string {
 func (*AgentDraftReviewSetting) ProtoMessage() {}
 
 func (x *AgentDraftReviewSetting) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[102]
+	mi := &file_web_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7511,7 +7191,7 @@ func (x *AgentDraftReviewSetting) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftReviewSetting.ProtoReflect.Descriptor instead.
 func (*AgentDraftReviewSetting) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{102}
+	return file_web_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *AgentDraftReviewSetting) GetKey() string {
@@ -7573,7 +7253,7 @@ type AgentDraftReview struct {
 
 func (x *AgentDraftReview) Reset() {
 	*x = AgentDraftReview{}
-	mi := &file_web_proto_msgTypes[103]
+	mi := &file_web_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7585,7 +7265,7 @@ func (x *AgentDraftReview) String() string {
 func (*AgentDraftReview) ProtoMessage() {}
 
 func (x *AgentDraftReview) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[103]
+	mi := &file_web_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7598,7 +7278,7 @@ func (x *AgentDraftReview) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftReview.ProtoReflect.Descriptor instead.
 func (*AgentDraftReview) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{103}
+	return file_web_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *AgentDraftReview) GetRevision() int64 {
@@ -7658,7 +7338,7 @@ type SaveDraftResponse struct {
 
 func (x *SaveDraftResponse) Reset() {
 	*x = SaveDraftResponse{}
-	mi := &file_web_proto_msgTypes[104]
+	mi := &file_web_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7670,7 +7350,7 @@ func (x *SaveDraftResponse) String() string {
 func (*SaveDraftResponse) ProtoMessage() {}
 
 func (x *SaveDraftResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[104]
+	mi := &file_web_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7683,7 +7363,7 @@ func (x *SaveDraftResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveDraftResponse.ProtoReflect.Descriptor instead.
 func (*SaveDraftResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{104}
+	return file_web_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *SaveDraftResponse) GetSaveState() string {
@@ -7724,7 +7404,7 @@ type StopWaitingRequest struct {
 
 func (x *StopWaitingRequest) Reset() {
 	*x = StopWaitingRequest{}
-	mi := &file_web_proto_msgTypes[105]
+	mi := &file_web_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7736,7 +7416,7 @@ func (x *StopWaitingRequest) String() string {
 func (*StopWaitingRequest) ProtoMessage() {}
 
 func (x *StopWaitingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[105]
+	mi := &file_web_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7749,7 +7429,7 @@ func (x *StopWaitingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopWaitingRequest.ProtoReflect.Descriptor instead.
 func (*StopWaitingRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{105}
+	return file_web_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *StopWaitingRequest) GetId() string {
@@ -7773,7 +7453,7 @@ type ProposeDraftChangesRequest struct {
 
 func (x *ProposeDraftChangesRequest) Reset() {
 	*x = ProposeDraftChangesRequest{}
-	mi := &file_web_proto_msgTypes[106]
+	mi := &file_web_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7785,7 +7465,7 @@ func (x *ProposeDraftChangesRequest) String() string {
 func (*ProposeDraftChangesRequest) ProtoMessage() {}
 
 func (x *ProposeDraftChangesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[106]
+	mi := &file_web_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7798,7 +7478,7 @@ func (x *ProposeDraftChangesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProposeDraftChangesRequest.ProtoReflect.Descriptor instead.
 func (*ProposeDraftChangesRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{106}
+	return file_web_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *ProposeDraftChangesRequest) GetId() string {
@@ -7843,7 +7523,7 @@ type AgentDraftProposedSetting struct {
 
 func (x *AgentDraftProposedSetting) Reset() {
 	*x = AgentDraftProposedSetting{}
-	mi := &file_web_proto_msgTypes[107]
+	mi := &file_web_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7855,7 +7535,7 @@ func (x *AgentDraftProposedSetting) String() string {
 func (*AgentDraftProposedSetting) ProtoMessage() {}
 
 func (x *AgentDraftProposedSetting) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[107]
+	mi := &file_web_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7868,7 +7548,7 @@ func (x *AgentDraftProposedSetting) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftProposedSetting.ProtoReflect.Descriptor instead.
 func (*AgentDraftProposedSetting) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{107}
+	return file_web_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *AgentDraftProposedSetting) GetVariant() string {
@@ -7911,7 +7591,7 @@ type AgentDraftProposedBody struct {
 
 func (x *AgentDraftProposedBody) Reset() {
 	*x = AgentDraftProposedBody{}
-	mi := &file_web_proto_msgTypes[108]
+	mi := &file_web_proto_msgTypes[103]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7923,7 +7603,7 @@ func (x *AgentDraftProposedBody) String() string {
 func (*AgentDraftProposedBody) ProtoMessage() {}
 
 func (x *AgentDraftProposedBody) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[108]
+	mi := &file_web_proto_msgTypes[103]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7936,7 +7616,7 @@ func (x *AgentDraftProposedBody) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftProposedBody.ProtoReflect.Descriptor instead.
 func (*AgentDraftProposedBody) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{108}
+	return file_web_proto_rawDescGZIP(), []int{103}
 }
 
 func (x *AgentDraftProposedBody) GetVariant() string {
@@ -7976,7 +7656,7 @@ type AgentDraftProposal struct {
 
 func (x *AgentDraftProposal) Reset() {
 	*x = AgentDraftProposal{}
-	mi := &file_web_proto_msgTypes[109]
+	mi := &file_web_proto_msgTypes[104]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7988,7 +7668,7 @@ func (x *AgentDraftProposal) String() string {
 func (*AgentDraftProposal) ProtoMessage() {}
 
 func (x *AgentDraftProposal) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[109]
+	mi := &file_web_proto_msgTypes[104]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8001,7 +7681,7 @@ func (x *AgentDraftProposal) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDraftProposal.ProtoReflect.Descriptor instead.
 func (*AgentDraftProposal) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{109}
+	return file_web_proto_rawDescGZIP(), []int{104}
 }
 
 func (x *AgentDraftProposal) GetId() string {
@@ -8058,7 +7738,7 @@ type DecideProposalRequest struct {
 
 func (x *DecideProposalRequest) Reset() {
 	*x = DecideProposalRequest{}
-	mi := &file_web_proto_msgTypes[110]
+	mi := &file_web_proto_msgTypes[105]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8070,7 +7750,7 @@ func (x *DecideProposalRequest) String() string {
 func (*DecideProposalRequest) ProtoMessage() {}
 
 func (x *DecideProposalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[110]
+	mi := &file_web_proto_msgTypes[105]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8083,7 +7763,7 @@ func (x *DecideProposalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecideProposalRequest.ProtoReflect.Descriptor instead.
 func (*DecideProposalRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{110}
+	return file_web_proto_rawDescGZIP(), []int{105}
 }
 
 func (x *DecideProposalRequest) GetId() string {
@@ -8117,7 +7797,7 @@ type InspectAgentsRequest struct {
 
 func (x *InspectAgentsRequest) Reset() {
 	*x = InspectAgentsRequest{}
-	mi := &file_web_proto_msgTypes[111]
+	mi := &file_web_proto_msgTypes[106]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8129,7 +7809,7 @@ func (x *InspectAgentsRequest) String() string {
 func (*InspectAgentsRequest) ProtoMessage() {}
 
 func (x *InspectAgentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[111]
+	mi := &file_web_proto_msgTypes[106]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8142,7 +7822,7 @@ func (x *InspectAgentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InspectAgentsRequest.ProtoReflect.Descriptor instead.
 func (*InspectAgentsRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{111}
+	return file_web_proto_rawDescGZIP(), []int{106}
 }
 
 func (x *InspectAgentsRequest) GetTarget() string {
@@ -8169,7 +7849,7 @@ type InspectAgentsResponse struct {
 
 func (x *InspectAgentsResponse) Reset() {
 	*x = InspectAgentsResponse{}
-	mi := &file_web_proto_msgTypes[112]
+	mi := &file_web_proto_msgTypes[107]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8181,7 +7861,7 @@ func (x *InspectAgentsResponse) String() string {
 func (*InspectAgentsResponse) ProtoMessage() {}
 
 func (x *InspectAgentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[112]
+	mi := &file_web_proto_msgTypes[107]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8194,7 +7874,7 @@ func (x *InspectAgentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InspectAgentsResponse.ProtoReflect.Descriptor instead.
 func (*InspectAgentsResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{112}
+	return file_web_proto_rawDescGZIP(), []int{107}
 }
 
 func (x *InspectAgentsResponse) GetOutput() string {
@@ -8226,7 +7906,7 @@ type UpdateSessionRequest struct {
 
 func (x *UpdateSessionRequest) Reset() {
 	*x = UpdateSessionRequest{}
-	mi := &file_web_proto_msgTypes[113]
+	mi := &file_web_proto_msgTypes[108]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8238,7 +7918,7 @@ func (x *UpdateSessionRequest) String() string {
 func (*UpdateSessionRequest) ProtoMessage() {}
 
 func (x *UpdateSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[113]
+	mi := &file_web_proto_msgTypes[108]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8251,7 +7931,7 @@ func (x *UpdateSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSessionRequest.ProtoReflect.Descriptor instead.
 func (*UpdateSessionRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{113}
+	return file_web_proto_rawDescGZIP(), []int{108}
 }
 
 func (x *UpdateSessionRequest) GetId() string {
@@ -8297,7 +7977,7 @@ type UpdateSessionResponse struct {
 
 func (x *UpdateSessionResponse) Reset() {
 	*x = UpdateSessionResponse{}
-	mi := &file_web_proto_msgTypes[114]
+	mi := &file_web_proto_msgTypes[109]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8309,7 +7989,7 @@ func (x *UpdateSessionResponse) String() string {
 func (*UpdateSessionResponse) ProtoMessage() {}
 
 func (x *UpdateSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[114]
+	mi := &file_web_proto_msgTypes[109]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8322,7 +8002,7 @@ func (x *UpdateSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSessionResponse.ProtoReflect.Descriptor instead.
 func (*UpdateSessionResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{114}
+	return file_web_proto_rawDescGZIP(), []int{109}
 }
 
 type ProtocolRequest struct {
@@ -8333,7 +8013,7 @@ type ProtocolRequest struct {
 
 func (x *ProtocolRequest) Reset() {
 	*x = ProtocolRequest{}
-	mi := &file_web_proto_msgTypes[115]
+	mi := &file_web_proto_msgTypes[110]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8345,7 +8025,7 @@ func (x *ProtocolRequest) String() string {
 func (*ProtocolRequest) ProtoMessage() {}
 
 func (x *ProtocolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[115]
+	mi := &file_web_proto_msgTypes[110]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8358,7 +8038,7 @@ func (x *ProtocolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProtocolRequest.ProtoReflect.Descriptor instead.
 func (*ProtocolRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{115}
+	return file_web_proto_rawDescGZIP(), []int{110}
 }
 
 type ProtocolResponse struct {
@@ -8370,7 +8050,7 @@ type ProtocolResponse struct {
 
 func (x *ProtocolResponse) Reset() {
 	*x = ProtocolResponse{}
-	mi := &file_web_proto_msgTypes[116]
+	mi := &file_web_proto_msgTypes[111]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8382,7 +8062,7 @@ func (x *ProtocolResponse) String() string {
 func (*ProtocolResponse) ProtoMessage() {}
 
 func (x *ProtocolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[116]
+	mi := &file_web_proto_msgTypes[111]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8395,7 +8075,7 @@ func (x *ProtocolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProtocolResponse.ProtoReflect.Descriptor instead.
 func (*ProtocolResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{116}
+	return file_web_proto_rawDescGZIP(), []int{111}
 }
 
 func (x *ProtocolResponse) GetProtoSha256() string {
@@ -8419,7 +8099,7 @@ type QueueItem struct {
 
 func (x *QueueItem) Reset() {
 	*x = QueueItem{}
-	mi := &file_web_proto_msgTypes[117]
+	mi := &file_web_proto_msgTypes[112]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8431,7 +8111,7 @@ func (x *QueueItem) String() string {
 func (*QueueItem) ProtoMessage() {}
 
 func (x *QueueItem) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[117]
+	mi := &file_web_proto_msgTypes[112]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8444,7 +8124,7 @@ func (x *QueueItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueItem.ProtoReflect.Descriptor instead.
 func (*QueueItem) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{117}
+	return file_web_proto_rawDescGZIP(), []int{112}
 }
 
 func (x *QueueItem) GetId() string {
@@ -8498,7 +8178,7 @@ type ListQueueRequest struct {
 
 func (x *ListQueueRequest) Reset() {
 	*x = ListQueueRequest{}
-	mi := &file_web_proto_msgTypes[118]
+	mi := &file_web_proto_msgTypes[113]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8510,7 +8190,7 @@ func (x *ListQueueRequest) String() string {
 func (*ListQueueRequest) ProtoMessage() {}
 
 func (x *ListQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[118]
+	mi := &file_web_proto_msgTypes[113]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8523,7 +8203,7 @@ func (x *ListQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListQueueRequest.ProtoReflect.Descriptor instead.
 func (*ListQueueRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{118}
+	return file_web_proto_rawDescGZIP(), []int{113}
 }
 
 func (x *ListQueueRequest) GetId() string {
@@ -8542,7 +8222,7 @@ type ListQueueResponse struct {
 
 func (x *ListQueueResponse) Reset() {
 	*x = ListQueueResponse{}
-	mi := &file_web_proto_msgTypes[119]
+	mi := &file_web_proto_msgTypes[114]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8554,7 +8234,7 @@ func (x *ListQueueResponse) String() string {
 func (*ListQueueResponse) ProtoMessage() {}
 
 func (x *ListQueueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[119]
+	mi := &file_web_proto_msgTypes[114]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8567,7 +8247,7 @@ func (x *ListQueueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListQueueResponse.ProtoReflect.Descriptor instead.
 func (*ListQueueResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{119}
+	return file_web_proto_rawDescGZIP(), []int{114}
 }
 
 func (x *ListQueueResponse) GetItems() []*QueueItem {
@@ -8588,7 +8268,7 @@ type QueueItemRequest struct {
 
 func (x *QueueItemRequest) Reset() {
 	*x = QueueItemRequest{}
-	mi := &file_web_proto_msgTypes[120]
+	mi := &file_web_proto_msgTypes[115]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8600,7 +8280,7 @@ func (x *QueueItemRequest) String() string {
 func (*QueueItemRequest) ProtoMessage() {}
 
 func (x *QueueItemRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[120]
+	mi := &file_web_proto_msgTypes[115]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8613,7 +8293,7 @@ func (x *QueueItemRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueItemRequest.ProtoReflect.Descriptor instead.
 func (*QueueItemRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{120}
+	return file_web_proto_rawDescGZIP(), []int{115}
 }
 
 func (x *QueueItemRequest) GetId() string {
@@ -8645,7 +8325,7 @@ type QueueItemResponse struct {
 
 func (x *QueueItemResponse) Reset() {
 	*x = QueueItemResponse{}
-	mi := &file_web_proto_msgTypes[121]
+	mi := &file_web_proto_msgTypes[116]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8657,7 +8337,7 @@ func (x *QueueItemResponse) String() string {
 func (*QueueItemResponse) ProtoMessage() {}
 
 func (x *QueueItemResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[121]
+	mi := &file_web_proto_msgTypes[116]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8670,7 +8350,7 @@ func (x *QueueItemResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueItemResponse.ProtoReflect.Descriptor instead.
 func (*QueueItemResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{121}
+	return file_web_proto_rawDescGZIP(), []int{116}
 }
 
 type ReorderQueueRequest struct {
@@ -8683,7 +8363,7 @@ type ReorderQueueRequest struct {
 
 func (x *ReorderQueueRequest) Reset() {
 	*x = ReorderQueueRequest{}
-	mi := &file_web_proto_msgTypes[122]
+	mi := &file_web_proto_msgTypes[117]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8695,7 +8375,7 @@ func (x *ReorderQueueRequest) String() string {
 func (*ReorderQueueRequest) ProtoMessage() {}
 
 func (x *ReorderQueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[122]
+	mi := &file_web_proto_msgTypes[117]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8708,7 +8388,7 @@ func (x *ReorderQueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReorderQueueRequest.ProtoReflect.Descriptor instead.
 func (*ReorderQueueRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{122}
+	return file_web_proto_rawDescGZIP(), []int{117}
 }
 
 func (x *ReorderQueueRequest) GetId() string {
@@ -8734,7 +8414,7 @@ type MoveToBackgroundRequest struct {
 
 func (x *MoveToBackgroundRequest) Reset() {
 	*x = MoveToBackgroundRequest{}
-	mi := &file_web_proto_msgTypes[123]
+	mi := &file_web_proto_msgTypes[118]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8746,7 +8426,7 @@ func (x *MoveToBackgroundRequest) String() string {
 func (*MoveToBackgroundRequest) ProtoMessage() {}
 
 func (x *MoveToBackgroundRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[123]
+	mi := &file_web_proto_msgTypes[118]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8759,7 +8439,7 @@ func (x *MoveToBackgroundRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveToBackgroundRequest.ProtoReflect.Descriptor instead.
 func (*MoveToBackgroundRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{123}
+	return file_web_proto_rawDescGZIP(), []int{118}
 }
 
 func (x *MoveToBackgroundRequest) GetConversationId() string {
@@ -8778,7 +8458,7 @@ type MoveToBackgroundResponse struct {
 
 func (x *MoveToBackgroundResponse) Reset() {
 	*x = MoveToBackgroundResponse{}
-	mi := &file_web_proto_msgTypes[124]
+	mi := &file_web_proto_msgTypes[119]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8790,7 +8470,7 @@ func (x *MoveToBackgroundResponse) String() string {
 func (*MoveToBackgroundResponse) ProtoMessage() {}
 
 func (x *MoveToBackgroundResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[124]
+	mi := &file_web_proto_msgTypes[119]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8803,7 +8483,7 @@ func (x *MoveToBackgroundResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveToBackgroundResponse.ProtoReflect.Descriptor instead.
 func (*MoveToBackgroundResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{124}
+	return file_web_proto_rawDescGZIP(), []int{119}
 }
 
 func (x *MoveToBackgroundResponse) GetMoved() bool {
@@ -8823,7 +8503,7 @@ type StopBackgroundJobRequest struct {
 
 func (x *StopBackgroundJobRequest) Reset() {
 	*x = StopBackgroundJobRequest{}
-	mi := &file_web_proto_msgTypes[125]
+	mi := &file_web_proto_msgTypes[120]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8835,7 +8515,7 @@ func (x *StopBackgroundJobRequest) String() string {
 func (*StopBackgroundJobRequest) ProtoMessage() {}
 
 func (x *StopBackgroundJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[125]
+	mi := &file_web_proto_msgTypes[120]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8848,7 +8528,7 @@ func (x *StopBackgroundJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopBackgroundJobRequest.ProtoReflect.Descriptor instead.
 func (*StopBackgroundJobRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{125}
+	return file_web_proto_rawDescGZIP(), []int{120}
 }
 
 func (x *StopBackgroundJobRequest) GetConversationId() string {
@@ -8875,7 +8555,7 @@ type StopBackgroundJobResponse struct {
 
 func (x *StopBackgroundJobResponse) Reset() {
 	*x = StopBackgroundJobResponse{}
-	mi := &file_web_proto_msgTypes[126]
+	mi := &file_web_proto_msgTypes[121]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8887,7 +8567,7 @@ func (x *StopBackgroundJobResponse) String() string {
 func (*StopBackgroundJobResponse) ProtoMessage() {}
 
 func (x *StopBackgroundJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[126]
+	mi := &file_web_proto_msgTypes[121]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8900,7 +8580,7 @@ func (x *StopBackgroundJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopBackgroundJobResponse.ProtoReflect.Descriptor instead.
 func (*StopBackgroundJobResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{126}
+	return file_web_proto_rawDescGZIP(), []int{121}
 }
 
 func (x *StopBackgroundJobResponse) GetStopped() bool {
@@ -8919,7 +8599,7 @@ type SessionEntriesRequest struct {
 
 func (x *SessionEntriesRequest) Reset() {
 	*x = SessionEntriesRequest{}
-	mi := &file_web_proto_msgTypes[127]
+	mi := &file_web_proto_msgTypes[122]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8931,7 +8611,7 @@ func (x *SessionEntriesRequest) String() string {
 func (*SessionEntriesRequest) ProtoMessage() {}
 
 func (x *SessionEntriesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[127]
+	mi := &file_web_proto_msgTypes[122]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8944,7 +8624,7 @@ func (x *SessionEntriesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEntriesRequest.ProtoReflect.Descriptor instead.
 func (*SessionEntriesRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{127}
+	return file_web_proto_rawDescGZIP(), []int{122}
 }
 
 func (x *SessionEntriesRequest) GetId() string {
@@ -8965,7 +8645,7 @@ type SessionEntryMeta struct {
 
 func (x *SessionEntryMeta) Reset() {
 	*x = SessionEntryMeta{}
-	mi := &file_web_proto_msgTypes[128]
+	mi := &file_web_proto_msgTypes[123]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8977,7 +8657,7 @@ func (x *SessionEntryMeta) String() string {
 func (*SessionEntryMeta) ProtoMessage() {}
 
 func (x *SessionEntryMeta) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[128]
+	mi := &file_web_proto_msgTypes[123]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8990,7 +8670,7 @@ func (x *SessionEntryMeta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEntryMeta.ProtoReflect.Descriptor instead.
 func (*SessionEntryMeta) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{128}
+	return file_web_proto_rawDescGZIP(), []int{123}
 }
 
 func (x *SessionEntryMeta) GetId() int64 {
@@ -9023,7 +8703,7 @@ type ListSessionEntriesResponse struct {
 
 func (x *ListSessionEntriesResponse) Reset() {
 	*x = ListSessionEntriesResponse{}
-	mi := &file_web_proto_msgTypes[129]
+	mi := &file_web_proto_msgTypes[124]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9035,7 +8715,7 @@ func (x *ListSessionEntriesResponse) String() string {
 func (*ListSessionEntriesResponse) ProtoMessage() {}
 
 func (x *ListSessionEntriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[129]
+	mi := &file_web_proto_msgTypes[124]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9048,7 +8728,7 @@ func (x *ListSessionEntriesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionEntriesResponse.ProtoReflect.Descriptor instead.
 func (*ListSessionEntriesResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{129}
+	return file_web_proto_rawDescGZIP(), []int{124}
 }
 
 func (x *ListSessionEntriesResponse) GetEntries() []*SessionEntryMeta {
@@ -9068,7 +8748,7 @@ type SessionEntryData struct {
 
 func (x *SessionEntryData) Reset() {
 	*x = SessionEntryData{}
-	mi := &file_web_proto_msgTypes[130]
+	mi := &file_web_proto_msgTypes[125]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9080,7 +8760,7 @@ func (x *SessionEntryData) String() string {
 func (*SessionEntryData) ProtoMessage() {}
 
 func (x *SessionEntryData) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[130]
+	mi := &file_web_proto_msgTypes[125]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9093,7 +8773,7 @@ func (x *SessionEntryData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionEntryData.ProtoReflect.Descriptor instead.
 func (*SessionEntryData) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{130}
+	return file_web_proto_rawDescGZIP(), []int{125}
 }
 
 func (x *SessionEntryData) GetId() int64 {
@@ -9119,7 +8799,7 @@ type LoadSessionEntriesResponse struct {
 
 func (x *LoadSessionEntriesResponse) Reset() {
 	*x = LoadSessionEntriesResponse{}
-	mi := &file_web_proto_msgTypes[131]
+	mi := &file_web_proto_msgTypes[126]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9131,7 +8811,7 @@ func (x *LoadSessionEntriesResponse) String() string {
 func (*LoadSessionEntriesResponse) ProtoMessage() {}
 
 func (x *LoadSessionEntriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[131]
+	mi := &file_web_proto_msgTypes[126]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9144,7 +8824,7 @@ func (x *LoadSessionEntriesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoadSessionEntriesResponse.ProtoReflect.Descriptor instead.
 func (*LoadSessionEntriesResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{131}
+	return file_web_proto_rawDescGZIP(), []int{126}
 }
 
 func (x *LoadSessionEntriesResponse) GetEntries() []*SessionEntryData {
@@ -9163,7 +8843,7 @@ type DeleteSessionEntriesResponse struct {
 
 func (x *DeleteSessionEntriesResponse) Reset() {
 	*x = DeleteSessionEntriesResponse{}
-	mi := &file_web_proto_msgTypes[132]
+	mi := &file_web_proto_msgTypes[127]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9175,7 +8855,7 @@ func (x *DeleteSessionEntriesResponse) String() string {
 func (*DeleteSessionEntriesResponse) ProtoMessage() {}
 
 func (x *DeleteSessionEntriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[132]
+	mi := &file_web_proto_msgTypes[127]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9188,7 +8868,7 @@ func (x *DeleteSessionEntriesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSessionEntriesResponse.ProtoReflect.Descriptor instead.
 func (*DeleteSessionEntriesResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{132}
+	return file_web_proto_rawDescGZIP(), []int{127}
 }
 
 func (x *DeleteSessionEntriesResponse) GetDeleted() int64 {
@@ -9206,7 +8886,7 @@ type IdentityRequest struct {
 
 func (x *IdentityRequest) Reset() {
 	*x = IdentityRequest{}
-	mi := &file_web_proto_msgTypes[133]
+	mi := &file_web_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9218,7 +8898,7 @@ func (x *IdentityRequest) String() string {
 func (*IdentityRequest) ProtoMessage() {}
 
 func (x *IdentityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[133]
+	mi := &file_web_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9231,7 +8911,7 @@ func (x *IdentityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdentityRequest.ProtoReflect.Descriptor instead.
 func (*IdentityRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{133}
+	return file_web_proto_rawDescGZIP(), []int{128}
 }
 
 // sandbox_error is why emulated shells cannot run, empty when they can or no agent uses one. limited is set,
@@ -9248,7 +8928,7 @@ type IdentityResponse struct {
 
 func (x *IdentityResponse) Reset() {
 	*x = IdentityResponse{}
-	mi := &file_web_proto_msgTypes[134]
+	mi := &file_web_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9260,7 +8940,7 @@ func (x *IdentityResponse) String() string {
 func (*IdentityResponse) ProtoMessage() {}
 
 func (x *IdentityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[134]
+	mi := &file_web_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9273,7 +8953,7 @@ func (x *IdentityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdentityResponse.ProtoReflect.Descriptor instead.
 func (*IdentityResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{134}
+	return file_web_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *IdentityResponse) GetUsername() string {
@@ -9313,7 +8993,7 @@ type ReloadRequest struct {
 
 func (x *ReloadRequest) Reset() {
 	*x = ReloadRequest{}
-	mi := &file_web_proto_msgTypes[135]
+	mi := &file_web_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9325,7 +9005,7 @@ func (x *ReloadRequest) String() string {
 func (*ReloadRequest) ProtoMessage() {}
 
 func (x *ReloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[135]
+	mi := &file_web_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9338,7 +9018,7 @@ func (x *ReloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadRequest.ProtoReflect.Descriptor instead.
 func (*ReloadRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{135}
+	return file_web_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *ReloadRequest) GetReason() string {
@@ -9357,7 +9037,7 @@ type ReloadResponse struct {
 
 func (x *ReloadResponse) Reset() {
 	*x = ReloadResponse{}
-	mi := &file_web_proto_msgTypes[136]
+	mi := &file_web_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9369,7 +9049,7 @@ func (x *ReloadResponse) String() string {
 func (*ReloadResponse) ProtoMessage() {}
 
 func (x *ReloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[136]
+	mi := &file_web_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9382,7 +9062,7 @@ func (x *ReloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadResponse.ProtoReflect.Descriptor instead.
 func (*ReloadResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{136}
+	return file_web_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *ReloadResponse) GetMessage() string {
@@ -9404,7 +9084,7 @@ type VoiceRequest struct {
 
 func (x *VoiceRequest) Reset() {
 	*x = VoiceRequest{}
-	mi := &file_web_proto_msgTypes[137]
+	mi := &file_web_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9416,7 +9096,7 @@ func (x *VoiceRequest) String() string {
 func (*VoiceRequest) ProtoMessage() {}
 
 func (x *VoiceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[137]
+	mi := &file_web_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9429,7 +9109,7 @@ func (x *VoiceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceRequest.ProtoReflect.Descriptor instead.
 func (*VoiceRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{137}
+	return file_web_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *VoiceRequest) GetConversationId() string {
@@ -9465,7 +9145,7 @@ type VoiceSettingsRequest struct {
 
 func (x *VoiceSettingsRequest) Reset() {
 	*x = VoiceSettingsRequest{}
-	mi := &file_web_proto_msgTypes[138]
+	mi := &file_web_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9477,7 +9157,7 @@ func (x *VoiceSettingsRequest) String() string {
 func (*VoiceSettingsRequest) ProtoMessage() {}
 
 func (x *VoiceSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[138]
+	mi := &file_web_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9490,7 +9170,7 @@ func (x *VoiceSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceSettingsRequest.ProtoReflect.Descriptor instead.
 func (*VoiceSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{138}
+	return file_web_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *VoiceSettingsRequest) GetAction() VoiceSettingsAction {
@@ -9533,7 +9213,7 @@ type VoiceSettingsResponse struct {
 
 func (x *VoiceSettingsResponse) Reset() {
 	*x = VoiceSettingsResponse{}
-	mi := &file_web_proto_msgTypes[139]
+	mi := &file_web_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9545,7 +9225,7 @@ func (x *VoiceSettingsResponse) String() string {
 func (*VoiceSettingsResponse) ProtoMessage() {}
 
 func (x *VoiceSettingsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[139]
+	mi := &file_web_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9558,7 +9238,7 @@ func (x *VoiceSettingsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceSettingsResponse.ProtoReflect.Descriptor instead.
 func (*VoiceSettingsResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{139}
+	return file_web_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *VoiceSettingsResponse) GetAgent() string {
@@ -9593,7 +9273,7 @@ type Space struct {
 
 func (x *Space) Reset() {
 	*x = Space{}
-	mi := &file_web_proto_msgTypes[140]
+	mi := &file_web_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9605,7 +9285,7 @@ func (x *Space) String() string {
 func (*Space) ProtoMessage() {}
 
 func (x *Space) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[140]
+	mi := &file_web_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9618,7 +9298,7 @@ func (x *Space) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Space.ProtoReflect.Descriptor instead.
 func (*Space) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{140}
+	return file_web_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *Space) GetId() string {
@@ -9648,7 +9328,7 @@ type Tab struct {
 
 func (x *Tab) Reset() {
 	*x = Tab{}
-	mi := &file_web_proto_msgTypes[141]
+	mi := &file_web_proto_msgTypes[136]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9660,7 +9340,7 @@ func (x *Tab) String() string {
 func (*Tab) ProtoMessage() {}
 
 func (x *Tab) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[141]
+	mi := &file_web_proto_msgTypes[136]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9673,7 +9353,7 @@ func (x *Tab) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Tab.ProtoReflect.Descriptor instead.
 func (*Tab) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{141}
+	return file_web_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *Tab) GetPath() string {
@@ -9704,21 +9384,19 @@ func (x *Tab) GetSearch() *SearchPage {
 	return nil
 }
 
-// SearchPage is a Search tab's name and its searches, active naming the shown one by id. board is the style id of a
-// Dashboard, whose searches are its lanes; empty is an ordinary Search page.
+// SearchPage is a Search tab's name and its searches, active naming the shown one by id.
 type SearchPage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Searches      []*SavedSearch         `protobuf:"bytes,2,rep,name=searches,proto3" json:"searches,omitempty"`
 	Active        string                 `protobuf:"bytes,3,opt,name=active,proto3" json:"active,omitempty"`
-	Board         string                 `protobuf:"bytes,4,opt,name=board,proto3" json:"board,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SearchPage) Reset() {
 	*x = SearchPage{}
-	mi := &file_web_proto_msgTypes[142]
+	mi := &file_web_proto_msgTypes[137]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9730,7 +9408,7 @@ func (x *SearchPage) String() string {
 func (*SearchPage) ProtoMessage() {}
 
 func (x *SearchPage) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[142]
+	mi := &file_web_proto_msgTypes[137]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9743,7 +9421,7 @@ func (x *SearchPage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchPage.ProtoReflect.Descriptor instead.
 func (*SearchPage) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{142}
+	return file_web_proto_rawDescGZIP(), []int{137}
 }
 
 func (x *SearchPage) GetName() string {
@@ -9767,28 +9445,19 @@ func (x *SearchPage) GetActive() string {
 	return ""
 }
 
-func (x *SearchPage) GetBoard() string {
-	if x != nil {
-		return x.Board
-	}
-	return ""
-}
-
-// SavedSearch is one search on a Search page: its id, the name the person gave it, and its query. notify marks a
-// Dashboard lane whose newly entering sessions raise a desktop notification.
+// SavedSearch is one search on a Search page: its id, the name the person gave it, and its query.
 type SavedSearch struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Query         string                 `protobuf:"bytes,3,opt,name=query,proto3" json:"query,omitempty"`
-	Notify        bool                   `protobuf:"varint,4,opt,name=notify,proto3" json:"notify,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SavedSearch) Reset() {
 	*x = SavedSearch{}
-	mi := &file_web_proto_msgTypes[143]
+	mi := &file_web_proto_msgTypes[138]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9800,7 +9469,7 @@ func (x *SavedSearch) String() string {
 func (*SavedSearch) ProtoMessage() {}
 
 func (x *SavedSearch) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[143]
+	mi := &file_web_proto_msgTypes[138]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9813,7 +9482,7 @@ func (x *SavedSearch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SavedSearch.ProtoReflect.Descriptor instead.
 func (*SavedSearch) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{143}
+	return file_web_proto_rawDescGZIP(), []int{138}
 }
 
 func (x *SavedSearch) GetId() string {
@@ -9837,13 +9506,6 @@ func (x *SavedSearch) GetQuery() string {
 	return ""
 }
 
-func (x *SavedSearch) GetNotify() bool {
-	if x != nil {
-		return x.Notify
-	}
-	return false
-}
-
 type TabGroup struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -9856,7 +9518,7 @@ type TabGroup struct {
 
 func (x *TabGroup) Reset() {
 	*x = TabGroup{}
-	mi := &file_web_proto_msgTypes[144]
+	mi := &file_web_proto_msgTypes[139]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9868,7 +9530,7 @@ func (x *TabGroup) String() string {
 func (*TabGroup) ProtoMessage() {}
 
 func (x *TabGroup) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[144]
+	mi := &file_web_proto_msgTypes[139]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9881,7 +9543,7 @@ func (x *TabGroup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TabGroup.ProtoReflect.Descriptor instead.
 func (*TabGroup) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{144}
+	return file_web_proto_rawDescGZIP(), []int{139}
 }
 
 func (x *TabGroup) GetId() string {
@@ -9927,7 +9589,7 @@ type TabState struct {
 
 func (x *TabState) Reset() {
 	*x = TabState{}
-	mi := &file_web_proto_msgTypes[145]
+	mi := &file_web_proto_msgTypes[140]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -9939,7 +9601,7 @@ func (x *TabState) String() string {
 func (*TabState) ProtoMessage() {}
 
 func (x *TabState) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[145]
+	mi := &file_web_proto_msgTypes[140]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -9952,7 +9614,7 @@ func (x *TabState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TabState.ProtoReflect.Descriptor instead.
 func (*TabState) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{145}
+	return file_web_proto_rawDescGZIP(), []int{140}
 }
 
 func (x *TabState) GetTabs() []*Tab {
@@ -10006,7 +9668,7 @@ type SharedTab struct {
 
 func (x *SharedTab) Reset() {
 	*x = SharedTab{}
-	mi := &file_web_proto_msgTypes[146]
+	mi := &file_web_proto_msgTypes[141]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10018,7 +9680,7 @@ func (x *SharedTab) String() string {
 func (*SharedTab) ProtoMessage() {}
 
 func (x *SharedTab) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[146]
+	mi := &file_web_proto_msgTypes[141]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10031,7 +9693,7 @@ func (x *SharedTab) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SharedTab.ProtoReflect.Descriptor instead.
 func (*SharedTab) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{146}
+	return file_web_proto_rawDescGZIP(), []int{141}
 }
 
 func (x *SharedTab) GetSpace() string {
@@ -10074,7 +9736,7 @@ type TopShelf struct {
 
 func (x *TopShelf) Reset() {
 	*x = TopShelf{}
-	mi := &file_web_proto_msgTypes[147]
+	mi := &file_web_proto_msgTypes[142]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10086,7 +9748,7 @@ func (x *TopShelf) String() string {
 func (*TopShelf) ProtoMessage() {}
 
 func (x *TopShelf) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[147]
+	mi := &file_web_proto_msgTypes[142]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10099,7 +9761,7 @@ func (x *TopShelf) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TopShelf.ProtoReflect.Descriptor instead.
 func (*TopShelf) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{147}
+	return file_web_proto_rawDescGZIP(), []int{142}
 }
 
 func (x *TopShelf) GetTabs() []*ShelfTab {
@@ -10130,7 +9792,7 @@ type ShelfTab struct {
 
 func (x *ShelfTab) Reset() {
 	*x = ShelfTab{}
-	mi := &file_web_proto_msgTypes[148]
+	mi := &file_web_proto_msgTypes[143]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10142,7 +9804,7 @@ func (x *ShelfTab) String() string {
 func (*ShelfTab) ProtoMessage() {}
 
 func (x *ShelfTab) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[148]
+	mi := &file_web_proto_msgTypes[143]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10155,7 +9817,7 @@ func (x *ShelfTab) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShelfTab.ProtoReflect.Descriptor instead.
 func (*ShelfTab) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{148}
+	return file_web_proto_rawDescGZIP(), []int{143}
 }
 
 func (x *ShelfTab) GetServer() string {
@@ -10198,7 +9860,7 @@ type AttentionChange struct {
 
 func (x *AttentionChange) Reset() {
 	*x = AttentionChange{}
-	mi := &file_web_proto_msgTypes[149]
+	mi := &file_web_proto_msgTypes[144]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10210,7 +9872,7 @@ func (x *AttentionChange) String() string {
 func (*AttentionChange) ProtoMessage() {}
 
 func (x *AttentionChange) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[149]
+	mi := &file_web_proto_msgTypes[144]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10223,7 +9885,7 @@ func (x *AttentionChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttentionChange.ProtoReflect.Descriptor instead.
 func (*AttentionChange) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{149}
+	return file_web_proto_rawDescGZIP(), []int{144}
 }
 
 func (x *AttentionChange) GetPaths() []string {
@@ -10272,7 +9934,7 @@ type TabsRequest struct {
 
 func (x *TabsRequest) Reset() {
 	*x = TabsRequest{}
-	mi := &file_web_proto_msgTypes[150]
+	mi := &file_web_proto_msgTypes[145]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10284,7 +9946,7 @@ func (x *TabsRequest) String() string {
 func (*TabsRequest) ProtoMessage() {}
 
 func (x *TabsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[150]
+	mi := &file_web_proto_msgTypes[145]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10297,7 +9959,7 @@ func (x *TabsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TabsRequest.ProtoReflect.Descriptor instead.
 func (*TabsRequest) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{150}
+	return file_web_proto_rawDescGZIP(), []int{145}
 }
 
 func (x *TabsRequest) GetState() *TabState {
@@ -10401,7 +10063,7 @@ type TabsResponse struct {
 
 func (x *TabsResponse) Reset() {
 	*x = TabsResponse{}
-	mi := &file_web_proto_msgTypes[151]
+	mi := &file_web_proto_msgTypes[146]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10413,7 +10075,7 @@ func (x *TabsResponse) String() string {
 func (*TabsResponse) ProtoMessage() {}
 
 func (x *TabsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[151]
+	mi := &file_web_proto_msgTypes[146]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10426,7 +10088,7 @@ func (x *TabsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TabsResponse.ProtoReflect.Descriptor instead.
 func (*TabsResponse) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{151}
+	return file_web_proto_rawDescGZIP(), []int{146}
 }
 
 func (x *TabsResponse) GetSpaces() []*Space {
@@ -10515,7 +10177,7 @@ type VoiceEvent struct {
 
 func (x *VoiceEvent) Reset() {
 	*x = VoiceEvent{}
-	mi := &file_web_proto_msgTypes[152]
+	mi := &file_web_proto_msgTypes[147]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10527,7 +10189,7 @@ func (x *VoiceEvent) String() string {
 func (*VoiceEvent) ProtoMessage() {}
 
 func (x *VoiceEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[152]
+	mi := &file_web_proto_msgTypes[147]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10540,7 +10202,7 @@ func (x *VoiceEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceEvent.ProtoReflect.Descriptor instead.
 func (*VoiceEvent) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{152}
+	return file_web_proto_rawDescGZIP(), []int{147}
 }
 
 func (x *VoiceEvent) GetEvent() isVoiceEvent_Event {
@@ -10655,7 +10317,7 @@ type VoiceAnswer struct {
 
 func (x *VoiceAnswer) Reset() {
 	*x = VoiceAnswer{}
-	mi := &file_web_proto_msgTypes[153]
+	mi := &file_web_proto_msgTypes[148]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10667,7 +10329,7 @@ func (x *VoiceAnswer) String() string {
 func (*VoiceAnswer) ProtoMessage() {}
 
 func (x *VoiceAnswer) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[153]
+	mi := &file_web_proto_msgTypes[148]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10680,7 +10342,7 @@ func (x *VoiceAnswer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceAnswer.ProtoReflect.Descriptor instead.
 func (*VoiceAnswer) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{153}
+	return file_web_proto_rawDescGZIP(), []int{148}
 }
 
 func (x *VoiceAnswer) GetSdp() string {
@@ -10707,7 +10369,7 @@ type VoiceEnded struct {
 
 func (x *VoiceEnded) Reset() {
 	*x = VoiceEnded{}
-	mi := &file_web_proto_msgTypes[154]
+	mi := &file_web_proto_msgTypes[149]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -10719,7 +10381,7 @@ func (x *VoiceEnded) String() string {
 func (*VoiceEnded) ProtoMessage() {}
 
 func (x *VoiceEnded) ProtoReflect() protoreflect.Message {
-	mi := &file_web_proto_msgTypes[154]
+	mi := &file_web_proto_msgTypes[149]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -10732,7 +10394,7 @@ func (x *VoiceEnded) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VoiceEnded.ProtoReflect.Descriptor instead.
 func (*VoiceEnded) Descriptor() ([]byte, []int) {
-	return file_web_proto_rawDescGZIP(), []int{154}
+	return file_web_proto_rawDescGZIP(), []int{149}
 }
 
 func (x *VoiceEnded) GetReason() string {
@@ -10752,7 +10414,7 @@ const file_web_proto_rawDesc = "" +
 	"\x05since\x18\x02 \x01(\tR\x05since\x12\x12\n" +
 	"\x04hold\x18\x03 \x01(\bR\x04hold\x12\x1f\n" +
 	"\vsame_origin\x18\x04 \x01(\bR\n" +
-	"sameOrigin\"\x8d\b\n" +
+	"sameOrigin\"\xb5\a\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -10782,14 +10444,9 @@ const file_web_proto_rawDesc = "" +
 	"\x11remote_session_id\x18\x19 \x01(\tR\x0fremoteSessionId\x12\x14\n" +
 	"\x05label\x18\x1a \x01(\tR\x05label\x12\x1b\n" +
 	"\tunread_at\x18\x1b \x01(\tR\bunreadAt\x12\x16\n" +
-	"\x06asking\x18\x1c \x01(\bR\x06asking\x12-\n" +
-	"\n" +
-	"work_state\x18\x1d \x01(\x0e2\x0e.rpc.WorkStateR\tworkState\x12\x1f\n" +
+	"\x06asking\x18\x1c \x01(\bR\x06asking\x12\x1f\n" +
 	"\vstate_since\x18\x1e \x01(\tR\n" +
-	"stateSince\x12\x1a\n" +
-	"\bexternal\x18\x1f \x01(\bR\bexternal\x12\x1d\n" +
-	"\n" +
-	"arrived_at\x18  \x01(\tR\tarrivedAt\x12#\n" +
+	"stateSince\x12#\n" +
 	"\rmarked_unread\x18! \x01(\bR\fmarkedUnread\x12\x16\n" +
 	"\x06parked\x18\" \x01(\bR\x06parked\x12\x14\n" +
 	"\x05until\x18# \x01(\tR\x05until\x12\x12\n" +
@@ -10798,7 +10455,7 @@ const file_web_proto_rawDesc = "" +
 	"until_done\x18% \x01(\bR\tuntilDone\x12\x1b\n" +
 	"\tauto_park\x18& \x01(\bR\bautoPark\x12\x16\n" +
 	"\x06paused\x18' \x01(\bR\x06paused\x12\x1a\n" +
-	"\bpausable\x18( \x01(\bR\bpausableJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rR\x0eallowed_agents\"\x97\x01\n" +
+	"\bpausable\x18( \x01(\bR\bpausableJ\x04\b\x06\x10\aJ\x04\b\a\x10\bJ\x04\b\v\x10\fJ\x04\b\f\x10\rJ\x04\b\x1d\x10\x1eJ\x04\b\x1f\x10 J\x04\b \x10!R\x0eallowed_agents\"\x97\x01\n" +
 	"\fTabAttention\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1b\n" +
 	"\tunread_at\x18\x02 \x01(\tR\bunreadAt\x12\x14\n" +
@@ -10966,24 +10623,7 @@ const file_web_proto_rawDesc = "" +
 	"mentionIds\x12\x1e\n" +
 	"\n" +
 	"principals\x18\t \x03(\tR\n" +
-	"principalsJ\x04\b\a\x10\bJ\x04\b\b\x10\t\"^\n" +
-	"\fBoardRequest\x12\x19\n" +
-	"\bspace_id\x18\x01 \x01(\tR\aspaceId\x123\n" +
-	"\n" +
-	"dashboards\x18\x02 \x03(\v2\x13.rpc.BoardDashboardR\n" +
-	"dashboards\"&\n" +
-	"\x0eBoardDashboard\x12\x14\n" +
-	"\x05lanes\x18\x01 \x03(\tR\x05lanes\"@\n" +
-	"\rBoardResponse\x12/\n" +
-	"\n" +
-	"dashboards\x18\x01 \x03(\v2\x0f.rpc.BoardLanesR\n" +
-	"dashboards\"2\n" +
-	"\n" +
-	"BoardLanes\x12$\n" +
-	"\x05lanes\x18\x01 \x03(\v2\x0e.rpc.BoardLaneR\x05lanes\"K\n" +
-	"\tBoardLane\x12(\n" +
-	"\bsessions\x18\x01 \x03(\v2\f.rpc.SessionR\bsessions\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x05R\x05total\"%\n" +
+	"principalsJ\x04\b\a\x10\bJ\x04\b\b\x10\t\"%\n" +
 	"\x11SlackNamesRequest\x12\x10\n" +
 	"\x03ids\x18\x01 \x03(\tR\x03ids\"\x88\x01\n" +
 	"\x12SlackNamesResponse\x128\n" +
@@ -11490,18 +11130,16 @@ const file_web_proto_rawDesc = "" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
 	"\x05group\x18\x04 \x01(\tR\x05group\x12\x14\n" +
 	"\x05space\x18\x05 \x01(\tR\x05space\x12'\n" +
-	"\x06search\x18\x06 \x01(\v2\x0f.rpc.SearchPageR\x06searchJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x06pinnedR\apreview\"|\n" +
+	"\x06search\x18\x06 \x01(\v2\x0f.rpc.SearchPageR\x06searchJ\x04\b\x02\x10\x03J\x04\b\x03\x10\x04R\x06pinnedR\apreview\"l\n" +
 	"\n" +
 	"SearchPage\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12,\n" +
 	"\bsearches\x18\x02 \x03(\v2\x10.rpc.SavedSearchR\bsearches\x12\x16\n" +
-	"\x06active\x18\x03 \x01(\tR\x06active\x12\x14\n" +
-	"\x05board\x18\x04 \x01(\tR\x05board\"_\n" +
+	"\x06active\x18\x03 \x01(\tR\x06activeJ\x04\b\x04\x10\x05\"M\n" +
 	"\vSavedSearch\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
-	"\x05query\x18\x03 \x01(\tR\x05query\x12\x16\n" +
-	"\x06notify\x18\x04 \x01(\bR\x06notify\"b\n" +
+	"\x05query\x18\x03 \x01(\tR\x05queryJ\x04\b\x04\x10\x05\"b\n" +
 	"\bTabGroup\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -11577,13 +11215,7 @@ const file_web_proto_rawDesc = "" +
 	"\x05route\x18\x02 \x01(\tR\x05route\"$\n" +
 	"\n" +
 	"VoiceEnded\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\tR\x06reason*=\n" +
-	"\tWorkState\x12\b\n" +
-	"\x04IDLE\x10\x00\x12\r\n" +
-	"\tNEEDS_YOU\x10\x01\x12\v\n" +
-	"\aRUNNING\x10\x02\x12\n" +
-	"\n" +
-	"\x06QUEUED\x10\x03*\xa7\x01\n" +
+	"\x06reason\x18\x01 \x01(\tR\x06reason*\xa7\x01\n" +
 	"\x10ConversationKind\x12\f\n" +
 	"\bWEB_CHAT\x10\x00\x12\x10\n" +
 	"\fSLACK_THREAD\x10\x01\x12\f\n" +
@@ -11613,7 +11245,7 @@ const file_web_proto_rawDesc = "" +
 	"\x0fPARK_UNTIL_DONE\x10\x04\x12\r\n" +
 	"\tAUTO_PARK\x10\x05\x12\x12\n" +
 	"\x0eSTOP_AUTO_PARK\x10\x06\x12\b\n" +
-	"\x04SENT\x10\a2\xd9\x1e\n" +
+	"\x04SENT\x10\a2\xa9\x1e\n" +
 	"\x03Web\x126\n" +
 	"\x10UploadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment(\x01\x128\n" +
 	"\x12DownloadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment0\x01\x12E\n" +
@@ -11637,8 +11269,7 @@ const file_web_proto_rawDesc = "" +
 	"\vStageRevert\x12\x17.rpc.StageRevertRequest\x1a\x18.rpc.StageRevertResponse\x12@\n" +
 	"\vClearRevert\x12\x17.rpc.ClearRevertRequest\x1a\x18.rpc.ClearRevertResponse\x12I\n" +
 	"\x0eSearchMessages\x12\x1a.rpc.SearchMessagesRequest\x1a\x1b.rpc.SearchMessagesResponse\x12I\n" +
-	"\x0eSearchSessions\x12\x1a.rpc.SearchSessionsRequest\x1a\x1b.rpc.SearchSessionsResponse\x12.\n" +
-	"\x05Board\x12\x11.rpc.BoardRequest\x1a\x12.rpc.BoardResponse\x12=\n" +
+	"\x0eSearchSessions\x12\x1a.rpc.SearchSessionsRequest\x1a\x1b.rpc.SearchSessionsResponse\x12=\n" +
 	"\n" +
 	"SlackNames\x12\x16.rpc.SlackNamesRequest\x1a\x17.rpc.SlackNamesResponse\x124\n" +
 	"\aHandoff\x12\x13.rpc.HandoffRequest\x1a\x14.rpc.HandoffResponse\x12=\n" +
@@ -11692,397 +11323,384 @@ func file_web_proto_rawDescGZIP() []byte {
 	return file_web_proto_rawDescData
 }
 
-var file_web_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_web_proto_msgTypes = make([]protoimpl.MessageInfo, 162)
+var file_web_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_web_proto_msgTypes = make([]protoimpl.MessageInfo, 157)
 var file_web_proto_goTypes = []any{
-	(WorkState)(0),                        // 0: rpc.WorkState
-	(ConversationKind)(0),                 // 1: rpc.ConversationKind
-	(PromptDelivery)(0),                   // 2: rpc.PromptDelivery
-	(VoiceSettingsAction)(0),              // 3: rpc.VoiceSettingsAction
-	(AttentionAction)(0),                  // 4: rpc.AttentionAction
-	(*ListSessionsRequest)(nil),           // 5: rpc.ListSessionsRequest
-	(*Session)(nil),                       // 6: rpc.Session
-	(*TabAttention)(nil),                  // 7: rpc.TabAttention
-	(*HistoryRequest)(nil),                // 8: rpc.HistoryRequest
-	(*HistoryResponse)(nil),               // 9: rpc.HistoryResponse
-	(*LineageLevel)(nil),                  // 10: rpc.LineageLevel
-	(*ShadowBinding)(nil),                 // 11: rpc.ShadowBinding
-	(*ShadowTurn)(nil),                    // 12: rpc.ShadowTurn
-	(*PendingQuestion)(nil),               // 13: rpc.PendingQuestion
-	(*QuestionOption)(nil),                // 14: rpc.QuestionOption
-	(*BackgroundJob)(nil),                 // 15: rpc.BackgroundJob
-	(*StageRevertRequest)(nil),            // 16: rpc.StageRevertRequest
-	(*StageRevertResponse)(nil),           // 17: rpc.StageRevertResponse
-	(*ClearRevertRequest)(nil),            // 18: rpc.ClearRevertRequest
-	(*ClearRevertResponse)(nil),           // 19: rpc.ClearRevertResponse
-	(*ListSessionsResponse)(nil),          // 20: rpc.ListSessionsResponse
-	(*TagChoices)(nil),                    // 21: rpc.TagChoices
-	(*CreateSessionRequest)(nil),          // 22: rpc.CreateSessionRequest
-	(*CreateSessionResponse)(nil),         // 23: rpc.CreateSessionResponse
-	(*ForkSessionRequest)(nil),            // 24: rpc.ForkSessionRequest
-	(*ForkSessionResponse)(nil),           // 25: rpc.ForkSessionResponse
-	(*SearchMessagesRequest)(nil),         // 26: rpc.SearchMessagesRequest
-	(*MessageMatch)(nil),                  // 27: rpc.MessageMatch
-	(*SearchMessagesResponse)(nil),        // 28: rpc.SearchMessagesResponse
-	(*SearchSessionsRequest)(nil),         // 29: rpc.SearchSessionsRequest
-	(*SearchTerm)(nil),                    // 30: rpc.SearchTerm
-	(*SessionMatch)(nil),                  // 31: rpc.SessionMatch
-	(*SearchSessionsResponse)(nil),        // 32: rpc.SearchSessionsResponse
-	(*BoardRequest)(nil),                  // 33: rpc.BoardRequest
-	(*BoardDashboard)(nil),                // 34: rpc.BoardDashboard
-	(*BoardResponse)(nil),                 // 35: rpc.BoardResponse
-	(*BoardLanes)(nil),                    // 36: rpc.BoardLanes
-	(*BoardLane)(nil),                     // 37: rpc.BoardLane
-	(*SlackNamesRequest)(nil),             // 38: rpc.SlackNamesRequest
-	(*SlackNamesResponse)(nil),            // 39: rpc.SlackNamesResponse
-	(*HandoffRequest)(nil),                // 40: rpc.HandoffRequest
-	(*HandoffResponse)(nil),               // 41: rpc.HandoffResponse
-	(*JoinRequest)(nil),                   // 42: rpc.JoinRequest
-	(*ConversationChange)(nil),            // 43: rpc.ConversationChange
-	(*ReportTypingRequest)(nil),           // 44: rpc.ReportTypingRequest
-	(*ReportTypingResponse)(nil),          // 45: rpc.ReportTypingResponse
-	(*WatchTypingRequest)(nil),            // 46: rpc.WatchTypingRequest
-	(*TypingEvent)(nil),                   // 47: rpc.TypingEvent
-	(*TranscriptEvent)(nil),               // 48: rpc.TranscriptEvent
-	(*CodeModeCall)(nil),                  // 49: rpc.CodeModeCall
-	(*Attachment)(nil),                    // 50: rpc.Attachment
-	(*PromptRequest)(nil),                 // 51: rpc.PromptRequest
-	(*PromptResponse)(nil),                // 52: rpc.PromptResponse
-	(*CronJob)(nil),                       // 53: rpc.CronJob
-	(*Agent)(nil),                         // 54: rpc.Agent
-	(*ListAgentsRequest)(nil),             // 55: rpc.ListAgentsRequest
-	(*ListAgentsResponse)(nil),            // 56: rpc.ListAgentsResponse
-	(*Skill)(nil),                         // 57: rpc.Skill
-	(*ListSkillsRequest)(nil),             // 58: rpc.ListSkillsRequest
-	(*ListSkillsResponse)(nil),            // 59: rpc.ListSkillsResponse
-	(*ListCronJobsRequest)(nil),           // 60: rpc.ListCronJobsRequest
-	(*ListCronJobsResponse)(nil),          // 61: rpc.ListCronJobsResponse
-	(*PageRequest)(nil),                   // 62: rpc.PageRequest
-	(*Page)(nil),                          // 63: rpc.Page
-	(*ListPagesRequest)(nil),              // 64: rpc.ListPagesRequest
-	(*ListPagesResponse)(nil),             // 65: rpc.ListPagesResponse
-	(*PageEntry)(nil),                     // 66: rpc.PageEntry
-	(*RunCronJobRequest)(nil),             // 67: rpc.RunCronJobRequest
-	(*RunCronJobResponse)(nil),            // 68: rpc.RunCronJobResponse
-	(*AnswerQuestionRequest)(nil),         // 69: rpc.AnswerQuestionRequest
-	(*AnswerQuestionResponse)(nil),        // 70: rpc.AnswerQuestionResponse
-	(*ConfigChannel)(nil),                 // 71: rpc.ConfigChannel
-	(*ConfigView)(nil),                    // 72: rpc.ConfigView
-	(*ListConfigRequest)(nil),             // 73: rpc.ListConfigRequest
-	(*SaveBehaviorSettingsRequest)(nil),   // 74: rpc.SaveBehaviorSettingsRequest
-	(*ListConfigResponse)(nil),            // 75: rpc.ListConfigResponse
-	(*TestModelRequest)(nil),              // 76: rpc.TestModelRequest
-	(*TestModelResponse)(nil),             // 77: rpc.TestModelResponse
-	(*AgentDraft)(nil),                    // 78: rpc.AgentDraft
-	(*AgentDraftPending)(nil),             // 79: rpc.AgentDraftPending
-	(*AgentDraftVariant)(nil),             // 80: rpc.AgentDraftVariant
-	(*AgentDraftSetting)(nil),             // 81: rpc.AgentDraftSetting
-	(*AgentDraftExternalMCP)(nil),         // 82: rpc.AgentDraftExternalMCP
-	(*AgentDraftSplice)(nil),              // 83: rpc.AgentDraftSplice
-	(*AgentDraftOp)(nil),                  // 84: rpc.AgentDraftOp
-	(*AgentDraftPresence)(nil),            // 85: rpc.AgentDraftPresence
-	(*CreateAgentDraftRequest)(nil),       // 86: rpc.CreateAgentDraftRequest
-	(*ListAgentDraftsRequest)(nil),        // 87: rpc.ListAgentDraftsRequest
-	(*ListAgentDraftsResponse)(nil),       // 88: rpc.ListAgentDraftsResponse
-	(*GetAgentDraftRequest)(nil),          // 89: rpc.GetAgentDraftRequest
-	(*GetAgentDraftResponse)(nil),         // 90: rpc.GetAgentDraftResponse
-	(*AgentDraftMessage)(nil),             // 91: rpc.AgentDraftMessage
-	(*ApplyAgentDraftOpRequest)(nil),      // 92: rpc.ApplyAgentDraftOpRequest
-	(*ApplyAgentDraftOpResponse)(nil),     // 93: rpc.ApplyAgentDraftOpResponse
-	(*SetAgentDraftPresenceRequest)(nil),  // 94: rpc.SetAgentDraftPresenceRequest
-	(*SetAgentDraftPresenceResponse)(nil), // 95: rpc.SetAgentDraftPresenceResponse
-	(*AgentSettingsRequest)(nil),          // 96: rpc.AgentSettingsRequest
-	(*AgentSettingsResponse)(nil),         // 97: rpc.AgentSettingsResponse
-	(*AgentSettingHelp)(nil),              // 98: rpc.AgentSettingHelp
-	(*DraftPromptRequest)(nil),            // 99: rpc.DraftPromptRequest
-	(*RestartDraftChatRequest)(nil),       // 100: rpc.RestartDraftChatRequest
-	(*AgentDraftProblem)(nil),             // 101: rpc.AgentDraftProblem
-	(*DraftPromptResponse)(nil),           // 102: rpc.DraftPromptResponse
-	(*DraftLayersRequest)(nil),            // 103: rpc.DraftLayersRequest
-	(*AgentLayer)(nil),                    // 104: rpc.AgentLayer
-	(*DraftLayersResponse)(nil),           // 105: rpc.DraftLayersResponse
-	(*SaveDraftRequest)(nil),              // 106: rpc.SaveDraftRequest
-	(*AgentDraftReviewSetting)(nil),       // 107: rpc.AgentDraftReviewSetting
-	(*AgentDraftReview)(nil),              // 108: rpc.AgentDraftReview
-	(*SaveDraftResponse)(nil),             // 109: rpc.SaveDraftResponse
-	(*StopWaitingRequest)(nil),            // 110: rpc.StopWaitingRequest
-	(*ProposeDraftChangesRequest)(nil),    // 111: rpc.ProposeDraftChangesRequest
-	(*AgentDraftProposedSetting)(nil),     // 112: rpc.AgentDraftProposedSetting
-	(*AgentDraftProposedBody)(nil),        // 113: rpc.AgentDraftProposedBody
-	(*AgentDraftProposal)(nil),            // 114: rpc.AgentDraftProposal
-	(*DecideProposalRequest)(nil),         // 115: rpc.DecideProposalRequest
-	(*InspectAgentsRequest)(nil),          // 116: rpc.InspectAgentsRequest
-	(*InspectAgentsResponse)(nil),         // 117: rpc.InspectAgentsResponse
-	(*UpdateSessionRequest)(nil),          // 118: rpc.UpdateSessionRequest
-	(*UpdateSessionResponse)(nil),         // 119: rpc.UpdateSessionResponse
-	(*ProtocolRequest)(nil),               // 120: rpc.ProtocolRequest
-	(*ProtocolResponse)(nil),              // 121: rpc.ProtocolResponse
-	(*QueueItem)(nil),                     // 122: rpc.QueueItem
-	(*ListQueueRequest)(nil),              // 123: rpc.ListQueueRequest
-	(*ListQueueResponse)(nil),             // 124: rpc.ListQueueResponse
-	(*QueueItemRequest)(nil),              // 125: rpc.QueueItemRequest
-	(*QueueItemResponse)(nil),             // 126: rpc.QueueItemResponse
-	(*ReorderQueueRequest)(nil),           // 127: rpc.ReorderQueueRequest
-	(*MoveToBackgroundRequest)(nil),       // 128: rpc.MoveToBackgroundRequest
-	(*MoveToBackgroundResponse)(nil),      // 129: rpc.MoveToBackgroundResponse
-	(*StopBackgroundJobRequest)(nil),      // 130: rpc.StopBackgroundJobRequest
-	(*StopBackgroundJobResponse)(nil),     // 131: rpc.StopBackgroundJobResponse
-	(*SessionEntriesRequest)(nil),         // 132: rpc.SessionEntriesRequest
-	(*SessionEntryMeta)(nil),              // 133: rpc.SessionEntryMeta
-	(*ListSessionEntriesResponse)(nil),    // 134: rpc.ListSessionEntriesResponse
-	(*SessionEntryData)(nil),              // 135: rpc.SessionEntryData
-	(*LoadSessionEntriesResponse)(nil),    // 136: rpc.LoadSessionEntriesResponse
-	(*DeleteSessionEntriesResponse)(nil),  // 137: rpc.DeleteSessionEntriesResponse
-	(*IdentityRequest)(nil),               // 138: rpc.IdentityRequest
-	(*IdentityResponse)(nil),              // 139: rpc.IdentityResponse
-	(*ReloadRequest)(nil),                 // 140: rpc.ReloadRequest
-	(*ReloadResponse)(nil),                // 141: rpc.ReloadResponse
-	(*VoiceRequest)(nil),                  // 142: rpc.VoiceRequest
-	(*VoiceSettingsRequest)(nil),          // 143: rpc.VoiceSettingsRequest
-	(*VoiceSettingsResponse)(nil),         // 144: rpc.VoiceSettingsResponse
-	(*Space)(nil),                         // 145: rpc.Space
-	(*Tab)(nil),                           // 146: rpc.Tab
-	(*SearchPage)(nil),                    // 147: rpc.SearchPage
-	(*SavedSearch)(nil),                   // 148: rpc.SavedSearch
-	(*TabGroup)(nil),                      // 149: rpc.TabGroup
-	(*TabState)(nil),                      // 150: rpc.TabState
-	(*SharedTab)(nil),                     // 151: rpc.SharedTab
-	(*TopShelf)(nil),                      // 152: rpc.TopShelf
-	(*ShelfTab)(nil),                      // 153: rpc.ShelfTab
-	(*AttentionChange)(nil),               // 154: rpc.AttentionChange
-	(*TabsRequest)(nil),                   // 155: rpc.TabsRequest
-	(*TabsResponse)(nil),                  // 156: rpc.TabsResponse
-	(*VoiceEvent)(nil),                    // 157: rpc.VoiceEvent
-	(*VoiceAnswer)(nil),                   // 158: rpc.VoiceAnswer
-	(*VoiceEnded)(nil),                    // 159: rpc.VoiceEnded
-	nil,                                   // 160: rpc.HistoryResponse.ReviewRationalesEntry
-	nil,                                   // 161: rpc.ListSessionsResponse.OpencodeServersEntry
-	nil,                                   // 162: rpc.ListSessionsResponse.AgentTagsEntry
-	nil,                                   // 163: rpc.SlackNamesResponse.NamesEntry
-	nil,                                   // 164: rpc.AgentDraftExternalMCP.MetadataEntry
-	nil,                                   // 165: rpc.AgentDraftMessage.LabelsEntry
-	nil,                                   // 166: rpc.TabState.LastEntry
+	(ConversationKind)(0),                 // 0: rpc.ConversationKind
+	(PromptDelivery)(0),                   // 1: rpc.PromptDelivery
+	(VoiceSettingsAction)(0),              // 2: rpc.VoiceSettingsAction
+	(AttentionAction)(0),                  // 3: rpc.AttentionAction
+	(*ListSessionsRequest)(nil),           // 4: rpc.ListSessionsRequest
+	(*Session)(nil),                       // 5: rpc.Session
+	(*TabAttention)(nil),                  // 6: rpc.TabAttention
+	(*HistoryRequest)(nil),                // 7: rpc.HistoryRequest
+	(*HistoryResponse)(nil),               // 8: rpc.HistoryResponse
+	(*LineageLevel)(nil),                  // 9: rpc.LineageLevel
+	(*ShadowBinding)(nil),                 // 10: rpc.ShadowBinding
+	(*ShadowTurn)(nil),                    // 11: rpc.ShadowTurn
+	(*PendingQuestion)(nil),               // 12: rpc.PendingQuestion
+	(*QuestionOption)(nil),                // 13: rpc.QuestionOption
+	(*BackgroundJob)(nil),                 // 14: rpc.BackgroundJob
+	(*StageRevertRequest)(nil),            // 15: rpc.StageRevertRequest
+	(*StageRevertResponse)(nil),           // 16: rpc.StageRevertResponse
+	(*ClearRevertRequest)(nil),            // 17: rpc.ClearRevertRequest
+	(*ClearRevertResponse)(nil),           // 18: rpc.ClearRevertResponse
+	(*ListSessionsResponse)(nil),          // 19: rpc.ListSessionsResponse
+	(*TagChoices)(nil),                    // 20: rpc.TagChoices
+	(*CreateSessionRequest)(nil),          // 21: rpc.CreateSessionRequest
+	(*CreateSessionResponse)(nil),         // 22: rpc.CreateSessionResponse
+	(*ForkSessionRequest)(nil),            // 23: rpc.ForkSessionRequest
+	(*ForkSessionResponse)(nil),           // 24: rpc.ForkSessionResponse
+	(*SearchMessagesRequest)(nil),         // 25: rpc.SearchMessagesRequest
+	(*MessageMatch)(nil),                  // 26: rpc.MessageMatch
+	(*SearchMessagesResponse)(nil),        // 27: rpc.SearchMessagesResponse
+	(*SearchSessionsRequest)(nil),         // 28: rpc.SearchSessionsRequest
+	(*SearchTerm)(nil),                    // 29: rpc.SearchTerm
+	(*SessionMatch)(nil),                  // 30: rpc.SessionMatch
+	(*SearchSessionsResponse)(nil),        // 31: rpc.SearchSessionsResponse
+	(*SlackNamesRequest)(nil),             // 32: rpc.SlackNamesRequest
+	(*SlackNamesResponse)(nil),            // 33: rpc.SlackNamesResponse
+	(*HandoffRequest)(nil),                // 34: rpc.HandoffRequest
+	(*HandoffResponse)(nil),               // 35: rpc.HandoffResponse
+	(*JoinRequest)(nil),                   // 36: rpc.JoinRequest
+	(*ConversationChange)(nil),            // 37: rpc.ConversationChange
+	(*ReportTypingRequest)(nil),           // 38: rpc.ReportTypingRequest
+	(*ReportTypingResponse)(nil),          // 39: rpc.ReportTypingResponse
+	(*WatchTypingRequest)(nil),            // 40: rpc.WatchTypingRequest
+	(*TypingEvent)(nil),                   // 41: rpc.TypingEvent
+	(*TranscriptEvent)(nil),               // 42: rpc.TranscriptEvent
+	(*CodeModeCall)(nil),                  // 43: rpc.CodeModeCall
+	(*Attachment)(nil),                    // 44: rpc.Attachment
+	(*PromptRequest)(nil),                 // 45: rpc.PromptRequest
+	(*PromptResponse)(nil),                // 46: rpc.PromptResponse
+	(*CronJob)(nil),                       // 47: rpc.CronJob
+	(*Agent)(nil),                         // 48: rpc.Agent
+	(*ListAgentsRequest)(nil),             // 49: rpc.ListAgentsRequest
+	(*ListAgentsResponse)(nil),            // 50: rpc.ListAgentsResponse
+	(*Skill)(nil),                         // 51: rpc.Skill
+	(*ListSkillsRequest)(nil),             // 52: rpc.ListSkillsRequest
+	(*ListSkillsResponse)(nil),            // 53: rpc.ListSkillsResponse
+	(*ListCronJobsRequest)(nil),           // 54: rpc.ListCronJobsRequest
+	(*ListCronJobsResponse)(nil),          // 55: rpc.ListCronJobsResponse
+	(*PageRequest)(nil),                   // 56: rpc.PageRequest
+	(*Page)(nil),                          // 57: rpc.Page
+	(*ListPagesRequest)(nil),              // 58: rpc.ListPagesRequest
+	(*ListPagesResponse)(nil),             // 59: rpc.ListPagesResponse
+	(*PageEntry)(nil),                     // 60: rpc.PageEntry
+	(*RunCronJobRequest)(nil),             // 61: rpc.RunCronJobRequest
+	(*RunCronJobResponse)(nil),            // 62: rpc.RunCronJobResponse
+	(*AnswerQuestionRequest)(nil),         // 63: rpc.AnswerQuestionRequest
+	(*AnswerQuestionResponse)(nil),        // 64: rpc.AnswerQuestionResponse
+	(*ConfigChannel)(nil),                 // 65: rpc.ConfigChannel
+	(*ConfigView)(nil),                    // 66: rpc.ConfigView
+	(*ListConfigRequest)(nil),             // 67: rpc.ListConfigRequest
+	(*SaveBehaviorSettingsRequest)(nil),   // 68: rpc.SaveBehaviorSettingsRequest
+	(*ListConfigResponse)(nil),            // 69: rpc.ListConfigResponse
+	(*TestModelRequest)(nil),              // 70: rpc.TestModelRequest
+	(*TestModelResponse)(nil),             // 71: rpc.TestModelResponse
+	(*AgentDraft)(nil),                    // 72: rpc.AgentDraft
+	(*AgentDraftPending)(nil),             // 73: rpc.AgentDraftPending
+	(*AgentDraftVariant)(nil),             // 74: rpc.AgentDraftVariant
+	(*AgentDraftSetting)(nil),             // 75: rpc.AgentDraftSetting
+	(*AgentDraftExternalMCP)(nil),         // 76: rpc.AgentDraftExternalMCP
+	(*AgentDraftSplice)(nil),              // 77: rpc.AgentDraftSplice
+	(*AgentDraftOp)(nil),                  // 78: rpc.AgentDraftOp
+	(*AgentDraftPresence)(nil),            // 79: rpc.AgentDraftPresence
+	(*CreateAgentDraftRequest)(nil),       // 80: rpc.CreateAgentDraftRequest
+	(*ListAgentDraftsRequest)(nil),        // 81: rpc.ListAgentDraftsRequest
+	(*ListAgentDraftsResponse)(nil),       // 82: rpc.ListAgentDraftsResponse
+	(*GetAgentDraftRequest)(nil),          // 83: rpc.GetAgentDraftRequest
+	(*GetAgentDraftResponse)(nil),         // 84: rpc.GetAgentDraftResponse
+	(*AgentDraftMessage)(nil),             // 85: rpc.AgentDraftMessage
+	(*ApplyAgentDraftOpRequest)(nil),      // 86: rpc.ApplyAgentDraftOpRequest
+	(*ApplyAgentDraftOpResponse)(nil),     // 87: rpc.ApplyAgentDraftOpResponse
+	(*SetAgentDraftPresenceRequest)(nil),  // 88: rpc.SetAgentDraftPresenceRequest
+	(*SetAgentDraftPresenceResponse)(nil), // 89: rpc.SetAgentDraftPresenceResponse
+	(*AgentSettingsRequest)(nil),          // 90: rpc.AgentSettingsRequest
+	(*AgentSettingsResponse)(nil),         // 91: rpc.AgentSettingsResponse
+	(*AgentSettingHelp)(nil),              // 92: rpc.AgentSettingHelp
+	(*DraftPromptRequest)(nil),            // 93: rpc.DraftPromptRequest
+	(*RestartDraftChatRequest)(nil),       // 94: rpc.RestartDraftChatRequest
+	(*AgentDraftProblem)(nil),             // 95: rpc.AgentDraftProblem
+	(*DraftPromptResponse)(nil),           // 96: rpc.DraftPromptResponse
+	(*DraftLayersRequest)(nil),            // 97: rpc.DraftLayersRequest
+	(*AgentLayer)(nil),                    // 98: rpc.AgentLayer
+	(*DraftLayersResponse)(nil),           // 99: rpc.DraftLayersResponse
+	(*SaveDraftRequest)(nil),              // 100: rpc.SaveDraftRequest
+	(*AgentDraftReviewSetting)(nil),       // 101: rpc.AgentDraftReviewSetting
+	(*AgentDraftReview)(nil),              // 102: rpc.AgentDraftReview
+	(*SaveDraftResponse)(nil),             // 103: rpc.SaveDraftResponse
+	(*StopWaitingRequest)(nil),            // 104: rpc.StopWaitingRequest
+	(*ProposeDraftChangesRequest)(nil),    // 105: rpc.ProposeDraftChangesRequest
+	(*AgentDraftProposedSetting)(nil),     // 106: rpc.AgentDraftProposedSetting
+	(*AgentDraftProposedBody)(nil),        // 107: rpc.AgentDraftProposedBody
+	(*AgentDraftProposal)(nil),            // 108: rpc.AgentDraftProposal
+	(*DecideProposalRequest)(nil),         // 109: rpc.DecideProposalRequest
+	(*InspectAgentsRequest)(nil),          // 110: rpc.InspectAgentsRequest
+	(*InspectAgentsResponse)(nil),         // 111: rpc.InspectAgentsResponse
+	(*UpdateSessionRequest)(nil),          // 112: rpc.UpdateSessionRequest
+	(*UpdateSessionResponse)(nil),         // 113: rpc.UpdateSessionResponse
+	(*ProtocolRequest)(nil),               // 114: rpc.ProtocolRequest
+	(*ProtocolResponse)(nil),              // 115: rpc.ProtocolResponse
+	(*QueueItem)(nil),                     // 116: rpc.QueueItem
+	(*ListQueueRequest)(nil),              // 117: rpc.ListQueueRequest
+	(*ListQueueResponse)(nil),             // 118: rpc.ListQueueResponse
+	(*QueueItemRequest)(nil),              // 119: rpc.QueueItemRequest
+	(*QueueItemResponse)(nil),             // 120: rpc.QueueItemResponse
+	(*ReorderQueueRequest)(nil),           // 121: rpc.ReorderQueueRequest
+	(*MoveToBackgroundRequest)(nil),       // 122: rpc.MoveToBackgroundRequest
+	(*MoveToBackgroundResponse)(nil),      // 123: rpc.MoveToBackgroundResponse
+	(*StopBackgroundJobRequest)(nil),      // 124: rpc.StopBackgroundJobRequest
+	(*StopBackgroundJobResponse)(nil),     // 125: rpc.StopBackgroundJobResponse
+	(*SessionEntriesRequest)(nil),         // 126: rpc.SessionEntriesRequest
+	(*SessionEntryMeta)(nil),              // 127: rpc.SessionEntryMeta
+	(*ListSessionEntriesResponse)(nil),    // 128: rpc.ListSessionEntriesResponse
+	(*SessionEntryData)(nil),              // 129: rpc.SessionEntryData
+	(*LoadSessionEntriesResponse)(nil),    // 130: rpc.LoadSessionEntriesResponse
+	(*DeleteSessionEntriesResponse)(nil),  // 131: rpc.DeleteSessionEntriesResponse
+	(*IdentityRequest)(nil),               // 132: rpc.IdentityRequest
+	(*IdentityResponse)(nil),              // 133: rpc.IdentityResponse
+	(*ReloadRequest)(nil),                 // 134: rpc.ReloadRequest
+	(*ReloadResponse)(nil),                // 135: rpc.ReloadResponse
+	(*VoiceRequest)(nil),                  // 136: rpc.VoiceRequest
+	(*VoiceSettingsRequest)(nil),          // 137: rpc.VoiceSettingsRequest
+	(*VoiceSettingsResponse)(nil),         // 138: rpc.VoiceSettingsResponse
+	(*Space)(nil),                         // 139: rpc.Space
+	(*Tab)(nil),                           // 140: rpc.Tab
+	(*SearchPage)(nil),                    // 141: rpc.SearchPage
+	(*SavedSearch)(nil),                   // 142: rpc.SavedSearch
+	(*TabGroup)(nil),                      // 143: rpc.TabGroup
+	(*TabState)(nil),                      // 144: rpc.TabState
+	(*SharedTab)(nil),                     // 145: rpc.SharedTab
+	(*TopShelf)(nil),                      // 146: rpc.TopShelf
+	(*ShelfTab)(nil),                      // 147: rpc.ShelfTab
+	(*AttentionChange)(nil),               // 148: rpc.AttentionChange
+	(*TabsRequest)(nil),                   // 149: rpc.TabsRequest
+	(*TabsResponse)(nil),                  // 150: rpc.TabsResponse
+	(*VoiceEvent)(nil),                    // 151: rpc.VoiceEvent
+	(*VoiceAnswer)(nil),                   // 152: rpc.VoiceAnswer
+	(*VoiceEnded)(nil),                    // 153: rpc.VoiceEnded
+	nil,                                   // 154: rpc.HistoryResponse.ReviewRationalesEntry
+	nil,                                   // 155: rpc.ListSessionsResponse.OpencodeServersEntry
+	nil,                                   // 156: rpc.ListSessionsResponse.AgentTagsEntry
+	nil,                                   // 157: rpc.SlackNamesResponse.NamesEntry
+	nil,                                   // 158: rpc.AgentDraftExternalMCP.MetadataEntry
+	nil,                                   // 159: rpc.AgentDraftMessage.LabelsEntry
+	nil,                                   // 160: rpc.TabState.LastEntry
 }
 var file_web_proto_depIdxs = []int32{
-	1,   // 0: rpc.Session.kind:type_name -> rpc.ConversationKind
-	0,   // 1: rpc.Session.work_state:type_name -> rpc.WorkState
-	48,  // 2: rpc.HistoryResponse.messages:type_name -> rpc.TranscriptEvent
-	15,  // 3: rpc.HistoryResponse.background_jobs:type_name -> rpc.BackgroundJob
-	13,  // 4: rpc.HistoryResponse.pending_questions:type_name -> rpc.PendingQuestion
-	11,  // 5: rpc.HistoryResponse.shadows:type_name -> rpc.ShadowBinding
-	160, // 6: rpc.HistoryResponse.review_rationales:type_name -> rpc.HistoryResponse.ReviewRationalesEntry
-	10,  // 7: rpc.HistoryResponse.lineage:type_name -> rpc.LineageLevel
-	1,   // 8: rpc.LineageLevel.kind:type_name -> rpc.ConversationKind
-	12,  // 9: rpc.ShadowBinding.turns:type_name -> rpc.ShadowTurn
-	14,  // 10: rpc.PendingQuestion.options:type_name -> rpc.QuestionOption
-	48,  // 11: rpc.StageRevertResponse.prompt:type_name -> rpc.TranscriptEvent
-	6,   // 12: rpc.ListSessionsResponse.sessions:type_name -> rpc.Session
-	161, // 13: rpc.ListSessionsResponse.opencode_servers:type_name -> rpc.ListSessionsResponse.OpencodeServersEntry
-	162, // 14: rpc.ListSessionsResponse.agent_tags:type_name -> rpc.ListSessionsResponse.AgentTagsEntry
-	7,   // 15: rpc.ListSessionsResponse.tabs:type_name -> rpc.TabAttention
-	48,  // 16: rpc.ForkSessionResponse.prompt:type_name -> rpc.TranscriptEvent
-	48,  // 17: rpc.MessageMatch.message:type_name -> rpc.TranscriptEvent
-	27,  // 18: rpc.SearchMessagesResponse.matches:type_name -> rpc.MessageMatch
-	30,  // 19: rpc.SearchSessionsResponse.terms:type_name -> rpc.SearchTerm
-	31,  // 20: rpc.SearchSessionsResponse.matches:type_name -> rpc.SessionMatch
-	27,  // 21: rpc.SearchSessionsResponse.messages:type_name -> rpc.MessageMatch
-	34,  // 22: rpc.BoardRequest.dashboards:type_name -> rpc.BoardDashboard
-	36,  // 23: rpc.BoardResponse.dashboards:type_name -> rpc.BoardLanes
-	37,  // 24: rpc.BoardLanes.lanes:type_name -> rpc.BoardLane
-	6,   // 25: rpc.BoardLane.sessions:type_name -> rpc.Session
-	163, // 26: rpc.SlackNamesResponse.names:type_name -> rpc.SlackNamesResponse.NamesEntry
-	50,  // 27: rpc.TranscriptEvent.attachments:type_name -> rpc.Attachment
-	15,  // 28: rpc.TranscriptEvent.completion_notes:type_name -> rpc.BackgroundJob
-	49,  // 29: rpc.TranscriptEvent.code_mode_calls:type_name -> rpc.CodeModeCall
-	2,   // 30: rpc.PromptRequest.delivery:type_name -> rpc.PromptDelivery
-	54,  // 31: rpc.ListAgentsResponse.agents:type_name -> rpc.Agent
-	57,  // 32: rpc.ListSkillsResponse.skills:type_name -> rpc.Skill
-	53,  // 33: rpc.ListCronJobsResponse.jobs:type_name -> rpc.CronJob
-	66,  // 34: rpc.ListPagesResponse.pages:type_name -> rpc.PageEntry
-	71,  // 35: rpc.ConfigView.slack_channels:type_name -> rpc.ConfigChannel
-	72,  // 36: rpc.ListConfigResponse.config:type_name -> rpc.ConfigView
-	80,  // 37: rpc.AgentDraft.variants:type_name -> rpc.AgentDraftVariant
-	82,  // 38: rpc.AgentDraft.external_mcp:type_name -> rpc.AgentDraftExternalMCP
-	79,  // 39: rpc.AgentDraft.pending:type_name -> rpc.AgentDraftPending
-	81,  // 40: rpc.AgentDraftVariant.settings:type_name -> rpc.AgentDraftSetting
-	164, // 41: rpc.AgentDraftExternalMCP.metadata:type_name -> rpc.AgentDraftExternalMCP.MetadataEntry
-	83,  // 42: rpc.AgentDraftOp.splices:type_name -> rpc.AgentDraftSplice
-	82,  // 43: rpc.AgentDraftOp.external_mcp:type_name -> rpc.AgentDraftExternalMCP
-	78,  // 44: rpc.ListAgentDraftsResponse.drafts:type_name -> rpc.AgentDraft
-	78,  // 45: rpc.GetAgentDraftResponse.draft:type_name -> rpc.AgentDraft
-	84,  // 46: rpc.GetAgentDraftResponse.ops:type_name -> rpc.AgentDraftOp
-	85,  // 47: rpc.GetAgentDraftResponse.presence:type_name -> rpc.AgentDraftPresence
-	114, // 48: rpc.GetAgentDraftResponse.proposals:type_name -> rpc.AgentDraftProposal
-	91,  // 49: rpc.GetAgentDraftResponse.messages:type_name -> rpc.AgentDraftMessage
-	165, // 50: rpc.AgentDraftMessage.labels:type_name -> rpc.AgentDraftMessage.LabelsEntry
-	101, // 51: rpc.AgentDraftMessage.not_run:type_name -> rpc.AgentDraftProblem
-	82,  // 52: rpc.AgentDraftMessage.external_mcp:type_name -> rpc.AgentDraftExternalMCP
-	84,  // 53: rpc.ApplyAgentDraftOpRequest.op:type_name -> rpc.AgentDraftOp
-	85,  // 54: rpc.SetAgentDraftPresenceRequest.presence:type_name -> rpc.AgentDraftPresence
-	98,  // 55: rpc.AgentSettingsResponse.settings:type_name -> rpc.AgentSettingHelp
-	101, // 56: rpc.DraftPromptResponse.problems:type_name -> rpc.AgentDraftProblem
-	104, // 57: rpc.DraftLayersResponse.layers:type_name -> rpc.AgentLayer
-	107, // 58: rpc.AgentDraftReview.settings:type_name -> rpc.AgentDraftReviewSetting
-	83,  // 59: rpc.AgentDraftReview.splices:type_name -> rpc.AgentDraftSplice
-	101, // 60: rpc.SaveDraftResponse.problems:type_name -> rpc.AgentDraftProblem
-	108, // 61: rpc.SaveDraftResponse.review:type_name -> rpc.AgentDraftReview
-	112, // 62: rpc.AgentDraftProposal.settings:type_name -> rpc.AgentDraftProposedSetting
-	113, // 63: rpc.AgentDraftProposal.bodies:type_name -> rpc.AgentDraftProposedBody
-	50,  // 64: rpc.QueueItem.attachments:type_name -> rpc.Attachment
-	2,   // 65: rpc.QueueItem.delivery:type_name -> rpc.PromptDelivery
-	122, // 66: rpc.ListQueueResponse.items:type_name -> rpc.QueueItem
-	133, // 67: rpc.ListSessionEntriesResponse.entries:type_name -> rpc.SessionEntryMeta
-	135, // 68: rpc.LoadSessionEntriesResponse.entries:type_name -> rpc.SessionEntryData
-	3,   // 69: rpc.VoiceSettingsRequest.action:type_name -> rpc.VoiceSettingsAction
-	147, // 70: rpc.Tab.search:type_name -> rpc.SearchPage
-	148, // 71: rpc.SearchPage.searches:type_name -> rpc.SavedSearch
-	146, // 72: rpc.TabState.tabs:type_name -> rpc.Tab
-	149, // 73: rpc.TabState.groups:type_name -> rpc.TabGroup
-	166, // 74: rpc.TabState.last:type_name -> rpc.TabState.LastEntry
-	147, // 75: rpc.SharedTab.search:type_name -> rpc.SearchPage
-	147, // 76: rpc.SharedTab.base:type_name -> rpc.SearchPage
-	153, // 77: rpc.TopShelf.tabs:type_name -> rpc.ShelfTab
-	147, // 78: rpc.ShelfTab.search:type_name -> rpc.SearchPage
-	4,   // 79: rpc.AttentionChange.action:type_name -> rpc.AttentionAction
-	150, // 80: rpc.TabsRequest.state:type_name -> rpc.TabState
-	145, // 81: rpc.TabsRequest.rename_space:type_name -> rpc.Space
-	151, // 82: rpc.TabsRequest.share:type_name -> rpc.SharedTab
-	151, // 83: rpc.TabsRequest.unshare:type_name -> rpc.SharedTab
-	151, // 84: rpc.TabsRequest.edit_shared:type_name -> rpc.SharedTab
-	152, // 85: rpc.TabsRequest.top_shelf:type_name -> rpc.TopShelf
-	154, // 86: rpc.TabsRequest.attention:type_name -> rpc.AttentionChange
-	145, // 87: rpc.TabsResponse.spaces:type_name -> rpc.Space
-	150, // 88: rpc.TabsResponse.state:type_name -> rpc.TabState
-	151, // 89: rpc.TabsResponse.shared:type_name -> rpc.SharedTab
-	147, // 90: rpc.TabsResponse.unshared:type_name -> rpc.SearchPage
-	152, // 91: rpc.TabsResponse.top_shelf:type_name -> rpc.TopShelf
-	146, // 92: rpc.TabsResponse.closed:type_name -> rpc.Tab
-	158, // 93: rpc.VoiceEvent.answer:type_name -> rpc.VoiceAnswer
-	159, // 94: rpc.VoiceEvent.ended:type_name -> rpc.VoiceEnded
-	21,  // 95: rpc.ListSessionsResponse.AgentTagsEntry.value:type_name -> rpc.TagChoices
-	50,  // 96: rpc.Web.UploadAttachment:input_type -> rpc.Attachment
-	50,  // 97: rpc.Web.DownloadAttachment:input_type -> rpc.Attachment
-	5,   // 98: rpc.Web.ListSessions:input_type -> rpc.ListSessionsRequest
-	22,  // 99: rpc.Web.CreateSession:input_type -> rpc.CreateSessionRequest
-	42,  // 100: rpc.Web.Join:input_type -> rpc.JoinRequest
-	46,  // 101: rpc.Web.WatchTyping:input_type -> rpc.WatchTypingRequest
-	44,  // 102: rpc.Web.ReportTyping:input_type -> rpc.ReportTypingRequest
-	142, // 103: rpc.Web.Voice:input_type -> rpc.VoiceRequest
-	143, // 104: rpc.Web.VoiceSettings:input_type -> rpc.VoiceSettingsRequest
-	155, // 105: rpc.Web.Tabs:input_type -> rpc.TabsRequest
-	51,  // 106: rpc.Web.Prompt:input_type -> rpc.PromptRequest
-	60,  // 107: rpc.Web.ListCronJobs:input_type -> rpc.ListCronJobsRequest
-	67,  // 108: rpc.Web.RunCronJob:input_type -> rpc.RunCronJobRequest
-	62,  // 109: rpc.Web.GetPage:input_type -> rpc.PageRequest
-	64,  // 110: rpc.Web.ListPages:input_type -> rpc.ListPagesRequest
-	69,  // 111: rpc.Web.AnswerQuestion:input_type -> rpc.AnswerQuestionRequest
-	8,   // 112: rpc.Web.History:input_type -> rpc.HistoryRequest
-	24,  // 113: rpc.Web.ForkSession:input_type -> rpc.ForkSessionRequest
-	16,  // 114: rpc.Web.StageRevert:input_type -> rpc.StageRevertRequest
-	18,  // 115: rpc.Web.ClearRevert:input_type -> rpc.ClearRevertRequest
-	26,  // 116: rpc.Web.SearchMessages:input_type -> rpc.SearchMessagesRequest
-	29,  // 117: rpc.Web.SearchSessions:input_type -> rpc.SearchSessionsRequest
-	33,  // 118: rpc.Web.Board:input_type -> rpc.BoardRequest
-	38,  // 119: rpc.Web.SlackNames:input_type -> rpc.SlackNamesRequest
-	40,  // 120: rpc.Web.Handoff:input_type -> rpc.HandoffRequest
-	55,  // 121: rpc.Web.ListAgents:input_type -> rpc.ListAgentsRequest
-	58,  // 122: rpc.Web.ListSkills:input_type -> rpc.ListSkillsRequest
-	73,  // 123: rpc.Web.ListConfig:input_type -> rpc.ListConfigRequest
-	76,  // 124: rpc.Web.TestModel:input_type -> rpc.TestModelRequest
-	86,  // 125: rpc.Web.CreateAgentDraft:input_type -> rpc.CreateAgentDraftRequest
-	87,  // 126: rpc.Web.ListAgentDrafts:input_type -> rpc.ListAgentDraftsRequest
-	89,  // 127: rpc.Web.GetAgentDraft:input_type -> rpc.GetAgentDraftRequest
-	92,  // 128: rpc.Web.ApplyAgentDraftOp:input_type -> rpc.ApplyAgentDraftOpRequest
-	94,  // 129: rpc.Web.SetAgentDraftPresence:input_type -> rpc.SetAgentDraftPresenceRequest
-	96,  // 130: rpc.Web.AgentSettings:input_type -> rpc.AgentSettingsRequest
-	99,  // 131: rpc.Web.DraftPrompt:input_type -> rpc.DraftPromptRequest
-	100, // 132: rpc.Web.RestartDraftChat:input_type -> rpc.RestartDraftChatRequest
-	103, // 133: rpc.Web.DraftLayers:input_type -> rpc.DraftLayersRequest
-	106, // 134: rpc.Web.SaveDraft:input_type -> rpc.SaveDraftRequest
-	110, // 135: rpc.Web.StopWaiting:input_type -> rpc.StopWaitingRequest
-	111, // 136: rpc.Web.ProposeDraftChanges:input_type -> rpc.ProposeDraftChangesRequest
-	115, // 137: rpc.Web.DecideProposal:input_type -> rpc.DecideProposalRequest
-	74,  // 138: rpc.Web.SaveBehaviorSettings:input_type -> rpc.SaveBehaviorSettingsRequest
-	116, // 139: rpc.Web.InspectAgents:input_type -> rpc.InspectAgentsRequest
-	118, // 140: rpc.Web.UpdateSession:input_type -> rpc.UpdateSessionRequest
-	120, // 141: rpc.Web.Protocol:input_type -> rpc.ProtocolRequest
-	138, // 142: rpc.Web.Identity:input_type -> rpc.IdentityRequest
-	140, // 143: rpc.Web.Reload:input_type -> rpc.ReloadRequest
-	123, // 144: rpc.Web.ListQueue:input_type -> rpc.ListQueueRequest
-	125, // 145: rpc.Web.RemoveQueueItem:input_type -> rpc.QueueItemRequest
-	125, // 146: rpc.Web.SteerQueueItem:input_type -> rpc.QueueItemRequest
-	125, // 147: rpc.Web.PopQueueItem:input_type -> rpc.QueueItemRequest
-	125, // 148: rpc.Web.EditQueueItem:input_type -> rpc.QueueItemRequest
-	127, // 149: rpc.Web.ReorderQueue:input_type -> rpc.ReorderQueueRequest
-	128, // 150: rpc.Web.MoveToBackground:input_type -> rpc.MoveToBackgroundRequest
-	130, // 151: rpc.Web.StopBackgroundJob:input_type -> rpc.StopBackgroundJobRequest
-	132, // 152: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
-	132, // 153: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
-	132, // 154: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
-	50,  // 155: rpc.Web.UploadAttachment:output_type -> rpc.Attachment
-	50,  // 156: rpc.Web.DownloadAttachment:output_type -> rpc.Attachment
-	20,  // 157: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
-	23,  // 158: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
-	43,  // 159: rpc.Web.Join:output_type -> rpc.ConversationChange
-	47,  // 160: rpc.Web.WatchTyping:output_type -> rpc.TypingEvent
-	45,  // 161: rpc.Web.ReportTyping:output_type -> rpc.ReportTypingResponse
-	157, // 162: rpc.Web.Voice:output_type -> rpc.VoiceEvent
-	144, // 163: rpc.Web.VoiceSettings:output_type -> rpc.VoiceSettingsResponse
-	156, // 164: rpc.Web.Tabs:output_type -> rpc.TabsResponse
-	52,  // 165: rpc.Web.Prompt:output_type -> rpc.PromptResponse
-	61,  // 166: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
-	68,  // 167: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
-	63,  // 168: rpc.Web.GetPage:output_type -> rpc.Page
-	65,  // 169: rpc.Web.ListPages:output_type -> rpc.ListPagesResponse
-	70,  // 170: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
-	9,   // 171: rpc.Web.History:output_type -> rpc.HistoryResponse
-	25,  // 172: rpc.Web.ForkSession:output_type -> rpc.ForkSessionResponse
-	17,  // 173: rpc.Web.StageRevert:output_type -> rpc.StageRevertResponse
-	19,  // 174: rpc.Web.ClearRevert:output_type -> rpc.ClearRevertResponse
-	28,  // 175: rpc.Web.SearchMessages:output_type -> rpc.SearchMessagesResponse
-	32,  // 176: rpc.Web.SearchSessions:output_type -> rpc.SearchSessionsResponse
-	35,  // 177: rpc.Web.Board:output_type -> rpc.BoardResponse
-	39,  // 178: rpc.Web.SlackNames:output_type -> rpc.SlackNamesResponse
-	41,  // 179: rpc.Web.Handoff:output_type -> rpc.HandoffResponse
-	56,  // 180: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
-	59,  // 181: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
-	75,  // 182: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
-	77,  // 183: rpc.Web.TestModel:output_type -> rpc.TestModelResponse
-	78,  // 184: rpc.Web.CreateAgentDraft:output_type -> rpc.AgentDraft
-	88,  // 185: rpc.Web.ListAgentDrafts:output_type -> rpc.ListAgentDraftsResponse
-	90,  // 186: rpc.Web.GetAgentDraft:output_type -> rpc.GetAgentDraftResponse
-	93,  // 187: rpc.Web.ApplyAgentDraftOp:output_type -> rpc.ApplyAgentDraftOpResponse
-	95,  // 188: rpc.Web.SetAgentDraftPresence:output_type -> rpc.SetAgentDraftPresenceResponse
-	97,  // 189: rpc.Web.AgentSettings:output_type -> rpc.AgentSettingsResponse
-	102, // 190: rpc.Web.DraftPrompt:output_type -> rpc.DraftPromptResponse
-	102, // 191: rpc.Web.RestartDraftChat:output_type -> rpc.DraftPromptResponse
-	105, // 192: rpc.Web.DraftLayers:output_type -> rpc.DraftLayersResponse
-	109, // 193: rpc.Web.SaveDraft:output_type -> rpc.SaveDraftResponse
-	109, // 194: rpc.Web.StopWaiting:output_type -> rpc.SaveDraftResponse
-	114, // 195: rpc.Web.ProposeDraftChanges:output_type -> rpc.AgentDraftProposal
-	114, // 196: rpc.Web.DecideProposal:output_type -> rpc.AgentDraftProposal
-	75,  // 197: rpc.Web.SaveBehaviorSettings:output_type -> rpc.ListConfigResponse
-	117, // 198: rpc.Web.InspectAgents:output_type -> rpc.InspectAgentsResponse
-	119, // 199: rpc.Web.UpdateSession:output_type -> rpc.UpdateSessionResponse
-	121, // 200: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
-	139, // 201: rpc.Web.Identity:output_type -> rpc.IdentityResponse
-	141, // 202: rpc.Web.Reload:output_type -> rpc.ReloadResponse
-	124, // 203: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
-	126, // 204: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
-	126, // 205: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
-	126, // 206: rpc.Web.PopQueueItem:output_type -> rpc.QueueItemResponse
-	126, // 207: rpc.Web.EditQueueItem:output_type -> rpc.QueueItemResponse
-	126, // 208: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
-	129, // 209: rpc.Web.MoveToBackground:output_type -> rpc.MoveToBackgroundResponse
-	131, // 210: rpc.Web.StopBackgroundJob:output_type -> rpc.StopBackgroundJobResponse
-	134, // 211: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
-	136, // 212: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
-	137, // 213: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
-	155, // [155:214] is the sub-list for method output_type
-	96,  // [96:155] is the sub-list for method input_type
-	96,  // [96:96] is the sub-list for extension type_name
-	96,  // [96:96] is the sub-list for extension extendee
-	0,   // [0:96] is the sub-list for field type_name
+	0,   // 0: rpc.Session.kind:type_name -> rpc.ConversationKind
+	42,  // 1: rpc.HistoryResponse.messages:type_name -> rpc.TranscriptEvent
+	14,  // 2: rpc.HistoryResponse.background_jobs:type_name -> rpc.BackgroundJob
+	12,  // 3: rpc.HistoryResponse.pending_questions:type_name -> rpc.PendingQuestion
+	10,  // 4: rpc.HistoryResponse.shadows:type_name -> rpc.ShadowBinding
+	154, // 5: rpc.HistoryResponse.review_rationales:type_name -> rpc.HistoryResponse.ReviewRationalesEntry
+	9,   // 6: rpc.HistoryResponse.lineage:type_name -> rpc.LineageLevel
+	0,   // 7: rpc.LineageLevel.kind:type_name -> rpc.ConversationKind
+	11,  // 8: rpc.ShadowBinding.turns:type_name -> rpc.ShadowTurn
+	13,  // 9: rpc.PendingQuestion.options:type_name -> rpc.QuestionOption
+	42,  // 10: rpc.StageRevertResponse.prompt:type_name -> rpc.TranscriptEvent
+	5,   // 11: rpc.ListSessionsResponse.sessions:type_name -> rpc.Session
+	155, // 12: rpc.ListSessionsResponse.opencode_servers:type_name -> rpc.ListSessionsResponse.OpencodeServersEntry
+	156, // 13: rpc.ListSessionsResponse.agent_tags:type_name -> rpc.ListSessionsResponse.AgentTagsEntry
+	6,   // 14: rpc.ListSessionsResponse.tabs:type_name -> rpc.TabAttention
+	42,  // 15: rpc.ForkSessionResponse.prompt:type_name -> rpc.TranscriptEvent
+	42,  // 16: rpc.MessageMatch.message:type_name -> rpc.TranscriptEvent
+	26,  // 17: rpc.SearchMessagesResponse.matches:type_name -> rpc.MessageMatch
+	29,  // 18: rpc.SearchSessionsResponse.terms:type_name -> rpc.SearchTerm
+	30,  // 19: rpc.SearchSessionsResponse.matches:type_name -> rpc.SessionMatch
+	26,  // 20: rpc.SearchSessionsResponse.messages:type_name -> rpc.MessageMatch
+	157, // 21: rpc.SlackNamesResponse.names:type_name -> rpc.SlackNamesResponse.NamesEntry
+	44,  // 22: rpc.TranscriptEvent.attachments:type_name -> rpc.Attachment
+	14,  // 23: rpc.TranscriptEvent.completion_notes:type_name -> rpc.BackgroundJob
+	43,  // 24: rpc.TranscriptEvent.code_mode_calls:type_name -> rpc.CodeModeCall
+	1,   // 25: rpc.PromptRequest.delivery:type_name -> rpc.PromptDelivery
+	48,  // 26: rpc.ListAgentsResponse.agents:type_name -> rpc.Agent
+	51,  // 27: rpc.ListSkillsResponse.skills:type_name -> rpc.Skill
+	47,  // 28: rpc.ListCronJobsResponse.jobs:type_name -> rpc.CronJob
+	60,  // 29: rpc.ListPagesResponse.pages:type_name -> rpc.PageEntry
+	65,  // 30: rpc.ConfigView.slack_channels:type_name -> rpc.ConfigChannel
+	66,  // 31: rpc.ListConfigResponse.config:type_name -> rpc.ConfigView
+	74,  // 32: rpc.AgentDraft.variants:type_name -> rpc.AgentDraftVariant
+	76,  // 33: rpc.AgentDraft.external_mcp:type_name -> rpc.AgentDraftExternalMCP
+	73,  // 34: rpc.AgentDraft.pending:type_name -> rpc.AgentDraftPending
+	75,  // 35: rpc.AgentDraftVariant.settings:type_name -> rpc.AgentDraftSetting
+	158, // 36: rpc.AgentDraftExternalMCP.metadata:type_name -> rpc.AgentDraftExternalMCP.MetadataEntry
+	77,  // 37: rpc.AgentDraftOp.splices:type_name -> rpc.AgentDraftSplice
+	76,  // 38: rpc.AgentDraftOp.external_mcp:type_name -> rpc.AgentDraftExternalMCP
+	72,  // 39: rpc.ListAgentDraftsResponse.drafts:type_name -> rpc.AgentDraft
+	72,  // 40: rpc.GetAgentDraftResponse.draft:type_name -> rpc.AgentDraft
+	78,  // 41: rpc.GetAgentDraftResponse.ops:type_name -> rpc.AgentDraftOp
+	79,  // 42: rpc.GetAgentDraftResponse.presence:type_name -> rpc.AgentDraftPresence
+	108, // 43: rpc.GetAgentDraftResponse.proposals:type_name -> rpc.AgentDraftProposal
+	85,  // 44: rpc.GetAgentDraftResponse.messages:type_name -> rpc.AgentDraftMessage
+	159, // 45: rpc.AgentDraftMessage.labels:type_name -> rpc.AgentDraftMessage.LabelsEntry
+	95,  // 46: rpc.AgentDraftMessage.not_run:type_name -> rpc.AgentDraftProblem
+	76,  // 47: rpc.AgentDraftMessage.external_mcp:type_name -> rpc.AgentDraftExternalMCP
+	78,  // 48: rpc.ApplyAgentDraftOpRequest.op:type_name -> rpc.AgentDraftOp
+	79,  // 49: rpc.SetAgentDraftPresenceRequest.presence:type_name -> rpc.AgentDraftPresence
+	92,  // 50: rpc.AgentSettingsResponse.settings:type_name -> rpc.AgentSettingHelp
+	95,  // 51: rpc.DraftPromptResponse.problems:type_name -> rpc.AgentDraftProblem
+	98,  // 52: rpc.DraftLayersResponse.layers:type_name -> rpc.AgentLayer
+	101, // 53: rpc.AgentDraftReview.settings:type_name -> rpc.AgentDraftReviewSetting
+	77,  // 54: rpc.AgentDraftReview.splices:type_name -> rpc.AgentDraftSplice
+	95,  // 55: rpc.SaveDraftResponse.problems:type_name -> rpc.AgentDraftProblem
+	102, // 56: rpc.SaveDraftResponse.review:type_name -> rpc.AgentDraftReview
+	106, // 57: rpc.AgentDraftProposal.settings:type_name -> rpc.AgentDraftProposedSetting
+	107, // 58: rpc.AgentDraftProposal.bodies:type_name -> rpc.AgentDraftProposedBody
+	44,  // 59: rpc.QueueItem.attachments:type_name -> rpc.Attachment
+	1,   // 60: rpc.QueueItem.delivery:type_name -> rpc.PromptDelivery
+	116, // 61: rpc.ListQueueResponse.items:type_name -> rpc.QueueItem
+	127, // 62: rpc.ListSessionEntriesResponse.entries:type_name -> rpc.SessionEntryMeta
+	129, // 63: rpc.LoadSessionEntriesResponse.entries:type_name -> rpc.SessionEntryData
+	2,   // 64: rpc.VoiceSettingsRequest.action:type_name -> rpc.VoiceSettingsAction
+	141, // 65: rpc.Tab.search:type_name -> rpc.SearchPage
+	142, // 66: rpc.SearchPage.searches:type_name -> rpc.SavedSearch
+	140, // 67: rpc.TabState.tabs:type_name -> rpc.Tab
+	143, // 68: rpc.TabState.groups:type_name -> rpc.TabGroup
+	160, // 69: rpc.TabState.last:type_name -> rpc.TabState.LastEntry
+	141, // 70: rpc.SharedTab.search:type_name -> rpc.SearchPage
+	141, // 71: rpc.SharedTab.base:type_name -> rpc.SearchPage
+	147, // 72: rpc.TopShelf.tabs:type_name -> rpc.ShelfTab
+	141, // 73: rpc.ShelfTab.search:type_name -> rpc.SearchPage
+	3,   // 74: rpc.AttentionChange.action:type_name -> rpc.AttentionAction
+	144, // 75: rpc.TabsRequest.state:type_name -> rpc.TabState
+	139, // 76: rpc.TabsRequest.rename_space:type_name -> rpc.Space
+	145, // 77: rpc.TabsRequest.share:type_name -> rpc.SharedTab
+	145, // 78: rpc.TabsRequest.unshare:type_name -> rpc.SharedTab
+	145, // 79: rpc.TabsRequest.edit_shared:type_name -> rpc.SharedTab
+	146, // 80: rpc.TabsRequest.top_shelf:type_name -> rpc.TopShelf
+	148, // 81: rpc.TabsRequest.attention:type_name -> rpc.AttentionChange
+	139, // 82: rpc.TabsResponse.spaces:type_name -> rpc.Space
+	144, // 83: rpc.TabsResponse.state:type_name -> rpc.TabState
+	145, // 84: rpc.TabsResponse.shared:type_name -> rpc.SharedTab
+	141, // 85: rpc.TabsResponse.unshared:type_name -> rpc.SearchPage
+	146, // 86: rpc.TabsResponse.top_shelf:type_name -> rpc.TopShelf
+	140, // 87: rpc.TabsResponse.closed:type_name -> rpc.Tab
+	152, // 88: rpc.VoiceEvent.answer:type_name -> rpc.VoiceAnswer
+	153, // 89: rpc.VoiceEvent.ended:type_name -> rpc.VoiceEnded
+	20,  // 90: rpc.ListSessionsResponse.AgentTagsEntry.value:type_name -> rpc.TagChoices
+	44,  // 91: rpc.Web.UploadAttachment:input_type -> rpc.Attachment
+	44,  // 92: rpc.Web.DownloadAttachment:input_type -> rpc.Attachment
+	4,   // 93: rpc.Web.ListSessions:input_type -> rpc.ListSessionsRequest
+	21,  // 94: rpc.Web.CreateSession:input_type -> rpc.CreateSessionRequest
+	36,  // 95: rpc.Web.Join:input_type -> rpc.JoinRequest
+	40,  // 96: rpc.Web.WatchTyping:input_type -> rpc.WatchTypingRequest
+	38,  // 97: rpc.Web.ReportTyping:input_type -> rpc.ReportTypingRequest
+	136, // 98: rpc.Web.Voice:input_type -> rpc.VoiceRequest
+	137, // 99: rpc.Web.VoiceSettings:input_type -> rpc.VoiceSettingsRequest
+	149, // 100: rpc.Web.Tabs:input_type -> rpc.TabsRequest
+	45,  // 101: rpc.Web.Prompt:input_type -> rpc.PromptRequest
+	54,  // 102: rpc.Web.ListCronJobs:input_type -> rpc.ListCronJobsRequest
+	61,  // 103: rpc.Web.RunCronJob:input_type -> rpc.RunCronJobRequest
+	56,  // 104: rpc.Web.GetPage:input_type -> rpc.PageRequest
+	58,  // 105: rpc.Web.ListPages:input_type -> rpc.ListPagesRequest
+	63,  // 106: rpc.Web.AnswerQuestion:input_type -> rpc.AnswerQuestionRequest
+	7,   // 107: rpc.Web.History:input_type -> rpc.HistoryRequest
+	23,  // 108: rpc.Web.ForkSession:input_type -> rpc.ForkSessionRequest
+	15,  // 109: rpc.Web.StageRevert:input_type -> rpc.StageRevertRequest
+	17,  // 110: rpc.Web.ClearRevert:input_type -> rpc.ClearRevertRequest
+	25,  // 111: rpc.Web.SearchMessages:input_type -> rpc.SearchMessagesRequest
+	28,  // 112: rpc.Web.SearchSessions:input_type -> rpc.SearchSessionsRequest
+	32,  // 113: rpc.Web.SlackNames:input_type -> rpc.SlackNamesRequest
+	34,  // 114: rpc.Web.Handoff:input_type -> rpc.HandoffRequest
+	49,  // 115: rpc.Web.ListAgents:input_type -> rpc.ListAgentsRequest
+	52,  // 116: rpc.Web.ListSkills:input_type -> rpc.ListSkillsRequest
+	67,  // 117: rpc.Web.ListConfig:input_type -> rpc.ListConfigRequest
+	70,  // 118: rpc.Web.TestModel:input_type -> rpc.TestModelRequest
+	80,  // 119: rpc.Web.CreateAgentDraft:input_type -> rpc.CreateAgentDraftRequest
+	81,  // 120: rpc.Web.ListAgentDrafts:input_type -> rpc.ListAgentDraftsRequest
+	83,  // 121: rpc.Web.GetAgentDraft:input_type -> rpc.GetAgentDraftRequest
+	86,  // 122: rpc.Web.ApplyAgentDraftOp:input_type -> rpc.ApplyAgentDraftOpRequest
+	88,  // 123: rpc.Web.SetAgentDraftPresence:input_type -> rpc.SetAgentDraftPresenceRequest
+	90,  // 124: rpc.Web.AgentSettings:input_type -> rpc.AgentSettingsRequest
+	93,  // 125: rpc.Web.DraftPrompt:input_type -> rpc.DraftPromptRequest
+	94,  // 126: rpc.Web.RestartDraftChat:input_type -> rpc.RestartDraftChatRequest
+	97,  // 127: rpc.Web.DraftLayers:input_type -> rpc.DraftLayersRequest
+	100, // 128: rpc.Web.SaveDraft:input_type -> rpc.SaveDraftRequest
+	104, // 129: rpc.Web.StopWaiting:input_type -> rpc.StopWaitingRequest
+	105, // 130: rpc.Web.ProposeDraftChanges:input_type -> rpc.ProposeDraftChangesRequest
+	109, // 131: rpc.Web.DecideProposal:input_type -> rpc.DecideProposalRequest
+	68,  // 132: rpc.Web.SaveBehaviorSettings:input_type -> rpc.SaveBehaviorSettingsRequest
+	110, // 133: rpc.Web.InspectAgents:input_type -> rpc.InspectAgentsRequest
+	112, // 134: rpc.Web.UpdateSession:input_type -> rpc.UpdateSessionRequest
+	114, // 135: rpc.Web.Protocol:input_type -> rpc.ProtocolRequest
+	132, // 136: rpc.Web.Identity:input_type -> rpc.IdentityRequest
+	134, // 137: rpc.Web.Reload:input_type -> rpc.ReloadRequest
+	117, // 138: rpc.Web.ListQueue:input_type -> rpc.ListQueueRequest
+	119, // 139: rpc.Web.RemoveQueueItem:input_type -> rpc.QueueItemRequest
+	119, // 140: rpc.Web.SteerQueueItem:input_type -> rpc.QueueItemRequest
+	119, // 141: rpc.Web.PopQueueItem:input_type -> rpc.QueueItemRequest
+	119, // 142: rpc.Web.EditQueueItem:input_type -> rpc.QueueItemRequest
+	121, // 143: rpc.Web.ReorderQueue:input_type -> rpc.ReorderQueueRequest
+	122, // 144: rpc.Web.MoveToBackground:input_type -> rpc.MoveToBackgroundRequest
+	124, // 145: rpc.Web.StopBackgroundJob:input_type -> rpc.StopBackgroundJobRequest
+	126, // 146: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
+	126, // 147: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
+	126, // 148: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
+	44,  // 149: rpc.Web.UploadAttachment:output_type -> rpc.Attachment
+	44,  // 150: rpc.Web.DownloadAttachment:output_type -> rpc.Attachment
+	19,  // 151: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
+	22,  // 152: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
+	37,  // 153: rpc.Web.Join:output_type -> rpc.ConversationChange
+	41,  // 154: rpc.Web.WatchTyping:output_type -> rpc.TypingEvent
+	39,  // 155: rpc.Web.ReportTyping:output_type -> rpc.ReportTypingResponse
+	151, // 156: rpc.Web.Voice:output_type -> rpc.VoiceEvent
+	138, // 157: rpc.Web.VoiceSettings:output_type -> rpc.VoiceSettingsResponse
+	150, // 158: rpc.Web.Tabs:output_type -> rpc.TabsResponse
+	46,  // 159: rpc.Web.Prompt:output_type -> rpc.PromptResponse
+	55,  // 160: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
+	62,  // 161: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
+	57,  // 162: rpc.Web.GetPage:output_type -> rpc.Page
+	59,  // 163: rpc.Web.ListPages:output_type -> rpc.ListPagesResponse
+	64,  // 164: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
+	8,   // 165: rpc.Web.History:output_type -> rpc.HistoryResponse
+	24,  // 166: rpc.Web.ForkSession:output_type -> rpc.ForkSessionResponse
+	16,  // 167: rpc.Web.StageRevert:output_type -> rpc.StageRevertResponse
+	18,  // 168: rpc.Web.ClearRevert:output_type -> rpc.ClearRevertResponse
+	27,  // 169: rpc.Web.SearchMessages:output_type -> rpc.SearchMessagesResponse
+	31,  // 170: rpc.Web.SearchSessions:output_type -> rpc.SearchSessionsResponse
+	33,  // 171: rpc.Web.SlackNames:output_type -> rpc.SlackNamesResponse
+	35,  // 172: rpc.Web.Handoff:output_type -> rpc.HandoffResponse
+	50,  // 173: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
+	53,  // 174: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
+	69,  // 175: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
+	71,  // 176: rpc.Web.TestModel:output_type -> rpc.TestModelResponse
+	72,  // 177: rpc.Web.CreateAgentDraft:output_type -> rpc.AgentDraft
+	82,  // 178: rpc.Web.ListAgentDrafts:output_type -> rpc.ListAgentDraftsResponse
+	84,  // 179: rpc.Web.GetAgentDraft:output_type -> rpc.GetAgentDraftResponse
+	87,  // 180: rpc.Web.ApplyAgentDraftOp:output_type -> rpc.ApplyAgentDraftOpResponse
+	89,  // 181: rpc.Web.SetAgentDraftPresence:output_type -> rpc.SetAgentDraftPresenceResponse
+	91,  // 182: rpc.Web.AgentSettings:output_type -> rpc.AgentSettingsResponse
+	96,  // 183: rpc.Web.DraftPrompt:output_type -> rpc.DraftPromptResponse
+	96,  // 184: rpc.Web.RestartDraftChat:output_type -> rpc.DraftPromptResponse
+	99,  // 185: rpc.Web.DraftLayers:output_type -> rpc.DraftLayersResponse
+	103, // 186: rpc.Web.SaveDraft:output_type -> rpc.SaveDraftResponse
+	103, // 187: rpc.Web.StopWaiting:output_type -> rpc.SaveDraftResponse
+	108, // 188: rpc.Web.ProposeDraftChanges:output_type -> rpc.AgentDraftProposal
+	108, // 189: rpc.Web.DecideProposal:output_type -> rpc.AgentDraftProposal
+	69,  // 190: rpc.Web.SaveBehaviorSettings:output_type -> rpc.ListConfigResponse
+	111, // 191: rpc.Web.InspectAgents:output_type -> rpc.InspectAgentsResponse
+	113, // 192: rpc.Web.UpdateSession:output_type -> rpc.UpdateSessionResponse
+	115, // 193: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
+	133, // 194: rpc.Web.Identity:output_type -> rpc.IdentityResponse
+	135, // 195: rpc.Web.Reload:output_type -> rpc.ReloadResponse
+	118, // 196: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
+	120, // 197: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
+	120, // 198: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
+	120, // 199: rpc.Web.PopQueueItem:output_type -> rpc.QueueItemResponse
+	120, // 200: rpc.Web.EditQueueItem:output_type -> rpc.QueueItemResponse
+	120, // 201: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
+	123, // 202: rpc.Web.MoveToBackground:output_type -> rpc.MoveToBackgroundResponse
+	125, // 203: rpc.Web.StopBackgroundJob:output_type -> rpc.StopBackgroundJobResponse
+	128, // 204: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
+	130, // 205: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
+	131, // 206: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
+	149, // [149:207] is the sub-list for method output_type
+	91,  // [91:149] is the sub-list for method input_type
+	91,  // [91:91] is the sub-list for extension type_name
+	91,  // [91:91] is the sub-list for extension extendee
+	0,   // [0:91] is the sub-list for field type_name
 }
 
 func init() { file_web_proto_init() }
@@ -12090,16 +11708,16 @@ func file_web_proto_init() {
 	if File_web_proto != nil {
 		return
 	}
-	file_web_proto_msgTypes[43].OneofWrappers = []any{}
-	file_web_proto_msgTypes[99].OneofWrappers = []any{}
-	file_web_proto_msgTypes[101].OneofWrappers = []any{}
-	file_web_proto_msgTypes[103].OneofWrappers = []any{}
-	file_web_proto_msgTypes[113].OneofWrappers = []any{}
-	file_web_proto_msgTypes[117].OneofWrappers = []any{}
-	file_web_proto_msgTypes[134].OneofWrappers = []any{}
-	file_web_proto_msgTypes[138].OneofWrappers = []any{}
-	file_web_proto_msgTypes[150].OneofWrappers = []any{}
-	file_web_proto_msgTypes[152].OneofWrappers = []any{
+	file_web_proto_msgTypes[38].OneofWrappers = []any{}
+	file_web_proto_msgTypes[94].OneofWrappers = []any{}
+	file_web_proto_msgTypes[96].OneofWrappers = []any{}
+	file_web_proto_msgTypes[98].OneofWrappers = []any{}
+	file_web_proto_msgTypes[108].OneofWrappers = []any{}
+	file_web_proto_msgTypes[112].OneofWrappers = []any{}
+	file_web_proto_msgTypes[129].OneofWrappers = []any{}
+	file_web_proto_msgTypes[133].OneofWrappers = []any{}
+	file_web_proto_msgTypes[145].OneofWrappers = []any{}
+	file_web_proto_msgTypes[147].OneofWrappers = []any{
 		(*VoiceEvent_Answer)(nil),
 		(*VoiceEvent_Ended)(nil),
 		(*VoiceEvent_Notice)(nil),
@@ -12112,8 +11730,8 @@ func file_web_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_web_proto_rawDesc), len(file_web_proto_rawDesc)),
-			NumEnums:      5,
-			NumMessages:   162,
+			NumEnums:      4,
+			NumMessages:   157,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

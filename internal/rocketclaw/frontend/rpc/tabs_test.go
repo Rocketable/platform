@@ -86,7 +86,7 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 
 	saved := &TabState{
 		Tabs: []*Tab{{Path: "/", Space: "main"}, {Path: "/s/YQ", Group: "g", Space: "main"}, {Path: "/s/Yg", Space: "ops"},
-			{Path: "/search/a", Space: "ops", Search: &SearchPage{Name: "Triage", Board: "kanban", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}, {Id: "2", Name: "Mine", Query: "principal:alice", Notify: true}}, Active: "2"}}},
+			{Path: "/search/a", Space: "ops", Search: &SearchPage{Name: "Triage", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}, {Id: "2", Name: "Mine", Query: "principal:alice"}}, Active: "2"}}},
 		Groups: []*TabGroup{{Id: "g", Name: "Work", Color: "Blue", Collapsed: true}},
 		Space:  "main",
 		Last:   map[string]string{"main": "/s/YQ", "ops": "/search"},
@@ -208,7 +208,7 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.True(t, proto.Equal(&SharedTab{Space: space, Path: "/search/a", Search: triage}, response.Shared[2]))
 	assert.Nil(t, response.Shared[0].Search, "other Shared tabs have no page")
 
-	edited := &SearchPage{Name: "Triage", Board: "kanban", Searches: []*SavedSearch{{Id: "1", Query: "is:unread", Notify: true}, {Id: "2", Query: "tag:bug"}}, Active: "1"}
+	edited := &SearchPage{Name: "Triage", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}, {Id: "2", Query: "tag:bug"}}, Active: "1"}
 	response, err = call("192.0.2.2", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: edited, Search: edited}})
 	require.NoError(t, err)
 	assert.True(t, response.Stale)
@@ -303,7 +303,7 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "nothing shelved yet: %v", response.TopShelf)
 
 	shelf := &TopShelf{Tabs: []*ShelfTab{{Server: "work", Space: "main", Path: "/s/eA"}, {Path: "/s/YQ", Space: "main"}, {Path: "/s/Yw", Space: "main"},
-		{Path: "/search/1", Space: "main", Search: &SearchPage{Name: "x", Searches: []*SavedSearch{{Id: "1", Query: "q", Notify: true}}, Active: "1"}}, {Server: "work", Path: "/search/1", Space: "main"}}, Collapsed: true}
+		{Path: "/search/1", Space: "main", Search: &SearchPage{Name: "x", Searches: []*SavedSearch{{Id: "1", Query: "q"}}, Active: "1"}}, {Server: "work", Path: "/search/1", Space: "main"}}, Collapsed: true}
 	_, err = call("127.0.0.1", &TabsRequest{TopShelf: shelf})
 	require.NoError(t, err)
 	response, err = call("127.0.0.1", &TabsRequest{})

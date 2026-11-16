@@ -187,7 +187,7 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 
 			require.Equal(t, []SidebarSession{
 				{Conversation: protocol.Conversation{ID: "history", Agent: "main"}, Kind: kind, Summary: &protocol.SessionSummary{ConversationID: "history", LastMessage: "assistant", LastUpdated: updated}, Tags: []string{}, AutoPark: true, Origin: origin,
-					Work: WorkIdle, StateSince: updated, External: creation == "external MCP", ArrivedAt: updated},
+					StateSince: updated, External: creation == "external MCP", ArrivedAt: updated},
 			}, rows)
 		})
 	}
@@ -444,7 +444,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT min(created_at_unix_ns), max(created_at_unix_ns) FROM turns WHERE conversation_id = 'a'`).Scan(&started, &newest))
 
 	for _, id := range []string{"Z", "a", "ä", "missing", "zero"} {
-		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main"}, Kind: KindWebChat, Running: id == "a", AutoPark: true, Origin: ChatOriginFacts{ConversationID: id}, Work: WorkIdle}
+		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main"}, Kind: KindWebChat, Running: id == "a", AutoPark: true, Origin: ChatOriginFacts{ConversationID: id}}
 
 		row.Tags = []string{"customer"}
 		if id == "zero" {
@@ -459,7 +459,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 		}
 
 		if id == "a" {
-			row.Work, row.StateSince, row.ArrivedAt = WorkRunning, time.Unix(0, started).UTC(), time.Unix(0, newest).UTC()
+			row.StateSince, row.ArrivedAt = time.Unix(0, started).UTC(), time.Unix(0, newest).UTC()
 		}
 
 		want = append(want, row)
@@ -654,9 +654,7 @@ func TestSidebarSessionsWorkTimes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, service.PutThreadQueueItem("next", &protocol.ThreadQueueItem{ConversationID: "busy", Message: "next", StashAt: time.Now()}))
 
-	busy := row("busy")
-	require.Equal(t, WorkRunning, busy.Work, "running wins over queued")
-	require.Equal(t, time.Unix(0, started.UnixNano()).UTC(), busy.StateSince)
+	require.Equal(t, time.Unix(0, started.UnixNano()).UTC(), row("busy").StateSince, "running wins over queued")
 }
 
 func TestSidebarSessionsWorkFactsUseWaitingIndex(t *testing.T) {

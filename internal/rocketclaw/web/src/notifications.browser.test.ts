@@ -282,7 +282,7 @@ test("a person marks tabs read or unread from the tab menu or the palette, each 
 test("a Cron tab's loud mark turns it bold and notifies with its note, a park that ends brings it back after it closed, a tab closed elsewhere never notifies, and a Shared-only row's notification opens it in its space", async () => {
   const { chromium: engine } = await import(playwright!);
   const cron = `/cron/${encode("daily")}`, chat = `/s/${encode("chat")}`;
-  const ops: SearchPage = { name: "Ops", board: "kanban", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" };
+  const ops: SearchPage = { name: "Ops", searches: [{ id: "0", name: "Needs you", query: "is:waiting" }], active: "0" };
   let state = { tabs: [{ path: chat, space: "main" }, { path: cron, space: "main" }], groups: [], space: "main", last: {} }, revision = 1, marks: TabAttention[] = [];
   const viewing: string[] = [];
   let reloads = 0;
@@ -300,7 +300,7 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await request.json() as { id?: string; state?: typeof state; dashboards?: { lanes: string[] }[] };
+    const input = await request.json() as { id?: string; state?: typeof state };
     switch (url.pathname) {
       case "/api/Protocol": return Response.json({ protoSha256: "notifications" });
       case "/api/Identity": return Response.json({ username: "tester" });
@@ -308,7 +308,6 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
       case "/api/ListQueue": return Response.json({ items: [] });
       case "/api/ListCronJobs": return Response.json({ jobs: [] });
       case "/api/History": return Response.json({ origin: "", delegations: [], replacedKeys: [], removedKeys: [], terminal: "", movable: false, backgroundJobs: [], messages: [], revision: input.id, reset: true, entryKeys: [], running: false, start: "0", more: false });
-      case "/api/Board": return Response.json({ dashboards: input.dashboards!.map(({ lanes }) => ({ lanes: lanes.map(() => ({ sessions: [], total: 0 })) })) });
       case "/api/Tabs":
         if (input.state) [state, revision] = [input.state, revision + 1];
         else reloads++;
@@ -372,11 +371,11 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
     await polls();
     expect((await notes()).slice(2)).toEqual([]);
 
-    // A Dashboard only in another space's Shared group notifies under its name, and its click enters that space, where
+    // A Search page only in another space's Shared group notifies under its name, and its click enters that space, where
     // it shows as the Shared row it is, without a tab of this person's.
-    marks = [...marks, { path: "/search/d", unreadAt: "2026-10-22T10:03:00Z", note: "Needs you: q1" }];
+    marks = [...marks, { path: "/search/d", unreadAt: "2026-10-22T10:03:00Z", note: "Search finished" }];
     await polls();
-    expect((await notes()).slice(2)).toEqual([{ title: "Ops", body: "Needs you: q1", tag: "/search/d", closed: false }]);
+    expect((await notes()).slice(2)).toEqual([{ title: "Ops", body: "Search finished", tag: "/search/d", closed: false }]);
     await page.evaluate(() => (window.notes[2] as unknown as Notification).onclick!(new Event("click")));
     await page.waitForURL((url: URL) => url.pathname === "/search/d");
     await page.getByRole("button", { name: "Space: Team" }).waitFor();
@@ -384,250 +383,6 @@ test("a Cron tab's loud mark turns it bold and notifies with its note, a park th
     await polls();
     expect(state.tabs.map((tab) => tab.path)).not.toContain("/search/d");
     expect(await strip.locator('[data-tab="/search/d"]').count()).toBe(0);
-    expect(errors).toEqual([]);
-  } finally {
-    await browser.close();
-    server.stop(true);
-  }
-}, 60_000);
-
-test("sessions moving between a Dashboard's lanes because its lanes changed are not new", async () => {
-  const { chromium: engine } = await import(playwright!);
-  // e1 is an External MCP session running, so it sits in Running ahead of External; w1 waits on this person.
-  const rows = new Map(([["w1", "NEEDS_YOU", true], ["e1", "RUNNING", true], ["q1", "QUEUED", false]] as const)
-    .map(([id, workState, external]): [string, Session] => [id, { id, agent: "main", name: id, spaceId: "main", workState, external }]));
-  const has: Record<string, (row: Session) => boolean> = { "is:waiting": (row) => row.workState === "NEEDS_YOU", "is:running": (row) => row.workState === "RUNNING", "is:queued": (row) => row.workState === "QUEUED", "is:external": (row) => !!row.external };
-  const changed = new Set<string>(), set = (row: Session) => { rows.set(row.id, row); changed.add(row.id); };
-  let polls = 0, slow = 0;
-  const lanes = [["Needs you", "is:waiting", false], ["Running", "is:running", false], ["Queued", "is:queued", true], ["External", "is:external", true]] as const;
-  let state = { tabs: [{ path: "/search/d", space: "main", search: { name: "Ops", board: "kanban", searches: lanes.map(([name, query, notify], i) => ({ id: String(i), name, query, notify })), active: "0" } as SearchPage }], groups: [], space: "main", last: { main: "/search/d" } };
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
-    const url = new URL(request.url);
-    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") {
-      const sessions = url.searchParams.get("since") ? [...changed].map((id) => rows.get(id)!) : [...rows.values()];
-      changed.clear();
-      polls++;
-      const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${polls}`, since: url.searchParams.get("since") || undefined };
-      return new Response(`data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: false })}\n\ndata: ${JSON.stringify(done)}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
-    }
-    if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
-    }
-    const input = await request.json() as { state?: typeof state; dashboards: { lanes: string[] }[] };
-    switch (url.pathname) {
-      case "/api/Protocol": return Response.json({ protoSha256: "notifications" });
-      case "/api/Identity": return Response.json({ username: "tester" });
-      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
-      case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: [], messages: [], mentionIds: [] });
-      case "/api/Tabs":
-        if (input.state) state = input.state;
-        return Response.json({ spaces: [{ id: "main", name: "Main" }], state, revision: String(polls), shared: [] });
-      case "/api/Board": {
-        // Each session sits only in the first lane it matches, as the server does.
-        await Bun.sleep(slow);
-        const taken = new Set<string>();
-        return Response.json({ dashboards: input.dashboards.map(({ lanes: queries }) => ({ lanes: queries.map((query) => {
-          const sessions = [...rows.values()].filter((row) => !taken.has(row.id) && has[query](row));
-          sessions.forEach((row) => taken.add(row.id));
-          return { sessions, total: sessions.length };
-        }) })) });
-      }
-      default: return Response.json({});
-    }
-  } });
-  const browser = await engine.launch({ executablePath: chromium, headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-    const errors: string[] = [];
-    page.on("pageerror", (error: Error) => errors.push(error.message));
-    await page.addInitScript(() => { if (origin !== "null") sessionStorage.setItem("permission", "granted"); });
-    await page.addInitScript(stubNotifications);
-    const lane = (name: string): Promise<string[]> => page.locator(`[data-board] section[aria-label="${name}"] li b`).allTextContents();
-    const marked = (): Promise<string[]> => page.locator('[data-board] li[data-new="true"] b').allTextContents();
-    const settle = async () => {
-      for (const seen = polls; polls < seen + 2;) await Bun.sleep(20);
-      await Bun.sleep(300);
-    };
-    await page.goto(`http://127.0.0.1:${server.port}/search/d`);
-    await page.locator('[data-board] section[aria-label="Running"] li').waitFor();
-    await settle();
-
-    // Closing the Running lane moves e1 into External: it did not arrive, so it is not new.
-    await page.getByRole("button", { name: "Close search 2" }).click();
-    await page.locator('[data-board] section[aria-label="Running"]').waitFor({ state: "detached" });
-    await settle();
-    expect(await lane("External")).toEqual(["e1"]);
-    expect(await marked()).toEqual([]);
-
-    // A session newly entering External shows new.
-    set({ id: "e2", agent: "main", name: "e2", spaceId: "main", workState: "IDLE", external: true });
-    await settle();
-    expect(await marked()).toEqual(["e2"]);
-
-    // Editing Needs you's query moves w1 into External: nothing shows new.
-    await page.getByRole("textbox", { name: "Search sessions" }).fill("is:running");
-    await settle();
-    expect(await lane("Needs you")).toEqual(["e1"]);
-    expect(await lane("External")).toEqual(["w1", "e2"]);
-    expect(await marked()).toEqual([]);
-
-    // Turning Needs you's mark on keeps its cards in view, even with Board slow to answer, and e1, already in it, is not
-    // new. A session entering after the next result shows new; the browser notifies nothing, as the server watches lanes.
-    slow = 1000;
-    await page.getByRole("button", { name: "Notify", exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('button[aria-label="Notify"]')?.getAttribute("aria-pressed") === "true");
-    expect(await lane("Needs you")).toEqual(["e1"]);
-    expect(await page.locator('[data-board] section[aria-label="Needs you"] h3 span').textContent()).toBe("1");
-    slow = 0;
-    set({ ...rows.get("q1")!, preview: "q1 again" });
-    await settle();
-    set({ ...rows.get("q1")!, workState: "RUNNING" });
-    await settle();
-    expect(await lane("Needs you")).toEqual(["e1", "q1"]);
-    expect(await marked()).toEqual(["q1"]);
-    expect(await page.evaluate(() => window.notes)).toEqual([]);
-    expect(errors).toEqual([]);
-  } finally {
-    await browser.close();
-    server.stop(true);
-  }
-}, 60_000);
-
-test("a lane listing only its newest 200 sessions shows new those arriving newer, not ones sliding in from beyond", async () => {
-  const { chromium: engine } = await import(playwright!);
-  // c000 arrived last; 202 sessions wait, so the lane lists 200 of them, as the server does.
-  const at = (minutes: number) => new Date(Date.UTC(2026, 9, 22, 10) - minutes * 60_000).toISOString();
-  const rows = new Map(Array.from({ length: 202 }, (_, i): [string, Session] => {
-    const id = `c${String(i).padStart(3, "0")}`;
-    return [id, { id, agent: "main", name: id, spaceId: "main", workState: "NEEDS_YOU", arrivedAt: at(i) }];
-  }));
-  const ops: SearchPage = { name: "Ops", board: "kanban", searches: [{ id: "0", name: "Needs you", query: "is:waiting", notify: true }], active: "0" };
-  const changed = new Set<string>(), set = (row: Session) => { rows.set(row.id, row); changed.add(row.id); };
-  let polls = 0;
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
-    const url = new URL(request.url);
-    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") {
-      const sessions = url.searchParams.get("since") ? [...changed].map((id) => rows.get(id)!) : [...rows.values()];
-      changed.clear();
-      polls++;
-      const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${polls}`, since: url.searchParams.get("since") || undefined };
-      return new Response(`data: ${JSON.stringify({ sessions, owner: "tester", upstreamSuccess: false })}\n\ndata: ${JSON.stringify(done)}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
-    }
-    if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
-    }
-    switch (url.pathname) {
-      case "/api/Protocol": return Response.json({ protoSha256: "notifications" });
-      case "/api/Identity": return Response.json({ username: "tester" });
-      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
-      case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: [], messages: [], mentionIds: [] });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: "/search/d", space: "main", search: ops }], groups: [], space: "main", last: { main: "/search/d" } }, revision: "1", shared: [] });
-      case "/api/Board": {
-        const sessions = [...rows.values()].filter((row) => row.workState === "NEEDS_YOU").toSorted((a, b) => b.arrivedAt!.localeCompare(a.arrivedAt!));
-        return Response.json({ dashboards: [{ lanes: [{ sessions: sessions.slice(0, 200), total: sessions.length }] }] });
-      }
-      default: return Response.json({});
-    }
-  } });
-  const browser = await engine.launch({ executablePath: chromium, headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-    const errors: string[] = [];
-    page.on("pageerror", (error: Error) => errors.push(error.message));
-    await page.addInitScript(() => { if (origin !== "null") sessionStorage.setItem("permission", "granted"); });
-    await page.addInitScript(stubNotifications);
-    const marked = (): Promise<string[]> => page.locator('[data-board] li[data-new="true"] b').allTextContents();
-    const settle = async () => {
-      for (const seen = polls; polls < seen + 2;) await Bun.sleep(20);
-      await Bun.sleep(300);
-    };
-    await page.goto(`http://127.0.0.1:${server.port}/search/d`);
-    await page.locator('[data-board] section[aria-label="Needs you"] li').first().waitFor();
-    await settle();
-
-    // The newest session leaving lets the 201st into the list: it was in the lane already, so it is not new.
-    set({ ...rows.get("c000")!, workState: "IDLE" });
-    await settle();
-    expect(await page.locator('[data-board] section[aria-label="Needs you"] h3').textContent()).toBe("Needs you 201");
-    expect(await marked()).toEqual([]);
-
-    // A session arriving newer than the listed ones is marked new.
-    set({ id: "new", agent: "main", name: "new", spaceId: "main", workState: "NEEDS_YOU", arrivedAt: at(-1) });
-    await settle();
-    expect(await marked()).toEqual(["new"]);
-    expect(await page.evaluate(() => window.notes)).toEqual([]);
-    expect(errors).toEqual([]);
-  } finally {
-    await browser.close();
-    server.stop(true);
-  }
-}, 60_000);
-
-test("a session the Board lists before the session list has it shows new once, from the Board's own card", async () => {
-  const { chromium: engine } = await import(playwright!);
-  // Board answers from every session; the session list has only those listed, sending the changed ones since a version.
-  const sessions = new Map<string, Session>([["w1", { id: "w1", agent: "main", name: "w1", spaceId: "main", workState: "NEEDS_YOU", arrivedAt: "2026-10-22T10:00:00Z" }]]);
-  const listed = new Set(["w1"]), changed = new Set<string>(), list = (row: Session) => { sessions.set(row.id, row); listed.add(row.id); changed.add(row.id); };
-  const ops: SearchPage = { name: "Ops", board: "kanban", searches: [{ id: "0", name: "Needs you", query: "is:waiting", notify: true }], active: "0" };
-  let polls = 0;
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
-    const url = new URL(request.url);
-    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
-    if (url.pathname === "/api/ListSessions") {
-      const rows = [...(url.searchParams.get("since") ? changed : listed)].map((id) => sessions.get(id)!);
-      changed.clear();
-      polls++;
-      const done = { sessions: [], owner: "tester", upstreamSuccess: true, version: `v${polls}`, since: url.searchParams.get("since") || undefined };
-      return new Response(`data: ${JSON.stringify({ sessions: rows, owner: "tester", upstreamSuccess: false })}\n\ndata: ${JSON.stringify(done)}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
-    }
-    if (!url.pathname.startsWith("/api/")) {
-      const file = Bun.file(path.join(dist, url.pathname));
-      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
-    }
-    switch (url.pathname) {
-      case "/api/Protocol": return Response.json({ protoSha256: "notifications" });
-      case "/api/Identity": return Response.json({ username: "tester" });
-      case "/api/ListAgents": return Response.json({ agents: [{ name: "main" }], currentAgent: "main" });
-      case "/api/SearchSessions": return Response.json({ terms: [], text: "", needle: "", matches: [], messages: [], mentionIds: [] });
-      case "/api/Tabs": return Response.json({ spaces: [{ id: "main", name: "Main" }], state: { tabs: [{ path: "/search/d", space: "main", search: ops }], groups: [], space: "main", last: { main: "/search/d" } }, revision: "1", shared: [] });
-      case "/api/Board": {
-        const lane = [...sessions.values()].filter((row) => row.workState === "NEEDS_YOU").toSorted((a, b) => b.arrivedAt!.localeCompare(a.arrivedAt!));
-        return Response.json({ dashboards: [{ lanes: [{ sessions: lane, total: lane.length }] }] });
-      }
-      default: return Response.json({});
-    }
-  } });
-  const browser = await engine.launch({ executablePath: chromium, headless: true });
-  try {
-    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-    const errors: string[] = [];
-    page.on("pageerror", (error: Error) => errors.push(error.message));
-    await page.addInitScript(() => { if (origin !== "null") sessionStorage.setItem("permission", "granted"); });
-    await page.addInitScript(stubNotifications);
-    const marked = (): Promise<string[]> => page.locator('[data-board] li[data-new="true"] b').allTextContents();
-    const settle = async () => {
-      for (const seen = polls; polls < seen + 2;) await Bun.sleep(20);
-      await Bun.sleep(300);
-    };
-    await page.goto(`http://127.0.0.1:${server.port}/search/d`);
-    await page.locator('[data-board] section[aria-label="Needs you"] li').waitFor();
-    await settle();
-
-    // The Board lists late before the session list has it: another row's change asks Board, whose card shows new.
-    sessions.set("late", { id: "late", agent: "main", name: "Late **arrival**", spaceId: "main", workState: "NEEDS_YOU", arrivedAt: "2026-10-22T10:05:00Z" });
-    list({ ...sessions.get("w1")!, preview: "nudge" });
-    await settle();
-    expect(await marked()).toEqual(["Late arrival"]);
-
-    // The session list catching up marks nothing more, and the browser notifies nothing.
-    list(sessions.get("late")!);
-    await settle();
-    expect(await marked()).toEqual([]);
-    expect(await page.evaluate(() => window.notes)).toEqual([]);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
