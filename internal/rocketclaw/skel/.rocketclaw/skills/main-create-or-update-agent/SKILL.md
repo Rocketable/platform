@@ -344,7 +344,7 @@ Keys:
 - `space` (required): Web space name
 - `sticky`: `off` (default), `user` or `global`, as for advanced agents
 - `workingDirectory` (required): the agent's own folder, the only one its shell and file tools can write, for example `sessions/<name>/$ROCKETCLAW_CONVERSATION_ID`; relative to RocketClaw's working directory; it may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills`, `cron` or `scripts`, wherever a link puts them
-- `subagents`: models `task` may run this agent on, each like `model`; `[]` for none; default its own `model`
+- `subagents`: models `task` may run this agent on, each like `model`; `[]` for none; default its own `model`. An entry ending in `*` (quote it in YAML, such as `"anthropic/*"`) allows every model whose name, `#effort` included, starts with the text before the `*`; a `*` anywhere else fails loading
 - `maxRecursion`: subagent levels, 0 or more; `0` turns `task` off; default `1`
 - `approver`: `model` replaces the review model, `prompt` is added to the guardian's rules, and `decision` (`model`, `minConfidence`, `prompt`) replaces the decision model reviews ask first and gives it its own rules; default `guardian` on `auto_approver_model`, after `auto_approver_decision.model` when set; see [Reviews and decision models](#reviews-and-decision-models)
 - `decision`: decision models the Code Mode `decision` tool may call, each `provider/model` with its provider configured under `decision`; calls run without review; default no `decision` tool

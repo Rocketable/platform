@@ -42,6 +42,8 @@ func TestLoadEasyAgentErrors(t *testing.T) {
 		{"sticky user routines", easyRequired + "\nsticky: user\nroutines: [30m]", "main.md: routines: a sticky: user agent cannot have routines"},
 		{"negative maxRecursion", easyRequired + "\nmaxRecursion: -1", "main.md: maxRecursion: must be an integer of 0 or more"},
 		{"unknown subagent provider", easyRequired + "\nsubagents: [nope/gpt-6]", `main.md: model "nope/gpt-6": provider "nope" is not configured`},
+		{"unknown subagent prefix provider", easyRequired + "\nsubagents: ['nope/*']", `main.md: model "nope/*": provider "nope" is not configured`},
+		{"subagent star inside", easyRequired + "\nsubagents: ['work/*#high']", `main.md: subagents: "work/*#high": * may only end an entry`},
 		{"unknown approver provider", easyRequired + "\napprover: {model: nope/gpt-6}", `main.md: model "nope/gpt-6": provider "nope" is not configured`},
 		{"misspelled approver key", easyRequired + "\napprover: {promt: rules}", "main.md: approver.promt: not an easy-mode key"},
 		{"unknown approver decision provider", easyRequired + "\napprover: {decision: {model: typesafe/jev-latest}}", `main.md: decision model "typesafe/jev-latest": provider "typesafe" is not configured in decision`},
@@ -157,6 +159,33 @@ schema: {output: {type: object, properties: {answer: {type: string}}}}`)
 			require.Nil(t, agent.MaxRecursion)
 		}
 	})
+}
+
+func TestEasySubagentModelPrefixes(t *testing.T) {
+	agent, errs := loadEasyTestAgent(t, easyRequired+"\nsubagents: [gpt-6-luna, 'work/*', 'gpt-6.1-sol#*']")
+	require.Empty(t, errs)
+
+	for model, want := range map[string]bool{
+		"gpt-6-luna":            true,
+		"gpt-6-luna#max":        false,
+		"work/gpt-6-luna":       true,
+		"work/gpt-6-luna#max":   true,
+		"openai/gpt-6-luna":     false,
+		"gpt-6.1-sol#low":       true,
+		"gpt-6.1-sol":           false,
+		"work-other/gpt-6-luna": false,
+		"work/*":                false,
+		"work/":                 false,
+		"gpt-6.1-sol#":          false,
+	} {
+		require.Equal(t, want, agent.allowsSubagentModel(model), model)
+	}
+
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": agent}})
+	factory.agent = &agent
+	description := factory.taskDescription()
+	require.Contains(t, description, "Available models:\n- gpt-6-luna\n- work/*\n- gpt-6.1-sol#*")
+	require.Contains(t, description, "A listed entry ending in * stands for every model whose name, #effort included, starts with the text before the *")
 }
 
 func TestEasyAgentPermissions(t *testing.T) {

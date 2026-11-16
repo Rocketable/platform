@@ -382,7 +382,7 @@ Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-ex
 | `space` | Web space name, as for advanced agents. | Required. |
 | `sticky` | `off`, `user` or `global`, as for advanced agents. A `global` agent's routine runs report into its sticky session; a `user` agent cannot have `routines`. | `off` |
 | `workingDirectory` | The agent's folder, read-write for its shell and file tools. Relative to RocketClaw's working directory. `$VAR`s come from the turn, each escaped into one path segment, or from RocketClaw's environment; an unset one fails the turn. It may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills`, `cron` or `scripts`, wherever a link puts them. | Required. |
-| `subagents` | Models `task` may run this agent on, each like `model`; `[]` for none. | The agent's own `model`. |
+| `subagents` | Models `task` may run this agent on, each like `model`; `[]` for none. An entry ending in `*` allows every model whose name, `#effort` included, starts with the text before it; a `*` elsewhere fails loading. | The agent's own `model`. |
 | `maxRecursion` | Subagent levels, 0 or more; `0` turns `task` off. | `1` |
 | `approver` | `model` replaces the review model and effort. `prompt` is added to the guardian's rules as tenant rules and never replaces them; the decision model does not read it. `decision` pre-gates the reviews: `model` (`provider/model`, its provider configured under `decision`) and `minConfidence` (0 to 1) replace `auto_approver_decision.model` and `auto_approver_decision.min_confidence`, and `prompt` adds rules for the decision model only. With `prompt` set and no `decision.prompt`, reviews are never pre-gated; write the rules in both to pre-gate them. | `guardian` on `auto_approver_model`, after `auto_approver_decision.model` when set. |
 | `decision` | Decision models the Code Mode `decision` tool may call, each `provider/model` with its provider configured under `decision`; its calls run without review. | No `decision` tool. |
@@ -407,7 +407,7 @@ An unknown key fails loading, and so do `description`, `reasoningEffort`, `verbo
 | `background` | Background scripts and subagents, and stopping and steering them |
 | `restart` | `rocketclaw_restart` |
 
-`task` takes `model`, one of `subagents`, and `tools`, the names of the parent's tools the subagent gets, `null` for all of them. A `continue` must name a model still in the list. The subagent runs this agent's own file, folder, approver and secrets. No agent can `task` an easy agent; use `rocketclaw_sessions`.
+`task` takes `model`, one of `subagents` or a model a `*` entry allows, and `tools`, the names of the parent's tools the subagent gets, `null` for all of them. A `continue` must name a model the list still allows. The subagent runs this agent's own file, folder, approver and secrets. No agent can `task` an easy agent; use `rocketclaw_sessions`.
 
 Routines:
 
