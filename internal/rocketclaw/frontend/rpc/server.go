@@ -290,18 +290,11 @@ func (s *Server) listSessions(request *ListSessionsRequest, stream grpc.ServerSt
 func sidebarSession(chat *backend.SidebarChat) *Session {
 	row := &chat.Session
 	conversation := row.Conversation
-	workStates := map[backend.WorkState]WorkState{backend.WorkIdle: WorkState_IDLE, backend.WorkNeedsYou: WorkState_NEEDS_YOU, backend.WorkRunning: WorkState_RUNNING, backend.WorkQueued: WorkState_QUEUED}
-
 	session := &Session{Id: conversation.ID, Title: chat.Room, Agent: conversation.Agent, Running: row.Running, Background: row.Background, Asking: row.Asking, Pinned: row.Pinned, Paused: row.Paused, Pausable: row.Pausable, Name: row.Name, ForkedFrom: row.ForkedFrom, Tags: row.Tags, Cron: chat.Cron, CronName: chat.CronName, Server: row.Server, Directory: row.Directory, Offline: row.Offline, SpaceId: row.SpaceID, Reply: row.Reply, Model: row.Model,
-		Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label(), External: row.External, WorkState: workStates[row.Work]}
+		Kind: conversationKind(row.Kind), RemoteSessionId: row.RemoteSession, Label: row.Label()}
 
 	if !row.StateSince.IsZero() {
 		session.StateSince = row.StateSince.Format(time.RFC3339Nano)
-
-		session.ArrivedAt = session.StateSince
-		if row.ArrivedAt != row.StateSince {
-			session.ArrivedAt = row.ArrivedAt.Format(time.RFC3339Nano)
-		}
 	}
 
 	if summary := row.Summary; summary != nil {

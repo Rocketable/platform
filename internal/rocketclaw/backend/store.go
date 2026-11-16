@@ -937,22 +937,12 @@ type SidebarSession struct {
 	Attention     Attention
 	AutoPark      bool
 	Origin        ChatOriginFacts
-	Work          WorkState
 	StateSince    time.Time
 	Queued        bool
 	External      bool
 	Pausable      bool
 	ArrivedAt     time.Time
 }
-
-type WorkState string
-
-const (
-	WorkIdle     WorkState = "idle"
-	WorkNeedsYou WorkState = "needs_you"
-	WorkRunning  WorkState = "running"
-	WorkQueued   WorkState = "queued"
-)
 
 type ChatOriginFacts struct {
 	ConversationID         string
@@ -1189,8 +1179,6 @@ SELECT
     COALESCE(u.until_done, FALSE) AS until_done,
     COALESCE(u.note, '') AS note,
     COALESCE(u.auto_park, e.auto_park, TRUE) AS auto_park,
-    -- Idle chats read NULL and zeros, which cost no allocation per row.
-    CASE WHEN k.conversation_id IS NOT NULL THEN 'needs_you' WHEN w.running_since IS NOT NULL THEN 'running' WHEN w.queued_since IS NOT NULL THEN 'queued' END AS work,
     COALESCE(w.running_since, w.queued_since, 0) AS state_since,
     w.queued_since IS NOT NULL AS queued,
     c.external <> '' OR x.conversation_id IS NOT NULL AS external_mcp,
@@ -1209,7 +1197,7 @@ WHERE (c.found OR c.running) AND ($5::text[] IS NULL OR c.conversation_id = ANY(
 SELECT o.conversation_id, o.agent, '', convert_to(o.title, 'UTF8'), o.last_updated, o.running, o.background, o.asking, o.pinned, FALSE AS paused, FALSE AS pausable, o.name, o.forked_from, COALESCE(o.tags, '[]'::jsonb),
     o.server, o.directory, o.synced_at < now() - interval '15 seconds', COALESCE(o.space_id, ''), COALESCE(o.reply, ''), '', '', COALESCE(o.model, ''), o.kind, o.remote_session, u.unread_at, COALESCE(u.quiet, FALSE),
     COALESCE(u.parked, FALSE), u.until, COALESCE(u.until_done, FALSE), COALESCE(u.note, ''), COALESCE(u.auto_park, e.auto_park, TRUE),
-    CASE WHEN o.asking THEN 'needs_you' WHEN o.running OR o.background THEN 'running' END, 0, FALSE AS queued, FALSE AS external_mcp, 0,
+    0, FALSE AS queued, FALSE AS external_mcp, 0,
     '', '', '', 'null'::jsonb, '', '', '', NULL::bigint, FALSE
 FROM conversations o
 LEFT JOIN reads u ON u.conversation_id = o.conversation_id
@@ -1233,7 +1221,6 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			tags           pgtype.DriverBytes
 			updated        sql.NullTime
 			unread, until  sql.NullTime
-			work           sql.NullString
 			since, arrived int64
 		)
 
@@ -1243,7 +1230,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 			var row SidebarSession
 
 			dest = append(dest[:0], &row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &preview, &updated, &row.Running, &row.Background, &row.Asking, &row.Pinned, &row.Paused, &row.Pausable, &row.Name, &row.ForkedFrom, &tags, &row.Server, &row.Directory, &row.Offline, &row.SpaceID, &row.Reply, &row.SlackChannel, &row.CronPath, &row.Model, &row.Kind, &row.RemoteSession, &unread, &row.Attention.Quiet,
-				&row.Attention.Parked, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &work, &since, &row.Queued, &row.External, &arrived)
+				&row.Attention.Parked, &until, &row.Attention.UntilDone, &row.Attention.Note, &row.AutoPark, &since, &row.Queued, &row.External, &arrived)
 			if err := scanChatOrigin(rows, &row.Origin, dest...); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
@@ -1255,7 +1242,7 @@ SELECT * FROM chats`, pgx.QueryExecModeCacheDescribe, "", ThreadCreatedByCron, K
 
 			row.Origin.ConversationID, row.Origin.CreatedBy = row.Conversation.ID, ThreadCreator(row.Conversation.CreatedBy)
 			row.Attention.UnreadAt, row.Attention.Until = unread.Time.UTC(), until.Time.UTC()
-			row.Work, row.StateSince, row.ArrivedAt = cmp.Or(WorkState(work.String), WorkIdle), cmp.Or(timeFromUnixNano(since), updated.Time.UTC()), cmp.Or(timeFromUnixNano(arrived), updated.Time.UTC())
+			row.StateSince, row.ArrivedAt = cmp.Or(timeFromUnixNano(since), updated.Time.UTC()), cmp.Or(timeFromUnixNano(arrived), updated.Time.UTC())
 
 			if err := json.Unmarshal(tags, &row.Tags); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("decode sidebar tags: %w", err))

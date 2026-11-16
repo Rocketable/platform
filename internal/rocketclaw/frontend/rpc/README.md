@@ -773,7 +773,7 @@ no Birth Space whose current agent is theirs, and never a remote OpenCode sessio
 The checks sit where requests already pass:
 
 - Listings: backend `sidebarSessions` drops rows outside the limit after reading
-  them, so `ListSessions`, `SearchSessions`, and `Board` need no code of their own.
+  them, so `ListSessions` and `SearchSessions` need no code of their own.
   `SearchSessions` offers only the principals of the chats it read for the caller.
   `SearchMessages` keeps only hits in chats `SidebarChats` lists for the caller,
   and its shared-search key names the caller only for a limited person.

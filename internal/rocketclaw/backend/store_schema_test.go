@@ -553,12 +553,12 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM legacy_thread_queue`).Scan(&kept))
 	require.Equal(t, 1, kept)
 
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql")
+	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
 	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql"}, ledger)
+	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql", "098_drop_dashboards.sql"}, ledger)
 
 	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
 	require.NoError(t, err)
@@ -847,7 +847,7 @@ UNION ALL SELECT 'function' WHERE to_regprocedure('delete_search_page()') IS NOT
 
 	_, err = store.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, space, revision) VALUES ('alice', 'main', 1);
 INSERT INTO web_tabs (username, path, position, space, search) VALUES
-    ('alice', '/search/a', 0, 'main', '{"name":"Triage","board":"kanban","searches":[{"id":"1","query":"is:unread"},{"id":"2","name":"Mine","query":"principal:alice","notify":true}],"active":"2"}'),
+    ('alice', '/search/a', 0, 'main', '{"name":"Triage","searches":[{"id":"1","query":"is:unread"},{"id":"2","name":"Mine","query":"principal:alice"}],"active":"2"}'),
     ('alice', '/search/b', 1, 'main', '{"searches":[{"id":"1","query":"a"},{"id":"1","query":"b"}],"active":"9"}'),
     ('alice', '/search/c', 2, 'main', '{"name":"Empty","active":"1"}'),
     ('alice', '/cron', 3, 'main', NULL);
@@ -859,7 +859,7 @@ INSERT INTO web_closed_tabs (username, path, space, search, closed_at) VALUES ('
 	state, _, err := store.TabState(ctx, "alice")
 	require.NoError(t, err)
 	require.Equal(t, []Tab{
-		{Path: "/search/a", Space: "main", Search: &SearchPage{Name: "Triage", Board: "kanban", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}, {ID: "2", Name: "Mine", Query: "principal:alice", Notify: true}}, Active: "2"}},
+		{Path: "/search/a", Space: "main", Search: &SearchPage{Name: "Triage", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}, {ID: "2", Name: "Mine", Query: "principal:alice"}}, Active: "2"}},
 		{Path: "/search/b", Space: "main", Search: &SearchPage{Searches: []SavedSearch{{ID: "1", Query: "a"}, {ID: "1", Query: "b"}}, Active: "9"}},
 		{Path: "/search/c", Space: "main", Search: &SearchPage{Name: "Empty", Active: "1"}},
 		{Path: "/cron", Space: "main"},
@@ -891,7 +891,7 @@ WHERE table_schema = current_schema() AND (table_name = 'web_top_shelves' OR col
 	_, err = store.db.ExecContext(ctx, `INSERT INTO web_tab_states (username, space, revision) VALUES ('alice', 'main', 3);
 INSERT INTO web_top_shelves (username, shelf) VALUES
     ('alice', '{"tabs":[{"server":"work","space":"main","path":"/s/eA"},{"space":"main","path":"/s/YQ"},{"space":"main","path":"/s/Yg"},
-        {"space":"main","path":"/search/1","search":{"name":"x","searches":[{"id":"1","query":"q","notify":true}],"active":"1"}},
+        {"space":"main","path":"/search/1","search":{"name":"x","searches":[{"id":"1","query":"q"}],"active":"1"}},
         {"space":"main","path":"/s/C1%3A1.2"},{"space":"main","path":"/s/%FF"},{"space":"ops","path":"/s/a"},
         {"space":"ops","path":"/search/1","search":{"name":"repeat"}},{"server":"work","space":"main","path":"/search/1"},{"path":"/cron"}],"collapsed":true}'),
     ('bob', '{"collapsed":true}'),
@@ -904,7 +904,7 @@ INSERT INTO web_top_shelves (username, shelf) VALUES
 	require.Equal(t, TopShelf{Tabs: []ShelfTab{
 		{Server: "work", Space: "main", Path: "/s/eA"},
 		{Space: "main", Path: "/s/YQ"},
-		{Space: "main", Path: "/search/1", Search: &SearchPage{Name: "x", Searches: []SavedSearch{{ID: "1", Query: "q", Notify: true}}, Active: "1"}},
+		{Space: "main", Path: "/search/1", Search: &SearchPage{Name: "x", Searches: []SavedSearch{{ID: "1", Query: "q"}}, Active: "1"}},
 		{Space: "main", Path: "/s/QzE6MS4y"},
 		{Server: "work", Space: "main", Path: "/search/1"},
 		{Path: "/cron"},

@@ -342,10 +342,10 @@ RETURNING a.path`, "wake tab timers", username, viewing)
     INSERT INTO web_tabs (username, path, conversation_id, position, group_id, space, search_page)
     SELECT $1, d.path, d.conversation_id, p.position, d.group_id, d.space, d.search_page FROM due d JOIN placed p ON p.path = d.path AND p.restored
 ), pages AS (
-    INSERT INTO web_search_pages (id, name, board, active) SELECT d.search_page, p.name, p.board, p.active FROM due d JOIN web_search_pages p ON p.id = d.source
+    INSERT INTO web_search_pages (id, name, active) SELECT d.search_page, p.name, p.active FROM due d JOIN web_search_pages p ON p.id = d.source
 ), searches AS (
-    INSERT INTO web_searches (page, position, id, name, query, notify)
-    SELECT d.search_page, s.position, s.id, s.name, s.query, s.notify FROM due d JOIN web_searches s ON s.page = d.source
+    INSERT INTO web_searches (page, position, id, name, query)
+    SELECT d.search_page, s.position, s.id, s.name, s.query FROM due d JOIN web_searches s ON s.page = d.source
 ), reopened AS (
     DELETE FROM web_closed_tabs w USING due d WHERE w.username = $1 AND w.path = d.path
 ), restored AS (

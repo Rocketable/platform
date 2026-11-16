@@ -2401,7 +2401,7 @@ VALUES ('opencode:box:ses_b', '', '', 'remote', FALSE, 'remote', 'box', '', '/sr
 	require.NoError(t, err)
 	assert.Equal(t, TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}}, Space: "main", Last: last, SharedOrder: order}, state, "every space keeps its own last tab")
 
-	page := &SearchPage{Name: "Triage", Board: "kanban", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}, {ID: "1", Name: "Mine", Query: "principal:alice", Notify: true}}, Active: "1"}
+	page := &SearchPage{Name: "Triage", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}, {ID: "1", Name: "Mine", Query: "principal:alice"}}, Active: "1"}
 	for i, tab := range []Tab{{Path: "/search/a", Space: "main", Search: page}, {Path: "/search/a", Group: "g", Space: "ops", Search: page}} {
 		saved, err = store.SaveTabState(ctx, "alice", &TabState{Tabs: []Tab{{Path: "/cron", Space: "ops"}, tab}, Space: "main"}, int64(3+i))
 		require.NoError(t, err)
@@ -2499,8 +2499,8 @@ func TestWebSharedTabs(t *testing.T) {
 	require.NoError(t, err)
 
 	docs := spaces[1].ID
-	first := &SearchPage{Name: "Triage", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}, {ID: "1", Query: "tag:bug", Notify: true}}, Active: "1"}
-	second, mine := &SearchPage{Name: "Deploys", Board: "kanban", Searches: []SavedSearch{{ID: "2", Name: "Mine", Query: "principal:alice"}}}, &SearchPage{Name: "Mine"}
+	first := &SearchPage{Name: "Triage", Searches: []SavedSearch{{ID: "1", Query: "is:unread"}, {ID: "1", Query: "tag:bug"}}, Active: "1"}
+	second, mine := &SearchPage{Name: "Deploys", Searches: []SavedSearch{{ID: "2", Name: "Mine", Query: "principal:alice"}}}, &SearchPage{Name: "Mine"}
 	page := func(space, path string) *SearchPage {
 		t.Helper()
 

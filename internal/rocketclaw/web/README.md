@@ -697,8 +697,7 @@ active tab.
   session's name, or its agent when it has none, an OpenCode session's tab
   title, or any other tab's title. Its body says what happened: “Park ended”
   for a park's time, the start of the reply for any other session mark,
-  “Search finished”, the Dashboard lane and the session that entered it,
-  “Run finished” for a cron, or “<agent> · <page> updated”. Only a tab you have
+  “Search finished”, “Run finished” for a cron, or “<agent> · <page> updated”. Only a tab you have
   notifies: in your own tabs, Shared, or on the Top Shelf. News on a tab you
   closed shows quietly in bold when you open it again, and a window still
   holding tabs older than the server's waits for its reload before it notifies.
@@ -831,7 +830,7 @@ active tab.
 - **People limited to spaces.** A person the config's `permissions` lists (see
   [Space permissions](../../../README.md#space-permissions)) gets only their
   spaces from the server: the space menu, **Move to space**, and Shared groups
-  show only those, and so do the session list, search, Dashboards, the agent
+  show only those, and so do the session list, search, the agent
   picker, the Cron page, and the Page Index. The space menu hides **New space**,
   **Rename space**, and **Delete space** for them, because the server refuses
   them. When another person switches a session to an agent outside their spaces,
@@ -880,12 +879,11 @@ active tab.
 - **Unread** tabs show a bold title, and any kind of tab can be unread. The
   server marks a tab when something new happens on it: for a session, a turn
   ends, finished, failed, or stopped, or the agent starts asking a question;
-  for a Search page, a search you entered finishes; for a Dashboard, a session
-  enters a lane flagged to notify (see Dashboards below); for a cron's page, its
+  for a Search page, a search you entered finishes; for a cron's page, its
   run ends, once nothing is left to wake it, and the Cron page of the cron's
   space is marked too; for
   a published page, an HTML file of it is stored, and the space's Pages list is
-  marked too. Agents, Skills, Settings, Shortcuts, Quick view, Voice, and Recently closed
+  marked too. Agents, Skills, Settings, Shortcuts, Voice, and Recently closed
   are marked only by you. A session's turn or question reaches you, with a
   notification, when you sent or steered that turn from the Web, when the
   session is in your own tabs in any space, or when it is on your Top Shelf and
@@ -1029,33 +1027,9 @@ plain text that matches no conversation opens Search everywhere. When only the t
 search actions remain, everywhere is highlighted; ArrowUp selects scoped search.
 Clicking a command always runs it.
 
-A Search page becomes a Dashboard when its **Board style** menu picks a style:
-Strip Bay, Dispatch Console, Triage Census, Kanban, or Radar Scope; **List**
-shows its results again. A Dashboard's searches are its lanes. The server sorts the sessions
-of the space its tab sits in into them, each session once, in the first lane it
-matches; a session without a Birth Space counts in its agent's space, or in every
-space when its agent has none, except for people limited to spaces, who never see
-it. The board follows the session list without a reload.
-**Notify** flags the shown lane. The server watches every open Dashboard with a
-flagged lane every 5 seconds, also while no window is open. When a session enters
-a flagged lane, it marks the Dashboard's tab for everyone who has that Dashboard
-open: as their own tab, on their Top Shelf, or in the Shared group of a space they
-can see. The tab turns bold and raises a desktop notification titled with the
-Dashboard's name, whose body names the lane and the newest session, with "and 2
-more" when several arrived; clicking it opens the Dashboard. Nobody is marked for
-the Dashboard they are viewing, and a parked Dashboard stays quiet. A session that a
-lane of unread sessions (`is:unread`) shows only for a quiet mark, such as your own
-Mark as unread, has not arrived. The first check
-after the server starts, opening a Dashboard, and editing, reordering, or flagging
-a lane record what
-the lanes hold and mark nothing; a session that leaves a lane and enters it again
-marks again. The board still draws newly arrived cards as new. **New dashboard** in
-the command palette opens a new Strip Bay Dashboard, added to the current space's
-Shared group, with the lanes Needs you (`is:waiting`), Running (`is:running`), Queued
-(`is:queued`), and External (`is:external`), in that order; all but Running are
-flagged to notify. **Duplicate**, in a Search page's or Dashboard's tab menu
+**Duplicate**, in a Search page's tab menu
 or Shared row menu and in the palette as **Tabs: Duplicate**, opens a copy at a new
-address with the same style, lanes, and marks, named "<name> copy" (an unnamed page
+address with the same searches, named "<name> copy" (an unnamed page
 after its shown query, as "<query> copy"). A copy of a page in the current space's
 Shared group is added to it; any other copy is your own tab.
 
@@ -1074,8 +1048,7 @@ Enter, Retry, a link, or the palette marks the tab bold with a "Search
 finished" notification when it ends while you are elsewhere; reopening the page
 runs it again without marking, and new sessions in the list start it over, still
 marking once if you entered it. Other servers'
-results are fetched while the page is open, and a Dashboard's lanes do not run
-this way.
+results are fetched while the page is open.
 Results refresh when conversations appear in the session list. An empty
 Cmd/Ctrl+P lists the session list without a request; it opens with the first 50
 rows and renders the rest in the background. Until new results arrive, the
@@ -1137,9 +1110,8 @@ question, or a remote OpenCode session's pending form or permission request), an
 chat bound to External MCP). `running`, `queued`, and `external` count the hidden runs reporting to
 a chat, such as its External MCP run, as the chat's own work, and agents' `rocketclaw_sessions_list`
 reads every work term too. Each listed
-session also carries its work state (the first of needs you, running, and queued, else idle), when
-that state began, and when its newest running or waiting turn arrived, or its last update when it
-has none; these come from the server and read the same for everyone. Typing `sort:` suggests
+session also carries when its work state (the first of needs you, running, and queued, else idle)
+began, which comes from the server and reads the same for everyone. Typing `sort:` suggests
 `newest` and `oldest`. While typing, a last word that is an unfinished filter
 (a bare `tag:`, `cron:`, `agent:`, `principal:`, `room:`, `server:`, `model:`, or `space:`, a partial `is:` or `sort:` term
 such as `is:pin`, or an unclosed quote) is not sent; Enter, opening a saved
@@ -1158,13 +1130,13 @@ may be incomplete; the Search page says so instead of reporting “No matches”
 hit from a stopped or failed turn opens its chat without jumping to a message. A
 failed search shows an error with Retry, and the next keystroke also retries.
 Cmd/Ctrl+Shift+P opens the same palette with commands only. It always offers
-**Sessions: New**, **Sessions: Search**, **New dashboard**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
+**Sessions: New**, **Sessions: Search**, **Voice**, **Cron: Dashboard**, **Cron: Run**,
 **List Agents**, **List Skills**, **Settings**, **Tabs: Previous**, **Tabs: Next**,
-**Tabs: Recently closed**, **Help: Keyboard Shortcuts**, and **Quick view**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
+**Tabs: Recently closed**, and **Help: Keyboard Shortcuts**, plus **Tabs: Toggle sidebar** while Cmd/Ctrl+B
 works (the desktop sidebar, not the narrow-screen drawer), and **Tabs: Reopen closed tab** while a tab is closed. In both palettes a command bound to a
 key shows it on the right of its row, OpenCode style: **⌘ Option N** on Mac or
 **Ctrl Alt N** elsewhere for **Sessions: New**, **⌘ [** and **⌘ ]** for the tab
-commands, **⌘ Option T** for reopening, **⌘ Shift D** for Quick view, and **⌘ B** for the sidebar toggle. Unbound commands have no shortcut
+commands, **⌘ Option T** for reopening, and **⌘ B** for the sidebar toggle. Unbound commands have no shortcut
 hint. **Help: Keyboard Shortcuts** opens the read-only `/shortcuts` page, which
 lists every shortcut from the same list: the palette keys, new session, tab
 stepping and reopening, the sidebar toggle, Escape on a page tab, and the message box's steer
@@ -1550,33 +1522,6 @@ and the Go-driven browser tests in `internal/rocketclaw/frontend/rpc` all fail
 with `Cannot find package 'undefined'`.
 See [Frontend RPC Tests Need Setup in Every Fresh JJ Workspace](../../../docs/solutions/best-practices/frontend-rpc-tests-need-setup-in-fresh-jj-workspaces.md)
 for the setup.
-
-## Quick view
-
-Cmd/Ctrl+Shift+D, or **Quick view** in the command palette, opens the `/quick-view`
-page in a tab; Escape closes it like other pages. It shows every server's
-sessions as a board of tiles: each tile is a session, with a coloured dot for its
-state and the start of its title, in labelled rows. Chips at the top, or the keys
-1 to 0, switch between ten variations, and this browser remembers the last one.
-Each variation has its own rules for which sessions it shows, how it groups them
-into rows, which states its legend names, and what clicking a tile does; the rules
-are listed under the board:
-
-| Key | Variation | Shows | Rows | Click |
-|---|---|---|---|---|
-| 1 | Ranks | Unparked sessions touched in 24 hours | Ranks of 9, most urgent first | Opens the session |
-| 2 | Agents | The last 7 days, without cron runs | One per agent | Shows the last message, with Open |
-| 3 | Triage | Sessions asking, unread, or working | Needs you, Unread, Working | Adds its tab and stays on the page |
-| 4 | Timeline | Unparked, the last 7 days | Last hour, Today, Yesterday, This week | Opens a preview tab |
-| 5 | Spaces | Unparked, the last 7 days, every space | One per space | Opens it in its space |
-| 6 | Live now | Busy, or touched in 15 minutes | One per server | Opens it in a new window |
-| 7 | Origins | The last 24 hours | You, forks, Slack, each cron, External… | A cron run opens its cron's timeline |
-| 8 | Stuck | Running, queued, or asking | Minutes in that state, longest first | Selects; Open, Park until done, or Mark read the selection |
-| 9 | Sweep | Unread or asking | One per tag | Marks it read; double-click opens |
-| 0 | Parking lot | The last 7 days, parked ones too | In play, then each kind of parking | Parks it until done, or unparks it |
-
-Read, park and add-a-tab clicks act only on this server's sessions. The board's
-times are those of its opening.
 
 ## Attachment HTTP contract
 

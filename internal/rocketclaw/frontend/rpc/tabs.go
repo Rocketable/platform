@@ -247,9 +247,9 @@ func webSearchPage(saved *backend.SearchPage) *SearchPage {
 		return nil
 	}
 
-	page := &SearchPage{Name: saved.Name, Board: saved.Board, Active: saved.Active}
+	page := &SearchPage{Name: saved.Name, Active: saved.Active}
 	for _, search := range saved.Searches {
-		page.Searches = append(page.Searches, &SavedSearch{Id: search.ID, Name: search.Name, Query: search.Query, Notify: search.Notify})
+		page.Searches = append(page.Searches, &SavedSearch{Id: search.ID, Name: search.Name, Query: search.Query})
 	}
 
 	return page
@@ -260,9 +260,9 @@ func savedSearchPage(page *SearchPage) *backend.SearchPage {
 		return nil
 	}
 
-	saved := &backend.SearchPage{Name: page.Name, Board: page.Board, Active: page.Active}
+	saved := &backend.SearchPage{Name: page.Name, Active: page.Active}
 	for _, search := range page.Searches {
-		saved.Searches = append(saved.Searches, backend.SavedSearch{ID: search.Id, Name: search.Name, Query: search.Query, Notify: search.Notify})
+		saved.Searches = append(saved.Searches, backend.SavedSearch{ID: search.Id, Name: search.Name, Query: search.Query})
 	}
 
 	return saved

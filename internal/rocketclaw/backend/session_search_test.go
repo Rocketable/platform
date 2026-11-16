@@ -649,93 +649,6 @@ func TestSearchSessionsSortOrder(t *testing.T) {
 	}
 }
 
-func TestSessionBoard(t *testing.T) {
-	t.Parallel()
-
-	s := newTestSessionService(t)
-	ctx := t.Context()
-	writeAgent(t, s.definitions.Clone().Workspace, "ops", "---\nmodel: gpt-6.1-sol\nspace: OPS\n---\nHelp.")
-
-	for _, name := range []string{"Ops", "Bulk"} {
-		require.NoError(t, s.CreateSpace(ctx, name))
-	}
-
-	spaces, err := s.Spaces(ctx)
-	require.NoError(t, err)
-
-	ids := make(map[string]string)
-	for _, space := range spaces {
-		ids[space.Name] = space.ID
-	}
-
-	require.NoError(t, s.RegisterExternalMCPConversation("ticket", "ops", &ExternalMCPSessionState{Agent: "ops", PrivateConversationID: "mcp-run", ManagedConversationID: "mcp"}))
-
-	for day, chat := range []struct{ id, agent, space string }{{"loose", "main", ""}, {"mcp", "ops", ""}, {"web-ops", "main", ids["Ops"]}, {"web-main", "main", ids["Main"]}} {
-		require.NoError(t, s.UpsertThread(chat.id, ThreadState{Agent: chat.agent}))
-		_, err := s.AppendEntryID(ctx, chat.id, testSessionEntryAt(time.Date(2026, 1, day+1, 0, 0, 0, 0, time.UTC), "secret body words"))
-		require.NoError(t, err)
-		_, err = s.db.ExecContext(ctx, `UPDATE conversations SET space_id = NULLIF($2, '') WHERE conversation_id = $1`, chat.id, chat.space)
-		require.NoError(t, err)
-	}
-
-	_, err = s.UpdateConversationDetails(ctx, "web-ops", nil, new("Invoice run"))
-	require.NoError(t, err)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, preview, has_entries, last_updated, space_id)
-SELECT 'bulk-' || lpad(n::text, 3, '0'), 'main', '', 'web_chat', TRUE, 'preview'::bytea, TRUE, now() - n * interval '1 second', $1 FROM generate_series(0, 249) n`, ids["Bulk"])
-	require.NoError(t, err)
-
-	bulk := make([]string, 200)
-	for i := range bulk {
-		bulk[i] = fmt.Sprintf("bulk-%03d", i)
-	}
-
-	listed := make(map[string]SidebarChat)
-
-	for chat, err := range s.SidebarChats(ctx, "", noSlackLookups{}, nil) {
-		require.NoError(t, err)
-
-		listed[chat.Session.Conversation.ID] = chat
-	}
-
-	type lane struct {
-		IDs   []string
-		Total int
-	}
-
-	for _, tc := range []struct {
-		space      string
-		dashboards [][]string
-		want       [][]lane
-	}{
-		{ids["Ops"], [][]string{{"is:external", "INVOICE", ""}, {"", "is:external"}, {"secret"}, {"model:sol"}}, [][]lane{
-			{{IDs: []string{"mcp"}, Total: 1}, {IDs: []string{"web-ops"}, Total: 1}, {IDs: []string{"loose"}, Total: 1}},
-			{{IDs: []string{"web-ops", "mcp", "loose"}, Total: 3}, {}},
-			{{}},
-			{{IDs: []string{"mcp"}, Total: 1}},
-		}},
-		{ids["Main"], [][]string{{""}}, [][]lane{{{IDs: []string{"web-main", "loose"}, Total: 2}}}},
-		{ids["Bulk"], [][]string{{"bulk"}}, [][]lane{{{IDs: bulk, Total: 250}}}},
-		{"no-such-space", [][]string{{"", "is:external"}}, [][]lane{{{}, {}}}},
-	} {
-		board, err := s.Board(ctx, "", tc.space, tc.dashboards, noSlackLookups{})
-		require.NoError(t, err)
-
-		got := make([][]lane, len(board))
-		for i, lanes := range board {
-			got[i] = make([]lane, len(lanes))
-			for j, found := range lanes {
-				got[i][j].Total = found.Total
-				for _, chat := range found.Chats {
-					got[i][j].IDs = append(got[i][j].IDs, chat.Session.Conversation.ID)
-					require.Equal(t, listed[chat.Session.Conversation.ID], chat)
-				}
-			}
-		}
-
-		require.Equal(t, tc.want, got, "%s %q", tc.space, tc.dashboards)
-	}
-}
-
 func TestSpaceLimit(t *testing.T) {
 	t.Parallel()
 
@@ -851,20 +764,6 @@ VALUES ('opencode:box:ops', '', '', 'remote', FALSE, 'remote', 'box', 'ops', 'ne
 	search, err = s.SearchSessions(ctx, "bob@example.com", "needle", SearchMessages, noSlackLookups{})
 	require.NoError(t, err)
 	require.Equal(t, []string{"Writer loose-unborn", "Writer main-born", "Writer ops-born", "Writer ops-unborn", "Writer switched"}, search.Principals)
-
-	for _, tc := range []struct {
-		username, space string
-		want            []string
-	}{
-		{"alice@example.com", ops, theirs},
-		{"bob@example.com", ops, []string{"loose-unborn", "opencode:box:ops", "ops-born", "ops-unborn", "switched"}},
-		{"alice@example.com", mainID, []string{}},
-		{"carol@example.com", mainID, []string{"main-born"}},
-	} {
-		board, err := s.Board(ctx, tc.username, tc.space, [][]string{{""}}, noSlackLookups{})
-		require.NoError(t, err)
-		require.Equal(t, tc.want, sorted(board[0][0].Chats), "%s %s", tc.username, tc.space)
-	}
 
 	top, err := s.TopLevelSession(ctx, "ops-born/call-1")
 	require.NoError(t, err)
