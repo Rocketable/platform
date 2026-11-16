@@ -107,9 +107,7 @@ func (s *SessionService) ProposeAgentDraftChanges(ctx context.Context, id, usern
 		return nil, fmt.Errorf("prepare agent draft assistant: %w", err)
 	}
 
-	if err := runtime.RestrictTools([]string{}); err != nil {
-		return nil, fmt.Errorf("disable agent draft assistant tools: %w", err)
-	}
+	clear(runtime.Tools)
 
 	object := func(properties map[string]any) map[string]any {
 		return map[string]any{"type": "object", "properties": properties, "required": slices.Sorted(maps.Keys(properties)), "additionalProperties": false}

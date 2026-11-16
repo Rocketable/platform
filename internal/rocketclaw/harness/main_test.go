@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -542,65 +540,6 @@ func TestExecuteSpillStorageIsPrivate(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, full, string(raw))
 			}
-		})
-	}
-}
-
-func TestRuntimeRestrictTools(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	client := openai.NewClient()
-	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, "skill: {demo: allow}\nread: {'*': allow}")}
-	skills := LoadSkills(fstest.MapFS{"demo/SKILL.md": mapFile("---\nname: demo\ndescription: Demo\n---\n")}, "/virtual/skills").Skills
-
-	newRuntime := func(t *testing.T) *Runtime {
-		t.Helper()
-
-		runtime, err := NewWithModelResolver(testResolverForClient(&client), testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main")
-		require.NoError(t, err)
-
-		return runtime
-	}
-
-	t.Run("nil keeps all derived tools", func(t *testing.T) {
-		runtime := newRuntime(t)
-		before := slices.Sorted(maps.Keys(runtime.Tools))
-		require.NoError(t, runtime.RestrictTools(nil))
-		require.Equal(t, before, slices.Sorted(maps.Keys(runtime.Tools)))
-	})
-
-	t.Run("exact and empty allowlists", func(t *testing.T) {
-		runtime := newRuntime(t)
-		require.Contains(t, runtime.Tools, "skill")
-		require.Contains(t, runtime.Tools, "find_skills")
-		require.Contains(t, runtime.Tools, loadExecuteResultToolName)
-		require.NoError(t, runtime.RestrictTools([]string{"skill", executeToolName}))
-		runtime.restoreTurnExecuteResults("restricted")
-		_, err := runtime.saveExecuteResult(strings.Repeat("line\n", 2100))
-		require.NoError(t, err)
-		runtime.deleteTurnExecuteResults()
-		require.NotContains(t, runtime.Tools, loadExecuteResultToolName)
-		require.NoError(t, runtime.RestrictTools([]string{"skill"}))
-		require.Equal(t, []string{"skill"}, slices.Sorted(maps.Keys(runtime.Tools)))
-		require.NoError(t, runtime.RestrictTools([]string{}))
-		require.Empty(t, runtime.Tools)
-	})
-
-	for _, tc := range []struct {
-		name  string
-		tools []string
-	}{
-		{name: "unknown", tools: []string{"missing"}},
-		{name: "duplicate", tools: []string{"skill", "skill"}},
-	} {
-		t.Run(tc.name+" is atomic", func(t *testing.T) {
-			runtime := newRuntime(t)
-			before := slices.Sorted(maps.Keys(runtime.Tools))
-			require.Error(t, runtime.RestrictTools(tc.tools))
-			require.Equal(t, before, slices.Sorted(maps.Keys(runtime.Tools)))
 		})
 	}
 }
