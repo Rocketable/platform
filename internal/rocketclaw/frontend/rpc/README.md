@@ -225,10 +225,13 @@ names (always including `openai`) that the agent editor's model picker offers.
 The server never lists a provider's models. It never serializes credentials, database
 URLs, environment values, or MCP commands/headers. It also returns `canEdit`, true when
 the caller's username is in `web.admins`, and only then the behavior settings as
-two-space-indented JSON in `behaviorJson`.
+two-space-indented JSON in `behaviorJson`. A person limited to spaces gets only
+`tailscaleUser` and the Slack channels with their agents; every other field stays
+empty and `canEdit` false.
 `SaveBehaviorSettings(SaveBehaviorSettingsRequest) -> ListConfigResponse`
 (`POST /api/SaveBehaviorSettings`, `documentJson` required) replaces the whole
-document and answers as `ListConfig` does. A non-admin gets `PermissionDenied`.
+document and answers as `ListConfig` does. A non-admin, or an admin limited to
+spaces, gets `PermissionDenied`.
 Malformed JSON and every rejected save get `InvalidArgument` with the reason. A
 rejected save changes nothing: the stored document, live settings, runtime assets,
 External MCP agents, and cron jobs all stay as they were.
@@ -236,7 +239,8 @@ External MCP agents, and cron jobs all stay as they were.
 skill text and metadata; origin is the loader's relative definition location.
 With `ListSkills.agent`, it returns only skills allowed for that loaded agent,
 excluding denied and review-only permissions; an unavailable agent returns no
-skills. Omitting the filter retains the full skills-page catalog. The composer
+skills. Omitting the filter returns the full skills-page catalog, or, for a person
+limited to spaces, only the skills at least one of their agents may use. The composer
 supplies its selected agent and lists commands before those skills. Choosing a
 skill inserts `$name `, or `$skill name ` for a built-in name collision, without
 sending. Web-only outer `$enqueue` queues automatic later work, `$stash` holds
@@ -796,8 +800,8 @@ The checks sit where requests already pass:
   spaces and Shared tabs, and creates missing listed spaces), `GetPage` and
   `ListPages`, `ListCronJobs` and `RunCronJob` (the cron's space and its agent),
   `ListSessions`' first frame (no OpenCode servers, only their agents' tags),
-  `ListConfig`'s Slack channel agents, `ListSkills`' `agent`, and `Reload`, because
-  reloaded agent files can widen a limit.
+  `ListConfig` (see above), `ListSkills` (only skills their agents may use), and
+  `Reload`, because reloaded agent files can widen a limit.
 - The agent editor's methods and draft streams refuse limited people outright
   (see [Agent editor](#agent-editor)).
 

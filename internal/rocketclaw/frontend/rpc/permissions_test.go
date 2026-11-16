@@ -32,6 +32,7 @@ func TestSpacePermissions(t *testing.T) {
 		DatabaseURL: dsn, Workspace: t.TempDir(), Permissions: map[string][]string{"alice@example.com": {"Ops"}},
 		OpenCode: map[string]config.OpenCodeConfig{"box": {URL: "https://box.example"}},
 		Slack:    config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main-agent", "ops-agent", "loose"}}}},
+		Web:      config.WebConfig{Admins: []string{"alice@example.com"}},
 	}
 	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
@@ -45,9 +46,12 @@ func TestSpacePermissions(t *testing.T) {
 	require.NoError(t, root.MkdirAll(runtime+"/agents", 0o700))
 	require.NoError(t, root.MkdirAll(runtime+"/skills/notes", 0o700))
 	require.NoError(t, root.WriteFile(runtime+"/skills/notes/SKILL.md", []byte("---\nname: notes\ndescription: Take notes\n---\nNotes.\n"), 0o600))
+	require.NoError(t, root.MkdirAll(runtime+"/skills/plans", 0o700))
+	require.NoError(t, root.WriteFile(runtime+"/skills/plans/SKILL.md", []byte("---\nname: plans\ndescription: Make plans\n---\nPlans.\n"), 0o600))
 
 	for name, space := range map[string]string{"ops-agent": "space: Ops\n", "main-agent": "space: Main\n", "loose": ""} {
-		require.NoError(t, root.WriteFile(runtime+"/agents/"+name+".md", []byte("---\nmodel: gpt-6.1-sol\n"+space+"permission:\n  skill: {notes: allow}\n  rocketclaw:\n    rocketclaw_set_tag: [[x]]\n---\nHelp."), 0o600))
+		skills := map[string]string{"loose": ", plans: allow"}[name]
+		require.NoError(t, root.WriteFile(runtime+"/agents/"+name+".md", []byte("---\nmodel: gpt-6.1-sol\n"+space+"permission:\n  skill: {notes: allow"+skills+"}\n  rocketclaw:\n    rocketclaw_set_tag: [[x]]\n---\nHelp."), 0o600))
 		require.NoError(t, sessions.PutPage(t.Context(), &backend.Page{Agent: name, Kind: backend.PageFile, Name: "index.html", ContentType: "text/html", Body: []byte("<p>page</p>")}))
 		require.NoError(t, sessions.PutPage(t.Context(), &backend.Page{Agent: name, Kind: backend.PageData, Name: "rows", ContentType: "application/json", Body: []byte("[1]")}))
 	}
@@ -291,6 +295,8 @@ func TestSpacePermissions(t *testing.T) {
 		{alice, "main-agent", nil},
 		{alice, "ops-agent", []string{"notes"}},
 		{bob, "main-agent", []string{"notes"}},
+		{alice, "", []string{"notes"}},
+		{bob, "", []string{"notes", "plans"}},
 	} {
 		skills, err := server.listSkills(tc.ctx, &ListSkillsRequest{Agent: tc.agent})
 		require.NoError(t, err)
@@ -303,12 +309,18 @@ func TestSpacePermissions(t *testing.T) {
 		require.Equal(t, tc.want, names, tc.agent)
 	}
 
-	for ctx, want := range map[context.Context][]string{alice: {"ops-agent"}, bob: {"main-agent", "ops-agent", "loose"}} {
+	for ctx, want := range map[context.Context]*ConfigView{
+		alice: {TailscaleUser: "alice@example.com", SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"ops-agent"}}}},
+		bob:   {Workspace: cfg.Workspace, Providers: []string{"openai"}, TailscaleUser: "bob@example.com", SlackChannels: []*ConfigChannel{{Channel: "#ops", Agents: []string{"main-agent", "ops-agent", "loose"}}}},
+	} {
 		view, err := server.listConfig(ctx)
 		require.NoError(t, err)
-		require.True(t, proto.Equal(&ConfigChannel{Channel: "#ops", Agents: want}, view.Config.SlackChannels[0]), "%v", view.Config.SlackChannels)
-		require.Len(t, view.Config.SlackChannels, 1)
+		require.True(t, proto.Equal(want, view.Config), "%v", view.Config)
 	}
+
+	_, err = server.saveBehaviorSettings(alice, &SaveBehaviorSettingsRequest{DocumentJson: "{}"})
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.Empty(t, core.SaveBehaviorCalls())
 
 	_, err = server.reload(alice, &ReloadRequest{Reason: "assets"})
 	require.Equal(t, codes.PermissionDenied, status.Code(err))
