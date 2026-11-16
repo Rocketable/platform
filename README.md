@@ -149,6 +149,8 @@ Agents act with their own permissions, not the person's. An agent in a limited p
 
 Slack has one job: quick help when an allowed user mentions the bot. Everything else happens in the web page, including cron reports and MCP sessions.
 
+Slack is optional. Without `slack.bot_token` and `slack.app_token`, RocketClaw starts without Slack and `slack.channels` may be empty. With the tokens, both are required and `slack.channels` needs at least one row.
+
 Under `slack.channels`, map each channel to a list of agents and the Slack user IDs allowed to use them. A row named `@` is not a channel: it gives agents and allowed users for mentions in any other channel or group DM the bot is already in.
 
 Only a mention from an allowed user starts work. Messages without a mention, including replies in threads the bot answers in, reactions, and edited messages start nothing, and 1:1 DMs never start work. A top-level mention in a configured channel starts a new thread answered by the channel's first agent; a top-level mention with no text, file, or forward is ignored. A mention in a thread the bot does not know takes that thread over and reads up to 50 earlier messages. A mention in a thread the bot already answers in is that conversation's next turn and adds only the mention itself. It waits for running work and active goals instead of steering them. Mentions keep their files and forwarded threads. Slack shows the thread working as soon as the bot accepts a mention, and the bot accepts each mention once, even if Slack delivers it again. If it cannot read the thread or take the request, it replies with a short error.

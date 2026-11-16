@@ -414,6 +414,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if c.Slack.BotToken == "" && c.Slack.AppToken == "" {
+		return nil
+	}
+
 	for _, field := range [...]struct{ value, message string }{{c.Slack.BotToken, "slack.bot_token is required"}, {c.Slack.AppToken, "slack.app_token is required"}} {
 		if strings.TrimSpace(field.value) == "" {
 			return errors.New(field.message)
@@ -524,7 +528,7 @@ func (c *Config) validateSlack() error {
 	}
 
 	c.Slack.Channels = normalized
-	if len(c.Slack.Channels) == 0 {
+	if len(c.Slack.Channels) == 0 && c.Slack.BotToken != "" {
 		return errors.New("slack.channels is required")
 	}
 

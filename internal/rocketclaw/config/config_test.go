@@ -68,6 +68,13 @@ func TestLoadAcceptsSetupOnlyFile(t *testing.T) {
 	require.EqualError(t, cfg.ValidateBehavior(), "slack.channels is required")
 }
 
+func TestValidateAcceptsConfigWithoutSlack(t *testing.T) {
+	cfg := validConfig()
+	cfg.Slack = SlackConfig{}
+	require.NoError(t, cfg.Validate())
+	require.NoError(t, cfg.ValidateBehavior())
+}
+
 func TestBehaviorRoundTrip(t *testing.T) {
 	document := `{
 	  "auto_approver_model": "work/gpt-6.1-sol",
