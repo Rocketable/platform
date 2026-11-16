@@ -1467,6 +1467,3 @@ request identity, metadata mapping, download headers, and cancellation.
 The browser suite also exercises picker/remove/drop/paste, draft retention, failed-send
 retry, attachment-only sends and live replies, inline images, downloads, and
 queue versus steer behavior.
-
-Slack installation requirements, including channel rename subscriptions, are in
-the [RocketClaw cheatsheet](../cmd/rocketclaw/CHEATSHEET.md#slack-channel-rename-subscriptions).

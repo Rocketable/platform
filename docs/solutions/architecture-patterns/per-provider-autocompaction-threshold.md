@@ -145,4 +145,4 @@ Codex extracts the threshold, then strips the field the API does not accept:
 	}
 ```
 
-Operator-facing text: omit `autocompaction_threshold` to keep the runtime default; set it on `openai` or a named provider to override that provider only (`README.md:491`, `cmd/rocketclaw/CHEATSHEET.md:182`).
+Operator-facing text: omit `autocompaction_threshold` to keep the runtime default; set it on `openai` or a named provider to override that provider only (`README.md:491`).
