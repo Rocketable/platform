@@ -1,7 +1,4 @@
 -- +migrate Up
--- The State Store as 001_init.sql through 059_legacy_handoff.sql built it, without the legacy_ tables.
--- Startup adopts a store those migrations built; see initializeSessionDB.
--- Schemas sharing one database must not race to create the extension.
 SELECT pg_advisory_xact_lock(hashtext('rocketclaw pg_trgm extension'));
 CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
 
@@ -17,7 +14,6 @@ DECLARE
     channel TEXT := 'rocketclaw_transcript_' || md5(TG_TABLE_SCHEMA);
     revision TEXT := pg_current_xact_id()::text;
 BEGIN
-    -- Read only ownership keys; transcript payloads can be large.
     IF TG_TABLE_NAME = 'conversations' THEN
         IF TG_OP <> 'INSERT' THEN parents := array_append(parents, OLD.shadow_parent); END IF;
         IF TG_OP <> 'DELETE' THEN parents := array_append(parents, NEW.shadow_parent); END IF;
@@ -391,7 +387,6 @@ CREATE TABLE web_tab_states (
     revision bigint NOT NULL
 );
 
--- A SQL function's body is checked when it is created, so this one follows the tables it reads.
 -- +migrate StatementBegin
 CREATE FUNCTION turn_trace(text, text) RETURNS jsonb
     LANGUAGE sql STABLE
@@ -496,5 +491,4 @@ ALTER TABLE ONLY voice_settings
 
 INSERT INTO web_spaces (id, name) VALUES ('main', 'Main');
 
--- 059 ended with these statistics, so a new store plans its first queries as a migrated one did.
 ANALYZE conversations, turns, entries, steps, schedules;

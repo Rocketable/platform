@@ -1,5 +1,4 @@
 -- +migrate Up
--- Web tabs are no longer pinned; a pinned tab stays open where it was, as an ordinary tab.
 ALTER TABLE web_tabs DROP COLUMN pinned;
 
 -- +migrate Down

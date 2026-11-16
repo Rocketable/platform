@@ -1,6 +1,4 @@
 -- +migrate Up
--- A tab every Web user sees in a space's Shared group, oldest added first. A session's tab names its
--- conversation, so deleting the session takes it out of every space.
 CREATE TABLE web_shared_tabs (
     space TEXT NOT NULL REFERENCES web_spaces (id) ON DELETE CASCADE,
     path TEXT NOT NULL,
@@ -10,8 +8,6 @@ CREATE TABLE web_shared_tabs (
 );
 CREATE INDEX web_shared_tabs_conversation ON web_shared_tabs (conversation_id);
 
--- Each space's last tab, by space id. A flag on the person's one row per path could not hold a
--- Shared tab whose own copy sits in another space, so it moves to the person's state.
 ALTER TABLE web_tab_states ADD COLUMN last JSONB NOT NULL DEFAULT '{}';
 WITH lasts AS (
     SELECT username, jsonb_object_agg(space, path) AS last FROM web_tabs WHERE last GROUP BY username

@@ -1,7 +1,4 @@
 -- +migrate Up
--- A person's Top Shelf as rows: each tab of any RocketClaw, server '' being this one, in order, with its space and
--- path there. A tab of a local session names it, so deleting the session takes the tab off the shelf; a Search tab
--- points at its own page. Whether the shelf is collapsed is kept with the person's tab state.
 ALTER TABLE web_top_shelves RENAME TO web_top_shelf_blobs;
 ALTER TABLE web_top_shelf_blobs RENAME CONSTRAINT web_top_shelves_pkey TO web_top_shelf_blobs_pkey;
 CREATE TABLE web_top_shelves (
@@ -20,8 +17,6 @@ CREATE TRIGGER web_top_shelves_search_page_delete AFTER DELETE ON web_top_shelve
 CREATE TRIGGER web_top_shelves_search_page_change AFTER UPDATE OF search_page ON web_top_shelves FOR EACH ROW WHEN (OLD.search_page IS NOT NULL AND OLD.search_page IS DISTINCT FROM NEW.search_page) EXECUTE FUNCTION delete_search_page();
 ALTER TABLE web_tab_states ADD COLUMN shelf_collapsed BOOLEAN NOT NULL DEFAULT FALSE;
 
--- The session a local /s/ or /oc/ path names, read as Go's TabConversation reads it, legacy URI-encoded spellings
--- included; '' for any other path, and NULL for one whose text does not decode.
 -- +migrate StatementBegin
 CREATE FUNCTION shelf_conversation(path TEXT) RETURNS TEXT
     LANGUAGE plpgsql
@@ -51,9 +46,6 @@ END;
 $$;
 -- +migrate StatementEnd
 
--- Each shelf was the Web's TopShelf in protobuf JSON, which leaves out empty fields. A local session's tab is kept under
--- the path the Web spells it with, one of a session that no longer exists is left out, and of tabs that repeat a server
--- and path the first is kept.
 WITH entries AS (
     SELECT b.username, e.n, COALESCE(e.tab->>'server', '') AS server, COALESCE(e.tab->>'space', '') AS space, COALESCE(e.tab->>'path', '') AS path, e.tab->'search' AS search
     FROM web_top_shelf_blobs b CROSS JOIN jsonb_array_elements(COALESCE(b.shelf->'tabs', '[]')) WITH ORDINALITY AS e(tab, n)

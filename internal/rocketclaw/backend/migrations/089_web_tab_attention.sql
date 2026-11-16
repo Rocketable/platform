@@ -1,9 +1,4 @@
 -- +migrate Up
--- A person's attention on one tab location, the mutes' table reshaped. unread_at is when something new started
--- waiting for them, NULL once read; quiet marks a mark that raises no notification. A parked tab is set aside, and
--- until is when its park ends, NULL for a park until unparked. note is the notification text of a mark the server
--- wrote. A session tab's row names its session, so deleting the session deletes it. Mutes, snoozes
--- and unread marks are not carried over.
 DELETE FROM web_tab_mutes;
 ALTER TABLE web_tab_mutes RENAME TO web_tab_attention;
 ALTER TABLE web_tab_attention DROP CONSTRAINT web_tab_mutes_pkey, DROP CONSTRAINT web_tab_mutes_conversation_id_fkey;
@@ -19,14 +14,11 @@ ALTER TABLE web_tab_attention
     ADD CONSTRAINT web_tab_attention_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES conversations (conversation_id) ON DELETE CASCADE;
 CREATE INDEX web_tab_attention_conversation ON web_tab_attention (conversation_id);
 
--- Tab rows kept only for a mark go; every tab left has a place in the strip.
 DELETE FROM web_tabs WHERE position IS NULL;
 ALTER TABLE web_tabs DROP COLUMN unread_at, DROP COLUMN marked_unread, ALTER COLUMN position SET NOT NULL;
 
--- The tab in view is a location now, and the views held session ids.
 UPDATE web_tab_states SET viewing = '', viewed_at = NULL WHERE viewing <> '' OR viewed_at IS NOT NULL;
 
--- Where a closed tab was, so a timer that comes due on it can put it back.
 ALTER TABLE web_closed_tabs ADD COLUMN group_id TEXT NOT NULL DEFAULT '', ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
 
 -- +migrate Down

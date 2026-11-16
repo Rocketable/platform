@@ -1,5 +1,4 @@
 -- +migrate Up
--- 096 left every entry visible to every view and no entry naming a copy's source.
 DROP INDEX session_entries_sync_source_id;
 ALTER TABLE entries DROP COLUMN audience;
 

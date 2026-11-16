@@ -1,14 +1,6 @@
 -- +migrate Up
--- Copies made before v0.2.0 become single rows, so no reader needs entries.audience or the
--- sync_source_* keys. A copy in a hidden run (049 moved it there, visible-only) and the original
--- (sandbox-only) become one row: the original's bytes, which the run's own context replays, under the
--- copy's ID and search text, which its chat shows and finds; the chat strips the original's compaction
--- items as it does for every reported entry. A copy a Web chat holds of a run's entry goes, and the run
--- reports to that chat instead, so the chat shows the run's entry at the copy's place. Anything else
--- holding a copy is refused, and a refusal commits nothing, so the previous binary still starts.
 CREATE TEMP TABLE copied_entries ON COMMIT DROP AS
 WITH copies AS (
-    -- The predicate matches session_entries_sync_source_id, which 097 drops.
     SELECT id, conversation_id, audience, entry_timestamp, search_text, entry_json::jsonb->>'sync_source_conversation_id' AS named,
         (entry_json::jsonb->>'sync_source_entry_id')::bigint AS source_id, entry_json::jsonb - 'sync_source_entry_id' - 'sync_source_conversation_id' AS content
     FROM entries WHERE (entry_json::jsonb->>'sync_source_entry_id') IS NOT NULL
@@ -30,9 +22,6 @@ CREATE INDEX ON copied_entries (copy_id);
 CREATE INDEX ON copied_entries (source_id);
 ANALYZE copied_entries;
 
--- Some External MCP chats also hold an older mirror of a run's entry: their own row, with the entry's
--- exact content and time but no source key. Such a chat shows the message twice, the mirror in place
--- and the copy at the end; once bound it shows the run's entry once, in place, and the mirror goes too.
 CREATE TEMP TABLE mirrored_entries ON COMMIT DROP AS
 WITH bound AS (
     SELECT DISTINCT holder, run FROM copied_entries WHERE shape = 'bind'
@@ -54,7 +43,6 @@ BEGIN
     ), copied_ids AS (
         SELECT source_id AS id FROM copied_entries
     ), uncopied_run_entries AS (
-        -- A chat bound below must show nothing of the run it did not show already.
         SELECT e.id, e.conversation_id FROM bound_runs b JOIN entries e ON e.conversation_id = b.run LEFT JOIN copied_ids c USING (id)
         JOIN copied_entries k ON k.run = b.run AND k.shape = 'bind' WHERE c.id IS NULL
     ), copy_ids AS (
@@ -65,7 +53,6 @@ BEGIN
         SELECT e.conversation_id || ' entry ' || e.id AS why FROM entries e LEFT JOIN copy_ids c USING (id) WHERE e.audience = 'visible' AND c.id IS NULL
         UNION ALL SELECT e.conversation_id || ' entry ' || e.id FROM entries e LEFT JOIN pair_sources p USING (id) WHERE e.audience = 'sandbox' AND p.id IS NULL
     ), interleaved AS (
-        -- The run's own view keeps its order only if no other entry of it lies between an original and its copy.
         SELECT p.run || ' entry ' || e.id AS why FROM copied_entries p JOIN entries e ON e.conversation_id = p.run AND e.id > p.source_id AND e.id < p.copy_id AND e.audience = 'both'
         WHERE p.shape = 'pair'
     ), ambiguous_mirrors AS (
@@ -87,12 +74,6 @@ BEGIN
 END $$;
 -- +migrate StatementEnd
 
--- What each affected conversation shows and replays now, for the self-check below: its own entries
--- but the other audience's, and the reporting and continued runs' entries but sandbox ones; each as a
--- reader projects it (compaction items stripped from a synced entry), attributed as revert.go does.
--- Two intended changes are taken out here: a copy in a chat its source's run already reports to, and a
--- mirror, are each a second showing of a message, and a chat holding mirrors shows its messages in
--- the order they were written (the run's entry IDs) rather than with the copies at the end.
 CREATE TEMP TABLE hidden_run_views ON COMMIT DROP AS
 WITH affected AS (
     SELECT holder AS id FROM copied_entries UNION SELECT run FROM copied_entries
@@ -119,7 +100,6 @@ WITH affected AS (
     LEFT JOIN entries src ON NOT s.reported AND src.id = (e.entry_json::jsonb->>'sync_source_entry_id')::bigint
     WHERE d.id IS NULL
 ), moved AS (
-    -- Where each row lands: a pair's original under its copy's ID, a chat's copy at its source.
     SELECT source_id AS id, copy_id AS lands FROM copied_entries WHERE shape = 'pair'
     UNION ALL SELECT copy_id, source_id FROM copied_entries WHERE shape IN ('bind', 'duplicate')
 )
@@ -133,15 +113,11 @@ FROM attributed a LEFT JOIN moved m ON m.id = a.id LEFT JOIN reordered r ON r.vi
 CREATE TEMP TABLE hidden_run_origins ON COMMIT DROP AS
 SELECT DISTINCT c.conversation_id, c.first_source FROM copied_entries k JOIN conversations c ON c.conversation_id = k.holder WHERE k.shape IN ('bind', 'duplicate');
 
--- Bulk merging must not notify per row; the triggers come back below.
 ALTER TABLE entries DISABLE TRIGGER entries_transcript_change, DISABLE TRIGGER shadow_entries_change;
 
--- Pairs: the copy's row goes, and the original takes its ID and search text.
 DELETE FROM entries e USING copied_entries c WHERE c.shape = 'pair' AND e.id = c.copy_id;
 UPDATE entries e SET id = c.copy_id, audience = 'both', search_text = c.search_text FROM copied_entries c WHERE c.shape = 'pair' AND e.id = c.source_id;
 
--- Chats' copies: the run reports to the chat, its entry takes the copy's search text, and what pointed
--- at the copy points at the entry.
 WITH bindings AS (
     SELECT DISTINCT holder, run FROM copied_entries WHERE shape = 'bind'
 )
@@ -156,8 +132,6 @@ UPDATE conversations v SET revert_message_id = r.source_id::text || ':' || split
 WHERE v.revert_message_id <> '' AND split_part(v.revert_message_id, ':', 1)::bigint = r.id;
 DELETE FROM entries e USING retired_entries r WHERE e.id = r.id;
 
--- Each chat's entry facts as saveSessionSummary now reads them: whether it has entries of its own, and
--- the run its earliest shown entry came from, NULL when that entry is its own.
 WITH holders AS (
     SELECT DISTINCT holder AS conversation_id FROM copied_entries WHERE shape IN ('bind', 'duplicate')
 ), own AS (
@@ -174,9 +148,6 @@ UPDATE conversations c SET has_entries = f.has_entries, first_source = f.first_s
 
 ALTER TABLE entries ENABLE TRIGGER entries_transcript_change, ENABLE TRIGGER shadow_entries_change;
 
--- The self-check: every affected conversation shows and replays the same entries, in the same order,
--- with the same projected content and attribution, at the IDs computed above; no entry is anything
--- but both; no copy is left; and every chat keeps the origin it had.
 -- +migrate StatementBegin
 DO $$
 DECLARE
@@ -201,8 +172,6 @@ BEGIN
     ), leftovers AS (
         SELECT 1 FROM entries WHERE audience <> 'both' UNION ALL SELECT 1 FROM entries WHERE (entry_json::jsonb->>'sync_source_entry_id') IS NOT NULL
     ), origin_diff AS (
-        -- A chat left with no entries of its own is still found, by the time of its runs' latest entry.
-        -- An External MCP chat's origin is its binding, whatever its first entry's source (DecideOrigin).
         SELECT 1 FROM hidden_run_origins o JOIN conversations c USING (conversation_id)
         WHERE c.first_source IS DISTINCT FROM o.first_source AND NOT (c.external_id IS NOT NULL AND c.external_run = c.first_source)
             OR NOT c.has_entries AND c.last_updated > '0001-01-01' IS NOT TRUE
@@ -217,4 +186,3 @@ END $$;
 -- +migrate StatementEnd
 
 -- +migrate Down
--- Merged copies are not restored; readers with the audience filters read the merged rows the same.

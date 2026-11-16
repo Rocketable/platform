@@ -1,6 +1,4 @@
 -- +migrate Up
--- A session write's reply is a Background Job of its caller that the target session's turn consuming
--- the write settles; reply_target is that session.
 ALTER TABLE turns ADD COLUMN reply_target text;
 ALTER TABLE turns DROP CONSTRAINT turns_kind_check;
 ALTER TABLE turns ADD CONSTRAINT turns_kind_check CHECK ((kind = ANY (ARRAY['model'::text, 'script'::text, 'note'::text, 'reply'::text])) AND ((kind = 'reply'::text) = (reply_target IS NOT NULL)));
