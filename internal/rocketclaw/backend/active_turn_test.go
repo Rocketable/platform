@@ -55,7 +55,7 @@ func newResumeTestBridges(t *testing.T, blocked bool, databaseURL ...string) (ne
 		require.NoError(t, root.Close())
 	}
 
-	service = newTestSessionServiceAt(t, workspace)
+	service = newColdTestSessionServiceAt(t, workspace)
 	requests, finals = make(chan string, 16), make(chan *protocol.OutboundMessage, 16)
 
 	release, first := make(chan struct{}), make(chan struct{}, 1)

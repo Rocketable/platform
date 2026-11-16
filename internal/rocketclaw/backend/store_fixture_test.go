@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -99,41 +100,48 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func newMigratedTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
+func newTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
 	t.Helper()
 
-	template, err := url.Parse(os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL"))
-	require.NoError(t, err)
-	cfg, err := pgx.ParseConfig(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
-	require.NoError(t, err)
-
-	admin := stdlib.OpenDB(*cfg)
-
-	name := strings.TrimPrefix(template.Path, "/") + "_" + strings.ToLower(rand.Text())
-	_, err = admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE "+strings.TrimPrefix(template.Path, "/"))
-	require.NoError(t, errors.Join(err, admin.Close()))
-
-	t.Cleanup(func() {
-		db := stdlib.OpenDB(*cfg)
-		_, err := db.Exec("DROP DATABASE " + name)
-		require.NoError(t, errors.Join(err, db.Close()))
-	})
-
-	location := *template
-	location.Path = "/" + name
+	require.NoError(t, os.MkdirAll(workspace, 0o755))
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
-	require.NoError(t, root.WriteFile(".test-database-url", []byte(location.String()), 0o600))
+
+	if _, err := root.Stat(".test-database-url"); errors.Is(err, os.ErrNotExist) {
+		template, err := url.Parse(os.Getenv("ROCKETCLAW_TEST_MIGRATED_DATABASE_URL"))
+		require.NoError(t, err)
+		cfg, err := pgx.ParseConfig(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
+		require.NoError(t, err)
+
+		admin := stdlib.OpenDB(*cfg)
+
+		name := strings.TrimPrefix(template.Path, "/") + "_" + strings.ToLower(rand.Text())
+		_, err = admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE "+strings.TrimPrefix(template.Path, "/"))
+		require.NoError(t, errors.Join(err, admin.Close()))
+
+		t.Cleanup(func() {
+			db := stdlib.OpenDB(*cfg)
+			_, err := db.Exec("DROP DATABASE " + name)
+			require.NoError(t, errors.Join(err, db.Close()))
+		})
+
+		location := *template
+		location.Path = "/" + name
+		require.NoError(t, root.WriteFile(".test-database-url", []byte(location.String()), 0o600))
+	} else {
+		require.NoError(t, err)
+	}
+
 	require.NoError(t, root.Close())
 
-	return newTestSessionServiceAt(t, workspace)
+	return newColdTestSessionServiceAt(t, workspace)
 }
 
 func TestMigratedTestDatabaseMatchesColdAndIsolatesClones(t *testing.T) {
 	t.Parallel()
 
-	first := newMigratedTestSessionServiceAt(t, t.TempDir())
-	second := newMigratedTestSessionServiceAt(t, t.TempDir())
+	first := newTestSessionServiceAt(t, t.TempDir())
+	second := newTestSessionServiceAt(t, t.TempDir())
 	adminConfig, err := pgx.ParseConfig(os.Getenv("ROCKETCLAW_TEST_DATABASE_URL"))
 	require.NoError(t, err)
 
@@ -167,7 +175,7 @@ func TestMigratedTestDatabaseMatchesColdAndIsolatesClones(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, root.WriteFile(".test-database-url", []byte(coldLocation.String()), 0o600))
 	require.NoError(t, root.Close())
-	cold := newTestSessionServiceAt(t, workspace)
+	cold := newColdTestSessionServiceAt(t, workspace)
 
 	const catalog = `WITH relations AS (
     SELECT c.oid, c.relname, c.relkind, c.relpersistence, c.reloptions, c.relrowsecurity
@@ -289,7 +297,7 @@ SELECT definition FROM definitions ORDER BY definition`
 	)
 
 	t.Run("cleanup drops clone", func(t *testing.T) {
-		store := newMigratedTestSessionServiceAt(t, t.TempDir())
+		store := newTestSessionServiceAt(t, filepath.Join(t.TempDir(), "workspace"))
 		require.NoError(t, store.db.QueryRowContext(t.Context(), "SELECT current_database()").Scan(&clone))
 		require.NoError(t, admin.QueryRowContext(t.Context(), "SELECT count(*) FROM pg_database WHERE datname = $1", clone).Scan(&count))
 		require.Equal(t, 1, count)
