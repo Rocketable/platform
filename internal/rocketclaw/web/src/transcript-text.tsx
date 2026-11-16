@@ -2,7 +2,6 @@ import { Fragment, useCallback, useMemo, useState, useSyncExternalStore, type Re
 import type { Parent, RootContent } from "mdast";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { captureException } from "@sentry/react";
 import { useQuery, useQueries } from "@tanstack/react-query";
 import { Check, Copy, Maximize2, WrapText } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,28 +12,23 @@ import { queries } from "./api";
 import { GitHubPRLink } from "./github-pr-preview";
 
 export async function copyText(text: string, container: Element) {
-  try {
-    if (navigator.clipboard) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      // RocketClaw also serves plain HTTP, where the Clipboard API is unavailable.
-      const input = document.createElement("textarea");
-      input.value = text;
-      input.style.position = "fixed";
-      input.style.opacity = "0";
-      const focus = document.activeElement as HTMLElement;
-      container.append(input);
-      try {
-        input.select();
-        if (!document.execCommand("copy")) throw new Error("Copy failed");
-      } finally {
-        input.remove();
-        focus.focus({ preventScroll: true });
-      }
+  if (navigator.clipboard) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    // RocketClaw also serves plain HTTP, where the Clipboard API is unavailable.
+    const input = document.createElement("textarea");
+    input.value = text;
+    input.style.position = "fixed";
+    input.style.opacity = "0";
+    const focus = document.activeElement as HTMLElement;
+    container.append(input);
+    try {
+      input.select();
+      if (!document.execCommand("copy")) throw new Error("Copy failed");
+    } finally {
+      input.remove();
+      focus.focus({ preventScroll: true });
     }
-  } catch (error) {
-    captureException(error);
-    throw error;
   }
 }
 

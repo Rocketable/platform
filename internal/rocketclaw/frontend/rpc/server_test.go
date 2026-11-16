@@ -2193,11 +2193,10 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 
 	cfg.Overlays = []string{"local-overlay"}
 	cfg.Logging.Level, cfg.AutoApproverModel = "info", "gpt-6.1-sol"
-	cfg.MCPExternal.Enabled, cfg.Instrumentation.Enabled = true, true
+	cfg.MCPExternal.Enabled, cfg.PostHog.ProjectToken = true, "phc_test"
 	cfg.OpenAI.APIKey, cfg.OpenAI.Auth = "secret-provider-key", "secret-auth-path"
 	cfg.Providers = map[string]config.OpenAIConfig{"work": {APIKey: "secret-work-key", APIBaseURL: "https://secret-work"}, "anthropic": {APIKey: "secret-anthropic-key"}}
 	cfg.Slack.BotToken, cfg.Slack.AppToken = "secret-bot-token", "secret-app-token"
-	cfg.Instrumentation.APIKey = "secret-telemetry-key"
 	cfg.MCPServers = map[string]config.MCPServerConfig{
 		"zeta":  {URL: "https://secret-endpoint", Headers: map[string]string{"Authorization": "secret-header"}},
 		"alpha": {Command: "secret-command", Args: []string{"secret-argument"}, Env: map[string]string{"TOKEN": "secret-server-env"}},

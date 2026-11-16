@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { mutations, queries } from "./api";
 import type { ConfigView } from "./types";
 
@@ -15,16 +14,12 @@ type Behavior = {
   slack: { channels: Channel[] | null };
   server_display_name: string;
   logging: { level: string };
-  instrumentation: { hide_inputs: boolean; hide_outputs: boolean };
-  web: { sentry: { environment: string; traces_sample_rate: number | null } };
   overlays: string[] | null;
 };
 type Option = { value: string; label: string };
 
 const option = (value: string): Option => ({ value, label: value });
 const levels = ["debug", "info", "warn", "error"].map(option);
-
-const badRate = (rate: number | null) => rate !== null && !(rate >= 0 && rate <= 1);
 
 export function BehaviorSettings({ view }: { view: ConfigView }) {
   const [draft, setDraft] = useState<Behavior>();
@@ -36,7 +31,6 @@ export function BehaviorSettings({ view }: { view: ConfigView }) {
   if (!draft) {
     return <Button variant="outline" size="sm" className="self-start" onClick={() => setDraft(JSON.parse(view.behaviorJson!) as Behavior)}>Edit</Button>;
   }
-  const invalid = badRate(draft.web.sentry.traces_sample_rate);
   return (
     <form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); save.mutate({ documentJson: JSON.stringify(draft) }); }}>
       <fieldset disabled={save.isPending} className="flex flex-col gap-6">
@@ -44,7 +38,7 @@ export function BehaviorSettings({ view }: { view: ConfigView }) {
       </fieldset>
       {save.error ? <FieldError>{save.error.message}</FieldError> : null}
       <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={save.isPending || invalid}>{save.isPending ? "Saving…" : "Save"}</Button>
+        <Button type="submit" size="sm" disabled={save.isPending}>{save.isPending ? "Saving…" : "Save"}</Button>
         <Button type="button" variant="ghost" size="sm" disabled={save.isPending} onClick={() => { setDraft(undefined); save.reset(); }}>Cancel</Button>
       </div>
     </form>
@@ -52,8 +46,6 @@ export function BehaviorSettings({ view }: { view: ConfigView }) {
 }
 
 function BehaviorFields({ draft, disabled, onChange }: { draft: Behavior; disabled: boolean; onChange: (change: Partial<Behavior>) => void }) {
-  const { instrumentation, web } = draft;
-  const sentry = (change: Partial<Behavior["web"]["sentry"]>) => onChange({ web: { ...web, sentry: { ...web.sentry, ...change } } });
   return (
     <>
       <Group title="Slack channels">
@@ -63,10 +55,6 @@ function BehaviorFields({ draft, disabled, onChange }: { draft: Behavior; disabl
         <Setting label="Auto-approver model"><Input aria-label="Auto-approver model" className="w-64" placeholder="Default" value={draft.auto_approver_model} onChange={(event) => onChange({ auto_approver_model: event.target.value })} /></Setting>
         <Setting label="Display name"><Input aria-label="Display name" className="w-64" value={draft.server_display_name} onChange={(event) => onChange({ server_display_name: event.target.value })} /></Setting>
         <Setting label="Log level"><Choice label="Log level" value={draft.logging.level} options={levels} disabled={disabled} onPick={(level) => onChange({ logging: { ...draft.logging, level } })} /></Setting>
-        <Setting label="Hide inputs"><Switch aria-label="Hide inputs" checked={instrumentation.hide_inputs} disabled={disabled} onCheckedChange={(checked) => onChange({ instrumentation: { ...instrumentation, hide_inputs: checked } })} /></Setting>
-        <Setting label="Hide outputs"><Switch aria-label="Hide outputs" checked={instrumentation.hide_outputs} disabled={disabled} onCheckedChange={(checked) => onChange({ instrumentation: { ...instrumentation, hide_outputs: checked } })} /></Setting>
-        <Setting label="Sentry environment"><Input aria-label="Sentry environment" className="w-64" value={web.sentry.environment} onChange={(event) => sentry({ environment: event.target.value })} /></Setting>
-        <Setting label="Sentry sample rate"><SampleRate value={web.sentry.traces_sample_rate} onChange={(traces_sample_rate) => sentry({ traces_sample_rate })} /></Setting>
       </Group>
       <Group title="Overlays">
         <Rows noun="overlay" columns={["Overlay"]} rows={(draft.overlays ?? []).map((overlay) => [overlay])} onChange={(rows) => onChange({ overlays: rows.map(([overlay]) => overlay) })} />
@@ -81,16 +69,6 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
 
 function Setting({ label, children }: { label: string; children: ReactNode }) {
   return <div className="flex items-center justify-between gap-4 border-b py-2"><span className="text-sm text-muted-foreground">{label}</span>{children}</div>;
-}
-
-function SampleRate({ value, onChange }: { value: number | null; onChange: (value: number | null) => void }) {
-  const invalid = badRate(value);
-  return (
-    <div className="flex flex-col items-end gap-1">
-      <Input type="number" aria-label="Sentry sample rate" className="w-32" min={0} max={1} step={0.01} placeholder="Unset" value={value ?? ""} aria-invalid={invalid} onChange={(event) => onChange(event.target.value === "" ? null : Number(event.target.value))} />
-      {invalid ? <FieldError>Between 0 and 1</FieldError> : null}
-    </div>
-  );
 }
 
 function Choice({ label, value, options, placeholder, disabled, onPick }: { label: string; value: string | null; options: Option[]; placeholder?: string; disabled: boolean; onPick: (value: string) => void }) {

@@ -3,7 +3,7 @@ import { serverURL } from "./navigation";
 
 // This tab's reports leave at once, so one that hangs holds back nothing, and are numbered: the server drops one that
 // arrives after a later one, so a false is never undone by an earlier true. They go by plain fetch: a refused or
-// failed report changes nothing on screen and is not worth a Sentry report.
+// failed report changes nothing on screen.
 const tab = crypto.getRandomValues(new Uint32Array(4)).join("-");
 let sent = 0;
 // When this tab last reported typing in each chat, by server and chat; a chat is absent once it reported false.

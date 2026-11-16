@@ -3,8 +3,6 @@ package backend
 import (
 	"context"
 	"fmt"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -15,8 +13,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-func configureInstrumentation(ctx context.Context, cfg config.InstrumentationConfig, posthog config.PostHogConfig) (func(context.Context) error, error) {
-	if !cfg.Enabled {
+func configureInstrumentation(ctx context.Context, posthog config.PostHogConfig) (func(context.Context) error, error) {
+	if posthog.ProjectToken == "" {
 		return func(context.Context) error { return nil }, nil
 	}
 
@@ -25,53 +23,18 @@ func configureInstrumentation(ctx context.Context, cfg config.InstrumentationCon
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
 	}
 
-	export := func(endpoint string, headers map[string]string, batchSize int) error {
-		exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(endpoint), otlptracehttp.WithHeaders(headers), otlptracehttp.WithTimeout(10*time.Second))
+	for _, path := range []string{"/i/v0/ai/otel", "/i/v1/traces"} {
+		exporter, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(posthog.Host+path), otlptracehttp.WithHeaders(map[string]string{"Authorization": "Bearer " + posthog.ProjectToken}), otlptracehttp.WithTimeout(10*time.Second))
 		if err != nil {
-			return fmt.Errorf("initialize OTLP trace exporter: %w", err)
+			return nil, fmt.Errorf("initialize OTLP trace exporter: %w", err)
 		}
 
 		options = append(options, sdktrace.WithBatcher(exporter,
 			sdktrace.WithMaxQueueSize(2048),
-			sdktrace.WithMaxExportBatchSize(batchSize),
+			sdktrace.WithMaxExportBatchSize(32),
 			sdktrace.WithBatchTimeout(5*time.Second),
 			sdktrace.WithExportTimeout(30*time.Second),
 		))
-
-		return nil
-	}
-
-	if cfg.CollectorEndpoint != "" {
-		endpoint := strings.TrimRight(cfg.CollectorEndpoint, "/")
-		if !strings.HasSuffix(endpoint, "/v1/traces") {
-			endpoint += "/v1/traces"
-		}
-
-		parsed, err := url.Parse(endpoint)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return nil, fmt.Errorf("parse instrumentation.collector_endpoint: %q", cfg.CollectorEndpoint)
-		}
-
-		headers := map[string]string{}
-		if cfg.ProjectName != "" {
-			headers["x-project-name"] = cfg.ProjectName
-		}
-
-		if cfg.APIKey != "" {
-			headers["Authorization"] = "Bearer " + cfg.APIKey
-		}
-
-		if err := export(endpoint, headers, 512); err != nil {
-			return nil, err
-		}
-	}
-
-	if posthog.ProjectToken != "" {
-		for _, path := range []string{"/i/v0/ai/otel", "/i/v1/traces"} {
-			if err := export(posthog.Host+path, map[string]string{"Authorization": "Bearer " + posthog.ProjectToken}, 32); err != nil {
-				return nil, err
-			}
-		}
 	}
 
 	previous := otel.GetTracerProvider()

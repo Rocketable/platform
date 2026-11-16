@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	openai "github.com/openai/openai-go/v3"
@@ -688,7 +689,7 @@ func (l *looper) runTurn(
 	turnCtx, span := l.Observability.startSpan(turnCtx, "rocketcode.turn", semconv.SpanKindAgent,
 		attribute.String(semconv.AgentName, l.agent.Name),
 		otelsemconv.GenAIAgentName(l.agent.Name),
-		l.Observability.inputValue(strings.Join(input.Texts, "")),
+		attribute.String(semconv.InputValue, instrumentation.RedactedValue),
 		attribute.String("rocketcode.model", l.DisplayModel),
 		attribute.Int("rocketcode.tool_count", len(l.Tools)),
 		attribute.Int64("rocketcode.compact_threshold", l.compactThreshold()),
@@ -698,8 +699,8 @@ func (l *looper) runTurn(
 		recordSpanError(span, err)
 		span.span.SetAttributes(attribute.String("rocketcode.response_id", record.ResponseID))
 
-		if outputText := assistantOutputText(rendered); outputText != "" {
-			span.span.SetAttributes(l.Observability.outputValue(outputText))
+		if assistantOutputText(rendered) != "" {
+			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue))
 		}
 
 		span.span.End()
@@ -1178,8 +1179,7 @@ func (l *looper) newProviderResponse(
 		recordSpanError(span, err)
 
 		if resp != nil {
-			output, _ := json.Marshal([]map[string]string{{"role": "assistant", "content": l.Observability.TraceConfig.MaskOutputValue(resp.OutputText())}})
-			span.span.SetAttributes(attribute.String("rocketcode.response_id", resp.ID), otelsemconv.GenAIResponseID(resp.ID), otelsemconv.GenAIOutputMessagesKey.String(string(output)))
+			span.span.SetAttributes(attribute.String("rocketcode.response_id", resp.ID), otelsemconv.GenAIResponseID(resp.ID), otelsemconv.GenAIOutputMessagesKey.String(`[{"content":"`+instrumentation.RedactedValue+`","role":"assistant"}]`))
 
 			if usage, ok := tokenUsageFromResponse(resp); ok {
 				span.span.SetAttributes(usage.attributes()...)
@@ -1816,10 +1816,10 @@ func (l *looper) dispatchToolCalls(
 				return nil, err
 			}
 
-			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, "", args, toolCallMetadata{})
+			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, "", toolCallMetadata{})
 			result := toolCallFailureResult(item.Name, errors.New("tool not found"))
 			recordSpanError(span, errors.New("tool not found"))
-			span.span.SetAttributes(l.Observability.outputValue(result.Output), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", true))
+			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", true))
 			span.span.End()
 
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), ReplayInput: nil})
@@ -1832,11 +1832,11 @@ func (l *looper) dispatchToolCalls(
 				return nil, err
 			}
 
-			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
+			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, toolCallMetadata{})
 			result := fmt.Sprintf("tool call rejected: repeated identical %q call detected. Review the previous tool output and choose a different action instead of retrying the same input.", item.Name)
 
 			recordSpanError(span, errors.New("repeated identical tool call"))
-			span.span.SetAttributes(l.Observability.outputValue(result), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", true))
+			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", true))
 			span.span.End()
 
 			toolResult := TextToolResult(result)
@@ -1864,11 +1864,11 @@ func (l *looper) dispatchToolCalls(
 				return nil, err
 			}
 
-			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
+			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, toolCallMetadata{})
 			result := decision.message
 
 			recordSpanError(span, errDenied)
-			span.span.SetAttributes(l.Observability.outputValue(result), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", err != nil))
+			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", err != nil))
 			span.span.End()
 
 			toolResult := TextToolResult(result)
@@ -1921,7 +1921,7 @@ func (l *looper) dispatchToolCalls(
 
 			metadata := toolCallMetadata{callID: call.callID, subagentIndex: call.subagentIndex, subagentTotal: call.subagentTotal, observations: l.observations, progress: &call.progress}
 
-			callCtx, span := l.Observability.startToolSpan(groupCtx, call.name, call.callID, call.tool.Permission, call.args, metadata)
+			callCtx, span := l.Observability.startToolSpan(groupCtx, call.name, call.callID, call.tool.Permission, metadata)
 			defer span.span.End()
 
 			callCtx = context.WithValue(callCtx, toolCallContextKey{}, toolCallContext{looper: l, observations: l.observations, reviewInput: reviewContext, output: output, callID: call.callID})
@@ -1973,7 +1973,7 @@ func (l *looper) dispatchToolCalls(
 				replayInput = nil
 			}
 
-			span.span.SetAttributes(l.Observability.outputValue(attachmentOutputMessage(result)), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", err != nil))
+			span.span.SetAttributes(attribute.String(semconv.OutputValue, instrumentation.RedactedValue), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", err != nil))
 
 			outputs[call.outputIndex] = dispatchedToolOutput{Param: toolCallOutput(call.callID, result), ReplayInput: replayInput}
 

@@ -2,7 +2,6 @@ package harness
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 
 	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
@@ -95,22 +94,14 @@ func recordProviderDiagnosticEvent(ctx context.Context, diagnostic *ProviderDiag
 	trace.SpanFromContext(ctx).AddEvent("rocketcode.provider.diagnostic", trace.WithAttributes(attrs...))
 }
 
-func (o ObservabilityConfig) inputValue(text string) attribute.KeyValue {
-	return attribute.String(semconv.InputValue, strings.ToValidUTF8(o.TraceConfig.MaskInputValue(text), "�"))
-}
-
-func (o ObservabilityConfig) outputValue(text string) attribute.KeyValue {
-	return attribute.String(semconv.OutputValue, strings.ToValidUTF8(o.TraceConfig.MaskOutputValue(text), "�"))
-}
-
-func (o ObservabilityConfig) startToolSpan(ctx context.Context, name, callID, permission string, args json.RawMessage, metadata toolCallMetadata) (context.Context, observabilitySpan) {
+func (o ObservabilityConfig) startToolSpan(ctx context.Context, name, callID, permission string, metadata toolCallMetadata) (context.Context, observabilitySpan) {
 	attrs := []attribute.KeyValue{
 		attribute.String(semconv.ToolName, name),
 		attribute.String(semconv.ToolID, callID),
 		otelsemconv.GenAIToolName(name),
 		otelsemconv.GenAIToolCallID(callID),
 		attribute.String(semconv.InputMimeType, semconv.MimeTypeJSON),
-		o.inputValue(string(args)),
+		attribute.String(semconv.InputValue, instrumentation.RedactedValue),
 		attribute.String("rocketcode.permission", permission),
 		attribute.Int("rocketcode.subagent_index", metadata.subagentIndex),
 		attribute.Int("rocketcode.subagent_total", metadata.subagentTotal),

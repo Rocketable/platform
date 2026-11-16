@@ -1849,12 +1849,11 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	ctx = instrumentation.WithUser(instrumentation.WithSession(ctx, b.config.ConversationID), cmp.Or(msg.Metadata[protocol.InboundPrincipalEmailMetadataKey], msg.Metadata[protocol.InboundPrincipalMetadataKey]))
 
 	tracer := noop.NewTracerProvider().Tracer("rocketclaw")
-	if runtimeCfg.Instrumentation.Enabled {
+	if runtimeCfg.PostHog.ProjectToken != "" {
 		tracer = otel.Tracer("rocketclaw")
 	}
 
 	ctx, span := tracer.Start(ctx, "rocketclaw.turn")
-	traceConfig := instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}
 
 	instrumentation.ApplyContextAttributes(ctx, span)
 	span.SetAttributes(attribute.String(semconv.OpenInferenceSpanKind, semconv.SpanKindAgent), otelsemconv.GenAIOperationNameInvokeAgent)
@@ -1868,8 +1867,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		attribute.String("rocketclaw.source", string(msg.Source)),
 		attribute.String("rocketclaw.kind", string(msg.Kind)),
 		attribute.Int("rocketclaw.attachment_count", len(msg.Attachments)),
-		attribute.String(semconv.InputValue, traceConfig.MaskInputValue(msg.Text)),
-		attribute.String("$ai_input_state", traceConfig.MaskInputValue(msg.Text)),
+		attribute.String(semconv.InputValue, instrumentation.RedactedValue),
+		attribute.String("$ai_input_state", instrumentation.RedactedValue),
 	)
 
 	defer func() {
@@ -1879,7 +1878,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 
 		span.SetAttributes(
-			attribute.String(semconv.OutputValue, traceConfig.MaskOutputValue(result.text)),
+			attribute.String(semconv.OutputValue, instrumentation.RedactedValue),
 			attribute.String("rocketclaw.response_id", result.responseID),
 			attribute.String("rocketclaw.model", result.attribution.Model),
 		)
@@ -2487,7 +2486,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv map[string]strin
 		})
 	}
 
-	return harness.Config{AutoApproverModel: runtimeCfg.AutoApproverModel, AutoApproverDecisionModel: runtimeCfg.AutoApproverDecision.Model, AutoApproverMinConfidence: runtimeCfg.AutoApproverDecision.MinConfidence, Deciders: newDeciders(runtimeCfg), ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), ExpandPromptShellCommands: harness.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true}, ParallelToolCalls: 16, Observability: harness.ObservabilityConfig{Enabled: runtimeCfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: runtimeCfg.Instrumentation.HideInputs, HideOutputs: runtimeCfg.Instrumentation.HideOutputs}}, ChildSessions: b, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: harness.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: harness.DefaultShellCommand{}, Sandbox: *b.config.SessionService.shells.current(), MCPServers: toMCPClientServers(runtimeCfg.MCPServers), MCPWorkspace: runtimeCfg.Workspace}
+	return harness.Config{AutoApproverModel: runtimeCfg.AutoApproverModel, AutoApproverDecisionModel: runtimeCfg.AutoApproverDecision.Model, AutoApproverMinConfidence: runtimeCfg.AutoApproverDecision.MinConfidence, Deciders: newDeciders(runtimeCfg), ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(runtimeCfg), RetainedResultDir: rocketcodeRetainedDir(b.config.ConversationID), ExpandPromptShellCommands: harness.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true}, ParallelToolCalls: 16, Observability: harness.ObservabilityConfig{Enabled: runtimeCfg.PostHog.ProjectToken != "", Tracer: otel.Tracer("rocketcode")}, ChildSessions: b, Journal: conversationJournal{store: b.config.SessionService, conversationID: b.config.ConversationID, log: b.log}, BackgroundJobs: harness.InertBackgroundJobs{}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: harness.DefaultShellCommand{}, Sandbox: *b.config.SessionService.shells.current(), MCPServers: toMCPClientServers(runtimeCfg.MCPServers), MCPWorkspace: runtimeCfg.Workspace}
 }
 
 func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mcpclient.ServerConfig {

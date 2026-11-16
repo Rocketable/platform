@@ -74,8 +74,6 @@ func TestBehaviorRoundTrip(t *testing.T) {
 	  "slack": {"channels": [{"channel": "#ops", "agents": ["main"], "allowed_user_ids": ["U123"]}]},
 	  "server_display_name": "home lab",
 	  "logging": {"level": "warn"},
-	  "instrumentation": {"hide_inputs": true, "hide_outputs": true},
-	  "web": {"sentry": {"environment": "production", "traces_sample_rate": 0.25}},
 	  "overlays": ["github.com/rocketable/overlay1@main"]
 	}`
 
@@ -87,8 +85,6 @@ func TestBehaviorRoundTrip(t *testing.T) {
 	require.Equal(t, behavior, file.Behavior(), "the document has the file's shape")
 
 	cfg := validConfig()
-	cfg.Web.Sentry.DSN = "https://public@o1.ingest.sentry.io/1"
-	cfg.Instrumentation.CollectorEndpoint = "http://localhost:6006"
 	cfg.SetBehavior(&behavior)
 
 	require.Equal(t, behavior, cfg.Behavior())
@@ -97,8 +93,6 @@ func TestBehaviorRoundTrip(t *testing.T) {
 	require.JSONEq(t, document, string(data))
 	assert.Equal(t, "xoxb-test", cfg.Slack.BotToken)
 	assert.Equal(t, "xapp-test", cfg.Slack.AppToken)
-	assert.Equal(t, "https://public@o1.ingest.sentry.io/1", cfg.Web.Sentry.DSN)
-	assert.Equal(t, "http://localhost:6006", cfg.Instrumentation.CollectorEndpoint)
 }
 
 func TestAttachmentLocation(t *testing.T) {
@@ -144,35 +138,6 @@ func TestAttachmentLocation(t *testing.T) {
 				require.Equal(t, want, location)
 			})
 		}
-	}
-}
-
-func TestLoadSentry(t *testing.T) {
-	for _, tt := range []struct {
-		name, sentry, wantErr string
-	}{
-		{"disabled", `{}`, ""},
-		{"configured", `{"dsn":"https://public@o1.ingest.sentry.io/1","environment":"production","traces_sample_rate":0.25}`, ""},
-		{"zero sampling", `{"dsn":"https://public@o1.ingest.sentry.io/1","traces_sample_rate":0}`, ""},
-		{"invalid DSN", `{"dsn":"not-a-dsn"}`, "web.sentry.dsn"},
-		{"private key", `{"dsn":"https://public:private@o1.ingest.sentry.io/1"}`, "web.sentry.dsn"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "rocketclaw.json")
-			content := fmt.Sprintf(`{"database_url":"postgres://localhost/test","openai":{"api_key":"test"},"slack":{"bot_token":"test","app_token":"test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"web":{"sentry":%s}}`, tt.sentry)
-			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-
-			cfg, err := Load(path, "", &AWSFetcher{})
-			if tt.wantErr != "" {
-				require.ErrorContains(t, err, tt.wantErr)
-				return
-			}
-
-			require.NoError(t, err)
-			data, err := json.Marshal(cfg.Web.Sentry)
-			require.NoError(t, err)
-			require.JSONEq(t, tt.sentry, string(data))
-		})
 	}
 }
 
@@ -405,42 +370,8 @@ func TestValidateDecisionConfig(t *testing.T) {
 	}
 }
 
-func TestLoadPreservesInstrumentationConfig(t *testing.T) {
-	cfg := loadTestConfig(t, `{
-	  "workspace": ".",
-	  "openai": {"api_key": "test-key"},
-	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
-	  "instrumentation": {
-	    "enabled": true,
-	    "collector_endpoint": "http://localhost:6006",
-	    "project_name": "rocketclaw-dev",
-	    "api_key": "phoenix-key",
-	    "hide_inputs": true,
-	    "hide_outputs": true
-	  },
-	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
-	}`)
-
-	assert.True(t, cfg.Instrumentation.Enabled)
-	assert.Equal(t, "http://localhost:6006", cfg.Instrumentation.CollectorEndpoint)
-	assert.Equal(t, "rocketclaw-dev", cfg.Instrumentation.ProjectName)
-	assert.Equal(t, "phoenix-key", cfg.Instrumentation.APIKey)
-	assert.True(t, cfg.Instrumentation.HideInputs)
-	assert.True(t, cfg.Instrumentation.HideOutputs)
-}
-
-func TestValidateRejectsEnabledInstrumentationWithoutDestination(t *testing.T) {
-	cfg := validConfig()
-	cfg.Instrumentation.Enabled = true
-
-	err := cfg.Validate()
-
-	require.ErrorContains(t, err, "instrumentation.collector_endpoint or posthog.project_token is required")
-}
-
 func TestValidatePostHog(t *testing.T) {
 	cfg := validConfig()
-	cfg.Instrumentation.Enabled = true
 	cfg.PostHog.ProjectToken = "phc_project"
 
 	require.NoError(t, cfg.Validate())
@@ -801,8 +732,6 @@ func TestValidateBehaviorRejectsInvalidSettings(t *testing.T) {
 	}{
 		{name: "missing model", update: func(c *Config) { c.AutoApproverModel = "work/" }, wantErr: `auto_approver_model: invalid model "work/": expected model or provider/model`},
 		{name: "slack channels", update: func(c *Config) { c.Slack.Channels = nil }, wantErr: "slack.channels is required"},
-		{name: "negative sampling", update: func(c *Config) { c.Web.Sentry.TracesSampleRate = new(-0.1) }, wantErr: "web.sentry.traces_sample_rate must be between 0 and 1"},
-		{name: "excessive sampling", update: func(c *Config) { c.Web.Sentry.TracesSampleRate = new(1.1) }, wantErr: "web.sentry.traces_sample_rate must be between 0 and 1"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()

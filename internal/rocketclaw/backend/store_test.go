@@ -2278,11 +2278,8 @@ func TestBehaviorSettingsRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, found)
 
-	rate := 0.5
 	cfg := &config.Config{AutoApproverModel: "gpt-b", Overlays: []string{"https://example.com/overlay.git"}, ServerDisplayName: "Ops", Logging: config.LoggingConfig{Level: "warn"},
-		Slack:           config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}},
-		Instrumentation: config.InstrumentationConfig{HideInputs: true, HideOutputs: true},
-		Web:             config.WebConfig{Sentry: config.SentryConfig{Environment: "prod", TracesSampleRate: &rate}}}
+		Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}}}
 
 	for _, model := range []string{"gpt-a", "gpt-c"} {
 		cfg.AutoApproverModel = model

@@ -15,12 +15,7 @@
   },
   "server_display_name": "home lab",
   "web": {
-    "admins": ["alice@example.com"],
-    "sentry": {
-      "dsn": "",
-      "environment": "production",
-      "traces_sample_rate": 0.1
-    }
+    "admins": ["alice@example.com"]
   },
   "mcp_external": {
     "enabled": true,
@@ -93,14 +88,6 @@
   },
   "auto_approver_model": "",
   "agent_editor_model": "",
-  "instrumentation": {
-    "enabled": false,
-    "collector_endpoint": "http://localhost:6006",
-    "project_name": "rocketclaw-dev",
-    "api_key": "",
-    "hide_inputs": true,
-    "hide_outputs": true
-  },
   "posthog": {
     "project_token": "",
     "host": "https://us.i.posthog.com"

@@ -1,4 +1,3 @@
-import { captureException } from "@sentry/react";
 import { hashKey, type QueryKey } from "@tanstack/react-query";
 import { server, serverURL } from "./navigation";
 import type { AgentChoices, AgentDraft, AgentDraftOp, AgentDraftProposal, AgentDraftPresence, AgentSettingHelp, AttentionAction, ChatOrigin, ConfigView, CronJob, DraftLayers, DraftPromptResponse, HistoryView, SaveDraftResponse, PageEntry, PromptDelivery, QueueItem, SearchMessagesResponse, SearchSessionsResponse, SessionBatch, Skill, SlackNamesResponse, SavedTabs, SearchPage, TopShelf, TranscriptEvent, VoiceSettings } from "./types";
@@ -8,15 +7,10 @@ export class RPCError extends Error {
 }
 
 export async function rpc<T>(method: string, input: object = {}, signal?: AbortSignal, name = server()): Promise<T> {
-  try {
-    const response = await fetch(`${serverURL(name)}/api/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal });
-    const body = await response.json();
-    if (!response.ok) throw new RPCError(body.message, body.code);
-    return body;
-  } catch (error) {
-    if (!signal?.aborted) captureException(error, { tags: { rpc: method } });
-    throw error;
-  }
+  const response = await fetch(`${serverURL(name)}/api/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input), signal });
+  const body = await response.json();
+  if (!response.ok) throw new RPCError(body.message, body.code);
+  return body;
 }
 
 // Completion belongs to the transport, not the terminal snapshot's flag.
@@ -25,46 +19,41 @@ export const listSessions = (signal?: AbortSignal, url = "/api/ListSessions") =>
 
 export async function* sse<T>(url: string, init: RequestInit): AsyncGenerator<T> {
   const signal = init.signal;
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    const body = await response.json();
+    throw new RPCError(body.message, body.code);
+  }
+  const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
+  let pending = "", complete = false;
   try {
-    const response = await fetch(url, init);
-    if (!response.ok) {
-      const body = await response.json();
-      throw new RPCError(body.message, body.code);
-    }
-    const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-    let pending = "", complete = false;
-    try {
-      for (;;) {
-        signal?.throwIfAborted();
-        const { value, done } = await reader.read();
-        if (done) break;
-        pending += value;
-        let boundary: number;
-        while ((boundary = pending.indexOf("\n\n")) >= 0) {
-          const frame = pending.slice(0, boundary);
-          pending = pending.slice(boundary + 2);
-          let event = "message";
-          const data: string[] = [];
-          for (const line of frame.split("\n")) {
-            if (line.startsWith("event:")) event = line.slice(6).trim();
-            if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
-          }
-          if (!data.length) continue;
-          const body = JSON.parse(data.join("\n"));
-          if (event === "error") throw new RPCError(body.message, body.code);
-          if (event === "complete") complete = true;
-          else if (event === "message") yield body;
-        }
-      }
+    for (;;) {
       signal?.throwIfAborted();
-      if (!complete) throw new Error("Session stream ended without completion");
-    } finally {
-      await reader.cancel();
-      reader.releaseLock();
+      const { value, done } = await reader.read();
+      if (done) break;
+      pending += value;
+      let boundary: number;
+      while ((boundary = pending.indexOf("\n\n")) >= 0) {
+        const frame = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 2);
+        let event = "message";
+        const data: string[] = [];
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event:")) event = line.slice(6).trim();
+          if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+        }
+        if (!data.length) continue;
+        const body = JSON.parse(data.join("\n"));
+        if (event === "error") throw new RPCError(body.message, body.code);
+        if (event === "complete") complete = true;
+        else if (event === "message") yield body;
+      }
     }
-  } catch (error) {
-    if (!signal?.aborted) captureException(error, { tags: { rpc: url.split(/[?#]/, 1)[0].split("/").at(-1) } });
-    throw error;
+    signal?.throwIfAborted();
+    if (!complete) throw new Error("Session stream ended without completion");
+  } finally {
+    await reader.cancel();
+    reader.releaseLock();
   }
 }
 

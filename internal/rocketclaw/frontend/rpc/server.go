@@ -1183,7 +1183,7 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 	view := &ConfigView{
 		Workspace: cfg.Workspace, Overlays: cfg.Overlays,
 		LoggingLevel: cfg.Logging.Level, AutoApproverModel: cfg.AutoApproverModel,
-		InstrumentationEnabled: cfg.Instrumentation.Enabled, McpExternal: cfg.MCPExternal.Enabled,
+		InstrumentationEnabled: cfg.PostHog.ProjectToken != "", McpExternal: cfg.MCPExternal.Enabled,
 		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)), Providers: cfg.ProviderNames(), CanEdit: slices.Contains(cfg.Web.Admins, username),
 	}
 

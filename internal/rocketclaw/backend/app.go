@@ -85,7 +85,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	detach := context.AfterFunc(ctx, cancel)
 
-	stopInstrumentation, err := configureInstrumentation(runCtx, cfg.Instrumentation, cfg.PostHog)
+	stopInstrumentation, err := configureInstrumentation(runCtx, cfg.PostHog)
 	if err != nil {
 		return err
 	}
@@ -400,10 +400,6 @@ func setBehaviorFields(b *config.Behavior) []string {
 		{"slack.channels", b.Slack.Channels != nil},
 		{"server_display_name", b.ServerDisplayName != ""},
 		{"logging.level", b.Logging.Level != ""},
-		{"instrumentation.hide_inputs", b.Instrumentation.HideInputs},
-		{"instrumentation.hide_outputs", b.Instrumentation.HideOutputs},
-		{"web.sentry.environment", b.Web.Sentry.Environment != ""},
-		{"web.sentry.traces_sample_rate", b.Web.Sentry.TracesSampleRate != nil},
 		{"overlays", b.Overlays != nil},
 	} {
 		if field.set {

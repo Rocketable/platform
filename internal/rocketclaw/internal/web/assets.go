@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"path"
 	"regexp"
-	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -28,26 +27,11 @@ import (
 //go:embed dist all:oc-dist
 var assets embed.FS
 
-type sentryBootstrap struct {
-	config.SentryConfig
-
-	Release string `json:"release,omitempty"`
-}
-
-func release(build *debug.BuildInfo) string {
-	if build == nil || build.Main.Version == "(devel)" {
-		return ""
-	}
-
-	return build.Main.Version
-}
-
 func Handler(cfg *config.LockedConfig, serverName string) http.Handler {
 	files, _ := fs.Sub(assets, "dist")
 	ocFiles, _ := fs.Sub(assets, "oc-dist")
 
 	page, _ := fs.ReadFile(files, "index.html")
-	build, _ := debug.ReadBuildInfo()
 
 	var gzipWriters sync.Pool
 
@@ -59,11 +43,6 @@ func Handler(cfg *config.LockedConfig, serverName string) http.Handler {
 
 			if name := cmp.Or(live.ServerDisplayName, serverName); name != "" {
 				index = strings.Replace(index, "<title>RocketClaw</title>", "<title>"+html.EscapeString(name)+" - RocketClaw</title>", 1)
-			}
-
-			if live.Web.Sentry.DSN != "" {
-				data, _ := json.Marshal(sentryBootstrap{SentryConfig: live.Web.Sentry, Release: release(build)})
-				index = strings.Replace(index, "</head>", `<script id="sentry-config" type="application/json">`+string(data)+`</script></head>`, 1)
 			}
 
 			if live.PostHog.ProjectToken != "" {

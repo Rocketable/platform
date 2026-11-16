@@ -64,8 +64,8 @@ preview open. Reopening a closed preview is anonymous. **Cancel** while files
 are loading stops that request and keeps loaded content; **Close preview**
 discards the preview.
 Tokens are not saved, shared with the application server, or sent to telemetry.
-Preview DOM and GitHub network data are excluded from PostHog recording and Sentry
-request tracing. Browser extensions and clipboard managers remain outside the
+Preview DOM and GitHub network data are excluded from PostHog recording.
+Browser extensions and clipboard managers remain outside the
 application's control. No remote images or executable description content load.
 
 The conversation tab's **⋯ → Pull requests** menu item opens the existing right
@@ -370,134 +370,6 @@ answered in the app, never by voice. Voice needs microphone permission and a
 secure page: HTTPS, or `http://127.0.0.1` on the RocketClaw machine. See the
 [root README](../../../README.md#voice) for phone setup with `web.tsnet`,
 credentials, cost, and what OpenAI receives.
-
-## Frontend error and performance tracking
-
-Set `web.sentry.dsn` in either `rocketclaw.json` or `femtoclaw.json`.
-`environment` and `traces_sample_rate` are Behavior Settings: the first start
-imports them from the file, and later an admin changes them on the Config page.
-
-```json
-{
-  "web": {
-    "sentry": {
-      "dsn": "https://PUBLIC_KEY@oORG_ID.ingest.sentry.io/PROJECT_ID",
-      "environment": "production",
-      "traces_sample_rate": 0.1
-    }
-  }
-}
-```
-
-Use the **public DSN** from your Sentry project's Client Keys settings, not an
-auth token or a DSN containing a private key. Only these three settings and
-the running module version (as the Sentry release, omitted for local
-`(devel)` builds) are embedded in the HTML; the rest of the runtime config is
-not exposed. After changing the DSN, restart RocketClaw; a saved
-`environment` or `traces_sample_rate` needs no restart. Either way, reload the
-browser. No frontend rebuild is needed for config changes. When both filenames
-exist, `femtoclaw.json` takes precedence.
-
-With a DSN, the browser reports uncaught JS/TS errors, unhandled promise
-rejections, React rendering errors (caught, uncaught, and recoverable),
-`console.error`, and handled request, session-list stream, upload, clipboard,
-and query/mutation failures. Cancelled requests are not reported as failures.
-Error reports include stack
-traces; React reports also include component stacks. Errors are not sampled,
-regardless of the performance trace rate. Duplicate reports may be collapsed.
-
-The browser also sends page-load, History API navigation, fetch/XHR,
-click-interaction, main-thread stall, and Web Vitals performance data to Sentry.
-Stalls are recorded during active traces; this does not measure every freeze or
-detect a crashed browser. Browsers with the Long Animation Frames API (Chromium)
-report slow frames as `ui.long_animation_frame` with the script that caused them
-(`browser.script.invoker`, `code.file.path`, `code.function.name`, and
-`browser.script.source_char_position`); frames with no script attached, such as
-pure layout or style work, are not reported. A slow event listener is named by
-tag and event only, such as `INPUT.onclick`, and interaction, largest-paint and
-layout-shift targets are not sent: Sentry would describe them by id, classes and
-labels, which can hold private text such as a PR's file names. Other browsers report
-`ui.long_task` without a cause. Browser support determines which metrics
-are available. Click tracing uses Sentry's experimental Interactions integration.
-Page loads and navigations are named by screen (`/s/:id` for any session).
-The two-second background refreshes (`Protocol`, `Identity`, `ListSessions`,
-`ListAgents`, and `ListQueue`) and the once-a-minute check of the index page (`/`)
-are not traced, so they neither keep page loads and navigations open nor start
-traces of their own.
-
-Performance sampling defaults to `0.1` (10%). Set `1` to trace every operation
-while checking the setup, then lower it to control volume. Rates must be between
-`0` and `1`; `0` disables trace sampling, not error reporting. Omit `web.sentry`
-or leave `dsn` empty to disable the SDK entirely. `environment` is optional.
-
-No session replay, general console logs, breadcrumbs, user identity, cookies,
-headers, request/response bodies, or URL query parameters are automatically
-collected. Error messages and `console.error` arguments are collected and can
-contain sensitive text; do not put chat contents or secrets in them. The SDK's
-data settings do not remove arbitrary sensitive text from error messages.
-Collected URLs include paths and can contain conversation IDs.
-Click/Web Vitals metadata can include DOM selectors and element labels.
-No tracing headers are added to backend requests. Browsers must be able to reach
-the DSN's ingest host; any deployment Content Security Policy must allow that
-host in `connect-src`.
-
-To check a deployment, temporarily set the sample rate to `1`, reload, navigate
-between pages, and click a control. Check the browser Network panel for requests
-to Sentry's envelope endpoint, then check the selected project's traces and Web
-Vitals. Main-thread work over 50ms appears as a stall when a trace is active.
-Blocked ingest requests or an invalid project's client key can prevent delivery;
-local config validation does not verify the Sentry account.
-
-### Readable error stack traces
-
-Each frontend build generates source maps and Sentry debug IDs. The maps and
-copies of the matching JavaScript are saved under the repository's
-`.tmp/sentry-sourcemaps/`. RocketClaw embeds and serves the JavaScript, but not
-the source maps. Upload this directory to the same Sentry project before
-deploying the built assets:
-
-```sh
-SENTRY_ORG=your-org SENTRY_PROJECT=your-project SENTRY_AUTH_TOKEN=your-private-token bun run sentry:upload
-```
-
-Run this from `internal/rocketclaw/web` after `bun run build`. Keep the private
-token in your build environment or secret store, never in `web.sentry` or browser
-code. Upload the maps from the exact build being deployed; the next build replaces
-the local map directory. Without an upload, errors still arrive but their stack
-traces point to minified code. See [Sentry's source-map upload guide](https://docs.sentry.io/platforms/javascript/guides/react/sourcemaps/uploading/cli/).
-
-To check error delivery, trigger a test error from an app event handler in a test
-deployment, then check Sentry Issues for the error and mapped stack trace.
-Developer-console exceptions may not trigger browser error monitoring. Errors
-before the SDK loads, blocked delivery, and browser or extension crashes cannot
-all be captured. Local tests check outgoing envelopes and matching source maps,
-not acceptance by a hosted Sentry project.
-
-### Automatic upload on GitHub releases
-
-The `Upload Sentry source maps` workflow runs when you publish a GitHub release,
-including a prerelease. Creating a tag or saving a draft release alone does not
-trigger it. It checks out the release tag, rebuilds the frontend with Bun 1.4.4,
-and uploads the maps only if every rebuilt JavaScript bundle matches the JavaScript
-already embedded in that tag. CSS and fonts do not have uploaded source maps and
-are not compared. It does not modify the tag, publish binaries, or attach
-source maps to the public release.
-
-Configure these once in **Settings → Secrets and variables → Actions**:
-
-- Repository secret `SENTRY_AUTH_TOKEN`: a Sentry organization token permitted
-  to upload source maps. Keep it out of runtime config and source control.
-- Repository variable `SENTRY_ORG`: your Sentry organization slug.
-- Repository variable `SENTRY_PROJECT`: your Sentry project slug, for the same
-  project as the browser DSN.
-
-Then publish releases as usual and wait for the workflow to pass before deploying
-the release tag. Missing credentials, failed uploads, or mismatched JavaScript fail
-the workflow rather than silently skipping the upload. If JavaScript bundles
-do not match, use the workflow's pinned Bun version to regenerate and commit
-`internal/rocketclaw/internal/web/dist` before cutting the next release. Keep the
-workflow's Bun version and the version used for committed frontend builds aligned.
-After correcting credentials, rerun the failed workflow from the Actions tab.
 
 ## Local checks
 
@@ -1546,7 +1418,7 @@ people. The composer reports with `POST /api/ReportTyping` and
 `{"id":"<raw-id>","typing":true|false,"tab":"<random per page load>","seq":<n>}`, never
 the draft text, by plain `fetch`: `seq` counts the tab's reports from 1, and the server
 drops one that arrives after a later one. A refused stream is not retried, and failed
-reports show no error and reach no Sentry.
+reports show no error.
 
 - `POST /api/UploadAttachment?conversationId=<visible-id>&name=<filename>` takes the raw
   file as its body and returns JSON attachment metadata. Query values use normal

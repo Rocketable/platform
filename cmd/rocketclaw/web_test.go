@@ -131,7 +131,7 @@ func TestWebRPC(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = httpListener.Close() })
 	cfg := rt.Cfg.Clone()
-	require.NoError(t, json.Unmarshal([]byte(`{"web":{"listen_address":"`+httpListener.Addr().String()+`","sentry":{"dsn":"https://public@o1.ingest.sentry.io/1"}}}`), cfg))
+	require.NoError(t, json.Unmarshal([]byte(`{"web":{"listen_address":"`+httpListener.Addr().String()+`"},"posthog":{"project_token":"phc_test","host":"https://us.i.posthog.com"}}`), cfg))
 	rt.Cfg.Store(cfg)
 
 	_, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
@@ -163,7 +163,7 @@ func TestWebRPC(t *testing.T) {
 	require.NoError(t, responseHTTP.Body.Close())
 	require.Equal(t, http.StatusOK, responseHTTP.StatusCode)
 	require.Contains(t, string(body), "/assets/main-")
-	require.Contains(t, string(body), `"dsn":"https://public@o1.ingest.sentry.io/1"`)
+	require.Contains(t, string(body), `"project_token":"phc_test"`)
 
 	require.NoError(t, stop(t.Context()))
 	stop, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
