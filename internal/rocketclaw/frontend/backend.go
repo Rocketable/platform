@@ -31,7 +31,6 @@ type Backend interface {
 	EditQueueItem(context.Context, string, string, string) (bool, error)
 	ReorderQueueItems(string, []string) error
 	StashQueueItem(context.Context, string, *protocol.ThreadQueueItem) error
-	WorkflowDescriptions() ([]protocol.WorkflowDescription, error)
 	StartGoal(context.Context, *protocol.InboundMessage, protocol.GoalRequest) error
 	MoveToBackground(context.Context, string) (bool, error)
 	StopBackgroundJob(context.Context, string, string) (bool, error)

@@ -8,13 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 )
 
 func (r *Runtime) CreateConversation(ctx context.Context, conversation protocol.Conversation) error {
@@ -190,8 +188,6 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 		}
 
 		if eligible {
-			inbound.Workflow = inboundWorkflow(inbound)
-
 			fresh, err := r.admitWeb(ctx, bridge, &request, protocol.GoalRequest{})
 			if err != nil || !fresh {
 				return err
@@ -212,7 +208,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 	}
 
 	if err := bridge.enqueue(ctx, &request, "run turn"); err != nil {
-		return errors.Join(err, request.workflow.Close())
+		return err
 	}
 
 	select {
@@ -268,24 +264,6 @@ func (r *Runtime) StartGoal(ctx context.Context, inbound *protocol.InboundMessag
 	inbound.GoalAction = protocol.GoalActionKickoff
 
 	return bridge.Submit(ctx, inbound)
-}
-
-func (r *Runtime) WorkflowDescriptions() (descriptions []protocol.WorkflowDescription, err error) {
-	runtimeCfg := r.Cfg.Clone()
-
-	root, err := os.OpenRoot(runtimeCfg.Workspace)
-	if err != nil {
-		return nil, fmt.Errorf("open workflow root: %w", err)
-	}
-
-	defer func() { err = errors.Join(err, root.Close()) }()
-
-	definitions, err := workflow.Load(root, runtimeCfg.RuntimeDirName())
-	if err != nil {
-		return nil, fmt.Errorf("load workflow definitions: %w", err)
-	}
-
-	return workflow.Descriptions(definitions), nil
 }
 
 func (r *Runtime) QueueItems(conversationID string) ([]protocol.ThreadQueueItem, error) {
@@ -404,7 +382,6 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $3 AND reason <> $4 AND
 		}
 
 		item.Inbound.Metadata[protocol.InboundRawTextMetadataKey] = text
-		item.Inbound.Workflow = inboundWorkflow(item.Inbound)
 		data, _ := json.Marshal(item.Inbound)
 		inbound = new(string(removeSessionEntryNUL(data)))
 	}
@@ -424,19 +401,12 @@ WHERE conversation_id = $1 AND input_id = $2 AND phase = $3 AND reason <> $4 AND
 			continue
 		}
 
-		if request.inbound.Text != updatedText {
-			if err := request.workflow.Close(); err != nil {
-				return false, err
-			}
-		}
-
 		request.inbound.Text = updatedText
 		if request.inbound.Metadata == nil {
 			request.inbound.Metadata = make(map[string]string)
 		}
 
 		request.inbound.Metadata[protocol.InboundRawTextMetadataKey] = text
-		request.inbound.Workflow = inboundWorkflow(request.inbound)
 	}
 
 	return true, nil
@@ -490,23 +460,16 @@ func (r *Runtime) StashQueueItem(ctx context.Context, conversationID string, ite
 				inbound.Metadata["web_message_id"], inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.ID, item.Principal
 			}
 
-			inbound.Workflow = inboundWorkflow(inbound)
-
 			request := bridgeRequest{inbound: inbound}
 
 			fresh, err := r.admitWeb(ctx, bridge, &request, protocol.GoalRequest{})
 			if err != nil || !fresh || item.Kind == protocol.InboundKindHeld {
-				return errors.Join(err, request.workflow.Close())
+				return err
 			}
 
 			request.queueItemID = item.ID
 
-			err = bridge.enqueue(ctx, &request, "enqueue Web prompt")
-			if err != nil {
-				err = errors.Join(err, request.workflow.Close())
-			}
-
-			return err
+			return bridge.enqueue(ctx, &request, "enqueue Web prompt")
 		}
 	}
 

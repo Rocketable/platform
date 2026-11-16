@@ -114,9 +114,6 @@ var _ frontend.Backend = &BackendMock{}
 //			ValidateAgentFileFunc: func(s string, bytes []byte) error {
 //				panic("mock out the ValidateAgentFile method")
 //			},
-//			WorkflowDescriptionsFunc: func() ([]protocol.WorkflowDescription, error) {
-//				panic("mock out the WorkflowDescriptions method")
-//			},
 //		}
 //
 //		// use mockedBackend in code that requires frontend.Backend
@@ -213,9 +210,6 @@ type BackendMock struct {
 
 	// ValidateAgentFileFunc mocks the ValidateAgentFile method.
 	ValidateAgentFileFunc func(s string, bytes []byte) error
-
-	// WorkflowDescriptionsFunc mocks the WorkflowDescriptions method.
-	WorkflowDescriptionsFunc func() ([]protocol.WorkflowDescription, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -447,9 +441,6 @@ type BackendMock struct {
 			// Bytes is the bytes argument value.
 			Bytes []byte
 		}
-		// WorkflowDescriptions holds details about calls to the WorkflowDescriptions method.
-		WorkflowDescriptions []struct {
-		}
 	}
 	lockAgentPaused             sync.RWMutex
 	lockAnswerQuestion          sync.RWMutex
@@ -481,7 +472,6 @@ type BackendMock struct {
 	lockSubscribe               sync.RWMutex
 	lockSwitchConversationAgent sync.RWMutex
 	lockValidateAgentFile       sync.RWMutex
-	lockWorkflowDescriptions    sync.RWMutex
 }
 
 // AgentPaused calls AgentPausedFunc.
@@ -1596,32 +1586,5 @@ func (mock *BackendMock) ValidateAgentFileCalls() []struct {
 	mock.lockValidateAgentFile.RLock()
 	calls = mock.calls.ValidateAgentFile
 	mock.lockValidateAgentFile.RUnlock()
-	return calls
-}
-
-// WorkflowDescriptions calls WorkflowDescriptionsFunc.
-func (mock *BackendMock) WorkflowDescriptions() ([]protocol.WorkflowDescription, error) {
-	if mock.WorkflowDescriptionsFunc == nil {
-		panic("BackendMock.WorkflowDescriptionsFunc: method is nil but Backend.WorkflowDescriptions was just called")
-	}
-	callInfo := struct {
-	}{}
-	mock.lockWorkflowDescriptions.Lock()
-	mock.calls.WorkflowDescriptions = append(mock.calls.WorkflowDescriptions, callInfo)
-	mock.lockWorkflowDescriptions.Unlock()
-	return mock.WorkflowDescriptionsFunc()
-}
-
-// WorkflowDescriptionsCalls gets all the calls that were made to WorkflowDescriptions.
-// Check the length with:
-//
-//	len(mockedBackend.WorkflowDescriptionsCalls())
-func (mock *BackendMock) WorkflowDescriptionsCalls() []struct {
-} {
-	var calls []struct {
-	}
-	mock.lockWorkflowDescriptions.RLock()
-	calls = mock.calls.WorkflowDescriptions
-	mock.lockWorkflowDescriptions.RUnlock()
 	return calls
 }

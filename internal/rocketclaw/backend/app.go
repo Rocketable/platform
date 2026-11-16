@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"runtime/metrics"
 	"strings"
 	"sync"
@@ -15,7 +14,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
-	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -439,20 +437,6 @@ func validateRuntimeAssets(cfg *config.LockedConfig, runtimeDir string) error {
 				return fmt.Errorf("slack channel %s agent %s must use sticky: off", channel.Channel, name)
 			}
 		}
-	}
-
-	return validateWorkflowDefinitions(cfg.Clone(), runtimeDir)
-}
-
-func validateWorkflowDefinitions(cfg *config.Config, runtimeDir string) (err error) {
-	root, err := os.OpenRoot(cfg.Workspace)
-	if err != nil {
-		return fmt.Errorf("open workflow root: %w", err)
-	}
-	defer func() { err = errors.Join(err, root.Close()) }()
-
-	if _, err = workflow.Load(root, runtimeDir); err != nil {
-		return fmt.Errorf("validate workflow definitions: %w", err)
 	}
 
 	return nil

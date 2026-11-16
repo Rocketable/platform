@@ -123,7 +123,6 @@ type InboundMessage struct {
 	ConversationID        string
 	Metadata              map[string]string
 	ExternalMCPMetadata   map[string]string
-	Workflow              WorkflowInvocation
 	SyncDestination       string
 	RequireOutputDecision bool
 	Cronjob               *CronjobMessage
@@ -173,6 +172,14 @@ type AskUserQuestionAnswer struct {
 type UserQuestionAsker interface {
 	AskUserQuestion(context.Context, *AskUserQuestionRequest) (AskUserQuestionAnswer, error)
 }
+
+type Terminal string
+
+const (
+	TerminalComplete Terminal = "complete"
+	TerminalFailed   Terminal = "failed"
+	TerminalStopped  Terminal = "stopped"
+)
 
 type OutboundMessage struct {
 	ConsumedID, ConsumedText           string

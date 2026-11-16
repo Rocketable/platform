@@ -480,11 +480,9 @@ func TestPausedChat(t *testing.T) {
 	waiting := queue()
 	assert.ElementsMatch(t, []string{"q1:enqueue", "q2:enqueue", "s1:held"}, waiting)
 
-	for _, text := range []string{"$goal ship it", "$workflow deploy"} {
-		_, err := prompt("refused", text, PromptDelivery_STEER)
-		_, refused := errors.AsType[backend.AgentPausedError](err)
-		assert.True(t, refused, "%s: %v", text, err)
-	}
+	_, errGoal := prompt("refused", "$goal ship it", PromptDelivery_STEER)
+	_, goalRefused := errors.AsType[backend.AgentPausedError](errGoal)
+	assert.True(t, goalRefused, "%v", errGoal)
 
 	_, found, err := h.rt.Sessions.Goal(id)
 	require.NoError(t, err)
@@ -730,7 +728,7 @@ func TestVoice(t *testing.T) {
 
 		assert.Contains(t, <-h.requests, "CANARY_TOOL_RESULT")
 
-		handOff(t, peer, "d2", "$workflow deploy")
+		handOff(t, peer, "d2", "$skill deploy")
 		peer.send(t, `{"type":"session.delegation.created","delegation":{"id":"d1"}}`)
 		require.Eventually(t, func() bool {
 			items, err := h.rt.QueueItems("main")
@@ -739,7 +737,7 @@ func TestVoice(t *testing.T) {
 
 		h.replies <- voiceModelText("r2", "Tests passed.")
 
-		assert.Contains(t, <-h.requests, "$workflow deploy", "the second hand-off joins the running turn as plain text (R8)")
+		assert.Contains(t, <-h.requests, "$skill deploy", "the second hand-off joins the running turn as plain text (R8)")
 
 		h.replies <- voiceModelText("r3", lint)
 
@@ -790,7 +788,7 @@ func TestVoice(t *testing.T) {
 
 		require.Len(t, users, 4, "a re-delivered hand-off and talk after the last hand-off add no message")
 		assert.Equal(t, "d1 "+voiceDelegation("user: please run the tests", "user: please run the tests"), users[0].InputId+" "+users[0].Text)
-		assert.Equal(t, "d2 "+voiceDelegation("assistant: On it.\nuser: $workflow deploy", "assistant: On it.\nuser: $workflow deploy"), users[1].InputId+" "+users[1].Text)
+		assert.Equal(t, "d2 "+voiceDelegation("assistant: On it.\nuser: $skill deploy", "assistant: On it.\nuser: $skill deploy"), users[1].InputId+" "+users[1].Text)
 		assert.Contains(t, users[0].Header, `[Web media=Voice principal="alice"`)
 
 		h.ended(t)

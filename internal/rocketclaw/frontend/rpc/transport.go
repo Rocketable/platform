@@ -24,7 +24,7 @@ const editorMethods = "TestModel CreateAgentDraft ListAgentDrafts GetAgentDraft 
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
 
-	for _, method := range append([]string{"Protocol", "Identity", "Reload", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "Board", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "SaveBehaviorSettings", "InspectAgents", "ListSkills", "ListWorkflows", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "EditQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "VoiceSettings", "Tabs", "GetPage", "ListPages", "ReportTyping"}, strings.Fields(editorMethods)...) {
+	for _, method := range append([]string{"Protocol", "Identity", "Reload", "Prompt", "History", "ForkSession", "StageRevert", "ClearRevert", "SearchMessages", "SearchSessions", "Board", "SlackNames", "Handoff", "ListAgents", "CreateSession", "ListConfig", "SaveBehaviorSettings", "InspectAgents", "ListSkills", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "EditQueueItem", "ReorderQueue", "MoveToBackground", "StopBackgroundJob", "AnswerQuestion", "VoiceSettings", "Tabs", "GetPage", "ListPages", "ReportTyping"}, strings.Fields(editorMethods)...) {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 
@@ -179,8 +179,6 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 		return s.configCall(ctx, method, request)
 	case "ListSkills":
 		return s.listSkills(ctx, request.(*ListSkillsRequest))
-	case "ListWorkflows":
-		return s.listWorkflows(ctx)
 	case "ListAgents":
 		return s.listAgents(ctx, request.(*ListAgentsRequest).ConversationId)
 	case "Identity":

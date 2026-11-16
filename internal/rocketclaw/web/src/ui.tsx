@@ -149,7 +149,6 @@ const dollarCommands = [
   { name: "goal", label: "Start goal", hint: "<objective>", desc: "Start a goal loop" },
   { name: "stop", label: "Stop turn", hint: "", desc: "End the active turn" },
   { name: "cron", label: "Run cron", hint: "[job]", desc: "List or run a cron job" },
-  { name: "workflow", label: "Run workflow", hint: "<name> [args]", desc: "Run a saved workflow" },
   { name: "agent", label: "Choose agent", hint: "[name]", desc: "List or switch agent" },
   { name: "enqueue", label: "Enqueue work", hint: "<text>", desc: "Queue work to run automatically" },
   { name: "stash", label: "Stash work", hint: "<text>", desc: "Hold work until explicitly sent" },
@@ -158,15 +157,14 @@ const dollarCommands = [
   { name: "skill", label: "Invoke skill", hint: "<name> [args]", desc: "Invoke a skill by name" },
 ];
 
-function dollarMatches(text: string, skills: { name: string; description?: string }[], workflows: { name: string; description?: string }[]) {
-  const named = /^\$(workflow|skill)(?:[\t ]+([^\s]*))?$/i.exec(text);
+function dollarMatches(text: string, skills: { name: string; description?: string }[]) {
+  const named = /^\$skill(?:[\t ]+([^\s]*))?$/i.exec(text);
   if (named) {
-    const kind = named[1].toLowerCase();
-    return (kind === "skill" ? skills : workflows).flatMap((item) => item.name.toLowerCase().startsWith((named[2] ?? "").toLowerCase()) ? [{
+    return skills.flatMap((item) => item.name.toLowerCase().startsWith((named[1] ?? "").toLowerCase()) ? [{
       name: item.name,
       hint: "[args]",
       desc: item.description ?? "",
-      invocation: `$${kind} ${item.name} `,
+      invocation: `$skill ${item.name} `,
     }] : []);
   }
   if (!text.startsWith("$") || text.includes("\n") || text.includes(" ")) {
@@ -5238,12 +5236,11 @@ function SessionComposer({
   // Sends switch to the shown agent, so an unlisted current agent moves to the first listed one.
   const selected = offeredAgent(catalog, agent, currentAgent) ?? currentAgent;
   const skills = useQuery({ ...queries.skills({ agent: selected }), enabled: selected !== "", placeholderData: undefined });
-  const workflows = useQuery({ ...queries.workflows(), staleTime: 60_000 });
-  const matches = dollarOff ? [] : dollarMatches(text, skills.data ?? [], workflows.data ?? []);
+  const matches = dollarOff ? [] : dollarMatches(text, skills.data ?? []);
   const pick = Math.max(0, matches.findIndex((item) => item.invocation === dollarPick));
   const applyDollar = (invocation: string) => {
     setText(invocation);
-    setDollarOff(invocation !== "$skill " && invocation !== "$workflow ");
+    setDollarOff(invocation !== "$skill ");
     setAgentOpen(false);
   };
   const pausedIn = usePausedChats(), paused = pausedIn(id), question = useQuestion(id, draft, paused, refreshHistory, setSendError);

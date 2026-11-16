@@ -83,7 +83,7 @@ func (s *SessionService) ProposeAgentDraftChanges(ctx context.Context, id, usern
 
 	fmt.Fprintf(&input, "\n# Request\n%s\n", ask.Request)
 
-	root, agents, skills, resolver, err := prepareRocketCode(s.definitions, "main", slog.New(slog.DiscardHandler), toolModeWorkflow)
+	root, agents, skills, resolver, err := prepareRocketCode(s.definitions, "main", slog.New(slog.DiscardHandler))
 	if err != nil {
 		return nil, err
 	}

@@ -17,7 +17,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -330,7 +329,7 @@ func TestStopOnWaitingRowPostsStoppedFinalAndDoesNotRun(t *testing.T) {
 	idle := newBridge()
 	conversationID := idle.config.ConversationID
 	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "seed", true)
-	inbound.ConversationID, inbound.Workflow = conversationID, protocol.WorkflowInvocation{Name: "audit"}
+	inbound.ConversationID = conversationID
 	require.NoError(t, startTurnDB(t.Context(), service.db, "turn-waiting", conversationID, inbound))
 
 	stopped := idle.InterruptActiveTurn()
@@ -338,7 +337,7 @@ func TestStopOnWaitingRowPostsStoppedFinalAndDoesNotRun(t *testing.T) {
 	final := readFinal(t, finals)
 	assert.Empty(t, final.Text)
 	assert.Equal(t, "turn-waiting", final.TurnID)
-	assert.Equal(t, protocol.TerminalStopped, final.Terminal, "the workflow card shows the run stopped")
+	assert.Equal(t, protocol.TerminalStopped, final.Terminal, "the final shows the turn stopped")
 	require.Eventually(t, func() bool { return len(runningTestTurns(t, service)) == 0 }, 5*time.Second, 10*time.Millisecond)
 
 	ctx, cancel := context.WithCancelCause(t.Context())
@@ -1873,197 +1872,6 @@ func TestShutdownReleasesCronRunnerWait(t *testing.T) {
 	destinationQueue, err := service.ThreadQueueForConversation(template.config.ConversationID)
 	require.NoError(t, err)
 	assert.Empty(t, destinationQueue)
-}
-
-func TestWorkflowTurnStepsSeeTurnEnvironment(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  bash: allow\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "workflows"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "workflows", "who.star"), []byte("meta = {\"name\": \"who\", \"description\": \"Who\"}\ndef main(args): return agent(\"print\")\n"), 0o600))
-	service := newTestSessionServiceAt(t, workspace)
-
-	outputs := make(chan string, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Input []struct{ Type, Output string }
-		}
-		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-
-		if last := body.Input[len(body.Input)-1]; last.Type == "function_call_output" {
-			outputs <- last.Output
-
-			writeRawRunMessage(t, w, "done", "message", "done")
-
-			return
-		}
-
-		writeRawRunFunctionCall(t, w, "print", "execute", executeBashScript(`printf %s "${ROCKETCLAW_PRINCIPAL_NAME-unset}"`))
-	}))
-	t.Cleanup(server.Close)
-
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
-
-	finals := make(chan *protocol.OutboundMessage, 4)
-	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
-	bridge := NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
-	runTestBridge(t, bridge)
-
-	msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "$workflow who", true)
-	msg.Workflow = protocol.WorkflowInvocation{Name: "who"}
-	msg.Metadata = map[string]string{protocol.InboundPrincipalNameMetadataKey: "Alice"}
-	require.NoError(t, bridge.Submit(t.Context(), msg))
-
-	readFinal(t, finals)
-	require.Equal(t, "Alice", <-outputs)
-}
-
-func TestInterruptedWorkflowResumesWithRecordedWorkers(t *testing.T) {
-	t.Parallel()
-
-	for _, stop := range []bool{false, true} {
-		t.Run(map[bool]string{false: "resume", true: "stop"}[stop], func(t *testing.T) {
-			workspace := t.TempDir()
-			writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: {}\n---\nPrompt\n")
-			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "workflows"), 0o755))
-			require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "workflows", "audit.star"), []byte(`meta = {"name": "audit", "description": "Audit", "phases": ["one", "two", "three"]}
-def main(args):
-    a = phase("one", lambda: agent("worker-a"))
-    b = phase("two", lambda: agent("worker-b"))
-    c, d = phase("three", lambda: parallel([lambda: agent("worker-c"), lambda: agent("worker-d")]))
-    return a + b + c + d
-`), 0o600))
-			service := newTestSessionServiceAt(t, workspace)
-
-			var mu sync.Mutex
-
-			calls := map[string]int{}
-			blockedD := make(chan struct{}, 4)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				body, _ := io.ReadAll(r.Body)
-				worker := ""
-
-				for _, name := range []string{"a", "b", "c", "d"} {
-					if strings.Contains(string(body), "worker-"+name) {
-						worker = name
-					}
-				}
-
-				mu.Lock()
-				calls[worker]++
-				block := worker == "d" && (calls[worker] == 1 || stop)
-				mu.Unlock()
-
-				if block {
-					blockedD <- struct{}{}
-
-					<-r.Context().Done()
-
-					return
-				}
-
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"` + strings.ToUpper(worker) + `","annotations":[]}]}]}`))
-			}))
-			t.Cleanup(server.Close)
-
-			conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-			require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
-
-			finals := make(chan *protocol.OutboundMessage, 4)
-			cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}}
-			newBridge := func() *Bridge {
-				return NewConversation(config.NewLockedConfig(cfg), finalsPublisher{finals: finals}, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, SessionService: service}, slog.New(slog.DiscardHandler))
-			}
-			submit := func(bridge *Bridge) {
-				msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)
-				msg.Workflow = protocol.WorkflowInvocation{Name: "audit"}
-				require.NoError(t, bridge.Submit(t.Context(), msg))
-			}
-			workerCalls := func() map[string]int {
-				mu.Lock()
-				defer mu.Unlock()
-
-				return maps.Clone(calls)
-			}
-
-			first := newBridge()
-			shutdown := runTestBridge(t, first)
-			submit(first)
-			<-blockedD
-
-			turns := runningTestTurns(t, service)
-			require.Len(t, turns, 1)
-			turnID := turns[0]
-
-			require.Eventually(t, func() bool {
-				return slices.Contains(testTurnStepKeys(t, service, conversationID), turnID+"/workflow/2/0/0")
-			}, 5*time.Second, 10*time.Millisecond, "the finished parallel worker is recorded under its branch key")
-
-			shutdown()
-			require.Eventually(t, func() bool { return !first.handlingSnapshot() }, 5*time.Second, 10*time.Millisecond)
-			assert.Empty(t, finals, "shutdown posts nothing")
-			entries, err := service.ObserveEntries(t.Context(), conversationID)
-			require.NoError(t, err)
-			assert.Empty(t, entries, "shutdown writes no workflow summary")
-			require.Equal(t, []string{turnID}, runningTestTurns(t, service))
-			assert.True(t, slices.ContainsFunc(testTurnStepKeys(t, service, conversationID), func(key string) bool {
-				return strings.HasPrefix(key, turnID+"/workflow/2/1/0/")
-			}), "the in-flight worker's turn is journaled under its key")
-
-			restarted := newBridge()
-			runTestBridge(t, restarted)
-
-			if stop {
-				<-blockedD
-				require.NotNil(t, restarted.InterruptActiveTurn())
-
-				final := readFinal(t, finals)
-				assert.Equal(t, protocol.TerminalStopped, final.Terminal)
-				assert.Equal(t, map[string]int{"a": 1, "b": 1, "c": 1, "d": 2}, workerCalls(), "finished workers are not repeated")
-
-				require.Eventually(t, func() bool {
-					entries, err = service.ObserveEntries(t.Context(), conversationID)
-					return err == nil && len(entries) == 1
-				}, 5*time.Second, 10*time.Millisecond)
-
-				summary := workflowSummaryFromEntry(t, &entries[0].Entry)
-				assert.Equal(t, protocol.TerminalStopped, summary.Terminal)
-				assert.Equal(t, "workflow stopped by user", summary.Error)
-
-				return
-			}
-
-			final := readFinal(t, finals)
-			assert.Equal(t, "ABCD", final.Text)
-			assert.Equal(t, turnID, final.TurnID, "the resumed run keeps its run ID")
-			assert.Equal(t, map[string]int{"a": 1, "b": 1, "c": 1, "d": 2}, workerCalls(), "only the interrupted worker runs again")
-
-			submit(restarted)
-
-			uninterrupted := readFinal(t, finals)
-			assert.Equal(t, final.Text, uninterrupted.Text)
-			assert.Equal(t, map[string]int{"a": 2, "b": 2, "c": 2, "d": 3}, workerCalls())
-
-			require.Eventually(t, func() bool {
-				entries, err = service.ObserveEntries(t.Context(), conversationID)
-				return err == nil && len(entries) == 2
-			}, 5*time.Second, 10*time.Millisecond)
-
-			resumed := workflowSummaryPayloadFromEntry(t, &entries[0].Entry)
-			assert.JSONEq(t, strings.ReplaceAll(workflowSummaryPayloadFromEntry(t, &entries[1].Entry), uninterrupted.TurnID, turnID), resumed)
-			assert.JSONEq(t, `{"workflow":"audit","run_id":"`+turnID+`","terminal":"complete","phases":[{"name":"one","status":"complete","scheduled":1,"complete":1},{"name":"two","status":"complete","scheduled":1,"complete":1},{"name":"three","status":"complete","scheduled":2,"complete":2}]}`, resumed)
-			require.Eventually(t, func() bool { return len(testTurnStepKeys(t, service, conversationID)) == 0 }, 5*time.Second, 10*time.Millisecond, "the finished runs leave no journal steps")
-		})
-	}
 }
 
 func (nt *noteTest) restart(t *testing.T) (manager *threadBridgeManager, shutdown func()) {

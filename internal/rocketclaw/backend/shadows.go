@@ -742,10 +742,8 @@ func (s *SessionService) bindShadows(ctx context.Context, db stateStoreDB, paren
 }
 
 func (b *Bridge) admitShadowInputs(ctx context.Context, db stateStoreDB, request *bridgeRequest, agent, turn string) error {
-	if request.inbound.Workflow.Name == "" {
-		if err := b.config.SessionService.startShadowManifests(ctx, db, b.config.ConversationID, agent, turn, request.inbound); err != nil {
-			return err
-		}
+	if err := b.config.SessionService.startShadowManifests(ctx, db, b.config.ConversationID, agent, turn, request.inbound); err != nil {
+		return err
 	}
 
 	return saveTurnInputs(ctx, db, b.config.ConversationID, turn, &turnInputSnapshot{Agent: agent, Inputs: []harness.PromptInput{}})

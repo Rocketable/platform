@@ -134,12 +134,6 @@ packages:
           pkgname: backend
           structname: userQuestionAskerMock
           inpackage: false
-  github.com/Rocketable/platform/internal/rocketclaw/workflow:
-    interfaces:
-      AgentRunner:
-        config:
-          filename: agentrunner_mocks_test.go
-          structname: agentRunnerMock
   github.com/Rocketable/platform/internal/rocketclaw/harness:
     interfaces:
       ModelResolver:

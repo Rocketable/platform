@@ -60,55 +60,6 @@ func (InertJournal) CodeModeCalls(context.Context, string) ([]json.RawMessage, e
 	return nil, nil
 }
 
-type TracelessJournal struct {
-	Parent Journal
-}
-
-func (j TracelessJournal) Load(ctx context.Context, key string) (value json.RawMessage, found bool, err error) {
-	if value, found, err = j.Parent.Load(ctx, key); err != nil {
-		return nil, false, fmt.Errorf("load parent journal step: %w", err)
-	}
-
-	return value, found, nil
-}
-
-func (j TracelessJournal) Save(ctx context.Context, key string, value json.RawMessage) error {
-	if err := j.Parent.Save(ctx, key, value); err != nil {
-		return fmt.Errorf("save parent journal step: %w", err)
-	}
-
-	return nil
-}
-
-func (j TracelessJournal) SaveTurn(ctx context.Context, turnID string, step json.RawMessage, lists []TurnItems) error {
-	if err := j.Parent.SaveTurn(ctx, turnID, step, lists); err != nil {
-		return fmt.Errorf("save parent journal turn: %w", err)
-	}
-
-	return nil
-}
-
-func (j TracelessJournal) Items(ctx context.Context, turnID string, list TurnList) ([]json.RawMessage, error) {
-	items, err := j.Parent.Items(ctx, turnID, list)
-	if err != nil {
-		return nil, fmt.Errorf("load parent journal turn items: %w", err)
-	}
-
-	return items, nil
-}
-
-func (TracelessJournal) SaveTrace(context.Context, string, []json.RawMessage) error {
-	return nil
-}
-
-func (TracelessJournal) SaveCodeModeCall(context.Context, string, string, json.RawMessage) error {
-	return nil
-}
-
-func (TracelessJournal) CodeModeCalls(context.Context, string) ([]json.RawMessage, error) {
-	return nil, nil
-}
-
 type turnStep struct {
 	AppliedInputIDs []string          `json:"applied_input_ids,omitempty"`
 	Record          SessionEntry      `json:"record"`

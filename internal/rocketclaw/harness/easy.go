@@ -201,7 +201,6 @@ func compileEasyPermissions(agent *Agent, cfg AgentLoadConfig) (PermissionSet, e
 		"pages":      {{"rocketclaw", "rocketclaw_store"}, {"rocketclaw", "rocketclaw_read"}, {"rocketclaw", "rocketclaw_delete"}, {"rocketclaw", "rocketclaw_list"}, {"rocketclaw", "rocketclaw_kv_store"}, {"rocketclaw", "rocketclaw_kv_read"}},
 		"tags":       nil,
 		"background": {{"rocketclaw", AllowBackgroundSubject}},
-		"workflow":   {{"workflow", "*"}},
 		"restart":    {{"rocketclaw", "rocketclaw_restart"}},
 	}
 

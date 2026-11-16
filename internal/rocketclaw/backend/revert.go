@@ -612,10 +612,6 @@ func (b *Bridge) preserveRevertRequestLocked(ctx context.Context, request *bridg
 		}
 	}()
 
-	if err := request.workflow.Close(); err != nil {
-		return err
-	}
-
 	if request.inbound == nil || !request.inbound.Human && !request.scheduledMessageRecurring {
 		return nil
 	}
@@ -795,18 +791,6 @@ func (r *Runtime) admitWeb(ctx context.Context, b *Bridge, request *bridgeReques
 		return false, err
 	}
 
-	if inbound.Workflow.Name != "" {
-		if err := b.prepareWorkflow(request); err != nil {
-			return false, err
-		}
-
-		defer func() {
-			if !fresh {
-				err = errors.Join(err, request.workflow.Close())
-			}
-		}()
-	}
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -911,7 +895,7 @@ WHERE conversation_id = $1 AND takes_lane AND (input_id = $2 OR inbound_json->'M
 		}
 
 		attachmentsMatch := slices.Equal(attachmentsFromInbound(stored.Attachments), attachmentsFromInbound(inbound.Attachments))
-		if stored.Text != inbound.Text || stored.Source != inbound.Source || stored.Metadata[protocol.InboundPrincipalMetadataKey] != inbound.Metadata[protocol.InboundPrincipalMetadataKey] || stored.Metadata["web_goal"] != inbound.Metadata["web_goal"] || !attachmentsMatch || stored.AttachmentPresence != inbound.AttachmentPresence || !slices.Equal(stored.AttachmentWarnings, inbound.AttachmentWarnings) || stored.Workflow != inbound.Workflow || stored.GoalAction != inbound.GoalAction {
+		if stored.Text != inbound.Text || stored.Source != inbound.Source || stored.Metadata[protocol.InboundPrincipalMetadataKey] != inbound.Metadata[protocol.InboundPrincipalMetadataKey] || stored.Metadata["web_goal"] != inbound.Metadata["web_goal"] || !attachmentsMatch || stored.AttachmentPresence != inbound.AttachmentPresence || !slices.Equal(stored.AttachmentWarnings, inbound.AttachmentWarnings) || stored.GoalAction != inbound.GoalAction {
 			return false, errors.New("message ID was already accepted with different content")
 		}
 

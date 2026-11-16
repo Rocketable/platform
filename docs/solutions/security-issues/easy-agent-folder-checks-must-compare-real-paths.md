@@ -21,7 +21,7 @@ tags: [symlink, path-containment, sandbox, easy-mode, working-directory, emulate
 
 ## Problem
 
-An easy agent is confined to its `workingDirectory`, plus read-only uploads and skill folders. Its folder may not be, contain or lie inside the folders that define agents, skills, cron jobs, scripts and workflows, or the agent could rewrite its own rights. The checks that enforce this compared some paths by their real location and others by the name they were given. Wherever a symlink sat on the "name" side, the check gave the wrong answer. One change (PR #822) hit this three times: `resolveWorkingDirectory` compared the definitions folders by name and had no "contains" test, and the emulated shell's workdir check compared a real path with mount names.
+An easy agent is confined to its `workingDirectory`, plus read-only uploads and skill folders. Its folder may not be, contain or lie inside the folders that define agents, skills, cron jobs and scripts, or the agent could rewrite its own rights. The checks that enforce this compared some paths by their real location and others by the name they were given. Wherever a symlink sat on the "name" side, the check gave the wrong answer. One change (PR #822) hit this three times: `resolveWorkingDirectory` compared the definitions folders by name and had no "contains" test, and the emulated shell's workdir check compared a real path with mount names.
 
 ## Symptoms
 
@@ -45,7 +45,7 @@ Folder check, `internal/rocketclaw/backend/easy_turn.go:129-143`:
 ```go
 // A definitions folder counts where it really is, which a link may put out of the workspace; a missing
 // one, where it would be made.
-refused := []string{cfg.RuntimeDirName(), "agents", "skills", "cron", "scripts", "workflows"}
+refused := []string{cfg.RuntimeDirName(), "agents", "skills", "cron", "scripts"}
 for _, name := range refused {
 	dir := filepath.Join(workspace, name)
 	if _, errStat := os.Lstat(dir); !errors.Is(errStat, fs.ErrNotExist) {

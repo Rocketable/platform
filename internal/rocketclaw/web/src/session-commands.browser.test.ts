@@ -209,7 +209,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     await commandSearch.fill("original");
     expect(await commands.getByRole("button", { name: /Open original conversation/ }).count()).toBe(0);
     await commandSearch.fill("");
-    for (const name of ["Sessions: Fork session", "Sessions: Handoff session", "Sessions: Name session", "Sessions: Pin session", "Sessions: Choose agent", "Command: Start goal ($goal)", "Command: Run workflow ($workflow)", "Command: Invoke skill ($skill)", "Command: Enqueue work ($enqueue)", "Command: Stash work ($stash)", "Command: Steer turn ($steer)"]) {
+    for (const name of ["Sessions: Fork session", "Sessions: Handoff session", "Sessions: Name session", "Sessions: Pin session", "Sessions: Choose agent", "Command: Start goal ($goal)", "Command: Invoke skill ($skill)", "Command: Enqueue work ($enqueue)", "Command: Stash work ($stash)", "Command: Steer turn ($steer)"]) {
       const action = commands.getByRole("button", { name, exact: true });
       await action.waitFor();
       expect(await action.textContent()).toBe(name);
@@ -262,7 +262,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test(`fork 
     expect(details.source.name).toBe("Named source");
     expect(prompts).toHaveLength(0);
     await page.getByLabel("Attach files", { exact: true }).setInputFiles({ name: "draft.txt", mimeType: "text/plain", buffer: Buffer.from("keep attachment") });
-    for (const [label, invocation] of [["Start goal", "$goal"], ["Run workflow", "$workflow"], ["Invoke skill", "$skill"], ["Enqueue work", "$enqueue"], ["Stash work", "$stash"], ["Steer turn", "$steer"]]) {
+    for (const [label, invocation] of [["Start goal", "$goal"], ["Invoke skill", "$skill"], ["Enqueue work", "$enqueue"], ["Stash work", "$stash"], ["Steer turn", "$steer"]]) {
       await composer.fill("keep this draft");
       await page.keyboard.press("Meta+Shift+p");
       await commandSearch.fill(label);

@@ -1,6 +1,6 @@
 # Rocketable Platform
 
-Rocketable Platform runs AI agents inside a repository or folder. People talk to the agents through a built-in web page, Slack, or MCP (Model Context Protocol, a standard way for other AI tools to call this one). Agents can read and edit files, run shell commands, use tools and skills, and run saved workflows, but only as far as their permission rules allow.
+Rocketable Platform runs AI agents inside a repository or folder. People talk to the agents through a built-in web page, Slack, or MCP (Model Context Protocol, a standard way for other AI tools to call this one). Agents can read and edit files, run shell commands, use tools and skills, but only as far as their permission rules allow.
 
 It is written in Go and runs inside your own workspace. It is not a hosted service shared by many customers.
 
@@ -17,7 +17,6 @@ See [LICENSE](LICENSE) for the full license terms.
 - Runs agents that follow your workspace's instructions, agent definitions, and skills, under permission rules you write.
 - Saves conversations and unfinished work in PostgreSQL. After a restart, work continues from the last finished step.
 - Takes requests from the web page, Slack mentions, MCP, scheduled jobs, and one-off or repeating scheduled messages.
-- Runs saved workflows written in Starlark, a small Python-like language.
 - Sends model requests to OpenAI or to any service with the same API, and can use several services side by side.
 - Can send traces of agent runs to OpenTelemetry-compatible tools.
 - Can send events, errors, traces, and browser sessions to PostHog Cloud.
@@ -50,7 +49,7 @@ SQL
 
 Deleting the row (`DELETE FROM behavior_settings`) makes the next start import from the file again, but it discards every edit made on the Web, so use it only as a last resort.
 
-A workspace contains `AGENTS.md` and, optionally, `agents/`, `skills/`, `scripts/`, `cron/`, and `workflows/` folders.
+A workspace contains `AGENTS.md` and, optionally, `agents/`, `skills/`, `scripts/`, and `cron/` folders.
 
 ### Web page
 
@@ -141,7 +140,7 @@ A limited person:
 - Takes turns only while the session's current agent is one of theirs: prompts, steering, popping, or editing queued items, answers to questions, voice, and Handoff summaries. They run a cron only when the cron and its agent are both in their spaces. When someone else switches a session to an agent outside their spaces, they can still read it, and they can switch it back with `$agent`. The composer does that on their next send.
 - Gets no OpenCode (no OpenCode sessions, servers, or `/oc/` proxy) and cannot Reload.
 
-The workflow list, Slack names, skills, and the Config page stay visible to them, with Slack channels listing only their agents.
+Slack names, skills, and the Config page stay visible to them, with Slack channels listing only their agents.
 
 These limits cover the web page only. Slack, MCP, and cron keep their own allowlists. Each [remote RocketClaw](#remote-rocketclaws) applies its own `permissions`, so list the person there too.
 
@@ -214,7 +213,7 @@ Retention cleanup deletes ordinary chats, in Web or Slack and pinned or not, 90 
 
 ## How a request runs
 
-1. A request arrives from the web page (including a `$workflow` command), a Slack mention, MCP, a cron job, or a scheduled message.
+1. A request arrives from the web page, a Slack mention, MCP, a cron job, or a scheduled message.
 2. RocketClaw passes it to its agent harness with the chosen agent.
 3. The harness calls the model and runs tools, within the agent's permissions.
 4. RocketClaw saves each finished step and sends the reply back where the request came from.
@@ -243,7 +242,7 @@ A turn that a person starts from Web, voice, or Slack tells its shell commands w
 - `ROCKETCLAW_PRINCIPAL_EMAIL`: on Web, the Tailscale login; on Slack, the profile email.
 - `ROCKETCLAW_PRINCIPAL_ID`: the lowercase hex SHA-256 of the email after trimming spaces and lowercasing it, so `Alice@Example.com` and `alice@example.com` get the same ID.
 
-When RocketClaw has no email, only the name is set. The same person's values reach the subagents and shadows of that turn, the later turns of a `$goal` they set, and their queued or stashed messages when those run. A steer into a running turn keeps the values that turn started with. Cron turns, External MCP turns, and messages one agent sends another get none of them. The workers of a workflow get the values of the turn that runs them. A name is a display name its owner can change, so use it for attribution only. Permission patterns that grant access per person should use `${ROCKETCLAW_PRINCIPAL_ID}` or `${ROCKETCLAW_PRINCIPAL_EMAIL}`. When a turn lacks a variable that a rule names, an `allow` or `auto` rule is skipped, and a `deny` rule matches as if the variable were `*`. Such a rule covers everything that runs with that person's values: steers and promoted queued messages that other people deliver into the person's running turn, the later turns of the person's `$goal`, and a background subagent that starts after the person's turn ended, which takes the values of whichever top-level turn runs then. Per-person rules keep people's work apart for convenience; they are not an authorization boundary between people. The values say who asked for the turn, not a credential: permission patterns read them from the turn, but a script sees whatever value the command that runs it sets.
+When RocketClaw has no email, only the name is set. The same person's values reach the subagents and shadows of that turn, the later turns of a `$goal` they set, and their queued or stashed messages when those run. A steer into a running turn keeps the values that turn started with. Cron turns, External MCP turns, and messages one agent sends another get none of them. A name is a display name its owner can change, so use it for attribution only. Permission patterns that grant access per person should use `${ROCKETCLAW_PRINCIPAL_ID}` or `${ROCKETCLAW_PRINCIPAL_EMAIL}`. When a turn lacks a variable that a rule names, an `allow` or `auto` rule is skipped, and a `deny` rule matches as if the variable were `*`. Such a rule covers everything that runs with that person's values: steers and promoted queued messages that other people deliver into the person's running turn, the later turns of the person's `$goal`, and a background subagent that starts after the person's turn ended, which takes the values of whichever top-level turn runs then. Per-person rules keep people's work apart for convenience; they are not an authorization boundary between people. The values say who asked for the turn, not a credential: permission patterns read them from the turn, but a script sees whatever value the command that runs it sets.
 
 Some features are off until you turn them on under `permission.rocketclaw`:
 
@@ -293,13 +292,13 @@ Release note for agent session control:
 - There is no `session.spawn_mode` setting. An agent file that still has it fails to load; use `rocketclaw_sessions_write` instead.
 - `rocketclaw_sessions_write` defaults to `deny`, so existing agents can no longer start sessions until you allow it. That includes a deployed `agents/main.md` that still says `rocketclaw_start_new_thread: allow`; newly generated `main` agents allow it. Also update prompt text that names the old tool.
 - An agent with `auto` or `allow` can write into and stop any chat Web lists, including Slack threads RocketClaw manages, and the replies post to Slack. This holds for every turn of that agent, including cron, External MCP, and Slack mention turns.
-- Steering accepts any sender. A steer joins the running turn while that turn still takes input, whoever sent it and whoever started the turn, so a person's Web steer now also joins goal continuations, Completion Note wakes, scheduled messages, and the first turn of a session an agent created. Hidden cron and External MCP runs and `$workflow` turns still take a steer as their next turn.
+- Steering accepts any sender. A steer joins the running turn while that turn still takes input, whoever sent it and whoever started the turn, so a person's Web steer now also joins goal continuations, Completion Note wakes, scheduled messages, and the first turn of a session an agent created. Hidden cron and External MCP runs still take a steer as their next turn.
 - `task`'s `continue` is now `{session_id, mode}` for agents with `allow_background: allow`. A still-running subagent is no longer refused: `mode` steers it, queues a follow-up after it, or stops it and runs the prompt next. A steer joins even when a foreground `task` call is waiting on that subagent. Queued follow-ups survive a restart, and no prompt, steer, follow-up, or wake reaches a subagent twice after a restart.
 - A continue that names a different `subagent_type` switches the subagent to that type instead of failing. The type must exist, and the caller needs `task` permission for it. A steer switches a running subagent from its next step.
 - Every subagent now runs as a session of its own, on the same turn runner as other sessions, so its queue, steers, stops, and restart recovery work as a top-level session's do. A subagent session is not listed in the sidebar or search. Its Background Jobs report to the subagent itself. It acts for its top-level session's running turn: it writes sessions and tags for that session, the sessions it creates keep that turn's creator and agent limits, the files it attaches go out with that turn's reply, and `rocketclaw_sessions_current_id` returns that session's ID. It is not offered `rocketclaw_schedule_message` or `rocketclaw_reset_scheduled_messages`. Its first prompt carries a header naming the session and agent that delegated it.
 - Stopping a turn while its foreground `task` call waits also stops the subagent's current turn, and so on down a chain of foreground subagents, unless a background `task` job waits on that turn. The prompt the call sent, if still queued, is not withdrawn but held: it stays in the subagent's queue, shown in Web like a stash, through restarts, while the rest of the queue moves on. The next message sent to the subagent, by `task`, `rocketclaw_sessions_write`, or a person in Web, releases it to run just before that message, and a person's `$goal` releases it to run before the goal; a stash releases nothing, and a person's stash is never released this way. The stopped session gets no note. A restart is not a stop: the call waits again.
 
-Every permission review starts with a header RocketClaw writes outside the transcript: the turn's source (`Web`, `Slack`, `Cron`, `ExternalMCP` or `System`, or `ScheduledMessage` with its creator's source), the person who asked when known, and the agent that sent the message. Subagents, workflow workers and shadows carry their top-level turn's header. The reviewer trusts it over any origin the transcript claims, so a rule such as "cron turns never use write credentials" can be enforced.
+Every permission review starts with a header RocketClaw writes outside the transcript: the turn's source (`Web`, `Slack`, `Cron`, `ExternalMCP` or `System`, or `ScheduledMessage` with its creator's source), the person who asked when known, and the agent that sent the message. Subagents and shadows carry their top-level turn's header. The reviewer trusts it over any origin the transcript claims, so a rule such as "cron turns never use write credentials" can be enforced.
 
 A decision model can settle reviews first. Configure OpenAI's Decisions API or TypeSafe under `decision` in `rocketclaw.json`, and name the model in `auto_approver_decision` (`{"model": "openai/gpt-6-luna", "min_confidence": 0.9}`), or in an easy agent's `approver.decision`. The guardian's reviews then ask that model about risk, user authorization, prompt injection and the outcome, and whether judging the call needs files or state it cannot see. They act on its answer only when every answer is confident enough (`min_confidence`, 0.9 by default), nothing needs a closer look, and the outcome follows the guardian's rules. Anything less, and every error, goes to the guardian as before. A custom reviewer (`auto(name)`) asks a decision model first only when its own frontmatter sets `approver.decision.model`, and then sends its own prompt plus `approver.decision.prompt` as the rules. The decision model and the chat reviewer each read their own prompt, so an easy agent whose `approver.prompt` has no `approver.decision.prompt` is never pre-gated, and a rule that must hold goes in both; the [cheatsheet](cmd/rocketclaw/CHEATSHEET.md#agent-frontmatter-and-permissions) has a table of who checks what. TypeSafe receives the rules with each question rather than next to the conversation it judges. Agents can also ask decision models typed questions themselves: Code Mode scripts call `decision(model=..., state={...}, questions={...})`, optionally with `images=[...]` naming workspace image files the agent may read, and get the answers back as a dict with the tokens used, so one script can sort many items at once. Every decision call is traced with its token counts. An agent gets this tool only when its `permission.decision` rules, or an easy agent's `decision` list, name the models it may call. Each provider's `api_base_url` can point at another service that speaks the same protocol.
 
@@ -387,7 +386,7 @@ Agent instructions.
 
 The [cheatsheet](cmd/rocketclaw/CHEATSHEET.md#easy-mode-agent-frontmatter) lists every key and what leaving it out means. How an easy agent runs:
 
-- Its shell commands always run in the [emulated shell](#emulated-shell), in its `workingDirectory`. A relative path starts from RocketClaw's working directory. `$VAR`s come from the turn, each made into one safe path segment, or else from RocketClaw's environment; an unset variable fails the turn. `ROCKETCLAW_CONVERSATION_ID` is set on every turn, so the example gives each chat its own folder. The folder may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills`, `cron`, `scripts` or `workflows`, wherever a link puts them. Subagents and workflow workers use their top-level session's folder.
+- Its shell commands always run in the [emulated shell](#emulated-shell), in its `workingDirectory`. A relative path starts from RocketClaw's working directory. `$VAR`s come from the turn, each made into one safe path segment, or else from RocketClaw's environment; an unset variable fails the turn. `ROCKETCLAW_CONVERSATION_ID` is set on every turn, so the example gives each chat its own folder. The folder may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills`, `cron` or `scripts`, wherever a link puts them. Subagents use their top-level session's folder.
 - `read`, `glob`, `grep`, `apply_patch` and attaching files see only that folder, plus two read-only exceptions at their full host paths, which the shell sees too: the chat's uploads and the folders of the skills the agent may use. Files uploaded from Web go to `.rocketclaw/uploads/<chat>`; Slack files are put into the prompt, not uploaded.
 - The emulated shell sees only the turn's `ROCKETCLAW_*` variables. The programs `commands` starts run in host bash with RocketClaw's environment plus the `secretsARN` secrets. Each secret is a JSON object of string values, and each key becomes one variable. Secrets are fetched on every turn; a failure fails the turn and names the ARN and key.
 - ``!`…` `` lines in the body, in a routine's instruction and in the `SKILL.md` of a skill the agent loads run in host bash, from the workspace, with the secrets. A skill's lines run before the model's arguments go in, so text the model passes never runs.
@@ -398,7 +397,7 @@ The [cheatsheet](cmd/rocketclaw/CHEATSHEET.md#easy-mode-agent-frontmatter) lists
 
 ### Emulated shell
 
-An agent that sets `shell: emulated` runs its shell commands in real Bash inside a Linux sandbox instead of host bash: `bash` tool calls, `` !`…` `` lines and workflow workers. The sandbox has a pinned Ubuntu 26.04 LTS with the usual tools plus `python3`, `node` (also as `js-exec`) and `sqlite3`. As on 26.04 itself, `ls`, `cat`, `head` and the other core utilities are the uutils (Rust) coreutils; GNU's are there as `gnuls`, `gnucat` and so on. Each command runs in a fresh Bash, so files in the folder persist between calls but variables, functions and `cd` do not.
+An agent that sets `shell: emulated` runs its shell commands in real Bash inside a Linux sandbox instead of host bash: `bash` tool calls and `` !`…` `` lines. The sandbox has a pinned Ubuntu 26.04 LTS with the usual tools plus `python3`, `node` (also as `js-exec`) and `sqlite3`. As on 26.04 itself, `ls`, `cat`, `head` and the other core utilities are the uutils (Rust) coreutils; GNU's are there as `gnuls`, `gnucat` and so on. Each command runs in a fresh Bash, so files in the folder persist between calls but variables, functions and `cd` do not.
 
 ```yaml
 shell: emulated
@@ -470,8 +469,7 @@ name, such as `some-important-agent/name-of-shadow-agent`, alongside the other
 during a shadow run.
 
 The same inputs do not mean identical model conversations: system instructions,
-model, independent history, tool results, and compaction can differ. Workflow
-turns have no shadows.
+model, independent history, tool results, and compaction can differ.
 
 Inspect shadows in the Web comparison tabs beside their parent. Their output
 stays there, without an extra Slack reply, cron report, or MCP response. Shadows

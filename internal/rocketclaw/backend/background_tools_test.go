@@ -73,7 +73,7 @@ func TestStopBackgroundJobToolNeedsAllowBackground(t *testing.T) {
 			writeMainAgentSkills(t, workspace, "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission: "+permission+"\n---\nPrompt\n")
 
 			cfg := &config.Config{Workspace: workspace}
-			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler), toolModePersistent)
+			root, agents, skills, resolver, err := prepareRocketCode(config.NewLockedConfig(cfg), "main", slog.New(slog.DiscardHandler))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
 			require.NoError(t, root.MkdirAll("shell", 0o700))

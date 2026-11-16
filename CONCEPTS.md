@@ -58,7 +58,7 @@ While a Goal continues, its next turn takes the conversation's next slot ahead o
 
 Input sent into a conversation's running turn so the agent takes it into that turn instead of waiting for a turn of its own.
 
-A steer joins a running turn that still takes input, whoever sent it and whoever started the turn; otherwise it runs as the next turn. Workflow turns, and the hidden runs of cron and External MCP, always take a steer as their next turn. Steers come from Web and from agents; a Slack mention never steers.
+A steer joins a running turn that still takes input, whoever sent it and whoever started the turn; otherwise it runs as the next turn. The hidden runs of cron and External MCP always take a steer as their next turn. Steers come from Web and from agents; a Slack mention never steers.
 
 ### Agent Pause
 
@@ -67,7 +67,7 @@ A shared switch on a Web session a person started, which anyone who may prompt i
 
 Only a session a person started in the Web pauses, whatever its agent's sticky setting, and only while nothing outside reports into it: never a cron report chat, an External MCP chat, a Slack thread, a Remote OpenCode Session, a Shadow or Subagent Session, a chat a run reports into, or the Sticky Session of a `sticky: global` agent that a cron job or Routine runs. When a restart or Reload gives such an agent one, RocketClaw resumes its paused Sticky Session.
 
-While paused, a person's plain message posts straight into the chat under their name at once, above a reply still running, and starts no turn; queued and stashed items, Goals, Scheduled Messages, other agents' writes and Completion Note wakes wait, and Voice Hand-offs, `$goal`, a named `$workflow` and promoting a queued item are refused. A reply already running finishes without taking steers, and a turn already starting when someone pauses still runs; Send never answers the agent's pending question, which its card still does. A message sent as someone resumes reaches the agent as usual. The chat records who paused and who resumed the agent, and a fork whose copy ends paused starts live with a line saying the forker resumed it. Resuming starts no turn just to read what was said; waiting work runs in its usual order, and the next turn reads the paused messages as people talking among themselves. Background Jobs keep running; only their wakes wait.
+While paused, a person's plain message posts straight into the chat under their name at once, above a reply still running, and starts no turn; queued and stashed items, Goals, Scheduled Messages, other agents' writes and Completion Note wakes wait, and Voice Hand-offs, `$goal` and promoting a queued item are refused. A reply already running finishes without taking steers, and a turn already starting when someone pauses still runs; Send never answers the agent's pending question, which its card still does. A message sent as someone resumes reaches the agent as usual. The chat records who paused and who resumed the agent, and a fork whose copy ends paused starts live with a line saying the forker resumed it. Resuming starts no turn just to read what was said; waiting work runs in its usual order, and the next turn reads the paused messages as people talking among themselves. Background Jobs keep running; only their wakes wait.
 
 ### Scheduled Message
 
@@ -75,15 +75,11 @@ A message an agent schedules into its own conversation to arrive after a delay, 
 
 Thread Queue items placed after a Scheduled Message wait behind it until it runs or is cancelled.
 
-### Workflow
-
-A saved Starlark program that runs a task as agent calls made by named workers, grouped in phases. A person starts one from Web with `$workflow`, and an agent whose permissions allow it can run one too. A workflow turn has no Shadow Sessions, and a steer sent during it runs as the next turn instead of joining it.
-
 ## Runtime Assets
 
 ### Overlay Clone
 
-The live checkout of one configured overlay, a git repository whose agents, skills, workflows, cron definitions, and scripts RocketClaw layers over its own, as Reload last installed it.
+The live checkout of one configured overlay, a git repository whose agents, skills, cron definitions, and scripts RocketClaw layers over its own, as Reload last installed it.
 
 ### Reload
 
@@ -155,7 +151,7 @@ A Spill has an opaque result ID registered only with its owning Harness Turn. Th
 
 One model loop in the harness. It owns that loop's Spills.
 
-A Harness Turn is not a conversation's running turn. A conversation's turn usually drives one Harness Turn, but a workflow turn drives several, and the two lifetimes are not the same object.
+A Harness Turn is not a conversation's running turn. A conversation's turn usually drives one Harness Turn, but the two lifetimes are not the same object.
 
 ### Thought
 
@@ -225,7 +221,7 @@ An alternative agent, declared under one parent agent, that runs the parent's wo
 
 A saved comparison child that receives each parent turn's consumed inputs in order, with its own history, model, tool results, and failures.
 
-Web pairs turns by their recorded source and turn identity, not prompt text or completion order. A shadow may take a bounded multiple of its parent's model responses, counted from the turn's first message and again from each steer a person sends: ahead of a running parent it pauses, and after the parent's turn ends it stops once out of steps, with a Web-only note. Workflow turns have no shadows. Shadow output is never delivered to Slack or External MCP. Shadows run permitted tools for real in the shared workspace; separating their output is not a dry-run sandbox.
+Web pairs turns by their recorded source and turn identity, not prompt text or completion order. A shadow may take a bounded multiple of its parent's model responses, counted from the turn's first message and again from each steer a person sends: ahead of a running parent it pauses, and after the parent's turn ends it stops once out of steps, with a Web-only note. Shadow output is never delivered to Slack or External MCP. Shadows run permitted tools for real in the shared workspace; separating their output is not a dry-run sandbox.
 
 ### Agent Draft
 
@@ -409,7 +405,7 @@ Each fact lives in one place. There is one record for every conversation of ever
 
 ### Step Journal
 
-The durable, conversation-local record of every completed step of in-progress work. Steps include model responses, tool call results, Code Mode host and MCP calls, workflow worker results, pending questions, and accepted steers.
+The durable, conversation-local record of every completed step of in-progress work. Steps include model responses, tool call results, Code Mode host and MCP calls, pending questions, and accepted steers.
 
 A running turn saves each item of its record once, as a step of its own, instead of rewriting the whole record. An interrupted turn resumes from its last recorded step. Completed steps return their recorded results instead of running again. A clean shutdown lets running calls finish, so only a call cut off by a crash or a forced exit, which started without a recorded result, is reported to the model as interrupted. A turn's steps are cleared when it ends; a stopped or failed turn keeps its record and consumed inputs on its turn, where History reads them.
 

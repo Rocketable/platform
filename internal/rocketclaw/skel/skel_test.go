@@ -102,8 +102,6 @@ func TestSyncReportsWorkspaceDirectoryConflicts(t *testing.T) {
 		{name: "root setup dangling symlink", path: "AGENTS.md", symlink: "missing/AGENTS.md", want: "write root setup file"},
 		{name: "scripts symlink loop", path: scriptsRoot, symlink: scriptsRoot, want: "remove stale workspace script symlinks: stat workspace scripts directory"},
 		{name: "scripts unreadable", path: scriptsRoot, dirMode: os.ModeDir, want: "remove stale workspace script symlinks: walk workspace scripts: walk workspace scripts"},
-		{name: "workflows symlink loop", path: workflowsRoot, symlink: workflowsRoot, want: "apply rocketclaw overlay: stat rocketclaw overlay directory"},
-		{name: "workflows dangling symlink", path: workflowsRoot, symlink: "missing", want: "create rocketclaw workflows overlay directory"},
 	}
 
 	for _, tt := range tests {
@@ -192,34 +190,6 @@ func TestSyncPreservesExistingWorkspaceSetupFiles(t *testing.T) {
 	data, err = os.ReadFile(filepath.Join(tmp, targetRoot, "skills", "example", "SKILL.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "keep skill", string(data))
-}
-
-func TestSyncMaterializesLocalWorkflowOverlay(t *testing.T) {
-	workspace := t.TempDir()
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-	require.NoError(t, root.Mkdir("workflows", 0o755))
-	require.NoError(t, root.WriteFile("workflows/audit.star", []byte("local workflow"), 0o644))
-
-	require.NoError(t, SyncInWithOverlays(workspace, targetRoot, nil, testLogger()))
-
-	data, err := root.ReadFile(targetRoot + "/workflows/audit.star")
-	require.NoError(t, err)
-	assert.Equal(t, "local workflow", string(data))
-}
-
-func TestSyncCreatesEmptyWorkspaceWorkflowsWithoutRuntimePlaceholder(t *testing.T) {
-	workspace := t.TempDir()
-
-	require.NoError(t, SyncInWithOverlays(workspace, targetRoot, nil, testLogger()))
-
-	entries, err := os.ReadDir(filepath.Join(workspace, workflowsRoot))
-	require.NoError(t, err)
-	assert.Empty(t, entries)
-
-	_, err = os.Stat(filepath.Join(workspace, targetRoot, workflowsRoot))
-	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestSyncFSFilteredPreservesSourceExecutableBit(t *testing.T) {
@@ -328,7 +298,6 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "skills", "remote"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "cron"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "scripts"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(repo, "workflows"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "agents", "main.md"), []byte("remote agent"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "skills", "remote", "SKILL.md"), []byte("remote skill"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "cron", "daily.md"), []byte("remote cron"), 0o644))
@@ -338,7 +307,6 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "scripts", "run"), []byte("remote executable"), 0o755))
 	require.NoError(t, os.Chmod(filepath.Join(repo, "scripts", "run"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "scripts", "plain.sh"), []byte("remote non-executable"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "workflows", "audit.star"), []byte("remote workflow"), 0o644))
 	repoGit(t, repo, "add", ".")
 	repoGit(t, repo, "commit", "-m", "overlay")
 
@@ -368,10 +336,6 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	data, err = os.ReadFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"))
 	require.NoError(t, err)
 	assert.Equal(t, "local script", string(data))
-
-	data, err = os.ReadFile(filepath.Join(workspace, targetRoot, "workflows", "audit.star"))
-	require.NoError(t, err)
-	assert.Equal(t, "remote workflow", string(data))
 
 	data, err = os.ReadFile(filepath.Join(workspace, "scripts", "tool.sh"))
 	require.NoError(t, err)

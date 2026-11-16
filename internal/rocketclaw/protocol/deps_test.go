@@ -27,7 +27,7 @@ func TestEventsDoesNotImportEngine(t *testing.T) {
 				continue
 			}
 
-			for _, forbidden := range []string{"/workflow", "/harnessbridge", "/rocketclaw/app", "/rocketclaw/backend"} {
+			for _, forbidden := range []string{"/harnessbridge", "/rocketclaw/app", "/rocketclaw/backend"} {
 				if strings.Contains(line, forbidden) {
 					t.Errorf("%s imports %s", name, line)
 				}

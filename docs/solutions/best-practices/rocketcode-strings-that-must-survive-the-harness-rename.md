@@ -70,9 +70,9 @@ Safe (identifier):
 
 ```go
 // before
-root, agents, skills, resolver, err := prepareRocketCode(locked, agent, logger, toolModeWorkflow)
+root, agents, skills, resolver, err := prepareRocketCode(locked, agent, logger)
 // after
-root, agents, skills, resolver, err := prepareHarness(locked, agent, logger, toolModeWorkflow)
+root, agents, skills, resolver, err := prepareHarness(locked, agent, logger)
 ```
 
 Not safe (stored value, read back by exact match):

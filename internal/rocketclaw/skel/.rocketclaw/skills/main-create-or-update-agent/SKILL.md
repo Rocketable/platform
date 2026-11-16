@@ -62,7 +62,6 @@ Built-in permission buckets:
 - `edit`: root-relative file paths touched by `apply_patch`
 - `skill`: skill names for `find_skills` and `skill`
 - `task`: subagent names for the `task` tool only
-- `workflow`: workflow stems for `rocketclaw_dynamic_workflow`
 - `decision`: `provider/model` names the Code Mode `decision` tool may call, such as `"typesafe/*": allow`; scripts call `decision(model=..., state={...}, questions={...}, images=[...])` inside `execute`, where images are workspace files the agent may `read`; the tool exists only when `decision` providers are configured in `rocketclaw.json`
 - `read` / `edit` / `glob` / `grep` / `webfetch` / `bash`: same subjects as before; unlock nested builtins inside Code Mode `execute` (not separate top-level tools)
 - `mcp`: outbound MCP as `server.tool` or wildcards such as `demo.*`; unlocks Code Mode `execute` MCP builtins when a matching configured `mcp_servers` name is granted
@@ -158,8 +157,6 @@ permission:
   task:
     "reviewer": allow
     "test-*": allow
-  workflow:
-    "audit-routes": allow
   mcp:
     "demo.*": allow
     "demo.danger": deny
@@ -308,7 +305,7 @@ The optional `shell` frontmatter field runs every shell command for that agent i
 - never create or edit a `shell` program inside the workspace
 - carry `shell` over unchanged on updates and renames
 - never give an agent `edit` permission over a sandboxed agent's file or its wrapper program; editing either can remove the sandboxing, and `rocketclaw lint` reports it
-- the setting covers only the agent that declares it: task subagents and permission reviewers without their own `shell` run plain `/bin/bash`, and workflow workers use the root agent's. When the human asks to sandbox an agent, list the agents it delegates to, and ask whether each needs `shell` too
+- the setting covers only the agent that declares it: task subagents and permission reviewers without their own `shell` run plain `/bin/bash`. When the human asks to sandbox an agent, list the agents it delegates to, and ask whether each needs `shell` too
 
 A `shell` program must:
 - take the whole command as its only argument (there is no `-c`) and run it with bash, for example `bash --noprofile --norc -p -c "$1"`, because permission checks parse every command as bash
@@ -346,7 +343,7 @@ Keys:
 - `model` (required): a real model name, optionally `provider/model` and `#effort`; its provider must be configured in `rocketclaw.json`
 - `space` (required): Web space name
 - `sticky`: `off` (default), `user` or `global`, as for advanced agents
-- `workingDirectory` (required): the agent's own folder, the only one its shell and file tools can write, for example `sessions/<name>/$ROCKETCLAW_CONVERSATION_ID`; relative to RocketClaw's working directory; it may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills`, `cron`, `scripts` or `workflows`, wherever a link puts them
+- `workingDirectory` (required): the agent's own folder, the only one its shell and file tools can write, for example `sessions/<name>/$ROCKETCLAW_CONVERSATION_ID`; relative to RocketClaw's working directory; it may not be or contain the workspace, nor be, contain or lie inside `.rocketclaw`, `agents`, `skills`, `cron` or `scripts`, wherever a link puts them
 - `subagents`: models `task` may run this agent on, each like `model`; `[]` for none; default its own `model`
 - `maxRecursion`: subagent levels, 0 or more; `0` turns `task` off; default `1`
 - `approver`: `model` replaces the review model, `prompt` is added to the guardian's rules, and `decision` (`model`, `minConfidence`, `prompt`) replaces the decision model reviews ask first and gives it its own rules; default `guardian` on `auto_approver_model`, after `auto_approver_decision.model` when set; see [Reviews and decision models](#reviews-and-decision-models)
@@ -354,7 +351,7 @@ Keys:
 - `secretsARN`: Secrets Manager ARNs, fetched each turn, given only to `commands` programs and ``!`…` `` lines
 - `commands`: map from command name to the host command line it runs
 - `mcp`: `{}` for none, or a map from server to `auto` or tool groups `[read]` or `[read, write]`; groups come from `mcp_servers.<name>.tools` in `rocketclaw.json` (use `main-update-rocketclaw-json`); an unknown server or group fails loading
-- `rocketclaw`: `[]` for none, or a list of the groups `sessions`, `pages`, `tags`, `background`, `workflow`, `restart`; default all six
+- `rocketclaw`: `[]` for none, or a list of the groups `sessions`, `pages`, `tags`, `background`, `restart`; default all five
 - `tags`: tag groups as a list of lists; when `rocketclaw` is a list, `tags` and its `tags` group need each other
 - `skills`: `[]` for none, or folders under `skills/`; a missing folder fails loading; default all skills
 - `allowedNetworkTargets`: hosts, `host:port` entries and URL prefixes; wildcards and CIDR ranges fail loading; default public addresses only

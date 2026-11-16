@@ -16,7 +16,7 @@ import (
 )
 
 func GenerateHandoff(ctx context.Context, locked *config.LockedConfig, agent, transcript string) (document string, err error) {
-	root, agents, skills, resolver, err := prepareRocketCode(locked, agent, slog.New(slog.DiscardHandler), toolModeWorkflow)
+	root, agents, skills, resolver, err := prepareRocketCode(locked, agent, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return "", err
 	}

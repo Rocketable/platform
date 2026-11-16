@@ -29,7 +29,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harness"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/gorilla/websocket"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
@@ -746,21 +745,6 @@ func TestBridgeStopDoesNotClassifyOrdinaryTurnAsInterrupted(t *testing.T) {
 	}
 }
 
-func TestInterruptActiveWorkflowCancelsWithoutSignalChannel(t *testing.T) {
-	t.Parallel()
-
-	canceled := make(chan struct{})
-	bridge := &Bridge{requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), activeReply: new(protocol.InboundMessage)}
-	ctx, cancel := context.WithCancel(t.Context())
-	bridge.activeTurnCancel = cancel
-
-	context.AfterFunc(ctx, func() { close(canceled) })
-
-	bridge.InterruptActiveTurn()
-	<-canceled
-	assert.True(t, bridge.activeTurnInterrupted)
-}
-
 type lockedBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer
@@ -862,33 +846,6 @@ func publishTestFinal(ctx context.Context, b *Bridge, inbound *protocol.InboundM
 	}
 
 	return b.finish(ctx, &bridgeRequest{inbound: inbound, turnID: result.turnID}, &turnFinish{conversationID: strings.TrimSpace(b.config.ConversationID)}, result, "")
-}
-
-func workflowSummaryPayloadFromEntry(t *testing.T, entry *harness.SessionEntry) string {
-	t.Helper()
-
-	messages, err := replayInputMessages(entry.ReplayInput)
-	require.NoError(t, err)
-
-	for _, message := range messages {
-		if payload, found := strings.CutPrefix(message.text, workflowRunSummaryPrefix); found {
-			require.Equal(t, "developer", message.role)
-			return payload
-		}
-	}
-
-	t.Fatal("workflow run summary developer message not found")
-
-	return ""
-}
-
-func workflowSummaryFromEntry(t *testing.T, entry *harness.SessionEntry) workflowRunSummary {
-	t.Helper()
-
-	var summary workflowRunSummary
-	require.NoError(t, json.Unmarshal([]byte(workflowSummaryPayloadFromEntry(t, entry)), &summary))
-
-	return summary
 }
 
 func TestPublishFinalPreservesTurnID(t *testing.T) {
@@ -1950,7 +1907,7 @@ Prompt
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	agents, skills, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, toolModePersistent, nil)
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, config.NewLockedConfig(&config.Config{Workspace: workspace}), config.DefaultRuntimeDir, nil)
 	require.NoError(t, err)
 
 	resolver := newModelResolver(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", Auth: "api_key"}}, slog.New(slog.DiscardHandler))
@@ -2106,7 +2063,7 @@ func TestParseDirectSkillTrigger(t *testing.T) {
 
 	assert.Nil(t, parseDirectSkillTrigger("hello $docs-helper"))
 
-	for _, name := range []string{"", "agent", "cron", "workflow", "stop", "enqueue", "queue", "goal"} {
+	for _, name := range []string{"", "agent", "cron", "stop", "enqueue", "queue", "goal"} {
 		assert.Nil(t, parseDirectSkillTrigger("$"+name))
 		assert.Equal(t, &harness.PromptInputDirectSkill{Name: name, Arguments: ""}, parseDirectSkillTrigger("$skill "+name))
 	}
@@ -2130,69 +2087,21 @@ func TestParseDirectSkillTrigger(t *testing.T) {
 	}
 }
 
-func TestInboundWorkflowReadsWebCommands(t *testing.T) {
-	t.Parallel()
-
-	web := func(kind protocol.InboundKind, text string) *protocol.InboundMessage {
-		return protocol.NewInboundMessageFromContent(protocol.SourceWeb, kind, &protocol.InboundContent{Text: text, TextAttachments: []string{"attached"}}, true)
-	}
-
-	for text, want := range map[string]protocol.WorkflowInvocation{
-		"$workflow audit":                        {Name: "audit"},
-		"  $Workflow audit   src/routes  extra ": {Name: "audit", Args: "src/routes  extra"},
-		"$workflow\taudit\nsrc":                  {Name: "audit", Args: "src"},
-		"$workflow":                              {},
-		"$workflow   ":                           {},
-		"$workflows audit":                       {},
-		"please $workflow audit":                 {},
-		"audit":                                  {},
-	} {
-		assert.Equal(t, want, inboundWorkflow(web(protocol.InboundKindSteer, text)), text)
-	}
-
-	for _, kind := range []protocol.InboundKind{protocol.InboundKindPrompt, protocol.InboundKindSteer, protocol.InboundKindEnqueue} {
-		assert.Equal(t, protocol.WorkflowInvocation{Name: "audit", Args: "src"}, inboundWorkflow(web(kind, "$workflow audit src")), kind)
-	}
-
-	assert.Zero(t, inboundWorkflow(web(protocol.InboundKindCancel, "$workflow audit")))
-
-	automated := web(protocol.InboundKindSteer, "$workflow audit")
-	automated.Human = false
-	assert.Zero(t, inboundWorkflow(automated))
-
-	for _, source := range []protocol.Source{protocol.SourceSlack, protocol.SourceSystem, protocol.SourceExternalMCP} {
-		msg := protocol.NewInboundMessageFromContent(source, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$workflow audit"}, true)
-		assert.Zero(t, inboundWorkflow(msg), source)
-	}
-}
-
 func TestVoiceInboundRunsNoDollarCommands(t *testing.T) {
 	t.Parallel()
 
 	skill := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$docs-helper do it"}, true)
-	command := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$workflow deploy"}, true)
-
 	require.Equal(t, &harness.PromptInputDirectSkill{Name: "docs-helper", Arguments: "do it"}, inboundDirectSkill(skill))
-	require.Equal(t, protocol.WorkflowInvocation{Name: "deploy"}, inboundWorkflow(command))
 
-	for _, msg := range []*protocol.InboundMessage{skill, command} {
-		msg.Metadata[protocol.InboundMediaMetadataKey] = "Voice"
-		assert.Nil(t, inboundDirectSkill(msg), msg.Text)
-		assert.Zero(t, inboundWorkflow(msg), msg.Text)
-		assert.Equal(t, msg.Text, msg.Metadata[protocol.InboundRawTextMetadataKey])
-	}
+	skill.Metadata[protocol.InboundMediaMetadataKey] = "Voice"
+	assert.Nil(t, inboundDirectSkill(skill), skill.Text)
+	assert.Equal(t, skill.Text, skill.Metadata[protocol.InboundRawTextMetadataKey])
 }
 
-func TestBridgeQueuesWebWorkflowInsteadOfSteering(t *testing.T) {
+func TestBridgeSteersJoinOpenTurn(t *testing.T) {
 	t.Parallel()
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), stopCh: make(chan struct{}), inputOpen: true, requestCh: make(chan bridgeRequest, 1), config: Config{SessionService: newTestSessionService(t)}}
-
-	workflowInbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "$workflow audit src"}, true)
-	require.NoError(t, bridge.enqueue(t.Context(), &bridgeRequest{inbound: workflowInbound}, "test"))
-	assert.Empty(t, bridge.steers)
-	require.Len(t, bridge.requestCh, 1)
-	assert.Equal(t, protocol.WorkflowInvocation{Name: "audit", Args: "src"}, (<-bridge.requestCh).inbound.Workflow)
 
 	steer := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, &protocol.InboundContent{Text: "keep going"}, true)
 	require.NoError(t, bridge.enqueue(t.Context(), &bridgeRequest{inbound: steer}, "test"))
@@ -2210,10 +2119,9 @@ func TestStoppedSteerJoinsOnlyOpenTurns(t *testing.T) {
 		turn  *protocol.InboundMessage
 		joins bool
 	}{
-		"person":    {turn: &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Text: "start"}, joins: true},
-		"system":    {turn: &protocol.InboundMessage{Source: protocol.SourceSystem, Text: "goal continuation"}, joins: true},
-		"cron":      {turn: &protocol.InboundMessage{Source: protocol.SourceSystem, Text: "cron", RequireOutputDecision: true}},
-		"$workflow": {turn: &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Text: "$workflow audit", Workflow: protocol.WorkflowInvocation{Name: "audit"}}},
+		"person": {turn: &protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Text: "start"}, joins: true},
+		"system": {turn: &protocol.InboundMessage{Source: protocol.SourceSystem, Text: "goal continuation"}, joins: true},
+		"cron":   {turn: &protocol.InboundMessage{Source: protocol.SourceSystem, Text: "cron", RequireOutputDecision: true}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			service := newTestSessionService(t)
@@ -2378,408 +2286,6 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	entries, err := service.ObserveEntries(t.Context(), privateConversationID)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "the canonical scheduled turn does not enter private history")
-}
-
-func TestBridgeSuccessfulWorkflowPersistsRunSummary(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		workspace := t.TempDir()
-		writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\npermission:\n  rocketclaw:\n    rocketclaw_set_tag: [[customer, internal]]\n---\nMain prompt\n")
-
-		requests := 0
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var body struct {
-				Input []struct{ Type, Output string }
-			}
-			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
-				return
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-
-			requests++
-			if requests == 1 {
-				writeRawRunFunctionCall(t, w, "set-tag", "execute", struct {
-					Code string `json:"code"`
-				}{"def main():\n    return rocketclaw_set_tag(tag=\"customer\")\n"})
-
-				return
-			}
-
-			var outputs []string
-
-			for _, item := range body.Input {
-				if item.Type == "function_call_output" {
-					outputs = append(outputs, item.Output)
-				}
-			}
-
-			assert.Equal(t, []string{`{"tags":["customer"]}`}, outputs)
-
-			_, err := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"checking workflow","annotations":[]}]},{"id":"msg_2","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"finished","annotations":[]}]}]}`))
-			assert.NoError(t, err)
-		}))
-		t.Cleanup(server.Close)
-
-		root, err := os.OpenRoot(workspace)
-		require.NoError(t, err)
-		require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
-		require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-		require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Audit\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return phase(\"work\", lambda: agent(\"prompt\", label=\"worker\"))\n"), 0o600))
-		_, err = workflow.Load(root, ".rocketclaw")
-		require.NoError(t, err)
-		require.NoError(t, root.Close())
-
-		service := newTestSessionServiceAt(t, workspace)
-		pairID := protocol.SlackThreadConversationID("C123", "111.222")
-		recordTestConversations(t, service, "main", map[string]ConversationKind{pairID: KindSlackThread})
-
-		bus := newTestBus()
-		t.Cleanup(bus.Close)
-		bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), bus: bus, config: Config{ConversationID: pairID, Agent: "main", SessionService: service}}
-		require.NoError(t, startTestBridge(t.Context(), bridge))
-		t.Cleanup(bridge.Stop)
-
-		delivered := make(chan struct{})
-		workflowTurnID := ""
-		starts := 0
-
-		go func() {
-			for outbound := range bus.Outbound(t.Context()) {
-				workflowTurnID = outbound.TurnID
-				if !outbound.Complete {
-					starts++
-
-					assert.Empty(t, outbound.Text)
-					assert.Empty(t, outbound.ConsumedID)
-					assert.Empty(t, outbound.Attachments)
-					assert.Nil(t, outbound.ReasoningEffort)
-					assert.Empty(t, outbound.Terminal)
-				}
-
-				if outbound.Complete {
-					assert.Equal(t, "finished", outbound.Text)
-					close(delivered)
-
-					return
-				}
-			}
-		}()
-
-		inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)
-		inbound.Workflow = protocol.WorkflowInvocation{Name: "audit"}
-		response := inbound.EnableResponseWait()
-		require.NoError(t, bridge.Submit(t.Context(), inbound))
-		require.NoError(t, (<-response).Err)
-		<-delivered
-		require.Equal(t, 1, starts, "only one content-free start may precede the final answer")
-		server.Close()
-		synctest.Wait()
-
-		tags, err := sessionTags(t.Context(), service.db, pairID)
-		require.NoError(t, err)
-		require.Equal(t, []string{"customer"}, tags)
-
-		entries, err := service.ObserveEntries(t.Context(), pairID)
-		require.NoError(t, err)
-		require.Len(t, entries, 1)
-		assert.Equal(t, workflowRunEntryType, entries[0].Entry.Type)
-		messages, err := replayInputMessages(entries[0].Entry.ReplayInput)
-		require.NoError(t, err)
-		require.Len(t, messages, 3)
-		assert.Equal(t, []replayInputMessage{{role: "user", text: "$workflow audit"}, {role: "assistant", text: "finished"}}, messages[:2])
-		payload := workflowSummaryPayloadFromEntry(t, &entries[0].Entry)
-
-		var summary workflowRunSummary
-		require.NoError(t, json.Unmarshal([]byte(payload), &summary))
-		assert.Equal(t, workflowTurnID, summary.RunID)
-		assert.JSONEq(t, fmt.Sprintf(`{"workflow":"audit","run_id":%q,"terminal":"complete","phases":[{"name":"work","status":"complete","scheduled":1,"complete":1},{"name":"later","status":"skipped","scheduled":0,"complete":0}]}`, workflowTurnID), payload)
-		require.Equal(t, 2, requests, "the tag call must complete before the workflow answer")
-	})
-}
-
-func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		workspace := t.TempDir()
-		writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\n---\nMain prompt\n")
-		root, err := os.OpenRoot(workspace)
-		require.NoError(t, err)
-		require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
-		require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-		require.NoError(t, root.WriteFile(".rocketclaw/workflows/fail.star", []byte("meta = {\"name\": \"fail\", \"description\": \"Fail\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return phase(\"work\", lambda: 1 // 0)\n"), 0o600))
-		_, err = workflow.Load(root, ".rocketclaw")
-		require.NoError(t, err)
-		require.NoError(t, root.Close())
-
-		service := newTestSessionServiceAt(t, workspace)
-		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-		recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
-
-		bus := newTestBus()
-		t.Cleanup(bus.Close)
-		bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
-		require.NoError(t, startTestBridge(t.Context(), bridge))
-		t.Cleanup(bridge.Stop)
-
-		delivered := make(chan struct{})
-
-		go func() {
-			for outbound := range bus.Outbound(t.Context()) {
-				if outbound.Complete {
-					close(delivered)
-					return
-				}
-			}
-		}()
-
-		inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow fail", true)
-		inbound.Workflow = protocol.WorkflowInvocation{Name: "fail"}
-		response := inbound.EnableResponseWait()
-		require.NoError(t, bridge.Submit(t.Context(), inbound))
-		require.NoError(t, (<-response).Err)
-		<-delivered
-		synctest.Wait()
-
-		entries, err := service.ObserveEntries(t.Context(), conversationID)
-		require.NoError(t, err)
-		require.Len(t, entries, 1)
-		assert.Equal(t, workflowRunEntryType, entries[0].Entry.Type)
-		summary := workflowSummaryFromEntry(t, &entries[0].Entry)
-		assert.Equal(t, protocol.TerminalFailed, summary.Terminal)
-		assert.Equal(t, []protocol.PhaseUpdate{{Name: "work", Status: protocol.PhaseError}, {Name: "later", Status: protocol.PhaseSkipped}}, summary.Phases)
-		assert.Equal(t, `phase "work" failed`, summary.Error)
-	})
-}
-
-func TestBridgeFailedWorkerErrorIsNotPersisted(t *testing.T) {
-	t.Parallel()
-
-	const privateError = "PRIVATE_WORKER_ERROR"
-
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\n---\nMain prompt\n")
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
-	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-	require.NoError(t, root.WriteFile(".rocketclaw/workflows/fail-worker.star", []byte("meta = {\"name\": \"fail-worker\", \"description\": \"Fail worker\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return phase(\"work\", lambda: agent(\"fail\"))\n"), 0o600))
-	_, err = workflow.Load(root, ".rocketclaw")
-	require.NoError(t, err)
-	require.NoError(t, root.Close())
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, privateError, http.StatusInternalServerError)
-	}))
-	t.Cleanup(server.Close)
-
-	service := newTestSessionServiceAt(t, workspace)
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
-
-	bus := newTestBus()
-	t.Cleanup(bus.Close)
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
-	require.NoError(t, startTestBridge(t.Context(), bridge))
-	t.Cleanup(bridge.Stop)
-
-	delivered := make(chan struct{})
-
-	go func() {
-		for outbound := range bus.Outbound(t.Context()) {
-			if outbound.Complete {
-				close(delivered)
-				return
-			}
-		}
-	}()
-
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow fail-worker", true)
-	inbound.Workflow = protocol.WorkflowInvocation{Name: "fail-worker"}
-	response := inbound.EnableResponseWait()
-	require.NoError(t, bridge.Submit(t.Context(), inbound))
-	require.NoError(t, (<-response).Err)
-	<-delivered
-
-	entries, err := service.ObserveEntries(t.Context(), conversationID)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	encodedEntry, err := json.Marshal(entries[0].Entry)
-	require.NoError(t, err)
-	assert.NotContains(t, string(encodedEntry), privateError)
-	summary := workflowSummaryFromEntry(t, &entries[0].Entry)
-	assert.Equal(t, `phase "work" failed`, summary.Error)
-}
-
-func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
-	t.Parallel()
-
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\n---\nMain prompt\n")
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
-	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-	require.NoError(t, root.WriteFile(".rocketclaw/workflows/stop.star", []byte("meta = {\"name\": \"stop\", \"description\": \"Stop\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return phase(\"work\", lambda: agent(\"wait\"))\n"), 0o600))
-	_, err = workflow.Load(root, ".rocketclaw")
-	require.NoError(t, err)
-	require.NoError(t, root.Close())
-
-	requestArrived, releaseRequest := make(chan struct{}), make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		close(requestArrived)
-
-		select {
-		case <-request.Context().Done():
-		case <-releaseRequest:
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	service := newTestSessionServiceAt(t, workspace)
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
-
-	bus := newTestBus()
-	t.Cleanup(bus.Close)
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
-	require.NoError(t, startTestBridge(t.Context(), bridge))
-	t.Cleanup(bridge.Stop)
-
-	delivered := make(chan struct{})
-
-	go func() {
-		for outbound := range bus.Outbound(t.Context()) {
-			if outbound.Complete {
-				close(delivered)
-				return
-			}
-		}
-	}()
-
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow stop", true)
-	inbound.Workflow = protocol.WorkflowInvocation{Name: "stop"}
-	response := inbound.EnableResponseWait()
-	require.NoError(t, bridge.Submit(t.Context(), inbound))
-	<-requestArrived
-	assert.Same(t, inbound, bridge.InterruptActiveTurn())
-	close(releaseRequest)
-	require.NoError(t, (<-response).Err)
-	<-delivered
-
-	entries, err := service.ObserveEntries(t.Context(), conversationID)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	summary := workflowSummaryFromEntry(t, &entries[0].Entry)
-	assert.Equal(t, protocol.TerminalStopped, summary.Terminal)
-	assert.Equal(t, []protocol.PhaseUpdate{{Name: "work", Status: protocol.PhaseError, Scheduled: 1}, {Name: "later", Status: protocol.PhaseSkipped}}, summary.Phases)
-	assert.Equal(t, "workflow stopped by user", summary.Error)
-	transcript := testHistoryEntries(t, service, conversationID)
-	require.Len(t, transcript, 1)
-	assert.Empty(t, transcript[0].Terminal, "saved workflow summaries retain their existing transcript metadata")
-}
-
-func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
-	t.Parallel()
-
-	const intermediate = "PRIVATE_INTERMEDIATE_WORKFLOW_OUTPUT"
-
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-6.1-sol\n---\nMain prompt\n")
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
-	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-	require.NoError(t, root.WriteFile(".rocketclaw/workflows/private.star", []byte("meta = {\"name\": \"private\", \"description\": \"Private\", \"phases\": [\"work\", \"later\"]}\ndef main(args):\n    phase(\"work\", lambda: agent(\"produce intermediate\"))\n    return \"public result\"\n"), 0o600))
-	_, err = workflow.Load(root, ".rocketclaw")
-	require.NoError(t, err)
-	require.NoError(t, root.Close())
-
-	requests := 0
-
-	var followUpInput string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		requests++
-
-		var body map[string]any
-		if !assert.NoError(t, json.NewDecoder(request.Body).Decode(&body)) {
-			http.Error(w, "decode request", http.StatusBadRequest)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-
-		if requests == 1 {
-			writeRawRunMessage(t, w, "workflow-response", "workflow-message", intermediate)
-			return
-		}
-
-		encoded, err := json.Marshal(body["input"])
-		if !assert.NoError(t, err) {
-			http.Error(w, "encode request input", http.StatusInternalServerError)
-			return
-		}
-
-		followUpInput = string(encoded)
-
-		writeRawRunMessage(t, w, "follow-up-response", "follow-up-message", "follow-up answer")
-	}))
-	t.Cleanup(server.Close)
-
-	service := newTestSessionServiceAt(t, workspace)
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	recordTestConversations(t, service, "main", map[string]ConversationKind{conversationID: KindSlackThread})
-
-	bus := newTestBus()
-	t.Cleanup(bus.Close)
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: config.NewLockedConfig(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}), bus: bus, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}}
-	require.NoError(t, startTestBridge(t.Context(), bridge))
-	t.Cleanup(bridge.Stop)
-
-	completed := make(chan string, 2)
-
-	go func() {
-		for outbound := range bus.Outbound(t.Context()) {
-			if outbound.Complete {
-				completed <- outbound.Text
-			}
-		}
-	}()
-
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow private", true)
-	inbound.Workflow = protocol.WorkflowInvocation{Name: "private"}
-	response := inbound.EnableResponseWait()
-	require.NoError(t, bridge.Submit(t.Context(), inbound))
-	require.NoError(t, (<-response).Err)
-	assert.Equal(t, "public result", <-completed)
-
-	entries, err := service.ObserveEntries(t.Context(), conversationID)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	encodedEntry, err := json.Marshal(entries[0].Entry)
-	require.NoError(t, err)
-	assert.NotContains(t, string(encodedEntry), intermediate)
-
-	followUp := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "What happened?", true)
-	followUpResponse := followUp.EnableResponseWait()
-	require.NoError(t, bridge.Submit(t.Context(), followUp))
-	require.NoError(t, (<-followUpResponse).Err)
-	assert.Equal(t, "follow-up answer", <-completed)
-	assert.Contains(t, followUpInput, "Workflow run summary.")
-	assert.Contains(t, followUpInput, `\"workflow\":\"private\"`)
-	assert.Contains(t, followUpInput, `\"name\":\"work\",\"status\":\"complete\"`)
-	assert.Contains(t, followUpInput, `\"name\":\"later\",\"status\":\"skipped\"`)
-	assert.NotContains(t, followUpInput, intermediate)
-	assert.NotContains(t, followUpInput, "produce intermediate")
-	assert.NotContains(t, followUpInput, "function_call")
-	assert.NotContains(t, followUpInput, "reasoning")
-	entries, err = service.ObserveEntries(t.Context(), conversationID)
-	require.NoError(t, err)
-	require.Len(t, entries, 2)
-	assert.Equal(t, "turn", entries[1].Entry.Type)
 }
 
 func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
@@ -4424,32 +3930,6 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	assert.False(t, outbound.GoalActive)
 }
 
-func TestWorkflowFinalOutboundPreservesMetadata(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"thread-1": KindWebChat})
-	require.NoError(t, store.BeginGoal("thread-1", &GoalState{Objective: "ship it", MaxTurns: 3}))
-	bridge := &Bridge{config: Config{ConversationID: "thread-1", Agent: "main", SessionService: store}}
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "$workflow audit", true)
-	inbound.Workflow = protocol.WorkflowInvocation{Name: "audit"}
-	inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.1"}
-
-	outbound := bridge.newOutboundMessage(inbound, "turn-1", "finished", true)
-	assert.Equal(t, "thread-1", outbound.ConversationID)
-	assert.Equal(t, "thread-1", outbound.SourceConversationID)
-	assert.Equal(t, "main", outbound.Agent)
-	assert.Equal(t, "turn-1", outbound.TurnID)
-	assert.Equal(t, "finished", outbound.Text)
-	assert.True(t, outbound.Complete)
-	assert.False(t, outbound.GoalTurn)
-	assert.False(t, outbound.GoalActive)
-	assert.Zero(t, outbound.GoalTurnNumber)
-	assert.Zero(t, outbound.GoalMaxTurns)
-	assert.Equal(t, inbound.SlackReply, outbound.SlackReply)
-	assert.NotSame(t, inbound.SlackReply, outbound.SlackReply)
-}
-
 func readRocketCodeOutbound(t *testing.T, bus *testBus) *protocol.OutboundMessage {
 	t.Helper()
 
@@ -5372,7 +4852,7 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 			return
 		}
 
-		code := "def main():\n    bash(command=r'''while [ ! -f " + gate + " ]; do sleep 0.05; done''')\n    return '|'.join([rocketclaw_attach_files_to_response(attachments=[]), rocketclaw_restart(reason='x'), rocketclaw_schedule_message(message='later', send_this_in='1h', recurring=False), rocketclaw_dynamic_workflow(name='quiet', args='')])\n"
+		code := "def main():\n    bash(command=r'''while [ ! -f " + gate + " ]; do sleep 0.05; done''')\n    return '|'.join([rocketclaw_attach_files_to_response(attachments=[]), rocketclaw_restart(reason='x'), rocketclaw_schedule_message(message='later', send_this_in='1h', recurring=False)])\n"
 		arguments, _ := json.Marshal(struct {
 			Code        string `json:"code"`
 			Description string `json:"description"`
@@ -5382,8 +4862,7 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"id":"resp_0","object":"response","created_at":0,"status":"completed","model":"gpt-6.1-sol","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_b","name":"execute","arguments":%q}]}`, arguments)
 	})
 	gate = filepath.Join(nt.cfg.Workspace, "gate")
-	writeWorkflowFixture(t, nt.cfg.Workspace, "quiet", "meta = {\"name\": \"quiet\", \"description\": \"Quiet\"}\ndef main(args):\n    return None\n")
-	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  workflow: {\"*\": allow}\n  rocketclaw: {allow_background: allow, rocketclaw_restart: allow}\n---\nPrompt\n")
+	writeAgent(t, nt.cfg.Workspace, "main", "---\ndescription: Agent\nmodel: gpt-6.1-sol\npermission:\n  bash: {\"*\": allow}\n  rocketclaw: {allow_background: allow, rocketclaw_restart: allow}\n---\nPrompt\n")
 
 	manager, _ := nt.run(t, ignoreOutbound)
 	private, managed := "external_mcp:planner:private", protocol.SlackThreadConversationID("C9", "9.9")
@@ -5403,7 +4882,7 @@ func TestBackgroundScriptUsesOriginTurnTools(t *testing.T) {
 	require.NoError(t, os.WriteFile(gate, nil, 0o600))
 
 	const refusal = "Refused: %[1]s did nothing, because this call now runs as background work, after the turn it acts on. Nothing was shown to the user, and nobody will answer. This text is not %[1]s's result or the user's answer. Decide without it, or call %[1]s in the turn that receives this job's result."
-	assert.Contains(t, lastRequestMessage(t, nt.request(t)), fmt.Sprintf(refusal, attachFilesToolName)+"|"+fmt.Sprintf(refusal, restartToolName)+"|scheduled message in 1h0m0s|"+nestedWorkflowSilentCompleteText+"\n</execute>")
+	assert.Contains(t, lastRequestMessage(t, nt.request(t)), fmt.Sprintf(refusal, attachFilesToolName)+"|"+fmt.Sprintf(refusal, restartToolName)+"|scheduled message in 1h0m0s\n</execute>")
 	readFinalFor(t, nt.finals, managed)
 	nt.waitIdle(t, manager, managed)
 
