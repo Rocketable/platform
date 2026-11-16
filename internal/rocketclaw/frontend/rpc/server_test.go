@@ -1951,6 +1951,7 @@ func TestSessionEntries(t *testing.T) {
 	}
 
 	require.NoError(t, sessions.UpsertThread("private-X", backend.ThreadState{Agent: "producer"}))
+
 	_, err = seeded.db.ExecContext(ctx, `UPDATE conversations SET external_id = 'external', external_run = 'private-X', external_agent = 'producer', origin_pairs = '{"Original-Key":"Value <&> Unicode Ω"}' WHERE conversation_id = $1`, id)
 	require.NoError(t, err)
 
