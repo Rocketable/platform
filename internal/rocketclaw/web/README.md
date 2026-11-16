@@ -415,8 +415,8 @@ for five minutes. These IP rules apply to the `web.listen_address` listener. On 
 refuses tagged or unknown devices, never consults the CLI, and the
 Config page shows the connection's login.
 
-Users named in the config file's `web.admins` also get a **Behavior settings**
-section on the Config page. **Edit** shows one control per Behavior Setting
+Users named in the config file's `web.admins`, unless limited to spaces, also
+get a **Behavior settings** section on the Config page. **Edit** shows one control per Behavior Setting
 (see the [root README](../../../README.md#getting-started) for which fields they
 are); **Save** replaces the whole document and applies it to the running server,
 or shows the validation error and changes nothing. Everyone else sees the page
@@ -709,7 +709,9 @@ active tab.
   the session stays open to them, a pending question shows no answer form, and
   Send first switches the session to the agent the picker shows, one of theirs.
   A tab they saved earlier for a session outside their spaces opens into a
-  refusal.
+  refusal. The Config page hides its Runtime, Models, MCP, and Flags sections
+  from them, since the server sends them only their Tailscale login and Slack
+  channels.
 - **Groups in spaces.** A group lives in one space. The tab menu offers only the
   current space's groups, and moving a tab to another space takes it out of its group.
   The group editor adds **Move group to "<space>"** for each other space: it

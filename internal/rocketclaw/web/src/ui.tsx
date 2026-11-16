@@ -6090,16 +6090,19 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
     detail: channel.agents ?? [],
   }));
   const servers: ConfigItem[] = (view.mcpServers ?? []).map((server) => ({ key: server, label: server }));
+  const limited = identity.data?.limited;
   return (
     <>
-      <ConfigSection title="Runtime">
-        <ConfigRow label="Workspace" value={view.workspace ?? ""} />
-        <ConfigRow label="Logging" value={view.loggingLevel ?? ""} />
-        <ConfigList items={overlays} empty="No overlays" />
-      </ConfigSection>
-      <ConfigSection title="Models">
-        <ConfigRow label="Auto-approver" value={view.autoApproverModel ?? ""} />
-      </ConfigSection>
+      {limited ? null : <>
+        <ConfigSection title="Runtime">
+          <ConfigRow label="Workspace" value={view.workspace ?? ""} />
+          <ConfigRow label="Logging" value={view.loggingLevel ?? ""} />
+          <ConfigList items={overlays} empty="No overlays" />
+        </ConfigSection>
+        <ConfigSection title="Models">
+          <ConfigRow label="Auto-approver" value={view.autoApproverModel ?? ""} />
+        </ConfigSection>
+      </>}
       <ConfigSection title="Web">
         <ConfigRow label="Configured user" value={identity.data?.username ?? ""} />
         <ConfigRow label="Tailscale user" value={view.tailscaleUser || "Unavailable"} />
@@ -6107,13 +6110,15 @@ function ConfigLoaded({ view }: { view: ConfigView }) {
       <ConfigSection title="Slack">
         <ConfigList items={channels} empty="No channels" />
       </ConfigSection>
-      <ConfigSection title="MCP">
-        <ConfigList items={servers} empty="No servers" />
-      </ConfigSection>
-      <ConfigSection title="Flags">
-        <ConfigRow label="Instrumentation" value={view.instrumentationEnabled ? "On" : "Off"} />
-        <ConfigRow label="External MCP" value={view.mcpExternal ? "On" : "Off"} />
-      </ConfigSection>
+      {limited ? null : <>
+        <ConfigSection title="MCP">
+          <ConfigList items={servers} empty="No servers" />
+        </ConfigSection>
+        <ConfigSection title="Flags">
+          <ConfigRow label="Instrumentation" value={view.instrumentationEnabled ? "On" : "Off"} />
+          <ConfigRow label="External MCP" value={view.mcpExternal ? "On" : "Off"} />
+        </ConfigSection>
+      </>}
       {view.canEdit ? <ConfigSection title="Behavior settings"><BehaviorSettings view={view} /></ConfigSection> : null}
     </>
   );

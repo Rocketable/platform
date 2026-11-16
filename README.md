@@ -137,9 +137,10 @@ A limited person:
 - Sees only the sessions in their spaces, everywhere the page lists, searches, or opens sessions. A session is in a space when its Birth Space is that space, or, when it has no Birth Space, when its current agent's `space:` names that space. Subagent and permission-review histories follow their top-level session. Remote OpenCode sessions are in no space for them. Slack threads and MCP chats whose agent is theirs are in their space, and what they send into a Slack thread still posts to Slack.
 - Sees and uses only agents whose `space:` names one of their spaces. Agents with no `space:` are hidden. So are crons, cron runs, Hosted Pages, and Page Data of other spaces or of agents with no space.
 - Takes turns only while the session's current agent is one of theirs: prompts, steering, popping, or editing queued items, answers to questions, voice, and Handoff summaries. They run a cron only when the cron and its agent are both in their spaces. When someone else switches a session to an agent outside their spaces, they can still read it, and they can switch it back with `$agent`. The composer does that on their next send.
-- Gets no OpenCode (no OpenCode sessions, servers, or `/oc/` proxy) and cannot Reload.
+- Gets no OpenCode (no OpenCode sessions, servers, or `/oc/` proxy), cannot Reload, and cannot edit Behavior Settings, even when `web.admins` names them.
+- Sees only the skills that at least one of their agents may use. The Config page shows them only their own Web and Tailscale logins and the Slack channels, each listing only their agents, beside their Appearance, Timeline, and Tabs choices.
 
-Slack names, skills, and the Config page stay visible to them, with Slack channels listing only their agents.
+Slack names stay visible to them.
 
 These limits cover the web page only. Slack, MCP, and cron keep their own allowlists. Each [remote RocketClaw](#remote-rocketclaws) applies its own `permissions`, so list the person there too.
 

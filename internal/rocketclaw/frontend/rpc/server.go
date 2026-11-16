@@ -1180,11 +1180,15 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 	}
 
 	cfg := s.cfg.Clone()
-	view := &ConfigView{
-		Workspace: cfg.Workspace, Overlays: cfg.Overlays,
-		LoggingLevel: cfg.Logging.Level, AutoApproverModel: cfg.AutoApproverModel,
-		InstrumentationEnabled: cfg.PostHog.ProjectToken != "", McpExternal: cfg.MCPExternal.Enabled,
-		McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)), Providers: cfg.ProviderNames(), CanEdit: slices.Contains(cfg.Web.Admins, username),
+
+	view := &ConfigView{}
+	if !limit.Limited() {
+		view = &ConfigView{
+			Workspace: cfg.Workspace, Overlays: cfg.Overlays,
+			LoggingLevel: cfg.Logging.Level, AutoApproverModel: cfg.AutoApproverModel,
+			InstrumentationEnabled: cfg.PostHog.ProjectToken != "", McpExternal: cfg.MCPExternal.Enabled,
+			McpServers: slices.Sorted(maps.Keys(cfg.MCPServers)), Providers: cfg.ProviderNames(), CanEdit: slices.Contains(cfg.Web.Admins, username),
+		}
 	}
 
 	if view.CanEdit {
@@ -1224,9 +1228,13 @@ func (s *Server) testModel(ctx context.Context, request *TestModelRequest) *Test
 }
 
 func (s *Server) saveBehaviorSettings(ctx context.Context, request *SaveBehaviorSettingsRequest) (*ListConfigResponse, error) {
-	username, _, err := s.principal(ctx)
+	username, limit, err := s.spaceLimit(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	if limit.Limited() {
+		return nil, fmt.Errorf("web behavior settings: %w", status.Error(codes.PermissionDenied, "people limited to spaces cannot edit behavior settings"))
 	}
 
 	if !slices.Contains(s.cfg.Clone().Web.Admins, username) {
@@ -1283,7 +1291,20 @@ func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*L
 
 		items = definitions.Available(&agent)
 	} else {
-		items = slices.SortedFunc(maps.Values(definitions.Items), func(a, b harness.Skill) int {
+		usable := definitions.Items
+		if limit.Limited() {
+			usable = map[string]harness.Skill{}
+
+			for name := range agents.Items {
+				if agent := agents.Items[name]; limit.AllowsAgent(name) {
+					for _, skill := range definitions.Available(&agent) {
+						usable[skill.Name] = skill
+					}
+				}
+			}
+		}
+
+		items = slices.SortedFunc(maps.Values(usable), func(a, b harness.Skill) int {
 			return strings.Compare(a.Name, b.Name)
 		})
 	}
