@@ -149,30 +149,27 @@ type toolCallMetadata struct {
 }
 
 type looper struct {
-	agent                  Agent
-	ProviderOrigin         ProviderOrigin
-	Client                 responsesAPI
-	SystemPrompt           string
-	DisplayModel           string
-	ReasoningEffort        shared.ReasoningEffort
-	Verbosity              string
-	CompactThreshold       int64
-	ParallelToolCalls      int
-	ResponseFormat         responses.ResponseFormatTextConfigUnionParam
-	Permissions            PermissionSet
-	Tools                  map[string]looperTool
-	CodeModeHosts          map[string]looperTool
-	Diagnostics            bool
-	AutoApprovePermissions bool
-	PermissionReviewer     permissionReviewer
-	InPermissionReview     bool
-	Observability          ObservabilityConfig
-	Journal                Journal
-	observations           *turnObservations
-	SteerDrain             SteerDrain
-	expandInputPrompts     bool
-	promptExpansion        promptExpansionEnvironment
-	spillRel               string
+	agent              Agent
+	ProviderOrigin     ProviderOrigin
+	Client             responsesAPI
+	SystemPrompt       string
+	DisplayModel       string
+	ReasoningEffort    shared.ReasoningEffort
+	Verbosity          string
+	CompactThreshold   int64
+	ParallelToolCalls  int
+	ResponseFormat     responses.ResponseFormatTextConfigUnionParam
+	Permissions        PermissionSet
+	Tools              map[string]looperTool
+	CodeModeHosts      map[string]looperTool
+	PermissionReviewer permissionReviewer
+	InPermissionReview bool
+	Observability      ObservabilityConfig
+	Journal            Journal
+	observations       *turnObservations
+	SteerDrain         SteerDrain
+	promptExpansion    promptExpansionEnvironment
+	spillRel           string
 
 	spillMu      sync.Mutex
 	spillTurnID  string
@@ -180,12 +177,12 @@ type looper struct {
 }
 
 type permissionReviewer interface {
-	reviewPermission(context.Context, *permissionReviewRequest, chan<- ChatResponse) permissionReviewDecision
+	reviewPermission(context.Context, *permissionReviewRequest) permissionReviewDecision
 }
 
 type inertPermissionReviewer struct{}
 
-func (inertPermissionReviewer) reviewPermission(context.Context, *permissionReviewRequest, chan<- ChatResponse) permissionReviewDecision {
+func (inertPermissionReviewer) reviewPermission(context.Context, *permissionReviewRequest) permissionReviewDecision {
 	return permissionReviewFailure("automatic permission reviewer is unavailable")
 }
 
@@ -256,10 +253,6 @@ type permissionReviewDecision struct {
 
 type Runtime = looper
 
-type Looper interface {
-	Loop(ctx context.Context, input <-chan PromptInput, sessionIn iter.Seq2[SessionEntry, error], sessionOut sessionWriter, interrupts <-chan os.Signal) error
-}
-
 type sessionWriter interface {
 	Append(context.Context, *SessionEntry) error
 }
@@ -279,31 +272,8 @@ type doomLoopTrap struct {
 }
 
 type ChatResponse struct {
-	Kind     string
-	Text     string
-	Tool     *ToolDiagnostic
-	Subagent *SubagentDiagnostic
-	Provider *ProviderDiagnostic
-}
-
-type ToolDiagnostic struct {
-	Phase     string          `json:"phase"`
-	Name      string          `json:"name"`
-	Arguments json.RawMessage `json:"arguments,omitempty"`
-	Result    string          `json:"result,omitempty"`
-	Status    string          `json:"status,omitempty"`
-	Action    json.RawMessage `json:"action,omitempty"`
-}
-
-type SubagentDiagnostic struct {
-	Name     string              `json:"name"`
-	Label    string              `json:"label"`
-	Index    int                 `json:"index,omitempty"`
-	Total    int                 `json:"total,omitempty"`
-	Text     string              `json:"text,omitempty"`
-	Tool     *ToolDiagnostic     `json:"tool,omitempty"`
-	Subagent *SubagentDiagnostic `json:"subagent,omitempty"`
-	Provider *ProviderDiagnostic `json:"provider,omitempty"`
+	Kind string
+	Text string
 }
 
 type ProviderDiagnostic struct {
@@ -324,15 +294,12 @@ type ProviderDiagnostic struct {
 const (
 	ChatResponseAssistantMessage    = "assistant_message"
 	ChatResponseAssistantCommentary = "assistant_commentary"
-	ChatResponseAssistantTool       = "assistant_tool"
 	ChatResponseReasoningSummary    = "reasoning_summary"
 )
 
 const (
-	toolDiagnosticPhaseCall   = "call"
-	toolDiagnosticPhaseResult = "result"
-	providerDiagnosticRetry   = "retry"
-	providerDiagnosticError   = "error"
+	providerDiagnosticRetry = "retry"
+	providerDiagnosticError = "error"
 )
 
 type responseFailureError struct {
@@ -787,7 +754,7 @@ func (l *looper) runTurn(
 
 			var errResponse error
 
-			resp, errResponse = l.newProviderResponse(turnCtx, &params, observer, output, func(recovered []responses.ResponseInputItemUnionParam, retained int) error {
+			resp, errResponse = l.newProviderResponse(turnCtx, &params, observer, func(recovered []responses.ResponseInputItemUnionParam, retained int) error {
 				recovered = slices.Clone(recovered)
 				copy(recovered[len(recovered)-retained:], history[len(history)-retained:])
 				recovered = pruneHistoryBeforeLatestCompaction(recovered)
@@ -821,8 +788,6 @@ func (l *looper) runTurn(
 
 				return emptyRecord, nil, false, fmt.Errorf("request response: %w", errResponse)
 			}
-
-			l.emitHostedToolDiagnostics(output, resp.Output)
 
 			if err := l.appendProviderReplay(&record, &turnItems, resp); err != nil {
 				return emptyRecord, nil, false, err
@@ -1120,7 +1085,7 @@ func (l *looper) appendToolOutputReplay(record *SessionEntry, turnItems *[]respo
 }
 
 func (l *looper) promptTurnItems(ctx context.Context, input *PromptInput) ([]responses.ResponseInputItemUnionParam, error) {
-	if (l.expandInputPrompts || input.ExpandShellCommands) && input.DirectSkill == nil {
+	if input.ExpandShellCommands && input.DirectSkill == nil {
 		texts := make([]string, len(input.Texts))
 		for i, text := range input.Texts {
 			texts[i] = l.promptExpansion.expandShellCommands(ctx, text)
@@ -1199,7 +1164,6 @@ func (l *looper) newProviderResponse(
 	ctx context.Context,
 	params *responses.ResponseNewParams,
 	observer oai.ResponseObserver,
-	output chan<- ChatResponse,
 	checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error,
 ) (resp *responses.Response, err error) {
 	provider := l.ProviderOrigin.Provider
@@ -1225,10 +1189,10 @@ func (l *looper) newProviderResponse(
 		span.span.End()
 	}()
 
-	return l.newResponseWithProviderRetry(ctx, params, observer, output, checkpointCompacted)
+	return l.newResponseWithProviderRetry(ctx, params, observer, checkpointCompacted)
 }
 
-func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, observer oai.ResponseObserver, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
+func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, observer oai.ResponseObserver, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
 	attempt := 0
 
 	for {
@@ -1241,7 +1205,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 			}
 
 			if ctx.Err() == nil && isContextLengthExceeded(err) {
-				resp, err := l.newResponseAfterContextCompaction(ctx, params, observer, err, output, checkpointCompacted)
+				resp, err := l.newResponseAfterContextCompaction(ctx, params, observer, err, checkpointCompacted)
 				if err != nil {
 					return nil, fmt.Errorf("new response: %w", err)
 				}
@@ -1259,13 +1223,13 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 
 						if attempt > providerRateLimitMaxRetries {
 							diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: http.StatusTooManyRequests, Code: errRateLimit.code, Type: errRateLimit.typeName, Message: errRateLimit.message, RetryAfter: errRateLimit.retryAfter.String(), Headers: providerDiagnosticHeaders(errAPI.Response)}
-							l.emitProviderDiagnostic(ctx, output, &diagnostic)
+							l.emitProviderDiagnostic(ctx, &diagnostic)
 
 							return nil, fmt.Errorf("new response: %w", errRateLimit)
 						}
 
 						diagnostic := ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: http.StatusTooManyRequests, Code: errRateLimit.code, Type: errRateLimit.typeName, Message: errRateLimit.message, Attempt: attempt, RetryAfter: errRateLimit.retryAfter.String(), Headers: providerDiagnosticHeaders(errAPI.Response)}
-						l.emitProviderDiagnostic(ctx, output, &diagnostic)
+						l.emitProviderDiagnostic(ctx, &diagnostic)
 
 						if err := waitProviderRetry(ctx, wait); err != nil {
 							return nil, fmt.Errorf("wait for provider retry: %w", err)
@@ -1286,10 +1250,10 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 					}
 
 					diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: errAPI.StatusCode, Code: errAPI.Code, Type: errAPI.Type, Message: errAPI.Message, Headers: providerDiagnosticHeaders(errAPI.Response)}
-					l.emitProviderDiagnostic(ctx, output, &diagnostic)
+					l.emitProviderDiagnostic(ctx, &diagnostic)
 				} else {
 					diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""}
-					l.emitProviderDiagnostic(ctx, output, &diagnostic)
+					l.emitProviderDiagnostic(ctx, &diagnostic)
 				}
 			}
 
@@ -1298,7 +1262,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 
 		if resp == nil {
 			err := errors.New("missing response")
-			l.emitProviderDiagnostic(ctx, output, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
+			l.emitProviderDiagnostic(ctx, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
 
 			return nil, err
 		}
@@ -1315,7 +1279,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 		}
 
 		if isContextLengthExceeded(err) {
-			resp, err := l.newResponseAfterContextCompaction(ctx, params, observer, err, output, checkpointCompacted)
+			resp, err := l.newResponseAfterContextCompaction(ctx, params, observer, err, checkpointCompacted)
 			if err != nil {
 				return nil, err
 			}
@@ -1325,7 +1289,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 
 		if resp.Error.Code != responses.ResponseErrorCodeRateLimitExceeded {
 			diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0, nil)
-			l.emitProviderDiagnostic(ctx, output, &diagnostic)
+			l.emitProviderDiagnostic(ctx, &diagnostic)
 
 			return nil, err
 		}
@@ -1336,13 +1300,13 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 
 		if attempt > providerRateLimitMaxRetries {
 			diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0, raw)
-			l.emitProviderDiagnostic(ctx, output, &diagnostic)
+			l.emitProviderDiagnostic(ctx, &diagnostic)
 
 			return nil, err
 		}
 
 		diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticRetry, attempt, wait, raw)
-		l.emitProviderDiagnostic(ctx, output, &diagnostic)
+		l.emitProviderDiagnostic(ctx, &diagnostic)
 
 		if err := waitProviderRetry(ctx, wait); err != nil {
 			return nil, fmt.Errorf("wait for provider retry: %w", err)
@@ -1350,7 +1314,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 	}
 }
 
-func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, observer oai.ResponseObserver, errOriginal error, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
+func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, observer oai.ResponseObserver, errOriginal error, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
 	original := params.Input.OfInputItemList
 
 	blocks := compactionBlocks(original)
@@ -1410,7 +1374,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 					diagnostic.HTTPStatus = errAPI.StatusCode
 				}
 
-				l.emitProviderDiagnostic(ctx, output, &diagnostic)
+				l.emitProviderDiagnostic(ctx, &diagnostic)
 			}
 
 			return nil, fmt.Errorf("retry compacted response: %w", err)
@@ -1418,7 +1382,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 
 		if resp == nil {
 			err := errors.New("missing response")
-			l.emitProviderDiagnostic(ctx, output, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
+			l.emitProviderDiagnostic(ctx, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
 
 			return nil, err
 		}
@@ -1433,7 +1397,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 		}
 
 		diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0, nil)
-		l.emitProviderDiagnostic(ctx, output, &diagnostic)
+		l.emitProviderDiagnostic(ctx, &diagnostic)
 
 		return nil, errLast
 	}
@@ -1667,13 +1631,6 @@ func emitChatResponse(output chan<- ChatResponse, item ChatResponse) {
 	output <- item
 }
 
-func emitDiagnosticChatResponse(output chan<- ChatResponse, item ChatResponse) {
-	select {
-	case output <- item:
-	default:
-	}
-}
-
 func appendLiveTurnResponses(output chan<- ChatResponse, rendered, items []ChatResponse) []ChatResponse {
 	for _, item := range items {
 		if item.Kind == ChatResponseAssistantMessage {
@@ -1864,13 +1821,11 @@ func (l *looper) dispatchToolCalls(
 			recordSpanError(span, errors.New("tool not found"))
 			span.span.SetAttributes(l.Observability.outputValue(result.Output), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", true))
 			span.span.End()
-			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result.Output})
+
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), ReplayInput: nil})
 
 			continue
 		}
-
-		l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseCall, Name: item.Name, Arguments: args})
 
 		if doomLoop != nil && doomLoop.trapped(item.Name, args) {
 			if err := l.observations.finishCall(ctx, &progress, PublicProgressBlocked); err != nil {
@@ -1883,7 +1838,7 @@ func (l *looper) dispatchToolCalls(
 			recordSpanError(span, errors.New("repeated identical tool call"))
 			span.span.SetAttributes(l.Observability.outputValue(result), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", true))
 			span.span.End()
-			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
+
 			toolResult := TextToolResult(result)
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), ReplayInput: nil})
 
@@ -1898,7 +1853,7 @@ func (l *looper) dispatchToolCalls(
 			decision.message = toolCallFailureResult(item.Name, fmt.Errorf("check permission: %w", err)).Output
 			errDenied = err
 		} else if !decision.denied && decision.review != nil {
-			reviewDecision := l.reviewToolCall(ctx, item.Name, item.CallID, decision.review, reviewContext, output)
+			reviewDecision := l.reviewToolCall(ctx, item.Name, item.CallID, decision.review, reviewContext)
 			decision.denied = reviewDecision.Outcome != permissionReviewOutcomeAllow
 			decision.message = formatPermissionReviewDenied(reviewDecision)
 			errDenied = errors.New("automatic permission review denied tool call")
@@ -1915,7 +1870,7 @@ func (l *looper) dispatchToolCalls(
 			recordSpanError(span, errDenied)
 			span.span.SetAttributes(l.Observability.outputValue(result), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", err != nil))
 			span.span.End()
-			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
+
 			toolResult := TextToolResult(result)
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), ReplayInput: nil})
 
@@ -2020,7 +1975,6 @@ func (l *looper) dispatchToolCalls(
 
 			span.span.SetAttributes(l.Observability.outputValue(attachmentOutputMessage(result)), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", err != nil))
 
-			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: call.name, Result: attachmentOutputMessage(result)})
 			outputs[call.outputIndex] = dispatchedToolOutput{Param: toolCallOutput(call.callID, result), ReplayInput: replayInput}
 
 			return l.recordCall(groupCtx, key, &outputs[call.outputIndex].Param, replayInput)
@@ -2034,12 +1988,12 @@ func (l *looper) dispatchToolCalls(
 	return outputs, nil
 }
 
-func (l *looper) reviewToolCall(ctx context.Context, name, callID string, request *permissionReviewRequest, reviewContext []responses.ResponseInputItemUnionParam, output chan<- ChatResponse) permissionReviewDecision {
+func (l *looper) reviewToolCall(ctx context.Context, name, callID string, request *permissionReviewRequest, reviewContext []responses.ResponseInputItemUnionParam) permissionReviewDecision {
 	request.ReviewContext = slices.Clone(reviewContext)
 	request.Review = ChildKey{Path: "/" + ReviewKey(l.observations.turnID, callID), Turn: l.observations.turnID, Call: callID}
 	request.Turn = ReviewTurn(CallKey(l.observations.turnID, callID))
 
-	decision := l.PermissionReviewer.reviewPermission(ctx, request, output)
+	decision := l.PermissionReviewer.reviewPermission(ctx, request)
 	if name == executeToolName {
 		_ = l.observations.recordCodeModeCall(ctx, &CodeModeCall{Type: codeModeReviewTraceType, ParentCallID: callID, Key: CallKey(l.observations.turnID, callID), Outcome: decision.Outcome, Reason: decision.Rationale}, false)
 	}
@@ -2109,39 +2063,10 @@ func toolCallFailureResult(name string, err error) ToolResult {
 	return TextToolResult(fmt.Sprintf("tool call failed: %s: %v. Choose a different action.", name, err))
 }
 
-func (l *looper) emitToolDiagnostic(output chan<- ChatResponse, diagnostic *ToolDiagnostic) {
-	if !l.Diagnostics {
-		return
-	}
-
-	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Tool: diagnostic})
-}
-
-func (l *looper) emitProviderDiagnostic(ctx context.Context, output chan<- ChatResponse, diagnostic *ProviderDiagnostic) {
+func (l *looper) emitProviderDiagnostic(ctx context.Context, diagnostic *ProviderDiagnostic) {
 	diagnostic.Provider = l.ProviderOrigin.Provider
 	diagnostic.Model = l.ProviderOrigin.Model
 	recordProviderDiagnosticEvent(ctx, diagnostic)
-
-	if !l.Diagnostics {
-		return
-	}
-
-	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Provider: diagnostic})
-}
-
-func (l *looper) emitHostedToolDiagnostics(output chan<- ChatResponse, items []responses.ResponseOutputItemUnion) {
-	if !l.Diagnostics {
-		return
-	}
-
-	for i := range items {
-		item := items[i]
-		if item.Type != "web_search_call" {
-			continue
-		}
-
-		l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseCall, Name: "websearch", Status: item.Status, Action: json.RawMessage(webSearchOutputActionJSON(&item.Action))})
-	}
 }
 
 func toolCallOutput(callID string, result ToolResult) responses.ResponseInputItemFunctionCallOutputParam {
@@ -2240,10 +2165,6 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 
 		if l.InPermissionReview {
 			return toolPermissionDecision{denied: true, message: "tool call denied: automatic permission review cannot recursively require automatic approval. Choose a different action."}, nil
-		}
-
-		if !l.AutoApprovePermissions {
-			return toolPermissionDecision{denied: true, message: fmt.Sprintf("tool call denied: permission %q subject %q requires automatic approval, but automatic permission approval is disabled. Choose a different action.", permission, subject)}, nil
 		}
 
 		if !reviewerSet {
@@ -2425,26 +2346,6 @@ func CompactionCheckpointText(compaction *responses.ResponseCompactionItemParam)
 	}
 
 	return "<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider. The compacted details cannot be rehydrated here.\n</context_checkpoint>"
-}
-
-func webSearchOutputActionJSON(action *responses.ResponseOutputItemUnionAction) string {
-	value := map[string]any{"type": action.Type}
-	switch action.Type {
-	case "search":
-		value["query"] = action.Query
-		if len(action.Queries) > 0 {
-			value["queries"] = action.Queries
-		}
-	case "open_page":
-		value["url"] = action.URL
-	case "find_in_page":
-		value["url"] = action.URL
-		value["pattern"] = action.Pattern
-	}
-
-	data, _ := json.Marshal(value)
-
-	return string(data)
 }
 
 func agentOutputResponseFormat(schema map[string]any) responses.ResponseFormatTextConfigUnionParam {

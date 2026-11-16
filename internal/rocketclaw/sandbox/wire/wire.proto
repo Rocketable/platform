@@ -27,7 +27,8 @@ message InvokeStart {
   bytes name = 2;               // registered command name
   bytes cwd = 3;                // guest path
   repeated bytes args = 4;      // argv without the command name
-  repeated bytes guest_env = 5; // KEY=VALUE, untrusted metadata
+  reserved 5;
+  reserved "guest_env";
 }
 
 message StdinEOF {}

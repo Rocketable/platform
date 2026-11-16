@@ -408,11 +408,10 @@ func listSessionsTool(service *SessionService, threads *threadBridgeManager) har
 				ids, err = queryStrings(ctx, service.db, `WITH RECURSIVE runs AS (
     SELECT conversation_id, reports_to FROM conversations WHERE reports_to IS NOT NULL
 ), viewed AS (
-    SELECT e.conversation_id, e.entry_timestamp FROM entries e LEFT JOIN runs r USING (conversation_id)
-    WHERE e.audience <> CASE WHEN r.reports_to IS NULL THEN 'sandbox' ELSE 'visible' END
-    UNION ALL SELECT r.reports_to, e.entry_timestamp FROM runs r JOIN entries e USING (conversation_id) WHERE e.audience <> 'sandbox'
+    SELECT conversation_id, entry_timestamp FROM entries
+    UNION ALL SELECT r.reports_to, e.entry_timestamp FROM runs r JOIN entries e USING (conversation_id)
     UNION ALL SELECT c.conversation_id, e.entry_timestamp FROM conversations c JOIN entries e ON e.conversation_id = c.continues
-    WHERE c.continues IS NOT NULL AND e.audience <> 'sandbox'
+    WHERE c.continues IS NOT NULL
 ), starts AS (
     SELECT DISTINCT conversation_id AS id FROM viewed
 ), `+ancestorsSQL+`, shadowed AS (

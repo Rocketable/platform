@@ -14,31 +14,24 @@ func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) 
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"chat-2": KindWebChat})
+	binding := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "chat-2", OriginPairs: map[string]string{"topic": "billing", "external_conversation_id": "external", "rocketclaw_principal": "reader"}}
+	require.NoError(t, store.RegisterExternalMCPConversation("deploy-42", "main", &binding))
+	assert.Equal(t, map[string]string{"topic": "billing", "external_conversation_id": "external", "rocketclaw_principal": "reader"}, binding.OriginPairs, "storing details must not mutate the caller's map")
 
-	binding := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "chat-2"}
-	require.NoError(t, store.UpsertExternalMCPSession("deploy-42", &binding))
-
+	want := binding
+	want.OriginPairs = map[string]string{"topic": "billing"}
 	got, ok, err := store.ExternalMCPSession("deploy-42")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, binding, got)
+	assert.Equal(t, want, got)
 
 	for _, conversationID := range []string{binding.PrivateConversationID, binding.ManagedConversationID} {
 		externalConversationID, found, foundOK, err := store.ExternalMCPSessionByConversationID(conversationID)
 		require.NoError(t, err)
 		require.True(t, foundOK)
 		assert.Equal(t, "deploy-42", externalConversationID)
-		assert.Equal(t, binding, found)
+		assert.Equal(t, want, found)
 	}
-
-	binding.OriginPairs = map[string]string{"topic": "billing", "external_conversation_id": "external", "rocketclaw_principal": "reader"}
-	require.NoError(t, store.UpsertExternalMCPSession("deploy-42", &binding))
-	got, ok, err = store.ExternalMCPSession("deploy-42")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, map[string]string{"topic": "billing"}, got.OriginPairs)
-	assert.Equal(t, map[string]string{"topic": "billing", "external_conversation_id": "external", "rocketclaw_principal": "reader"}, binding.OriginPairs, "storing details must not mutate the caller's map")
 }
 
 func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {

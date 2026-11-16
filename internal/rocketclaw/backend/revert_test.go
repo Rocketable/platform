@@ -451,7 +451,7 @@ func TestRevertEligibility(t *testing.T) {
 	ctx := t.Context()
 	for _, c := range []struct{ id, kind, cronRun string }{
 		{"slack-thread:C1:1.1", "slack_thread", ""}, {"cron:job:1", "cron_run", ""}, {"web:cron:job:1", "web_chat", "cron:job:1"}, {"child/call", "subagent", ""},
-		{"external", "slack_thread", ""}, {"private", "external_mcp_run", ""}, {"copied", "web_chat", ""}, {"valid", "web_chat", ""},
+		{"copied", "web_chat", ""}, {"valid", "web_chat", ""},
 	} {
 		_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, cron_run) VALUES ($1, 'planner', '', $2, TRUE, NULLIF($3, ''))`, c.id, c.kind, c.cronRun)
 		require.NoError(t, err)
@@ -459,7 +459,7 @@ func TestRevertEligibility(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, s.UpsertExternalMCPSession("binding", &ExternalMCPSessionState{ManagedConversationID: "external", PrivateConversationID: "private", Agent: "planner"}))
+	require.NoError(t, s.RegisterExternalMCPConversation("binding", "planner", &ExternalMCPSessionState{ManagedConversationID: "external", PrivateConversationID: "private", Agent: "planner"}))
 
 	log := slog.New(slog.DiscardHandler)
 	rt := &Runtime{Sessions: s, threads: newThreadBridgeManager(nil, s, log, &bridgeFactoryMock{newBridgeFunc: func(c *Config) directBridge { return &Bridge{config: *c, log: log} }})}
@@ -810,8 +810,8 @@ func TestAgentPauseStorageFailures(t *testing.T) {
 	}{
 		{"pause column", `ALTER TABLE conversations RENAME COLUMN paused TO unavailable_paused`, `ALTER TABLE conversations RENAME COLUMN unavailable_paused TO paused`,
 			`column "paused" does not exist`, []string{"read", "resume", "post", "promote", "open input"}, false},
-		{"revert state", `ALTER TABLE entries RENAME COLUMN audience TO unavailable_audience`, `ALTER TABLE entries RENAME COLUMN unavailable_audience TO audience`,
-			"audience", []string{"resume", "post"}, true},
+		{"revert state", `ALTER TABLE conversations RENAME COLUMN continues TO unavailable_continues`, `ALTER TABLE conversations RENAME COLUMN unavailable_continues TO continues`,
+			"continues", []string{"resume", "post"}, true},
 		{"pause write", reject + `CREATE TRIGGER reject_pause BEFORE UPDATE ON conversations FOR EACH ROW EXECUTE FUNCTION reject_pause()`, `DROP FUNCTION reject_pause() CASCADE`,
 			"pause store failed", []string{"resume"}, false},
 		{"line write", reject + `CREATE TRIGGER reject_pause BEFORE INSERT ON entries FOR EACH ROW EXECUTE FUNCTION reject_pause()`, `DROP FUNCTION reject_pause() CASCADE`,
@@ -1209,8 +1209,7 @@ func TestRevertLatestUnsavedTurn(t *testing.T) {
 	require.Equal(t, "redo latest", prompt)
 
 	keys := func() map[string]ObservedSessionEntry {
-		transcript, err := s.ObserveTranscript(ctx, "main", 0, 0, nil)
-		require.NoError(t, err)
+		transcript := testHistoryEntries(t, s, "main")
 
 		keys := make(map[string]ObservedSessionEntry)
 		for _, entry := range transcript {
@@ -1633,7 +1632,7 @@ func TestRevertStageFailurePreservesHistory(t *testing.T) {
 
 	for _, tc := range []struct{ unavailable, want string }{
 		{"conversations.goal_objective", "read goal"}, {"turns", `relation "turns" does not exist`}, {"conversations update", "stage failed"}, {"settled delivery", "revert requires settled delivery"},
-		{"entries.audience", "observe session revert"}, {"turns.inbound_json", "read reverted goal prompt"},
+		{"conversations.continues", "observe session revert"}, {"turns.inbound_json", "read reverted goal prompt"},
 	} {
 		unavailable := tc.unavailable
 		t.Run(unavailable, func(t *testing.T) {
@@ -1701,19 +1700,22 @@ func TestRevertCorruptHistoryCannotBeAdmitted(t *testing.T) {
 
 	s := newTestSessionService(t)
 
-	for _, corrupt := range []struct{ name, raw, want string }{
-		{"trace", `{"type":"turn","output_trace":1,"replay_input":[{"role":"user","type":"message","content":"old"}]}`, "decode revert boundary"},
-		{"replay", `{"type":"turn","replay_input":[{"role":"user","type":"message","input_id":"old","prompt_header":42,"content":"old"}]}`, "decode revert boundary"},
-		{"synced", `{"type":"turn","sync_source_entry_id":"1","replay_input":[42]}`, "read visible replay item type"},
+	for _, corrupt := range []struct{ name, owner, raw, want string }{
+		{"trace", "main", `{"type":"turn","output_trace":1,"replay_input":[{"role":"user","type":"message","content":"old"}]}`, "decode revert boundary"},
+		{"replay", "main", `{"type":"turn","replay_input":[{"role":"user","type":"message","input_id":"old","prompt_header":42,"content":"old"}]}`, "decode revert boundary"},
+		{"synced", "run", `{"type":"turn","replay_input":[42]}`, "read visible replay item type"},
 	} {
 		t.Run(corrupt.name, func(t *testing.T) {
 			_, err := s.db.ExecContext(t.Context(), `TRUNCATE entries, turns, steps, conversations RESTART IDENTITY CASCADE`)
 			require.NoError(t, err)
 			ctx := t.Context()
 			require.NoError(t, s.UpsertThread("main", ThreadState{Agent: "main"}))
+			recordTestConversations(t, s, "main", map[string]ConversationKind{"run": KindCronRun})
+			_, err = s.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'main' WHERE conversation_id = 'run'`)
+			require.NoError(t, err)
 
 			var id int64
-			require.NoError(t, s.db.QueryRowContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('main', $1, '') RETURNING id`, corrupt.raw).Scan(&id))
+			require.NoError(t, s.db.QueryRowContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, $2, '') RETURNING id`, corrupt.owner, corrupt.raw).Scan(&id))
 			_, _, err = stageRevertDB(ctx, s.db, "main", fmt.Sprintf("%d:0", id))
 			require.ErrorContains(t, err, corrupt.want)
 

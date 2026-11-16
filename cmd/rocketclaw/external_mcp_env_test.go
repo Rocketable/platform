@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,8 +31,8 @@ type externalMCPAssembler struct {
 }
 
 type externalMCPStarted struct {
-	runtime *backend.Runtime
-	server  *externalmcp.Server
+	runtime  *backend.Runtime
+	endpoint string
 }
 
 func (externalMCPAssembler) ValidateAssets(*config.Config, string) error { return nil }
@@ -44,12 +45,13 @@ func (a externalMCPAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []
 		}
 	}()
 
-	server, err := startExternalMCPServer(rt.RunCtx, rt.Cfg.Clone(), nil, &mcpAgentIndex{names: []string{"planner"}}, rt.Sessions, rt, rt.Log)
+	listener, err := net.Listen("tcp", rt.Cfg.Clone().MCPExternal.ListenAddr)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	a.started <- externalMCPStarted{runtime: rt, server: server}
+	server := startExternalMCPServer(rt.RunCtx, listener, nil, &mcpAgentIndex{names: []string{"planner"}}, rt.Sessions, rt, rt.Log)
+	a.started <- externalMCPStarted{runtime: rt, endpoint: "http://" + listener.Addr().String() + externalmcp.ExternalMCPPath}
 
 	return make(chan struct{}), []func(context.Context) error{server.Close}, nil
 }
@@ -134,7 +136,7 @@ func TestExternalMCPMetadataReachesWebChatTurns(t *testing.T) {
 	}
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
-	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: started.server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
+	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: started.endpoint, HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = session.Close() })
 

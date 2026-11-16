@@ -69,14 +69,12 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	client := openai.NewClient()
 
 	config := testWorkspaceConfig(t, dir)
-	config.Diagnostics = true
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	looper, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "remember !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main")
 
 	require.NoError(t, err)
-	require.NotNil(t, looper)
 	require.Contains(t, looper.SystemPrompt, "remember workspace memory\n\n<current-workspace>\nWorkspace root: "+dir+"\n</current-workspace>")
 }
 
@@ -178,7 +176,6 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 	client := openai.NewClient()
 
 	config := testWorkspaceConfig(t, dir)
-	config.Diagnostics = true
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	config.ShellEnv = map[string]string{"ROCKETCLAW_CONVERSATION_ID": "prompt", "TMPDIR": "/ignored"}
 	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
@@ -273,9 +270,7 @@ func TestNewExpandsPromptsThroughRootAgentCustomShell(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	config := testWorkspaceConfig(t, dir)
-	config.Diagnostics = true
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
-	config.ExpandPromptShellCommands.InputPrompts = true
 	client := openai.NewClient()
 	loop, err := NewWithModelResolver(testResolverForClient(&client), config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Model: "gpt-5.4", Prompt: "remember !`echo hi`", CustomShell: CustomShell{Path: writeCustomShell(t, root)}},
@@ -284,14 +279,12 @@ func TestNewExpandsPromptsThroughRootAgentCustomShell(t *testing.T) {
 	require.Contains(t, loop.SystemPrompt, "remember custom:1:echo hi\n")
 
 	for _, tc := range []struct {
-		runtime, input bool
-		want           string
+		input bool
+		want  string
 	}{
-		{true, false, "input custom:1:echo there"},
-		{false, true, "input custom:1:echo there"},
-		{false, false, "input !`echo there`"},
+		{true, "input custom:1:echo there"},
+		{false, "input !`echo there`"},
 	} {
-		loop.expandInputPrompts = tc.runtime
 		input := PromptInput{Role: PromptInputRoleUser, Texts: []string{"input !`echo there`"}, ExpandShellCommands: tc.input}
 		_, err = loop.promptTurnItems(t.Context(), &input)
 		require.NoError(t, err)
@@ -747,18 +740,8 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	client := openai.NewClient()
 	skills := Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
 
-	t.Run("disabled allows guardian agent", func(t *testing.T) {
+	t.Run("rejects guardian agent", func(t *testing.T) {
 		config := testWorkspaceConfig(t, dir)
-		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4"}, "guardian": {Name: "guardian", Model: "gpt-5.4"}}}
-
-		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main")
-
-		require.NoError(t, err)
-	})
-
-	t.Run("enabled rejects guardian agent", func(t *testing.T) {
-		config := testWorkspaceConfig(t, dir)
-		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4"}, "guardian": {Name: "guardian", Model: "gpt-5.4"}}}
 
 		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main")
@@ -766,9 +749,8 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 		require.EqualError(t, err, `agent name "guardian" is reserved when auto permission approval is enabled`)
 	})
 
-	t.Run("enabled rejects missing custom reviewer", func(t *testing.T) {
+	t.Run("rejects missing custom reviewer", func(t *testing.T) {
 		config := testWorkspaceConfig(t, dir)
-		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)}}}
 
 		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main")
@@ -776,9 +758,8 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 		require.ErrorContains(t, err, `references missing reviewer agent "release-guardian"`)
 	})
 
-	t.Run("enabled rejects another agent's sticky reviewer", func(t *testing.T) {
+	t.Run("rejects another agent's sticky reviewer", func(t *testing.T) {
 		config := testWorkspaceConfig(t, dir)
-		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{
 			"main":     {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(reviewer)}`)},
 			"reviewer": {Name: "reviewer", Model: "gpt-5.4", Sticky: AgentStickyUser, Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(reviewer)}`)},
@@ -793,9 +774,8 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 		require.NoError(t, err, "a sticky agent may review its own rules")
 	})
 
-	t.Run("enabled rejects explicit guardian reviewer", func(t *testing.T) {
+	t.Run("rejects explicit guardian reviewer", func(t *testing.T) {
 		config := testWorkspaceConfig(t, dir)
-		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(guardian)}`)}}}
 
 		_, err := NewWithModelResolver(testResolverForClient(&client), config, root, agents, skills, "main")
@@ -803,9 +783,8 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 		require.ErrorContains(t, err, `references reserved reviewer "guardian"`)
 	})
 
-	t.Run("enabled accepts custom reviewer", func(t *testing.T) {
+	t.Run("accepts custom reviewer", func(t *testing.T) {
 		config := testWorkspaceConfig(t, dir)
-		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{
 			"main":             {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)},
 			"release-guardian": {Name: "release-guardian", Model: "gpt-5.4"},
@@ -818,7 +797,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 }
 
 func testConfig(shellTempDir string) *Config {
-	return &Config{Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, ParallelToolCalls: 0, ShellTempDir: shellTempDir, RetainedResultDir: "retained", AutoApprovePermissions: false, Observability: ObservabilityConfig{}, ChildSessions: InertChildSessions{}, Journal: InertJournal{}, BackgroundJobs: InertBackgroundJobs{}, CustomTools: nil, ShellEnv: nil, ShellCommand: DefaultShellCommand{}}
+	return &Config{ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, ParallelToolCalls: 0, ShellTempDir: shellTempDir, RetainedResultDir: "retained", Observability: ObservabilityConfig{}, ChildSessions: InertChildSessions{}, Journal: InertJournal{}, BackgroundJobs: InertBackgroundJobs{}, CustomTools: nil, ShellEnv: nil, ShellCommand: DefaultShellCommand{}}
 }
 
 func testWorkspaceConfig(t *testing.T, workspace string) *Config {

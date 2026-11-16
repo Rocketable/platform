@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -161,8 +162,10 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneWebChat(t *testing.T) {
 		turns []*protocol.InboundMessage
 	)
 
-	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}}
-	server, err := startExternalMCPServer(t.Context(), cfg, nil, &mcpAgentIndex{names: []string{"planner"}}, store, mcpTurns(func(inbound *protocol.InboundMessage) error {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	server := startExternalMCPServer(t.Context(), listener, nil, &mcpAgentIndex{names: []string{"planner"}}, store, mcpTurns(func(inbound *protocol.InboundMessage) error {
 		mu.Lock()
 		turns = append(turns, inbound)
 		mu.Unlock()
@@ -170,7 +173,6 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneWebChat(t *testing.T) {
 		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 		return nil
 	}), testLogger())
-	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
 	const calls = 8
@@ -181,7 +183,7 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneWebChat(t *testing.T) {
 	for range calls {
 		group.Go(func() {
 			client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
-			transport := &mcp.StreamableClientTransport{Endpoint: server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}
+			transport := &mcp.StreamableClientTransport{Endpoint: "http://" + listener.Addr().String() + externalmcp.ExternalMCPPath, HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}
 
 			session, err := client.Connect(t.Context(), transport, nil)
 			if err != nil {
@@ -240,13 +242,14 @@ func TestExternalMCPRepeatedIDKeepsLockedAgent(t *testing.T) {
 		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 		return nil
 	})
-	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}}
-	server, err := startExternalMCPServer(t.Context(), cfg, nil, &mcpAgentIndex{names: []string{"planner"}}, store, turns, testLogger())
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+
+	server := startExternalMCPServer(t.Context(), listener, nil, &mcpAgentIndex{names: []string{"planner"}}, store, turns, testLogger())
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
-	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
+	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: "http://" + listener.Addr().String() + externalmcp.ExternalMCPPath, HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = session.Close() })
 
@@ -270,16 +273,17 @@ func TestExternalMCPRefusesUnexposedAgents(t *testing.T) {
 	store := newMCPTestStore(t)
 	agents := &mcpAgentIndex{names: []string{"planner"}}
 
-	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}}
-	server, err := startExternalMCPServer(t.Context(), cfg, nil, agents, store, mcpTurns(func(inbound *protocol.InboundMessage) error {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	server := startExternalMCPServer(t.Context(), listener, nil, agents, store, mcpTurns(func(inbound *protocol.InboundMessage) error {
 		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 		return nil
 	}), testLogger())
-	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
-	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
+	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: "http://" + listener.Addr().String() + externalmcp.ExternalMCPPath, HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = session.Close() })
 
@@ -397,13 +401,14 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 
 				return nil
 			})
-			cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}}
-			server, err := startExternalMCPServer(t.Context(), cfg, nil, &mcpAgentIndex{names: []string{"planner"}}, store, turns, testLogger())
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
 			require.NoError(t, err)
+
+			server := startExternalMCPServer(t.Context(), listener, nil, &mcpAgentIndex{names: []string{"planner"}}, store, turns, testLogger())
 			t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
 			client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
-			session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
+			session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: "http://" + listener.Addr().String() + externalmcp.ExternalMCPPath, HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = session.Close() })
 

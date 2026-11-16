@@ -171,7 +171,7 @@ func TestEmbeddedGuardianAgentUsesLowReasoningEffort(t *testing.T) {
 	require.Equal(t, "low", agent.ReasoningEffort)
 }
 
-func TestPermissionReviewEmitsDiagnosticsWithChildContext(t *testing.T) {
+func TestPermissionReviewIncludesChildContext(t *testing.T) {
 	mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
 		testReasoningOutputItem("review-reasoning", "", "considering risk"),
 		testMessageOutputItem("review-commentary", "commentary", "checking authorization"),
@@ -187,20 +187,13 @@ func TestPermissionReviewEmitsDiagnosticsWithChildContext(t *testing.T) {
 			json.RawMessage(`{"type":"message","role":"developer","content":"This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\""}`),
 		}}},
 		childSessions: InertChildSessions{},
-		diagnostics:   true,
 	}
-	output := make(chan ChatResponse, 10)
 
-	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, output)
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true})
 
 	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 	require.Equal(t, responses.EasyInputMessageRoleDeveloper, newParams(mock)[0].Input.OfInputItemList[0].OfMessage.Role)
 	require.Equal(t, "This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\"", newParams(mock)[0].Input.OfInputItemList[0].OfMessage.Content.OfString.Value)
-	require.Equal(t, []ChatResponse{
-		subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Subagent: &SubagentDiagnostic{Label: "reasoning summary", Text: "considering risk"}}),
-		subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Subagent: &SubagentDiagnostic{Label: "assistant commentary", Text: "checking authorization"}}),
-		subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Text: "allow: Low-risk action.", Subagent: &SubagentDiagnostic{Label: "result"}}),
-	}, drainBufferedResponses(output))
 }
 
 func TestPermissionReviewUsesAgentApprover(t *testing.T) {
@@ -225,7 +218,7 @@ func TestPermissionReviewUsesAgentApprover(t *testing.T) {
 				childSessions:     InertChildSessions{},
 			}
 
-			decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))
+			decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true})
 
 			require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 			require.Len(t, newParams(mock), 1)
@@ -269,28 +262,27 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 		err              error
 		wantOutcome      permissionReviewOutcome
 		wantGuardian     bool
-		wantFallback     string
 		wantNoDecision   bool
 		noModel          bool
 		wantRules        string
 		configConfidence float64
 	}{
 		{name: "confident allow", answers: confidentAllow, wantOutcome: permissionReviewOutcomeAllow},
-		{name: "low outcome confidence", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "allow", 0.8), wantGuardian: true, wantFallback: "outcome confidence 0.80 is below 0.90"},
-		{name: "critical risk allowed", answers: reviewAnswers("critical", 0.95, "high", 0.95, 0.02, "allow", 0.97), wantGuardian: true, wantFallback: "answers conflict"},
+		{name: "low outcome confidence", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "allow", 0.8), wantGuardian: true},
+		{name: "critical risk allowed", answers: reviewAnswers("critical", 0.95, "high", 0.95, 0.02, "allow", 0.97), wantGuardian: true},
 		{name: "confident high-risk deny", answers: reviewAnswers("high", 0.95, "unknown", 0.92, 0.03, "deny", 0.96), wantOutcome: permissionReviewOutcomeDeny},
-		{name: "unauthorized high-risk allow", answers: reviewAnswers("high", 0.95, "low", 0.95, 0.02, "allow", 0.97), wantGuardian: true, wantFallback: "answers conflict"},
+		{name: "unauthorized high-risk allow", answers: reviewAnswers("high", 0.95, "low", 0.95, 0.02, "allow", 0.97), wantGuardian: true},
 		{name: "authorized high-risk allow", answers: reviewAnswers("high", 0.95, "medium", 0.95, 0.02, "allow", 0.97), wantOutcome: permissionReviewOutcomeAllow},
-		{name: "low-risk deny", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "deny", 0.97), wantGuardian: true, wantFallback: "answers conflict"},
-		{name: "unknown risk level", answers: reviewAnswers("", 0.95, "medium", 0.93, 0.02, "allow", 0.97), wantGuardian: true, wantFallback: `risk_level answered ""`},
-		{name: "provider error", err: errors.New("provider down"), wantGuardian: true, wantFallback: "decide with openai/gpt-6-luna: provider down"},
-		{name: "refusal", answers: append(confidentAllow[:3:3], DecisionAnswer{Name: "outcome", Refused: true}), wantGuardian: true, wantFallback: "outcome was refused"},
-		{name: "injection allowed", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.97, "allow", 0.97), wantGuardian: true, wantFallback: "answers conflict"},
+		{name: "low-risk deny", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "deny", 0.97), wantGuardian: true},
+		{name: "unknown risk level", answers: reviewAnswers("", 0.95, "medium", 0.93, 0.02, "allow", 0.97), wantGuardian: true},
+		{name: "provider error", err: errors.New("provider down"), wantGuardian: true},
+		{name: "refusal", answers: append(confidentAllow[:3:3], DecisionAnswer{Name: "outcome", Refused: true}), wantGuardian: true},
+		{name: "injection allowed", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.97, "allow", 0.97), wantGuardian: true},
 		{name: "injection denied", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.97, "deny", 0.97), wantOutcome: permissionReviewOutcomeDeny},
-		{name: "uncertain injection", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.7, "allow", 0.97), wantGuardian: true, wantFallback: "prompt_injection confidence 0.40 is below 0.90"},
-		{name: "split risk", answers: reviewAnswers("low", 0.5, "medium", 0.93, 0.02, "allow", 0.97), wantGuardian: true, wantFallback: "risk_level confidence 0.50 is below 0.90"},
-		{name: "needs investigation", answers: append(confidentAllow[:4:4], predicateAnswer("needs_investigation", 0.97)), wantGuardian: true, wantFallback: "needs investigation (probability 0.97)"},
-		{name: "unsure about investigation", answers: append(confidentAllow[:4:4], predicateAnswer("needs_investigation", 0.3)), wantGuardian: true, wantFallback: "needs_investigation confidence 0.40 is below 0.90"},
+		{name: "uncertain injection", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.7, "allow", 0.97), wantGuardian: true},
+		{name: "split risk", answers: reviewAnswers("low", 0.5, "medium", 0.93, 0.02, "allow", 0.97), wantGuardian: true},
+		{name: "needs investigation", answers: append(confidentAllow[:4:4], predicateAnswer("needs_investigation", 0.97)), wantGuardian: true},
+		{name: "unsure about investigation", answers: append(confidentAllow[:4:4], predicateAnswer("needs_investigation", 0.3)), wantGuardian: true},
 		{name: "config threshold", configConfidence: 0.8, answers: reviewAnswers("low", 0.85, "medium", 0.85, 0.02, "allow", 0.85), wantOutcome: permissionReviewOutcomeAllow},
 		{name: "agent decision model", noModel: true, agent: Agent{Name: "main", Mode: AgentModeEasy, ApproverDecision: ApproverDecision{Model: "openai/gpt-6-luna"}}, answers: confidentAllow, wantOutcome: permissionReviewOutcomeAllow},
 		{name: "agent rules only the guardian reads", agent: Agent{Name: "main", Mode: AgentModeEasy, ApproverPrompt: "Chat rule."}, answers: confidentAllow, wantGuardian: true, wantNoDecision: true},
@@ -299,7 +291,7 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 		{name: "easy custom reviewer", reviewer: "easy", answers: confidentAllow, wantGuardian: true, wantNoDecision: true},
 		{name: "custom reviewer decision model", reviewer: "careful", answers: confidentAllow, wantOutcome: permissionReviewOutcomeAllow, wantRules: "Deny anything touching production.\n### Agent Rules\nDeny deploys on Fridays.\n\n\n# Turn Origin"},
 		{name: "custom reviewer threshold", reviewer: "lenient", answers: reviewAnswers("low", 0.85, "medium", 0.85, 0.02, "allow", 0.85), wantOutcome: permissionReviewOutcomeAllow},
-		{name: "custom reviewer fallback", reviewer: "careful", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "allow", 0.8), wantGuardian: true, wantFallback: "outcome confidence 0.80 is below 0.90"},
+		{name: "custom reviewer fallback", reviewer: "careful", answers: reviewAnswers("low", 0.95, "medium", 0.93, 0.02, "allow", 0.8), wantGuardian: true},
 		{name: "agent threshold", agent: Agent{Name: "main", Mode: AgentModeEasy, ApproverDecision: ApproverDecision{MinConfidence: 0.8}}, answers: reviewAnswers("low", 0.85, "medium", 0.85, 0.02, "allow", 0.85), wantOutcome: permissionReviewOutcomeAllow},
 		{name: "custom reviewer without decision model", reviewer: "release", answers: confidentAllow, wantGuardian: true, wantNoDecision: true},
 		{name: "unconfigured agent decision provider", agent: Agent{Name: "main", Mode: AgentModeEasy, ApproverDecision: ApproverDecision{Model: "typesafe/jev-latest"}}, answers: confidentAllow, wantGuardian: true, wantNoDecision: true},
@@ -330,7 +322,6 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 				"lenient": {Name: "lenient", Model: "gpt-5.4", Prompt: "Deny anything touching production.", ApproverDecision: ApproverDecision{Model: "openai/gpt-6-luna", MinConfidence: 0.8}},
 			}})
 			factory.autoApproverMinConfidence = tc.configConfidence
-			factory.diagnostics = true
 			factory.deciders = map[string]Decider{"openai": decider}
 			factory.autoApproverDecisionModel = "openai/gpt-6-luna"
 			factory.childSessions = &mockChildSessions{AppendChildEntryFunc: func(_ context.Context, _ ChildKey, entry *SessionEntry) error {
@@ -342,10 +333,9 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 				factory.autoApproverDecisionModel = ""
 			}
 
-			output := make(chan ChatResponse, 16)
 			request := &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{"command":"ls"}`, Subjects: []string{"ls"}, Reviewer: tc.reviewer, ReviewerEmbedded: tc.reviewer == ""}
 
-			decision := factory.reviewPermission(t.Context(), request, output)
+			decision := factory.reviewPermission(t.Context(), request)
 
 			require.Len(t, newParams(mock), map[bool]int{true: 1}[tc.wantGuardian])
 
@@ -383,7 +373,8 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 
 			require.Equal(t, []string{"risk_level", "user_authorization", "prompt_injection", "outcome", "needs_investigation"}, names)
 
-			diagnostics := drainBufferedResponses(output)
+			require.Len(t, saved, 1)
+			require.Equal(t, cmp.Or(tc.reviewer, "guardian"), saved[0].Agent)
 
 			if tc.wantGuardian {
 				instructions := newParams(mock)[0].Instructions.Value
@@ -391,17 +382,13 @@ func TestPermissionReviewAsksDecisionModelFirst(t *testing.T) {
 				require.Equal(t, 1, strings.Count(instructions, "# Turn Origin"))
 				require.Equal(t, agent.Mode == AgentModeEasy, strings.Contains(instructions, "# Whole Scripts"))
 				require.Equal(t, "guardian", decision.Rationale)
-				require.Contains(t, diagnostics[0].Subagent.Text, "decision model openai/gpt-6-luna fell back to "+cmp.Or(tc.reviewer, "guardian")+": "+tc.wantFallback)
+				require.Equal(t, PermissionReview{Outcome: permissionReviewOutcomeDeny, Rationale: "guardian"}, saved[0].PermissionReviewDecision())
 
 				return
 			}
 
 			require.Equal(t, tc.wantOutcome, decision.Outcome)
 			require.Contains(t, decision.Rationale, "decision model openai/gpt-6-luna")
-			require.Equal(t, []ChatResponse{subagentDiagnosticResponse(&SubagentDiagnostic{Name: "decision:openai/gpt-6-luna", Label: "auto-approver", Text: string(decision.Outcome) + ": " + decision.Rationale, Subagent: &SubagentDiagnostic{Label: "result"}})}, diagnostics)
-
-			require.Len(t, saved, 1)
-			require.Equal(t, cmp.Or(tc.reviewer, "guardian"), saved[0].Agent)
 			require.Equal(t, &TokenUsage{PromptTokens: 2000, TotalTokens: 2000}, saved[0].TokenUsage)
 			review := saved[0].PermissionReviewDecision()
 			require.Equal(t, PermissionReview{Outcome: decision.Outcome, Rationale: decision.Rationale}, review)
@@ -439,7 +426,7 @@ func TestPermissionReviewExpandsDecisionRules(t *testing.T) {
 	factory.childSessions = &mockChildSessions{AppendChildEntryFunc: func(context.Context, ChildKey, *SessionEntry) error { return nil }}
 
 	request := &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{"command":"ls"}`, Subjects: []string{"ls"}, ReviewerEmbedded: true}
-	require.Equal(t, permissionReviewOutcomeAllow, factory.reviewPermission(t.Context(), request, make(chan ChatResponse, 16)).Outcome)
+	require.Equal(t, permissionReviewOutcomeAllow, factory.reviewPermission(t.Context(), request).Outcome)
 
 	require.Len(t, decider.DecideCalls(), 1)
 	require.Contains(t, decider.DecideCalls()[0].Request.Instructions, "### Agent Rules\nDeny deploys.\n")
@@ -459,7 +446,7 @@ func TestPermissionReviewSystemPromptIncludesRootInstructionsAndCodeMode(t *test
 			factory.autoApproverModel = "gpt-5.4"
 			factory.rootInstructions = "Instructions from: AGENTS.md\nproject rules"
 
-			decision := factory.reviewPermission(t.Context(), &permissionReviewRequest{Reviewer: reviewer, ReviewerEmbedded: reviewer == ""}, make(chan ChatResponse, 10))
+			decision := factory.reviewPermission(t.Context(), &permissionReviewRequest{Reviewer: reviewer, ReviewerEmbedded: reviewer == ""})
 
 			require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 
@@ -486,7 +473,7 @@ func TestPermissionReviewResolvesEmbeddedAutoApproverIndependently(t *testing.T)
 		return rootClient, ProviderOrigin{Provider: "openai", Model: model}, nil
 	})
 
-	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ReviewerEmbedded: true}, make(chan ChatResponse, 8))
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ReviewerEmbedded: true})
 
 	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 	require.Len(t, reviewRequests, 1)
@@ -508,7 +495,7 @@ func TestPermissionReviewResolvesCustomReviewerIndependently(t *testing.T) {
 		return rootClient, ProviderOrigin{Provider: "openai", Model: model}, nil
 	})
 
-	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{Reviewer: "release"}, make(chan ChatResponse, 8))
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{Reviewer: "release"})
 
 	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 	require.Len(t, reviewRequests, 1)

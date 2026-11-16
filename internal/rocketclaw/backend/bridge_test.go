@@ -1093,7 +1093,7 @@ FROM turns WHERE conversation_id = $1 ORDER BY id`, "missing-agent reply state",
 	require.NoError(t, response.Err)
 }
 
-func TestRocketCodeConfigEnablesDiagnostics(t *testing.T) {
+func TestRocketCodeConfig(t *testing.T) {
 	t.Parallel()
 
 	bridge := &Bridge{runtime: config.NewLockedConfig(&config.Config{AutoApproverModel: "gpt-5.4-mini"}), config: Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", RequestRestart: &runtimeRestarterMock{restartFunc: func(string) string { return "" }}, RequestReload: &runtimeReloaderMock{ReloadFunc: func(string) (string, error) {
@@ -1106,12 +1106,9 @@ func TestRocketCodeConfigEnablesDiagnostics(t *testing.T) {
 		toolNames = append(toolNames, cfg.CustomTools[i].Name)
 	}
 
-	assert.True(t, cfg.Diagnostics)
-	assert.True(t, cfg.ExperimentalStrongerSkills)
-	assert.True(t, cfg.AutoApprovePermissions)
 	assert.Equal(t, "gpt-5.4-mini", cfg.AutoApproverModel)
 	assert.Equal(t, 16, cfg.ParallelToolCalls)
-	assert.Equal(t, harness.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, cfg.ExpandPromptShellCommands)
+	assert.Equal(t, harness.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true}, cfg.ExpandPromptShellCommands)
 	assert.NotContains(t, toolNames, restartToolName)
 	assert.NotContains(t, toolNames, scheduleMessageToolName, "each turn builds its schedule tools")
 	assert.Contains(t, toolNames, reloadToolName)
@@ -1321,19 +1318,6 @@ func TestBridgeRunsTaskSubagentOnItsProvider(t *testing.T) {
 	require.NoError(t, group.Wait())
 	require.NotNil(t, outbound)
 	require.Equal(t, "persistent done", outbound.Text)
-
-	decoder := json.NewDecoder(strings.NewReader(logs.String()))
-	for decoder.More() {
-		var event struct {
-			Event string `json:"event"`
-			Kind  string `json:"kind"`
-		}
-		require.NoError(t, decoder.Decode(&event))
-
-		if event.Event == "first_response_item" {
-			assert.NotEqual(t, harness.ChatResponseAssistantMessage, event.Kind)
-		}
-	}
 
 	assert.Contains(t, logs.String(), `"event":"first_assistant_text"`)
 	assert.Contains(t, logs.String(), `"event":"operation_snapshot"`)
@@ -2356,8 +2340,9 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	writeAgent(t, cfg.Clone().Workspace, "selected", "---\ndescription: Selected\nmodel: gpt-6.1-sol\npermission: {}\n---\nSelected canonical instructions\n")
 	require.NoError(t, service.UpsertThread(threadKey, ThreadState{Agent: "selected"}))
 	require.NoError(t, service.UpsertThread(privateConversationID, ThreadState{Agent: "planner"}))
-	require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: threadKey}))
-	_, err := service.AppendEntryID(t.Context(), threadKey, testSessionEntry("canonical context", "canonical history"))
+	_, err := service.db.ExecContext(t.Context(), `UPDATE conversations SET external_id = 'public-1', external_run = $1, external_agent = 'planner', origin_pairs = 'null' WHERE conversation_id = $2`, privateConversationID, threadKey)
+	require.NoError(t, err)
+	_, err = service.AppendEntryID(t.Context(), threadKey, testSessionEntry("canonical context", "canonical history"))
 	require.NoError(t, err)
 
 	inbound := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "producer context", true)
@@ -2691,8 +2676,7 @@ func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
 	assert.Equal(t, protocol.TerminalStopped, summary.Terminal)
 	assert.Equal(t, []protocol.PhaseUpdate{{Name: "work", Status: protocol.PhaseError, Scheduled: 1}, {Name: "later", Status: protocol.PhaseSkipped}}, summary.Phases)
 	assert.Equal(t, "workflow stopped by user", summary.Error)
-	transcript, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
-	require.NoError(t, err)
+	transcript := testHistoryEntries(t, service, conversationID)
 	require.Len(t, transcript, 1)
 	assert.Empty(t, transcript[0].Terminal, "saved workflow summaries retain their existing transcript metadata")
 }
@@ -3951,16 +3935,14 @@ func TestHandleInboundJournalsTurnAndClearsRowWithHistoryAppend(t *testing.T) {
 		_, err, ok := nextChange()
 		require.True(t, ok)
 		require.NoError(t, err)
-		entries, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
-		require.NoError(t, err)
+		entries := testHistoryEntries(t, service, conversationID)
 
 		if len(entries) == 1 && len(harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace)) > 0 {
 			progress := harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace)
 			require.Equal(t, "early-public", progress[0].Text)
 			require.Equal(t, harness.PublicProgressWorking, progress[0].State)
 			require.True(t, entries[0].Active)
-			reopened, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
-			require.NoError(t, err)
+			reopened := testHistoryEntries(t, service, conversationID)
 			require.Equal(t, entries, reopened, "reopen observes the committed text without another signal")
 
 			break

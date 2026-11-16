@@ -24,7 +24,6 @@ type Config struct {
 	Overlays             []string                                    `json:"overlays,omitempty"`
 	Web                  WebConfig                                   `json:"web,omitzero"`
 	ServerDisplayName    string                                      `json:"server_display_name,omitempty"`
-	Environment          []string                                    `json:"environment,omitempty"`
 	Logging              LoggingConfig                               `json:"logging"`
 	MCPExternal          MCPExternalConfig                           `json:"mcp_external"`
 	MCPServers           map[string]MCPServerConfig                  `json:"mcp_servers,omitempty"`
@@ -424,10 +423,6 @@ func (c *Config) Validate() error {
 		return errors.New("database_url is required")
 	}
 
-	if err := validateEnvironment(c.Environment); err != nil {
-		return err
-	}
-
 	if err := normalizeOpenAIConfig("openai", &c.OpenAI); err != nil {
 		return err
 	}
@@ -782,24 +777,6 @@ func validateMCPServerName(name string) error {
 
 	if len(invalid) > 0 {
 		return fmt.Errorf("name contains invalid characters: %s", strings.Join(invalid, ", "))
-	}
-
-	return nil
-}
-
-func validateEnvironment(environment []string) error {
-	for _, entry := range environment {
-		key, value, ok := strings.Cut(entry, "=")
-		switch {
-		case !ok:
-			return fmt.Errorf("environment entry %q must be in KEY=value form", entry)
-		case strings.TrimSpace(key) == "":
-			return errors.New("environment keys must not be empty")
-		case strings.ContainsRune(key, '\x00'):
-			return fmt.Errorf("environment key %q must not contain NUL", key)
-		case strings.ContainsRune(value, '\x00'):
-			return fmt.Errorf("environment value for %q must not contain NUL", key)
-		}
 	}
 
 	return nil

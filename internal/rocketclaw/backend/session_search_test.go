@@ -50,11 +50,13 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 	for id, facts := range map[string]conversationFacts{
 		searchChatA: {kind: KindSlackThread, slackChannel: "C1", slackThread: "1.1"}, searchChatB: {kind: KindSlackThread, slackChannel: "C9", slackThread: "2.2"},
 		searchChatW: {kind: KindWebChat},
-		searchChatD: {kind: KindWebChat, cronRun: daily}, searchChatE: {kind: KindWebChat, cronRun: weekly}, "external_mcp:private": {kind: KindExternalMCPRun},
+		searchChatD: {kind: KindWebChat, cronRun: daily}, searchChatE: {kind: KindWebChat, cronRun: weekly},
 	} {
 		_, err := s.recordConversation(ctx, &protocol.Conversation{ID: id, Space: map[string]string{searchChatA: "Blue garden", searchChatW: "Blue garden", searchChatB: "Amber"}[id]}, facts, harness.AgentStickyOff)
 		require.NoError(t, err)
 	}
+
+	require.NoError(t, s.RegisterExternalMCPConversation("ext-1", "main", &ExternalMCPSessionState{Agent: "producer", PrivateConversationID: "external_mcp:private", ManagedConversationID: searchChatX, OriginPairs: map[string]string{"Ticket": "T-1"}}))
 
 	for id, run := range map[string]*protocol.CronRun{
 		daily:  {Path: "cron/daily.md", At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
@@ -89,8 +91,6 @@ func newSessionSearchFixture(t *testing.T) (*SessionService, *slackLookupMock) {
 	require.NoError(t, s.startSubagent(ctx, searchChatD, &harness.SubagentWrite{Key: harness.ChildKey{Path: "/call-1", Turn: "turn-1", Call: "call-1"}, Agent: "main"}))
 	_, err := s.AppendEntryID(ctx, searchChatD+"/call-1", testSessionEntry("billing delegated", "support child"))
 	require.NoError(t, err)
-
-	require.NoError(t, s.UpsertExternalMCPSession("ext-1", &ExternalMCPSessionState{Agent: "producer", PrivateConversationID: "external_mcp:private", ManagedConversationID: searchChatX, OriginPairs: map[string]string{"Ticket": "T-1"}}))
 
 	_, err = s.UpdateConversationDetails(ctx, searchChatA, new(true), nil)
 	require.NoError(t, err)

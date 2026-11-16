@@ -1,7 +1,6 @@
 package harness
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -310,7 +309,7 @@ func TestBashPermissionGrantsSessionShellTempReadAndGlob(t *testing.T) {
 			return nil, err
 		}
 
-		return []string{rootedPathSubject(cmp.Or(params.FilePath, params.Filename))}, nil
+		return []string{rootedPathSubject(params.FilePath)}, nil
 	})
 	globTool := testPermissionReadTool(func(raw json.RawMessage) ([]string, error) {
 		var params globToolParams
@@ -447,7 +446,6 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 	}})
 	sessions := answeringSessions(map[string][]SessionEntry{}, false)
 	factory.childSessions = sessions
-	factory.autoApprovePermissions = true
 	probe := testLooperTool("probe")
 	probe.Permission = "probe"
 	probe.Subjects = func(json.RawMessage) ([]string, error) { return []string{"top"}, nil }
@@ -457,7 +455,6 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 	factory.baseTools["probe"] = probe
 	looper := testLooper(mock)
 	looper.agent = Agent{Name: "main"}
-	looper.AutoApprovePermissions = true
 	looper.PermissionReviewer = factory
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{auto, {Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}}
 	looper.Tools = map[string]looperTool{"task": factory.taskTool(), "probe": probe}
@@ -490,7 +487,7 @@ func TestChildRunsAppendUnderToolCallKeys(t *testing.T) {
 }
 
 func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
-	call := responseWithFunctionCalls("root", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call_0", "task", `{"description":"Review","prompt":"look","subagent_type":"child","command":""}`)})
+	call := responseWithFunctionCalls("root", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call_0", "task", `{"description":"Review","prompt":"look","subagent_type":"child"}`)})
 	allowed := []*responses.Response{call, responseWithMessage("review", `{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"ok"}`), responseWithMessage("root-final", "done")}
 	denied := []*responses.Response{call, responseWithMessage("review", `{"risk_level":"critical","user_authorization":"unknown","outcome":"deny","rationale":"no"}`), responseWithMessage("root-final", "done")}
 	saved := map[string][]SessionEntry{}
@@ -500,10 +497,8 @@ func TestPermissionReviewKeyIsUniquePerToolCall(t *testing.T) {
 		mock := mockResponses([][]*responses.Response{allowed, allowed, denied}[i]...)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"child": testAgent("child")}})
 		factory.childSessions = answeringSessions(saved, false)
-		factory.autoApprovePermissions = true
 		looper := testLooper(mock)
 		looper.agent = Agent{Name: "main"}
-		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = factory
 		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAuto}}}}}
 		looper.Tools = map[string]looperTool{"task": factory.taskTool()}
@@ -540,7 +535,7 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 	for _, turnID := range []string{"turn-1", "turn-1", "turn-2"} {
 		parent := testLooper(mockResponses())
 		parent.observations.turnID = turnID
-		result, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call_0"}), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review","command":""}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
+		result, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call_0"}), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review"}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nlook: done\n</task_result>", result.Output)
 
@@ -560,7 +555,7 @@ func TestTaskSubagentKeyIsUniquePerToolCall(t *testing.T) {
 	factory.childKey = ChildKey{Path: "/parent"}
 	parent := testLooper(mockResponses())
 	parent.observations.turnID = "turn-3"
-	_, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call_0"}), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review","command":""}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
+	_, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call_0"}), json.RawMessage(`{"subagent_type":"child","prompt":"look","description":"Review"}`), nil, toolCallMetadata{callID: "call_0", observations: parent.observations, progress: &PublicProgress{ID: "call_0"}})
 	require.NoError(t, err)
 
 	progress := PublicProgressFromTrace(parent.observations.trace)
@@ -584,7 +579,7 @@ func TestEasyTaskDelegatesByModel(t *testing.T) {
 		return err
 	}
 	args := func(model, tools, continueID string) string {
-		return fmt.Sprintf(`{"model":%q,"tools":%s,"prompt":"look","description":"Look","command":"","background":false,"continue":{"session_id":%q,"mode":"enqueue"}}`, model, tools, continueID)
+		return fmt.Sprintf(`{"model":%q,"tools":%s,"prompt":"look","description":"Look","background":false,"continue":{"session_id":%q,"mode":"enqueue"}}`, model, tools, continueID)
 	}
 
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{"main": agent}})
@@ -682,7 +677,7 @@ func TestAdvancedTaskRefusesEasyAgent(t *testing.T) {
 	require.NotContains(t, factory.taskDescription(), "- main:")
 
 	parent := testLooper(mockResponses())
-	_, err := factory.taskTool().Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call-1"}), json.RawMessage(`{"subagent_type":"main","prompt":"look","description":"Look","command":""}`), nil, toolCallMetadata{callID: "call-1", observations: parent.observations, progress: &PublicProgress{ID: "call-1"}})
+	_, err := factory.taskTool().Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: "call-1"}), json.RawMessage(`{"subagent_type":"main","prompt":"look","description":"Look"}`), nil, toolCallMetadata{callID: "call-1", observations: parent.observations, progress: &PublicProgress{ID: "call-1"}})
 	require.EqualError(t, err, "agent type main is an easy agent, which task cannot run; write to its sessions with rocketclaw_sessions instead")
 }
 
@@ -777,19 +772,6 @@ func testPermissionReadTool(subjects func(json.RawMessage) ([]string, error)) lo
 	tool.Subjects = subjects
 
 	return tool
-}
-
-func drainBufferedResponses(output <-chan ChatResponse) []ChatResponse {
-	var items []ChatResponse
-
-	for {
-		select {
-		case item := <-output:
-			items = append(items, item)
-		default:
-			return items
-		}
-	}
 }
 
 func permissionSetForActions(actions map[string]PermissionAction) PermissionSet {

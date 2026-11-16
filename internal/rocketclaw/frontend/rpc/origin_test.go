@@ -46,14 +46,20 @@ func TestChatOriginFactsMatchHistory(t *testing.T) {
 	}}, &mockCronJobs{LoadOneOffCronjobFunc: func(stem string) (protocol.OneOffCronjob, error) {
 		return protocol.OneOffCronjob{RelativePath: "cron/" + stem + ".md"}, nil
 	}})
-	scheduled := "cron:cron/daily.md:20260905T010000.000000001Z:first"
-	oneOff := "one-off-cron:cron/report.md:20260905T020000.000000002Z:second"
+	scheduled, scheduledAgain := "cron:cron/daily.md:20260905T010000.000000001Z:first", "cron:cron/daily.md:20260905T013000.000000003Z:third"
+	oneOff, oneOffLater := "one-off-cron:cron/report.md:20260905T020000.000000002Z:second", "one-off-cron:cron/report.md:20260905T030000.000000004Z:fourth"
 	cronSlack, plainSlack, destination := "slack-thread:C1:1.1", "slack-thread:C2:2.2", "slack-thread:C3:3.3"
 
 	for id, run := range map[string]*protocol.CronRun{
-		scheduled: {Path: "cron/daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, oneOff: {Path: "cron/report.md", At: time.Date(2026, 9, 5, 2, 0, 0, 2, time.UTC), OneOff: true},
+		scheduled: {Path: "cron/daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, scheduledAgain: {Path: "cron/daily.md", At: time.Date(2026, 9, 5, 1, 30, 0, 3, time.UTC)},
+		oneOff: {Path: "cron/report.md", At: time.Date(2026, 9, 5, 2, 0, 0, 2, time.UTC), OneOff: true}, oneOffLater: {Path: "cron/report.md", At: time.Date(2026, 9, 5, 3, 0, 0, 4, time.UTC), OneOff: true},
 	} {
-		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: id, Agent: map[string]string{scheduled: "cron-agent", oneOff: "report-agent"}[id], CreatedBy: "cron", Run: run}))
+		agent := "cron-agent"
+		if run.OneOff {
+			agent = "report-agent"
+		}
+
+		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: id, Agent: agent, CreatedBy: "cron", Run: run}))
 	}
 
 	for id, thread := range map[string]backend.ThreadState{
@@ -71,34 +77,14 @@ WHERE conversation_id IN ($1, $2)`, cronSlack, plainSlack)
 	require.NoError(t, err)
 	require.NoError(t, sessions.RegisterExternalMCPConversation("ext-1", "main", &backend.ExternalMCPSessionState{Agent: "producer", PrivateConversationID: "external_mcp:private", ManagedConversationID: destination, OriginPairs: map[string]string{"Ticket": "T-1", "b": "two"}}))
 
-	entry := func(id, source string, byEntryID bool) {
-		entryID, err := sessions.AppendEntryID(ctx, id, &harness.SessionEntry{Type: "turn"})
+	for run, chat := range map[string]string{scheduled: cronSlack, oneOff: plainSlack, "external_mcp:private": destination, scheduledAgain: "web-cron-synced", oneOffLater: "web-later-cron"} {
+		_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $2 WHERE conversation_id = $1`, run, chat)
 		require.NoError(t, err)
-
-		provenance := `jsonb_build_object('sync_source_conversation_id', $2::text)`
-		if byEntryID {
-			provenance = `jsonb_build_object('sync_source_entry_id', f.id)`
-		}
-
-		if source != "" {
-			_, err = db.ExecContext(ctx, `WITH first_entry AS (SELECT MIN(id) AS id FROM entries WHERE conversation_id = $2)
-UPDATE entries e SET entry_json = (e.entry_json::jsonb || `+provenance+`)::json FROM first_entry f WHERE e.id = $1`, entryID, source)
-			require.NoError(t, err)
-		}
 	}
-	for _, step := range []struct {
-		id, source string
-		byEntryID  bool
-	}{
-		{scheduled, "", false}, {oneOff, "", false}, {"external_mcp:private", "", false},
-		{cronSlack, scheduled, true}, {cronSlack, "", false},
-		{plainSlack, oneOff, true},
-		{destination, "external_mcp:private", true},
-		{"web:" + oneOff, oneOff, true},
-		{"web-cron-synced", scheduled, false}, {"web-cron-synced", "", false},
-		{"web-later-cron", "", false}, {"web-later-cron", oneOff, false},
-	} {
-		entry(step.id, step.source, step.byEntryID)
+
+	for _, id := range []string{scheduled, cronSlack, oneOff, plainSlack, "external_mcp:private", destination, "web:" + oneOff, scheduledAgain, "web-cron-synced", "web-later-cron", oneOffLater} {
+		_, err := sessions.AppendEntryID(ctx, id, &harness.SessionEntry{Type: "turn"})
+		require.NoError(t, err)
 	}
 
 	_, err = db.ExecContext(ctx, `INSERT INTO turns (id, conversation_id, inbound_json, output_trace_json, created_at_unix_ns, updated_at_unix_ns, history_anchor_id)

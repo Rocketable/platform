@@ -19,7 +19,7 @@ var _ permissionReviewer = &mockPermissionReviewer{}
 //
 //		// make and configure a mocked permissionReviewer
 //		mockedpermissionReviewer := &mockPermissionReviewer{
-//			reviewPermissionFunc: func(context1 context.Context, permissionReviewRequestMoqParam *permissionReviewRequest, chatResponseCh chan<- ChatResponse) permissionReviewDecision {
+//			reviewPermissionFunc: func(context1 context.Context, permissionReviewRequestMoqParam *permissionReviewRequest) permissionReviewDecision {
 //				panic("mock out the reviewPermission method")
 //			},
 //		}
@@ -30,7 +30,7 @@ var _ permissionReviewer = &mockPermissionReviewer{}
 //	}
 type mockPermissionReviewer struct {
 	// reviewPermissionFunc mocks the reviewPermission method.
-	reviewPermissionFunc func(context1 context.Context, permissionReviewRequestMoqParam *permissionReviewRequest, chatResponseCh chan<- ChatResponse) permissionReviewDecision
+	reviewPermissionFunc func(context1 context.Context, permissionReviewRequestMoqParam *permissionReviewRequest) permissionReviewDecision
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -40,31 +40,27 @@ type mockPermissionReviewer struct {
 			Context1 context.Context
 			// PermissionReviewRequestMoqParam is the permissionReviewRequestMoqParam argument value.
 			PermissionReviewRequestMoqParam *permissionReviewRequest
-			// ChatResponseCh is the chatResponseCh argument value.
-			ChatResponseCh chan<- ChatResponse
 		}
 	}
 	lockreviewPermission sync.RWMutex
 }
 
 // reviewPermission calls reviewPermissionFunc.
-func (mock *mockPermissionReviewer) reviewPermission(context1 context.Context, permissionReviewRequestMoqParam *permissionReviewRequest, chatResponseCh chan<- ChatResponse) permissionReviewDecision {
+func (mock *mockPermissionReviewer) reviewPermission(context1 context.Context, permissionReviewRequestMoqParam *permissionReviewRequest) permissionReviewDecision {
 	if mock.reviewPermissionFunc == nil {
 		panic("mockPermissionReviewer.reviewPermissionFunc: method is nil but permissionReviewer.reviewPermission was just called")
 	}
 	callInfo := struct {
 		Context1                        context.Context
 		PermissionReviewRequestMoqParam *permissionReviewRequest
-		ChatResponseCh                  chan<- ChatResponse
 	}{
 		Context1:                        context1,
 		PermissionReviewRequestMoqParam: permissionReviewRequestMoqParam,
-		ChatResponseCh:                  chatResponseCh,
 	}
 	mock.lockreviewPermission.Lock()
 	mock.calls.reviewPermission = append(mock.calls.reviewPermission, callInfo)
 	mock.lockreviewPermission.Unlock()
-	return mock.reviewPermissionFunc(context1, permissionReviewRequestMoqParam, chatResponseCh)
+	return mock.reviewPermissionFunc(context1, permissionReviewRequestMoqParam)
 }
 
 // reviewPermissionCalls gets all the calls that were made to reviewPermission.
@@ -74,12 +70,10 @@ func (mock *mockPermissionReviewer) reviewPermission(context1 context.Context, p
 func (mock *mockPermissionReviewer) reviewPermissionCalls() []struct {
 	Context1                        context.Context
 	PermissionReviewRequestMoqParam *permissionReviewRequest
-	ChatResponseCh                  chan<- ChatResponse
 } {
 	var calls []struct {
 		Context1                        context.Context
 		PermissionReviewRequestMoqParam *permissionReviewRequest
-		ChatResponseCh                  chan<- ChatResponse
 	}
 	mock.lockreviewPermission.RLock()
 	calls = mock.calls.reviewPermission

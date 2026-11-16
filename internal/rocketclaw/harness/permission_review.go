@@ -79,7 +79,7 @@ func (r PermissionReview) CodeModeCall(e *SessionEntry) (CodeModeCall, bool) {
 	return CodeModeCall{}, false
 }
 
-func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionReviewRequest, parentOutput chan<- ChatResponse) permissionReviewDecision {
+func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionReviewRequest) permissionReviewDecision {
 	agent := embeddedGuardianAgent()
 	agent.Model = f.autoApproverModel
 
@@ -151,15 +151,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 
 		decision, fallback := childFactory.decideReview(ctx, request, agent.Name, model, minConfidence, childFactory.childSystemPrompt(&decider), texts)
 		if fallback == "" {
-			if f.diagnostics {
-				emitPermissionReviewResult(parentOutput, "decision:"+model, decision)
-			}
-
 			return decision
-		}
-
-		if f.diagnostics {
-			emitSubagentDiagnostic(parentOutput, &SubagentDiagnostic{Name: agent.Name, Label: "auto-approver", Text: "decision model " + model + " fell back to " + agent.Name + ": " + fallback})
 		}
 	}
 
@@ -175,7 +167,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	reviewCtx, cancel := context.WithTimeout(ctx, permissionReviewTimeout)
 	defer cancel()
 
-	last, err := child.runPrompt(reviewCtx, request.Turn, texts, f.childSession, childSessionWriter{factory: &childFactory}, parentOutput)
+	last, err := child.runPrompt(reviewCtx, request.Turn, texts, f.childSession, childSessionWriter{factory: &childFactory})
 	if err != nil {
 		if reviewCtx.Err() == context.DeadlineExceeded {
 			return permissionReviewFailure("automatic permission review timed out while evaluating the requested approval")
@@ -187,10 +179,6 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	var decision permissionReviewDecision
 	if err := json.Unmarshal([]byte(last), &decision); err != nil {
 		return permissionReviewFailure("automatic permission reviewer returned invalid structured output: invalid JSON: " + err.Error())
-	}
-
-	if f.diagnostics {
-		emitPermissionReviewResult(parentOutput, agent.Name, decision)
 	}
 
 	return decision
@@ -286,22 +274,6 @@ func permissionReviewQuestions() []DecisionQuestion {
 		{Name: "outcome", Type: DecisionChoice, Instructions: permissionReviewOutcomeDescription, Options: []DecisionOption{{Value: "allow"}, {Value: "deny"}}},
 		{Name: "needs_investigation", Type: DecisionPredicate, Instructions: "Would judging this action's risk need file contents, script bodies, repository or system state, or truncated data that the transcript and planned action do not show?"},
 	}
-}
-
-func emitPermissionReviewResult(output chan<- ChatResponse, reviewer string, decision permissionReviewDecision) {
-	text := string(decision.Outcome)
-	if rationale := strings.TrimSpace(decision.Rationale); rationale != "" {
-		text += ": " + rationale
-	}
-
-	emitSubagentDiagnostic(output, &SubagentDiagnostic{
-		Name:  reviewer,
-		Label: "auto-approver",
-		Text:  text,
-		Subagent: &SubagentDiagnostic{
-			Label: "result",
-		},
-	})
 }
 
 func permissionReviewFailure(rationale string) permissionReviewDecision {

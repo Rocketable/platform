@@ -396,8 +396,7 @@ func testOpenAILoop(t *testing.T, client *openai.Client) *Runtime {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	config := testConfig(dir)
-	loop, err := NewWithModelResolver(testResolverForClient(client), config, root, Agents{Items: map[string]Agent{
+	loop, err := NewWithModelResolver(testResolverForClient(client), testConfig(dir), root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Model: "gpt-6.1-sol", Prompt: "prompt"},
 	}}, Skills{Items: map[string]Skill{}}, "main")
 	require.NoError(t, err)

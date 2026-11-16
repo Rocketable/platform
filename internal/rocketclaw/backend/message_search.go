@@ -146,7 +146,7 @@ const searchableSQL = `, chats AS (
     WHERE r.reports_to IS DISTINCT FROM c.conversation_id
 ), shown_rows AS (
     SELECT s.conversation_id, e.id AS entry_id, e.id AS position, NULL::bigint AS created_at_unix_ns, '' AS turn_id, s.cut_entry, s.cut_index, e.search_text
-    FROM shown s JOIN entries e ON e.conversation_id = s.source COLLATE "C" WHERE e.audience <> 'sandbox'
+    FROM shown s JOIN entries e ON e.conversation_id = s.source COLLATE "C"
     UNION ALL SELECT c.conversation_id, 0, a.history_anchor_id, a.created_at_unix_ns, a.id, c.cut_entry, c.cut_index, a.search_text
     FROM chats c JOIN turns a USING (conversation_id)
 ), searchable AS (
@@ -227,7 +227,7 @@ const visibleChatsSQL = `visible_chats AS NOT MATERIALIZED (SELECT * FROM conver
 
 const searchMessagesSQL = `WITH found AS (
     SELECT e.conversation_id, e.id, e.search_text, r.reports_to FROM entries e LEFT JOIN conversations r ON r.conversation_id = e.conversation_id
-    WHERE e.search_text LIKE ANY ($1::text[]) AND e.audience <> 'sandbox'
+    WHERE e.search_text LIKE ANY ($1::text[])
 ), matching AS (
     SELECT COALESCE(reports_to, conversation_id) AS conversation_id, id AS entry_id, id AS position, NULL::bigint AS created_at_unix_ns, '' AS turn_id, search_text FROM found
     UNION ALL SELECT w.conversation_id, f.id AS entry_id, f.id AS position, NULL::bigint AS created_at_unix_ns, '' AS turn_id, f.search_text FROM found f JOIN conversations w ON w.continues = f.conversation_id

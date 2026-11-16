@@ -26,7 +26,6 @@ const (
 	mcpPermissionBucket       = "mcp"
 	codeModeApproveSubject    = "code_mode_approve"
 	AllowBackgroundSubject    = "allow_background"
-	executeNestedToolPrefix   = executeToolName + " → "
 	codeModeRawStringRule     = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in "...". Inside that string, bash(command=...) takes r'''...''' only, not Starlark "..." or '...'. r"..." is raw but single-line; a real newline needs r'''...'''. Example execute argument: {"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
 )
 
@@ -335,7 +334,7 @@ func callExecute(ctx context.Context, registry mcpclient.Registry, permissions P
 			return errors.Join(errCheck, tc.observations.recordCodeModeCall(ctx, record.finish(ToolResult{}, errCheck), false))
 		},
 		mcpCall,
-		executeToolDiagnostics{},
+		inertToolCallObserver{},
 		host,
 	)
 	if errRun != nil {
@@ -841,28 +840,9 @@ func recordHostCall(ctx context.Context, name string, args map[string]any, resum
 	return result, errors.Join(errRun, saveStep(ctx, tc.looper.Journal, key, &want), tc.observations.recordCodeModeCall(ctx, record.finish(result, errRun), false))
 }
 
-type executeToolDiagnostics struct{}
+type inertToolCallObserver struct{}
 
-func (executeToolDiagnostics) ObserveToolCall(ctx context.Context, path []string, nestedName string, args map[string]any) {
-	tc, _ := toolCallContextFrom(ctx)
-	if !tc.looper.Diagnostics || tc.output == nil {
-		return
-	}
-
-	raw, _ := json.Marshal(args)
-
-	namePath := append(slices.Clone(path), nestedName)
-	nestedName = strings.Join(namePath, " → ")
-
-	emitChatResponse(tc.output, ChatResponse{
-		Kind: ChatResponseAssistantTool,
-		Tool: &ToolDiagnostic{
-			Phase:     toolDiagnosticPhaseCall,
-			Name:      executeNestedToolPrefix + nestedName,
-			Arguments: raw,
-		},
-	})
-}
+func (inertToolCallObserver) ObserveToolCall(context.Context, []string, string, map[string]any) {}
 
 func codeModeHostInputSchema(name string, def *responses.FunctionToolParam) map[string]any {
 	if def == nil || def.Parameters == nil {

@@ -36,7 +36,7 @@ func messageSearchTestRows(t *testing.T, s *SessionService, conversationID strin
 ), sources AS (
     SELECT $1::text AS conversation_id UNION SELECT conversation_id FROM reporting EXCEPT SELECT conversation_id FROM unreported
 ), shown AS (
-    SELECT e.id, e.search_text FROM sources r JOIN entries e USING (conversation_id) WHERE e.audience <> 'sandbox'
+    SELECT e.id, e.search_text FROM sources r JOIN entries e USING (conversation_id)
     UNION ALL SELECT 0, search_text FROM turns WHERE conversation_id = $1
 )
 SELECT id, search_text FROM shown WHERE search_text IS NOT NULL ORDER BY id`, "message search rows", func(row rowScanner) (messageSearchTestRow, error) {
@@ -212,27 +212,6 @@ func TestMessageSearchIndexesBoundRunEntries(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = (stateDAO{db: s.db}).bindRun(ctx, "cron:broken", "web-dest")
 	require.ErrorContains(t, err, "decode")
-}
-
-func TestMessageSearchSkipsSandboxEntries(t *testing.T) {
-	t.Parallel()
-
-	s := newTestSessionService(t)
-	ctx := t.Context()
-	recordTestConversations(t, s, "job", map[string]ConversationKind{"cron:daily": KindCronRun})
-	require.NoError(t, (&Runtime{Sessions: s}).CreateConversation(ctx, protocol.Conversation{ID: "chat", Agent: "main"}))
-	bindTestRun(t, s, "cron:daily", "chat")
-
-	reported, err := s.AppendEntryID(ctx, "cron:daily", testReplayEntry(`{"type":"compaction","id":"cmp_1","encrypted_content":"sealed"}`, `{"type":"message","role":"user","content":"report summary"}`))
-	require.NoError(t, err)
-	sandboxed, err := s.AppendEntryID(ctx, "cron:daily", testReplayEntry(`{"type":"message","role":"user","content":"compacted summary of earlier work"}`))
-	require.NoError(t, err)
-	_, err = s.db.ExecContext(ctx, `UPDATE entries SET audience = 'sandbox' WHERE id = $1`, sandboxed)
-	require.NoError(t, err)
-
-	hits, err := s.SearchMessages(ctx, "summary", nil)
-	require.NoError(t, err)
-	require.Equal(t, []MessageSearchHit{{ConversationID: "chat", Role: "user", Text: "report summary", MessageID: fmt.Sprintf("%d:0", reported)}}, hits)
 }
 
 func TestMessageSearchFindsContinuedRun(t *testing.T) {
@@ -543,8 +522,7 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 
 	endTestTurn(t, s, "web-chat", "turn-1", protocol.TerminalStopped)
 
-	transcript, err := s.ObserveTranscript(ctx, "web-chat", 0, 0, nil)
-	require.NoError(t, err)
+	transcript := testHistoryEntries(t, s, "web-chat")
 	require.Len(t, transcript, 1)
 	require.Equal(t, protocol.TerminalStopped, transcript[0].Terminal)
 	require.Equal(t, []messageSearchTestRow{
@@ -555,7 +533,7 @@ func TestMessageSearchIndexesEndedTurns(t *testing.T) {
 	require.Empty(t, search.Principals, "a chat without saved history is not listed in the sidebar")
 	require.Empty(t, matches)
 
-	_, err = s.AppendEntryID(ctx, "web-chat", testReplayEntry())
+	_, err := s.AppendEntryID(ctx, "web-chat", testReplayEntry())
 	require.NoError(t, err)
 	_, matches = searchTestSessions(t, s, noSlackLookups{}, `principal:"Stopped Writer"`, SearchFields)
 	require.Len(t, matches, 1)
@@ -838,8 +816,7 @@ func TestSearchMessagesMatchesGoReference(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		transcript, err := s.ObserveTranscript(ctx, id, 0, 0, nil)
-		require.NoError(t, err)
+		transcript := testHistoryEntries(t, s, id)
 
 		for _, entry := range transcript {
 			for i, raw := range entry.Entry.ReplayInput {

@@ -45,30 +45,27 @@ func withCustomShell(shell shellCommander, customShell *CustomShell, command str
 }
 
 type Config struct {
-	AutoApproverModel          shared.ResponsesModel
-	AutoApproverDecisionModel  string
-	AutoApproverMinConfidence  float64
-	Deciders                   map[string]Decider
-	Diagnostics                bool
-	ExperimentalStrongerSkills bool
-	ExpandPromptShellCommands  PromptShellCommandExpansion
-	ParallelToolCalls          int
-	ShellTempDir               string
-	SpillDir                   string
-	RetainedResultDir          string
-	AutoApprovePermissions     bool
-	Observability              ObservabilityConfig
-	ChildSessions              ChildSessions
-	Journal                    Journal
-	BackgroundJobs             BackgroundJobs
-	CustomTools                []Tool
-	ShellEnv                   map[string]string
-	ChildContext               []SessionEntry
-	OriginHeader               string
-	ShellCommand               shellCommander
-	Sandbox                    sandbox.Runtime
-	MCPServers                 map[string]mcpclient.ServerConfig
-	MCPWorkspace               string
+	AutoApproverModel         shared.ResponsesModel
+	AutoApproverDecisionModel string
+	AutoApproverMinConfidence float64
+	Deciders                  map[string]Decider
+	ExpandPromptShellCommands PromptShellCommandExpansion
+	ParallelToolCalls         int
+	ShellTempDir              string
+	SpillDir                  string
+	RetainedResultDir         string
+	Observability             ObservabilityConfig
+	ChildSessions             ChildSessions
+	Journal                   Journal
+	BackgroundJobs            BackgroundJobs
+	CustomTools               []Tool
+	ShellEnv                  map[string]string
+	ChildContext              []SessionEntry
+	OriginHeader              string
+	ShellCommand              shellCommander
+	Sandbox                   sandbox.Runtime
+	MCPServers                map[string]mcpclient.ServerConfig
+	MCPWorkspace              string
 }
 
 type ChildSessions interface {
@@ -120,7 +117,6 @@ type PromptShellCommandExpansion struct {
 	PrimaryPrompts  bool
 	SubagentPrompts bool
 	SkillPrompts    bool
-	InputPrompts    bool
 }
 
 type shellTempConfig struct {
@@ -255,7 +251,7 @@ func NewWithModelResolver(
 		return nil, errors.New("agents are required")
 	}
 
-	if err := validateAutoPermissionReviewers(config.AutoApprovePermissions, agents); err != nil {
+	if err := validateAutoPermissionReviewers(agents); err != nil {
 		return nil, err
 	}
 
@@ -315,35 +311,32 @@ func NewWithModelResolver(
 	mcpRegistry := mcpclient.New(config.MCPWorkspace, config.MCPServers)
 
 	factory := &toolFactory{
-		resolver:                   resolver,
-		rootInstructions:           strings.TrimSpace(rootInstructions),
-		workspaceInstructions:      workspaceInstructions,
-		autoApproverModel:          cmp.Or(config.AutoApproverModel, defaultOpenAIModel),
-		autoApproverDecisionModel:  config.AutoApproverDecisionModel,
-		autoApproverMinConfidence:  config.AutoApproverMinConfidence,
-		deciders:                   config.Deciders,
-		reasoningEffort:            reasoningEffort,
-		parallelToolCalls:          config.ParallelToolCalls,
-		diagnostics:                config.Diagnostics,
-		experimentalStrongerSkills: config.ExperimentalStrongerSkills,
-		expandPromptShellCommands:  config.ExpandPromptShellCommands,
-		promptExpansion:            promptExpansion,
-		agent:                      agentForTools,
-		recursionRemaining:         activeAgent.MaxRecursion,
-		agents:                     agents,
-		skills:                     skills,
-		baseTools:                  baseTools,
-		shellSystem:                shellSystem,
-		childContext:               config.ChildContext,
-		originHeader:               config.OriginHeader,
-		shellTemp:                  shellTemp,
-		spillRel:                   spillRel,
-		retainedRel:                filepath.Join(spillRel, config.RetainedResultDir),
-		autoApprovePermissions:     config.AutoApprovePermissions,
-		observability:              config.Observability,
-		childSessions:              config.ChildSessions,
-		backgroundJobs:             config.BackgroundJobs,
-		mcpRegistry:                mcpRegistry,
+		resolver:                  resolver,
+		rootInstructions:          strings.TrimSpace(rootInstructions),
+		workspaceInstructions:     workspaceInstructions,
+		autoApproverModel:         cmp.Or(config.AutoApproverModel, defaultOpenAIModel),
+		autoApproverDecisionModel: config.AutoApproverDecisionModel,
+		autoApproverMinConfidence: config.AutoApproverMinConfidence,
+		deciders:                  config.Deciders,
+		reasoningEffort:           reasoningEffort,
+		parallelToolCalls:         config.ParallelToolCalls,
+		expandPromptShellCommands: config.ExpandPromptShellCommands,
+		promptExpansion:           promptExpansion,
+		agent:                     agentForTools,
+		recursionRemaining:        activeAgent.MaxRecursion,
+		agents:                    agents,
+		skills:                    skills,
+		baseTools:                 baseTools,
+		shellSystem:               shellSystem,
+		childContext:              config.ChildContext,
+		originHeader:              config.OriginHeader,
+		shellTemp:                 shellTemp,
+		spillRel:                  spillRel,
+		retainedRel:               filepath.Join(spillRel, config.RetainedResultDir),
+		observability:             config.Observability,
+		childSessions:             config.ChildSessions,
+		backgroundJobs:            config.BackgroundJobs,
+		mcpRegistry:               mcpRegistry,
 	}
 
 	looper, err := factory.newLooper(agentForTools, factory.sessionSystemPrompt(context.Background(), agentForTools))
@@ -351,7 +344,7 @@ func NewWithModelResolver(
 		return nil, fmt.Errorf("agent %q model: %w", activeAgent.Name, err)
 	}
 
-	looper.Journal, looper.expandInputPrompts = config.Journal, config.ExpandPromptShellCommands.InputPrompts
+	looper.Journal = config.Journal
 
 	return looper, nil
 }
@@ -383,11 +376,7 @@ func (r *Runtime) RestrictTools(names []string) error {
 	return nil
 }
 
-func validateAutoPermissionReviewers(enabled bool, agents Agents) error {
-	if !enabled {
-		return nil
-	}
-
+func validateAutoPermissionReviewers(agents Agents) error {
 	if _, ok := agents.Items[guardianAgentName]; ok {
 		return fmt.Errorf("agent name %q is reserved when auto permission approval is enabled", guardianAgentName)
 	}

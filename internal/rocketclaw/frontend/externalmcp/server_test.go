@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"syscall"
 	"testing"
 
@@ -20,7 +19,7 @@ import (
 )
 
 func TestStartSessionPromptServerCallsHandler(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, attachments []SessionAttachment) (SessionResult, error) {
+	endpoint := startTestServer(t, nil, func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, attachments []SessionAttachment) (SessionResult, error) {
 		assert.Empty(t, username)
 		assert.Equal(t, "test-conversation", externalConversationID)
 		assert.Equal(t, "main", agent)
@@ -30,11 +29,8 @@ func TestStartSessionPromptServerCallsHandler(t *testing.T) {
 
 		return SessionResult{ExternalConversationID: externalConversationID, Agent: "main", Answer: "plain text reply"}, nil
 	})
-	require.NoError(t, err)
 
-	defer func() { require.NoError(t, server.Close(context.Background())) }()
-
-	result := callSessionPrompt(t, server.url, "", "", "main", "what now?", nil)
+	result := callSessionPrompt(t, endpoint, "", "", "main", "what now?", nil)
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "plain text reply", content.Text)
@@ -42,7 +38,7 @@ func TestStartSessionPromptServerCallsHandler(t *testing.T) {
 }
 
 func TestStartSessionPromptServerReturnsExternalConversationID(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, externalConversationID, agent, input string, metadata map[string]string, _ []SessionAttachment) (SessionResult, error) {
+	endpoint := startTestServer(t, nil, func(_ context.Context, _, externalConversationID, agent, input string, metadata map[string]string, _ []SessionAttachment) (SessionResult, error) {
 		assert.Equal(t, "test-conversation", externalConversationID)
 		assert.Equal(t, "planner", agent)
 		assert.Equal(t, "what now?", input)
@@ -50,11 +46,8 @@ func TestStartSessionPromptServerReturnsExternalConversationID(t *testing.T) {
 
 		return SessionResult{ExternalConversationID: "external_mcp:planner:abc", Agent: "planner", Answer: "planner reply"}, nil
 	})
-	require.NoError(t, err)
 
-	defer func() { require.NoError(t, server.Close(context.Background())) }()
-
-	result := callSessionPrompt(t, server.url, "", "", "planner", "what now?", map[string]string{"ticket-id": "123"})
+	result := callSessionPrompt(t, endpoint, "", "", "planner", "what now?", map[string]string{"ticket-id": "123"})
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "planner reply", content.Text)
@@ -62,25 +55,22 @@ func TestStartSessionPromptServerReturnsExternalConversationID(t *testing.T) {
 }
 
 func TestStartSessionPromptServerTrimsIDAndAgent(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, id, agent, input string, _ map[string]string, _ []SessionAttachment) (SessionResult, error) {
+	endpoint := startTestServer(t, nil, func(_ context.Context, _, id, agent, input string, _ map[string]string, _ []SessionAttachment) (SessionResult, error) {
 		assert.Equal(t, "external-1", id)
 		assert.Equal(t, "main", agent)
 		assert.Equal(t, " what now?\n", input)
 
 		return SessionResult{Answer: "plain text reply"}, nil
 	})
-	require.NoError(t, err)
 
-	defer func() { require.NoError(t, server.Close(context.Background())) }()
-
-	result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": " external-1\t", "agent": "\nmain ", "input": " what now?\n"})
+	result := callTool(t, endpoint, "", "", map[string]any{"external_conversation_id": " external-1\t", "agent": "\nmain ", "input": " what now?\n"})
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "plain text reply", content.Text)
 }
 
 func TestStartSessionPromptServerAttachments(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, _, _, input string, _ map[string]string, attachments []SessionAttachment) (SessionResult, error) {
+	endpoint := startTestServer(t, nil, func(_ context.Context, _, _, _, input string, _ map[string]string, attachments []SessionAttachment) (SessionResult, error) {
 		assert.Equal(t, "look", input)
 		assert.Equal(t, []SessionAttachment{{Name: "scorecard.png", MIMEType: "image/png", DataBase64: base64.StdEncoding.EncodeToString([]byte("png"))}}, attachments)
 
@@ -90,11 +80,8 @@ func TestStartSessionPromptServerAttachments(t *testing.T) {
 			{MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("unnamed"))},
 		}}, nil
 	})
-	require.NoError(t, err)
 
-	defer func() { require.NoError(t, server.Close(context.Background())) }()
-
-	result := callTool(t, server.url, "", "", map[string]any{
+	result := callTool(t, endpoint, "", "", map[string]any{
 		"external_conversation_id": "external-1",
 		"agent":                    "main",
 		"input":                    "look",
@@ -155,13 +142,11 @@ func TestStartSessionPromptServerReturnsErrors(t *testing.T) {
 		}}, wantErr: "decode session result attachment 2: illegal base64 data at input byte 0"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error) {
+			endpoint := startTestServer(t, nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error) {
 				return tt.reply, tt.err
 			})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
-			result := callSessionPrompt(t, server.url, "", "", "main", "hello", nil)
+			result := callSessionPrompt(t, endpoint, "", "", "main", "hello", nil)
 			require.True(t, result.IsError)
 			require.Len(t, result.Content, 1)
 			content, ok := result.Content[0].(*mcp.TextContent)
@@ -173,18 +158,16 @@ func TestStartSessionPromptServerReturnsErrors(t *testing.T) {
 }
 
 func TestStartSessionPromptServerUsesStatelessProtocol(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, externalConversationID, agent, input string, _ map[string]string, _ []SessionAttachment) (SessionResult, error) {
+	endpoint := startTestServer(t, nil, func(_ context.Context, _, externalConversationID, agent, input string, _ map[string]string, _ []SessionAttachment) (SessionResult, error) {
 		assert.Equal(t, "external-1", externalConversationID)
 		assert.Equal(t, "main", agent)
 		assert.Equal(t, "hello", input)
 
 		return SessionResult{ExternalConversationID: externalConversationID, Agent: agent, Answer: "reply"}, nil
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
-	transport := &mcp.StreamableClientTransport{Endpoint: server.url, DisableStandaloneSSE: true}
+	transport := &mcp.StreamableClientTransport{Endpoint: endpoint, DisableStandaloneSSE: true}
 	session, err := client.Connect(t.Context(), transport, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, session.Close()) })
@@ -236,34 +219,30 @@ func TestStartSessionPromptServerUsesStatelessProtocol(t *testing.T) {
 }
 
 func TestStartSessionPromptServerIgnoresSlackChannel(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error) {
+	endpoint := startTestServer(t, nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error) {
 		return SessionResult{Answer: "reply"}, nil
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
 	for _, channel := range []any{"#ops", "", nil} {
-		result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": "hello", "slack_channel": channel})
+		result := callTool(t, endpoint, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": "hello", "slack_channel": channel})
 		require.False(t, result.IsError, "%v", channel)
 		assert.Equal(t, "reply", result.Content[0].(*mcp.TextContent).Text)
 	}
 }
 
 func TestStartSessionPromptServerRejectsBlankInputWithoutAttachments(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error) {
+	endpoint := startTestServer(t, nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error) {
 		t.Fatal("handler called for blank turn")
 		return SessionResult{}, nil
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
-	result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": " \n\t"})
+	result := callTool(t, endpoint, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": " \n\t"})
 	assert.Contains(t, result.Content[0].(*mcp.TextContent).Text, "input or attachments")
 }
 
 func TestStartSessionPromptServerAcceptsAttachmentsWithoutInput(t *testing.T) {
 	called := false
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, _, _, input string, _ map[string]string, attachments []SessionAttachment) (SessionResult, error) {
+	endpoint := startTestServer(t, nil, func(_ context.Context, _, _, _, input string, _ map[string]string, attachments []SessionAttachment) (SessionResult, error) {
 		called = true
 
 		assert.Empty(t, input)
@@ -271,16 +250,14 @@ func TestStartSessionPromptServerAcceptsAttachmentsWithoutInput(t *testing.T) {
 
 		return SessionResult{Answer: "accepted"}, nil
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
-	result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": "", "attachments": []any{map[string]any{"data_base64": "eA=="}}})
+	result := callTool(t, endpoint, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": "", "attachments": []any{map[string]any{"data_base64": "eA=="}}})
 	require.True(t, called)
 	assert.Equal(t, "accepted", result.Content[0].(*mcp.TextContent).Text)
 }
 
 func TestStartSessionPromptServerRequiresBasicAuth(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"alice": "secret"}, func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, _ []SessionAttachment) (SessionResult, error) {
+	endpoint := startTestServer(t, map[string]string{"alice": "secret"}, func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, _ []SessionAttachment) (SessionResult, error) {
 		assert.Equal(t, "alice", username)
 		assert.Equal(t, "test-conversation", externalConversationID)
 		assert.Equal(t, "main", agent)
@@ -289,9 +266,6 @@ func TestStartSessionPromptServerRequiresBasicAuth(t *testing.T) {
 
 		return SessionResult{Answer: "plain text reply"}, nil
 	})
-	require.NoError(t, err)
-
-	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
 	body, err := json.Marshal([]map[string]any{{
 		"jsonrpc": "2.0",
@@ -305,7 +279,7 @@ func TestStartSessionPromptServerRequiresBasicAuth(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, endpoint, bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
@@ -317,26 +291,25 @@ func TestStartSessionPromptServerRequiresBasicAuth(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	assert.Equal(t, `Basic realm="rocketclaw external mcp"`, resp.Header.Get("WWW-Authenticate"))
 
-	result := callSessionPrompt(t, server.url, "alice", "secret", "main", "what now?", nil)
+	result := callSessionPrompt(t, endpoint, "alice", "secret", "main", "what now?", nil)
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "plain text reply", content.Text)
 }
 
-func TestServerAccessorsAndClose(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error) {
+func TestServerClose(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	server := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), listener, nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error) {
 		return SessionResult{Answer: "plain text reply"}, nil
 	})
-	require.NoError(t, err)
 
-	callSessionPrompt(t, server.URL(), "", "", "main", "hello", nil)
-
-	endpoint, err := url.Parse(server.URL())
-	require.NoError(t, err)
+	callSessionPrompt(t, "http://"+listener.Addr().String()+ExternalMCPPath, "", "", "main", "hello", nil)
 
 	require.NoError(t, server.Close(context.Background()))
 
-	conn, err := new(net.Dialer).DialContext(t.Context(), "tcp", endpoint.Host)
+	conn, err := new(net.Dialer).DialContext(t.Context(), "tcp", listener.Addr().String())
 	if err == nil {
 		require.NoError(t, conn.Close())
 	}
@@ -345,11 +318,16 @@ func TestServerAccessorsAndClose(t *testing.T) {
 	require.NoError(t, server.Close(context.Background()))
 }
 
-func TestStartSessionPromptServerRejectsInvalidListenAddr(t *testing.T) {
-	_, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "bad listen address", nil, func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error) {
-		return SessionResult{}, nil
-	})
-	require.ErrorContains(t, err, "listen for external MCP HTTP server")
+func startTestServer(t *testing.T, users map[string]string, handler func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error)) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	server := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), listener, users, handler)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	return "http://" + listener.Addr().String() + ExternalMCPPath
 }
 
 func callSessionPrompt(t *testing.T, endpoint, username, password, agent, input string, metadata map[string]string) *mcp.CallToolResult {

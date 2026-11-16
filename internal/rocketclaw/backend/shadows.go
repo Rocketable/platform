@@ -724,10 +724,6 @@ func (s *SessionService) bindShadows(ctx context.Context, db stateStoreDB, paren
 
 		for i := range observed {
 			entry := &observed[i]
-			if entry.Synced && entry.SourceConversationID == "" {
-				continue
-			}
-
 			if entry.SourceConversationID != "" {
 				producers = append(producers, entry.SourceConversationID)
 			}

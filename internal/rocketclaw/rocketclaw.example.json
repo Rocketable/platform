@@ -5,9 +5,6 @@
     "driver": "filesystem",
     "path": "/srv/rocketclaw/attachments"
   },
-  "environment": [
-    "EXAMPLE_API_TOKEN=set-me"
-  ],
   "overlays": [
     "git@github.com:Rocketable/overlay1.git@main",
     "https://github.com/Rocketable/overlay2.git@commit-hash",

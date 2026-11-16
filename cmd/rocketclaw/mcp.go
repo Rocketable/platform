@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -48,16 +49,16 @@ func (i *mcpAgentIndex) Exposed(agent string) bool {
 
 func startExternalMCPServer(
 	ctx context.Context,
-	cfg *config.Config,
+	listener net.Listener,
 	users map[string]string,
 	agents *mcpAgentIndex,
 	store *backend.SessionService,
 	turns frontend.Backend,
 	logger *slog.Logger,
-) (*externalmcp.Server, error) {
+) *externalmcp.Server {
 	locks := backend.NewKeyedConversationLocks()
 
-	server, err := externalmcp.StartSessionPromptServer(ctx, logger, cfg.MCPExternal.ListenAddr, users, func(callCtx context.Context, username, externalConversationID, requestedAgent, input string, metadata map[string]string, attachments []externalmcp.SessionAttachment) (result externalmcp.SessionResult, err error) {
+	return externalmcp.StartSessionPromptServer(ctx, logger, listener, users, func(callCtx context.Context, username, externalConversationID, requestedAgent, input string, metadata map[string]string, attachments []externalmcp.SessionAttachment) (result externalmcp.SessionResult, err error) {
 		var (
 			managedConversationID string
 			durableRegistration   bool
@@ -145,11 +146,6 @@ func startExternalMCPServer(
 
 		return result, err
 	})
-	if err != nil {
-		return nil, fmt.Errorf("start external MCP HTTP server: %w", err)
-	}
-
-	return server, nil
 }
 
 func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (protocol.InboundContent, error) {

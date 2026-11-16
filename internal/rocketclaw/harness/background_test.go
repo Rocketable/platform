@@ -21,7 +21,7 @@ import (
 
 const (
 	todayExecuteParameters = `{"additionalProperties":false,"properties":{"code":{"description":"Starlark source defining def main() that returns a string (or JSON-encodable value). Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in \"...\". Inside that string, bash(command=...) takes r'''...''' only, not Starlark \"...\" or '...'. r\"...\" is raw but single-line; a real newline needs r'''...'''. Example execute argument: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun. Concurrency: gather([lambda: …], concurrency=16) — one list of zero-arg lambdas, not varargs.","type":"string"},"description":{"description":"A short 3-5 word label for the script, displayed to the user.","type":"string"}},"required":["code","description"],"type":"object"}`
-	todayTaskParameters    = `{"additionalProperties":false,"properties":{"command":{"type":"string"},"description":{"type":"string"},"prompt":{"type":"string"},"subagent_type":{"type":"string"}},"required":["command","description","prompt","subagent_type"],"type":"object"}`
+	todayTaskParameters    = `{"additionalProperties":false,"properties":{"description":{"type":"string"},"prompt":{"type":"string"},"subagent_type":{"type":"string"}},"required":["description","prompt","subagent_type"],"type":"object"}`
 	backgroundPermissions  = `{rocketclaw: {allow_background: allow}, task: allow, read: allow, probe: auto}`
 )
 
@@ -65,7 +65,7 @@ func TestBackgroundSchemasFollowPermission(t *testing.T) {
 			require.NoError(t, json.Unmarshal(marshalParameters(t, model[executeToolName].Definition.Parameters), &execute))
 			require.NoError(t, json.Unmarshal(marshalParameters(t, model["task"].Definition.Parameters), &task))
 			require.Equal(t, []string{"background", "code", "description"}, execute.Required)
-			require.Equal(t, []string{"background", "command", "continue", "description", "prompt", "subagent_type"}, task.Required)
+			require.Equal(t, []string{"background", "continue", "description", "prompt", "subagent_type"}, task.Required)
 			require.Equal(t, "boolean", execute.Properties["background"].Type)
 			require.Equal(t, backgroundExecuteParam, execute.Properties["background"].Description)
 			require.Contains(t, execute.Properties["background"].Description, "result_id lasts 7 days")
@@ -101,7 +101,7 @@ func TestSudoAgentSeesEveryTool(t *testing.T) {
 
 func TestBackgroundRequestsRejectedWhenNotOffered(t *testing.T) {
 	executeArgs := `{"code":"def main():\n    return probe()\n","description":"","background":true}`
-	taskArgs := `{"subagent_type":"missing","prompt":"look","description":"Review","command":"","background":true,"continue":""}`
+	taskArgs := `{"subagent_type":"missing","prompt":"look","description":"Review","background":true,"continue":""}`
 
 	for _, tc := range []struct {
 		name, permissions, tool, args string
@@ -153,7 +153,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 		},
 		{
 			name: "moved task", tool: "task",
-			args: `{"subagent_type":"child","prompt":"look","description":"Review","command":"","background":false,"continue":{"session_id":"","mode":"enqueue"}}`,
+			args: `{"subagent_type":"child","prompt":"look","description":"Review","background":false,"continue":{"session_id":"","mode":"enqueue"}}`,
 			job:  BackgroundJob{ID: "turn/call/call-1", Kind: BackgroundKindTask, Label: "Review", Agent: "main", SubagentKey: taskKey("turn", "call-1"), CallID: "call-1"},
 		},
 	} {
@@ -217,7 +217,7 @@ func TestBackgroundCallReturnsJobWhileWorkRuns(t *testing.T) {
 				nested := 0
 
 				for item := range output {
-					if item.Tool != nil && item.Tool.Name == executeNestedToolPrefix+"probe" {
+					if item == assistantCommentary("probe") {
 						nested++
 					}
 				}
@@ -377,7 +377,7 @@ func TestTaskContinueSteerJoinsRunningTurn(t *testing.T) {
 func TestTaskContinueNeedsTaskPermission(t *testing.T) {
 	jobs := enabledBackgroundJobs()
 	loop := backgroundTestLooper(t, `{rocketclaw: {allow_background: allow}, task: {reviewer: allow}}`, jobs, nil)
-	args := `{"subagent_type":"child","prompt":"more","description":"Review","command":"","background":false,"continue":{"session_id":"/call-1","mode":"steer"}}`
+	args := `{"subagent_type":"child","prompt":"more","description":"Review","background":false,"continue":{"session_id":"/call-1","mode":"steer"}}`
 
 	outputs, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-3", "task", args)}), nil, nil, make(chan ChatResponse, 20))
 	require.NoError(t, err)
@@ -439,7 +439,7 @@ func TestSteerSwitchesRunningSessionType(t *testing.T) {
 				loop.PermissionReviewer.(*toolFactory).baseTools["probe"] = probe
 				loop.Tools["probe"], loop.SteerDrain = probe, drain
 
-				return loop.runPrompt(t.Context(), "turn-1", []string{"probe it"}, func(func(SessionEntry, error) bool) {}, &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error { saved = append(saved, *entry); return nil }}, make(chan ChatResponse, 1))
+				return loop.runPrompt(t.Context(), "turn-1", []string{"probe it"}, func(func(SessionEntry, error) bool) {}, &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error { saved = append(saved, *entry); return nil }})
 			}
 			call := responseWithFunctionCalls("probe", []responses.ResponseFunctionToolCall{testFunctionCall("item", "call-p", "probe", `{}`)})
 			crashed, mock := mockResponses(call), mockResponses(call, responseWithMessage("answer", "reviewed"))
@@ -547,7 +547,7 @@ func TestSteerSwitchConvertsTurnForProvider(t *testing.T) {
 
 	var saved []SessionEntry
 
-	got, err := loop.runPrompt(t.Context(), "", []string{"probe it"}, func(yield func(SessionEntry, error) bool) { yield(history, nil) }, &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error { saved = append(saved, *entry); return nil }}, make(chan ChatResponse, 1))
+	got, err := loop.runPrompt(t.Context(), "", []string{"probe it"}, func(yield func(SessionEntry, error) bool) { yield(history, nil) }, &mockSessionWriter{AppendFunc: func(_ context.Context, entry *SessionEntry) error { saved = append(saved, *entry); return nil }})
 	require.NoError(t, err)
 	require.Equal(t, "done", got)
 
@@ -616,7 +616,7 @@ func continueTestTask(t *testing.T, mock *mockResponsesAPI, jobs BackgroundJobs,
 	return func(callID, subagentType, prompt, continueID string) (string, []PublicProgress, error) {
 		parent := testLooper(mockResponses())
 		parent.observations.turnID = "turn-" + callID
-		args := fmt.Sprintf(`{"subagent_type":%q,"prompt":%q,"description":"Review","command":"","background":false,"continue":{"session_id":%q,"mode":"enqueue"}}`, subagentType, prompt, continueID)
+		args := fmt.Sprintf(`{"subagent_type":%q,"prompt":%q,"description":"Review","background":false,"continue":{"session_id":%q,"mode":"enqueue"}}`, subagentType, prompt, continueID)
 		result, err := task.Call(context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: parent, observations: parent.observations, output: nil, callID: callID}), json.RawMessage(args), nil, toolCallMetadata{callID: callID, observations: parent.observations, progress: &PublicProgress{ID: callID}})
 
 		return result.Output, PublicProgressFromTrace(parent.observations.trace), err
@@ -629,7 +629,8 @@ func backgroundTestLooper(t *testing.T, permissions string, jobs BackgroundJobs,
 	probeTool := testLooperTool("probe")
 	probeTool.Permission = "probe"
 	probeTool.codeModeOnly = true
-	probeTool.Call = func(ctx context.Context, _ json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+	probeTool.Call = func(ctx context.Context, _ json.RawMessage, output chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+		emitChatResponse(output, assistantCommentary("probe"))
 		return probe(ctx)
 	}
 
@@ -640,8 +641,6 @@ func backgroundTestLooper(t *testing.T, permissions string, jobs BackgroundJobs,
 	loop := testLooper(mockResponses())
 	loop.agent = agent
 	loop.Permissions = agent.Permission
-	loop.Diagnostics = true
-	loop.AutoApprovePermissions = true
 	loop.PermissionReviewer = permissionReviewerWith(permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "ok"})
 	loop.observations = &turnObservations{journal: InertJournal{}, turnID: "turn"}
 	loop.Tools, loop.CodeModeHosts = factory.assembleTools(&agent)

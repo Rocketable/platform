@@ -1427,22 +1427,13 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
-	recordTestConversations(t, store, "selected", map[string]ConversationKind{"slack-thread:C1:1.1": KindSlackThread, "slack-thread:C1:2.2": KindSlackThread, "external_mcp:planner:def": KindExternalMCPRun})
 
-	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: " cron ", PrivateConversationID: " external_mcp:cron:abc ", ManagedConversationID: " slack-thread:C1:1.1 "}))
+	require.NoError(t, store.RegisterExternalMCPConversation(" ticket-123 ", " selected ", &ExternalMCPSessionState{Agent: " planner ", PrivateConversationID: " external_mcp:planner:def ", ManagedConversationID: " web-chat "}))
 
 	session, ok, err := store.ExternalMCPSession("ticket-123")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, ExternalMCPSessionState{Agent: "cron", PrivateConversationID: "external_mcp:cron:abc", ManagedConversationID: "slack-thread:C1:1.1"}, session)
-
-	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:def", ManagedConversationID: "slack-thread:C1:2.2"}))
-
-	session, ok, err = store.ExternalMCPSession("ticket-123")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:def", ManagedConversationID: "slack-thread:C1:2.2"}, session)
-	require.NoError(t, store.UpsertThread(session.ManagedConversationID, ThreadState{Agent: "selected"}))
+	assert.Equal(t, ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:def", ManagedConversationID: "web-chat"}, session)
 	privateEntryID, err := store.AppendEntryID(t.Context(), session.PrivateConversationID, testSessionEntry("private", "private answer"))
 	require.NoError(t, err)
 	managedEntryID, err := store.AppendEntryID(t.Context(), session.ManagedConversationID, testSessionEntry("human", "human answer"))
@@ -1459,7 +1450,7 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 	assert.Equal(t, "selected", thread.Agent)
 	listed, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM conversations WHERE external_id IS NOT NULL`, "bound conversation IDs")
 	require.NoError(t, err)
-	assert.Equal(t, []string{session.ManagedConversationID}, listed, "the binding left the thread it was on")
+	assert.Equal(t, []string{session.ManagedConversationID}, listed, "only the Web chat holds the binding")
 
 	for conversationID, entryID := range map[string]int64{session.PrivateConversationID: privateEntryID, session.ManagedConversationID: managedEntryID} {
 		entries, err := store.ObserveEntries(t.Context(), conversationID)
@@ -1468,19 +1459,7 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 		assert.Equal(t, entryID, entries[0].ID)
 	}
 
-	for _, id := range []string{"optional-1", "optional-2", "duplicate-managed"} {
-		require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "main"}))
-	}
-
-	for _, id := range []string{"optional-1", "optional-2"} {
-		require.NoError(t, store.UpsertExternalMCPSession(id, &ExternalMCPSessionState{PrivateConversationID: " \t ", ManagedConversationID: id}))
-		require.NoError(t, store.UpsertExternalMCPSession(id, &ExternalMCPSessionState{ManagedConversationID: id}))
-	}
-
-	var unmapped int
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM conversations WHERE external_id IS NOT NULL AND external_run IS NULL`).Scan(&unmapped))
-	assert.Equal(t, 2, unmapped)
-	require.Error(t, store.UpsertExternalMCPSession("duplicate-private", &ExternalMCPSessionState{PrivateConversationID: session.PrivateConversationID, ManagedConversationID: "duplicate-managed"}))
+	require.Error(t, store.RegisterExternalMCPConversation("duplicate-private", "main", &ExternalMCPSessionState{Agent: "main", PrivateConversationID: session.PrivateConversationID, ManagedConversationID: "duplicate-managed"}))
 }
 
 func TestSessionServiceRejectsBlankKeys(t *testing.T) {
@@ -1489,7 +1468,6 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 	store := newTestSessionService(t)
 
 	require.ErrorContains(t, store.UpsertThread(" ", ThreadState{Agent: "agent"}), "thread conversation ID is required")
-	require.ErrorContains(t, store.UpsertExternalMCPSession(" ", &ExternalMCPSessionState{}), "external MCP conversation ID is required")
 	require.EqualError(t, store.BeginGoal(" ", &GoalState{Objective: "obj", MaxTurns: 1}), "goal conversation ID is required")
 	require.EqualError(t, store.BeginGoal("thread-1", &GoalState{Objective: " ", MaxTurns: 1}), "goal objective is required")
 	require.NoError(t, store.UpsertThread("thread-1", ThreadState{Agent: "agent"}))
@@ -1678,8 +1656,7 @@ WHERE conversation_id IN ('empty-recorded', 'continuing', 'old-web', 'active-web
 			require.NoError(t, err)
 			require.Len(t, entries, want)
 
-			transcript, err := store.ObserveTranscript(ctx, id, 0, 0, nil)
-			require.NoError(t, err)
+			transcript := testHistoryEntries(t, store, id)
 
 			for _, entry := range transcript {
 				raw, err := json.Marshal(entry.Entry)
@@ -2011,7 +1988,8 @@ func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t 
 				require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID}))
 			} else {
 				recordTestConversations(t, store, "main", map[string]ConversationKind{managedConversationID: KindWebChat})
-				require.NoError(t, store.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", ManagedConversationID: managedConversationID}))
+				_, err := store.db.ExecContext(t.Context(), `UPDATE conversations SET external_id = 'public-1', external_agent = 'planner', origin_pairs = 'null' WHERE conversation_id = $1`, managedConversationID)
+				require.NoError(t, err)
 			}
 
 			_, err := store.db.ExecContext(t.Context(), `UPDATE conversations SET created_at = $1`, cutoff.Add(-time.Hour))
@@ -2043,55 +2021,6 @@ func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t 
 				assert.Equal(t, !tt.wantPruned, ok, conversationID)
 			}
 		})
-	}
-}
-
-func TestPruneStateDropsFinishedCronRunContext(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	ctx := t.Context()
-	cutoff := time.Unix(1_700_000_000, 0).UTC()
-
-	recordTestConversations(t, store, "main", map[string]ConversationKind{"chat": KindWebChat, "finished": KindCronRun, "fresh": KindCronRun, "pending": KindCronRun})
-	_, err := store.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'chat' WHERE kind = 'cron_run'`)
-	require.NoError(t, err)
-
-	for run, shown := range map[string]time.Time{"finished": cutoff.Add(-time.Hour), "fresh": cutoff.Add(time.Hour), "pending": cutoff.Add(-time.Hour)} {
-		sandbox, err := store.AppendEntryID(ctx, run, testSessionEntryAt(cutoff.Add(-2*time.Hour), run+" context"))
-		require.NoError(t, err)
-		_, err = store.db.ExecContext(ctx, `UPDATE entries SET audience = 'sandbox' WHERE id = $1`, sandbox)
-		require.NoError(t, err)
-		_, err = store.AppendEntryID(ctx, run, testSessionEntryAt(shown, run+" report"))
-		require.NoError(t, err)
-		require.NoError(t, store.SaveAttachment(ctx, run, "", &protocol.OutboundAttachment{ID: run + "-file", Name: "report", Data: []byte(run)}, false))
-	}
-
-	require.NoError(t, store.PutScheduledMessage("later", &protocol.ScheduledMessageState{ConversationID: "pending", Agent: "main", Message: "later", DueAt: cutoff.Add(time.Hour)}))
-
-	shown, err := store.ObserveEntries(ctx, "chat")
-	require.NoError(t, err)
-	require.Len(t, shown, 3)
-
-	stats, err := store.PruneStateBefore(ctx, cutoff, 0)
-	require.NoError(t, err)
-	assert.Equal(t, PruneStateStats{SessionRows: 1}, stats)
-
-	after, err := store.ObserveEntries(ctx, "chat")
-	require.NoError(t, err)
-	require.Equal(t, shown, after, "the chat still shows every message")
-
-	audiences, err := queryStrings(ctx, store.db, `SELECT conversation_id || ' ' || audience FROM entries ORDER BY id`, "kept entries")
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"finished both", "fresh sandbox", "fresh both", "pending sandbox", "pending both"}, audiences)
-
-	for _, run := range []string{"finished", "fresh", "pending"} {
-		_, isRun, err := store.CronRun(ctx, run)
-		require.NoError(t, err)
-		require.True(t, isRun, run)
-		attachment, err := store.LoadAttachment(ctx, run, run+"-file", false)
-		require.NoError(t, err)
-		require.Equal(t, []byte(run), attachment.Data)
 	}
 }
 
@@ -2267,27 +2196,6 @@ func testReplayInput(messages ...replayInputMessage) []json.RawMessage {
 	}
 
 	return replayInput
-}
-func TestCopiedAttributionSurvivesSourceRetention(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	recordTestConversations(t, store, "planner", map[string]ConversationKind{"producer-x": KindCronRun, "interactive-y": KindWebChat})
-
-	entry := harness.SessionEntry{Version: 1, Type: "turn", Agent: "planner", Model: "work/model-a", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"answer"}`)}}
-	producerID, err := store.AppendEntryID(t.Context(), "producer-x", &entry)
-	require.NoError(t, err)
-	_, err = store.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
-SELECT 'interactive-y', (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id, 'sync_source_conversation_id', 'producer-x'))::json, entry_timestamp FROM entries WHERE id = $1`, producerID)
-	require.NoError(t, err)
-	_, err = store.db.ExecContext(t.Context(), `DELETE FROM entries WHERE conversation_id=$1`, "producer-x")
-	require.NoError(t, err)
-	entries, err := store.ObserveEntries(t.Context(), "interactive-y")
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	require.Equal(t, "producer-x", entries[0].SourceConversationID)
-	require.Equal(t, entry.AttributionAt(0), entries[0].Entry.AttributionAt(0))
-	require.JSONEq(t, string(entry.ReplayInput[0]), string(entries[0].Entry.ReplayInput[0]))
 }
 
 func TestVoiceSettings(t *testing.T) {

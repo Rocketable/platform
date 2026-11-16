@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,12 +49,10 @@ func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 }
 
 func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	serveFakeSlack(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"ok": true, "url": "https://example.slack.com/", "team": "t", "user": "bot", "team_id": "T1", "user_id": "U1"}))
-	}))
-	t.Cleanup(server.Close)
-	t.Setenv("ROCKETCLAW_SLACK_API_URL", server.URL+"/")
+	})
 
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "agents"), 0o755))

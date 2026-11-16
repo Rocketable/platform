@@ -160,8 +160,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 	entries, err := sessions.ObserveEntries(t.Context(), "parent")
 	require.NoError(t, err)
 	require.Equal(t, replay, entries[0].Entry.ReplayInput, "model input text and attachment references are untouched")
-	require.NoError(t, runtime.CreateConversation(t.Context(), protocol.Conversation{ID: "visible", Agent: "main"}))
-	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{Agent: "main", PrivateConversationID: "parent", ManagedConversationID: "visible"}))
+	require.NoError(t, sessions.RegisterExternalMCPConversation("external", "main", &backend.ExternalMCPSessionState{Agent: "main", PrivateConversationID: "parent", ManagedConversationID: "visible"}))
 
 	for _, projection := range []struct {
 		destination          string

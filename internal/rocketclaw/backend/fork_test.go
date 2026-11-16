@@ -337,12 +337,4 @@ func TestForkConversationRejectsUnreadableHistory(t *testing.T) {
 		_, err = sessions.db.ExecContext(t.Context(), `DELETE FROM entries WHERE id = $1`, id)
 		require.NoError(t, err)
 	}
-
-	_, err = sessions.db.ExecContext(t.Context(), `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) VALUES ('source', '{"sync_source_entry_id":-1,"replay_input":[{"type":"message","role":"user","content":"deleted producer"}]}', '')`)
-	require.NoError(t, err)
-	_, err = sessions.ForkConversation(t.Context(), "source", protocol.Conversation{ID: "fork", Agent: "main"}, "")
-	require.NoError(t, err)
-	entries, err := sessions.ObserveEntries(t.Context(), "fork")
-	require.NoError(t, err)
-	require.Empty(t, entries, "history from a deleted producer must not be resurrected")
 }

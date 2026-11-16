@@ -115,13 +115,12 @@ func projectSessionSummary(summary *protocol.SessionSummary, entry *harness.Sess
 }
 
 const entryFactsSQL = `WITH own AS (
-    SELECT id, f.sync_source_conversation_id AS source, CASE WHEN f.sync_source_conversation_id IS NULL THEN f.sync_source_entry_id::bigint END AS source_entry_id
-    FROM entries, json_to_record(entry_json) AS f(sync_source_conversation_id text, sync_source_entry_id text) WHERE conversation_id = $1 ORDER BY id LIMIT 1
+    SELECT id FROM entries WHERE conversation_id = $1 ORDER BY id LIMIT 1
 ), reported AS (
     SELECT e.id, e.conversation_id AS source FROM conversations m JOIN entries e USING (conversation_id)
-    WHERE m.reports_to = $1 AND e.audience <> 'sandbox' ORDER BY e.id LIMIT 1
+    WHERE m.reports_to = $1 ORDER BY e.id LIMIT 1
 ), firsts AS (
-    SELECT o.id, COALESCE(o.source, s.conversation_id) AS source, TRUE AS own FROM own o LEFT JOIN entries s ON s.id = o.source_entry_id
+    SELECT id, NULL::text AS source, TRUE AS own FROM own
     UNION ALL SELECT id, source, FALSE FROM reported
 ), facts AS (
     SELECT COALESCE(bool_or(own), FALSE) AS has_entries, (array_agg(source ORDER BY id))[1] AS first_source FROM firsts

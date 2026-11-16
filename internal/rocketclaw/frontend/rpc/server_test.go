@@ -1951,7 +1951,8 @@ func TestSessionEntries(t *testing.T) {
 	}
 
 	require.NoError(t, sessions.UpsertThread("private-X", backend.ThreadState{Agent: "producer"}))
-	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: id, Agent: "producer"}))
+	_, err = seeded.db.ExecContext(ctx, `UPDATE conversations SET external_id = 'external', external_run = 'private-X', external_agent = 'producer', origin_pairs = '{"Original-Key":"Value <&> Unicode Ω"}' WHERE conversation_id = $1`, id)
+	require.NoError(t, err)
 
 	_, err = seeded.db.ExecContext(ctx, `UPDATE conversations SET kind = 'external_mcp_run', listed = FALSE WHERE conversation_id = 'private-X'`)
 	require.NoError(t, err)
@@ -2174,13 +2175,6 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	}, got)
 
 	t.Run("History keeps original private metadata and session search keeps it hidden", func(t *testing.T) {
-		binding, found, err := sessions.ExternalMCPSession("external")
-		require.NoError(t, err)
-		require.True(t, found)
-
-		binding.OriginPairs = map[string]string{"Original-Key": "Value <&> Unicode Ω"}
-		require.NoError(t, sessions.UpsertExternalMCPSession("external", &binding))
-
 		full, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id})
 		require.NoError(t, err)
 		require.JSONEq(t, `{"kind":"external_mcp","externalConversationId":"external","agent":"producer","pairs":[{"key":"Original-Key","value":"Value <&> Unicode Ω"}]}`, full.Origin)
@@ -2251,7 +2245,6 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 	cfg.Providers = map[string]config.OpenAIConfig{"work": {APIKey: "secret-work-key", APIBaseURL: "https://secret-work"}, "anthropic": {APIKey: "secret-anthropic-key"}}
 	cfg.Slack.BotToken, cfg.Slack.AppToken = "secret-bot-token", "secret-app-token"
 	cfg.Instrumentation.APIKey = "secret-telemetry-key"
-	cfg.Environment = []string{"TOKEN=secret-environment"}
 	cfg.MCPServers = map[string]config.MCPServerConfig{
 		"zeta":  {URL: "https://secret-endpoint", Headers: map[string]string{"Authorization": "secret-header"}},
 		"alpha": {Command: "secret-command", Args: []string{"secret-argument"}, Env: map[string]string{"TOKEN": "secret-server-env"}},
@@ -2313,9 +2306,9 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 
 	entry.Agent, entry.Model, entry.ReasoningEffort = "producer", "work/a-very-long-provider-qualified-model-name-for-narrow-layout", new("high")
 	entry.ReplayInput = []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"Copied producer answer"}`)}
-	_, err = sessions.AppendEntryID(ctx, id, &entry)
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $1 WHERE conversation_id = 'private-X'`, id)
 	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', 0, 'sync_source_conversation_id', 'private-X'))::json WHERE conversation_id=$1`, id)
+	_, err = sessions.AppendEntryID(ctx, "private-X", &entry)
 	require.NoError(t, err)
 	httpServer := startHTTPTestServer(t, connection)
 
@@ -2377,9 +2370,9 @@ SELECT conversation_id, shadow_parent, 'waiting', '{}' FROM conversations WHERE 
 
 	remaining, err = sessions.ObserveEntries(ctx, id)
 	require.NoError(t, err)
-	require.Len(t, remaining, 1, "the wipe keeps the copied producer answer")
+	require.Len(t, remaining, 1, "the wipe keeps the private run's answer")
 
-	_, err = db.ExecContext(ctx, `WITH gone AS (DELETE FROM entries WHERE conversation_id = $1)
+	_, err = db.ExecContext(ctx, `WITH gone AS (DELETE FROM entries WHERE conversation_id IN ($1, 'private-X')), unbound AS (UPDATE conversations SET reports_to = NULL WHERE conversation_id = 'private-X')
 UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALSE, first_source = NULL WHERE conversation_id = $1`, id)
 	require.NoError(t, err)
 
@@ -2647,8 +2640,6 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	runs := []*protocol.CronRun{{Path: "cron/report:daily.md", At: time.Date(2026, 9, 5, 1, 0, 0, 1, time.UTC)}, {Path: "cron/report_daily.md", At: time.Date(2026, 9, 5, 2, 0, 0, 2, time.UTC), OneOff: true}}
 
 	runEntries := make([]int64, 0, len(sources))
-	_, err = db.ExecContext(ctx, `INSERT INTO conversations (conversation_id, agent, created_by, kind, listed, retention) VALUES ('unrecorded-history-destination', '', '', 'web_chat', FALSE, 'private')`)
-	require.NoError(t, err)
 
 	for i, source := range sources {
 		require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(ctx, protocol.Conversation{ID: source, Agent: "producer", Run: runs[i]}))
@@ -2663,30 +2654,19 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 		require.NoError(t, err)
 		require.Len(t, trace.Messages, 1)
 		require.Equal(t, source, trace.Messages[0].Text)
-
-		for range 2 {
-			destinationEntry, err := sessions.AppendEntryID(ctx, id, &runEntry)
-			require.NoError(t, err)
-			_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, sourceEntry, destinationEntry)
-			require.NoError(t, err)
-		}
-
-		for _, hiddenDestination := range []string{"private-X", "unrecorded-history-destination"} {
-			destinationEntry, err := sessions.AppendEntryID(ctx, hiddenDestination, &entry)
-			require.NoError(t, err)
-			_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, sourceEntry, destinationEntry)
-			require.NoError(t, err)
-		}
 	}
+
+	_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $1 WHERE conversation_id = ANY($2)`, id, sources)
+	require.NoError(t, err)
 
 	observed, err := sessions.ObserveEntries(ctx, id)
 	require.NoError(t, err)
-	require.Len(t, observed, 4)
+	require.Len(t, observed, 2)
 	require.Equal(t, sources[0], observed[0].SourceConversationID)
-	require.Equal(t, sources[1], observed[3].SourceConversationID)
+	require.Equal(t, sources[1], observed[1].SourceConversationID)
 	preview, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[0]})
 	require.NoError(t, err)
-	require.Len(t, preview.Messages, 2)
+	require.Len(t, preview.Messages, 1)
 
 	for _, message := range preview.Messages {
 		require.Equal(t, sources[0], message.Text)
@@ -2696,16 +2676,15 @@ UPDATE conversations SET preview = NULL, last_updated = NULL, has_entries = FALS
 	require.NoError(t, err)
 	require.Empty(t, preview.Messages)
 
-	_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', '[{"type":"reasoning","summary":42}]')::json WHERE id = $1`, observed[3].ID)
+	_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', '[{"type":"reasoning","summary":42}]')::json WHERE id = $1`, observed[1].ID)
 	require.NoError(t, err)
 	preview, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[0]})
 	require.NoError(t, err)
-	require.Len(t, preview.Messages, 2)
+	require.Len(t, preview.Messages, 1)
 
 	_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[1]})
 	require.ErrorContains(t, err, "decode web history")
-	_, err = db.ExecContext(ctx, `WITH original AS (SELECT entry_json::jsonb->'replay_input' AS replay FROM entries WHERE id = $1)
-UPDATE entries e SET entry_json = jsonb_set(e.entry_json::jsonb, '{replay_input}', o.replay)::json FROM original o WHERE e.id = $2`, observed[2].ID, observed[3].ID)
+	_, err = db.ExecContext(ctx, `UPDATE entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', jsonb_build_array(jsonb_build_object('type', 'message', 'role', 'assistant', 'content', $2::text)))::json WHERE id = $1`, observed[1].ID, sources[1])
 	require.NoError(t, err)
 
 	corrupt := "cron:corrupt-delegations"
@@ -2724,8 +2703,6 @@ UPDATE entries e SET entry_json = jsonb_set(e.entry_json::jsonb, '{replay_input}
 		require.NoError(t, err)
 	}
 
-	_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $1 WHERE conversation_id = ANY($2)`, id, sources)
-	require.NoError(t, err)
 	jobs, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
 	require.Len(t, jobs.Jobs, 4)
@@ -2814,10 +2791,10 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			require.NoError(t, err)
 			require.Empty(t, saved)
 
-			transcript, err := sessions.ObserveTranscript(ctx, source, 0, 0, nil)
+			transcript, err := sessions.ObserveHistory(ctx, source, "", 0, 0, 0, &backend.HistoryInventory{})
 			require.NoError(t, err)
-			require.Len(t, transcript, 1)
-			require.True(t, transcript[0].Active)
+			require.Len(t, transcript.Entries, 1)
+			require.True(t, transcript.Entries[0].Active)
 
 			trace, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: source})
 			require.NoError(t, err)
@@ -2832,16 +2809,16 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 			for _, terminal := range []protocol.Terminal{protocol.TerminalFailed, protocol.TerminalStopped, ""} {
 				require.NoError(t, seeded.SetActiveTurnTerminal(ctx, source, terminal))
-				transcript, err := sessions.ObserveTranscript(ctx, source, 0, 0, nil)
+				transcript, err := sessions.ObserveHistory(ctx, source, "", 0, 0, 0, &backend.HistoryInventory{})
 				require.NoError(t, err)
 				listed, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 				require.NoError(t, err)
 
 				if terminal == "" {
-					require.Empty(t, transcript)
+					require.Empty(t, transcript.Entries)
 					require.True(t, proto.Equal(withSilent, listed), "completed checkpoint changed inventory: %v", listed)
 				} else {
-					require.Len(t, transcript, 1)
+					require.Len(t, transcript.Entries, 1)
 					require.True(t, proto.Equal(want, listed), "terminal checkpoint missing or inventory changed: %v", listed)
 				}
 			}
@@ -3542,12 +3519,12 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 
 		producerFile := protocol.OutboundAttachment{ID: "private-generated", Name: "generated.png", MIMEType: "image/png", Data: []byte("private original")}
 		require.NoError(t, sessions.SaveAttachment(ctx, "private-X", "", &producerFile, false))
-		sourceID, err := sessions.AppendEntryID(ctx, "private-X", &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+		_, err = db.ExecContext(ctx, `UPDATE conversations SET reports_to = $1 WHERE conversation_id = 'private-X'`, conversation)
+		require.NoError(t, err)
+		_, err = sessions.AppendEntryID(ctx, "private-X", &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call","call_id":"private-file","name":"rocketclaw_attach_files_to_response","arguments":"{}"}`),
 			json.RawMessage(`{"type":"function_call_output","call_id":"private-file","output":"queued attachments for final response: private-generated"}`),
 		}})
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp) SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id))::json, entry_timestamp FROM entries WHERE id=$2`, conversation, sourceID)
 		require.NoError(t, err)
 		_, err = sessions.AppendEntryID(ctx, conversation, &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"function_call","call_id":"own","name":"task","arguments":"{}"}`),
@@ -3623,8 +3600,6 @@ VALUES ($1, 'producer', '', $2, 'subagent', FALSE, 'turn', 'task')`, subagent, s
 			})
 		}
 
-		_, err = db.ExecContext(ctx, `DELETE FROM entries WHERE conversation_id = $1 AND entry_json::jsonb ? 'sync_source_entry_id'`, conversation)
-		require.NoError(t, err)
 		_, err = sessions.DeleteSession(ctx, conversation)
 		require.NoError(t, err)
 		stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/DownloadAttachment")
@@ -4289,13 +4264,8 @@ func TestBackgroundJobRPCs(t *testing.T) {
 
 	const cronRun = "cron:cron/daily.md:20000102T030405.000000006Z:a"
 
-	for _, id := range []string{"chat", "private-X"} {
-		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
-	}
-
+	require.NoError(t, sessions.RegisterExternalMCPConversation("external", "main", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main"}))
 	require.NoError(t, (&backend.Runtime{Sessions: sessions}).CreateConversation(t.Context(), protocol.Conversation{ID: cronRun, Agent: "main", Run: &protocol.CronRun{Path: "cron/daily.md", At: time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC)}}))
-
-	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main"}))
 
 	note := `<execute id="turn-1/call/a" state="completed" description="tests">` + "\n" + `<execute id="turn-1/call/fake" state="failed" description="fake">` + "\n</execute>"
 	stopped := `<subagent id="turn-1/call/b" state="stopped" description="say \"hi\"" continue="/call_b">` + "\nThe job was stopped by user. Do not run it again unless asked.\n</subagent>"
@@ -4445,8 +4415,7 @@ func TestQuestionRPCs(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-	require.NoError(t, sessions.UpsertThread("chat", backend.ThreadState{Agent: "main"}))
-	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main"}))
+	require.NoError(t, sessions.RegisterExternalMCPConversation("external", "main", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "chat", Agent: "main"}))
 
 	pending := []protocol.AskUserQuestionRequest{{ID: "turn-1/call/q", ConversationID: "chat", Question: "Which?", Details: "Pick any", Options: []protocol.AskUserQuestionOption{{Label: "A", Value: "a", Description: "first"}, {Label: "B", Value: "b"}}, Multiple: true}}
 	core := withoutBackgroundJobs()
@@ -4485,7 +4454,7 @@ func TestQuestionRPCs(t *testing.T) {
 	_, err = invoke[AnswerQuestionResponse](t.Context(), connection, "AnswerQuestion", &AnswerQuestionRequest{ConversationId: "chat", AskId: "turn-1/call/q", Custom: "no principal"})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 	_, err = invoke[AnswerQuestionResponse](ctx, connection, "AnswerQuestion", &AnswerQuestionRequest{ConversationId: "private-X", AskId: "turn-1/call/q"})
-	require.Equal(t, codes.NotFound, status.Code(err), "this test binds the private run without recording it")
+	require.Equal(t, codes.PermissionDenied, status.Code(err), "the private run is hidden")
 	require.Empty(t, core.AnswerQuestionCalls(), "refused callers never reach the backend")
 
 	answer, err := http.Post(startHTTPTestServer(t, connection).URL+"/api/AnswerQuestion", "application/json", strings.NewReader(`{"conversationId":"chat","askId":"turn-1/call/q","selected":["a","b"],"custom":"and c"}`))

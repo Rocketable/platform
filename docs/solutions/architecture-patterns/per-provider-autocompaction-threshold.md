@@ -46,7 +46,7 @@ The copy path is:
 1. Load and validate provider JSON. `Validate` runs `normalizeOpenAIConfig` on `openai` and every named provider (`internal/rocketclaw/config/config.go:451-466`).
 2. `modelResolver.Resolve` copies `providerConfig.AutocompactionThreshold` onto `ProviderOrigin.CompactThreshold` (`internal/rocketclaw/backend/model_resolver.go:71`).
 3. Every looper is built by `toolFactory.newLooper`, which uses `cmp.Or(origin.CompactThreshold, defaultCompactThreshold)` so a set provider value wins and a zero origin falls back. Root turns, each Task Subagent Session's turn, steer agent-type switches and permission-review children all call it.
-4. `looper.compactThreshold()` still treats `<= 0` as `defaultCompactThreshold` (`internal/rocketclaw/harness/looper.go:34`, `internal/rocketclaw/harness/looper.go:1873-1879`). `buildParams` sends that value as Responses `context_management[].compact_threshold` (`internal/rocketclaw/harness/looper.go:1825-1828`).
+4. `looper.compactThreshold()` still treats `<= 0` as `defaultCompactThreshold` (`internal/rocketclaw/harness/looper.go:34`, `internal/rocketclaw/harness/looper.go:1760-1766`). `buildParams` sends that value as Responses `context_management[].compact_threshold` (`internal/rocketclaw/harness/looper.go:1712-1715`).
 
 The harness uses the supplied `ModelResolver`; an origin with no threshold uses `defaultCompactThreshold`. There is no separate harness configuration override.
 
@@ -58,7 +58,7 @@ When adding a new child looper, build it with `toolFactory.newLooper`. Do not ha
 
 Compaction is provider-specific. A ChatGPT Codex workspace and a named API-key provider can need different token budgets. Putting the number on `OpenAIConfig` keeps it next to credentials and auth mode.
 
-If a new looper bypasses `toolFactory.newLooper`, child turns silently use the factory default and ignore the provider override. If ChatGPT request cleanup stops extracting `compact_threshold` before deleting `context_management`, Codex either rejects the unknown field or never compacts. If validation starts rejecting `0`, omitted JSON and explicit zeros stop meaning "use the runtime default."
+If a new looper bypasses `toolFactory.newLooper`, child turns silently use the runtime default and ignore the provider override. If ChatGPT request cleanup stops extracting `compact_threshold` before deleting `context_management`, Codex either rejects the unknown field or never compacts. If validation starts rejecting `0`, omitted JSON and explicit zeros stop meaning "use the runtime default."
 
 ## When to Apply
 
@@ -100,8 +100,8 @@ Resolver copies the selected provider's field onto the origin:
 
 Origin wins over the runtime default:
 
-```237:237:internal/rocketclaw/harness/tools.go
-		CompactThreshold:       cmp.Or(origin.CompactThreshold, defaultCompactThreshold),
+```218:218:internal/rocketclaw/harness/tools.go
+		CompactThreshold:   cmp.Or(origin.CompactThreshold, defaultCompactThreshold),
 ```
 
 Default and request field:
@@ -110,7 +110,7 @@ Default and request field:
 const defaultCompactThreshold int64 = 200000
 ```
 
-```1825:1828:internal/rocketclaw/harness/looper.go
+```1712:1715:internal/rocketclaw/harness/looper.go
 	params.ContextManagement = []responses.ResponseNewParamsContextManagement{{
 		Type:             "compaction",
 		CompactThreshold: openai.Int(l.compactThreshold()),
