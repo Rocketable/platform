@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"maps"
 	"os"
@@ -143,7 +142,7 @@ func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRe
 	runtimeConfig.CustomTools = r.customTools
 	runtimeConfig.ShellEnv, runtimeConfig.OriginHeader = r.shellEnv, r.originHeader
 
-	runtime, err := harness.NewWithModelResolver(r.resolver, &runtimeConfig, r.root, callAgents, r.skills, r.agent, io.Discard)
+	runtime, err := harness.NewWithModelResolver(r.resolver, &runtimeConfig, r.root, callAgents, r.skills, r.agent)
 	if err != nil {
 		return nil, fmt.Errorf("prepare workflow rocketcode run: %w", err)
 	}

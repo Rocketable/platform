@@ -361,7 +361,7 @@ def main(args):
 		ChildSessions:     harness.InertChildSessions{},
 		Journal:           harness.InertJournal{},
 		ShellCommand:      harness.DefaultShellCommand{},
-	}, root, agents, skills, "main", io.Discard)
+	}, root, agents, skills, "main")
 	require.NoError(t, err)
 
 	_, hasDynamic := runtime.Tools[dynamicWorkflowToolName]

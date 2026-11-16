@@ -15,7 +15,6 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
-	"io"
 	"io/fs"
 	"iter"
 	"log/slog"
@@ -2287,7 +2286,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		rocketcodeConfig.BackgroundJobs = backgroundTurn{registry: b.background, root: shared, conversationID: b.config.ConversationID, origin: msg}
 	}
 
-	looper, err := harness.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
+	looper, err := harness.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName)
 	if err != nil {
 		return runResult{}, fmt.Errorf("prepare rocketcode turn: %w", err)
 	}
