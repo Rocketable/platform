@@ -4598,8 +4598,6 @@ export function useSessionStream(id: string, draft: ComposerDraft, onDraftChange
   const loadEarlier = useCallback((from?: string) => readEarlierHistory(draft.sessionId, draft, onDraftChange, from), [draft, onDraftChange]);
   const followed = history.data, earlier = draft.delegations, earlierReviews = draft.reviewRationales;
   const delegations = useMemo(() => ({ delegations: [...new Set([...(followed?.delegations ?? []), ...(earlier ?? [])])], reviewRationales: { ...earlierReviews, ...followed?.reviewRationales } }), [followed, earlier, earlierReviews]);
-  const setBusy = useCallback((value: boolean) => { draft.busy = value; onDraftChange(); }, [draft, onDraftChange]);
-  const setLines = useCallback((update: (current: Line[]) => Line[]) => { draft.lines = update(draft.lines); onDraftChange(); }, [draft, onDraftChange]);
   useEffect(() => {
     if (!id || !scope) return;
     const stream = new EventSource(`${serverURL()}/stream?${new URLSearchParams({ id })}`);
@@ -4613,7 +4611,7 @@ export function useSessionStream(id: string, draft: ComposerDraft, onDraftChange
       stream.close();
     };
   }, [id, scope, refreshHistory]);
-  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations, shadows: mergeShadowBindings((draft.earlierShadows ?? []).reduce<ShadowBinding[]>((bindings, page) => mergeShadowBindings(bindings, page.shadows), []), draft.shadows ?? []), more: draft.more ?? false, start: draft.start, loadEarlier, movable: draft.movable ?? false, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
+  return { busy: draft.busy, lines: draft.lines, refreshHistory, opening: id !== "" && !draft.revision, historyError: draft.historyError, origin: draft.origin, terminal: draft.terminal, delegations, shadows: mergeShadowBindings((draft.earlierShadows ?? []).reduce<ShadowBinding[]>((bindings, page) => mergeShadowBindings(bindings, page.shadows), []), draft.shadows ?? []), more: draft.more ?? false, start: draft.start, loadEarlier, movable: draft.movable ?? false, hasSandboxed: draft.lines.some((line) => line.origin === "sandboxed") };
 }
 
 function mergeShadowBindings(earlier: ShadowBinding[], followed: ShadowBinding[]) {
@@ -4689,7 +4687,7 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
       navigate(sessionPath(draft.sessionId));
     }
   });
-  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, shadows, more, start, loadEarlier, movable, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
+  const { busy, lines, refreshHistory, opening, historyError, origin, terminal, delegations, shadows, more, start, loadEarlier, movable, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
   const messageId = pagePath() === sessionPath(id) ? new URLSearchParams(search).get("message") : null;
   const matchedOrigin = (previewLines ?? lines).find((line) => line.messageId === messageId)?.origin;
   // A linked message older than the loaded entries loads every entry from it onward.
@@ -4729,7 +4727,7 @@ function Transcript({ id, drafts, scopeError, onDraftChange, onCreated }: { id: 
       </ButtonGroup> : null}
       </TranscriptLog></Delegations>
       <fieldset disabled={[opening, previewing, !draft.hydrated].some(Boolean)} className={previewing ? "hidden" : "contents"}>
-        <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} setLines={setLines} refreshHistory={refreshHistory} queued={queued} />
+        <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} refreshHistory={refreshHistory} queued={queued} />
       </fieldset>
     </RevertActions>
   );
@@ -5170,8 +5168,6 @@ function SessionComposer({
   drafts,
   onDraftChange,
   busy,
-  setBusy,
-  setLines,
   refreshHistory,
   queued,
 }: {
@@ -5180,8 +5176,6 @@ function SessionComposer({
   drafts: Map<string, ComposerDraft>;
   onDraftChange: () => void;
   busy: boolean;
-  setBusy: (value: boolean) => void;
-  setLines: (update: (current: Line[]) => Line[]) => void;
   refreshHistory: () => Promise<unknown>;
   queued: QueueItem[];
 }) {
@@ -5190,6 +5184,8 @@ function SessionComposer({
   const { setCommand } = useContext(SessionCommands);
   const scope = useContext(DraftScope)!;
   const revert = useContext(RevertActions)!;
+  const setBusy = useCallback((value: boolean) => { draft.busy = value; onDraftChange(); }, [draft, onDraftChange]);
+  const setLines = useCallback((update: (current: Line[]) => Line[]) => { draft.lines = update(draft.lines); onDraftChange(); }, [draft, onDraftChange]);
   const { scrollToEnd, scrollToMessage } = useMessageScroller();
   const prompt = useMutation({ mutationFn: (input: Parameters<typeof mutations.prompt>[0]) => mutations.prompt(input, name), onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
   // No polling: on a slow link a 2 s refresh used a large share of the connection. Agent switches made here
