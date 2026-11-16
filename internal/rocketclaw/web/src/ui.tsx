@@ -571,11 +571,10 @@ type SidebarView = {
 };
 
 // One server's listing, with its saved tabs while the page is on another server.
-type ServerView = SidebarView & { invalidate: () => void; tabs?: SavedTabs };
+type ServerView = SidebarView & { invalidateQueries: () => void; tabs?: SavedTabs };
 
 // rows, refreshing and invalidation are the page's server's; all holds every server's rows, newest first.
-type SidebarState = SidebarView & {
-  invalidateQueries: () => void;
+type SidebarState = ServerView & {
   all: Session[];
   servers: Record<string, ServerView>;
 };
@@ -617,9 +616,9 @@ function SidebarOwner({ children }: { children: ReactNode }) {
 function SidebarMerge({ children }: { children: ReactNode }) {
   const name = useServer(), servers = useContext(ServerViews);
   const value = useMemo(() => {
-    const here = servers[name] ?? { rows: [], refreshing: false, enumerationComplete: false, invalidate: () => {} };
+    const here = servers[name] ?? { rows: [], refreshing: false, enumerationComplete: false, invalidateQueries: () => {} };
     const all = Object.keys(servers).length > 1 ? Object.values(servers).flatMap((view) => view.rows).toSorted((a, b) => (Date.parse(b.updatedAt ?? "") || 0) - (Date.parse(a.updatedAt ?? "") || 0)) : here.rows;
-    return { ...here, all, servers, invalidateQueries: here.invalidate };
+    return { ...here, all, servers };
   }, [servers, name]);
   return (
     <SidebarInvalidation.Provider value={value.invalidateQueries}>
@@ -743,7 +742,7 @@ function ServerSessions({ children }: { children: ReactNode }) {
   const visible = owner !== undefined && ownerRef.current === owner && protocolRef.current === scope;
   const parent = useContext(ServerViews);
   const views = useMemo(() => ({ ...parent, [name]: {
-    ...view, invalidate: bump, tabs: here ? undefined : tabs.data, enumerationComplete: visible && view.enumerationComplete, marks: visible && !unreachable ? view.marks : undefined, offline: unreachable, foreign,
+    ...view, invalidateQueries: bump, tabs: here ? undefined : tabs.data, enumerationComplete: visible && view.enumerationComplete, marks: visible && !unreachable ? view.marks : undefined, offline: unreachable, foreign,
     rows: !visible ? [] : name ? view.rows.map((row) => ({ ...row, rocketclaw: name, offline: row.offline || unreachable })) : view.rows,
   } }), [parent, name, view, visible, unreachable, foreign, here, tabs.data, bump]);
   return <ServerViews.Provider value={views}>{children}</ServerViews.Provider>;
@@ -1801,7 +1800,7 @@ function TabStrip({ tabs, newChat }: { tabs: ReturnType<typeof useTabs>; newChat
   // else the strip's, as in SearchTabs.
   const selected = (from = list) => from.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]') ?? list.current!.querySelector<HTMLElement>('[role="tab"][tabindex="0"]');
   // A Top Shelf row's attention changes go to its own server, named before any wait.
-  const send = (name: string): Attend => name === server() ? attend : (paths, action, until) => void tabsCall(name, { attention: { paths, action, until } }).then(sidebar.servers[name].invalidate, () => undefined);
+  const send = (name: string): Attend => name === server() ? attend : (paths, action, until) => void tabsCall(name, { attention: { paths, action, until } }).then(sidebar.servers[name].invalidateQueries, () => undefined);
   const header = () => list.current!.querySelector<HTMLElement>(`[data-group="${editor?.id}"]`);
   const group = groups.find((item) => item.id === editor?.id);
   // Cmd/Ctrl+click and Shift+click select tabs besides the active one; activating a tab or Escape drops them.
