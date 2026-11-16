@@ -2,19 +2,14 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
 	"log/slog"
 	"maps"
-	"os"
-	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/agentlint"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
@@ -188,74 +183,6 @@ func (r *Runtime) SaveBehavior(behavior *config.Behavior) error {
 	}
 
 	return fmt.Errorf("behavior settings rejected, nothing changed: %w", err)
-}
-
-func (r *Runtime) InspectAgents(target protocol.InspectTarget, kind protocol.InspectKind) (output string, findings int, err error) {
-	cfg := r.Cfg.Clone()
-	runtimeDir := cfg.RuntimeDirName()
-
-	switch target {
-	case protocol.InspectCurrent:
-	case protocol.InspectNext:
-		stage, err := os.MkdirTemp(cfg.Workspace, ".rocketclaw-inspect-*")
-		if err != nil {
-			return "", 0, fmt.Errorf("create inspection stage: %w", err)
-		}
-
-		defer func() { _ = os.RemoveAll(stage) }()
-
-		if err := skel.SyncEffectiveRuntimeAssets(cfg.Workspace, stage, cfg.Overlays, r.Log); err != nil {
-			return "", 0, fmt.Errorf("build next target: %w", err)
-		}
-
-		runtimeDir = filepath.Base(stage)
-	default:
-		return "", 0, fmt.Errorf("unknown inspection target %q", target)
-	}
-
-	runtimeRoot := filepath.Join(cfg.Workspace, runtimeDir)
-
-	switch kind {
-	case protocol.InspectGraph:
-		dot, err := agentlint.AgentGraphDOT(runtimeRoot, cfg)
-		if err != nil {
-			return "", 0, fmt.Errorf("draw agent graph: %w", err)
-		}
-
-		return dot, 0, nil
-	case protocol.InspectLint:
-		result, err := agentlint.Lint(runtimeRoot, cfg)
-		if err != nil {
-			return "", 0, fmt.Errorf("lint agents: %w", err)
-		}
-
-		if err := r.Assemble.ValidateAssets(cfg, runtimeDir); err != nil {
-			return "", 0, fmt.Errorf("validate frontend assets: %w", err)
-		}
-
-		if len(result.Findings) == 0 {
-			return fmt.Sprintf("rocketclaw lint %s: OK\n", target), 0, nil
-		}
-
-		lines := []string{fmt.Sprintf("rocketclaw lint %s: found %d findings", target, len(result.Findings))}
-		for _, finding := range result.Findings {
-			lines = append(lines, fmt.Sprintf("%s %s %s: %s", finding.Code, finding.Severity, finding.Path, finding.Message))
-		}
-
-		return strings.Join(lines, "\n") + "\n", len(result.Findings), nil
-	case protocol.InspectSettings:
-		behavior := cfg.Behavior()
-		behavior.RedactUsers()
-
-		document, err := json.MarshalIndent(behavior, "", "  ")
-		if err != nil {
-			return "", 0, fmt.Errorf("encode behavior settings: %w", err)
-		}
-
-		return string(document) + "\n", 0, nil
-	}
-
-	return "", 0, fmt.Errorf("unknown inspection kind %q", kind)
 }
 
 func (r *Runtime) Subscribe(ctx context.Context) iter.Seq[protocol.Event] {

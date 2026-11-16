@@ -2484,7 +2484,7 @@ func TestSubagentActsForRootTurn(t *testing.T) {
 			}
 
 			writeAgent(t, nt.cfg.Workspace, "researcher", "---\ndescription: Researcher\nmodel: gpt-6.1-sol\npermission:\n  bash: auto\n  rocketclaw: {rocketclaw_attach_files_to_response: allow, rocketclaw_schedule_message: allow, rocketclaw_sessions: allow}\n---\nResearch\n")
-			nt.cfg.Web = config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
+			nt.cfg.Web = config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}
 			nt.cfg.AutoApproverModel = "gpt-review"
 
 			manager, _ := nt.run(t, ignoreOutbound)

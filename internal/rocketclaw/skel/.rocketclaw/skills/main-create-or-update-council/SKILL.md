@@ -48,7 +48,7 @@ Start each agent with an explicit permission set and add only required capabilit
 
 3. **Member capabilities:** Give each member its own `model`, instructions, and tools. Use `read`/`glob`/`grep` for analysts, narrow `edit` paths for editors, exact `bash` commands for test runners, and named `task` targets for further delegation.
 
-Exact task rules keep the graph auditable. Wildcard rules widen the graph to every matching loaded agent. Follow `main-create-or-update-agent` for permission buckets, write/execute separation, web-content trust, and lint.
+Exact task rules keep the graph auditable. Wildcard rules widen the graph to every matching loaded agent. Follow `main-create-or-update-agent` for permission buckets, write/execute separation, and web-content trust.
 
 ## Coordinator Behavior
 
@@ -61,17 +61,16 @@ Write the coordinator body with the current member roster. Instruct it to:
 
 RocketClaw dispatches up to 16 same-turn tool calls concurrently in its bridge runs. The coordinator body owns council-specific instructions. The parent receives the member's final assistant message as its task result.
 
-Slack mentions use the first agent in each channel's configured `agents` list, and Web's agent selector offers that list for the channel's threads. MCP addresses loaded top-level agent names. Verify every configured surface name against `rocketclaw agent-graph next` before activation.
+Slack mentions use the first agent in each channel's configured `agents` list, and Web's agent selector offers that list for the channel's threads. MCP addresses loaded top-level agent names. Verify every configured surface name against the loaded agent names before activation.
 
 ## File And Activation Workflow
 
 1. Read each existing effective file from `.rocketclaw/agents/<name>.md`.
 2. Copy existing files into matching `agents/<name>.md` overlays before editing; create new files in `agents/`.
 3. Add exact caller-to-coordinator and coordinator-to-member task rules.
-4. Run `rocketclaw lint` after all requested edits.
-5. Use `rocketclaw_reload` for agent-only edits.
-6. Model mappings, Slack channel `agents` lists, and the overlay list are Behavior Settings: ask the human to change them on the Web Config page, where a save applies without a restart. Use `main-update-rocketclaw-json` and `rocketclaw_restart` only for setup fields in `rocketclaw.json`.
-7. Complete review-only requests with a report and preserve the active runtime state.
-8. Report the flat agent names, permission edges, recursion budget, surface names, lint result, and activation result.
+4. Use `rocketclaw_reload` for agent-only edits.
+5. Model mappings, Slack channel `agents` lists, and the overlay list are Behavior Settings: ask the human to change them on the Web Config page, where a save applies without a restart. Use `main-update-rocketclaw-json` and `rocketclaw_restart` only for setup fields in `rocketclaw.json`.
+6. Complete review-only requests with a report and preserve the active runtime state.
+7. Report the flat agent names, permission edges, recursion budget, surface names, and activation result.
 
-Keep a one-way coordinator-to-member graph for ordinary councils. For an intentional cycle, give every participant a bounded `maxRecursion` value and resolve the corresponding `RC003` lint finding with the human's approval.
+Keep a one-way coordinator-to-member graph for ordinary councils. For an intentional cycle, give every participant a bounded `maxRecursion` value and get the human's approval for the cycle.

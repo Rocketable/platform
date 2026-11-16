@@ -151,7 +151,7 @@ func TestRemoteRocketClawRealBrowser(t *testing.T) {
 
 	remotes := map[string]config.RemoteRocketClawConfig{"work": {URL: named("work", remote)}, "gone": {URL: "https://gone." + suffix + ":1"}}
 	localRPC, _ := serve("Local reply")
-	web := versioned("local", NewHTTPHandler(localRPC, config.NewLockedConfig(&config.Config{RocketClaws: remotes}), ""))
+	web := versioned("local", signedIn("alice", NewHTTPHandler(localRPC, config.NewLockedConfig(&config.Config{RocketClaws: remotes}), "")))
 	local := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/test/view-expired" {
 			var stale bool

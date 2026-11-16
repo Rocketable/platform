@@ -22,7 +22,6 @@ Only use these runtime paths:
 - read the current effective skill from `.rocketclaw`
 - copy the current effective content from `.rocketclaw` into `skills/` before editing an existing skill
 - make the requested edits in `skills/`
-- if the skill edit affects agent behavior, permission guidance, task delegation, or scripts, run `rocketclaw lint` before reload
 - after all requested `skills/` overlay edits are complete, call `rocketclaw_reload` exactly once so the runtime validates and reloads the updated skill definitions. Use `rocketclaw_restart` instead only when setup fields in `rocketclaw.json` changed; the overlay list is a Behavior Setting an admin saves on the Web Config page, with no restart. Do not call reload or restart for memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.
 - never edit `.rocketclaw` directly
 ## Required inputs
@@ -101,8 +100,7 @@ When updating an existing skill, preserve body content that the human did not as
 4. Summarize the skill change you are about to make.
 5. Create or update the overlay file in `skills/`.
 6. If this is a rename or move and an old overlay file exists at the previous path, remove that old overlay file.
-7. If the skill change affects agent behavior, permission guidance, task delegation, or scripts, run `rocketclaw lint` and resolve or explicitly suppress findings approved by the human.
-8. If you changed one or more `skills/` overlay files, finish all requested skill-definition edits first, then optionally tell the human you are applying them now and call `rocketclaw_restart` exactly once.
+7. If you changed one or more `skills/` overlay files, finish all requested skill-definition edits first, then optionally tell the human you are applying them now and call `rocketclaw_restart` exactly once.
 
 ## Important
 
@@ -110,7 +108,6 @@ When updating an existing skill, preserve body content that the human did not as
 - Always copy existing skill content from `.rocketclaw` into `skills/` before editing it.
 - The skill `name` in frontmatter must exactly match the leaf directory name containing `SKILL.md`.
 - Route permission-bearing agent changes through `main-create-or-update-agent` instead of editing agent permissions inside this skill.
-- Run `rocketclaw lint` before restart when skill edits affect agent behavior, permission guidance, task delegation, or scripts.
 - Make all requested skill-definition edits before calling `rocketclaw_restart`; do not call it between intermediate edits.
 - Be truthful about overlay limitations when a rename or move cannot remove an old embedded source path.
 - If no skill-definition file changed, do not call `rocketclaw_restart`.

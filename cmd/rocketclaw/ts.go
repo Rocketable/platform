@@ -25,8 +25,6 @@ Commands:
          Stop RocketClaw first, and start it again afterwards.
 `
 
-var errTailnetNotConfigured = errors.New("web.tsnet is not set in the configuration")
-
 func runTS(args []string) error {
 	if len(args) == 0 {
 		return printStdout(tsHelpText, "ts help")
@@ -58,10 +56,6 @@ func runTSLogin(args []string) error {
 	_, cfg, err := loadRuntimeConfig(*secretsARN)
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
-	}
-
-	if cfg.Web.Tsnet == nil {
-		return errTailnetNotConfigured
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

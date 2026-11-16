@@ -66,9 +66,9 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	httpServer := httptest.NewServer(NewHTTPHandler(connection, config.NewLockedConfig(cfg), ""))
+	httpServer := httptest.NewServer(signedIn("alice", NewHTTPHandler(connection, config.NewLockedConfig(cfg), "")))
 	t.Cleanup(httpServer.Close)
-	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	ctx := metadata.NewOutgoingContext(t.Context(), tailnetUser("alice"))
 	image, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=")
 	require.NoError(t, err)
 
@@ -94,7 +94,7 @@ func TestShadowUploadCardsAndDownloads(t *testing.T) {
 			continue
 		}
 
-		content, err := server.uploadContent(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1")), "parent", []string{"  initial image\n", "uploaded steer"}[i], []string{file.Id})
+		content, err := server.uploadContent(metadata.NewIncomingContext(t.Context(), tailnetUser("alice")), "parent", []string{"  initial image\n", "uploaded steer"}[i], []string{file.Id})
 		require.NoError(t, err)
 
 		text := content.Text + "\n\n" + content.TextAttachments[0]

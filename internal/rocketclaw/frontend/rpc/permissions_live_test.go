@@ -144,7 +144,7 @@ func TestSpacePermissionsRealBrowser(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, connection.Close()) })
 
-	handler := NewHTTPHandler(connection, rt.Cfg, "")
+	handler := signedIn("alice", NewHTTPHandler(connection, rt.Cfg, ""))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/test/unlimit" {
 			handler.ServeHTTP(w, r)

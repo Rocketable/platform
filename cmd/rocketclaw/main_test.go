@@ -66,7 +66,7 @@ func TestRunServeKeepsLegacyConfigReadOnly(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
-	legacy := fmt.Appendf(nil, `{"workspace":".","database_url":%q,"slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","human_user_id":"U123","room":"D123","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`, dsn)
+	legacy := fmt.Appendf(nil, `{"workspace":".","web":{"tsnet":{}},"database_url":%q,"slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","human_user_id":"U123","room":"D123","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`, dsn)
 	require.NoError(t, os.WriteFile(defaultConfigPath, legacy, 0o600))
 
 	err = runServe([]string{"--pprof=false"}, "127.0.0.1:0")
@@ -144,11 +144,6 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 	}{
 		{name: "serve", args: []string{"run", "--bad-flag"}, want: "parse serve flags"},
 		{name: "oai", args: []string{"oai", "bogus"}, want: `unknown oai command "bogus"`},
-		{name: "lint flags", args: []string{"lint", "--bad-flag"}, want: "parse lint flags"},
-		{name: "agent graph flags", args: []string{"agent-graph", "--bad-flag"}, want: "parse agent-graph flags"},
-		{name: "lint config", args: []string{"lint", "current"}, want: "load config"},
-		{name: "agent graph config", args: []string{"agent-graph", "current"}, want: "load config"},
-		{name: "settings config", args: []string{"settings"}, want: "load config"},
 		{name: "oai login config", args: []string{"oai", "login", "--headless"}, want: "load runtime config"},
 		{name: "oai list config", args: []string{"oai", "list"}, want: "load runtime config"},
 		{name: "oai logout config", args: []string{"oai", "logout"}, want: "load runtime config"},

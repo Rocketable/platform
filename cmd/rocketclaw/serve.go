@@ -55,7 +55,7 @@ func runServe(args []string, diagnosticsAddress string) error {
 			}
 		}()
 
-		mirrors = postHogMirrors(client, cmp.Or(cfg.ServerDisplayName, serverName(cfg)))
+		mirrors = postHogMirrors(client, cmp.Or(cfg.ServerDisplayName, cfg.Web.Tsnet.Hostname))
 	}
 
 	level := new(slog.LevelVar)

@@ -2,60 +2,21 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"net"
 	"net/http"
-	"os/exec"
-	"strings"
-	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
-	"tailscale.com/ipn/ipnstate"
 )
-
-func serverName(cfg *config.Config) string {
-	if cfg.Web.Tsnet != nil {
-		return cfg.Web.Tsnet.Hostname
-	}
-
-	output, err := exec.Command("tailscale", "status", "--json", "--peers=false").Output()
-
-	var status ipnstate.Status
-	if err != nil || json.Unmarshal(output, &status) != nil || status.Self == nil {
-		return ""
-	}
-
-	name, _, _ := strings.Cut(status.Self.DNSName, ".")
-
-	return name
-}
 
 func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs rpc.CronJobs) (func(context.Context) error, error) {
 	cfg := rt.Cfg.Clone()
-	certificate, err := webCertificate(cfg.Web)
-	if err != nil {
-		return nil, err
-	}
-
-	httpListener, err := net.Listen("tcp", cfg.Web.ListenAddress)
-	if err != nil {
-		return nil, fmt.Errorf("start Web HTTP: %w", err)
-	}
 
 	listener := bufconn.Listen(1 << 20)
 	connection, _ := grpc.NewClient("passthrough:///web", grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -63,25 +24,20 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 			return listener.DialContext(ctx)
 		}))
 	handler := http.NewServeMux()
-	handler.Handle("/", rpc.NewHTTPHandler(connection, rt.Cfg, serverName(cfg)))
+	handler.Handle("/", rpc.NewHTTPHandler(connection, rt.Cfg, cfg.Web.Tsnet.Hostname))
 	handler.Handle("/opencode/{name}/mcp", http.NewCrossOriginProtection().Handler(rt.OpenCodeMCP()))
-	httpServer := &http.Server{Handler: handler, TLSConfig: &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}}
 	server := grpc.NewServer()
 	web := rpc.New(rt, rt.Sessions, rt.Cfg, channels, cronjobs)
 	web.Register(server)
 
 	var serving errgroup.Group
 
-	closeTailnet := func() error { return nil }
+	closeTailnet, err := startTailnet(rt, cfg.Web.Tsnet, handler, &serving)
+	if err != nil {
+		_ = listener.Close()
+		_ = connection.Close()
 
-	if tailnet := cfg.Web.Tsnet; tailnet != nil {
-		if closeTailnet, err = startTailnet(rt, tailnet, httpServer.Handler, &serving); err != nil {
-			_ = httpListener.Close()
-			_ = listener.Close()
-			_ = connection.Close()
-
-			return nil, fmt.Errorf("start Web Tailscale node: %w", err)
-		}
+		return nil, fmt.Errorf("start Web Tailscale node: %w", err)
 	}
 
 	serving.Go(func() error {
@@ -91,14 +47,6 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 
 		return nil
 	})
-	serving.Go(func() error {
-		if err := httpServer.ServeTLS(httpListener, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("serve Web HTTP: %w", err)
-		}
-
-		return nil
-	})
-	rt.Log.Info("started Web HTTPS", "address", httpListener.Addr().String(), "self_signed", cfg.Web.TLSCertFile == "")
 
 	ctxSync, cancelSync := context.WithCancel(context.Background())
 
@@ -110,54 +58,17 @@ func startWebRPC(rt *backend.Runtime, channels rpc.ChannelAgentChoices, cronjobs
 	}
 
 	return func(context.Context) error {
-		errs := []error{httpServer.Close()}
-		_ = httpListener.Close()
-
 		cancelSync()
-		errs = append(errs, closeTailnet())
+
+		errTailnet := closeTailnet()
 
 		server.Stop()
 		web.StopSearches()
 
-		if err := errors.Join(append(errs, serving.Wait(), connection.Close())...); err != nil {
+		if err := errors.Join(errTailnet, serving.Wait(), connection.Close()); err != nil {
 			return fmt.Errorf("stop Web: %w", err)
 		}
 
 		return nil
 	}, nil
-}
-
-func webCertificate(web config.WebConfig) (tls.Certificate, error) {
-	if web.TLSCertFile != "" {
-		certificate, err := tls.LoadX509KeyPair(web.TLSCertFile, web.TLSKeyFile)
-		if err != nil {
-			return tls.Certificate{}, fmt.Errorf("load Web certificate: %w", err)
-		}
-
-		return certificate, nil
-	}
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("make Web certificate key: %w", err)
-	}
-
-	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(now.UnixNano()),
-		Subject:      pkix.Name{CommonName: "RocketClaw"},
-		NotBefore:    now.Add(-time.Hour),
-		NotAfter:     now.AddDate(1, 0, 0),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{"localhost"},
-		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
-	}
-
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		return tls.Certificate{}, fmt.Errorf("make Web certificate: %w", err)
-	}
-
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
 }

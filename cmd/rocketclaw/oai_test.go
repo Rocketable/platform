@@ -370,6 +370,7 @@ func prepareOAIConfig(t *testing.T) string {
     "help": {"auth":"api_key","api_key":"help-key"}
   },
 	"slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
+  "web": {"tsnet": {}},
   "future_root_field": {"enabled":true},
   "future_large": 9007199254740993
 }`

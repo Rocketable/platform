@@ -40,8 +40,8 @@ func TestTabs(t *testing.T) {
 
 	db := openTestTurns(t, dsn).db
 	server := &Server{sessions: sessions, cfg: new(config.LockedConfig)}
-	call := func(ip string, request *TabsRequest) (*TabsResponse, error) {
-		return server.tabs(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", ip)), request)
+	call := func(login string, request *TabsRequest) (*TabsResponse, error) {
+		return server.tabs(metadata.NewIncomingContext(t.Context(), tailnetUser(login)), request)
 	}
 	names := func(response *TabsResponse) []string {
 		out := make([]string, 0, len(response.Spaces))
@@ -91,22 +91,22 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 		Space:  "main",
 		Last:   map[string]string{"main": "/s/YQ", "ops": "/search"},
 	}
-	response, err := call("127.0.0.1", &TabsRequest{State: saved})
+	response, err := call("alice", &TabsRequest{State: saved})
 	require.NoError(t, err)
 	assert.False(t, response.Stale)
 
-	response, err = call("127.0.0.1", &TabsRequest{})
+	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(saved, response.State), "a read returns the saved state")
 	assert.Equal(t, int64(1), response.Revision)
 	assert.Equal(t, []string{"Main"}, names(response))
 
-	response, err = call("192.0.2.2", &TabsRequest{})
+	response, err = call("bob", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&TabState{}, response.State), "bob has his own state")
 	assert.Equal(t, int64(0), response.Revision)
 
-	response, err = call("127.0.0.1", &TabsRequest{State: &TabState{Space: "main"}, Revision: 0})
+	response, err = call("alice", &TabsRequest{State: &TabState{Space: "main"}, Revision: 0})
 	require.NoError(t, err)
 	assert.True(t, response.Stale)
 	assert.True(t, proto.Equal(saved, response.State))
@@ -116,7 +116,7 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	require.NoError(t, err)
 
 	next := &TabState{Tabs: []*Tab{{Path: "/s/a", Space: "main"}, {Path: "/s/bm9uZQ", Space: "main"}, {Path: "/s/_w", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/s/a"}}
-	response, err = call("127.0.0.1", &TabsRequest{State: next, Revision: 1})
+	response, err = call("alice", &TabsRequest{State: next, Revision: 1})
 	require.NoError(t, err)
 	assert.False(t, response.Stale)
 	assert.True(t, proto.Equal(next, response.State), "the save answers with the saved state")
@@ -132,7 +132,7 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	assert.True(t, proto.Equal(saved.Tabs[2], closed["/s/Yg"]))
 	assert.True(t, proto.Equal(saved.Tabs[3], closed["/search/a"]))
 
-	response, err = call("127.0.0.1", &TabsRequest{})
+	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&TabState{Tabs: []*Tab{{Path: "/s/YQ", Space: "main"}}, Space: "main", Last: map[string]string{"main": "/s/YQ"}}, response.State))
 
@@ -140,156 +140,156 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs())
 
-	response, err = call("192.0.2.2", &TabsRequest{State: &TabState{Space: "main"}, Revision: 0})
+	response, err = call("bob", &TabsRequest{State: &TabState{Space: "main"}, Revision: 0})
 	require.NoError(t, err)
 	assert.False(t, response.Stale)
 
-	response, err = call("127.0.0.1", &TabsRequest{Share: &SharedTab{Space: "main", Path: "/s/YQ"}})
+	response, err = call("alice", &TabsRequest{Share: &SharedTab{Space: "main", Path: "/s/YQ"}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"main /s/YQ"}, shared(response))
-	response, err = call("192.0.2.2", &TabsRequest{Share: &SharedTab{Space: "main", Path: "/search"}})
+	response, err = call("bob", &TabsRequest{Share: &SharedTab{Space: "main", Path: "/search"}})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&TabState{Space: "main"}, response.State))
 	assert.Equal(t, []string{"main /s/YQ", "main /search"}, shared(response))
 
 	for path, code := range map[string]codes.Code{"/": codes.InvalidArgument, "/s/cHJpdmF0ZS1Y": codes.PermissionDenied, "/s/bm9uZQ": codes.NotFound, "/pages/x/%": codes.InvalidArgument, "/pages/x/%FF": codes.InvalidArgument} {
-		_, err = call("192.0.2.2", &TabsRequest{Share: &SharedTab{Space: "main", Path: path}})
+		_, err = call("bob", &TabsRequest{Share: &SharedTab{Space: "main", Path: path}})
 		assert.Equal(t, code, status.Code(err), path)
 	}
 
-	_, err = call("192.0.2.2", &TabsRequest{Unshare: &SharedTab{Space: "main", Path: "/s/YQ"}})
+	_, err = call("bob", &TabsRequest{Unshare: &SharedTab{Space: "main", Path: "/s/YQ"}})
 	require.NoError(t, err)
-	response, err = call("127.0.0.1", &TabsRequest{})
+	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"main /search"}, shared(response))
 	assert.Equal(t, []*Tab{{Path: "/s/YQ", Space: "main"}}, response.State.Tabs)
 
-	response, err = call("192.0.2.2", &TabsRequest{State: &TabState{Space: "main"}, Revision: 1})
+	response, err = call("bob", &TabsRequest{State: &TabState{Space: "main"}, Revision: 1})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"main /search"}, shared(response), "a save's reply carries the Shared tabs too")
 
-	response, err = call("192.0.2.2", &TabsRequest{CreateSpace: "Ops"})
+	response, err = call("bob", &TabsRequest{CreateSpace: "Ops"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Main", "Ops"}, names(response), "spaces are shared, oldest first")
 
-	_, err = call("127.0.0.1", &TabsRequest{CreateSpace: "OPS"})
+	_, err = call("alice", &TabsRequest{CreateSpace: "OPS"})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
-	_, err = call("127.0.0.1", &TabsRequest{RenameSpace: &Space{Id: "main", Name: "ops"}})
+	_, err = call("alice", &TabsRequest{RenameSpace: &Space{Id: "main", Name: "ops"}})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	response, err = call("127.0.0.1", &TabsRequest{RenameSpace: &Space{Id: response.Spaces[1].Id, Name: "Operations"}})
+	response, err = call("alice", &TabsRequest{RenameSpace: &Space{Id: response.Spaces[1].Id, Name: "Operations"}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Main", "Operations"}, names(response))
-	response, err = call("127.0.0.1", &TabsRequest{DeleteSpace: "main"})
+	response, err = call("alice", &TabsRequest{DeleteSpace: "main"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Operations"}, names(response))
 	assert.Equal(t, []string{response.Spaces[0].Id + " /search"}, shared(response), "a deleted space's Shared tabs move to the first space")
-	_, err = call("127.0.0.1", &TabsRequest{DeleteSpace: response.Spaces[0].Id})
+	_, err = call("alice", &TabsRequest{DeleteSpace: response.Spaces[0].Id})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err), "the last space stays")
 
 	space := response.Spaces[0].Id
-	_, err = call("127.0.0.1", &TabsRequest{Share: &SharedTab{Space: space, Path: "/cron"}})
+	_, err = call("alice", &TabsRequest{Share: &SharedTab{Space: space, Path: "/cron"}})
 	require.NoError(t, err)
-	_, err = call("192.0.2.2", &TabsRequest{State: &TabState{Space: space, SharedOrder: []string{"/cron", "/search"}}, Revision: 2})
+	_, err = call("bob", &TabsRequest{State: &TabState{Space: space, SharedOrder: []string{"/cron", "/search"}}, Revision: 2})
 	require.NoError(t, err)
-	response, err = call("192.0.2.2", &TabsRequest{})
+	response, err = call("bob", &TabsRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/cron", "/search"}, response.State.SharedOrder)
 	assert.Equal(t, []string{space + " /search", space + " /cron"}, shared(response))
-	response, err = call("127.0.0.1", &TabsRequest{})
+	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
 	assert.Empty(t, response.State.SharedOrder, "a person's Shared order is their own")
 
 	triage := &SearchPage{Name: "Triage", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}}, Active: "1"}
-	_, err = call("127.0.0.1", &TabsRequest{Share: &SharedTab{Space: space, Path: "/search/a", Search: triage}})
+	_, err = call("alice", &TabsRequest{Share: &SharedTab{Space: space, Path: "/search/a", Search: triage}})
 	require.NoError(t, err)
-	response, err = call("192.0.2.2", &TabsRequest{})
+	response, err = call("bob", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&SharedTab{Space: space, Path: "/search/a", Search: triage}, response.Shared[2]))
 	assert.Nil(t, response.Shared[0].Search, "other Shared tabs have no page")
 
 	edited := &SearchPage{Name: "Triage", Searches: []*SavedSearch{{Id: "1", Query: "is:unread"}, {Id: "2", Query: "tag:bug"}}, Active: "1"}
-	response, err = call("192.0.2.2", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: edited, Search: edited}})
+	response, err = call("bob", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: edited, Search: edited}})
 	require.NoError(t, err)
 	assert.True(t, response.Stale)
 	assert.True(t, proto.Equal(triage, response.Shared[2].Search), "a refused edit answers with the page as saved")
 
-	response, err = call("192.0.2.2", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: triage, Search: edited}})
+	response, err = call("bob", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: triage, Search: edited}})
 	require.NoError(t, err)
 	assert.False(t, response.Stale)
 	assert.Equal(t, []string{space + " /search", space + " /cron", space + " /search/a"}, shared(response), "an edit keeps its place")
 	assert.True(t, proto.Equal(edited, response.Shared[2].Search))
 
-	response, err = call("127.0.0.1", &TabsRequest{Unshare: &SharedTab{Space: space, Path: "/search/a"}})
+	response, err = call("alice", &TabsRequest{Unshare: &SharedTab{Space: space, Path: "/search/a"}})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(edited, response.Unshared))
-	response, err = call("192.0.2.2", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: edited, Search: edited}})
+	response, err = call("bob", &TabsRequest{EditShared: &SharedTab{Space: space, Path: "/search/a", Base: edited, Search: edited}})
 	require.NoError(t, err)
 	assert.True(t, response.Stale)
 	assert.Equal(t, []string{space + " /search", space + " /cron"}, shared(response), "an edit after unsharing does not share again")
 
 	later := time.Now().Add(time.Hour).UTC().Format("2006-01-02T15:04:05.000Z07:00")
-	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/a", "/cron"}, Action: AttentionAction_PARK, Until: later}})
+	_, err = call("alice", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/a", "/cron"}, Action: AttentionAction_PARK, Until: later}})
 	require.NoError(t, err)
-	_, err = call("192.0.2.2", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/Yw"}, Action: AttentionAction_PARK, Until: later}})
+	_, err = call("bob", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/Yw"}, Action: AttentionAction_PARK, Until: later}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/cron t t", "/s/YQ 0", "/s/YQ t t", "/s/Yw f f"}, aliceTabs())
 
 	for path, code := range map[string]codes.Code{"/": codes.InvalidArgument, "group:g": codes.InvalidArgument, "/s/cHJpdmF0ZS1Y": codes.PermissionDenied, "/s/bm9uZQ": codes.NotFound} {
-		_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/Yw", path}, Action: AttentionAction_MARK_UNREAD}})
+		_, err = call("alice", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/Yw", path}, Action: AttentionAction_MARK_UNREAD}})
 		assert.Equal(t, code, status.Code(err), path)
 	}
 
-	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/Yw"}, Action: AttentionAction_PARK, Until: "tomorrow"}})
+	_, err = call("alice", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/Yw"}, Action: AttentionAction_PARK, Until: "tomorrow"}})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 	assert.Equal(t, []string{"/cron t t", "/s/YQ 0", "/s/YQ t t", "/s/Yw f f"}, aliceTabs())
 
-	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_UNPARK}})
+	_, err = call("alice", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_UNPARK}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs())
 
-	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_PARK_UNTIL_DONE}})
+	_, err = call("alice", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_PARK_UNTIL_DONE}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/YQ 0", "/s/YQ t t", "/s/Yw f f"}, aliceTabs())
 
-	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ"}, Action: AttentionAction_UNPARK}})
+	_, err = call("alice", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ"}, Action: AttentionAction_UNPARK}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs())
 
 	sent := func(paths ...string) {
 		t.Helper()
 
-		_, err := call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: paths, Action: AttentionAction_SENT}})
+		_, err := call("alice", &TabsRequest{Attention: &AttentionChange{Paths: paths, Action: AttentionAction_SENT}})
 		require.NoError(t, err)
 	}
-	response, err = call("127.0.0.1", &TabsRequest{})
+	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, response.AutoPark)
 
-	response, err = call("127.0.0.1", &TabsRequest{AutoPark: new(false)})
+	response, err = call("alice", &TabsRequest{AutoPark: new(false)})
 	require.NoError(t, err)
 	assert.False(t, response.AutoPark)
 	sent("/s/YQ")
 	assert.Equal(t, []string{"/s/YQ 0", "/s/Yw f f"}, aliceTabs(), "nothing is auto-parked with it off")
 
-	response, err = call("192.0.2.2", &TabsRequest{})
+	response, err = call("bob", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, response.AutoPark, "auto-park is each person's own")
 
-	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_AUTO_PARK}})
+	_, err = call("alice", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ", "/cron"}, Action: AttentionAction_AUTO_PARK}})
 	require.NoError(t, err)
 	sent("/s/YQ", "/s/Yw")
 	assert.Equal(t, []string{"/s/YQ 0", "/s/YQ t t", "/s/Yw f f"}, aliceTabs())
 
-	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ"}, Action: AttentionAction_UNPARK}})
+	_, err = call("alice", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ"}, Action: AttentionAction_UNPARK}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/s/YQ 0", "/s/YQ f f", "/s/Yw f f"}, aliceTabs())
 
-	response, err = call("127.0.0.1", &TabsRequest{AutoPark: new(true)})
+	response, err = call("alice", &TabsRequest{AutoPark: new(true)})
 	require.NoError(t, err)
 	assert.True(t, response.AutoPark)
 
-	_, err = call("127.0.0.1", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ"}, Action: AttentionAction_STOP_AUTO_PARK}})
+	_, err = call("alice", &TabsRequest{Attention: &AttentionChange{Paths: []string{"/s/YQ"}, Action: AttentionAction_STOP_AUTO_PARK}})
 	require.NoError(t, err)
 	sent("/s/YQ", "/s/Yw")
 	assert.Equal(t, []string{"/s/YQ 0", "/s/YQ f f", "/s/Yw t t"}, aliceTabs(), "her choice for a session wins over her choice for every session")
@@ -297,39 +297,39 @@ SELECT row FROM rows ORDER BY row COLLATE "C"`)
 	_, err = db.ExecContext(t.Context(), `DELETE FROM web_tab_attention WHERE username = 'alice' AND path <> '/s/Yw'; UPDATE web_tab_attention SET parked = FALSE, until = NULL WHERE username = 'alice'`)
 	require.NoError(t, err)
 
-	response, err = call("127.0.0.1", &TabsRequest{})
+	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
 
 	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "nothing shelved yet: %v", response.TopShelf)
 
 	shelf := &TopShelf{Tabs: []*ShelfTab{{Server: "work", Space: "main", Path: "/s/eA"}, {Path: "/s/YQ", Space: "main"}, {Path: "/s/Yw", Space: "main"},
 		{Path: "/search/1", Space: "main", Search: &SearchPage{Name: "x", Searches: []*SavedSearch{{Id: "1", Query: "q"}}, Active: "1"}}, {Server: "work", Path: "/search/1", Space: "main"}}, Collapsed: true}
-	_, err = call("127.0.0.1", &TabsRequest{TopShelf: shelf})
+	_, err = call("alice", &TabsRequest{TopShelf: shelf})
 	require.NoError(t, err)
-	response, err = call("127.0.0.1", &TabsRequest{})
+	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(shelf, response.TopShelf), "a read returns the saved shelf, one path on two servers twice: %v", response.TopShelf)
 
 	_, err = db.ExecContext(t.Context(), `DELETE FROM conversations WHERE conversation_id = 'c'`)
 	require.NoError(t, err)
-	response, err = call("127.0.0.1", &TabsRequest{})
+	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
 
 	shelf.Tabs = slices.Delete(shelf.Tabs, 2, 3)
 	assert.True(t, proto.Equal(shelf, response.TopShelf), "c's deleted session leaves the shelf: %v", response.TopShelf)
-	response, err = call("192.0.2.2", &TabsRequest{})
+	response, err = call("bob", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "another person's shelf is not theirs: %v", response.TopShelf)
-	_, err = call("127.0.0.1", &TabsRequest{TopShelf: &TopShelf{}})
+	_, err = call("alice", &TabsRequest{TopShelf: &TopShelf{}})
 	require.NoError(t, err)
-	response, err = call("127.0.0.1", &TabsRequest{})
+	response, err = call("alice", &TabsRequest{})
 	require.NoError(t, err)
 	assert.True(t, proto.Equal(&TopShelf{}, response.TopShelf), "an emptied shelf stays empty: %v", response.TopShelf)
 }
 
 func TestPromptAutoParks(t *testing.T) {
 	h := startVoiceHarness(t)
-	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	alice := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
 	attention := func() backend.Attention {
 		t.Helper()
 
@@ -381,8 +381,8 @@ func TestTabsSpaceLimit(t *testing.T) {
 	require.NoError(t, root.WriteFile(cfg.RuntimeDirName()+"/agents/ops-agent.md", []byte("---\nmodel: gpt-6.1-sol\nspace: Ops\n---\nHelp."), 0o600))
 
 	server := &Server{sessions: sessions, cfg: config.NewLockedConfig(cfg)}
-	alice := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
-	bob := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.2"))
+	alice := metadata.NewIncomingContext(t.Context(), tailnetUser("alice"))
+	bob := metadata.NewIncomingContext(t.Context(), tailnetUser("bob"))
 	read := func(ctx context.Context) (spaces, shared []string) {
 		t.Helper()
 

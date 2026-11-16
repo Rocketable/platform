@@ -60,21 +60,6 @@ const (
 	SourceSystem      Source = "system"
 )
 
-type InspectKind string
-
-const (
-	InspectLint     InspectKind = "lint"
-	InspectGraph    InspectKind = "graph"
-	InspectSettings InspectKind = "settings"
-)
-
-type InspectTarget string
-
-const (
-	InspectNext    InspectTarget = "next"
-	InspectCurrent InspectTarget = "current"
-)
-
 type InboundResponse struct {
 	Text        string
 	Attachments []OutboundAttachment

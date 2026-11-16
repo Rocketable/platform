@@ -65,12 +65,6 @@ func (c *Config) SetBehavior(b *Behavior) {
 	c.ServerDisplayName, c.Logging, c.Overlays = b.ServerDisplayName, b.Logging, b.Overlays
 }
 
-func (b *Behavior) RedactUsers() {
-	for i := range b.Slack.Channels {
-		b.Slack.Channels[i].AllowedUserIDs = nil
-	}
-}
-
 const DefaultRuntimeDir = ".rocketclaw"
 
 type AttachmentDriver string
@@ -120,11 +114,8 @@ func (c *Config) RuntimeDirName() string {
 }
 
 type WebConfig struct {
-	ListenAddress string       `json:"listen_address,omitempty"`
-	Admins        []string     `json:"admins,omitempty"`
-	TLSCertFile   string       `json:"tls_cert_file,omitempty"`
-	TLSKeyFile    string       `json:"tls_key_file,omitempty"`
-	Tsnet         *TsnetConfig `json:"tsnet,omitempty"`
+	Admins []string     `json:"admins,omitempty"`
+	Tsnet  *TsnetConfig `json:"tsnet,omitempty"`
 }
 
 type TsnetConfig struct {
@@ -344,20 +335,18 @@ func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
 }
 
 func (c *Config) Validate() error {
-	c.Web.ListenAddress = cmp.Or(c.Web.ListenAddress, "0.0.0.0:3000")
 	if _, _, err := c.AttachmentLocation(); err != nil {
 		return err
 	}
 
-	if (c.Web.TLSCertFile == "") != (c.Web.TLSKeyFile == "") {
-		return errors.New("web.tls_cert_file and web.tls_key_file must be set together")
+	tsnet := c.Web.Tsnet
+	if tsnet == nil {
+		return errors.New("web.tsnet is required: the Web is served only on the tailnet")
 	}
 
-	if tsnet := c.Web.Tsnet; tsnet != nil {
-		tsnet.Hostname = cmp.Or(tsnet.Hostname, "rocketclaw")
-		if strings.Trim(tsnet.Hostname, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || slices.ContainsFunc(tsnet.Tags, func(tag string) bool { return !strings.HasPrefix(tag, "tag:") }) {
-			return errors.New(`web.tsnet.hostname must use only a-z, 0-9 and -, and each web.tsnet.tags entry must start with "tag:"`)
-		}
+	tsnet.Hostname = cmp.Or(tsnet.Hostname, "rocketclaw")
+	if strings.Trim(tsnet.Hostname, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" || slices.ContainsFunc(tsnet.Tags, func(tag string) bool { return !strings.HasPrefix(tag, "tag:") }) {
+		return errors.New(`web.tsnet.hostname must use only a-z, 0-9 and -, and each web.tsnet.tags entry must start with "tag:"`)
 	}
 
 	if c.Workspace == "" {

@@ -24,7 +24,7 @@ func TestPageTools(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSessionService(t)
-	threads := &threadBridgeManager{runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store}
+	threads := &threadBridgeManager{runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store}
 
 	root, err := os.OpenRoot(t.TempDir())
 	require.NoError(t, err)
@@ -222,7 +222,7 @@ func TestPageStoreReadsEasyFileView(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, workspace.Close()) })
 
 	store := newTestSessionService(t)
-	threads := &threadBridgeManager{runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:8080", Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store}
+	threads := &threadBridgeManager{runtime: config.NewLockedConfig(&config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rc", Origin: "https://rc.example"}}}), store: store}
 	pageStore := pageSpace{sessions: store, threads: threads, agent: "easy", space: "Ops"}.nativeTools(workspace, &harness.CustomShell{Emulated: true, Dir: filepath.Join(dir, "folder")})[0]
 
 	_, err = pageStore.Call(t.Context(), json.RawMessage(`{"path":"config.json","source":"rocketclaw.json"}`), nil)

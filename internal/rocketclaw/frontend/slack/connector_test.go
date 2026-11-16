@@ -1286,7 +1286,7 @@ func newFooterRouter(t *testing.T, report bool, errLink error) *primaryTextRoute
 
 	return &primaryTextRouterMock{
 		MentionThreadFunc: func(protocol.TextConversationTarget) (bool, bool, error) { return true, report, nil },
-		WebURLFunc: func(_ context.Context, conversationID string) (string, error) {
+		WebURLFunc: func(conversationID string) (string, error) {
 			assert.Equal(t, "slack-thread:C123:111.222", conversationID)
 
 			if errLink != nil {

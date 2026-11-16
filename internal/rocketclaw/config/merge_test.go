@@ -59,6 +59,8 @@ func loadSecretConfig(t *testing.T, local, arn string, fetcher SecretFetcher) *C
 		local = strings.Replace(local, "{", `{"database_url":"postgres://localhost/rocketclaw_test?sslmode=disable",`, 1)
 	}
 
+	local = strings.Replace(local, "{", `{"web":{"tsnet":{}},`, 1)
+
 	path := filepath.Join(t.TempDir(), "rocketclaw.json")
 	require.NoError(t, os.WriteFile(path, []byte(local), 0o600))
 	cfg, err := Load(path, arn, fetcher)

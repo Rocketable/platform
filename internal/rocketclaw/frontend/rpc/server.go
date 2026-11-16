@@ -13,10 +13,8 @@ import (
 	"hash/fnv"
 	"log/slog"
 	"maps"
-	"net/netip"
 	"net/url"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -46,9 +44,6 @@ type Server struct {
 	cfg      *config.LockedConfig
 	channels ChannelAgentChoices
 	cronjobs CronJobs
-
-	tailscaleMu    sync.Mutex
-	tailscaleUsers map[netip.Addr]tailscaleUser
 
 	searchMu    sync.Mutex
 	searches    map[string]*searchFlight
@@ -83,12 +78,6 @@ type searchFlight struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	waiters int
-}
-
-type tailscaleUser struct {
-	username  string
-	principal string
-	expires   time.Time
 }
 
 type ChannelAgentChoices interface {
@@ -1202,8 +1191,6 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 
 	if login := metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-login-bin"); len(login) == 1 {
 		view.TailscaleUser = login[0]
-	} else if username, _, errWhoIs := s.tailscaleUsername(ctx, netip.MustParseAddr(metadata.ValueFromIncomingContext(ctx, "rocketclaw-principal")[0])); errWhoIs == nil {
-		view.TailscaleUser = username
 	}
 
 	for _, channel := range cfg.Slack.Channels {
@@ -1251,21 +1238,6 @@ func (s *Server) saveBehaviorSettings(ctx context.Context, request *SaveBehavior
 	}
 
 	return s.listConfig(ctx)
-}
-
-func (s *Server) inspectAgents(ctx context.Context, request *InspectAgentsRequest) (*InspectAgentsResponse, error) {
-	if !slices.Contains(metadata.ValueFromIncomingContext(ctx, "rocketclaw-direct-local"), "true") {
-		if _, _, err := s.principal(ctx); err != nil {
-			return nil, err
-		}
-	}
-
-	output, findings, err := s.backend.InspectAgents(protocol.InspectTarget(request.Target), protocol.InspectKind(request.Kind))
-	if err != nil {
-		return nil, fmt.Errorf("web inspect agents: %w", err)
-	}
-
-	return &InspectAgentsResponse{Output: output, Findings: int32(findings)}, nil
 }
 
 func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*ListSkillsResponse, error) {
@@ -2162,26 +2134,17 @@ func (s *Server) join(request *JoinRequest, stream grpc.ServerStream) error {
 }
 
 func (s *Server) principal(ctx context.Context) (username, principal string, err error) {
-	if login := metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-login-bin"); len(login) == 1 {
-		principal = metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-name-bin")[0]
-		if strings.TrimSpace(principal) == "" {
-			principal = login[0]
-		}
-
-		return login[0], principal, nil
+	login := metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-login-bin")
+	if len(login) != 1 {
+		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "tailnet login is required"))
 	}
 
-	values := metadata.ValueFromIncomingContext(ctx, "rocketclaw-principal")
-	if len(values) != 1 {
-		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "browser IP is required"))
+	principal = metadata.ValueFromIncomingContext(ctx, "rocketclaw-tailnet-name-bin")[0]
+	if strings.TrimSpace(principal) == "" {
+		principal = login[0]
 	}
 
-	ip, err := netip.ParseAddr(values[0])
-	if err != nil {
-		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "invalid browser IP"))
-	}
-
-	return s.tailscaleUsername(ctx, ip)
+	return login[0], principal, nil
 }
 
 func (s *Server) spaceLimit(ctx context.Context) (username string, limit backend.SpaceLimit, err error) {
@@ -2213,50 +2176,6 @@ func (s *Server) cronInLimit(limit backend.SpaceLimit, stem string) error {
 	}
 
 	return nil
-}
-
-func (s *Server) tailscaleUsername(ctx context.Context, ip netip.Addr) (username, principal string, err error) {
-	ip = ip.Unmap()
-
-	s.tailscaleMu.Lock()
-	defer s.tailscaleMu.Unlock()
-
-	now := time.Now()
-	if user := s.tailscaleUsers[ip]; now.Before(user.expires) {
-		return user.username, user.principal, nil
-	}
-
-	maps.DeleteFunc(s.tailscaleUsers, func(_ netip.Addr, user tailscaleUser) bool { return !now.Before(user.expires) })
-
-	output, err := exec.CommandContext(ctx, "tailscale", "whois", "--json", ip.String()).Output()
-	if err != nil {
-		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "Tailscale could not identify browser IP"))
-	}
-
-	var identity struct {
-		Node        struct{ Tags []string }
-		UserProfile struct{ LoginName, DisplayName string }
-	}
-	if err := json.Unmarshal(output, &identity); err != nil {
-		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "invalid Tailscale identity response"))
-	}
-
-	if len(identity.Node.Tags) > 0 || identity.UserProfile.LoginName == "" {
-		return "", "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "browser IP has no Tailscale user"))
-	}
-
-	if s.tailscaleUsers == nil {
-		s.tailscaleUsers = make(map[netip.Addr]tailscaleUser)
-	}
-
-	principal = identity.UserProfile.DisplayName
-	if strings.TrimSpace(principal) == "" {
-		principal = identity.UserProfile.LoginName
-	}
-
-	s.tailscaleUsers[ip] = tailscaleUser{username: identity.UserProfile.LoginName, principal: principal, expires: time.Now().Add(5 * time.Minute)}
-
-	return identity.UserProfile.LoginName, principal, nil
 }
 
 func (s *Server) entries(ctx context.Context, id string) ([]backend.ObservedSessionEntry, error) {

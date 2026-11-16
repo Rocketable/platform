@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/sandbox"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/stretchr/testify/require"
@@ -99,76 +98,6 @@ func TestRuntimeReload(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestRuntimeInspectAgents(t *testing.T) {
-	cfg := &config.Config{Workspace: t.TempDir(), AutoApproverModel: "gpt-6.1-sol"}
-	cfg.Slack.Channels = []config.SlackChannelConfig{{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}
-	root, err := os.OpenRoot(cfg.Workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	agents := map[string]string{
-		"main.md":   "---\nmodel: software-development-sol\ndescription: main\nmaxRecursion: 0\npermission:\n  task:\n    \"worker\": allow\n---\nmain\n",
-		"worker.md": "---\nmodel: gpt-6.1-sol\ndescription: worker\n---\nworker\n",
-	}
-
-	for _, dir := range []string{"agents", cfg.RuntimeDirName() + "/agents"} {
-		require.NoError(t, root.MkdirAll(dir, 0o755))
-
-		for name, content := range agents {
-			require.NoError(t, root.WriteFile(dir+"/"+name, []byte(content), 0o600))
-		}
-	}
-
-	require.NoError(t, root.WriteFile("agents/lint-bad.md", []byte("---\nmodel: gpt-6.1-sol\ndescription: bad\npermissions:\n  bash:\n    \"echo ok\": allow\n---\nbad\n"), 0o600))
-
-	rt := &Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.DiscardHandler), Assemble: &frontendAssemblerMock{ValidateAssetsFunc: func(*config.Config, string) error { return nil }}}
-	for _, tt := range []struct {
-		target   protocol.InspectTarget
-		kind     protocol.InspectKind
-		want     string
-		findings int
-	}{
-		{protocol.InspectCurrent, protocol.InspectLint, "rocketclaw lint current: OK\n", 0},
-		{protocol.InspectNext, protocol.InspectLint, "rocketclaw lint next: found 1 findings\nRC006 error agents/lint-bad.md: plural permissions frontmatter is ignored; use permission\n", 1},
-		{protocol.InspectCurrent, protocol.InspectGraph, "digraph agent_graph {\n  \"main\" [label=\"main\\nmaxRecursion=0\"];\n  \"worker\" [label=\"worker\\nmaxRecursion=unbounded\"];\n  \"main\" -> \"worker\";\n}\n", 0},
-		{protocol.InspectCurrent, protocol.InspectSettings, `{
-  "auto_approver_model": "gpt-6.1-sol",
-  "slack": {
-    "channels": [
-      {
-        "channel": "@",
-        "agents": [
-          "main"
-        ]
-      }
-    ]
-  },
-  "server_display_name": "",
-  "logging": {
-    "level": ""
-  },
-  "overlays": null
-}
-`, 0},
-	} {
-		output, findings, err := rt.InspectAgents(tt.target, tt.kind)
-		require.NoError(t, err, tt.kind)
-		require.Equal(t, tt.want, output, tt.kind)
-		require.Equal(t, tt.findings, findings, tt.kind)
-	}
-
-	_, _, err = rt.InspectAgents("previous", protocol.InspectLint)
-	require.EqualError(t, err, `unknown inspection target "previous"`)
-	_, _, err = rt.InspectAgents(protocol.InspectCurrent, "format")
-	require.EqualError(t, err, `unknown inspection kind "format"`)
-
-	require.Equal(t, []string{"U1"}, rt.Cfg.Clone().Slack.Channels[0].AllowedUserIDs, "settings leave the live config intact")
-
-	stages, err := filepath.Glob(filepath.Join(cfg.Workspace, ".rocketclaw-inspect-*"))
-	require.NoError(t, err)
-	require.Empty(t, stages, "next removes its stage")
 }
 
 func TestRuntimeSaveBehavior(t *testing.T) {

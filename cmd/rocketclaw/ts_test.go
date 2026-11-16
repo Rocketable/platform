@@ -35,7 +35,6 @@ func TestRunTS(t *testing.T) {
 	assert.Contains(t, captureStdout(t, func() error { return runTS(nil) }), "rocketclaw ts login")
 	require.EqualError(t, runTS([]string{"logout"}), `unknown ts command "logout"`)
 	require.EqualError(t, runTS([]string{"login", "extra"}), "ts login takes no arguments")
-	require.ErrorIs(t, runTS([]string{"login"}), errTailnetNotConfigured)
 }
 
 func TestTailnetLogin(t *testing.T) {
@@ -73,7 +72,7 @@ func TestTailnetLogin(t *testing.T) {
 
 	var logs bytes.Buffer
 
-	cfg := &config.Config{Web: config.WebConfig{ListenAddress: "127.0.0.1:0", Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}}}
+	cfg := &config.Config{Web: config.WebConfig{Tsnet: &config.TsnetConfig{Hostname: "rocketclaw-test"}}}
 	rt := &backend.Runtime{Cfg: config.NewLockedConfig(cfg), Log: slog.New(slog.NewTextHandler(&logs, nil)), Sessions: webSessions(t)}
 
 	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
