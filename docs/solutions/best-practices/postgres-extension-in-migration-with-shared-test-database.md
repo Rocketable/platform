@@ -36,7 +36,7 @@ An extension does not belong to a schema the way a table does. Each database has
 
 ## Guidance
 
-Write the extension part of the migration like this (as `030_message_search.sql` did; `001_baseline.sql:4-6` keeps its lock and extension lines):
+Write the extension part of the migration like this (as `030_message_search.sql` did; `001_baseline.sql:2-3` keeps its lock and extension lines):
 
 ```sql
 -- +migrate Up
@@ -84,7 +84,7 @@ DROP TABLE message_search;
 DROP EXTENSION pg_trgm;
 ```
 
-After: see the Guidance block above; `internal/rocketclaw/backend/migrations/001_baseline.sql:4-6` has the lock and extension lines, and its trigram indexes use `public.gin_trgm_ops`. The baseline has no Down step.
+After: see the Guidance block above; `internal/rocketclaw/backend/migrations/001_baseline.sql:2-3` has the lock and extension lines, and its trigram indexes use `public.gin_trgm_ops`. The baseline has no Down step.
 
 Production note: `pg_trgm` is a trusted extension (PostgreSQL 13 and later). A role without superuser can create it if it has `CREATE` privilege on the database. Check that the production database role has that privilege before deploying a migration that creates an extension, since startup runs migrations (`README.md`: "RocketClaw upgrades the database schema at startup").
 

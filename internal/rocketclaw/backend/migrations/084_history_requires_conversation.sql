@@ -1,6 +1,4 @@
 -- +migrate Up
--- A history lock locks its conversation's row, so history may only exist for a conversation that has one.
--- History left without its conversation is deleted first; it cannot be shown or locked.
 WITH orphans AS (
     SELECT e.id FROM entries e LEFT JOIN conversations c ON c.conversation_id = e.conversation_id WHERE c.conversation_id IS NULL
 )
@@ -21,7 +19,6 @@ ALTER TABLE turns ADD CONSTRAINT turns_conversation_fkey FOREIGN KEY (conversati
 ALTER TABLE steps ADD CONSTRAINT steps_conversation_fkey FOREIGN KEY (conversation_id) REFERENCES conversations (conversation_id);
 
 -- +migrate Down
--- Deleted history is not restored.
 ALTER TABLE steps DROP CONSTRAINT steps_conversation_fkey;
 ALTER TABLE turns DROP CONSTRAINT turns_conversation_fkey;
 ALTER TABLE entries DROP CONSTRAINT entries_conversation_fkey;

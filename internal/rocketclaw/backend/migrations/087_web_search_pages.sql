@@ -1,7 +1,4 @@
 -- +migrate Up
--- A Search tab's page as rows: its name, the style id of the Dashboard it is, and the id of the search it shows, with
--- its searches in order, keyed by position because a page's search ids may repeat. Every tab, Shared tab and closed tab
--- with a page points at its own copy, which is deleted with the row or when the row points elsewhere.
 CREATE TABLE web_search_pages (
     id UUID PRIMARY KEY,
     name TEXT NOT NULL,
@@ -21,8 +18,6 @@ ALTER TABLE web_tabs ADD COLUMN search_page UUID UNIQUE REFERENCES web_search_pa
 ALTER TABLE web_shared_tabs ADD COLUMN search_page UUID UNIQUE REFERENCES web_search_pages (id);
 ALTER TABLE web_closed_tabs ADD COLUMN search_page UUID UNIQUE REFERENCES web_search_pages (id);
 
--- The pages were the Web's SearchPage in protobuf JSON, which leaves out empty fields; one an older Web saved may lack
--- any field, and its active search may name none of its searches.
 WITH tabs AS (
     UPDATE web_tabs SET search_page = gen_random_uuid() WHERE search IS NOT NULL RETURNING search_page, search
 ), shared AS (
@@ -43,7 +38,6 @@ ALTER TABLE web_tabs DROP COLUMN search;
 ALTER TABLE web_shared_tabs DROP COLUMN search;
 ALTER TABLE web_closed_tabs DROP COLUMN search;
 
--- Deletes the page a row held. Any table whose rows hold pages in a search_page column attaches it.
 -- +migrate StatementBegin
 CREATE FUNCTION delete_search_page() RETURNS trigger
     LANGUAGE plpgsql

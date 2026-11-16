@@ -1,5 +1,4 @@
 -- +migrate Up
--- Nothing reads the retired settle, snooze and producer-effects state any more.
 ALTER TABLE conversations DROP COLUMN settled, DROP COLUMN reopened_at, DROP COLUMN snoozed_until, DROP COLUMN producer_effects_through_id;
 
 -- +migrate Down

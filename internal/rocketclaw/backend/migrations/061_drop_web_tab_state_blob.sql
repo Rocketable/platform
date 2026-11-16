@@ -1,6 +1,4 @@
 -- +migrate Up
--- The release with 060 unpacked every saved tab blob into rows at startup, so the blob column goes.
--- A blob still here was never unpacked: refuse, so its tabs are not lost, until that release has started once.
 -- +migrate StatementBegin
 DO $$
 BEGIN
