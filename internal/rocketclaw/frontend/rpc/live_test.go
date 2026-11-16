@@ -43,6 +43,8 @@ func liveSlack() config.SlackConfig {
 }
 
 func TestPublicProgressRealBrowser(t *testing.T) {
+	t.Parallel()
+
 	finals := []string{"short", "empty", "stop", "calls"}
 	env := make([]string, 0, len(finals))
 	checks := make([]func(), 0, len(finals))
@@ -433,6 +435,8 @@ func TestRevertRPCAndHistoryReset(t *testing.T) {
 }
 
 func TestReloadRealBackendBrowser(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), Slack: liveSlack()}
@@ -501,6 +505,8 @@ func TestReloadRealBackendBrowser(t *testing.T) {
 }
 
 func TestRevertRealBackendBrowser(t *testing.T) {
+	t.Parallel()
+
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
