@@ -20,9 +20,9 @@ IMPORTANT FACT: NOW IS
 
 ## Daily Logs
 
-!`mkdir -p memory/; touch "memory/$(date -v-1d +"%Y-%m-%d").md"; echo "Yesterday: $(date -v-1d +"%Y-%m-%d")"; cat "memory/$(date -v-1d +"%Y-%m-%d").md"`
+!`mkdir -p memories/; touch "memories/$(date -d yesterday +%Y-%m-%d).md"; echo "Yesterday: $(date -d yesterday +%Y-%m-%d)"; cat "memories/$(date -d yesterday +%Y-%m-%d).md"`
 
-!`mkdir -p memory/; touch "memory/$(date +%Y-%m-%d).md"; echo "Today: $(date +%Y-%m-%d)"; cat "memory/$(date +%Y-%m-%d).md"`
+!`mkdir -p memories/; touch "memories/$(date +%Y-%m-%d).md"; echo "Today: $(date +%Y-%m-%d)"; cat "memories/$(date +%Y-%m-%d).md"`
 
 # Heartbeat Action Items
 
