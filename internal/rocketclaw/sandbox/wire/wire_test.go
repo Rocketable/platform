@@ -19,11 +19,10 @@ func TestFrameRoundTrip(t *testing.T) {
 	w := NewWriter(&buf)
 
 	start := &InvokeStart{
-		ExecId:   []byte("x-1"),
-		Name:     []byte("upper"),
-		Cwd:      []byte("/home/user/dir with space"),
-		Args:     [][]byte{{}, []byte("a b"), []byte("line\nbreak"), []byte("ünïcødé"), {0xff, 0x00, 0xfe}},
-		GuestEnv: [][]byte{[]byte("DEPLOY_TOKEN=evil")},
+		ExecId: []byte("x-1"),
+		Name:   []byte("upper"),
+		Cwd:    []byte("/home/user/dir with space"),
+		Args:   [][]byte{{}, []byte("a b"), []byte("line\nbreak"), []byte("ünïcødé"), {0xff, 0x00, 0xfe}},
 	}
 	frames := []*Frame{
 		{Body: &Frame_InvokeStart{InvokeStart: start}},
@@ -93,11 +92,11 @@ func marshal(t *testing.T, f *Frame) []byte {
 }
 
 func TestReadRejectsInvalidFrames(t *testing.T) {
-	start := &Frame{Version: Version, Body: &Frame_InvokeStart{InvokeStart: &InvokeStart{Name: []byte("deploy"), GuestEnv: [][]byte{[]byte("DEPLOY_TOKEN=fourth-fake")}}}}
+	start := &Frame{Version: Version, Body: &Frame_InvokeStart{InvokeStart: &InvokeStart{Name: []byte("deploy")}}}
 
-	hostEnvInStart := func() []byte {
+	forgedStart := func(field protowire.Number) []byte {
 		inner, _ := proto.Marshal(start.GetInvokeStart())
-		inner = protowire.AppendTag(inner, 6, protowire.BytesType)
+		inner = protowire.AppendTag(inner, field, protowire.BytesType)
 		inner = protowire.AppendBytes(inner, []byte("DEPLOY_TOKEN=evil"))
 
 		b := protowire.AppendTag(nil, 1, protowire.VarintType)
@@ -105,7 +104,7 @@ func TestReadRejectsInvalidFrames(t *testing.T) {
 		b = protowire.AppendTag(b, 2, protowire.BytesType)
 
 		return protowire.AppendBytes(b, inner)
-	}()
+	}
 
 	hostEnvInFrame := protowire.AppendBytes(protowire.AppendTag(marshal(t, start), 99, protowire.BytesType), []byte("DEPLOY_TOKEN=evil"))
 
@@ -113,7 +112,8 @@ func TestReadRejectsInvalidFrames(t *testing.T) {
 		name string
 		in   []byte
 	}{
-		{"unknown InvokeStart field", hostEnvInStart},
+		{"reserved guest_env field", forgedStart(5)},
+		{"unknown InvokeStart field", forgedStart(6)},
 		{"unknown frame field", hostEnvInFrame},
 		{"other version", marshal(t, &Frame{Version: 2, Body: &Frame_StdinEof{StdinEof: &StdinEOF{}}})},
 		{"no version", marshal(t, &Frame{Body: &Frame_StdinEof{StdinEof: &StdinEOF{}}})},

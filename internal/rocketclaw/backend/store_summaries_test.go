@@ -410,7 +410,6 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 		}
 	}
 
-	require.NoError(t, service.UpsertExternalMCPSession("external", &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "not-recorded"}))
 	recordPrivateHistories(t, service, map[string]ConversationKind{"history-only": KindExternalMCPRun})
 
 	stamp := time.Unix(2, 123456789).UTC()

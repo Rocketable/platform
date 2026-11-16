@@ -13,7 +13,6 @@ func TestLockedConfig(t *testing.T) {
 	rate := 0.5
 	want := &Config{
 		Workspace: "workspace", Overlays: []string{"overlay"},
-		Environment: []string{"KEY=value"},
 		Providers:   map[string]OpenAIConfig{"work": {APIKey: "invented"}},
 		Decision:    map[DecisionProvider]DecisionProviderConfig{DecisionTypeSafe: {APIKey: "invented"}},
 		RocketClaws: map[string]RemoteRocketClawConfig{"work": {URL: "https://work.example.ts.net"}},
@@ -27,7 +26,6 @@ func TestLockedConfig(t *testing.T) {
 	for _, snapshot := range []*Config{want, locked.Clone()} {
 		snapshot.Workspace = "changed"
 		snapshot.Overlays[0] = "changed"
-		snapshot.Environment[0] = "changed"
 		snapshot.Providers["work"] = OpenAIConfig{APIKey: "changed"}
 		snapshot.Decision[DecisionTypeSafe] = DecisionProviderConfig{APIKey: "changed"}
 		snapshot.RocketClaws["work"] = RemoteRocketClawConfig{URL: "changed"}
@@ -45,7 +43,6 @@ func TestLockedConfig(t *testing.T) {
 	snapshot := locked.Clone()
 	require.Equal(t, "workspace", snapshot.Workspace)
 	require.Equal(t, []string{"overlay"}, snapshot.Overlays)
-	require.Equal(t, []string{"KEY=value"}, snapshot.Environment)
 	require.Equal(t, "invented", snapshot.Providers["work"].APIKey)
 	require.Equal(t, "invented", snapshot.Decision[DecisionTypeSafe].APIKey)
 	require.Equal(t, "https://work.example.ts.net", snapshot.RocketClaws["work"].URL)

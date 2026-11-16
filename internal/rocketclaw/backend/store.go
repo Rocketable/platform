@@ -283,28 +283,6 @@ func (s *SessionService) StopGoal(conversationID string) error {
 	return err
 }
 
-func (s *SessionService) UpsertExternalMCPSession(externalConversationID string, session *ExternalMCPSessionState) error {
-	externalConversationID = strings.TrimSpace(externalConversationID)
-	if externalConversationID == "" {
-		return errors.New("external MCP conversation ID is required")
-	}
-
-	session.Agent = strings.TrimSpace(session.Agent)
-	session.PrivateConversationID = strings.TrimSpace(session.PrivateConversationID)
-	session.ManagedConversationID = strings.TrimSpace(session.ManagedConversationID)
-
-	_, err := execState(context.Background(), s.db, "upsert external MCP session", `WITH moved AS (
-    UPDATE conversations SET external_id = NULL, external_run = NULL WHERE external_id = $1 AND conversation_id <> $3 RETURNING 1
-), released AS (
-    SELECT count(*) FROM moved
-)
-`+bindExternalMCPSQL+` FROM released WHERE conversation_id = $3`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, originPairsJSON(session.OriginPairs))
-
-	return err
-}
-
-const bindExternalMCPSQL = `UPDATE conversations SET external_id = $1, external_run = NULLIF($2::text, ''), external_agent = $4, origin_pairs = $5`
-
 func (s *SessionService) RegisterExternalMCPConversation(externalConversationID, managedAgent string, session *ExternalMCPSessionState) error {
 	externalConversationID = strings.TrimSpace(externalConversationID)
 	managedAgent = strings.TrimSpace(managedAgent)
@@ -346,7 +324,7 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID,
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, bindExternalMCPSQL+` WHERE conversation_id = $3`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, originPairsJSON(session.OriginPairs)); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET external_id = $1, external_run = NULLIF($2::text, ''), external_agent = $4, origin_pairs = $5 WHERE conversation_id = $3`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, originPairsJSON(session.OriginPairs)); err != nil {
 		return fmt.Errorf("register external MCP binding: %w", err)
 	}
 
@@ -577,7 +555,6 @@ const (
 	pruneGoal
 	pruneExternalMCP
 	pruneOrphan
-	pruneRunContext
 	pruneSticky
 )
 
@@ -594,13 +571,6 @@ func (c pruneCandidate) stale(ctx context.Context, db stateStoreDB, cutoff time.
 	case pruneOrphan:
 		orphans, err := stalePrivateConversationIDs(ctx, db, cutoff, c.id)
 		return len(orphans) > 0, err
-	case pruneRunContext:
-		pending, err := conversationHasPendingWork(ctx, db, c.id)
-		if err != nil || pending {
-			return false, err
-		}
-
-		return sessionLatestBefore(ctx, db, c.id, time.Unix(0, 0).UTC(), cutoff)
 	case pruneGoal:
 		var recorded bool
 		if err := queryScalar(ctx, db, "read goal conversation", `SELECT count(*) > 0 FROM conversations WHERE conversation_id = $1 AND retention = 'record'`, &recorded, c.id); err != nil || recorded {
@@ -648,14 +618,6 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time,
 		return PruneStateStats{}, err
 	}
 
-	runs, err := queryStrings(ctx, s.db, `WITH runs AS (
-    SELECT conversation_id FROM conversations WHERE kind IN ('cron_run', 'one_off_cron_run')
-)
-SELECT DISTINCT r.conversation_id FROM runs r JOIN entries e USING (conversation_id) WHERE e.audience = 'sandbox' ORDER BY 1`, "cron runs with sandbox context")
-	if err != nil {
-		return PruneStateStats{}, err
-	}
-
 	managed, external := map[string]bool{}, map[string]bool{}
 	for _, id := range threadIDs {
 		managed[id] = true
@@ -694,10 +656,6 @@ SELECT DISTINCT r.conversation_id FROM runs r JOIN entries e USING (conversation
 
 	for _, id := range orphans {
 		candidates = append(candidates, pruneCandidate{kind: pruneOrphan, id: id})
-	}
-
-	for _, id := range runs {
-		candidates = append(candidates, pruneCandidate{kind: pruneRunContext, id: id})
 	}
 
 	var (
@@ -937,11 +895,11 @@ func scanDelegation(row rowScanner) (Delegation, error) {
 }
 
 const delegationsSQL = `WITH ` + sessionHistorySQL + `, ` + turnReplaySQL + `, saved_turns AS (
-    SELECT DISTINCT entry->>'turn_id' AS turn_id FROM physical_entries WHERE NOT synced OR source_conversation_id = $1
+    SELECT DISTINCT entry->>'turn_id' AS turn_id FROM physical_entries WHERE NOT synced
 ), calls AS (
     SELECT COALESCE(NULLIF(source_conversation_id, ''), $1) AS producer, entry->>'turn_id' AS turn_id, item->>'call_id' AS call_id
     FROM effective_entries e CROSS JOIN LATERAL jsonb_array_elements(NULLIF(e.entry->'replay_input', 'null'::jsonb)) WITH ORDINALITY AS items(item, ordinal)
-    WHERE e.id >= $3 AND ($4::bigint = 0 OR e.id < $4) AND (NOT synced OR source_conversation_id <> '')
+    WHERE e.id >= $3 AND ($4::bigint = 0 OR e.id < $4)
         AND item->>'type' = 'function_call' AND (e.revert_index < 0 OR ordinal <= e.revert_index)
     UNION ALL
     SELECT $1, r.turn_id, r.item->>'call_id' FROM turn_replay r CROSS JOIN viewer v LEFT JOIN saved_turns saved USING (turn_id)
@@ -1091,9 +1049,9 @@ func (s *SessionService) CronRunSources(ctx context.Context) ([]CronRunSource, e
     SELECT e.id, e.conversation_id, e.conversation_id AS source FROM runs r JOIN entries e USING (conversation_id)
     UNION ALL
     SELECT e.id, r.reports_to, r.conversation_id FROM runs r JOIN entries e USING (conversation_id)
-    WHERE r.reports_to IS NOT NULL AND e.audience <> 'sandbox'
+    WHERE r.reports_to IS NOT NULL
     UNION ALL
-    SELECT e.id, c.conversation_id, c.continues FROM conversations c JOIN entries e ON e.conversation_id = c.continues WHERE e.audience <> 'sandbox'
+    SELECT e.id, c.conversation_id, c.continues FROM conversations c JOIN entries e ON e.conversation_id = c.continues
 ), located AS (
     -- A run whose start migration 051 could not read from its ID has no location and is left out.
     SELECT conversation_id, cron_path, cron_run_at_unix_ns FROM runs WHERE cron_path IS NOT NULL
@@ -1393,19 +1351,6 @@ func (s *SessionService) pruneCandidate(ctx context.Context, c pruneCandidate, c
 
 	if stale, err := c.stale(ctx, tx, cutoff); err != nil || !stale {
 		return 0, false, err
-	}
-
-	if c.kind == pruneRunContext {
-		rows, err = execRows(ctx, tx, "prune finished cron run context", `DELETE FROM entries WHERE conversation_id = $1 AND audience = 'sandbox'`, c.id)
-		if err != nil {
-			return 0, false, err
-		}
-
-		if err := tx.Commit(); err != nil {
-			return 0, false, fmt.Errorf("commit cron run context prune: %w", err)
-		}
-
-		return rows, true, nil
 	}
 
 	if c.kind == pruneSticky {
@@ -1800,7 +1745,7 @@ FROM conversations WHERE conversation_id = $1 AND (listed AND retention = 'recor
     SELECT $1::text AS conversation_id UNION SELECT conversation_id FROM conversations WHERE reports_to = $1
     UNION SELECT continues FROM conversations WHERE conversation_id = $1 AND continues IS NOT NULL
 ), entry AS (
-    SELECT $1::text AS conversation_id FROM shown s JOIN entries e USING (conversation_id) WHERE s.conversation_id = $1 OR e.audience <> 'sandbox' LIMIT 1
+    SELECT $1::text AS conversation_id FROM shown s JOIN entries e USING (conversation_id) LIMIT 1
 ), turn AS (
     SELECT conversation_id FROM turns WHERE conversation_id = $1 AND takes_lane LIMIT 1
 )
@@ -1821,7 +1766,7 @@ func sessionLatestBefore(ctx context.Context, db stateStoreDB, conversationID st
     UNION SELECT continues FROM conversations WHERE conversation_id = $3 AND continues IS NOT NULL
 ), shown AS (
     SELECT entry_timestamp FROM entries WHERE conversation_id = $3
-    UNION ALL SELECT e.entry_timestamp FROM runs r JOIN entries e USING (conversation_id) WHERE e.audience <> 'sandbox'
+    UNION ALL SELECT e.entry_timestamp FROM runs r JOIN entries e USING (conversation_id)
 )
 SELECT COALESCE(MAX(entry_timestamp), $1) < $2 FROM shown`, &before, fallback.UTC().Format(time.RFC3339Nano), cutoff.UTC().Format(time.RFC3339Nano), conversationID); err != nil {
 		return false, err

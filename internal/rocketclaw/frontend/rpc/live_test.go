@@ -241,8 +241,10 @@ func TestPublicProgressRealBrowser(t *testing.T) {
 
 		env = append(env, "ROCKETCLAW_PUBLIC_TEST_URL_"+final+"="+httpServer.URL)
 		checks = append(checks, func() {
-			entries, err := rt.Sessions.ObserveTranscript(ctx, id, 0, 0, nil)
+			view, err := rt.Sessions.ObserveHistory(ctx, id, "", 0, 0, 0, &backend.HistoryInventory{})
 			require.NoError(t, err)
+
+			entries := view.Entries
 			require.Len(t, entries, 1)
 			require.False(t, entries[0].Active)
 

@@ -5,10 +5,8 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"iter"
-	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/jackc/pgx/v5"
@@ -77,15 +75,6 @@ func (s *SessionService) Changes(ctx context.Context, conversationID string) ite
 			}
 		}
 	}
-}
-
-func (s *SessionService) ObserveTranscript(ctx context.Context, conversationID string, from, before int64, revisions map[string]string) ([]ObservedSessionEntry, error) {
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
-		return nil, errors.New("conversation ID is required")
-	}
-
-	return observeTranscriptDB(ctx, s.db, conversationID, from, before, revisions)
 }
 
 func observeTranscriptDB(ctx context.Context, db stateStoreDB, conversationID string, from, before int64, revisions map[string]string) ([]ObservedSessionEntry, error) {
@@ -171,15 +160,6 @@ FROM fingerprinted ORDER BY position, checkpoint, checkpoint_timestamp, turn_id`
 
 		return entry, nil
 	}, conversationID, string(manifest), from, before)
-}
-
-func (s *SessionService) TranscriptPage(ctx context.Context, conversationID string, before int64, limit int) (start, oldest int64, err error) {
-	err = s.db.QueryRowContext(ctx, transcriptPageSQL, conversationID, before, limit-1).Scan(&start, &oldest)
-	if err != nil {
-		return 0, 0, fmt.Errorf("read transcript page: %w", err)
-	}
-
-	return start, oldest, nil
 }
 
 const transcriptPageSQL = `WITH ` + sessionHistorySQL + ` SELECT

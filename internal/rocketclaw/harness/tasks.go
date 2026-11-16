@@ -20,7 +20,6 @@ type taskParams struct {
 	Description  string       `json:"description"`
 	Prompt       string       `json:"prompt"`
 	SubagentType string       `json:"subagent_type"`
-	Command      string       `json:"command"`
 	Model        string       `json:"model"`
 	Tools        []string     `json:"tools"`
 	Continue     taskContinue `json:"continue"`
@@ -32,7 +31,6 @@ func (f *toolFactory) taskTool() looperTool {
 		"description":   map[string]any{"type": "string"},
 		"prompt":        map[string]any{"type": "string"},
 		"subagent_type": map[string]any{"type": "string"},
-		"command":       map[string]any{"type": "string"},
 	}
 
 	if easy {
@@ -88,13 +86,10 @@ func (f *toolFactory) taskDescription() string {
 		"",
 		selection,
 		"",
-		"When to use the Task tool:",
-		"- When you are instructed to execute custom slash commands. Use the Task tool with the slash command invocation as the entire prompt. The slash command can take arguments. For example: Task(description=\"Check the file\", prompt=\"/check-file path/to/file.py\")",
-		"",
 		"When NOT to use the Task tool:",
-		"- If you want to read a specific file path, use the Read or Glob tool instead of the Task tool, to find the match more quickly",
-		"- If you are searching for a specific class definition like \"class Foo\", use the Glob tool instead, to find the match more quickly",
-		"- If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead of the Task tool, to find the match more quickly",
+		"- If you want to read a specific file path, use read or glob inside the execute tool instead of the Task tool, to find the match more quickly",
+		"- If you are searching for a specific class definition like \"class Foo\", use grep inside the execute tool instead, to find the match more quickly",
+		"- If you are searching for code within a specific file or set of 2-3 files, use read inside the execute tool instead of the Task tool, to find the match more quickly",
 		"- Other tasks that are not related to the agent descriptions above",
 		"",
 		"Usage notes:",
@@ -115,8 +110,8 @@ func (f *toolFactory) taskDescription() string {
 		"<example>",
 		"user: \"Please write a function that checks if a number is prime\"",
 		"assistant: Sure let me write a function that checks if a number is prime",
-		"assistant: First let me use the Write tool to write a function that checks if a number is prime",
-		"assistant: I'm going to use the Write tool to write the following code:",
+		"assistant: First let me use apply_patch inside the execute tool to write a function that checks if a number is prime",
+		"assistant: I'm going to use apply_patch inside the execute tool to write the following code:",
 		"<code>",
 		"function isPrime(n) {",
 		"  if (n <= 1) return false",
@@ -325,7 +320,7 @@ func (l *looper) asRecordAgent(ctx context.Context, record *SessionEntry, histor
 		return nil, err
 	}
 
-	next.Journal, next.observations, next.SteerDrain, next.expandInputPrompts = l.Journal, l.observations, l.SteerDrain, l.expandInputPrompts
+	next.Journal, next.observations, next.SteerDrain = l.Journal, l.observations, l.SteerDrain
 	next.restoreTurnExecuteResults(record.TurnID)
 	record.Model, record.ReasoningEffort = next.DisplayModel, new(string(next.ReasoningEffort))
 
@@ -366,7 +361,7 @@ func (f *toolFactory) childSession(yield func(SessionEntry, error) bool) {
 	}
 }
 
-func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, sessionIn iter.Seq2[SessionEntry, error], sessionOut sessionWriter, parentOutput chan<- ChatResponse) (last string, err error) {
+func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, sessionIn iter.Seq2[SessionEntry, error], sessionOut sessionWriter) (last string, err error) {
 	output := make(chan ChatResponse)
 
 	input := make(chan PromptInput, 1)
@@ -380,18 +375,6 @@ func (l *looper) runPrompt(ctx context.Context, turnID string, texts []string, s
 		for item := range output {
 			if item.Kind == ChatResponseAssistantMessage {
 				last = item.Text
-			} else if l.Diagnostics {
-				emitSubagentDiagnostic(parentOutput, &SubagentDiagnostic{
-					Name:  l.agent.Name,
-					Label: "auto-approver",
-					Subagent: &SubagentDiagnostic{
-						Label:    nestedDiagnosticLabel(item),
-						Text:     item.Text,
-						Tool:     item.Tool,
-						Subagent: item.Subagent,
-						Provider: item.Provider,
-					},
-				})
 			}
 		}
 
@@ -414,31 +397,4 @@ func (w childSessionWriter) Append(ctx context.Context, entry *SessionEntry) err
 	}
 
 	return nil
-}
-
-func nestedDiagnosticLabel(item ChatResponse) string {
-	if item.Subagent != nil {
-		return ""
-	}
-
-	return subagentResponseLabel(item.Kind)
-}
-
-func emitSubagentDiagnostic(output chan<- ChatResponse, diagnostic *SubagentDiagnostic) {
-	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Subagent: diagnostic})
-}
-
-func subagentResponseLabel(kind string) string {
-	switch kind {
-	case ChatResponseAssistantMessage:
-		return "assistant message"
-	case ChatResponseAssistantCommentary:
-		return "assistant commentary"
-	case ChatResponseAssistantTool:
-		return "assistant tool"
-	case ChatResponseReasoningSummary:
-		return "reasoning summary"
-	default:
-		return "output"
-	}
 }

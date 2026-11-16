@@ -268,23 +268,12 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 
 	output := make(chan ChatResponse, 8)
 	observations := &turnObservations{journal: InertJournal{}}
-	looper := &looper{Journal: InertJournal{}, observations: observations, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
+	looper := &looper{Journal: InertJournal{}, observations: observations, Permissions: permissions, Tools: model, CodeModeHosts: hosts}
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: output, callID: "exec-1"})
 	run := model[executeToolName]
 	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return ask_user_question(question=\"ship it?\")\n"}`), output, emptyToolCallMetadata())
 	require.NoError(t, err)
 	assert.Equal(t, "answer:ship it?", result.Output)
-	close(output)
-
-	var sawNested bool
-
-	for item := range output {
-		if item.Tool != nil && item.Tool.Name == executeNestedToolPrefix+"ask_user_question" {
-			sawNested = true
-		}
-	}
-
-	assert.True(t, sawNested, "expected nested ask_user_question diagnostic")
 
 	assert.Equal(t, []CodeModeCall{{Type: codeModeCallTraceType, ParentCallID: "exec-1", Key: "/call/exec-1/host/0", Name: "ask_user_question", Arguments: `{"question":"ship it?"}`, Status: codeModeCallOK, Summary: "answer:ship it?"}}, observations.calls)
 	assert.Empty(t, observations.trace)
@@ -318,12 +307,11 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 	assert.Contains(t, hosts, "bash")
 
 	looper := &looper{
-		Journal:                InertJournal{},
-		observations:           &turnObservations{journal: InertJournal{}},
-		Permissions:            permissions,
-		AutoApprovePermissions: true,
-		Tools:                  model,
-		CodeModeHosts:          hosts,
+		Journal:       InertJournal{},
+		observations:  &turnObservations{journal: InertJournal{}},
+		Permissions:   permissions,
+		Tools:         model,
+		CodeModeHosts: hosts,
 	}
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})
 	bound, _ := codeModeHostToolsFromContext(ctx)
@@ -471,96 +459,6 @@ func TestExecuteParseFailureDoesNotRunHost(t *testing.T) {
 	assert.Contains(t, err.Error(), "unexpected newline")
 }
 
-func TestExecuteNestedConcurrencyPrefixesThinkingDiagnostic(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = root.Close() })
-	require.NoError(t, root.WriteFile("a.txt", []byte("a"), 0o600))
-	require.NoError(t, root.WriteFile("b.txt", []byte("b"), 0o600))
-
-	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("read", "*"))
-
-	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, nil)}
-	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
-	output := make(chan ChatResponse, 8)
-	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
-	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: output, callID: ""})
-
-	run := model[executeToolName]
-	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return gather([lambda: read(filePath=\"a.txt\"), lambda: read(filePath=\"b.txt\")])\n"}`), output, emptyToolCallMetadata())
-	require.NoError(t, err)
-	assert.Contains(t, result.Output, "a")
-	assert.Contains(t, result.Output, "b")
-	close(output)
-
-	var names []string
-
-	for item := range output {
-		if item.Tool != nil && item.Tool.Phase == toolDiagnosticPhaseCall {
-			names = append(names, item.Tool.Name)
-		}
-	}
-
-	assert.ElementsMatch(t, []string{
-		executeNestedToolPrefix + "gather → read",
-		executeNestedToolPrefix + "gather → read",
-	}, names)
-}
-
-func TestExecuteNestedToolDiagnosticNotDroppedWhenOutputFull(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = root.Close() })
-	require.NoError(t, root.WriteFile("a.txt", []byte("hello"), 0o600))
-
-	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("read", "*"))
-
-	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, nil)}
-	agent := &Agent{Permission: permissions}
-	model, hosts := factory.assembleTools(agent)
-
-	output := make(chan ChatResponse)
-	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
-	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: output, callID: ""})
-
-	done := make(chan struct{})
-
-	var nested []ToolDiagnostic
-
-	go func() {
-		defer close(done)
-
-		for item := range output {
-			if item.Tool != nil && item.Tool.Phase == toolDiagnosticPhaseCall {
-				nested = append(nested, *item.Tool)
-			}
-		}
-	}()
-
-	run := model[executeToolName]
-	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return [read(filePath=\"a.txt\"), search(query=\"context7\")]\n"}`), output, emptyToolCallMetadata())
-	require.NoError(t, err)
-	assert.Contains(t, result.Output, "hello")
-	assert.Contains(t, result.Output, "items")
-	close(output)
-	<-done
-	require.Len(t, nested, 2)
-	assert.Equal(t, executeNestedToolPrefix+"read", nested[0].Name)
-	assert.Contains(t, string(nested[0].Arguments), "a.txt")
-	assert.Equal(t, executeNestedToolPrefix+"search", nested[1].Name)
-	assert.Contains(t, string(nested[1].Arguments), "context7")
-}
-
 func TestMCPServerVisibility(t *testing.T) {
 	t.Parallel()
 
@@ -616,7 +514,6 @@ func TestExecuteExactToolGrant(t *testing.T) {
 
 	loop := testLooper(mockResponses())
 	loop.Permissions = permissions
-	loop.AutoApprovePermissions = true
 	execute := tools[executeToolName]
 	decision, err := loop.permissionDecision(executeToolName, &execute, json.RawMessage(`{"code":"def main(): return github_create_issue()"}`))
 	require.NoError(t, err)
@@ -648,7 +545,6 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 
 	reviewer := permissionReviewerWith(permissionReviewDecision{Outcome: permissionReviewOutcomeDeny})
 	loop.PermissionReviewer = reviewer
-	loop.AutoApprovePermissions = true
 
 	results, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, `{"code":"def main():\n    text = demo_output()\n    if len(text.splitlines()) != 2100:\n        fail(\"host output clipped\")\n    return text\n"}`)}), nil, nil, nil)
 	require.NoError(t, err)
@@ -660,11 +556,9 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 	require.True(t, ok)
 
 	pageArgs := fmt.Sprintf(`{"result_id":%q,"start_line":2001,"limit":10,"line_numbers":true}`, id)
-	loop.Diagnostics = true
 
 	for range 2 {
-		output := make(chan ChatResponse, 10)
-		results, err = loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("page", []responses.ResponseFunctionToolCall{testFunctionCall("page", "page-call", "load_execute_result", pageArgs)}), nil, nil, output)
+		results, err = loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("page", []responses.ResponseFunctionToolCall{testFunctionCall("page", "page-call", "load_execute_result", pageArgs)}), nil, nil, nil)
 		require.NoError(t, err)
 
 		var want strings.Builder
@@ -674,13 +568,6 @@ func TestLoadExecuteResultDispatchWithoutRead(t *testing.T) {
 
 		want.WriteString("\n[next_start_line=2011]\n")
 		require.Equal(t, want.String(), results[0].Param.Output.OfString.Value)
-		close(output)
-
-		for _, response := range collectResponses(output) {
-			if response.Tool != nil {
-				require.Equal(t, loadExecuteResultToolName, response.Tool.Name)
-			}
-		}
 	}
 
 	require.Equal(t, permissions, loop.Permissions)
@@ -777,7 +664,6 @@ func TestExecuteWholeScriptApproval(t *testing.T) {
 			loop.Permissions = permissions
 			loop.Tools = model
 			loop.CodeModeHosts = hosts
-			loop.AutoApprovePermissions = true
 			reviewer := permissionReviewerWith(permissionReviewDecision{Outcome: tc.outcome, Rationale: "review decision"})
 			loop.PermissionReviewer = reviewer
 			output := make(chan ChatResponse, 10)
@@ -842,10 +728,9 @@ func TestExecuteSearchAndRun(t *testing.T) {
 	require.NotNil(t, tools)
 
 	looper := &looper{
-		Journal:                InertJournal{},
-		observations:           &turnObservations{journal: InertJournal{}},
-		Permissions:            permissions,
-		AutoApprovePermissions: false,
+		Journal:      InertJournal{},
+		observations: &turnObservations{journal: InertJournal{}},
+		Permissions:  permissions,
 	}
 	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})
 
@@ -1170,9 +1055,8 @@ func TestExecuteRecordsEachCommand(t *testing.T) {
 	loop.agent = Agent{Name: "main", Permission: parsePermissionYAML(t, rules+"}")}
 	loop.Tools, loop.CodeModeHosts = (&toolFactory{mcpRegistry: reg, baseTools: base}).assembleTools(&loop.agent)
 	loop.Permissions = parsePermissionYAML(t, rules+", 'demo.danger': deny}")
-	loop.AutoApprovePermissions = true
 	loop.observations = &turnObservations{journal: InertJournal{}, turnID: "turn"}
-	loop.PermissionReviewer = &mockPermissionReviewer{reviewPermissionFunc: func(_ context.Context, request *permissionReviewRequest, _ chan<- ChatResponse) permissionReviewDecision {
+	loop.PermissionReviewer = &mockPermissionReviewer{reviewPermissionFunc: func(_ context.Context, request *permissionReviewRequest) permissionReviewDecision {
 		switch {
 		case request.Permission == "rocketclaw":
 			return permissionReviewDecision{Outcome: permissionReviewOutcomeAllow, Rationale: "script ok"}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -114,15 +115,13 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 }
 
 func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/auth.test", r.URL.Path)
+	serveFakeSlack(t, func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/auth.test", r.URL.Path)
 		assert.Equal(t, "xoxb", r.FormValue("token"))
 		w.Header().Set("Content-Type", "application/json")
 		_, err := io.WriteString(w, `{"ok":false,"error":"invalid_auth"}`)
 		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-	t.Setenv("ROCKETCLAW_SLACK_API_URL", server.URL+"/")
+	})
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 
@@ -143,6 +142,27 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 	for name, agent := range agents.Items {
 		require.False(t, agent.CustomShell.Emulated, "Slack auth fixture must not start background sandbox preparation for agent %q", name)
 	}
+}
+
+func serveFakeSlack(t *testing.T, handler http.HandlerFunc) {
+	t.Helper()
+
+	server := httptest.NewTLSServer(handler)
+	t.Cleanup(server.Close)
+
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	transport.TLSClientConfig.ServerName = "example.com"
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address == "slack.com:443" {
+			address = server.Listener.Addr().String()
+		}
+
+		return new(net.Dialer).DialContext(ctx, network, address)
+	}
+
+	base := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = base })
 }
 
 func TestBuildIdentityUsesOnlyAvailableBinaryMetadata(t *testing.T) {

@@ -508,9 +508,8 @@ metadata:
 		require.Equal(t, 10, strings.Count(got, "<file>"))
 	})
 
-	t.Run("experimental stronger skills returns a short tool result and developer replay input", func(t *testing.T) {
+	t.Run("replay returns a short tool result and developer replay input", func(t *testing.T) {
 		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
-		factory.experimentalStrongerSkills = true
 		result, replayInput, err := factory.skillTool().CallReplay(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil, emptyToolCallMetadata())
 		require.NoError(t, err)
 
@@ -677,7 +676,7 @@ Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 		require.NoError(t, err)
 
 		factory := testSkillFactory(t, loaded, agentWithSkillPermission())
-		factory.expandPromptShellCommands = PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: true, InputPrompts: false}
+		factory.expandPromptShellCommands = PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: true}
 		factory.promptExpansion = env
 		tool := factory.skillTool()
 

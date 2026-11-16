@@ -69,7 +69,7 @@ func TestRuntimeRecordsExplicitConversationsWithoutResettingSelection(t *testing
 	rt := &Runtime{Sessions: store}
 	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "opaque", Agent: "selected", CreatedBy: "cron"}))
 	require.NoError(t, rt.CreateConversation(t.Context(), protocol.Conversation{ID: "opaque", Agent: "new-default"}))
-	require.NoError(t, store.UpsertExternalMCPSession("external", &ExternalMCPSessionState{PrivateConversationID: "unrecorded-X", ManagedConversationID: "opaque", Agent: "producer"}))
+
 	thread, found, err := store.Thread("opaque")
 	require.NoError(t, err)
 	require.True(t, found)

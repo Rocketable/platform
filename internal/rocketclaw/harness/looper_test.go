@@ -319,8 +319,7 @@ func turnSaveBytes(journal *mockJournal) []int {
 
 func permissionReviewerWith(decision permissionReviewDecision) *mockPermissionReviewer {
 	return &mockPermissionReviewer{
-		reviewPermissionFunc: func(_ context.Context, _ *permissionReviewRequest, output chan<- ChatResponse) permissionReviewDecision {
-			emitPermissionReviewResult(output, "guardian", decision)
+		reviewPermissionFunc: func(context.Context, *permissionReviewRequest) permissionReviewDecision {
 			return decision
 		},
 	}
@@ -421,44 +420,6 @@ func reasoningSummary(text string) ChatResponse {
 	response.Text = text
 
 	return response
-}
-
-func toolDiagnosticResponse(diagnostic *ToolDiagnostic) ChatResponse {
-	var response ChatResponse
-
-	response.Kind = ChatResponseAssistantTool
-	response.Tool = diagnostic
-
-	return response
-}
-
-func subagentDiagnosticResponse(diagnostic *SubagentDiagnostic) ChatResponse {
-	var response ChatResponse
-
-	response.Kind = ChatResponseAssistantTool
-	response.Subagent = diagnostic
-
-	return response
-}
-
-func providerDiagnosticResponse(diagnostic *ProviderDiagnostic) ChatResponse {
-	var response ChatResponse
-
-	diagnostic.Provider = "openai"
-	diagnostic.Model = openai.ChatModelGPT6Luna
-	response.Kind = ChatResponseAssistantTool
-	response.Provider = diagnostic
-
-	return response
-}
-
-func testToolDiagnostic(phase, name string) *ToolDiagnostic {
-	var diagnostic ToolDiagnostic
-
-	diagnostic.Phase = phase
-	diagnostic.Name = name
-
-	return &diagnostic
 }
 
 func testFunctionToolParam(name string) responses.FunctionToolParam {
@@ -797,10 +758,11 @@ func TestLooperPromptInputShellCommandExpansion(t *testing.T) {
 		t.Run(tc.want, func(t *testing.T) {
 			mock := mockResponses(responseWithMessage("resp-final", "done"))
 			looper := testLooper(mock)
-			looper.expandInputPrompts = tc.enabled
 			looper.promptExpansion = testPromptExpansionEnvironment(t)
 			output := make(chan ChatResponse, 10)
-			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, nil, new(testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil)))
+			input := testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil)
+			input.ExpandShellCommands = tc.enabled
+			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, nil, &input)
 
 			require.NoError(t, err)
 			require.False(t, interrupted)
@@ -1205,7 +1167,6 @@ func TestLooperStopsOnCompactedRetryError(t *testing.T) {
 				return nil, errProvider
 			}
 			loop := testLooper(mock)
-			loop.Diagnostics = true
 			output := make(chan ChatResponse, 10)
 
 			input := make(chan PromptInput, 1)
@@ -1220,24 +1181,18 @@ func TestLooperStopsOnCompactedRetryError(t *testing.T) {
 			require.NoError(t, err)
 
 			err = loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: replay}}), discardSession(), make(chan os.Signal, 1))
-			diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, Code: "invalid_prompt", Message: "bad prompt", HTTPStatus: http.StatusBadRequest}
 
 			if failedResponse {
 				errFailure, ok := errors.AsType[*responseFailureError](err)
 				require.True(t, ok, "expected failed response, got %v", err)
 				require.Equal(t, "resp-invalid", errFailure.responseID)
 				require.Equal(t, responses.ResponseErrorCodeInvalidPrompt, errFailure.code)
-
-				diagnostic.HTTPStatus = 0
-				diagnostic.ResponseStatus = string(responses.ResponseStatusFailed)
-				diagnostic.ResponseID = "resp-invalid"
 			} else {
 				require.ErrorIs(t, err, errProvider)
 			}
 
 			require.Len(t, compactParams(mock), 1)
 			require.Len(t, newParams(mock), 2, "a terminal retry error must stop further requests")
-			require.Equal(t, []ChatResponse{providerDiagnosticResponse(diagnostic)}, collectResponses(output))
 		})
 	}
 }
@@ -1365,7 +1320,6 @@ func TestLooperPermissionReviewUsesPrunedHistory(t *testing.T) {
 		responseWithMessage("resp-final", "done"),
 	)
 	looper := testLooper(mock)
-	looper.AutoApprovePermissions = true
 	looper.PermissionReviewer = reviewer
 	looper.agent = Agent{Name: "main"}
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "webfetch", Rules: []PermissionRule{{Pattern: "https://allowed.example/*", Action: permissionAuto}}}}}
@@ -2038,31 +1992,10 @@ func TestLooperDeniesToolCallsInBand(t *testing.T) {
 }
 
 func TestLooperAutoPermissionReview(t *testing.T) {
-	t.Run("disabled denies without executing", func(t *testing.T) {
-		called := false
-		looper := testLooper(mockResponses())
-		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}}}}}
-		tool := testLooperTool("bash")
-		tool.Permission = "bash"
-		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"deploy prod"}, nil }
-		tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
-			called = true
-			return TextToolResult("called"), nil
-		}
-		looper.Tools = map[string]looperTool{"bash": tool}
-
-		outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil, nil)
-
-		require.NoError(t, err)
-		require.False(t, called)
-		require.Contains(t, outputs[0].Param.Output.OfString.Value, `requires automatic approval, but automatic permission approval is disabled`)
-	})
-
 	t.Run("approval executes", func(t *testing.T) {
 		called := false
 		reviewer := permissionReviewerWith(permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."})
 		looper := testLooper(mockResponses())
-		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
 		looper.agent = Agent{Name: "main"}
 		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "webfetch", Rules: []PermissionRule{{Pattern: "https://allowed.example/*", Action: permissionAuto}}}}}
@@ -2076,13 +2009,11 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		looper.Tools = map[string]looperTool{"webfetch": tool}
 
 		reviewContext := []responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, "fetch the allowed page", "")}
-		output := make(chan ChatResponse, 10)
-		outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "webfetch", `{"url":"https://allowed.example/page"}`)}), reviewContext, nil, output)
+		outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "webfetch", `{"url":"https://allowed.example/page"}`)}), reviewContext, nil, nil)
 
 		require.NoError(t, err)
 		require.True(t, called)
 		require.Equal(t, "fetched", outputs[0].Param.Output.OfString.Value)
-		require.Equal(t, []ChatResponse{subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Text: "allow: Low-risk action.", Subagent: &SubagentDiagnostic{Label: "result"}})}, drainBufferedResponses(output))
 		require.Len(t, reviewedRequests(reviewer), 1)
 		require.True(t, reviewedRequests(reviewer)[0].ReviewerEmbedded)
 		require.Equal(t, "main", reviewedRequests(reviewer)[0].ActiveAgent)
@@ -2095,7 +2026,6 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		called := false
 		reviewer := permissionReviewerWith(permissionReviewDecision{RiskLevel: permissionReviewRiskLevelHigh, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeDeny, Rationale: "Not authorized."})
 		looper := testLooper(mockResponses())
-		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
 		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "github_private_repo", Action: permissionAuto, Reviewer: "release-guardian"}}}}}
 		tool := testLooperTool("github_create_issue")
@@ -2107,8 +2037,7 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		}
 		looper.Tools = map[string]looperTool{"github_create_issue": tool}
 
-		output := make(chan ChatResponse, 10)
-		outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "github_create_issue", `{}`)}), nil, nil, output)
+		outputs, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "github_create_issue", `{}`)}), nil, nil, nil)
 
 		require.NoError(t, err)
 		require.False(t, called)
@@ -2118,7 +2047,6 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		require.Len(t, progress, 1)
 		require.Equal(t, PublicProgressBlocked, progress[0].State)
 		require.Empty(t, progress[0].Text)
-		require.Equal(t, []ChatResponse{subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Text: "deny: Not authorized.", Subagent: &SubagentDiagnostic{Label: "result"}})}, drainBufferedResponses(output))
 		require.Len(t, reviewedRequests(reviewer), 1)
 		require.False(t, reviewedRequests(reviewer)[0].ReviewerEmbedded)
 		require.Equal(t, "release-guardian", reviewedRequests(reviewer)[0].Reviewer)
@@ -2127,7 +2055,6 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 	t.Run("deny short circuits auto", func(t *testing.T) {
 		reviewer := permissionReviewerWith(permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."})
 		looper := testLooper(mockResponses())
-		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
 		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}, {Pattern: "rm -rf *", Action: permissionDeny}}}}}
 		tool := testLooperTool("bash")
@@ -2145,7 +2072,6 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 	t.Run("mixed reviewers deny without review", func(t *testing.T) {
 		reviewer := permissionReviewerWith(permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."})
 		looper := testLooper(mockResponses())
-		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
 		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}, {Pattern: "release *", Action: permissionAuto, Reviewer: "release-guardian"}}}}}
 		tool := testLooperTool("bash")
@@ -2173,7 +2099,7 @@ func TestPermissionReviewFailsClosedOnInvalidReviewerOutput(t *testing.T) {
 		childSessions:     InertChildSessions{},
 	}
 
-	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true})
 
 	require.Equal(t, permissionReviewRiskLevelHigh, decision.RiskLevel)
 	require.Equal(t, permissionReviewUserAuthorizationUnknown, decision.UserAuthorization)
@@ -2321,21 +2247,19 @@ Use this skill for docs.
 `)}, "/virtual/skills").Skills
 	agent := agentWithSkillPermission()
 	factory := testSkillFactory(t, loaded, agent)
-	factory.experimentalStrongerSkills = true
 	factory.expandPromptShellCommands.SkillPrompts = true
 
 	mock := mockResponses(responseWithMessage("resp-final", "done"))
 	looper := testLooper(mock)
 	looper.Permissions = agent.Permission
 	looper.Tools = map[string]looperTool{"skill": factory.skillTool()}
-	looper.expandInputPrompts = true
 	looper.promptExpansion = factory.promptExpansion
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
 	arguments := "write the API guide !`echo run >> calls`"
 
-	input <- PromptInput{Texts: []string{"$docs-helper " + arguments}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: arguments}, Responses: output}
+	input <- PromptInput{Texts: []string{"$docs-helper " + arguments}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: arguments}, ExpandShellCommands: true, Responses: output}
 
 	close(input)
 
@@ -2416,12 +2340,10 @@ Use this skill for docs.
 
 			mock := mockResponses(responseWithMessage("resp-final", "should not run"))
 			looper := testLooper(mock)
-			looper.AutoApprovePermissions = true
 			looper.Permissions = agent.Permission
 			factory := testSkillFactory(t, loaded, agent)
 			factory.expandPromptShellCommands.SkillPrompts = true
 			looper.Tools = map[string]looperTool{"skill": factory.skillTool()}
-			looper.expandInputPrompts = true
 			looper.promptExpansion = factory.promptExpansion
 			sink := recordingJournal()
 			looper.Journal = sink
@@ -2429,7 +2351,7 @@ Use this skill for docs.
 			saves := 0
 
 			input := make(chan PromptInput, 1)
-			call := PromptInput{ID: "original-input", Texts: []string{"$" + skillName + " !`touch executed`"}, DirectSkill: &PromptInputDirectSkill{Name: skillName, Arguments: "!`touch executed`"}, Responses: output}
+			call := PromptInput{ID: "original-input", Texts: []string{"$" + skillName + " !`touch executed`"}, DirectSkill: &PromptInputDirectSkill{Name: skillName, Arguments: "!`touch executed`"}, ExpandShellCommands: true, Responses: output}
 
 			if steer {
 				looper.SteerDrain = &mockSteerDrain{DrainFunc: func(context.Context, string, TurnPhase, []string) ([]PromptInput, error) {
@@ -2556,64 +2478,6 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	require.JSONEq(t, `[{"content":"start","role":"user","type":"message"},{"content":"original answer","id":"resp-final-msg","role":"assistant","type":"message"}]`, marshalJSON(t, journaled[1].Record.ReplayInput))
 }
 
-func TestLooperEmitsToolDiagnosticsWhenEnabled(t *testing.T) {
-	mock := mockResponses(
-		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "skill", `{"name":"current-time"}`)}),
-		responseWithMessage("resp-final", "done"),
-	)
-	looper := testLooper(mock)
-	looper.Diagnostics = true
-	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
-	skillTool := testLooperTool("skill")
-	skillTool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
-		return TextToolResult("loaded current-time"), nil
-	}
-	looper.Tools = map[string]looperTool{"skill": skillTool}
-	output := make(chan ChatResponse, 10)
-
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "what time is it?", output)
-
-	close(input)
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
-
-	require.NoError(t, err)
-
-	callDiagnostic := testToolDiagnostic(toolDiagnosticPhaseCall, "skill")
-	callDiagnostic.Arguments = json.RawMessage(`{"name":"current-time"}`)
-	resultDiagnostic := testToolDiagnostic(toolDiagnosticPhaseResult, "skill")
-	resultDiagnostic.Result = "loaded current-time"
-	require.Equal(t, []ChatResponse{
-		toolDiagnosticResponse(callDiagnostic),
-		toolDiagnosticResponse(resultDiagnostic),
-		assistantMessage("done"),
-	}, collectResponses(output))
-}
-
-func TestLooperEmitsHostedWebSearchDiagnosticsWhenEnabled(t *testing.T) {
-	mock := mockResponses(responseWithWebSearchAndMessage("resp-search", "opencode", "found it"))
-	looper := testLooper(mock)
-	looper.Diagnostics = true
-	looper.Tools = map[string]looperTool{"websearch": webSearchTool()}
-	output := make(chan ChatResponse, 10)
-
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "search web", output)
-
-	close(input)
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
-
-	require.NoError(t, err)
-
-	callDiagnostic := testToolDiagnostic(toolDiagnosticPhaseCall, "websearch")
-	callDiagnostic.Status = "completed"
-	callDiagnostic.Action = json.RawMessage(`{"queries":["opencode"],"query":"opencode","type":"search"}`)
-	require.Equal(t, []ChatResponse{
-		toolDiagnosticResponse(callDiagnostic),
-		assistantMessage("found it"),
-	}, collectResponses(output))
-}
-
 func TestEmitChatResponseDeliversInOrder(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		output := make(chan ChatResponse, 1)
@@ -2631,25 +2495,6 @@ func TestEmitChatResponseDeliversInOrder(t *testing.T) {
 			require.Equal(t, item, <-output)
 		}
 	})
-}
-
-func TestEmitDiagnosticChatResponseDropsWhenUnavailable(t *testing.T) {
-	emitDiagnosticChatResponse(nil, toolDiagnosticResponse(testToolDiagnostic("", "nil")))
-
-	unbuffered := make(chan ChatResponse)
-	emitDiagnosticChatResponse(unbuffered, toolDiagnosticResponse(testToolDiagnostic("", "blocked")))
-
-	select {
-	case item := <-unbuffered:
-		t.Fatalf("unexpected diagnostic delivered on blocked channel: %#v", item)
-	default:
-	}
-
-	buffered := make(chan ChatResponse, 1)
-	buffered <- assistantMessage("existing")
-
-	emitDiagnosticChatResponse(buffered, toolDiagnosticResponse(testToolDiagnostic("", "full")))
-	require.Equal(t, assistantMessage("existing"), <-buffered)
 }
 
 func TestLooperTrapsDoomLoopInBand(t *testing.T) {
@@ -2719,15 +2564,15 @@ func TestLooperStreamsReasoningBeforeToolCalls(t *testing.T) {
 	})
 	mock := mockResponses(first, responseWithMessage("resp-final", "done"))
 	looper := testLooper(mock)
-	looper.Diagnostics = true
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	output := make(chan ChatResponse, 10)
+	streamedBeforeTool := 0
 	skillTool := testLooperTool("skill")
 	skillTool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		streamedBeforeTool = len(output)
 		return TextToolResult("loaded"), nil
 	}
 	looper.Tools = map[string]looperTool{"skill": skillTool}
-
-	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
 	input <- testPromptInput(PromptInputRoleUser, "what time?", output)
@@ -2736,12 +2581,8 @@ func TestLooperStreamsReasoningBeforeToolCalls(t *testing.T) {
 
 	require.NoError(t, looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1)))
 
-	got := collectResponses(output)
-	require.GreaterOrEqual(t, len(got), 3)
-	require.Equal(t, reasoningSummary("**Planning tool use**"), got[0])
-	require.Equal(t, toolDiagnosticPhaseCall, got[1].Tool.Phase)
-	require.Equal(t, "skill", got[1].Tool.Name)
-	require.Equal(t, assistantMessage("done"), got[len(got)-1])
+	require.Equal(t, 1, streamedBeforeTool)
+	require.Equal(t, []ChatResponse{reasoningSummary("**Planning tool use**"), assistantMessage("done")}, collectResponses(output))
 }
 
 func TestLooperUpdatesSessionStoreAfterCompletedTurn(t *testing.T) {
@@ -3374,7 +3215,6 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 		}
 		looper := testLooper(mock)
 		looper.Journal = sink
-		looper.Diagnostics = true
 		output := make(chan ChatResponse, 10)
 
 		input := make(chan PromptInput, 1)
@@ -3392,12 +3232,7 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 		progress := PublicProgressFromTrace(writes[len(writes)-1].Trace)
 		require.Len(t, progress, 1)
 		require.Equal(t, "done", progress[0].Text)
-
-		diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: 0, ResponseStatus: string(responses.ResponseStatusFailed), Code: string(responses.ResponseErrorCodeRateLimitExceeded), Message: "too many requests", Attempt: 1, RetryAfter: "1s", ResponseID: "resp-rate"}
-		require.Equal(t, []ChatResponse{
-			providerDiagnosticResponse(diagnostic),
-			assistantMessage("done"),
-		}, collectResponses(output))
+		require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
 	})
 }
 
@@ -3419,48 +3254,29 @@ func observeTestResponseAttempt(ctx context.Context, observer oai.ResponseObserv
 	return nil
 }
 
-func TestLooperReportsFailedResponsesInDiagnostics(t *testing.T) {
-	mock := mockResponses(
-		failedResponseWithCode("resp-invalid", responses.ResponseErrorCodeInvalidPrompt, "bad prompt"),
-	)
-	looper := testLooper(mock)
-	looper.Diagnostics = true
-	output := make(chan ChatResponse, 10)
+func TestLooperReturnsProviderRequestErrors(t *testing.T) {
+	for _, tc := range []struct {
+		mock *mockResponsesAPI
+		want string
+	}{
+		{mockResponses(failedResponseWithCode("resp-invalid", responses.ResponseErrorCodeInvalidPrompt, "bad prompt")), "run turn: request response: response failed: invalid_prompt: bad prompt"},
+		{mockResponseError(openAIError("rate_limit_exceeded", "slow down", nil)), "run turn: request response: new response: provider retry limit: status 429"},
+		{mockResponseError(errors.New("network exploded")), "run turn: request response: new response: network exploded"},
+	} {
+		looper := testLooper(tc.mock)
+		output := make(chan ChatResponse, 10)
 
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
+		input := make(chan PromptInput, 1)
+		input <- testPromptInput(PromptInputRoleUser, "question", output)
 
-	close(input)
+		close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
+		err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
 
-	require.EqualError(t, err, "run turn: request response: response failed: invalid_prompt: bad prompt")
-
-	diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: string(responses.ResponseStatusFailed), Code: string(responses.ResponseErrorCodeInvalidPrompt), Message: "bad prompt", Attempt: 0, RetryAfter: "", ResponseID: "resp-invalid"}
-	require.Equal(t, []ChatResponse{providerDiagnosticResponse(diagnostic)}, collectResponses(output))
-}
-
-func TestLooperReportsOpenAIRequestErrorsInDiagnostics(t *testing.T) {
-	mock := mockResponseError(openAIError("rate_limit_exceeded", "slow down", nil))
-	looper := testLooper(mock)
-	looper.Diagnostics = true
-	output := make(chan ChatResponse, 10)
-
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
-
-	close(input)
-
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
-
-	require.EqualError(t, err, "run turn: request response: new response: provider retry limit: status 429")
-	require.Len(t, newParams(mock), 1)
-
-	_, ok := errors.AsType[*providerRetryLimitError](err)
-	require.True(t, ok)
-
-	diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: http.StatusTooManyRequests, ResponseStatus: "", Code: string(responses.ResponseErrorCodeRateLimitExceeded), Message: "slow down", Attempt: 0, RetryAfter: "", ResponseID: ""}
-	require.Equal(t, []ChatResponse{providerDiagnosticResponse(diagnostic)}, collectResponses(output))
+		require.EqualError(t, err, tc.want)
+		require.Len(t, newParams(tc.mock), 1)
+		require.Empty(t, collectResponses(output))
+	}
 }
 
 func TestLooperClassifiesTerminalTooManyRequestsErrors(t *testing.T) {
@@ -3519,21 +3335,17 @@ func TestLooperRetriesTooManyRequestsRequestError(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				headers := tc.headers.Clone()
-				headers.Set("X-Request-ID", "req-rate")
-
 				start := time.Now()
 				calls := 0
 				mock := mockResponseFunc(func(context.Context, *responses.ResponseNewParams) (*responses.Response, error) {
 					calls++
 					if calls == 1 {
-						return nil, openAIError("too_many_requests", "Too Many Requests", headers)
+						return nil, openAIError("too_many_requests", "Too Many Requests", tc.headers)
 					}
 
 					return responseWithMessage("resp-ok", "done"), nil
 				})
 				looper := testLooper(mock)
-				looper.Diagnostics = true
 				output := make(chan ChatResponse, 10)
 
 				input := make(chan PromptInput, 1)
@@ -3546,39 +3358,10 @@ func TestLooperRetriesTooManyRequestsRequestError(t *testing.T) {
 				require.NoError(t, err)
 				require.Len(t, newParams(mock), 2)
 				require.Equal(t, tc.wait, time.Since(start))
-
-				wantHeaders := map[string]string{"x-request-id": "req-rate"}
-				for name, values := range tc.headers {
-					wantHeaders[strings.ToLower(name)] = values[0]
-				}
-
-				diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: http.StatusTooManyRequests, Code: "too_many_requests", Message: "Too Many Requests", Attempt: 1, RetryAfter: tc.wait.String(), Headers: wantHeaders}
-				require.Equal(t, []ChatResponse{
-					providerDiagnosticResponse(diagnostic),
-					assistantMessage("done"),
-				}, collectResponses(output))
+				require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
 			})
 		})
 	}
-}
-
-func TestLooperReportsRequestErrorsInDiagnostics(t *testing.T) {
-	mock := mockResponseError(errors.New("network exploded"))
-	looper := testLooper(mock)
-	looper.Diagnostics = true
-	output := make(chan ChatResponse, 10)
-
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
-
-	close(input)
-
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession(), make(chan os.Signal, 1))
-
-	require.EqualError(t, err, "run turn: request response: new response: network exploded")
-
-	diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: "network exploded", Attempt: 0, RetryAfter: "", ResponseID: ""}
-	require.Equal(t, []ChatResponse{providerDiagnosticResponse(diagnostic)}, collectResponses(output))
 }
 
 func TestLooperLoopRequiresDependencies(t *testing.T) {
@@ -3666,10 +3449,10 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 		{Texts: []string{"and skip tests"}, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
 	}
 	want := []string{
-		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\nInstructions first fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
+		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\n<skill_metadata>\nname: docs-helper\ndescription: Docs\nlicense: \ncompatibility: \nlocation: docs-helper/SKILL.md\nmetadata: null\n</skill_metadata>\n\nInstructions first fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
 		`{"content":[{"type":"input_text","text":"use the other file"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,c2NyZWVu"}],"role":"user","type":"message"}`,
 		`{"content":[{"type":"input_image","detail":"auto","image_url":"data:image/jpeg;base64,cGhvdG8="}],"role":"user","type":"message"}`,
-		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\nInstructions last fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
+		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\n<skill_metadata>\nname: docs-helper\ndescription: Docs\nlicense: \ncompatibility: \nlocation: docs-helper/SKILL.md\nmetadata: null\n</skill_metadata>\n\nInstructions last fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
 		`{"content":"and skip tests","role":"user","type":"message"}`,
 	}
 	mock := mockResponses(

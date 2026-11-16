@@ -409,10 +409,6 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 	for i := range entries {
 		entry := &entries[i]
-		if entry.Synced && entry.SourceConversationID == "" && !cronTrace {
-			continue
-		}
-
 		producer := cmp.Or(entry.SourceConversationID, request.Id)
 
 		if calls[producer] == nil {
@@ -2296,7 +2292,7 @@ func (s *Server) entries(ctx context.Context, id string) ([]backend.ObservedSess
 		return nil, fmt.Errorf("web entries: %w", status.Error(codes.Internal, "load session entries"))
 	}
 
-	return slices.DeleteFunc(entries, func(entry backend.ObservedSessionEntry) bool { return entry.Synced && entry.SourceConversationID == "" }), nil
+	return entries, nil
 }
 
 func (s *Server) chatOrigin(ctx context.Context, id string) (string, error) {

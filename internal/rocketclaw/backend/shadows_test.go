@@ -981,8 +981,7 @@ WHERE c.conversation_id IN ($1, $2) ORDER BY c.conversation_id, t.id, s.id`, "st
 					require.Empty(t, entries, "%s must not save pending note text as replay", id)
 				}
 
-				transcript, err := store.ObserveTranscript(t.Context(), id, 0, 0, nil)
-				require.NoError(t, err)
+				transcript := testHistoryEntries(t, store, id)
 				require.Len(t, transcript, 1)
 				require.Equal(t, protocol.TerminalStopped, transcript[0].Terminal)
 			}
@@ -1800,8 +1799,7 @@ func TestShadowStepLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, stopped)
 
-	entries, err := store.ObserveTranscript(t.Context(), limited.config.ConversationID, 0, 0, nil)
-	require.NoError(t, err)
+	entries := testHistoryEntries(t, store, limited.config.ConversationID)
 	require.Len(t, entries, 1)
 	require.Equal(t, []harness.PublicProgress{{ID: "shadow-step-limit", Kind: harness.PublicProgressText, State: harness.PublicProgressStopped, Text: "Hit the step limit: 15 vs. parent's 10."}}, harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace))
 	require.Empty(t, entries[0].Entry.ReplayInput)

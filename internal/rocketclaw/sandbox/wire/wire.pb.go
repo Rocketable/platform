@@ -199,11 +199,10 @@ func (*Frame_Cancel) isFrame_Body() {}
 // InvokeStart is entirely guest-controlled. There is deliberately no host environment field.
 type InvokeStart struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ExecId        []byte                 `protobuf:"bytes,1,opt,name=exec_id,json=execId,proto3" json:"exec_id,omitempty"`       // claimed execution; the broker compares it with the socket's own
-	Name          []byte                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`                         // registered command name
-	Cwd           []byte                 `protobuf:"bytes,3,opt,name=cwd,proto3" json:"cwd,omitempty"`                           // guest path
-	Args          [][]byte               `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`                         // argv without the command name
-	GuestEnv      [][]byte               `protobuf:"bytes,5,rep,name=guest_env,json=guestEnv,proto3" json:"guest_env,omitempty"` // KEY=VALUE, untrusted metadata
+	ExecId        []byte                 `protobuf:"bytes,1,opt,name=exec_id,json=execId,proto3" json:"exec_id,omitempty"` // claimed execution; the broker compares it with the socket's own
+	Name          []byte                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`                   // registered command name
+	Cwd           []byte                 `protobuf:"bytes,3,opt,name=cwd,proto3" json:"cwd,omitempty"`                     // guest path
+	Args          [][]byte               `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`                   // argv without the command name
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -262,13 +261,6 @@ func (x *InvokeStart) GetCwd() []byte {
 func (x *InvokeStart) GetArgs() [][]byte {
 	if x != nil {
 		return x.Args
-	}
-	return nil
-}
-
-func (x *InvokeStart) GetGuestEnv() [][]byte {
-	if x != nil {
-		return x.GuestEnv
 	}
 	return nil
 }
@@ -422,13 +414,12 @@ const file_wire_proto_rawDesc = "" +
 	"\vinvoke_exit\x18\a \x01(\v2#.rocketclaw.sandbox.wire.InvokeExitH\x00R\n" +
 	"invokeExit\x129\n" +
 	"\x06cancel\x18\b \x01(\v2\x1f.rocketclaw.sandbox.wire.CancelH\x00R\x06cancelB\x06\n" +
-	"\x04body\"}\n" +
+	"\x04body\"q\n" +
 	"\vInvokeStart\x12\x17\n" +
 	"\aexec_id\x18\x01 \x01(\fR\x06execId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\fR\x04name\x12\x10\n" +
 	"\x03cwd\x18\x03 \x01(\fR\x03cwd\x12\x12\n" +
-	"\x04args\x18\x04 \x03(\fR\x04args\x12\x1b\n" +
-	"\tguest_env\x18\x05 \x03(\fR\bguestEnv\"\n" +
+	"\x04args\x18\x04 \x03(\fR\x04argsJ\x04\b\x05\x10\x06R\tguest_env\"\n" +
 	"\n" +
 	"\bStdinEOF\":\n" +
 	"\n" +

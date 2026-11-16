@@ -900,33 +900,6 @@ func TestValidateSlackChannelsRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestValidateEnvironmentEntries(t *testing.T) {
-	tests := []struct {
-		name    string
-		entry   string
-		wantErr string
-	}{
-		{name: "missing separator", entry: "KEY", wantErr: `environment entry "KEY" must be in KEY=value form`},
-		{name: "empty key", entry: " =value", wantErr: "environment keys must not be empty"},
-		{name: "key NUL", entry: "KE\x00Y=value", wantErr: `environment key "KE\x00Y" must not contain NUL`},
-		{name: "value NUL", entry: "KEY=va\x00lue", wantErr: `environment value for "KEY" must not contain NUL`},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfig()
-			cfg.Environment = []string{tt.entry}
-
-			err := cfg.Validate()
-			require.EqualError(t, err, tt.wantErr)
-		})
-	}
-
-	cfg := validConfig()
-	cfg.Environment = []string{"KEY=value"}
-	require.NoError(t, cfg.Validate())
-}
-
 func TestLoadExternalMCPUsers(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "rocketclaw.json")

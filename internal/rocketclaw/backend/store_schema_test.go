@@ -2,9 +2,11 @@ package backend
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
@@ -94,58 +96,6 @@ FROM pg_index WHERE indrelid = 'entries'::regclass`
 	require.NoError(t, err)
 	require.NoError(t, store.db.QueryRowContext(ctx, historyReads).Scan(&after))
 	require.Equal(t, int64(3), after-before, "read the parent and only one indexed entry per child history")
-}
-
-func TestChatOriginFactsSkipsKnownSourceLookup(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	store.db.SetMaxOpenConns(1)
-
-	ctx := t.Context()
-	_, err := store.db.ExecContext(ctx, `
-INSERT INTO conversations (conversation_id, agent, created_by, kind, listed) VALUES ('source', 'sample-agent', '', 'cron_run', FALSE);
-INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
-SELECT 'unrelated-' || n, 'sample-agent', '', 'cron_run', FALSE FROM generate_series(1, 512) n;
-INSERT INTO entries (id, conversation_id, entry_json, entry_timestamp)
-VALUES (1000, 'source', '{}', '');
-INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
-SELECT 'unrelated-' || n, '{}', '' FROM generate_series(1, 512) n;
-INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
-SELECT 'web:origin-' || n, 'sample-agent', 'alice', 'web_chat', TRUE FROM generate_series(1, 128) n;
-INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
-SELECT conversation_id, '{"sync_source_conversation_id":"source","sync_source_entry_id":1000}', ''
-FROM conversations WHERE listed;
-ANALYZE conversations;
-ANALYZE entries;
-SET plan_cache_mode = force_generic_plan;
-SELECT pg_stat_force_next_flush();`)
-	require.NoError(t, err)
-
-	const sourceReads = `SELECT pg_stat_get_tuples_returned('session_entries_pkey'::regclass)`
-
-	var before, after int64
-	require.NoError(t, store.db.QueryRowContext(ctx, sourceReads).Scan(&before))
-
-	chats, err := queryStrings(ctx, store.db, `SELECT conversation_id FROM conversations WHERE listed`, "chats")
-	require.NoError(t, err)
-	saveEntryFacts(t, store, chats...)
-
-	_, err = store.db.ExecContext(ctx, `SELECT pg_stat_force_next_flush()`)
-	require.NoError(t, err)
-	require.NoError(t, store.db.QueryRowContext(ctx, sourceReads).Scan(&after))
-	require.Equal(t, before, after, "an explicit source needs no source-entry lookup")
-
-	seen := 0
-
-	for facts, err := range store.ChatOriginFacts(ctx, "") {
-		require.NoError(t, err)
-		require.Equal(t, "source", facts.CreatingSource)
-
-		seen++
-	}
-
-	require.Equal(t, 128, seen)
 }
 
 func saveEntryFacts(t *testing.T, store *SessionService, ids ...string) {
@@ -312,10 +262,10 @@ SET plan_cache_mode = force_generic_plan;`)
 	}{
 		{"parent/kept", 20}, {"parent/discarded", 0}, {"ordinary", 40}, {"missing", 0},
 	} {
-		start, oldest, err := store.TranscriptPage(ctx, tc.conversationID, 0, 1)
+		view, err := store.ObserveHistory(ctx, tc.conversationID, "", 0, 0, 1, &HistoryInventory{})
 		require.NoError(t, err)
-		require.Equal(t, tc.id, start)
-		require.Equal(t, tc.id, oldest)
+		require.Equal(t, tc.id, view.Inventory.From)
+		require.Equal(t, tc.id, view.Inventory.Oldest)
 	}
 
 	queries, err := queryStrings(ctx, store.db, `SELECT format('EXPLAIN EXECUTE %I(%s)', name,
@@ -328,25 +278,6 @@ FROM pg_prepared_statements WHERE statement = $1`, "history statement", transcri
 	require.Contains(t, strings.Join(plan, "\n"), "managed_conversations_reverted")
 	require.NotContains(t, strings.Join(plan, "\n"), "Seq Scan on conversations parent")
 	t.Log(strings.Join(plan, "\n"))
-}
-
-func TestTranscriptChangeUsesSyncSourceIndex(t *testing.T) {
-	t.Parallel()
-
-	store := newTestSessionService(t)
-	_, err := store.db.ExecContext(t.Context(), `
-INSERT INTO conversations (conversation_id, agent, created_by, kind, listed)
-SELECT 'history-' || n, 'main', '', 'web_chat', TRUE FROM generate_series(1, 4096) n;
-INSERT INTO entries (conversation_id, entry_json, entry_timestamp)
-SELECT 'history-' || n, json_build_object('sync_source_entry_id', n), '' FROM generate_series(1, 4096) n;
-ANALYZE entries;`)
-	require.NoError(t, err)
-
-	plan, err := queryStrings(t.Context(), store.db, `EXPLAIN SELECT DISTINCT conversation_id FROM entries
-WHERE entry_json::jsonb->>'sync_source_entry_id' = $1`, "transcript change plan", "2048")
-	require.NoError(t, err)
-	require.Contains(t, strings.Join(plan, "\n"), "session_entries_sync_source_id")
-	require.NotContains(t, strings.Join(plan, "\n"), "Seq Scan")
 }
 
 func TestShadowHistoryUsesProducerDestinationIndex(t *testing.T) {
@@ -622,12 +553,12 @@ INSERT INTO legacy_thread_queue VALUES ('q') ON CONFLICT DO NOTHING`)
 	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM legacy_thread_queue`).Scan(&kept))
 	require.Equal(t, 1, kept)
 
-	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql")
+	release("001_init.sql", "059_legacy_handoff.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql")
 	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
 
 	ledger, err := queryStrings(ctx, store.db, `SELECT id FROM pg_migrations ORDER BY id`, "ledger")
 	require.NoError(t, err)
-	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql"}, ledger)
+	require.Equal(t, []string{"001_baseline.sql", "060_web_tab_rows.sql", "061_drop_web_tab_state_blob.sql", "062_drop_web_tab_placement.sql", "063_drop_web_tab_pin.sql", "064_web_shared_tabs.sql", "065_web_tab_mutes.sql", "066_hosted_page_conversation.sql", "067_behavior_settings.sql", "068_web_tab_search.sql", "069_external_mcp_web_chats.sql", "070_web_shared_order.sql", "071_drop_goal_check_script.sql", "072_remote_asking.sql", "073_drop_spawned_by.sql", "074_session_reply_jobs.sql", "075_drop_guardrail_entries.sql", "076_conversation_space_index.sql", "077_review_origin.sql", "078_subagent_model.sql", "079_web_top_shelves.sql", "080_external_mcp_metadata.sql", "081_drop_web_tab_preview.sql", "082_web_closed_tabs.sql", "083_web_tab_marked_unread.sql", "084_history_requires_conversation.sql", "085_drop_voice_conversation.sql", "086_conversation_sticky.sql", "087_web_search_pages.sql", "088_web_top_shelf_rows.sql", "089_web_tab_attention.sql", "090_web_auto_park.sql", "091_web_auto_park_default.sql", "092_conversation_paused.sql", "093_agent_drafts.sql", "094_agent_draft_messages.sql", "095_drop_retired_conversation_columns.sql", "096_hidden_run_copies.sql", "097_drop_entry_audience.sql"}, ledger)
 
 	legacy, err := queryStrings(ctx, store.db, `SELECT tablename FROM pg_tables WHERE schemaname = current_schema() AND starts_with(tablename, 'legacy_')`, "legacy tables")
 	require.NoError(t, err)
@@ -691,6 +622,82 @@ func TestAgentDraftsMigrationDown(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []string{"kept"}, owners, table)
 	}
+}
+
+func TestHiddenRunCopiesMigration(t *testing.T) {
+	t.Parallel()
+
+	downTo95 := func(store *SessionService) {
+		_, err := (migrate.MigrationSet{TableName: "pg_migrations"}).ExecVersionContext(t.Context(), store.db, "postgres", migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}, migrate.Down, 95)
+		require.NoError(t, err)
+	}
+
+	store := newTestSessionService(t)
+	ctx := t.Context()
+
+	downTo95(store)
+	recordTestConversations(t, store, "main", map[string]ConversationKind{"chat": KindWebChat, "run": KindCronRun, "cron-chat": KindWebChat, "old-run": KindCronRun, "mcp-chat": KindWebChat, "mcp-run": KindExternalMCPRun})
+	_, err := store.db.ExecContext(ctx, `UPDATE conversations SET reports_to = 'chat', producer_inbound_json = '{}' WHERE conversation_id = 'run';
+UPDATE conversations SET first_source = 'old-run', last_updated = now() WHERE conversation_id = 'cron-chat';
+UPDATE conversations SET external_id = 'ext-1', external_run = 'mcp-run', last_updated = now() WHERE conversation_id = 'mcp-chat'`)
+	require.NoError(t, err)
+
+	const (
+		original = `{"type":"turn","turn_id":"t1","replay_input":[{"type":"compaction","id":"cmp_1","encrypted_content":"sealed"},{"type":"message","role":"user","content":"report"}]}`
+		shown    = `{"type":"turn","turn_id":"t1","replay_input":[{"type":"message","role":"user","content":"report"}]}`
+	)
+
+	insert := func(conversation, audience, entry, searchText string) int64 {
+		var id int64
+		require.NoError(t, store.db.QueryRowContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp, audience, search_text) VALUES ($1, $2, '2026-10-01T00:00:00Z', $3, NULLIF($4, '')) RETURNING id`,
+			conversation, entry, audience, searchText).Scan(&id))
+
+		return id
+	}
+	copied := func(source int64, run string) string {
+		return fmt.Sprintf(`{"type":"turn","turn_id":"t1","replay_input":[{"type":"message","role":"user","content":"report"}],"sync_source_entry_id":%d,"sync_source_conversation_id":%q}`, source, run)
+	}
+
+	pair := insert("run", "sandbox", original, "")
+	merged := insert("run", "visible", copied(pair, "run"), "copy text")
+	oldRun := insert("old-run", "both", shown, "")
+	insert("cron-chat", "both", copied(oldRun, "old-run"), "chat text")
+	mcpRun := insert("mcp-run", "both", shown, "")
+	insert("mcp-chat", "both", shown, "")
+	insert("mcp-chat", "both", copied(mcpRun, "mcp-run"), "")
+
+	require.NoError(t, initializeSessionDB(ctx, store.db, slog.New(slog.DiscardHandler)))
+
+	rows, err := queryStrings(ctx, store.db, `SELECT conversation_id || ' ' || id || ' ' || md5(entry_json::text) || ' ' || COALESCE(search_text, '') FROM entries ORDER BY id`, "merged entries")
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		fmt.Sprintf("run %d %x copy text", merged, md5.Sum([]byte(original))),
+		fmt.Sprintf("old-run %d %x chat text", oldRun, md5.Sum([]byte(shown))),
+		fmt.Sprintf("mcp-run %d %x ", mcpRun, md5.Sum([]byte(shown))),
+	}, rows)
+
+	facts, err := queryStrings(ctx, store.db, `SELECT conversation_id || ' ' || COALESCE(reports_to, '') || ' ' || COALESCE(first_source, '') FROM conversations ORDER BY 1`, "conversation facts")
+	require.NoError(t, err)
+	require.Equal(t, []string{"chat  ", "cron-chat  old-run", "mcp-chat  mcp-run", "mcp-run mcp-chat ", "old-run cron-chat ", "run chat "}, facts)
+
+	for conversation, items := range map[string]int{"chat": 1, "run": 2} {
+		observed, err := store.ObserveEntries(ctx, conversation)
+		require.NoError(t, err)
+		require.Len(t, observed, 1, conversation)
+		require.Equal(t, merged, observed[0].ID, conversation)
+		require.Len(t, observed[0].Entry.ReplayInput, items, "the chat leaves out the run's compaction items")
+	}
+
+	refused := newTestSessionService(t)
+	downTo95(refused)
+	recordTestConversations(t, refused, "main", map[string]ConversationKind{"run": KindCronRun})
+	_, err = refused.db.ExecContext(ctx, `INSERT INTO entries (conversation_id, entry_json, entry_timestamp, audience) VALUES ('run', '{}', '', 'visible')`)
+	require.NoError(t, err)
+	require.ErrorContains(t, initializeSessionDB(ctx, refused.db, slog.New(slog.DiscardHandler)), "cannot be merged")
+
+	ledger, err := queryStrings(ctx, refused.db, `SELECT id FROM pg_migrations WHERE id >= '096' ORDER BY id`, "ledger")
+	require.NoError(t, err)
+	require.Empty(t, ledger, "a refusal commits nothing")
 }
 
 func TestDropWebTabStateBlobMigration(t *testing.T) {

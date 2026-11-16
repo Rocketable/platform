@@ -45,21 +45,21 @@ const sessionHistorySQL = `RECURSIVE starts AS (
 ), visibility AS (
     SELECT count(*) FILTER (WHERE k.conversation_id IS NULL) = 0 AS readable FROM reverted_parents p LEFT JOIN kept_calls k USING (conversation_id)
 ), viewer AS (
-    SELECT v.readable, CASE WHEN c.producer_inbound_json IS NULL THEN 'sandbox' ELSE 'visible' END AS hidden_audience, COALESCE(c.revert_message_id, '') AS marker
+    SELECT v.readable, COALESCE(c.revert_message_id, '') AS marker
     FROM visibility v LEFT JOIN conversations c ON c.conversation_id = $1
 ), reporting_runs AS (
     SELECT conversation_id FROM conversations WHERE reports_to = $1
     UNION SELECT continues FROM conversations WHERE conversation_id = $1 AND continues IS NOT NULL
 ), viewed_rows AS (
     SELECT e.id, e.conversation_id, e.entry_json, FALSE AS reported FROM entries e CROSS JOIN viewer v
-    WHERE e.conversation_id = $1 AND e.audience <> v.hidden_audience AND v.readable
+    WHERE e.conversation_id = $1 AND v.readable
     UNION ALL
     SELECT e.id, e.conversation_id, e.entry_json, TRUE FROM reporting_runs r JOIN entries e USING (conversation_id) CROSS JOIN viewer v
-    WHERE e.audience <> 'sandbox' AND v.readable
+    WHERE v.readable
 ), attributed_rows AS (
-    SELECT r.id, r.entry_json::text AS entry_json, r.entry_json::jsonb AS entry, r.reported OR r.entry_json::jsonb ? 'sync_source_entry_id' AS synced,
-        CASE WHEN r.reported THEN r.conversation_id ELSE COALESCE(r.entry_json->>'sync_source_conversation_id', source.conversation_id, '') END AS source_conversation_id
-    FROM viewed_rows r LEFT JOIN entries source ON NOT r.reported AND source.id = (r.entry_json->>'sync_source_entry_id')::bigint
+    SELECT id, entry_json::text AS entry_json, entry_json::jsonb AS entry, reported AS synced,
+        CASE WHEN reported THEN conversation_id ELSE '' END AS source_conversation_id
+    FROM viewed_rows
 ), physical_entries AS (
     SELECT id, entry_json, source_conversation_id, synced, CASE WHEN synced AND jsonb_typeof(entry->'replay_input') = 'array'
         THEN jsonb_set(entry, '{replay_input}', jsonb_path_query_array(entry->'replay_input', '$[*] ? (!(@.type == "compaction" || @.type == "compaction_summary"))'))

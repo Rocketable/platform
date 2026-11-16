@@ -623,8 +623,7 @@ func TestBackgroundJobsStayOffTheLane(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, found)
 
-	transcript, err := store.ObserveTranscript(ctx, "main", 0, 0, nil)
-	require.NoError(t, err)
+	transcript := testHistoryEntries(t, store, "main")
 	require.Len(t, transcript, 1, "only the saved entry")
 
 	var listed []string

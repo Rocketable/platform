@@ -800,8 +800,7 @@ SELECT COUNT(*) FROM entries, running WHERE conversation_id = $1 AND turns > 0`,
 	assert.Empty(t, queueIDs(t, nt.service, nt.conversationID), "nothing is queued")
 	require.NoError(t, nt.service.postStopLines(t.Context(), nt.conversationID), "a later flush posts nothing again")
 
-	transcript, err := nt.service.ObserveTranscript(t.Context(), nt.conversationID, 0, 0, nil)
-	require.NoError(t, err)
+	transcript := testHistoryEntries(t, nt.service, nt.conversationID)
 	require.Len(t, transcript, 2)
 	assert.Equal(t, protocol.TerminalStopped, transcript[0].Terminal, "the stopped turn comes first")
 

@@ -181,7 +181,7 @@ const shadowHistorySQL = `WITH ` + sessionHistorySQL + `, owners AS (
     SELECT $1::text AS id FROM viewer WHERE readable AND ($2 = '' OR $2 = $1)
     UNION
     SELECT source_conversation_id FROM effective_entries
-    WHERE synced AND source_conversation_id <> '' AND ($2 = '' OR source_conversation_id = $2)
+    WHERE synced AND ($2 = '' OR source_conversation_id = $2)
         AND id >= $3 AND ($4::bigint = 0 OR id < $4)
     UNION
     SELECT r.conversation_id FROM reporting_runs r CROSS JOIN viewer v

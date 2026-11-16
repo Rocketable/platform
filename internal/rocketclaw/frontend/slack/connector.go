@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	neturl "net/url"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -143,12 +142,7 @@ type rawSlackEventsPayload struct {
 func New(cfg *config.LockedConfig, threadRouter protocol.PrimaryTextRouter, facts channelFactsStore, logger *slog.Logger) *Connector {
 	tokens := cfg.Clone().Slack
 
-	opts := []slack.Option{slack.OptionAppLevelToken(tokens.AppToken), slack.OptionRetry(3)}
-	if endpoint := strings.TrimSpace(os.Getenv("ROCKETCLAW_SLACK_API_URL")); endpoint != "" {
-		opts = append(opts, slack.OptionAPIURL(endpoint))
-	}
-
-	api := slack.New(tokens.BotToken, opts...)
+	api := slack.New(tokens.BotToken, slack.OptionAppLevelToken(tokens.AppToken), slack.OptionRetry(3))
 
 	return &Connector{
 		log: logger.With("component", "slack"), config: cfg,

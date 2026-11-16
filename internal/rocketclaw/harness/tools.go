@@ -25,35 +25,32 @@ import (
 )
 
 type toolFactory struct {
-	resolver                   ModelResolver
-	rootInstructions           string
-	workspaceInstructions      string
-	autoApproverModel          string
-	autoApproverDecisionModel  string
-	autoApproverMinConfidence  float64
-	deciders                   map[string]Decider
-	reasoningEffort            shared.ReasoningEffort
-	parallelToolCalls          int
-	diagnostics                bool
-	experimentalStrongerSkills bool
-	expandPromptShellCommands  PromptShellCommandExpansion
-	promptExpansion            promptExpansionEnvironment
-	agent                      *Agent
-	recursionRemaining         *int
-	agents                     Agents
-	skills                     Skills
-	baseTools                  map[string]looperTool
-	shellSystem                *sandboxedShellSystem
-	childContext               []SessionEntry
-	originHeader               string
-	shellTemp                  shellTempConfig
-	spillRel                   string
-	retainedRel                string
-	autoApprovePermissions     bool
-	observability              ObservabilityConfig
-	childSessions              ChildSessions
-	backgroundJobs             BackgroundJobs
-	childKey                   ChildKey
+	resolver                  ModelResolver
+	rootInstructions          string
+	workspaceInstructions     string
+	autoApproverModel         string
+	autoApproverDecisionModel string
+	autoApproverMinConfidence float64
+	deciders                  map[string]Decider
+	reasoningEffort           shared.ReasoningEffort
+	parallelToolCalls         int
+	expandPromptShellCommands PromptShellCommandExpansion
+	promptExpansion           promptExpansionEnvironment
+	agent                     *Agent
+	recursionRemaining        *int
+	agents                    Agents
+	skills                    Skills
+	baseTools                 map[string]looperTool
+	shellSystem               *sandboxedShellSystem
+	childContext              []SessionEntry
+	originHeader              string
+	shellTemp                 shellTempConfig
+	spillRel                  string
+	retainedRel               string
+	observability             ObservabilityConfig
+	childSessions             ChildSessions
+	backgroundJobs            BackgroundJobs
+	childKey                  ChildKey
 
 	inPermissionReview bool
 
@@ -62,13 +59,11 @@ type toolFactory struct {
 
 type readToolParams struct {
 	FilePath string `json:"filePath"`
-	Filename string `json:"filename"`
 	Offset   int    `json:"offset"`
 }
 
 type applyPatchToolParams struct {
 	PatchText string `json:"patchText"`
-	Patch     string `json:"patch"`
 }
 
 type globToolParams struct {
@@ -213,28 +208,26 @@ func (f *toolFactory) newLooper(agent *Agent, systemPrompt string) (*looper, err
 	mcpServers := visibleMCPServers(agent.Permission, f.mcpRegistry.Names())
 
 	loop := &looper{
-		agent:                  *agent,
-		ProviderOrigin:         origin,
-		Client:                 responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}},
-		SystemPrompt:           withCodeModeSystemPrompt(composeSystemPromptWithSkills(systemPrompt, f.skills, agent), modelTools, codeHosts, mcpServers),
-		DisplayModel:           origin.displayModel(),
-		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
-		Verbosity:              agent.Verbosity,
-		CompactThreshold:       cmp.Or(origin.CompactThreshold, defaultCompactThreshold),
-		ParallelToolCalls:      f.parallelToolCalls,
-		ResponseFormat:         agentOutputResponseFormat(agent.OutputSchema),
-		Permissions:            agent.Permission,
-		Tools:                  modelTools,
-		CodeModeHosts:          codeHosts,
-		Diagnostics:            f.diagnostics,
-		AutoApprovePermissions: f.autoApprovePermissions,
-		PermissionReviewer:     f,
-		InPermissionReview:     f.inPermissionReview,
-		Observability:          f.observability,
-		Journal:                InertJournal{},
-		SteerDrain:             InertSteerDrain{},
-		promptExpansion:        f.promptExpansion,
-		spillRel:               f.spillRel,
+		agent:              *agent,
+		ProviderOrigin:     origin,
+		Client:             responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}},
+		SystemPrompt:       withCodeModeSystemPrompt(composeSystemPromptWithSkills(systemPrompt, f.skills, agent), modelTools, codeHosts, mcpServers),
+		DisplayModel:       origin.displayModel(),
+		ReasoningEffort:    shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
+		Verbosity:          agent.Verbosity,
+		CompactThreshold:   cmp.Or(origin.CompactThreshold, defaultCompactThreshold),
+		ParallelToolCalls:  f.parallelToolCalls,
+		ResponseFormat:     agentOutputResponseFormat(agent.OutputSchema),
+		Permissions:        agent.Permission,
+		Tools:              modelTools,
+		CodeModeHosts:      codeHosts,
+		PermissionReviewer: f,
+		InPermissionReview: f.inPermissionReview,
+		Observability:      f.observability,
+		Journal:            InertJournal{},
+		SteerDrain:         InertSteerDrain{},
+		promptExpansion:    f.promptExpansion,
+		spillRel:           f.spillRel,
 	}
 	loop.promptExpansion.customShell = agent.CustomShell
 
@@ -284,7 +277,7 @@ func makeSandboxedTools(sfs fileSystem, sss *sandboxedShellSystem) map[string]lo
 					return nil, err
 				}
 
-				return []string{sfs.readPermissionSubject(cmp.Or(params.FilePath, params.Filename))}, nil
+				return []string{sfs.readPermissionSubject(params.FilePath)}, nil
 			},
 			Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				var params readToolParams
@@ -292,7 +285,7 @@ func makeSandboxedTools(sfs fileSystem, sss *sandboxedShellSystem) map[string]lo
 					return ToolResult{}, err
 				}
 
-				return sfs.ReadResult(cmp.Or(params.FilePath, params.Filename), max(params.Offset, 1)), nil
+				return sfs.ReadResult(params.FilePath, max(params.Offset, 1)), nil
 			},
 		},
 		"apply_patch": {
@@ -306,7 +299,7 @@ func makeSandboxedTools(sfs fileSystem, sss *sandboxedShellSystem) map[string]lo
 					return nil, err
 				}
 
-				preview, errText := sfs.previewApplyPatch(cmp.Or(params.PatchText, params.Patch))
+				preview, errText := sfs.previewApplyPatch(params.PatchText)
 				if errText != "" {
 					return nil, errors.New(errText)
 				}
@@ -329,7 +322,7 @@ func makeSandboxedTools(sfs fileSystem, sss *sandboxedShellSystem) map[string]lo
 					return ToolResult{}, err
 				}
 
-				return TextToolResult(sfs.ApplyPatch(cmp.Or(params.PatchText, params.Patch))), nil
+				return TextToolResult(sfs.ApplyPatch(params.PatchText)), nil
 			},
 		},
 		"glob": {
@@ -528,13 +521,9 @@ func (f *toolFactory) skillTool() looperTool {
 			return TextToolResult(output), nil
 		},
 		CallReplay: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, []responses.ResponseInputItemUnionParam, error) {
-			input, output, err := f.renderSkillToolOutput(ctx, raw, f.experimentalStrongerSkills)
+			input, output, err := f.renderSkillToolOutput(ctx, raw, true)
 			if err != nil {
 				return ToolResult{}, nil, err
-			}
-
-			if !f.experimentalStrongerSkills {
-				return TextToolResult(output), nil, nil
 			}
 
 			message := inputMessageParam(responses.EasyInputMessageRoleDeveloper, easyInputStringContent(output))

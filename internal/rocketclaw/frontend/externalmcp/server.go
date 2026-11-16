@@ -47,12 +47,11 @@ type SessionResult struct {
 type usernameContextKey struct{}
 
 type Server struct {
-	url       string
 	closeOnce sync.Once
 	closeFn   func(context.Context) error
 }
 
-func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAddr string, users map[string]string, sessionPromptHandler func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error)) (*Server, error) {
+func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listener net.Listener, users map[string]string, sessionPromptHandler func(context.Context, string, string, string, string, map[string]string, []SessionAttachment) (SessionResult, error)) *Server {
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "rocketclaw-external-mcp", Version: "1.0.0"}, nil)
 	mcp.AddTool(mcpServer, &mcp.Tool{Name: SessionPromptToolName, Description: "Queue blocking input for a selectable rocketclaw session and return the final plain-text reply.", InputSchema: map[string]any{"type": "object", "required": []string{"external_conversation_id", "input", "agent"}, "properties": map[string]any{"external_conversation_id": map[string]any{"type": "string", "pattern": "\\S", "description": "external MCP conversation ID; an unknown ID starts a new conversation"}, "input": map[string]any{"type": "string", "description": "plain-text input to send to the selected rocketclaw session"}, "agent": map[string]any{"type": "string", "pattern": "\\S", "description": "agent requested for this external MCP conversation; the first agent remains fixed"}, "slack_channel": map[string]any{"description": "ignored; accepted so older callers keep working"}, "metadata": map[string]any{"type": "object", "description": "metadata for external MCP conversations", "additionalProperties": map[string]any{"type": "string"}}, "attachments": map[string]any{"type": "array", "description": "optional attachments for this turn", "items": map[string]any{"type": "object", "required": []string{"data_base64"}, "properties": map[string]any{"name": map[string]any{"type": "string", "description": "display filename for the attachment"}, "mime_type": map[string]any{"type": "string", "description": "attachment MIME type, for example image/png"}, "data_base64": map[string]any{"type": "string", "description": "base64-encoded attachment bytes"}}, "additionalProperties": false}}}, "additionalProperties": false}}, func(callCtx context.Context, _ *mcp.CallToolRequest, input sessionPromptInput) (*mcp.CallToolResult, SessionResult, error) {
 		if strings.TrimSpace(input.Input) == "" && len(input.Attachments) == 0 {
@@ -98,13 +97,8 @@ func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAd
 	mux := http.NewServeMux()
 	mux.Handle(ExternalMCPPath, withBasicAuth(httpHandler, users))
 
-	listener, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		return nil, fmt.Errorf("listen for external MCP HTTP server: %w", err)
-	}
-
 	httpServer := &http.Server{Handler: mux}
-	server := &Server{url: "http://" + listener.Addr().String() + ExternalMCPPath, closeFn: httpServer.Shutdown}
+	server := &Server{closeFn: httpServer.Shutdown}
 
 	go func() { <-ctx.Done(); _ = server.Close(context.Background()) }()
 
@@ -115,10 +109,8 @@ func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAd
 		}
 	}()
 
-	return server, nil
+	return server
 }
-
-func (s *Server) URL() string { return s.url }
 
 func (s *Server) Close(ctx context.Context) error {
 	var err error

@@ -258,9 +258,9 @@ Backend entry reads expose generic source conversation provenance; RPC
 decodes the Cron prefix and the timestamp/random suffix from the right. The stored
 path label is used as-is, including previously stored underscores, without matching
 current definitions. Each run X is one row, whatever chats hold its output. Only X's
-own history and turns count; subagent and review sessions under X and copied entries
-are not read. The row links to a recorded human Y that X reports to or that continues
-X, the greatest ID if several. Rows sort newest-first by the source run timestamp,
+own history and turns count; subagent and review sessions under X are not read. The
+row links to a recorded human Y that X reports to or that continues X, the greatest
+ID if several. Rows sort newest-first by the source run timestamp,
 with X as tie-breaker.
 Recorded private Cron conversations with saved entries or a running, failed, or
 stopped turn also supply run timestamps through the same metadata query, without
@@ -463,9 +463,8 @@ including uploads referenced by its selected staged user boundary for composer
 restoration—not arbitrary uploads or other references in the hidden suffix—
 then returns exact original bytes in 256 KiB chunks. Merely knowing an ID is not
 authorization. Private Cron producers and recorded private external MCP sessions
-are denied, as are unmapped browser IPs. Deleting history revokes its references;
-deleting a source also revokes its dangling synced copies. Queued references
-remain valid until removed or consumed.
+are denied, as are unmapped browser IPs. Deleting history revokes its references.
+Queued references remain valid until removed or consumed.
 
 `History` and `ListQueue` carry repeated `attachments` metadata. The
 protobuf JSON shape (using protojson) is:
@@ -475,9 +474,9 @@ protobuf JSON shape (using protojson) is:
 ```
 
 `data` is absent from transcript/queue metadata. `conversationId` there identifies
-the stored producer, which can differ from the visible conversation for a synced
-entry. **The HTTP proxy must use the currently viewed conversation for download
-authorization, never substitute this producer field.** Standard Go `encoding/json`
+the stored producer, which can differ from the visible conversation for an entry
+of a hidden run it shows. **The HTTP proxy must use the currently viewed
+conversation for download authorization, never substitute this producer field.** Standard Go `encoding/json`
 uses the generated snake_case tags and a numeric `size`; the HTTP adapter uses
 protojson instead. Upload raw bytes to `POST /api/UploadAttachment?conversationId=…&name=…`.
 Download through `GET /api/DownloadAttachment?conversationId=…&id=…`; `download=1`

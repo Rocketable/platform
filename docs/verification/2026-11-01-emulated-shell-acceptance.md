@@ -126,7 +126,7 @@ Fixture: `deploy` with secrets `DEPLOY_TOKEN=host-secret`, `DEPLOY_URL=https://p
 | G02 `export …; deploy`, nested shells, substitutions | pass | `bash -c 'export …; deploy'` and `$(DEPLOY_TOKEN=y deploy …)` |
 | G03 `env` and `env -i … /extensions/deploy` | pass | both |
 | G04 `PATH`, `BASH_ENV`, absolute shim path | pass | `PATH=/evil:$PATH BASH_ENV=/tmp/x … deploy` and `/extensions/probe` |
-| G05 forged `guestEnv` / invented `hostEnv` | pass | there is no environment field: extra `InvokeStart` fields make the frame malformed (`forge hostenv` → 126); `forge guestenv` changes nothing |
+| G05 forged `guestEnv` / invented `hostEnv` | pass + unit | there is no environment field: unknown `InvokeStart` fields make the frame malformed, including field 5, the retired `guest_env`, which `wire.proto` reserves so it is never reused; `forge guestenv` and `forge hostenv` → 126 `malformed host command request`, and a following `deploy` still sees `host-secret`; `TestReadRejectsInvalidFrames` |
 | G06 mutating the registration; concurrent invocations share one snapshot | n/a / review | there is no registration map: the backend fetches secrets per turn into a `CustomShell` the harness copies into `cmd.Env` once per invocation; no `os.Setenv` anywhere in the path |
 | G07 trusted subprocess; other commands do not inherit | pass | `deploy` is itself `bash -c`, a subprocess; another agent's `deploy` sees `[unset]` |
 | G08 secrets absent from guest env, `/proc`, files, argv, frames, output | pass | `TestEmulatedShellEnvironment` (env, `/proc/*/environ`, `cmdline`, mounted files); `forge raw quiet \| od -c` shows no secret in any frame |

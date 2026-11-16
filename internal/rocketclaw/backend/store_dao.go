@@ -147,7 +147,7 @@ func (d stateDAO) bindRun(ctx context.Context, run, destination string) (owner s
 	}
 
 	if bound {
-		entries, err := queryRows(ctx, d.db, `SELECT id, entry_json, '', TRUE, -1 FROM entries WHERE conversation_id = $1 AND audience <> 'sandbox' ORDER BY id`, "bound run entries", scanObservedEntry, run)
+		entries, err := queryRows(ctx, d.db, `SELECT id, entry_json, '', TRUE, -1 FROM entries WHERE conversation_id = $1 ORDER BY id`, "bound run entries", scanObservedEntry, run)
 		if err != nil {
 			return "", nil, err
 		}

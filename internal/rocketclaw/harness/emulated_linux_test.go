@@ -244,7 +244,7 @@ func TestEmulatedShellSecrets(t *testing.T) {
 
 	e.ok(t, "PATH=/evil AWS_SECRET_ACCESS_KEY=evil HTTPS_PROXY=http://evil /extensions/probe", "host-aws http://host-proxy "+os.Getenv("PATH")+"\n")
 
-	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge guestenv deploy", "host-secret https://prod.example.test \nexit 0\n")
+	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge guestenv deploy; deploy --release v8", "exit 126: rocketclaw: malformed host command request\n"+want("v8"))
 	e.ok(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge hostenv deploy", "exit 126: rocketclaw: malformed host command request\n")
 
 	got := e.bash(t, "ln -s /extensions/.rocketclaw/rocketclaw /tmp/rocketclaw-forge && /tmp/rocketclaw-forge raw quiet | od -c")
@@ -265,7 +265,7 @@ func forge(args []string) int {
 	}
 	defer func() { _ = conn.Close() }()
 
-	start := &wire.InvokeStart{ExecId: execID, GuestEnv: [][]byte{[]byte("DEPLOY_TOKEN=evil")}}
+	start := &wire.InvokeStart{ExecId: execID}
 	if len(args) > 1 {
 		start.Name = []byte(args[1])
 	}
@@ -278,9 +278,14 @@ func forge(args []string) int {
 		start.Name = []byte("arbitrary")
 	case "otherexec":
 		start.ExecId = []byte("x-forged")
-	case "hostenv":
+	case "guestenv", "hostenv":
+		field := protowire.Number(6)
+		if args[0] == "guestenv" {
+			field = 5
+		}
+
 		raw, _ := proto.Marshal(start)
-		raw = protowire.AppendBytes(protowire.AppendTag(raw, 6, protowire.BytesType), []byte("DEPLOY_TOKEN=evil"))
+		raw = protowire.AppendBytes(protowire.AppendTag(raw, field, protowire.BytesType), []byte("DEPLOY_TOKEN=evil"))
 		inner := protowire.AppendBytes(protowire.AppendTag(protowire.AppendVarint(protowire.AppendTag(nil, 1, protowire.VarintType), wire.Version), 2, protowire.BytesType), raw)
 		_, _ = conn.Write(append(binary.AppendUvarint(nil, uint64(len(inner))), inner...))
 		frame = nil

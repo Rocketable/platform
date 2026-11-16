@@ -153,8 +153,7 @@ func TestStoppedInitialRequestKeepsAcceptedInput(t *testing.T) {
 	require.Empty(t, entries[0].Entry.ResponseID)
 	assert.Contains(t, string(entries[0].Entry.ReplayInput[0]), `"input_id":"initial-input"`)
 	assert.Contains(t, string(entries[0].Entry.ReplayInput[0]), prompt)
-	transcript, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
-	require.NoError(t, err)
+	transcript := testHistoryEntries(t, service, conversationID)
 	require.Len(t, transcript, 1)
 	assert.Equal(t, protocol.TerminalStopped, transcript[0].Terminal)
 	require.Empty(t, testTurnStepKeys(t, service, conversationID), "the stopped turn leaves no step")
@@ -279,8 +278,7 @@ func TestLateRunnerLeavesStoppedTurn(t *testing.T) {
 		require.NoError(t, err)
 	}
 	observe := func() string {
-		transcript, err := service.ObserveTranscript(ctx, "chat", 0, 0, nil)
-		require.NoError(t, err)
+		transcript := testHistoryEntries(t, service, "chat")
 
 		data, err := json.Marshal(transcript)
 		require.NoError(t, err)
@@ -352,8 +350,7 @@ func TestStopOnWaitingRowPostsStoppedFinalAndDoesNotRun(t *testing.T) {
 	assert.Empty(t, requests, "a stopped row does not resume")
 	assert.Empty(t, finals, "the stopped final is posted once")
 
-	entries, err := service.ObserveTranscript(t.Context(), conversationID, 0, 0, nil)
-	require.NoError(t, err)
+	entries := testHistoryEntries(t, service, conversationID)
 	require.Len(t, entries, 1)
 	assert.Equal(t, protocol.TerminalStopped, entries[0].Terminal, "the web transcript shows the stopped turn")
 }
@@ -2452,9 +2449,9 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 	require.NoError(t, parent.Submit(t.Context(), nt.slackPrompt("hello")))
 	nt.request(t)
 	require.Eventually(t, func() bool {
-		entries, err := nt.service.ObserveTranscript(context.Background(), nt.conversationID, 0, 0, nil)
+		view, err := nt.service.ObserveHistory(context.Background(), nt.conversationID, "", 0, 0, 0, &HistoryInventory{})
 
-		return err == nil && len(entries) == 1 && slices.ContainsFunc(harness.PublicProgressFromTrace(entries[0].Entry.OutputTrace), func(progress harness.PublicProgress) bool {
+		return err == nil && len(view.Entries) == 1 && slices.ContainsFunc(harness.PublicProgressFromTrace(view.Entries[0].Entry.OutputTrace), func(progress harness.PublicProgress) bool {
 			return progress.Kind == harness.PublicProgressDelegation && progress.State == harness.PublicProgressWorking
 		})
 	}, 10*time.Second, 10*time.Millisecond, "the parent's task call waits")
@@ -2492,8 +2489,7 @@ func TestStoppedParentStopsSubagentItWaitsOn(t *testing.T) {
 	assert.Contains(t, lastRequestMessage(t, nt.request(t)), "next work")
 	nt.waitIdle(t, manager, subagent)
 
-	transcript, err := nt.service.ObserveTranscript(t.Context(), subagent, 0, 0, nil)
-	require.NoError(t, err)
+	transcript := testHistoryEntries(t, nt.service, subagent)
 	require.NotEmpty(t, transcript)
 	assert.Equal(t, protocol.TerminalStopped, transcript[0].Terminal, "the subagent's running turn stops with its waiting parent")
 

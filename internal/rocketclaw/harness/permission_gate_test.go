@@ -2,7 +2,6 @@ package harness
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -41,20 +40,6 @@ func TestCheckNestedPermissionAllow(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestCheckNestedPermissionAutoWithoutAutoApproveDenies(t *testing.T) {
-	t.Parallel()
-
-	var permissions PermissionSet
-	require.NoError(t, permissions.Set("mcp", "demo.echo", PermissionAuto))
-
-	looper := &looper{Journal: InertJournal{}, observations: &turnObservations{journal: InertJournal{}}, Permissions: permissions, AutoApprovePermissions: false}
-	ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: ""})
-
-	err := CheckNestedPermission(ctx, "execute", "mcp", "demo.echo", map[string]any{"message": "hi"})
-	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "automatic approval") || strings.Contains(err.Error(), "denied"), "error = %v", err)
-}
-
 func TestCheckNestedPermissionDeny(t *testing.T) {
 	t.Parallel()
 
@@ -75,18 +60,17 @@ func TestCheckNestedPermissionAutoWithReviewerAllow(t *testing.T) {
 	var permissions PermissionSet
 	require.NoError(t, permissions.Set("mcp", "demo.echo", PermissionAuto))
 
-	reviewer := &mockPermissionReviewer{reviewPermissionFunc: func(context.Context, *permissionReviewRequest, chan<- ChatResponse) permissionReviewDecision {
+	reviewer := &mockPermissionReviewer{reviewPermissionFunc: func(context.Context, *permissionReviewRequest) permissionReviewDecision {
 		return permissionReviewDecision{Outcome: permissionReviewOutcomeAllow, Rationale: "ok"}
 	}}
 
 	for _, turnID := range []string{"turn-1", "turn-1", "turn-2"} {
 		looper := &looper{
-			Journal:                InertJournal{},
-			observations:           &turnObservations{journal: InertJournal{}, turnID: turnID},
-			Permissions:            permissions,
-			AutoApprovePermissions: true,
-			PermissionReviewer:     reviewer,
-			agent:                  Agent{Name: "main"},
+			Journal:            InertJournal{},
+			observations:       &turnObservations{journal: InertJournal{}, turnID: turnID},
+			Permissions:        permissions,
+			PermissionReviewer: reviewer,
+			agent:              Agent{Name: "main"},
 		}
 		ctx := context.WithValue(t.Context(), toolCallContextKey{}, toolCallContext{looper: looper, observations: looper.observations, output: nil, callID: "call_0"})
 

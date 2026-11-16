@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
@@ -40,12 +41,12 @@ func (processAssembler) Assemble(rt *backend.Runtime) (<-chan struct{}, []func(c
 			return nil, nil, err
 		}
 
-		externalMCP, err := startExternalMCPServer(rt.RunCtx, cfg, rt.ExternalMCPUsers, agents, rt.Sessions, rt, rt.Log)
+		listener, err := net.Listen("tcp", cfg.MCPExternal.ListenAddr)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("start external MCP HTTP server: listen for external MCP HTTP server: %w", err)
 		}
 
-		stops = append(stops, externalMCP.Close)
+		stops = append(stops, startExternalMCPServer(rt.RunCtx, listener, rt.ExternalMCPUsers, agents, rt.Sessions, rt, rt.Log).Close)
 	}
 
 	stopWeb, err := startWebRPC(rt, slack, cronjobs)

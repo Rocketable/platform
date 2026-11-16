@@ -32,11 +32,11 @@ func TestTabs(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-	for _, id := range []string{"a", "b", "c", "private-X"} {
+	require.NoError(t, sessions.RegisterExternalMCPConversation("external", "main", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "a", Agent: "main"}))
+
+	for _, id := range []string{"b", "c"} {
 		require.NoError(t, sessions.UpsertThread(id, backend.ThreadState{Agent: "main"}))
 	}
-
-	require.NoError(t, sessions.UpsertExternalMCPSession("external", &backend.ExternalMCPSessionState{PrivateConversationID: "private-X", ManagedConversationID: "a", Agent: "main"}))
 
 	db := openTestTurns(t, dsn).db
 	server := &Server{sessions: sessions, cfg: new(config.LockedConfig)}

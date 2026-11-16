@@ -35,10 +35,6 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 
 	for index := range history {
 		observed := &history[index]
-		if observed.Synced && observed.SourceConversationID == "" {
-			continue
-		}
-
 		producers = append(producers, cmp.Or(observed.SourceConversationID, source))
 
 		entry := observed.Entry
